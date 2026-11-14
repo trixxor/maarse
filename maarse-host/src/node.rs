@@ -202,6 +202,20 @@ fn token() -> [u8; 16] {
     t
 }
 
+/// Læser en privat kanal fra `channels.txt`: `!<64 hex-tegn> <navn>`.
+fn parse_private_line(line: &str) -> Option<(String, [u8; 32])> {
+    let rest = line.strip_prefix('!')?;
+    let (hex, name) = rest.split_once(' ').unwrap_or((rest, ""));
+    if hex.len() != 64 || !hex.is_ascii() {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for (i, b) in key.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some((name.to_string(), key))
+}
+
 /// `offentlig` / `public` -> den offentlige kanal, alt andet -> `#navn`.
 fn normalize_channel(name: &str) -> (String, [u8; 32]) {
     let n = name.trim().to_lowercase();
@@ -318,7 +332,11 @@ impl Node {
         let saved = fs::read_to_string(node.data_dir.join("channels.txt")).unwrap_or_default();
         node.join_channel("offentlig", false);
         for line in saved.lines().filter(|l| !l.trim().is_empty()) {
-            node.join_channel(line, false);
+            if let Some((name, key)) = parse_private_line(line) {
+                node.join_private_channel(&name, key, false);
+            } else {
+                node.join_channel(line, false);
+            }
         }
         node.load_mailbox();
         Ok(node)
@@ -652,7 +670,7 @@ impl Node {
                         let _ = f.write_all(&a.identity.to_bytes());
                     }
                 }
-                self.broadcast(&Event::Heard { addr: dest, hops });
+                self.broadcast(&Event::Heard { addr: dest, hops, identity: Some(a.identity.to_bytes()) });
                 if self.dht.public_ep.is_some() {
                     let last = self.dht.heard.get(&dest).and_then(|h| h.2);
                     self.dht.heard.insert(dest, (payload.to_vec(), hops, last));
@@ -1217,8 +1235,8 @@ impl Node {
                 },
             );
         }
-        for a in self.known.keys() {
-            self.send_client(id, &Event::Heard { addr: *a, hops: 0 });
+        for (a, pk) in &self.known {
+            self.send_client(id, &Event::Heard { addr: *a, hops: 0, identity: Some(pk.to_bytes()) });
         }
         for ev in &self.inbox {
             self.send_client(id, ev);
@@ -1242,22 +1260,45 @@ impl Node {
             version: maarse_core::companion::PROTOCOL_VERSION,
             max_text: (MAX_DM_TEXT - 1) as u8,
             max_file: self.max_file,
+            identity: Some(self.identity.public().to_bytes()),
         }
     }
 
     fn join_channel(&mut self, name: &str, save: bool) -> (Address, String) {
         let (name, key) = normalize_channel(name);
+        self.join_key(name, key, save)
+    }
+
+    /// Privat kanal med en tilfældig nøgle fra en invitation.
+    fn join_private_channel(&mut self, name: &str, key: [u8; 32], save: bool) -> (Address, String) {
+        let mut name: String = name.trim().chars().filter(|c| !c.is_control()).collect();
+        if name.is_empty() {
+            name = "privat".into();
+        }
+        self.join_key(name, key, save)
+    }
+
+    fn join_key(&mut self, name: String, key: [u8; 32], save: bool) -> (Address, String) {
         let ch = channel_address(&key);
         let _ = self.router.subscribe(ch);
         let new = self.channels.insert(ch, (name.clone(), key)).is_none();
         if save && new {
-            let names: Vec<String> = self
+            // Én linje pr. kanal: navnet for offentlige/hashtag-kanaler,
+            // `!<nøgle i hex> <navn>` for private.
+            let lines: Vec<String> = self
                 .channels
                 .values()
-                .map(|(n, _)| n.clone())
-                .filter(|n| n != "offentlig")
+                .filter(|(_, k)| *k != public_channel_key())
+                .map(|(n, k)| {
+                    if normalize_channel(n).1 == *k {
+                        n.clone()
+                    } else {
+                        let hex: String = k.iter().map(|b| format!("{b:02x}")).collect();
+                        format!("!{hex} {n}")
+                    }
+                })
                 .collect();
-            let _ = fs::write(self.data_dir.join("channels.txt"), names.join("\n"));
+            let _ = fs::write(self.data_dir.join("channels.txt"), lines.join("\n"));
         }
         (ch, name)
     }
@@ -1272,6 +1313,14 @@ impl Node {
             Command::JoinChannel { name } => {
                 let name = String::from_utf8_lossy(&name).to_string();
                 let (ch, name) = self.join_channel(&name, true);
+                self.broadcast(&Event::ChannelJoined {
+                    channel: ch,
+                    name: text(name.as_bytes()),
+                });
+            }
+            Command::JoinPrivateChannel { key, name } => {
+                let name = String::from_utf8_lossy(&name).to_string();
+                let (ch, name) = self.join_private_channel(&name, key, true);
                 self.broadcast(&Event::ChannelJoined {
                     channel: ch,
                     name: text(name.as_bytes()),

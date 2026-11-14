@@ -254,7 +254,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         let _ = self.known.insert(dest, a.identity);
                     }
                     crate::bus::KNOWN_NODES.store(self.known.len() as u32, Relaxed);
-                    emit(&Event::Heard { addr: dest, hops });
+                    emit(&Event::Heard { addr: dest, hops, identity: Some(a.identity.to_bytes()) });
                     self.flush_mail(dest);
                 }
             }
@@ -385,6 +385,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     version: PROTOCOL_VERSION,
                     max_text: (MAX_DM_TEXT - 1) as u8,
                     max_file: 0,
+                    identity: Some(self.identity.public().to_bytes()),
                 });
                 for (ch, _, name) in &self.channels {
                     emit(&Event::ChannelJoined {
@@ -392,8 +393,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         name: text(name.as_bytes()),
                     });
                 }
-                for a in self.known.keys() {
-                    emit(&Event::Heard { addr: *a, hops: 0 });
+                for (a, id) in self.known.iter() {
+                    emit(&Event::Heard { addr: *a, hops: 0, identity: Some(id.to_bytes()) });
                 }
                 if !self.radio_ok {
                     log("Radioen svarer ikke - tjek board-valget");
@@ -406,6 +407,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::JoinChannel { name } => {
                 let name = core::str::from_utf8(&name).unwrap_or("");
                 self.join(name);
+            }
+            Command::JoinPrivateChannel { key, name } => {
+                let name = core::str::from_utf8(&name).unwrap_or("");
+                self.join_private(name, key);
             }
             Command::SendDirect {
                 req,
@@ -684,17 +689,36 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 hashtag_key(&s)
             }),
         };
+        let mut nm = Name::new();
+        if label != "offentlig" && !label.starts_with('#') {
+            let _ = nm.push('#');
+        }
+        for c in label.chars() {
+            for l in c.to_lowercase() {
+                let _ = nm.push(l);
+            }
+        }
+        self.join_key(nm, key);
+    }
+
+    /// Privat kanal: nøglen er tilfældig og kommer fra en invitation. Navnet
+    /// er kun til visning (afkortes til 24 bytes).
+    fn join_private(&mut self, name: &str, key: [u8; 32]) {
+        let mut nm = Name::new();
+        for c in name.trim().chars() {
+            if nm.push(c).is_err() {
+                break;
+            }
+        }
+        if nm.is_empty() {
+            let _ = nm.push_str("privat");
+        }
+        self.join_key(nm, key);
+    }
+
+    fn join_key(&mut self, nm: Name, key: [u8; 32]) {
         let addr = channel_address(&key);
         if !self.channels.iter().any(|(a, _, _)| *a == addr) {
-            let mut nm = Name::new();
-            if label != "offentlig" && !label.starts_with('#') {
-                let _ = nm.push('#');
-            }
-            for c in label.chars() {
-                for l in c.to_lowercase() {
-                    let _ = nm.push(l);
-                }
-            }
             if self.channels.push((addr, key, nm)).is_err() {
                 return log("Højst 4 kanaler på denne node");
             }

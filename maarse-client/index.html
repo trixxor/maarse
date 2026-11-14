@@ -73,7 +73,18 @@
   .form select, .form input { width: 100%; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
   .warn { background: var(--mine); border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.45; max-width: 520px; margin-bottom: 14px; }
   .hint { font-size: 12px; color: var(--muted); margin: 4px; line-height: 1.4; }
+  /* sikkerhedsnumre og private kanaler */
+  .secure { max-width: 560px; }
+  .secure h3 { font-size: 14px; margin: 18px 0 6px; }
+  .safety { display: grid; grid-template-columns: repeat(4, max-content); gap: 6px 18px; font-family: ui-monospace, Consolas, monospace;
+            font-size: 20px; letter-spacing: 1px; margin: 12px 0; font-variant-numeric: tabular-nums; }
+  .qr svg { display: block; max-width: 100%; height: auto; border-radius: 6px; }
+  .linktext { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; color: var(--muted); margin-top: 8px; }
+  #chat-tools { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  #chat-tools:empty { display: none; }
+  .verified { color: var(--accent); }
   @media (max-width: 720px) {
+    .safety { font-size: 16px; gap: 4px 12px; }
     main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
     aside { border-right: none; border-bottom: 1px solid var(--line); max-height: 36vh; min-width: 0; }
     header { padding: 8px 12px; gap: 8px; }
@@ -101,20 +112,22 @@
     <div class="row"><button id="btn-copy" disabled>Kopiér adresse</button><button id="btn-announce" disabled>Send announce</button></div>
 
     <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button></div>
+    <div class="row"><button id="btn-myqr" disabled>Min QR-kode</button></div>
 
     <h2>Kanaler</h2>
     <div id="channels"></div>
     <div class="row"><input id="join-name" placeholder="#kanalnavn"><button id="btn-join" disabled>Deltag</button></div>
+    <div class="row"><button id="btn-private-new" disabled>Ny privat kanal</button><button id="btn-private-join" disabled>Deltag via invitation</button></div>
 
     <h2>Kontakter</h2>
     <div id="contacts"></div>
-    <div class="row"><input id="add-addr" placeholder="Adresse (32 hex-tegn)"></div>
+    <div class="row"><input id="add-addr" placeholder="Adresse (32 hex-tegn) eller kontaktlink"></div>
     <div class="row"><input id="add-name" placeholder="Kaldenavn (kun for dig)"><button id="btn-add">Tilføj</button></div>
     <p class="hint">Du kan kun skrive til en node, når den har sendt et announce, som din node har hørt.</p>
   </aside>
 
   <section class="chat">
-    <div class="chat-head"><div id="chat-title">Ingen samtale valgt</div><div class="sub" id="chat-sub"></div></div>
+    <div class="chat-head"><div id="chat-title">Ingen samtale valgt</div><div class="sub" id="chat-sub"></div><div id="chat-tools"></div></div>
     <div class="messages" id="messages">
       <div class="empty" id="empty">
         Forbind til en node for at komme i gang.<br>
@@ -176,6 +189,7 @@ const Cmd = {
   setRadio: c => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [0]),
   getRadio: () => frame(0x0b),
   setRole: r => frame(0x10, [r]),
+  joinPrivate: (key, name) => frame(0x13, key, enc.encode(name)),
   remote: (req, destHex, inner) => frame(0x0c, u16(req), unhex(destHex), inner.slice(2)),
   setAdmins: list => frame(0x0d, ...list.map(unhex)),
   getAdmins: () => frame(0x0e),
@@ -191,13 +205,14 @@ function readU64(b, o) {
 function decodeEvent(f) {
   const t = f[0], a = (o) => hex(f.slice(o, o + 16)), txt = (o) => dec.decode(f.slice(o));
   switch (t) {
-    case 0x81: return { type: "info", addr: a(1), repeater: !!f[17], version: f[18], maxText: f[19], maxFile: f.length >= 24 ? rd32(f, 20) : 0 };
+    case 0x81: return { type: "info", addr: a(1), repeater: !!f[17], version: f[18], maxText: f[19], maxFile: f.length >= 24 ? rd32(f, 20) : 0,
+                     identity: f.length >= 88 ? f.slice(24, 88) : null };
     case 0x82: return { type: "sent", req: f[1] | f[2] << 8, msgId: readU64(f, 3) };
     case 0x83: return { type: "direct", from: a(1), hops: f[17], text: txt(18) };
     case 0x84: return { type: "channel", channel: a(1), from: a(17), hops: f[33], text: txt(34) };
     case 0x85: return { type: "acked", msgId: readU64(f, 1) };
     case 0x86: return { type: "route", dest: a(1), hops: f[17] };
-    case 0x87: return { type: "heard", addr: a(1), hops: f[17] };
+    case 0x87: return { type: "heard", addr: a(1), hops: f[17], identity: f.length >= 82 ? f.slice(18, 82) : null };
     case 0x88: return { type: "joined", channel: a(1), name: txt(17) };
     case 0x89: { const ml = f[29]; return { type: "fileIncoming", fileId: readU64(f, 1), from: a(9), size: rd32(f, 25),
                  mime: dec.decode(f.slice(30, 30 + ml)), name: txt(30 + ml) }; }
@@ -377,7 +392,7 @@ function renderSide() {
   const all = new Set([...state.contacts.keys(), ...Object.keys(nicknames)]);
   for (const addr of all) {
     const heard = state.contacts.get(addr)?.heard;
-    ct.appendChild(convRow("dm:" + addr, label(addr) + (heard ? "" : " (ikke hørt)"), addr));
+    ct.appendChild(convRow("dm:" + addr, label(addr) + (isVerified(addr) ? " ✓" : "") + (heard ? "" : " (ikke hørt)"), addr));
   }
   if (!all.size) { const p = document.createElement("p"); p.className = "hint"; p.textContent = "Ingen endnu."; ct.appendChild(p); }
 }
@@ -388,6 +403,8 @@ function renderChat() {
   $("composer").hidden = state.view !== "chat";
   if (state.view === "status") return renderStatus(box);
   if (state.view === "radio") return renderRadio(box);
+  renderChatTools();
+  if (renderSecurityView(box)) return;
   if (!key) { box.appendChild($("empty") || document.createElement("div")); return; }
   const [kind, addr] = key.split(":");
   $("chat-title").textContent = kind === "ch" ? state.channels.get(addr) : label(addr);
@@ -433,7 +450,8 @@ function updateComposer() {
 function setConnected(on, name) {
   $("dot").classList.toggle("on", on);
   $("status").innerHTML = on ? `Forbundet via <b>${name}</b>` : "Ikke forbundet";
-  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio"]) $(id).disabled = !on;
+  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
+  if (!on) $("btn-myqr").disabled = true;
   $("btn-disconnect").hidden = !on;
   for (const id of ["btn-ws", "btn-serial", "btn-ble"]) $(id).disabled = on;
   updateComposer();
@@ -448,6 +466,7 @@ function onEvent(ev) {
     case "info":
       state.me = ev.addr; state.maxText = ev.maxText; state.maxFile = ev.maxFile;
       $("me").textContent = ev.addr;
+      onIdentityInfo(ev);
       log(`Node ${short(ev.addr)} (protokol v${ev.version}, maks. ${ev.maxText} bytes pr. besked)`);
       break;
     case "joined":
@@ -457,6 +476,7 @@ function onEvent(ev) {
       break;
     case "heard":
       if (ev.addr !== state.me) {
+        onIdentityHeard(ev);
         const isNew = !state.contacts.has(ev.addr);
         state.contacts.set(ev.addr, { heard: true });
         if (isNew) log(`Hørt: ${label(ev.addr)}`);
@@ -825,6 +845,435 @@ function setView(v) {
   renderChat();
 }
 
+// ---------- sikkerhedsnumre (samme udregning som maarse-crypto::safety_number) ----------
+// <sikkerhedsnummer>
+// Lille SHA-256 i ren JavaScript, så det også virker uden crypto.subtle (fx file://).
+const sha256 = (() => {
+  const K = [], H0 = [];
+  const isPrime = n => { for (let d = 2; d * d <= n; d++) if (n % d === 0) return false; return true; };
+  for (let p = 2, i = 0; i < 64; p++) {
+    if (!isPrime(p)) continue;
+    if (i < 8) H0.push((Math.pow(p, 1 / 2) * 2 ** 32) | 0);
+    K.push((Math.pow(p, 1 / 3) * 2 ** 32) | 0);
+    i++;
+  }
+  return msg => {
+    const len = msg.length, n = ((len + 9 + 63) >> 6) << 6;
+    const buf = new Uint8Array(n); buf.set(msg); buf[len] = 0x80;
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(n - 4, len * 8); dv.setUint32(n - 8, Math.floor(len / 2 ** 29));
+    const h = H0.slice(), w = new Array(64);
+    for (let o = 0; o < n; o += 64) {
+      for (let i = 0; i < 16; i++) w[i] = dv.getUint32(o + i * 4);
+      for (let i = 16; i < 64; i++) {
+        const a = w[i - 15], b = w[i - 2];
+        const s0 = (a >>> 7 | a << 25) ^ (a >>> 18 | a << 14) ^ (a >>> 3);
+        const s1 = (b >>> 17 | b << 15) ^ (b >>> 19 | b << 13) ^ (b >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+      }
+      let [a, b, c, d, e, f, g, hh] = h;
+      for (let i = 0; i < 64; i++) {
+        const S1 = (e >>> 6 | e << 26) ^ (e >>> 11 | e << 21) ^ (e >>> 25 | e << 7);
+        const t1 = (hh + S1 + ((e & f) ^ (~e & g)) + K[i] + w[i]) | 0;
+        const S0 = (a >>> 2 | a << 30) ^ (a >>> 13 | a << 19) ^ (a >>> 22 | a << 10);
+        const t2 = (S0 + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        hh = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      h[0] = (h[0] + a) | 0; h[1] = (h[1] + b) | 0; h[2] = (h[2] + c) | 0; h[3] = (h[3] + d) | 0;
+      h[4] = (h[4] + e) | 0; h[5] = (h[5] + f) | 0; h[6] = (h[6] + g) | 0; h[7] = (h[7] + hh) | 0;
+    }
+    const out = new Uint8Array(32), odv = new DataView(out.buffer);
+    h.forEach((x, i) => odv.setUint32(i * 4, x));
+    return out;
+  };
+})();
+
+const SAFETY_CONTEXT = "maarse/sikkerhedsnummer/v0", SAFETY_ITERATIONS = 512;
+const concatBytes = (...a) => { const o = new Uint8Array(a.reduce((n, x) => n + x.length, 0)); let i = 0; for (const x of a) { o.set(x, i); i += x.length; } return o; };
+
+// 30 cifre for én offentlig identitet (64 bytes: Ed25519 | X25519).
+function safetyFingerprint(key) {
+  let h = sha256(concatBytes(new TextEncoder().encode(SAFETY_CONTEXT), key));
+  for (let i = 1; i < SAFETY_ITERATIONS; i++) h = sha256(concatBytes(h, key));
+  let s = "";
+  for (let i = 0; i < 6; i++) {
+    let v = 0;
+    for (let j = 0; j < 5; j++) v = v * 256 + h[i * 5 + j]; // < 2^40, præcist i en double
+    s += String(v % 100000).padStart(5, "0");
+  }
+  return s;
+}
+
+// 60 cifre, uafhængigt af rækkefølgen.
+function safetyNumber(keyA, keyB) {
+  const a = safetyFingerprint(keyA), b = safetyFingerprint(keyB);
+  return a <= b ? a + b : b + a;
+}
+// </sikkerhedsnummer>
+
+// ---------- base32 (RFC 4648, uden '=') til invitationer og kontaktlinks ----------
+const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+function base32(bytes) {
+  let s = "", acc = 0, n = 0;
+  for (const b of bytes) { acc = acc << 8 | b; n += 8; while (n >= 5) { s += B32[(acc >>> (n - 5)) & 31]; n -= 5; } acc &= 0xff; }
+  if (n) s += B32[(acc << (5 - n)) & 31];
+  return s;
+}
+function unbase32(s) {
+  const out = []; let acc = 0, n = 0;
+  for (const c of s.toUpperCase().replace(/[=\s]/g, "")) {
+    const v = B32.indexOf(c); if (v < 0) return null;
+    acc = (acc << 5 | v) & 0xffff; n += 5;
+    if (n >= 8) { out.push((acc >>> (n - 8)) & 0xff); n -= 8; }
+  }
+  return new Uint8Array(out);
+}
+
+// ---------- QR-kode (lille selvstændig encoder: byte-tilstand, fejlkorrektion M) ----------
+// <qr>
+const QR = (() => {
+  const ECC = [0, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28];
+  const BLK = [0, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49];
+  const rawModules = v => {
+    let r = (16 * v + 128) * v + 64;
+    if (v >= 2) { const n = Math.floor(v / 7) + 2; r -= (25 * n - 10) * n - 55; if (v >= 7) r -= 36; }
+    return r;
+  };
+  const dataCw = v => Math.floor(rawModules(v) / 8) - ECC[v] * BLK[v];
+  const bit = (x, i) => ((x >>> i) & 1) !== 0;
+  const mul = (x, y) => { let z = 0; for (let i = 7; i >= 0; i--) { z = (z << 1) ^ ((z >>> 7) * 0x11d); z ^= ((y >>> i) & 1) * x; } return z; };
+  function divisor(d) {
+    const r = new Array(d).fill(0); r[d - 1] = 1; let root = 1;
+    for (let i = 0; i < d; i++) {
+      for (let j = 0; j < d; j++) { r[j] = mul(r[j], root); if (j + 1 < d) r[j] ^= r[j + 1]; }
+      root = mul(root, 2);
+    }
+    return r;
+  }
+  function remainder(data, div) {
+    const r = div.map(() => 0);
+    for (const b of data) { const f = b ^ r.shift(); r.push(0); div.forEach((c, i) => { r[i] ^= mul(c, f); }); }
+    return r;
+  }
+  function alignPos(v) {
+    if (v === 1) return [];
+    const n = Math.floor(v / 7) + 2, step = v === 32 ? 26 : Math.ceil((v * 4 + 4) / (n * 2 - 2)) * 2, r = [6];
+    for (let p = v * 4 + 10; r.length < n; p -= step) r.splice(1, 0, p);
+    return r;
+  }
+  const MASKS = [
+    (x, y) => (x + y) % 2 === 0, (x, y) => y % 2 === 0, (x, y) => x % 3 === 0, (x, y) => (x + y) % 3 === 0,
+    (x, y) => (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0, (x, y) => x * y % 2 + x * y % 3 === 0,
+    (x, y) => (x * y % 2 + x * y % 3) % 2 === 0, (x, y) => ((x + y) % 2 + x * y % 3) % 2 === 0,
+  ];
+
+  // Returnerer en matrix af booleans (true = mørk).
+  function encode(bytes) {
+    let v = 1;
+    while (v <= 40 && 4 + (v < 10 ? 8 : 16) + bytes.length * 8 > dataCw(v) * 8) v++;
+    if (v > 40) throw new Error("For meget data til en QR-kode");
+    const bits = [], put = (val, n) => { for (let i = n - 1; i >= 0; i--) bits.push((val >>> i) & 1); };
+    const cap = dataCw(v) * 8;
+    put(4, 4); put(bytes.length, v < 10 ? 8 : 16); for (const b of bytes) put(b, 8);
+    put(0, Math.min(4, cap - bits.length)); put(0, (8 - bits.length % 8) % 8);
+    for (let p = 0xec; bits.length < cap; p ^= 0xec ^ 0x11) put(p, 8);
+    const data = [];
+    for (let i = 0; i < bits.length; i += 8) { let b = 0; for (let j = 0; j < 8; j++) b = b << 1 | bits[i + j]; data.push(b); }
+
+    const nb = BLK[v], ec = ECC[v], raw = Math.floor(rawModules(v) / 8), nShort = nb - raw % nb, shortLen = Math.floor(raw / nb);
+    const div = divisor(ec), blocks = [];
+    for (let i = 0, k = 0; i < nb; i++) {
+      const dat = data.slice(k, k + shortLen - ec + (i < nShort ? 0 : 1)); k += dat.length;
+      const e = remainder(dat, div);
+      if (i < nShort) dat.push(0);
+      blocks.push(dat.concat(e));
+    }
+    const all = [];
+    for (let i = 0; i < blocks[0].length; i++) blocks.forEach((b, j) => { if (i !== shortLen - ec || j >= nShort) all.push(b[i]); });
+
+    const size = v * 4 + 17;
+    const m = Array.from({ length: size }, () => new Array(size).fill(false));
+    const fn = Array.from({ length: size }, () => new Array(size).fill(false));
+    const set = (x, y, d) => { m[y][x] = d; fn[y][x] = true; };
+    for (let i = 0; i < size; i++) { set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0); }
+    const finder = (cx, cy) => {
+      for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+        const d = Math.max(Math.abs(dx), Math.abs(dy)), x = cx + dx, y = cy + dy;
+        if (x >= 0 && x < size && y >= 0 && y < size) set(x, y, d !== 2 && d !== 4);
+      }
+    };
+    finder(3, 3); finder(size - 4, 3); finder(3, size - 4);
+    const al = alignPos(v), na = al.length;
+    for (let i = 0; i < na; i++) for (let j = 0; j < na; j++) {
+      if ((i === 0 && j === 0) || (i === 0 && j === na - 1) || (i === na - 1 && j === 0)) continue;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(al[i] + dx, al[j] + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+    }
+    const drawFormat = mask => {
+      const d = mask; // fejlkorrektion M = 00
+      let rem = d; for (let i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+      const b = (d << 10 | rem) ^ 0x5412;
+      for (let i = 0; i <= 5; i++) set(8, i, bit(b, i));
+      set(8, 7, bit(b, 6)); set(8, 8, bit(b, 7)); set(7, 8, bit(b, 8));
+      for (let i = 9; i < 15; i++) set(14 - i, 8, bit(b, i));
+      for (let i = 0; i < 8; i++) set(size - 1 - i, 8, bit(b, i));
+      for (let i = 8; i < 15; i++) set(8, size - 15 + i, bit(b, i));
+      set(8, size - 8, true);
+    };
+    drawFormat(0);
+    if (v >= 7) {
+      let rem = v; for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >>> 11) * 0x1f25);
+      const b = v << 12 | rem;
+      for (let i = 0; i < 18; i++) { const a = size - 11 + i % 3, c = Math.floor(i / 3); set(a, c, bit(b, i)); set(c, a, bit(b, i)); }
+    }
+    let i = 0;
+    for (let right = size - 1; right >= 1; right -= 2) {
+      if (right === 6) right = 5;
+      for (let vert = 0; vert < size; vert++) for (let j = 0; j < 2; j++) {
+        const x = right - j, y = ((right + 1) & 2) === 0 ? size - 1 - vert : vert;
+        if (!fn[y][x] && i < all.length * 8) { m[y][x] = bit(all[i >>> 3], 7 - (i & 7)); i++; }
+      }
+    }
+    const applyMask = k => { for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (!fn[y][x] && MASKS[k](x, y)) m[y][x] = !m[y][x]; };
+    const penalty = () => {
+      let p = 0, dark = 0;
+      for (let a = 0; a < size; a++) for (const row of [true, false]) {
+        let run = 0, last = null;
+        for (let b = 0; b < size; b++) {
+          const c = row ? m[a][b] : m[b][a];
+          if (c === last) { run++; if (run === 5) p += 3; else if (run > 5) p++; } else { run = 1; last = c; }
+        }
+      }
+      for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+        if (m[y][x]) dark++;
+        if (x + 1 < size && y + 1 < size && m[y][x] === m[y][x + 1] && m[y][x] === m[y + 1][x] && m[y][x] === m[y + 1][x + 1]) p += 3;
+      }
+      return p + Math.floor(Math.abs(dark * 20 - size * size * 10) / (size * size)) * 10;
+    };
+    let best = 0, bestP = Infinity;
+    for (let k = 0; k < 8; k++) {
+      applyMask(k); drawFormat(k);
+      const p = penalty(); if (p < bestP) { bestP = p; best = k; }
+      applyMask(k);
+    }
+    applyMask(best); drawFormat(best);
+    return m;
+  }
+
+  // SVG med 4 moduler hvid kant (QR-koder skal have lys baggrund, også i mørk tilstand).
+  function svg(text, px = 240) {
+    const m = encode(new TextEncoder().encode(text)), n = m.length + 8;
+    let d = "";
+    m.forEach((row, y) => row.forEach((c, x) => { if (c) d += `M${x + 4} ${y + 4}h1v1h-1z`; }));
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n} ${n}" width="${px}" height="${px}" shape-rendering="crispEdges">` +
+      `<rect width="${n}" height="${n}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+  }
+  return { encode, svg };
+})();
+// </qr>
+
+// ---------- sikkerhedsnumre og private kanaler: tilstand og links ----------
+
+// Nøgler vi har set for hver kontakt (første gang = "fastholdt"), og hvilke
+// nøgler brugeren har bekræftet ved at sammenligne sikkerhedsnummeret.
+let contactKeys = store.get("keys", {});       // adresse -> hex(64 bytes)
+let verified = store.get("verified", {});      // adresse -> hex(64 bytes) der blev bekræftet
+let privateChannels = store.get("private", {}); // kanaladresse -> { name, key: hex(32) }
+
+const channelAddrOf = keyBytes => hex(sha256(keyBytes).slice(0, 16));
+const addrOfIdentity = keyBytes => hex(sha256(keyBytes).slice(0, 16));
+const isVerified = addr => !!contactKeys[addr] && verified[addr] === contactKeys[addr];
+
+function contactLink() {
+  return `maarse:kontakt?adr=${state.me}&nøgle=${base32(unhex(state.meKey))}`;
+}
+function inviteLink(ch) {
+  const p = privateChannels[ch];
+  return `maarse:kanal?navn=${encodeURIComponent(p.name)}&nøgle=${base32(unhex(p.key))}`;
+}
+// Læser "maarse:kanal?..." eller "maarse:kontakt?...". Tåler at "nøgle" er
+// procent-kodet, og at linket er indsat med mellemrum omkring.
+function parseMaarseLink(s) {
+  const m = s.trim().match(/^maarse:(kanal|kontakt)\?(.*)$/i);
+  if (!m) return null;
+  const q = {};
+  for (const part of m[2].split("&")) {
+    const i = part.indexOf("=");
+    if (i < 0) continue;
+    try { q[decodeURIComponent(part.slice(0, i)).toLowerCase()] = decodeURIComponent(part.slice(i + 1)); } catch { return null; }
+  }
+  const key = unbase32(q["nøgle"] || q["key"] || "");
+  if (m[1].toLowerCase() === "kanal") {
+    if (!key || key.length !== 32) return null;
+    return { kind: "kanal", name: (q.navn || q.name || "privat").slice(0, 24), key };
+  }
+  if (!key || key.length !== 64) return null;
+  const addr = addrOfIdentity(key);
+  if (q.adr && q.adr.toLowerCase() !== addr) return null; // adresse og nøgle passer ikke sammen
+  return { kind: "kontakt", addr, key };
+}
+
+// Kaldes fra onEvent: egen identitet fra Info.
+function onIdentityInfo(ev) {
+  state.meKey = ev.identity ? hex(ev.identity) : null;
+  $("btn-myqr").disabled = !state.meKey;
+  // Private kanaler gemmes i browseren; firmware husker dem ikke efter genstart.
+  for (const [ch, p] of Object.entries(privateChannels)) transport?.send(Cmd.joinPrivate(unhex(p.key), p.name));
+}
+
+// Kaldes fra onEvent: en kontakts nøgle fra Heard.
+function onIdentityHeard(ev) {
+  if (!ev.identity) return;
+  rememberKey(ev.addr, hex(ev.identity));
+}
+
+function rememberKey(addr, key) {
+  const old = contactKeys[addr];
+  if (old === key) return;
+  if (old) {
+    // Adressen er hash af nøglerne, så det her burde ikke ske; men vis det tydeligt.
+    log(`ADVARSEL: ${label(addr)} har en ny nøgle. Sammenlign sikkerhedsnummeret igen.`);
+  }
+  contactKeys[addr] = key; store.set("keys", contactKeys);
+  if (verified[addr] && verified[addr] !== key) { delete verified[addr]; store.set("verified", verified); }
+}
+
+// Tilføj-feltet accepterer også et kontaktlink fra en QR-kode.
+function addContactFromLink(s, nick) {
+  const l = parseMaarseLink(s);
+  if (!l || l.kind !== "kontakt") return false;
+  rememberKey(l.addr, hex(l.key));
+  nicknames[l.addr] = nick || nicknames[l.addr] || short(l.addr); store.set("nicknames", nicknames);
+  state.active = "dm:" + l.addr; setView("chat"); renderSide();
+  return true;
+}
+
+function joinPrivate(name, key) {
+  const ch = channelAddrOf(key);
+  privateChannels[ch] = { name, key: hex(key) }; store.set("private", privateChannels);
+  transport?.send(Cmd.joinPrivate(key, name));
+  return ch;
+}
+
+function leavePrivateMemory(ch) {
+  delete privateChannels[ch]; store.set("private", privateChannels);
+}
+
+// ---------- sikkerhedsnumre og private kanaler: visninger ----------
+
+function el(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  Object.assign(e, props);
+  for (const k of kids) e.append(k);
+  return e;
+}
+function qrBox(text) {
+  const w = el("div", { className: "qr" });
+  try { w.innerHTML = QR.svg(text); } catch (e) { w.textContent = "(QR-koden kunne ikke laves: " + e.message + ")"; }
+  return w;
+}
+function copyRow(text) {
+  const t = el("div", { className: "linktext", textContent: text });
+  const b = el("button", { textContent: "Kopiér" });
+  b.onclick = () => { navigator.clipboard?.writeText(text); log("Kopieret"); };
+  return el("div", {}, t, el("div", { className: "row" }, b));
+}
+const backButton = () => { const b = el("button", { textContent: "Tilbage" }); b.onclick = () => setView("chat"); return b; };
+
+// Knapper i samtalehovedet (bekræft nøgle / del invitation).
+function renderChatTools() {
+  const box = $("chat-tools"); box.replaceChildren();
+  if (state.view !== "chat" || !state.active) return;
+  const [kind, addr] = state.active.split(":");
+  if (kind === "dm") {
+    const b = el("button", { textContent: isVerified(addr) ? "✓ Bekræftet" : "Bekræft nøgle" });
+    b.onclick = () => setView("verify");
+    box.append(b);
+  } else if (privateChannels[addr]) {
+    const b = el("button", { textContent: "Del invitation" });
+    b.onclick = () => setView("invite");
+    box.append(el("span", { className: "hint", textContent: "Privat kanal" }), b);
+  }
+}
+
+// Returnerer true, hvis visningen er en af vores.
+function renderSecurityView(box) {
+  const v = state.view;
+  if (!["verify", "invite", "myqr", "newprivate", "joininvite"].includes(v)) return false;
+  const wrap = el("div", { className: "secure" });
+  box.append(wrap);
+  const [kind, addr] = (state.active || ":").split(":");
+  const title = t => { $("chat-title").textContent = t; $("chat-sub").textContent = ""; };
+
+  if (v === "verify" && kind === "dm") {
+    title("Bekræft nøgle: " + label(addr));
+    $("chat-sub").textContent = addr;
+    const theirs = contactKeys[addr];
+    if (!state.meKey || !theirs) {
+      wrap.append(el("p", { className: "warn", textContent: !state.meKey
+        ? "Noden har ikke oplyst sin egen nøgle (ældre firmware?)."
+        : "Kontaktens nøgle kendes ikke endnu. Vent på et announce fra den, eller tilføj den via dens QR-kode." }));
+    } else {
+      const num = safetyNumber(unhex(state.meKey), unhex(theirs));
+      const grid = el("div", { className: "safety" });
+      for (let i = 0; i < 60; i += 5) grid.append(el("span", { textContent: num.slice(i, i + 5) }));
+      const ok = isVerified(addr);
+      const mark = el("button", { className: ok ? "" : "primary", textContent: ok ? "Fjern bekræftelse" : "Markér som bekræftet" });
+      mark.onclick = () => {
+        if (ok) delete verified[addr]; else verified[addr] = theirs;
+        store.set("verified", verified); renderSide(); renderChat();
+      };
+      wrap.append(
+        el("p", { className: "hint", textContent: "Sammenlign sikkerhedsnummeret med kontaktens skærm, ansigt til ansigt eller over en kanal du stoler på. Er det ens, er der ingen mellemmand." }),
+        grid,
+        el("p", { textContent: ok ? "✓ Bekræftet" : "Ikke bekræftet" }),
+        el("div", { className: "row" }, mark),
+        el("h3", { textContent: "Din QR-kode" }),
+        el("p", { className: "hint", textContent: "Kontakten kan indsætte linket i Tilføj-feltet for at få din nøgle direkte." }),
+        qrBox(contactLink()), copyRow(contactLink()));
+    }
+  } else if (v === "myqr" && state.meKey) {
+    title("Min QR-kode");
+    wrap.append(el("p", { className: "hint", textContent: "Indeholder din adresse og offentlige nøgle. Indsæt linket i Tilføj-feltet hos en anden." }),
+      qrBox(contactLink()), copyRow(contactLink()));
+  } else if (v === "invite" && kind === "ch" && privateChannels[addr]) {
+    title("Invitation: " + privateChannels[addr].name);
+    const forget = el("button", { textContent: "Glem nøglen i denne browser" });
+    forget.onclick = () => { if (confirm("Glem nøglen? Noden kan stadig være med, til den genstarter.")) { leavePrivateMemory(addr); setView("chat"); } };
+    wrap.append(el("p", { className: "warn", textContent: "Alle med invitationen kan læse og skrive i kanalen. Del den kun med dem, der skal være med." }),
+      qrBox(inviteLink(addr)), copyRow(inviteLink(addr)), el("div", { className: "row" }, forget));
+  } else if (v === "newprivate") {
+    title("Ny privat kanal");
+    const name = el("input", { placeholder: "Navn (kun til visning)", maxLength: 24 });
+    const make = el("button", { className: "primary", textContent: "Opret" });
+    make.onclick = () => {
+      const key = crypto.getRandomValues(new Uint8Array(32));
+      const ch = joinPrivate(name.value.trim() || "privat", key);
+      state.active = "ch:" + ch; setView("invite");
+    };
+    wrap.append(el("p", { className: "hint", textContent: "Kanalen får en tilfældig nøgle. Kun dem, du giver invitationen, kan være med." }),
+      el("div", { className: "row" }, name, make));
+  } else if (v === "joininvite") {
+    title("Deltag via invitation");
+    const inp = el("input", { placeholder: "maarse:kanal?navn=…&nøgle=…" });
+    const go = el("button", { className: "primary", textContent: "Deltag" });
+    go.onclick = () => {
+      const l = parseMaarseLink(inp.value);
+      if (!l || l.kind !== "kanal") { log("Det er ikke en gyldig kanalinvitation"); return; }
+      const ch = joinPrivate(l.name, l.key);
+      state.active = "ch:" + ch; setView("chat");
+    };
+    wrap.append(el("p", { className: "hint", textContent: "Indsæt invitationen, du har fået." }), el("div", { className: "row" }, inp, go));
+  } else {
+    setView("chat"); return true;
+  }
+  wrap.append(el("div", { className: "row" }, backButton()));
+  return true;
+}
+
+$("btn-myqr").onclick = () => setView("myqr");
+$("btn-private-new").onclick = () => setView("newprivate");
+$("btn-private-join").onclick = () => setView("joininvite");
+
 // ---------- knapper ----------
 
 $("btn-ws").onclick = () => connect("ws");
@@ -850,6 +1299,7 @@ $("btn-join").onclick = () => {
 };
 $("btn-add").onclick = () => {
   const a = $("add-addr").value.trim().toLowerCase(), n = $("add-name").value.trim();
+  if (addContactFromLink($("add-addr").value, n)) { $("add-addr").value = ""; $("add-name").value = ""; return; }
   if (!/^[0-9a-f]{32}$/.test(a)) { log("Adressen skal være 32 hex-tegn"); return; }
   nicknames[a] = n || short(a); store.set("nicknames", nicknames);
   $("add-addr").value = ""; $("add-name").value = "";

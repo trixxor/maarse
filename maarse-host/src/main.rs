@@ -366,10 +366,17 @@ fn main() {
         println!("  MQTT:     {} (emner under {}/)", m.addr, m.prefix);
     }
     if let Some(addr) = cfg.http {
-        match web::spawn(addr, tx.clone()) {
+        let token = web::access_token(&cfg.data_dir);
+        match web::spawn(addr, token.clone(), tx.clone()) {
             Ok(()) => {
                 let url = format!("http://{addr}/");
                 println!("  Webklient: {url}");
+                if !addr.ip().is_loopback() {
+                    let shown = if addr.ip().is_unspecified() { format!("<denne-pc>:{}", addr.port()) } else { addr.to_string() };
+                    println!("  Fjernadgang: kræver adgangsnøglen (se {})", cfg.data_dir.join("adgangsnoegle.txt").display());
+                    println!("    Browser: http://{shown}/#token={token}");
+                    println!("    App:     adresse {shown}, nøgle {token}");
+                }
                 if cfg.open_browser {
                     open_browser(&url);
                 }

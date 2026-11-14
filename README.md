@@ -65,6 +65,18 @@ Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), US
 
 Filer på firmware-noder (`firmware/common/src/node/files.rs`, logikken i `maarse-crypto/src/files.rs`) bruger samme format som maarse-host, så de to kan sende filer til hinanden. Noden sender og modtager én fil ad gangen i hver retning (to statiske buffere på 8 KB). En modtaget fil sendes til klienten, når den er hel og tjekket; er ingen klient forbundet, bliver den liggende i RAM, til en klient forbinder (den overskrives af næste fil og forsvinder ved genstart). Filer lægges ikke i postkassen: én fil ville fylde de 8 KB flash helt.
 
+## Fjernadgang (fx telefonen over VPN)
+
+maarse-host kan nås fra andre maskiner, fx telefonen over en VPN hjem, når den lytter på en anden adresse end `127.0.0.1`:
+
+```text
+maarse-host --http 0.0.0.0:8080 --serial COM6 --meshcore COM9
+```
+
+Ved opstart skriver hosten en **adgangsnøgle** (gemt i `<data>/adgangsnoegle.txt`) og en færdig adresse til browseren (`http://<pc>:8080/#token=…`). Forbindelser fra PC'en selv virker uden nøgle som før; alle andre skal have nøglen med (`ws://…/ws?token=…`), ellers afvises de (HTTP 403). I Android-appen: tryk **maarse-host**, skriv adressen (fx PC'ens VPN-adresse `10.8.0.2:8080`) og nøglen; appen husker dem og forbinder selv igen. Telefonen bruger så PC'ens node: MeshCore-gateway, LoRa via modemet, TCP-backbone og historik.
+
+Lad kun hosten lytte på et netværk, du stoler på (VPN eller hjemmenet). Nøglen beskytter adgangen, men forbindelsen selv er ikke krypteret uden VPN.
+
 ## Android-app (APK)
 
 `python tools/build_apk.py` bygger `dist/maarse.apk` direkte med Android SDK'ens værktøjer (aapt2, javac, d8, zipalign, apksigner), uden Gradle. Kræver Android SDK (build-tools 34+, platform 35+) og en JDK; APK'en signeres med debug-nøglen.

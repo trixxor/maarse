@@ -13,23 +13,42 @@ use tungstenite::{Error as WsError, Message};
 /// Webklienten er bygget ind i programmet, så der kun er én fil at køre.
 const INDEX_HTML: &str = include_str!("../../maarse-client/index.html");
 
-pub fn spawn(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<()> {
+/// Adgangsnøglen til fjernadgang: læses fra `<data>/adgangsnoegle.txt`
+/// eller laves (32 hextegn) første gang.
+pub fn access_token(data_dir: &std::path::Path) -> String {
+    let p = data_dir.join("adgangsnoegle.txt");
+    if let Ok(t) = std::fs::read_to_string(&p) {
+        let t = t.trim().to_string();
+        if t.len() >= 16 {
+            return t;
+        }
+    }
+    use rand_core::RngCore;
+    let mut b = [0u8; 16];
+    rand_core::OsRng.fill_bytes(&mut b);
+    let t: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    let _ = std::fs::write(&p, format!("{t}\n"));
+    t
+}
+
+pub fn spawn(addr: SocketAddr, token: String, tx: Sender<In>) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr)?;
+    let token = std::sync::Arc::new(token);
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let tx = tx.clone();
-            thread::spawn(move || handle(stream, tx));
+            let (tx, token) = (tx.clone(), token.clone());
+            thread::spawn(move || handle(stream, &token, tx));
         }
     });
     Ok(())
 }
 
-fn handle(stream: TcpStream, tx: Sender<In>) {
+fn handle(stream: TcpStream, token: &str, tx: Sender<In>) {
     let mut peek = [0u8; 2048];
     let n = stream.peek(&mut peek).unwrap_or(0);
     let head = String::from_utf8_lossy(&peek[..n]).to_ascii_lowercase();
     if head.contains("upgrade: websocket") {
-        websocket(stream, tx);
+        websocket(stream, token, tx);
     } else {
         http(stream);
     }
@@ -89,25 +108,51 @@ fn service_worker() -> String {
     SW_JS.replacen("\"maarse-v1\"", &format!("\"maarse-{h:016x}\""), 1)
 }
 
-/// Kun sider fra samme vært må styre noden. Ellers kunne enhver hjemmeside,
-/// du besøger, sende beskeder i dit navn via localhost.
-#[allow(clippy::result_large_err)] // signaturen er givet af tungstenite
-fn same_origin(req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
+/// Hvem må styre noden over WebSocket?
+///
+/// * Fra denne computer (loopback) og fra en side med samme vært: ja, som
+///   før. Origin-tjekket forhindrer, at en hjemmeside, du besøger, sender
+///   beskeder i dit navn via localhost.
+/// * Alle andre (fx telefonen over VPN, eller appen, der har sin egen
+///   origin) skal have adgangsnøglen med: `ws://vært/ws?token=<nøgle>`.
+fn allowed(req: &Request, loopback: bool, token: &str) -> bool {
+    let given = req
+        .uri()
+        .query()
+        .unwrap_or("")
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("token="))
+        .unwrap_or("");
+    if !token.is_empty() && ct_eq(given.as_bytes(), token.as_bytes()) {
+        return true;
+    }
     let h = req.headers();
     let host = h.get("host").and_then(|v| v.to_str().ok()).unwrap_or("");
-    match h.get("origin").and_then(|v| v.to_str().ok()) {
-        None => Ok(resp),
-        Some(o) if o == format!("http://{host}") => Ok(resp),
-        Some(_) => {
-            let mut r = ErrorResponse::new(Some("Forkert origin".into()));
+    let origin_ok = match h.get("origin").and_then(|v| v.to_str().ok()) {
+        None => true,
+        Some(o) => o == format!("http://{host}"),
+    };
+    loopback && origin_ok
+}
+
+/// Sammenligning i konstant tid (nøglen må ikke kunne gættes tegn for tegn).
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn websocket(stream: TcpStream, token: &str, tx: Sender<In>) {
+    let loopback = stream.peer_addr().map(|a| a.ip().is_loopback()).unwrap_or(false);
+    #[allow(clippy::result_large_err)] // signaturen er givet af tungstenite
+    let check = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+        if allowed(req, loopback, token) {
+            Ok(resp)
+        } else {
+            let mut r = ErrorResponse::new(Some("Adgangsnøgle mangler eller er forkert".into()));
             *r.status_mut() = tungstenite::http::StatusCode::FORBIDDEN;
             Err(r)
         }
-    }
-}
-
-fn websocket(stream: TcpStream, tx: Sender<In>) {
-    let Ok(mut ws) = tungstenite::accept_hdr(stream, same_origin) else {
+    };
+    let Ok(mut ws) = tungstenite::accept_hdr(stream, check) else {
         return;
     };
     let _ = ws

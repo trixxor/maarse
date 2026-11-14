@@ -87,6 +87,8 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false);
+        // ws:// til en maarse-host (fx over VPN) fra den sikre interne side.
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         web.addJavascriptInterface(new Bridge(), "MaarseAndroid");
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -104,6 +106,12 @@ public class MainActivity extends Activity {
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
+                android.util.Log.i("maarse", m.messageLevel() + " " + m.message() + " (" + m.sourceId() + ":" + m.lineNumber() + ")");
+                return true;
+            }
+
             @Override
             public void onPermissionRequest(PermissionRequest req) {
                 main.post(() -> {

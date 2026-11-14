@@ -11,7 +11,7 @@ use crate::bus::{
     Frame, Pkt, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_TX, RSTATS, TxReq, USB_IN, USB_OUT,
 };
 use core::sync::atomic::Ordering::Relaxed;
-use embassy_futures::select::{Either3, select3};
+use embassy_futures::select::{Either, Either4, select, select4};
 use embassy_futures::yield_now;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::{FnvIndexMap, FnvIndexSet};
@@ -45,6 +45,9 @@ const RESYNC_EVERY: Duration = Duration::from_secs(60);
 type Name = heapless::String<40>;
 /// Regionsnavne, kommasepareret (fx `dk,nordjylland`).
 pub type RegionNames = heapless::Vec<u8, 120>;
+
+/// SNR given to packets from the Wi-Fi backbone link (same as maarse-host's TCP).
+const NET_SNR: i8 = 10;
 
 /// Hvor radioindstillinger gemmes (flash på boardet).
 pub trait Settings {
@@ -80,6 +83,12 @@ pub trait Settings {
     fn load_name(&mut self) -> maarse_core::appdata::Name {
         Default::default()
     }
+    /// Saves the Wi-Fi backbone settings. Default: not saved.
+    fn save_wifi(&mut self, _w: &maarse_core::companion::WifiSettings) {}
+    /// Saved Wi-Fi backbone settings; default is off.
+    fn load_wifi(&mut self) -> maarse_core::companion::WifiSettings {
+        Default::default()
+    }
 
     // ----- postkasse (valgfri; standard: ingen) -----
 
@@ -103,7 +112,9 @@ pub trait Settings {
 }
 
 pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
-    router: Router<256, 1024>,
+    /// In its own static (about 53 KB): built inside the node, its temporary
+    /// copies overflowed the ESP32-S3's stack at boot.
+    router: &'static mut Router<256, 1024>,
     identity: Identity,
     addr: Address,
     known: FnvIndexMap<Address, PublicIdentity, 64>,
@@ -177,7 +188,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         );
         // Rollen vælges i appen (`SetRole`) og hentes fra flash nedenfor;
         // standard er repeater (fast strøm).
-        let router = Router::new(addr, Role::Repeater);
+        static ROUTER: static_cell::StaticCell<Router<256, 1024>> = static_cell::StaticCell::new();
+        let router = ROUTER.init_with(|| Router::new(addr, Role::Repeater));
         let mut n = FwNode {
             router,
             identity,
@@ -226,10 +238,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         loop {
             if self.stamping.is_some() {
                 self.stamp_step();
-                match select3(RADIO_RX.receive(), USB_IN.receive(), yield_now()).await {
-                    Either3::First((pkt, snr)) => self.on_radio(pkt, snr),
-                    Either3::Second(frame) => self.on_frame(frame),
-                    Either3::Third(()) => {
+                match select4(RADIO_RX.receive(), USB_IN.receive(), select(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait()), yield_now()).await {
+                    Either4::First((pkt, snr)) => self.on_radio(pkt, snr),
+                    Either4::Second(frame) => self.on_frame(frame),
+                    Either4::Third(Either::First(pkt)) => self.on_net(pkt),
+                    Either4::Third(Either::Second(())) => self.toggle_radio(),
+                    Either4::Fourth(()) => {
                         if Instant::now() >= self.next_deadline() {
                             self.on_timer();
                         }
@@ -238,10 +252,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 continue;
             }
             let deadline = self.next_deadline();
-            match select3(RADIO_RX.receive(), USB_IN.receive(), Timer::at(deadline)).await {
-                Either3::First((pkt, snr)) => self.on_radio(pkt, snr),
-                Either3::Second(frame) => self.on_frame(frame),
-                Either3::Third(()) => self.on_timer(),
+            match select4(RADIO_RX.receive(), USB_IN.receive(), select(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait()), Timer::at(deadline)).await {
+                Either4::First((pkt, snr)) => self.on_radio(pkt, snr),
+                Either4::Second(frame) => self.on_frame(frame),
+                Either4::Third(Either::First(pkt)) => self.on_net(pkt),
+                Either4::Third(Either::Second(())) => self.toggle_radio(),
+                Either4::Fourth(()) => self.on_timer(),
             }
         }
     }
@@ -299,6 +315,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     fn transmit(&self, packet: Pkt, delay_ms: u32, id: u64) {
+        // The backbone link gets every packet at once; flood delays and
+        // cancellation only matter on the shared radio channel.
+        if crate::bus::WIFI_STATE.load(Relaxed) == maarse_core::companion::wifi_state::LINKED as u32 {
+            let _ = crate::bus::NET_TX.try_send(packet.clone());
+        }
         let _ = RADIO_TX.try_send(TxReq {
             packet,
             delay_ms,
@@ -353,6 +374,51 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     // ---------- radio ----------
+
+    /// A packet from the Wi-Fi backbone link. TCP is treated as a perfect
+    /// link, as maarse-host does.
+    fn on_net(&mut self, pkt: Pkt) {
+        if self.modem {
+            return;
+        }
+        let actions = self.router.on_receive(&pkt, NET_SNR, now_ms());
+        self.apply(actions);
+    }
+
+    /// The button asks to switch between Bluetooth and Wi-Fi: flip the saved
+    /// mode and restart (only one radio runs at a time).
+    fn toggle_radio(&mut self) {
+        use crate::bus::{NOTE_ONE_RADIO, NOTE_TO_BLE, NOTE_TO_WIFI, NOTE_WIFI_NOT_SET_UP, note};
+        if !crate::bus::WIFI_SUPPORTED.load(Relaxed) {
+            note(NOTE_ONE_RADIO, 4);
+            return;
+        }
+        let mut w = self.settings.load_wifi();
+        if !w.enabled && (w.ssid.is_empty() || w.peer.is_empty()) {
+            note(NOTE_WIFI_NOT_SET_UP, 5);
+            log("Wi-Fi is not set up; set it up over USB first");
+            return;
+        }
+        w.enabled = !w.enabled;
+        self.settings.save_wifi(&w);
+        note(if w.enabled { NOTE_TO_WIFI } else { NOTE_TO_BLE }, 5);
+        log(if w.enabled { "Button: switching to Wi-Fi" } else { "Button: switching to Bluetooth" });
+        let ev = self.wifi_event();
+        emit(&ev);
+        crate::bus::RESTART.signal(());
+    }
+
+    fn wifi_event(&mut self) -> Event {
+        let w = self.settings.load_wifi();
+        let ip = crate::bus::WIFI_IP.load(Relaxed).to_be_bytes();
+        Event::Wifi {
+            enabled: w.enabled,
+            state: crate::bus::WIFI_STATE.load(Relaxed) as u8,
+            ip,
+            ssid: w.ssid,
+            peer: w.peer,
+        }
+    }
 
     fn on_radio(&mut self, pkt: Pkt, snr: i8) {
         if self.modem {
@@ -636,6 +702,27 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 log("Regioner gemt");
             }
             Command::GetRegions => emit(&self.regions_event()),
+            Command::GetWifi => {
+                let ev = self.wifi_event();
+                emit(&ev);
+            }
+            Command::SetWifi(w) => {
+                if !crate::bus::WIFI_SUPPORTED.load(Relaxed) {
+                    return err(0, error_code::BAD_FRAME, "This board has no Wi-Fi");
+                }
+                // An empty password for the same network keeps the saved one,
+                // so the host can be changed without typing it again.
+                let mut w = w;
+                let old = self.settings.load_wifi();
+                if w.password.is_empty() && w.ssid == old.ssid {
+                    w.password = old.password;
+                }
+                self.settings.save_wifi(&w);
+                let ev = self.wifi_event();
+                emit(&ev);
+                log("Wi-Fi saved; restarting to apply");
+                crate::bus::RESTART.signal(());
+            }
             // Kun hosten kender ruten godt nok til at svare; klienten falder
             // tilbage til `Info.max_file` (8 KB på firmware).
             Command::GetFileLimit { .. } => err(0, error_code::BAD_FRAME, "ukendt kommando"),

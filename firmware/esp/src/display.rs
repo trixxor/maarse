@@ -1,9 +1,13 @@
 //! OLED-display (128×64, SSD1306/SSD1315) på Heltec V4.
 //!
 //! Knappen (PRG/GPIO0) skifter mellem tre sider:
-//! 1. oversigt: adresse, kendte noder, beskeder og den seneste besked
+//! 1. oversigt: adresse, kendte noder, beskeder, forbindelser (USB, BT,
+//!    Wi-Fi med IP) og den seneste besked
 //! 2. radio: RSSI/SNR, pakker ind/ud, fejl og duty cycle
 //! 3. slukket (sparer strøm og skærm)
+//!
+//! Holding the button for 3 s switches between Bluetooth and Wi-Fi (only one
+//! runs at a time); the node saves the choice and restarts.
 
 use core::fmt::Write as _;
 use core::sync::atomic::Ordering::Relaxed;
@@ -19,7 +23,17 @@ use esp_hal::gpio::Input;
 use esp_hal::i2c::master::I2c;
 use ssd1306::prelude::*;
 use ssd1306::{I2CDisplayInterface, Ssd1306};
-use maarse_fw_common::bus::{KNOWN_NODES, LAST_MSG, MSG_COUNT, MY_SHORT, RSTATS};
+use maarse_fw_common::bus::{
+    BLE_ACTIVE, BLE_CONNECTED, DISPLAY_NOTE, KNOWN_NODES, LAST_MSG, MSG_COUNT, MY_SHORT, NOTE_ONE_RADIO,
+    NOTE_TO_BLE, NOTE_TO_WIFI, NOTE_WIFI_NOT_SET_UP, RSTATS, TOGGLE_RADIO, USB_LAST_RX, WIFI_IP, WIFI_STATE,
+    WIFI_SUPPORTED,
+};
+use maarse_core::companion::wifi_state;
+
+/// How long the button must be held to switch radio.
+const LONG_PRESS: Duration = Duration::from_secs(3);
+/// A USB host counts as connected this long after its last frame (s).
+const USB_FRESH_S: u32 = 30;
 
 type Line = heapless::String<22>;
 
@@ -52,7 +66,16 @@ pub async fn display_task(i2c: I2c<'static, Blocking>, mut button: Input<'static
         match select(Timer::after(Duration::from_secs(1)), button.wait_for_falling_edge()).await {
             Either::First(()) => {}
             Either::Second(()) => {
-                page = (page + 1) % 3;
+                Timer::after_millis(50).await; // prel
+                match select(button.wait_for_rising_edge(), Timer::after(LONG_PRESS)).await {
+                    Either::First(()) => page = (page + 1) % 3,
+                    Either::Second(()) => {
+                        // Long press: switch radio, show the overview with the note.
+                        TOGGLE_RADIO.signal(());
+                        page = 0;
+                        button.wait_for_rising_edge().await;
+                    }
+                }
                 Timer::after_millis(150).await; // prel
             }
         }
@@ -61,23 +84,80 @@ pub async fn display_task(i2c: I2c<'static, Blocking>, mut button: Input<'static
 
 fn overview(l: &mut [Line; 6]) {
     let _ = write!(l[0], "Maarse {:08x}", MY_SHORT.load(Relaxed));
-    let _ = write!(l[1], "Noder: {}", KNOWN_NODES.load(Relaxed));
-    let _ = write!(l[2], "Beskeder: {}", MSG_COUNT.load(Relaxed));
-    LAST_MSG.lock(|m| {
-        let m = m.borrow();
-        if m.0 != 0 {
-            let _ = write!(l[3], "Fra {:08x}:", m.0);
-            // Teksten fordeles på to linjer à 21 tegn.
-            let mut chars = m.1.chars();
-            let (a, b) = l.split_at_mut(5);
-            for line in [&mut a[4], &mut b[0]] {
-                for c in chars.by_ref().take(21) {
-                    let c = if c.is_ascii() { c } else { '?' };
-                    let _ = line.push(c);
+    let _ = write!(l[1], "Nodes {}  Msgs {}", KNOWN_NODES.load(Relaxed), MSG_COUNT.load(Relaxed));
+    links(&mut l[2]);
+    wifi_line(&mut l[3]);
+    if !note_line(&mut l[4]) {
+        LAST_MSG.lock(|m| {
+            let m = m.borrow();
+            if m.0 != 0 {
+                let _ = write!(l[4], "From {:08x}:", m.0);
+                for c in m.1.chars().take(21) {
+                    let _ = l[5].push(if c.is_ascii() { c } else { '?' });
                 }
             }
-        }
+        });
+    }
+}
+
+/// Which links are up right now: USB host, Bluetooth phone, Wi-Fi.
+fn links(l: &mut Line) {
+    let now = embassy_time::Instant::now().as_secs() as u32;
+    let _ = l.push_str("Link:");
+    let mut any = false;
+    let usb = USB_LAST_RX.load(Relaxed);
+    if usb != 0 && now.saturating_sub(usb) < USB_FRESH_S {
+        let _ = l.push_str(" USB");
+        any = true;
+    }
+    if BLE_CONNECTED.load(Relaxed) {
+        let _ = l.push_str(" BT");
+        any = true;
+    } else if BLE_ACTIVE.load(Relaxed) {
+        let _ = l.push_str(" (BT)");
+        any = true;
+    }
+    if WIFI_STATE.load(Relaxed) == wifi_state::LINKED as u32 {
+        let _ = l.push_str(" WiFi");
+        any = true;
+    }
+    if !any {
+        let _ = l.push_str(" none");
+    }
+}
+
+/// Wi-Fi status with the IP address, when this firmware has Wi-Fi.
+fn wifi_line(l: &mut Line) {
+    if !WIFI_SUPPORTED.load(Relaxed) {
+        return;
+    }
+    let ip = WIFI_IP.load(Relaxed).to_be_bytes();
+    let _ = match WIFI_STATE.load(Relaxed) as u8 {
+        wifi_state::LINKED => write!(l, "{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]),
+        wifi_state::ONLINE => write!(l, "{}.{}.{}.{} no host", ip[0], ip[1], ip[2], ip[3]),
+        wifi_state::JOINING => write!(l, "WiFi joining..."),
+        wifi_state::SKIPPED_AFTER_CRASH => write!(l, "WiFi off (crashed)"),
+        wifi_state::BAD_SETTINGS | wifi_state::DRIVER_FAILED => write!(l, "WiFi failed"),
+        _ if BLE_ACTIVE.load(Relaxed) => write!(l, "Hold btn 3s: WiFi"),
+        _ => Ok(()),
+    };
+}
+
+/// A short note after a long press. Returns `false` when there is none.
+fn note_line(l: &mut Line) -> bool {
+    let n = DISPLAY_NOTE.load(Relaxed);
+    let now = embassy_time::Instant::now().as_secs() as u32;
+    if n == 0 || now > (n & 0x00FF_FFFF) {
+        return false;
+    }
+    let _ = l.push_str(match n >> 24 {
+        NOTE_TO_WIFI => "Switching to WiFi...",
+        NOTE_TO_BLE => "Switching to BT...",
+        NOTE_WIFI_NOT_SET_UP => "WiFi not set up (USB)",
+        NOTE_ONE_RADIO => "Only one radio here",
+        _ => "",
     });
+    true
 }
 
 fn radio(l: &mut [Line; 6]) {

@@ -30,22 +30,30 @@ use crate::{In, next_id};
 use maarse_core::Address;
 use maarse_core::companion::{Command, Event, FrameDecoder, text};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
+use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{ErrorKind, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-// ---------- protokolkonstanter (MyMesh.cpp linje 9-131) ----------
+// ---------- protokolkonstanter (MyMesh.cpp linje 9-140) ----------
 
 const CMD_APP_START: u8 = 1;
 const CMD_SEND_TXT_MSG: u8 = 2;
 const CMD_SEND_CHANNEL_TXT_MSG: u8 = 3;
 const CMD_GET_CONTACTS: u8 = 4;
 const CMD_SET_DEVICE_TIME: u8 = 6;
+const CMD_SEND_SELF_ADVERT: u8 = 7;
 const CMD_SYNC_NEXT_MESSAGE: u8 = 10;
+const CMD_REMOVE_CONTACT: u8 = 15;
 const CMD_DEVICE_QUERY: u8 = 22;
+const CMD_SEND_LOGIN: u8 = 26;
+const CMD_SEND_STATUS_REQ: u8 = 27;
 const CMD_GET_CHANNEL: u8 = 31;
 const CMD_SET_CHANNEL: u8 = 32;
+const CMD_SEND_TRACE_PATH: u8 = 36;
 
 const RESP_OK: u8 = 0;
 const RESP_ERR: u8 = 1;
@@ -62,11 +70,21 @@ const RESP_CONTACT_MSG_V3: u8 = 16;
 const RESP_CHANNEL_MSG_V3: u8 = 17;
 const RESP_CHANNEL_INFO: u8 = 18;
 
+const PUSH_ADVERT: u8 = 0x80;
 const PUSH_MSG_WAITING: u8 = 0x83;
+const PUSH_LOGIN_SUCCESS: u8 = 0x85;
+const PUSH_LOGIN_FAIL: u8 = 0x86;
+const PUSH_STATUS_RESPONSE: u8 = 0x87;
+const PUSH_TRACE_DATA: u8 = 0x89;
 const PUSH_NEW_ADVERT: u8 = 0x8A;
 
 /// TXT_TYPE_PLAIN (MyMesh.cpp, `CMD_SEND_CHANNEL_TXT_MSG` kræver denne).
 const TXT_PLAIN: u8 = 0;
+/// TXT_TYPE_CLI_DATA: admin-kommando til en repeater og dens svar
+/// (src/helpers/TxtDataHelpers.h linje 7).
+const TXT_CLI: u8 = 1;
+/// OUT_PATH_UNKNOWN (src/helpers/ContactInfo.h linje 6); også "ikke flood" i beskeder.
+const PATH_UNKNOWN: u8 = 0xFF;
 /// Den protokolversion, vi beder om med CMD_DEVICE_QUERY (≥ 3 giver SNR).
 const APP_TARGET_VER: u8 = 3;
 /// `MAX_FRAME_SIZE` i MeshCore (BaseSerialInterface.h) er 172; vi tillader lidt mere.
@@ -208,31 +226,177 @@ pub fn cmd_send_channel(idx: u8, unix: u32, msg: &str) -> Vec<u8> {
 /// CMD_SEND_TXT_MSG | txt_type | forsøg | tidsstempel (u32 LE) |
 /// offentlig nøgle-præfiks (6 bytes) | tekst (MyMesh.cpp linje 1132-1142).
 pub fn cmd_send_txt(prefix: &[u8; 6], unix: u32, msg: &str) -> Vec<u8> {
-    let mut v = vec![CMD_SEND_TXT_MSG, TXT_PLAIN, 0];
+    cmd_send_typed(TXT_PLAIN, prefix, unix, msg)
+}
+
+/// Som [`cmd_send_txt`] med valgfri txt_type. Med TXT_TYPE_CLI_DATA sendes
+/// teksten som admin-kommando (MyMesh.cpp linje 1149-1151; firmwaren bruger
+/// sit eget ur til tidsstemplet).
+pub fn cmd_send_typed(txt_type: u8, prefix: &[u8; 6], unix: u32, msg: &str) -> Vec<u8> {
+    let mut v = vec![CMD_SEND_TXT_MSG, txt_type, 0];
     v.extend_from_slice(&unix.to_le_bytes());
     v.extend_from_slice(prefix);
     v.extend_from_slice(msg.as_bytes());
     v
 }
 
+/// CMD_SEND_SELF_ADVERT | 1 = flood, 0 = zero-hop (MyMesh.cpp linje 1297-1313).
+pub fn cmd_self_advert(flood: bool) -> Vec<u8> {
+    vec![CMD_SEND_SELF_ADVERT, flood as u8]
+}
+
+/// CMD_REMOVE_CONTACT | offentlig nøgle (32) (MyMesh.cpp linje 1349-1358).
+pub fn cmd_remove_contact(key: &[u8; 32]) -> Vec<u8> {
+    let mut v = vec![CMD_REMOVE_CONTACT];
+    v.extend_from_slice(key);
+    v
+}
+
+/// CMD_SEND_LOGIN | offentlig nøgle (32) | adgangskode (MyMesh.cpp linje 1577-1596).
+pub fn cmd_login(key: &[u8; 32], password: &str) -> Vec<u8> {
+    let mut v = vec![CMD_SEND_LOGIN];
+    v.extend_from_slice(key);
+    v.extend_from_slice(clip(password, 15).as_bytes());
+    v
+}
+
+/// CMD_SEND_STATUS_REQ | offentlig nøgle (32) (MyMesh.cpp linje 1630-1646).
+pub fn cmd_status_req(key: &[u8; 32]) -> Vec<u8> {
+    let mut v = vec![CMD_SEND_STATUS_REQ];
+    v.extend_from_slice(key);
+    v
+}
+
+/// CMD_SEND_TRACE_PATH | tag (u32 LE) | auth (u32) | flags | sti
+/// (companion_radio/MyMesh.cpp). flags = 0: 1-byte hash pr. hop.
+pub fn cmd_trace(tag: u32, path: &[u8]) -> Vec<u8> {
+    let mut v = vec![CMD_SEND_TRACE_PATH];
+    v.extend_from_slice(&tag.to_le_bytes());
+    v.extend_from_slice(&[0, 0, 0, 0, 0]);
+    v.extend_from_slice(path);
+    v
+}
+
+/// Sti til et MeshCore-ping: ud ad kontaktens kendte rute, til kontakten selv
+/// og samme vej tilbage. Kun repeatere/rum videresender trace-pakker.
+pub fn ping_path(c: &McContact) -> Option<Vec<u8>> {
+    let n = usize::from(hops(c.out_path_len)?);
+    let out = c.out_path.get(..n)?;
+    let mut p = out.to_vec();
+    p.push(c.key[0]);
+    p.extend(out.iter().rev());
+    Some(p)
+}
+
 // ---------- svar og push ----------
+
+/// En MeshCore-kontakt (writeContactRespFrame, MyMesh.cpp linje 171-191).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McContact {
+    pub key: [u8; 32],
+    /// ADV_TYPE_* (src/helpers/AdvertDataHelpers.h linje 7-11).
+    pub kind: u8,
+    /// Rå out_path_len: 0xFF = ukendt (flood), ellers antal hop i de nederste 6 bit.
+    pub out_path_len: u8,
+    /// Hash-bytes for ruten (64 bytes i rammen; de første `hops` gælder).
+    pub out_path: Vec<u8>,
+    pub name: String,
+    /// Kontaktens eget ur ved seneste annoncering.
+    pub last_advert: u32,
+    /// Grader × 1 000 000 (ContactInfo.h linje 18).
+    pub lat: i32,
+    pub lon: i32,
+}
+
+/// Nodens egne oplysninger og radioindstillinger (RESP_CODE_SELF_INFO).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct McSelf {
+    pub name: String,
+    pub key: [u8; 32],
+    pub tx_power: u8,
+    /// kHz (firmwaren sender `freq * 1000` med freq i MHz).
+    pub freq_khz: u32,
+    /// Hz (firmwaren sender `bw * 1000` med bw i kHz).
+    pub bw_hz: u32,
+    pub sf: u8,
+    pub cr: u8,
+}
+
+/// Status fra en repeater (RepeaterStats, examples/simple_repeater/MyMesh.h
+/// linje 44-60). Felter efter rammens ende er `None`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct McStatus {
+    pub batt_mv: Option<u16>,
+    pub tx_queue: Option<u16>,
+    pub noise_floor: Option<i16>,
+    pub last_rssi: Option<i16>,
+    pub n_recv: Option<u32>,
+    pub n_sent: Option<u32>,
+    pub airtime_s: Option<u32>,
+    pub uptime_s: Option<u32>,
+    pub n_sent_flood: Option<u32>,
+    pub n_sent_direct: Option<u32>,
+    pub n_recv_flood: Option<u32>,
+    pub n_recv_direct: Option<u32>,
+    pub err_events: Option<u16>,
+    /// SNR × 4.
+    pub last_snr4: Option<i16>,
+}
+
+fn u16le(b: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(b.get(at..at + 2)?.try_into().ok()?))
+}
+
+fn u32at(b: &[u8], at: usize) -> Option<u32> {
+    u32le(b.get(at..)?)
+}
+
+impl McStatus {
+    pub fn parse(d: &[u8]) -> McStatus {
+        McStatus {
+            batt_mv: u16le(d, 0),
+            tx_queue: u16le(d, 2),
+            noise_floor: u16le(d, 4).map(|v| v as i16),
+            last_rssi: u16le(d, 6).map(|v| v as i16),
+            n_recv: u32at(d, 8),
+            n_sent: u32at(d, 12),
+            airtime_s: u32at(d, 16),
+            uptime_s: u32at(d, 20),
+            n_sent_flood: u32at(d, 24),
+            n_sent_direct: u32at(d, 28),
+            n_recv_flood: u32at(d, 32),
+            n_recv_direct: u32at(d, 36),
+            err_events: u16le(d, 40),
+            last_snr4: u16le(d, 42).map(|v| v as i16),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McEvent {
     Ok,
     Err(u8),
     DeviceInfo { fw_ver: u8 },
-    SelfInfo { name: String },
+    SelfInfo(McSelf),
     ContactsStart,
-    /// RESP_CODE_CONTACT eller PUSH_CODE_NEW_ADVERT.
-    Contact { key: [u8; 32], name: String },
+    /// RESP_CODE_CONTACT (`push` = false) eller PUSH_CODE_NEW_ADVERT (`push` = true).
+    Contact { c: McContact, push: bool },
+    /// PUSH_CODE_ADVERT: en kendt kontakt har annonceret igen.
+    Advert { key: [u8; 32] },
     EndOfContacts,
     Sent,
-    ChannelMsg { idx: u8, ts: u32, text: String },
-    ContactMsg { prefix: [u8; 6], ts: u32, text: String },
+    /// PUSH_CODE_TRACE_DATA: SNR × 4 for hvert hop og til sidst for os selv.
+    Trace { tag: u32, snrs: Vec<i8>, last: i8 },
+    /// `snr4` er SNR × 4 (kun v3); `path_len` er rå (0xFF = direkte rute).
+    ChannelMsg { idx: u8, ts: u32, text: String, snr4: Option<i8>, path_len: u8 },
+    /// `txt_type` er TXT_TYPE_PLAIN eller TXT_TYPE_CLI_DATA (andre giver `Other`).
+    ContactMsg { prefix: [u8; 6], ts: u32, text: String, txt_type: u8, snr4: Option<i8>, path_len: u8 },
     NoMoreMessages,
     ChannelInfo { idx: u8, name: String, secret: [u8; 16] },
     MsgWaiting,
+    LoginOk { prefix: [u8; 6], admin: bool },
+    LoginFail { prefix: [u8; 6] },
+    Status { prefix: [u8; 6], st: McStatus },
     /// Andre svar (kode < 0x80) og push-beskeder (≥ 0x80), vi ikke bruger.
     Other(u8),
 }
@@ -257,22 +421,41 @@ pub fn decode_event(f: &[u8]) -> Option<McEvent> {
         // code, adv_type, tx_power, max_tx_power, pub_key(32), lat(4), lon(4),
         // multi_acks, loc_policy, telemetry, manual_add, freq(4), bw(4), sf, cr,
         // navn (MyMesh.cpp linje 1085-1116): navnet starter ved byte 58.
-        RESP_SELF_INFO => McEvent::SelfInfo {
+        RESP_SELF_INFO => McEvent::SelfInfo(McSelf {
+            tx_power: *f.get(2)?,
+            key: f.get(4..36)?.try_into().ok()?,
+            freq_khz: u32at(f, 48)?,
+            bw_hz: u32at(f, 52)?,
+            sf: *f.get(56)?,
+            cr: *f.get(57)?,
             name: cstr(f.get(58..).unwrap_or(&[])),
-        },
+        }),
         RESP_CONTACTS_START => McEvent::ContactsStart,
-        // code, pub_key(32), type, flags, out_path_len, out_path(64), navn(32), …
+        // code, pub_key(32), type, flags, out_path_len, out_path(64), navn(32),
+        // last_advert(4), lat(4), lon(4), lastmod(4)
         // (writeContactRespFrame, MyMesh.cpp linje 171-191).
         RESP_CONTACT | PUSH_NEW_ADVERT => McEvent::Contact {
-            key: f.get(1..33)?.try_into().ok()?,
-            name: cstr(f.get(100..132)?),
+            c: McContact {
+                key: f.get(1..33)?.try_into().ok()?,
+                kind: *f.get(33)?,
+                out_path_len: *f.get(35)?,
+                out_path: f.get(36..100)?.to_vec(),
+                name: cstr(f.get(100..132)?),
+                last_advert: u32at(f, 132).unwrap_or(0),
+                lat: u32at(f, 136).unwrap_or(0) as i32,
+                lon: u32at(f, 140).unwrap_or(0) as i32,
+            },
+            push: code == PUSH_NEW_ADVERT,
         },
+        // code, pub_key(32) (onDiscoveredContact, MyMesh.cpp linje 363-365).
+        PUSH_ADVERT => McEvent::Advert { key: f.get(1..33)?.try_into().ok()? },
         RESP_END_OF_CONTACTS => McEvent::EndOfContacts,
         RESP_SENT => McEvent::Sent,
-        // v3: code, snr, res1, res2, idx, path_len, txt_type, ts(4), tekst;
-        // v<3 mangler de tre første bytes efter koden (MyMesh.cpp linje 559-578).
+        // v3: code, snr*4, res1, res2, idx, path_len, txt_type, ts(4), tekst;
+        // v<3 mangler de tre første bytes efter koden (MyMesh.cpp linje 558-584).
         RESP_CHANNEL_MSG | RESP_CHANNEL_MSG_V3 => {
-            let r = if code == RESP_CHANNEL_MSG_V3 { &f[4..] } else { &f[1..] };
+            let v3 = code == RESP_CHANNEL_MSG_V3;
+            let r = if v3 { f.get(4..)? } else { &f[1..] };
             if r.len() < 7 || r[2] != TXT_PLAIN {
                 return Some(McEvent::Other(code));
             }
@@ -280,19 +463,25 @@ pub fn decode_event(f: &[u8]) -> Option<McEvent> {
                 idx: r[0],
                 ts: u32le(&r[3..])?,
                 text: String::from_utf8_lossy(&r[7..]).into_owned(),
+                snr4: if v3 { Some(f[1] as i8) } else { None },
+                path_len: r[1],
             }
         }
-        // v3: code, snr, res1, res2, prefix(6), path_len, txt_type, ts(4), tekst
-        // (queueMessage, MyMesh.cpp linje 440-459).
+        // v3: code, snr*4, res1, res2, prefix(6), path_len, txt_type, ts(4), tekst
+        // (queueMessage, MyMesh.cpp linje 440-466).
         RESP_CONTACT_MSG | RESP_CONTACT_MSG_V3 => {
-            let r = if code == RESP_CONTACT_MSG_V3 { f.get(4..)? } else { &f[1..] };
-            if r.len() < 12 || r[7] != TXT_PLAIN {
+            let v3 = code == RESP_CONTACT_MSG_V3;
+            let r = if v3 { f.get(4..)? } else { &f[1..] };
+            if r.len() < 12 || !matches!(r[7], TXT_PLAIN | TXT_CLI) {
                 return Some(McEvent::Other(code));
             }
             McEvent::ContactMsg {
                 prefix: r[..6].try_into().ok()?,
                 ts: u32le(&r[8..])?,
                 text: String::from_utf8_lossy(&r[12..]).into_owned(),
+                txt_type: r[7],
+                snr4: if v3 { Some(f[1] as i8) } else { None },
+                path_len: r[6],
             }
         }
         RESP_NO_MORE_MESSAGES => McEvent::NoMoreMessages,
@@ -303,6 +492,31 @@ pub fn decode_event(f: &[u8]) -> Option<McEvent> {
             secret: f.get(34..50)?.try_into().ok()?,
         },
         PUSH_MSG_WAITING => McEvent::MsgWaiting,
+        // code, permissions (bit 0 = admin), prefix(6), … (onContactResponse,
+        // MyMesh.cpp linje 698-716).
+        PUSH_LOGIN_SUCCESS => McEvent::LoginOk {
+            admin: f.get(1)? & 1 != 0,
+            prefix: f.get(2..8)?.try_into().ok()?,
+        },
+        // code, reserveret, prefix(6) (MyMesh.cpp linje 717-721).
+        PUSH_LOGIN_FAIL => McEvent::LoginFail { prefix: f.get(2..8)?.try_into().ok()? },
+        // code, reserveret, prefix(6), RepeaterStats (MyMesh.cpp linje 731-738).
+        PUSH_STATUS_RESPONSE => McEvent::Status {
+            prefix: f.get(2..8)?.try_into().ok()?,
+            st: McStatus::parse(&f[8..]),
+        },
+        // code, res, path_len, flags, tag(4), auth(4), hashes(path_len),
+        // snrs(path_len >> (flags & 3)), sidste snr (onTraceRecv).
+        PUSH_TRACE_DATA => {
+            let plen = usize::from(*f.get(2)?);
+            let n = plen >> (f.get(3)? & 3);
+            let snrs = f.get(12 + plen..12 + plen + n)?;
+            McEvent::Trace {
+                tag: u32le(f.get(4..)?)?,
+                snrs: snrs.iter().map(|&b| b as i8).collect(),
+                last: *f.get(12 + plen + n)? as i8,
+            }
+        }
         c => McEvent::Other(c),
     })
 }
@@ -318,6 +532,8 @@ pub enum Out {
     /// Companion-kommando til vores egen Må:rse-node.
     Node(Command),
     Log(String),
+    /// JSON-hændelse til webklienterne på `/mc`.
+    Ui(String),
 }
 
 /// Hvilken MeshCore-kanal en Må:rse-kanal kobles til.
@@ -357,10 +573,46 @@ pub fn parse_mapping(s: &str) -> Result<Mapping, String> {
     Ok(Mapping { maarse: norm_maarse(a), meshcore: norm_meshcore(b) })
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Bro-valg fra webklienten: MeshCore-kanal -> Må:rse-kanal (`None` = ingen bro).
+pub type Overrides = Vec<(String, Option<String>)>;
+
+/// Læser `<data>/meshcore-broer.txt`: én linje pr. MeshCore-kanal,
+/// `<maarse-kanal>=<meshcore-kanal>` eller `-=<meshcore-kanal>` for ingen bro.
+pub fn parse_overrides(s: &str) -> Overrides {
+    let mut v: Overrides = Vec::new();
+    for l in s.lines().map(str::trim) {
+        let Some((a, b)) = l.split_once('=') else { continue };
+        if b.trim().is_empty() {
+            continue;
+        }
+        let mc = norm_meshcore(b);
+        let m = if a.trim() == "-" { None } else { Some(norm_maarse(a)) };
+        v.retain(|(k, _)| *k != mc);
+        v.push((mc, m));
+    }
+    v
+}
+
+pub fn format_overrides(o: &Overrides) -> String {
+    o.iter()
+        .map(|(mc, m)| format!("{}={mc}\n", m.as_deref().unwrap_or("-")))
+        .collect()
+}
+
+/// Hvad der skal ske, når en kommando fra webklienten lykkes.
+#[derive(Clone, Debug)]
+enum Effect {
+    None,
+    Slot(u8, String, [u8; 16]),
+    DelContact([u8; 32]),
+}
+
+#[derive(Clone, Debug)]
 enum Pend {
     Cmd(u8),
     GetChannel,
+    /// Kommando fra webklienten (`op`).
+    Ui(&'static str, Effect),
 }
 
 /// Afkorter til højst `max` bytes uden at skære et tegn over.
@@ -379,12 +631,55 @@ fn short(a: &Address) -> String {
     a.to_string()[..8].to_string()
 }
 
-fn parse_addr(hex: &str) -> Option<Address> {
-    if hex.len() != 32 || !hex.is_ascii() {
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.len() % 2 != 0 || !s.is_ascii() {
         return None;
     }
-    let b: Option<Vec<u8>> = (0..16).map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()).collect();
-    Address::from_slice(&b?)
+    (0..s.len() / 2).map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()).collect()
+}
+
+pub fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn parse_addr(hex: &str) -> Option<Address> {
+    if hex.len() != 32 {
+        return None;
+    }
+    Address::from_slice(&unhex(hex)?)
+}
+
+fn kind_name(k: u8) -> &'static str {
+    match k {
+        1 => "chat",
+        2 => "repeater",
+        3 => "room",
+        4 => "sensor",
+        _ => "?",
+    }
+}
+
+/// Antal hop ud fra en rå path_len (Packet.h linje 79-80), `None` hvis ukendt.
+fn hops(p: u8) -> Option<u8> {
+    (p != PATH_UNKNOWN).then_some(p & 63)
+}
+
+fn err_text(e: u8) -> String {
+    // ERR_CODE_* (MyMesh.cpp linje 135-140).
+    match e {
+        1 => "ikke understøttet af noden".into(),
+        2 => "ikke fundet".into(),
+        3 => "tabellen er fuld".into(),
+        4 => "forkert tilstand".into(),
+        5 => "filfejl på noden".into(),
+        6 => "ugyldigt argument".into(),
+        _ => format!("fejlkode {e}"),
+    }
+}
+
+fn ui_err(op: &str, msg: &str) -> Out {
+    Out::Ui(json!({"ev":"err","op":op,"msg":msg}).to_string())
 }
 
 pub struct Bridge {
@@ -402,15 +697,27 @@ pub struct Bridge {
     names: HashMap<Address, String>,
     /// Vores Må:rse-adresse (fra `Info`).
     my_addr: Option<Address>,
-    /// MeshCore-nodens navn (sættes foran kanalbeskeder af firmwaren).
-    mc_name: String,
-    /// MeshCore-kontakter: nøglepræfiks -> navn.
-    contacts: HashMap<[u8; 6], String>,
+    /// MeshCore-nodens egne oplysninger (navnet sættes foran kanalbeskeder af firmwaren).
+    me: McSelf,
+    /// MeshCore-kontakter efter offentlig nøgle.
+    contacts: HashMap<[u8; 32], McContact>,
+    /// Ukendte kontakter, der har annonceret (PUSH_ADVERT har kun nøglen);
+    /// navn og type sendes til webklienten, når kontaktlisten er hentet.
+    lookup: HashSet<[u8; 32]>,
+    /// Udestående ping: tag -> (kontakt, afsendt).
+    pings: HashMap<u32, ([u8; 32], std::time::Instant)>,
     /// Hvem på Må:rse skrev senest til en MeshCore-kontakt.
     dm_route: HashMap<[u8; 6], Address>,
+    /// Kontakter, webklienten har skrevet til (de får ingen hjælpetekst).
+    ui_dm: HashSet<[u8; 6]>,
     /// (hash, tid) for brobyggede beskeder.
     seen: VecDeque<(u64, u32)>,
     syncing: bool,
+    connected: bool,
+    port: String,
+    /// Bro-valg fra webklienten (gemmes i `save_to`).
+    overrides: Overrides,
+    save_to: Option<PathBuf>,
 }
 
 impl Bridge {
@@ -427,12 +734,30 @@ impl Bridge {
             maarse_ch: HashMap::new(),
             my_addr: None,
             names: HashMap::new(),
-            mc_name: String::new(),
+            me: McSelf::default(),
             contacts: HashMap::new(),
+            lookup: HashSet::new(),
+            pings: HashMap::new(),
             dm_route: HashMap::new(),
+            ui_dm: HashSet::new(),
             seen: VecDeque::new(),
             syncing: false,
+            connected: false,
+            port: String::new(),
+            overrides: Vec::new(),
+            save_to: None,
         }
+    }
+
+    /// Anvender gemte bro-valg oven på `--meshcore-bridge`.
+    pub fn apply_overrides(&mut self, o: Overrides) {
+        for (mc, m) in &o {
+            self.maps.retain(|x| x.meshcore != *mc);
+            if let Some(m) = m {
+                self.maps.push(Mapping { maarse: m.clone(), meshcore: mc.clone() });
+            }
+        }
+        self.overrides = o;
     }
 
     /// Sådan vises en Må:rse-afsender i MeshCore: visningsnavnet, hvis
@@ -454,6 +779,106 @@ impl Bridge {
         out.push(Out::Mc(payload));
     }
 
+    fn contact_by_prefix(&self, p: &[u8]) -> Option<&McContact> {
+        self.contacts.values().find(|c| c.key.starts_with(p))
+    }
+
+    /// Fuld nøgle i hex, hvis kontakten kendes, ellers præfikset.
+    fn key_text(&self, p: &[u8; 6]) -> String {
+        self.contact_by_prefix(p).map(|c| hex(&c.key)).unwrap_or_else(|| hex(p))
+    }
+
+    /// Nøgle (64 hex) eller præfiks (≥ 12 hex) af en kendt kontakt.
+    fn find_key(&self, s: &str) -> Option<[u8; 32]> {
+        let b = unhex(s)?;
+        if let Ok(k) = <[u8; 32]>::try_from(b.as_slice()) {
+            return Some(k);
+        }
+        if b.len() < 6 {
+            return None;
+        }
+        self.contact_by_prefix(&b).map(|c| c.key)
+    }
+
+    /// Navnet, MeshCore-kanalen på pladsen har i broen (`public`/`#navn`).
+    fn slot_key(&self, idx: u8) -> Option<String> {
+        let (name, secret) = self.mc_slots.get(&idx)?;
+        if name.is_empty() && secret.iter().all(|&b| b == 0) {
+            return None;
+        }
+        Some(if *secret == PUBLIC_PSK { "public".into() } else { norm_meshcore(name) })
+    }
+
+    /// Bygger `mc_idx` ud fra pladserne: offentlig og hashtags med den rigtige
+    /// nøgle først, så andre kanaler efter navn.
+    fn reindex(&mut self) {
+        self.mc_idx.clear();
+        let mut slots: Vec<_> = self.mc_slots.iter().map(|(i, v)| (*i, v.clone())).collect();
+        slots.sort_by_key(|s| s.0);
+        for verified in [true, false] {
+            for (idx, (name, secret)) in &slots {
+                let Some(key) = self.slot_key(*idx) else { continue };
+                let ok = *secret == PUBLIC_PSK || (key.starts_with('#') && hashtag_secret(&key) == *secret);
+                if ok == verified {
+                    let _ = name;
+                    self.mc_idx.entry(key).or_insert(*idx);
+                }
+            }
+        }
+    }
+
+    pub fn state_json(&self) -> String {
+        let mut contacts: Vec<&McContact> = self.contacts.values().collect();
+        contacts.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        let contacts: Vec<Value> = contacts
+            .into_iter()
+            .map(|c| {
+                let mut o = json!({
+                    "key": hex(&c.key),
+                    "name": c.name,
+                    "type": kind_name(c.kind),
+                    "last_advert": c.last_advert,
+                    "path_len": hops(c.out_path_len).map(i32::from).unwrap_or(-1),
+                });
+                if c.lat != 0 || c.lon != 0 {
+                    o["lat"] = json!(c.lat as f64 / 1e6);
+                    o["lon"] = json!(c.lon as f64 / 1e6);
+                }
+                o
+            })
+            .collect();
+        let mut idxs: Vec<u8> = self.mc_slots.keys().copied().filter(|i| self.slot_key(*i).is_some()).collect();
+        idxs.sort();
+        let channels: Vec<Value> = idxs
+            .into_iter()
+            .map(|i| {
+                let key = self.slot_key(i).unwrap_or_default();
+                let bridged = self.mc_idx.get(&key) == Some(&i);
+                let bridge = self.maps.iter().find(|m| bridged && m.meshcore == key).map(|m| m.maarse.clone());
+                json!({"idx": i, "name": self.mc_slots[&i].0, "bridge": bridge})
+            })
+            .collect();
+        let mut v = json!({
+            "ev": "state",
+            "connected": self.connected,
+            "port": self.port,
+            "contacts": contacts,
+            "channels": channels,
+        });
+        if self.connected && !self.me.name.is_empty() {
+            v["self"] = json!({
+                "name": self.me.name,
+                "key": hex(&self.me.key),
+                "freq": self.me.freq_khz as f64 / 1000.0,
+                "bw": self.me.bw_hz as f64 / 1000.0,
+                "sf": self.me.sf,
+                "cr": self.me.cr,
+                "tx_power": self.me.tx_power,
+            });
+        }
+        v.to_string()
+    }
+
     /// Kaldes ved opstart: deltag i Må:rse-kanalerne.
     pub fn node_start(&self) -> Vec<Out> {
         let mut out = vec![Out::Node(Command::GetInfo)];
@@ -470,6 +895,7 @@ impl Bridge {
         self.mc_idx.clear();
         self.channels_ready = false;
         self.syncing = false;
+        self.connected = true;
         let mut out = Vec::new();
         self.mc(&mut out, Pend::Cmd(CMD_DEVICE_QUERY), cmd_device_query());
         self.mc(&mut out, Pend::Cmd(CMD_APP_START), cmd_app_start("maarse-host"));
@@ -479,6 +905,13 @@ impl Bridge {
             self.mc(&mut out, Pend::GetChannel, cmd_get_channel(i));
         }
         out
+    }
+
+    /// Kaldes, når forbindelsen til MeshCore-noden er mistet.
+    pub fn mc_lost(&mut self) -> Vec<Out> {
+        self.connected = false;
+        self.pending.clear();
+        vec![Out::Ui(self.state_json())]
     }
 
     /// Kaldes jævnligt: hent beskeder, hvis en MSG_WAITING er gået tabt.
@@ -514,25 +947,9 @@ impl Bridge {
 
     fn resolve_channels(&mut self, out: &mut Vec<Out>) {
         // Kendte pladser: offentlig efter nøgle, hashtags efter nøgle eller navn.
-        let mut free: Vec<u8> = Vec::new();
-        let mut slots: Vec<_> = self.mc_slots.iter().map(|(i, v)| (*i, v.clone())).collect();
-        slots.sort_by_key(|s| s.0);
-        for (idx, (name, secret)) in &slots {
-            if name.is_empty() && secret.iter().all(|&b| b == 0) {
-                free.push(*idx);
-                continue;
-            }
-            let key = if *secret == PUBLIC_PSK {
-                "public".to_string()
-            } else {
-                let n = norm_meshcore(name);
-                if !(n.starts_with('#') && hashtag_secret(&n) == *secret) {
-                    continue;
-                }
-                n
-            };
-            self.mc_idx.entry(key).or_insert(*idx);
-        }
+        self.reindex();
+        let mut free: Vec<u8> = self.mc_slots.keys().copied().filter(|i| self.slot_key(*i).is_none()).collect();
+        free.sort();
         let wanted: Vec<String> = self.maps.iter().map(|m| m.meshcore.clone()).collect();
         for w in wanted {
             if self.mc_idx.contains_key(&w) {
@@ -550,6 +967,7 @@ impl Bridge {
             };
             out.push(Out::Log(format!("MeshCore: opretter kanal {name} på plads {idx}")));
             self.mc(out, Pend::Cmd(CMD_SET_CHANNEL), cmd_set_channel(idx, &name, &secret));
+            self.mc_slots.insert(idx, (name, secret));
             self.mc_idx.insert(w, idx);
         }
         self.channels_ready = true;
@@ -557,6 +975,32 @@ impl Bridge {
         out.push(Out::Log(format!("MeshCore: bro klar ({})", list.join(", "))));
         // Hent beskeder, der ventede, mens vi forbandt.
         out.extend(self.poll());
+    }
+
+    /// Svar på en kommando fra webklienten.
+    fn ui_reply(&mut self, op: &'static str, eff: Effect, ev: &McEvent, out: &mut Vec<Out>) {
+        match ev {
+            McEvent::Ok | McEvent::Sent => {
+                let changed = !matches!(eff, Effect::None);
+                match eff {
+                    Effect::None => {}
+                    Effect::Slot(idx, name, secret) => {
+                        self.mc_slots.insert(idx, (name, secret));
+                        self.reindex();
+                    }
+                    Effect::DelContact(k) => {
+                        self.contacts.remove(&k);
+                    }
+                }
+                let ev = if matches!(op, "send" | "chan_send") { "sent" } else { "ok" };
+                out.push(Out::Ui(json!({"ev":ev,"op":op}).to_string()));
+                if changed {
+                    out.push(Out::Ui(self.state_json()));
+                }
+            }
+            McEvent::Err(e) => out.push(ui_err(op, &format!("MeshCore: {}", err_text(*e)))),
+            _ => out.push(ui_err(op, "uventet svar fra MeshCore-noden")),
+        }
     }
 
     pub fn on_mc(&mut self, frame: &[u8], now: u32) -> Vec<Out> {
@@ -570,20 +1014,52 @@ impl Bridge {
         } else {
             None
         };
+        if let Some(Pend::Ui(op, eff)) = &pend {
+            self.ui_reply(op, eff.clone(), &ev, &mut out);
+            return out;
+        }
         match ev {
             McEvent::ChannelInfo { idx, name, secret } => {
                 self.mc_slots.insert(idx, (name, secret));
             }
-            McEvent::SelfInfo { name } => {
-                out.push(Out::Log(format!("MeshCore: forbundet til '{name}'")));
-                self.mc_name = name;
+            McEvent::SelfInfo(me) => {
+                out.push(Out::Log(format!("MeshCore: forbundet til '{}'", me.name)));
+                self.me = me;
             }
             McEvent::DeviceInfo { fw_ver } if fw_ver < 3 => {
                 out.push(Out::Log(format!("MeshCore: gammel firmware (v{fw_ver}), opdatér companion_radio")));
             }
-            McEvent::Contact { key, name } => {
-                let p: [u8; 6] = key[..6].try_into().unwrap();
-                self.contacts.insert(p, name);
+            McEvent::Contact { c, push } => {
+                if self.lookup.remove(&c.key) || push {
+                    out.push(Out::Ui(
+                        json!({"ev":"advert","key":hex(&c.key),"name":c.name,"type":kind_name(c.kind),"ts":c.last_advert})
+                            .to_string(),
+                    ));
+                }
+                self.contacts.insert(c.key, c);
+            }
+            McEvent::EndOfContacts => self.lookup.clear(),
+            McEvent::Trace { tag, snrs, last } => {
+                if let Some((key, sent)) = self.pings.remove(&tag) {
+                    let db = |s: i8| f64::from(s) / 4.0;
+                    out.push(Out::Ui(
+                        json!({"ev":"pong","key":hex(&key),"ms":sent.elapsed().as_millis() as u64,
+                               "snrs":snrs.iter().map(|&s| db(s)).collect::<Vec<_>>(),"last":db(last)})
+                        .to_string(),
+                    ));
+                }
+            }
+            McEvent::Advert { key } => {
+                let mut ev = json!({"ev":"advert","key":hex(&key),"ts":now});
+                if let Some(c) = self.contacts.get_mut(&key) {
+                    c.last_advert = now;
+                    ev["name"] = json!(c.name);
+                    ev["type"] = json!(kind_name(c.kind));
+                } else if self.lookup.insert(key) && self.lookup.len() == 1 {
+                    // Firmwaren har tilføjet kontakten selv; hent den for navn og type.
+                    self.mc(&mut out, Pend::Cmd(CMD_GET_CONTACTS), cmd_get_contacts());
+                }
+                out.push(Out::Ui(ev.to_string()));
             }
             McEvent::Err(e) => {
                 if let Some(Pend::Cmd(c)) = pend
@@ -597,28 +1073,219 @@ impl Bridge {
             }
             McEvent::MsgWaiting => out.extend(self.poll()),
             McEvent::NoMoreMessages => self.syncing = false,
-            McEvent::ChannelMsg { idx, ts: _, text: t } => {
+            McEvent::ChannelMsg { idx, ts, text: t, snr4, path_len } => {
                 self.syncing = false;
                 out.extend(self.poll());
+                let chan = self.mc_slots.get(&idx).map(|s| s.0.clone());
+                out.push(Out::Ui(
+                    json!({"ev":"msg","kind":"chan","idx":idx,"chan":chan,"text":t,"ts":ts,
+                           "snr":snr4.map(|s| s as f64 / 4.0),"path_len":hops(path_len)})
+                    .to_string(),
+                ));
                 self.mc_channel_msg(idx, &t, now, &mut out);
             }
-            McEvent::ContactMsg { prefix, ts: _, text: t } => {
+            McEvent::ContactMsg { prefix, ts, text: t, txt_type, snr4, path_len } => {
                 self.syncing = false;
                 out.extend(self.poll());
-                self.mc_direct_msg(prefix, &t, &mut out);
+                let key = self.key_text(&prefix);
+                if txt_type == TXT_CLI {
+                    out.push(Out::Ui(json!({"ev":"cli","key":key,"text":t}).to_string()));
+                } else {
+                    let name = self.contact_by_prefix(&prefix).map(|c| c.name.clone());
+                    out.push(Out::Ui(
+                        json!({"ev":"msg","kind":"dm","key":key,"name":name,"text":t,"ts":ts,
+                               "snr":snr4.map(|s| s as f64 / 4.0),"path_len":hops(path_len)})
+                        .to_string(),
+                    ));
+                    self.mc_direct_msg(prefix, &t, &mut out);
+                }
+            }
+            McEvent::LoginOk { prefix, admin } => {
+                out.push(Out::Ui(json!({"ev":"login","key":self.key_text(&prefix),"ok":true,"admin":admin}).to_string()));
+            }
+            McEvent::LoginFail { prefix } => {
+                out.push(Out::Ui(json!({"ev":"login","key":self.key_text(&prefix),"ok":false,"admin":false}).to_string()));
+            }
+            McEvent::Status { prefix, st } => {
+                let mut f = serde_json::Map::new();
+                let mut put = |k: &str, v: Option<Value>| {
+                    if let Some(v) = v {
+                        f.insert(k.into(), v);
+                    }
+                };
+                put("batt_mv", st.batt_mv.map(Value::from));
+                put("tx_queue", st.tx_queue.map(Value::from));
+                put("noise_floor", st.noise_floor.map(Value::from));
+                put("last_rssi", st.last_rssi.map(Value::from));
+                put("n_recv", st.n_recv.map(Value::from));
+                put("n_sent", st.n_sent.map(Value::from));
+                put("airtime_s", st.airtime_s.map(Value::from));
+                put("uptime_s", st.uptime_s.map(Value::from));
+                put("n_sent_flood", st.n_sent_flood.map(Value::from));
+                put("n_sent_direct", st.n_sent_direct.map(Value::from));
+                put("n_recv_flood", st.n_recv_flood.map(Value::from));
+                put("n_recv_direct", st.n_recv_direct.map(Value::from));
+                put("err_events", st.err_events.map(Value::from));
+                put("last_snr", st.last_snr4.map(|s| Value::from(s as f64 / 4.0)));
+                out.push(Out::Ui(json!({"ev":"status","key":self.key_text(&prefix),"fields":f}).to_string()));
             }
             McEvent::Other(RESP_CONTACT_MSG | RESP_CONTACT_MSG_V3 | RESP_CHANNEL_MSG | RESP_CHANNEL_MSG_V3) => {
-                // Ikke-tekst (fx signeret eller CLI): spring over, hent næste.
+                // Ikke-tekst (fx signeret): spring over, hent næste.
                 self.syncing = false;
                 out.extend(self.poll());
             }
             _ => {}
         }
-        if matches!(pend, Some(Pend::GetChannel))
-            && !self.channels_ready
-            && !self.pending.iter().any(|p| matches!(p, Pend::GetChannel))
-        {
-            self.resolve_channels(&mut out);
+        if matches!(pend, Some(Pend::GetChannel)) && !self.pending.iter().any(|p| matches!(p, Pend::GetChannel)) {
+            if self.channels_ready {
+                self.reindex();
+            } else {
+                self.resolve_channels(&mut out);
+            }
+            out.push(Out::Ui(self.state_json()));
+        }
+        out
+    }
+
+    /// Kommando fra en webklient (JSON fra `/mc`).
+    pub fn on_ui(&mut self, v: &Value, now: u32) -> Vec<Out> {
+        let mut out = Vec::new();
+        let op = v["op"].as_str().unwrap_or("");
+        let s = |k: &str| v[k].as_str().unwrap_or("");
+        let idx = v["idx"].as_u64().and_then(|i| u8::try_from(i).ok());
+        // Navnet på kommandoen, som 'static til Pend::Ui.
+        const OPS: [&str; 10] =
+            ["advert", "send", "chan_send", "chan_set", "chan_del", "contact_del", "login", "status", "cli", "ping"];
+        let sop = OPS.iter().copied().find(|o| *o == op);
+        match op {
+            "state" => out.push(Out::Ui(self.state_json())),
+            "bridge" => {
+                let Some(key) = idx.and_then(|i| self.slot_key(i)) else {
+                    out.push(ui_err(op, "ukendt kanalplads"));
+                    return out;
+                };
+                let maarse = v["maarse"].as_str().filter(|m| !m.trim().is_empty()).map(norm_maarse);
+                self.maps.retain(|m| m.meshcore != key);
+                if let Some(m) = &maarse {
+                    if !self.maarse_ch.values().any(|n| n == m) {
+                        out.push(Out::Node(Command::JoinChannel { name: text(m.as_bytes()) }));
+                    }
+                    self.maps.push(Mapping { maarse: m.clone(), meshcore: key.clone() });
+                    if let Some(i) = idx {
+                        self.mc_idx.insert(key.clone(), i);
+                    }
+                }
+                out.push(Out::Log(format!(
+                    "MeshCore: bro {key} ⇄ {}",
+                    maarse.as_deref().unwrap_or("(ingen)")
+                )));
+                self.overrides.retain(|(k, _)| *k != key);
+                self.overrides.push((key, maarse));
+                if let Some(p) = &self.save_to
+                    && let Err(e) = std::fs::write(p, format_overrides(&self.overrides))
+                {
+                    out.push(Out::Log(format!("MeshCore: kunne ikke gemme {}: {e}", p.display())));
+                }
+                out.push(Out::Ui(json!({"ev":"ok","op":"bridge"}).to_string()));
+                out.push(Out::Ui(self.state_json()));
+            }
+            _ if !self.connected => out.push(ui_err(op, "MeshCore-noden er ikke forbundet")),
+            "refresh" => {
+                self.mc_slots.clear();
+                self.contacts.clear();
+                self.mc(&mut out, Pend::Cmd(CMD_GET_CONTACTS), cmd_get_contacts());
+                for i in 0..CHANNEL_SCAN {
+                    self.mc(&mut out, Pend::GetChannel, cmd_get_channel(i));
+                }
+            }
+            "advert" => {
+                let flood = v["flood"].as_bool().unwrap_or(false);
+                self.mc(&mut out, Pend::Ui("advert", Effect::None), cmd_self_advert(flood));
+            }
+            "send" | "cli" => {
+                let Some(k) = self.find_key(s("to")).or_else(|| self.find_key(s("key"))) else {
+                    out.push(ui_err(op, "ukendt kontakt"));
+                    return out;
+                };
+                let p: [u8; 6] = k[..6].try_into().unwrap();
+                if op == "send" {
+                    self.dm_route.remove(&p);
+                    self.ui_dm.insert(p);
+                    self.mc(&mut out, Pend::Ui("send", Effect::None), cmd_send_txt(&p, now, clip(s("text"), MC_MAX_TEXT)));
+                } else {
+                    self.mc(&mut out, Pend::Ui("cli", Effect::None), cmd_send_typed(TXT_CLI, &p, now, clip(s("cmd"), MC_MAX_TEXT)));
+                }
+            }
+            "chan_send" => {
+                let Some(i) = idx.filter(|i| self.slot_key(*i).is_some()) else {
+                    out.push(ui_err(op, "ukendt kanalplads"));
+                    return out;
+                };
+                // Firmwaren sætter "<nodenavn>: " foran (BaseChatMesh.cpp linje 523).
+                let room = MC_MAX_TEXT.saturating_sub(self.me.name.len() + 2);
+                self.mc(&mut out, Pend::Ui("chan_send", Effect::None), cmd_send_channel(i, now, clip(s("text"), room)));
+            }
+            "chan_set" => {
+                let name = s("name").trim().to_string();
+                let Some(i) = idx.filter(|i| *i < CHANNEL_SCAN) else {
+                    out.push(ui_err(op, "ugyldig kanalplads"));
+                    return out;
+                };
+                let secret: Option<[u8; 16]> = match v["secret"].as_str().filter(|x| !x.is_empty()) {
+                    Some(h) => match unhex(h).and_then(|b| b.try_into().ok()) {
+                        Some(k) => Some(k),
+                        None => {
+                            out.push(ui_err(op, "nøglen skal være 32 hex-tegn"));
+                            return out;
+                        }
+                    },
+                    None if name.starts_with('#') => Some(hashtag_secret(&norm_meshcore(&name))),
+                    None if name.eq_ignore_ascii_case("public") => Some(PUBLIC_PSK),
+                    None => None,
+                };
+                let (Some(secret), false) = (secret, name.is_empty()) else {
+                    out.push(ui_err(op, "angiv et navn og en nøgle (eller et navn med #)"));
+                    return out;
+                };
+                self.mc(&mut out, Pend::Ui("chan_set", Effect::Slot(i, name.clone(), secret)), cmd_set_channel(i, &name, &secret));
+            }
+            "chan_del" => {
+                let Some(i) = idx.filter(|i| *i < CHANNEL_SCAN) else {
+                    out.push(ui_err(op, "ugyldig kanalplads"));
+                    return out;
+                };
+                self.mc(&mut out, Pend::Ui("chan_del", Effect::Slot(i, String::new(), [0; 16])), cmd_set_channel(i, "", &[0; 16]));
+            }
+            "contact_del" | "login" | "status" => {
+                let Some(k) = self.find_key(s("key")) else {
+                    out.push(ui_err(op, "ukendt kontakt"));
+                    return out;
+                };
+                let (eff, cmd) = match op {
+                    "contact_del" => (Effect::DelContact(k), cmd_remove_contact(&k)),
+                    "login" => (Effect::None, cmd_login(&k, s("password"))),
+                    _ => (Effect::None, cmd_status_req(&k)),
+                };
+                self.mc(&mut out, Pend::Ui(sop.unwrap_or("?"), eff), cmd);
+            }
+            "ping" => {
+                let Some(c) = self.find_key(s("key")).and_then(|k| self.contacts.get(&k)) else {
+                    out.push(ui_err(op, "ukendt kontakt"));
+                    return out;
+                };
+                let Some(path) = ping_path(c) else {
+                    out.push(ui_err(op, "ingen kendt rute til kontakten endnu (vent på en annoncering eller et svar)"));
+                    return out;
+                };
+                let key = c.key;
+                let tag = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
+                    .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
+                    .unwrap_or(0);
+                self.pings.retain(|_, (_, t)| t.elapsed().as_secs() < 120);
+                self.pings.insert(tag, (key, std::time::Instant::now()));
+                self.mc(&mut out, Pend::Ui("ping", Effect::None), cmd_trace(tag, &path));
+            }
+            _ => out.push(ui_err(op, "ukendt kommando")),
         }
         out
     }
@@ -629,7 +1296,7 @@ impl Bridge {
         };
         // Kanaltekst er "<afsender>: <besked>" (BaseChatMesh.cpp linje 523).
         let (from, body) = t.split_once(": ").unwrap_or(("?", t));
-        if body.starts_with("[Må ") || body.starts_with("[MC ") || from == self.mc_name {
+        if body.starts_with("[Må ") || body.starts_with("[MC ") || from == self.me.name {
             return;
         }
         let targets: Vec<String> =
@@ -651,9 +1318,7 @@ impl Bridge {
     }
 
     fn mc_direct_msg(&mut self, prefix: [u8; 6], t: &str, out: &mut Vec<Out>) {
-        let name = self.contacts.get(&prefix).cloned().unwrap_or_else(|| {
-            prefix.iter().map(|b| format!("{b:02x}")).collect()
-        });
+        let name = self.contact_by_prefix(&prefix).map(|c| c.name.clone()).unwrap_or_else(|| hex(&prefix));
         let t = t.trim();
         let (dest, body) = match t.strip_prefix('@').and_then(|r| {
             let (a, b) = r.split_once(' ').unwrap_or((r, ""));
@@ -672,6 +1337,8 @@ impl Bridge {
                     text: text(clip(&msg, 200).as_bytes()),
                 }));
             }
+            // Webklienten fører samtalen med kontakten: ingen hjælpetekst.
+            None if self.ui_dm.contains(&prefix) => {}
             None => {
                 let me = self.my_addr.map(|a| a.to_string()).unwrap_or_default();
                 let help = format!("Må:rse-gateway {me}. Skriv: @<Må:rse-adresse, 32 hex-tegn> besked");
@@ -713,7 +1380,7 @@ impl Bridge {
                         continue;
                     }
                     // Firmwaren sætter "<nodenavn>: " foran (BaseChatMesh.cpp linje 523).
-                    let room = MC_MAX_TEXT.saturating_sub(self.mc_name.len() + 2);
+                    let room = MC_MAX_TEXT.saturating_sub(self.me.name.len() + 2);
                     let msg = format!("[Må {}] {body}", self.label(&from));
                     self.mc(&mut out, Pend::Cmd(CMD_SEND_CHANNEL_TXT_MSG), cmd_send_channel(idx, now, clip(&msg, room)));
                 }
@@ -726,15 +1393,15 @@ impl Bridge {
                 // Længste kontaktnavn, teksten starter med (navne kan have mellemrum).
                 let hit = self
                     .contacts
-                    .iter()
-                    .filter(|(_, n)| {
-                        let n = n.to_lowercase();
+                    .values()
+                    .filter(|c| {
+                        let n = c.name.to_lowercase();
                         !n.is_empty()
                             && lower.starts_with(&n)
                             && lower[n.len()..].chars().next().is_none_or(|c| c == ' ')
                     })
-                    .max_by_key(|(_, n)| n.len())
-                    .map(|(p, n)| (*p, n.clone()));
+                    .max_by_key(|c| c.name.len())
+                    .map(|c| (<[u8; 6]>::try_from(&c.key[..6]).unwrap(), c.name.clone()));
                 match hit {
                     Some((p, n)) => {
                         let body = rest[n.len()..].trim();
@@ -755,6 +1422,39 @@ impl Bridge {
     }
 }
 
+// ---------- webklienter (/mc) ----------
+
+/// Forbindelsen mellem MeshCore-tråden og webklienterne på `/mc`.
+struct Hub {
+    /// Én afsender pr. forbundet webklient (JSON-tekst).
+    subs: Mutex<Vec<Sender<String>>>,
+    /// Kommandoer til MeshCore-tråden; `None` uden `--meshcore`.
+    cmd: Mutex<Option<Sender<String>>>,
+}
+
+static HUB: Hub = Hub { subs: Mutex::new(Vec::new()), cmd: Mutex::new(None) };
+
+/// Ny webklient: modtager alle hændelser fra nu af.
+pub fn subscribe() -> Receiver<String> {
+    let (tx, rx) = channel();
+    HUB.subs.lock().unwrap_or_else(|e| e.into_inner()).push(tx);
+    rx
+}
+
+/// Sender en JSON-kommando til MeshCore-tråden. Falsk uden `--meshcore`.
+pub fn command(json: String) -> bool {
+    HUB.cmd.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|t| t.send(json).is_ok())
+}
+
+/// `state`, når hosten kører uden `--meshcore`.
+pub fn disabled_state() -> String {
+    json!({"ev":"state","connected":false,"enabled":false,"contacts":[],"channels":[]}).to_string()
+}
+
+fn broadcast(s: &str) {
+    HUB.subs.lock().unwrap_or_else(|e| e.into_inner()).retain(|t| t.send(s.to_string()).is_ok());
+}
+
 // ---------- I/O ----------
 
 fn unix_now() -> u32 {
@@ -767,6 +1467,7 @@ const POLL_EVERY: Duration = Duration::from_secs(15);
 struct Ctx<'a> {
     tx: &'a Sender<In>,
     id: u32,
+    ui: &'a Receiver<String>,
 }
 
 impl Ctx<'_> {
@@ -783,10 +1484,26 @@ impl Ctx<'_> {
                     let f = c.encode();
                     let _ = self.tx.send(In::ClientFrame { id: self.id, frame: f[2..].to_vec() });
                 }
-                Out::Log(s) => println!("  {s}"),
+                Out::Log(s) => {
+                    println!("  {s}");
+                    broadcast(&json!({"ev":"log","text":s}).to_string());
+                }
+                Out::Ui(s) => broadcast(&s),
             }
         }
         Ok(())
+    }
+
+    /// Kommandoer fra webklienterne.
+    fn ui_commands(&self, bridge: &mut Bridge) -> Vec<Out> {
+        let mut outs = Vec::new();
+        while let Ok(s) = self.ui.try_recv() {
+            match serde_json::from_str::<Value>(&s) {
+                Ok(v) => outs.extend(bridge.on_ui(&v, unix_now())),
+                Err(_) => outs.push(ui_err("?", "ugyldig JSON")),
+            }
+        }
+        outs
     }
 }
 
@@ -833,6 +1550,8 @@ fn session<P: Read + Write>(
             let outs = bridge.on_node(ev, unix_now());
             ctx.dispatch(Some(port), outs)?;
         }
+        let outs = ctx.ui_commands(bridge);
+        ctx.dispatch(Some(port), outs)?;
         if last_poll.elapsed() >= POLL_EVERY {
             last_poll = Instant::now();
             let outs = bridge.poll();
@@ -841,16 +1560,29 @@ fn session<P: Read + Write>(
     }
 }
 
+/// Filen med bro-valg fra webklienten.
+pub fn overrides_file(data_dir: &Path) -> PathBuf {
+    data_dir.join("meshcore-broer.txt")
+}
+
 /// Starter broen i en tråd. Forbinder igen, hvis porten forsvinder.
-pub fn spawn(port: String, baud: u32, maps: Vec<Mapping>, tx: Sender<In>) {
+pub fn spawn(port: String, baud: u32, maps: Vec<Mapping>, data_dir: PathBuf, tx: Sender<In>) {
+    let (ui_tx, ui_rx) = channel();
+    *HUB.cmd.lock().unwrap_or_else(|e| e.into_inner()) = Some(ui_tx);
     std::thread::spawn(move || {
         let id = next_id();
         let (ctx_tx, crx) = channel();
         if tx.send(In::ClientUp { id, tx: ctx_tx }).is_err() {
             return;
         }
-        let ctx = Ctx { tx: &tx, id };
+        let ctx = Ctx { tx: &tx, id, ui: &ui_rx };
         let mut bridge = Bridge::new(maps);
+        bridge.port = port.clone();
+        let file = overrides_file(&data_dir);
+        if let Ok(s) = std::fs::read_to_string(&file) {
+            bridge.apply_overrides(parse_overrides(&s));
+        }
+        bridge.save_to = Some(file);
         let mut ndec = FrameDecoder::new();
         let _ = ctx.dispatch(None, bridge.node_start());
         loop {
@@ -862,12 +1594,15 @@ pub fn spawn(port: String, baud: u32, maps: Vec<Mapping>, tx: Sender<In>) {
                 }
                 Err(e) => eprintln!("  MeshCore: kan ikke åbne {port}: {e}"),
             }
-            // Følg med i Må:rse-kanaler, mens vi venter.
+            let _ = ctx.dispatch(None, bridge.mc_lost());
+            // Følg med i Må:rse-kanaler og webklienter, mens vi venter.
             let until = Instant::now() + Duration::from_secs(5);
             while Instant::now() < until {
                 for ev in node_events(&crx, &mut ndec) {
                     let _ = bridge.on_node(ev, unix_now());
                 }
+                let outs = ctx.ui_commands(&mut bridge);
+                let _ = ctx.dispatch(None, outs);
                 std::thread::sleep(Duration::from_millis(200));
             }
         }
@@ -956,20 +1691,30 @@ mod tests {
 
     #[test]
     fn decode_responses() {
-        assert_eq!(
+        assert!(matches!(
             decode_event(&chan_frame(0, 0x11223344, "Alice: hej")),
-            Some(McEvent::ChannelMsg { idx: 0, ts: 0x11223344, text: "Alice: hej".into() })
-        );
+            Some(McEvent::ChannelMsg { idx: 0, ts: 0x11223344, ref text, .. }) if text == "Alice: hej"
+        ));
         // v<3-variant (RESP_CODE_CHANNEL_MSG_RECV): ingen snr/reserverede bytes.
         let mut old = vec![RESP_CHANNEL_MSG, 1, 0xff, TXT_PLAIN, 1, 0, 0, 0];
         old.extend_from_slice(b"Bo: hi");
-        assert_eq!(decode_event(&old), Some(McEvent::ChannelMsg { idx: 1, ts: 1, text: "Bo: hi".into() }));
+        assert_eq!(
+            decode_event(&old),
+            Some(McEvent::ChannelMsg { idx: 1, ts: 1, text: "Bo: hi".into(), snr4: None, path_len: 0xff })
+        );
         // RESP_CODE_CONTACT_MSG_RECV_V3 (MyMesh.cpp linje 440-459).
         let mut dm = vec![RESP_CONTACT_MSG_V3, 0, 0, 0, 9, 8, 7, 6, 5, 4, 0xff, TXT_PLAIN, 5, 0, 0, 0];
         dm.extend_from_slice(b"yo");
         assert_eq!(
             decode_event(&dm),
-            Some(McEvent::ContactMsg { prefix: [9, 8, 7, 6, 5, 4], ts: 5, text: "yo".into() })
+            Some(McEvent::ContactMsg {
+                prefix: [9, 8, 7, 6, 5, 4],
+                ts: 5,
+                text: "yo".into(),
+                txt_type: TXT_PLAIN,
+                snr4: Some(0),
+                path_len: 0xff
+            })
         );
         assert_eq!(
             decode_event(&info_frame(2, "#test", &[7; 16])),
@@ -985,12 +1730,15 @@ mod tests {
         c.extend_from_slice(&name);
         c.extend_from_slice(&[0; 16]);
         assert_eq!(c.len(), 148);
-        assert_eq!(decode_event(&c), Some(McEvent::Contact { key: [0xaa; 32], name: "Alice".into() }));
+        assert!(matches!(
+            decode_event(&c),
+            Some(McEvent::Contact { ref c, push: false }) if c.key == [0xaa; 32] && c.name == "Alice"
+        ));
         // RESP_CODE_SELF_INFO: navnet starter ved byte 58.
         let mut si = vec![RESP_SELF_INFO];
         si.extend_from_slice(&[0; 57]);
         si.extend_from_slice(b"Gw");
-        assert_eq!(decode_event(&si), Some(McEvent::SelfInfo { name: "Gw".into() }));
+        assert!(matches!(decode_event(&si), Some(McEvent::SelfInfo(ref m)) if m.name == "Gw"));
         assert_eq!(decode_event(&[PUSH_MSG_WAITING]), Some(McEvent::MsgWaiting));
         assert_eq!(decode_event(&[RESP_ERR, 2]), Some(McEvent::Err(2)));
         assert_eq!(decode_event(&[]), None);
@@ -1068,7 +1816,8 @@ mod tests {
         // MeshCore -> Må:rse.
         let out = b.on_mc(&chan_frame(0, 1, "Alice: hej"), 200);
         assert_eq!(sent_texts(&out), vec!["[MC Alice] hej"]);
-        assert!(matches!(&out[..], [Out::Mc(_), Out::Node(Command::SendChannel { channel, .. })] if *channel == addr(1)));
+        let wire: Vec<&Out> = out.iter().filter(|o| !matches!(o, Out::Ui(_))).collect();
+        assert!(matches!(&wire[..], [Out::Mc(_), Out::Node(Command::SendChannel { channel, .. })] if *channel == addr(1)));
         // Samme besked igen (fx via en anden gateway) brobygges ikke.
         assert!(sent_texts(&b.on_mc(&chan_frame(0, 2, "Alice: hej"), 210)).is_empty());
         // Allerede brobygget tekst sendes ikke tilbage.
@@ -1200,7 +1949,8 @@ mod tests {
         }
         // Del strømmen i små stykker, som en rigtig seriel port.
         let mut port = MockPort { input: wire.chunks(7).map(|c| c.to_vec()).collect(), written: Vec::new() };
-        let ctx = Ctx { tx: &tx, id: 42 };
+        let (_ui_tx, ui_rx) = channel::<String>();
+        let ctx = Ctx { tx: &tx, id: 42, ui: &ui_rx };
         let r = session(&mut port, &mut bridge, &crx, &mut ndec, &ctx);
         assert_eq!(r.unwrap_err().kind(), ErrorKind::BrokenPipe);
         // Det første, der skrives, er CMD_DEVICE_QUERY i en '<'-ramme.
@@ -1216,5 +1966,37 @@ mod tests {
         assert!(sent.contains(&Command::SendChannel { req: 0, channel: addr(1), text: text(b"[MC Alice] hej fra MeshCore") }));
         // Og vi har bedt om næste besked (CMD_SYNC_NEXT_MESSAGE).
         assert!(port.written.windows(4).any(|w| w == [b'<', 1, 0, CMD_SYNC_NEXT_MESSAGE]));
+    }
+}
+
+#[cfg(test)]
+mod ping_tests {
+    use super::*;
+
+    #[test]
+    fn trace_frame_og_sti() {
+        // 2 hop med 1-byte hash: [0x89, res, plen=2, flags=0, tag, auth, AA BB, snr1 snr2, sidste]
+        let mut f = vec![PUSH_TRACE_DATA, 0, 2, 0];
+        f.extend_from_slice(&0x1234_5678u32.to_le_bytes());
+        f.extend_from_slice(&[0; 4]);
+        f.extend_from_slice(&[0xAA, 0xBB, 40, (-8i8) as u8, 22]);
+        assert_eq!(decode_event(&f), Some(McEvent::Trace { tag: 0x1234_5678, snrs: vec![40, -8], last: 22 }));
+
+        let mut c = McContact {
+            key: [0x7E; 32],
+            kind: 2,
+            out_path_len: 2,
+            out_path: vec![0x11, 0x22],
+            name: "r".into(),
+            last_advert: 0,
+            lat: 0,
+            lon: 0,
+        };
+        assert_eq!(ping_path(&c), Some(vec![0x11, 0x22, 0x7E, 0x22, 0x11]));
+        c.out_path_len = 0;
+        assert_eq!(ping_path(&c), Some(vec![0x7E]));
+        c.out_path_len = PATH_UNKNOWN;
+        assert_eq!(ping_path(&c), None);
+        assert_eq!(&cmd_trace(1, &[0x7E])[..], &[CMD_SEND_TRACE_PATH, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0x7E]);
     }
 }

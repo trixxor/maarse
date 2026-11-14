@@ -108,8 +108,16 @@ fn serve_dht(mut s: TcpStream, tx: &Sender<In>) {
     }
 }
 
+/// Keepalive probes after this much silence, then every `KEEPALIVE_EVERY`.
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+const KEEPALIVE_EVERY: Duration = Duration::from_secs(10);
+
 fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u16>) {
     let _ = stream.set_nodelay(true);
+    // Without keepalive a peer that disappears without closing (a node whose
+    // hotspot dropped, a restart) leaves a dead link we keep writing to.
+    let ka = socket2::TcpKeepalive::new().with_time(KEEPALIVE_IDLE).with_interval(KEEPALIVE_EVERY);
+    let _ = socket2::SockRef::from(&stream).set_tcp_keepalive(&ka);
     let id = next_id();
     let Ok(mut writer) = stream.try_clone() else {
         return;
@@ -187,7 +195,7 @@ port: String, baud: u32, tx: Sender<In>) {
     thread::spawn(move || {
         loop {
             match serialport::new(&port, baud)
-                .timeout(Duration::from_millis(100))
+                .timeout(Duration::from_millis(10))
                 .open()
             {
                 Ok(p) => run_serial(p, format!("seriel {port}"), &tx),
@@ -198,33 +206,24 @@ port: String, baud: u32, tx: Sender<In>) {
     });
 }
 
-fn run_serial(port: Box<dyn serialport::SerialPort>, name: String, tx: &Sender<In>) {
+/// Læser og skriver i samme tråd. Porten klones bevidst ikke: på Windows
+/// laver `try_clone` et håndtag, der kan arves (DuplicateHandle med
+/// bInheritHandle = TRUE), og så ville processen fra en genstart holde porten
+/// låst for altid ("Adgang nægtet").
+fn run_serial(mut port: Box<dyn serialport::SerialPort>, name: String, tx: &Sender<In>) {
     let id = next_id();
-    let Ok(mut writer) = port.try_clone() else {
-        return;
-    };
     let (wtx, wrx) = channel::<Vec<u8>>();
-    thread::spawn(move || {
-        // Sæt noden i modem-tilstand: hosten står for routingen.
-        let _ = writer.write_all(&[1, 0, 0x41]);
-        for pkt in wrx {
-            let mut buf = Vec::with_capacity(pkt.len() + 3);
-            buf.extend_from_slice(&((pkt.len() + 1) as u16).to_le_bytes());
-            buf.push(0x40);
-            buf.extend_from_slice(&pkt);
-            if writer.write_all(&buf).is_err() {
-                break;
-            }
-        }
-    });
+    // Sæt noden i modem-tilstand: hosten står for routingen.
+    if port.write_all(&[1, 0, 0x41]).is_err() {
+        return;
+    }
     if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
         return;
     }
-    let mut reader = port;
     let mut dec = FrameDecoder::new();
     let mut buf = [0u8; 256];
-    loop {
-        match reader.read(&mut buf) {
+    'link: loop {
+        match port.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
                 dec.push(&buf[..n]);
@@ -241,6 +240,15 @@ fn run_serial(port: Box<dyn serialport::SerialPort>, name: String, tx: &Sender<I
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(_) => break,
+        }
+        while let Ok(pkt) = wrx.try_recv() {
+            let mut out = Vec::with_capacity(pkt.len() + 3);
+            out.extend_from_slice(&((pkt.len() + 1) as u16).to_le_bytes());
+            out.push(0x40);
+            out.extend_from_slice(&pkt);
+            if port.write_all(&out).is_err() {
+                break 'link;
+            }
         }
     }
     let _ = tx.send(In::LinkDown { id });

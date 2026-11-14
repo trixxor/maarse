@@ -1,7 +1,7 @@
 //! Kanaler og fælles tællere mellem opgaverne (radio, USB og node).
 
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicI32, AtomicU32, Ordering::Relaxed};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering::Relaxed};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex as M;
 use embassy_sync::channel::Channel;
@@ -33,6 +33,48 @@ pub static USB_IN: Channel<M, Frame, 4> = Channel::new();
 pub static USB_OUT: Channel<M, FrameBuf, 16> = Channel::new();
 /// Færdige rammer til Bluetooth (med længdefelt).
 pub static BLE_OUT: Channel<M, FrameBuf, 16> = Channel::new();
+
+/// Packets received on the Wi-Fi backbone link (TCP), one Må:rse packet each.
+pub static NET_RX: Channel<M, Pkt, 4> = Channel::new();
+/// Packets to send on the Wi-Fi backbone link.
+pub static NET_TX: Channel<M, Pkt, 8> = Channel::new();
+/// Set by board code that has Wi-Fi (ESP32-S3).
+pub static WIFI_SUPPORTED: AtomicBool = AtomicBool::new(false);
+/// Wi-Fi state (`companion::wifi_state`), kept up to date by the Wi-Fi task.
+pub static WIFI_STATE: AtomicU32 = AtomicU32::new(0);
+/// IPv4 address (big-endian octets in a u32), 0 = none.
+pub static WIFI_IP: AtomicU32 = AtomicU32::new(0);
+/// Memory diagnostics set by board code (0 = unknown): never-used main
+/// stack, free heap and smallest free heap since boot, in bytes.
+pub static STACK_FREE: AtomicU32 = AtomicU32::new(0);
+pub static HEAP_FREE: AtomicU32 = AtomicU32::new(0);
+pub static HEAP_MIN_FREE: AtomicU32 = AtomicU32::new(0);
+pub static CRASHES: AtomicU32 = AtomicU32::new(0);
+pub static PANIC_LINE: AtomicU32 = AtomicU32::new(0);
+pub static PANIC_FILE: AtomicU32 = AtomicU32::new(0);
+/// Bluetooth is running (advertising or connected), and a phone is connected.
+pub static BLE_ACTIVE: AtomicBool = AtomicBool::new(false);
+pub static BLE_CONNECTED: AtomicBool = AtomicBool::new(false);
+/// Uptime (s) of the last frame from the USB host, 0 = none yet.
+pub static USB_LAST_RX: AtomicU32 = AtomicU32::new(0);
+/// The board's button asks to switch between Bluetooth and Wi-Fi.
+pub static TOGGLE_RADIO: Signal<M, ()> = Signal::new();
+/// Short note for the display: `code << 24 | until (uptime s)`; see
+/// `NOTE_*`. 0 = none.
+pub static DISPLAY_NOTE: AtomicU32 = AtomicU32::new(0);
+pub const NOTE_TO_WIFI: u32 = 1;
+pub const NOTE_TO_BLE: u32 = 2;
+pub const NOTE_WIFI_NOT_SET_UP: u32 = 3;
+pub const NOTE_ONE_RADIO: u32 = 4;
+
+/// Shows `code` on the display for `secs` seconds.
+pub fn note(code: u32, secs: u32) {
+    let until = embassy_time::Instant::now().as_secs() as u32 + secs;
+    DISPLAY_NOTE.store(code << 24 | (until & 0x00FF_FFFF), Relaxed);
+}
+
+/// Ask the board to restart (to apply saved Wi-Fi settings).
+pub static RESTART: Signal<M, ()> = Signal::new();
 
 /// Radiostatistik, opdateres af radio-opgaven.
 pub struct RadioStats {

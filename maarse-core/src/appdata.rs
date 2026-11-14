@@ -6,7 +6,13 @@
 //! 0x03 | længde | position               (fra og med 0x03: type | længde | data)
 //! 0x04 | længde | telemetri
 //! 0x05 | længde | visningsnavn            (UTF-8, højst 24 bytes)
+//! 0x06 | length | role | services         (see [`push_role`])
 //! ```
+//!
+//! Role (2 bytes): role as [`crate::router::Role::as_u8`] | flags (bit 0 =
+//! [`ROLE_HEARS_REPEATER`]: the node hears a repeater directly). Receivers
+//! read the bytes they know, so the field can grow. Neighbors use it for the
+//! edge bridge rule in the router.
 //!
 //! Nye felter skal stå efter `0x02`: ældre noder læser feltet `0x02` og
 //! stopper ved det første felt, de ikke kender. Fra og med `0x03` har alle
@@ -33,6 +39,14 @@ pub const APP_FS: u8 = 0x02;
 pub const APP_POSITION: u8 = 0x03;
 pub const APP_TELEMETRY: u8 = 0x04;
 pub const APP_NAME: u8 = 0x05;
+pub const APP_ROLE: u8 = 0x06;
+/// Role flag: the node hears a repeater or anchor directly.
+pub const ROLE_HEARS_REPEATER: u8 = 0x01;
+
+/// Appends the role field to app-data built with [`build`].
+pub fn push_role(v: &mut AppBuf, role: u8, flags: u8) {
+    let _ = v.extend_from_slice(&[APP_ROLE, 2, role, flags]);
+}
 
 /// Længste visningsnavn i bytes (UTF-8).
 pub const MAX_NAME: usize = 24;
@@ -193,6 +207,10 @@ pub struct AppData {
     pub position: Option<Position>,
     pub telemetry: Option<Telemetry>,
     pub name: Option<Name>,
+    /// Role byte from the role field, if present.
+    pub role: Option<u8>,
+    /// Flags byte from the role field (`ROLE_*`), if present.
+    pub role_flags: Option<u8>,
 }
 
 /// Bygger app-data. Positionen afrundes her (en præcis position sendes
@@ -245,6 +263,10 @@ pub fn parse(b: &[u8]) -> AppData {
                     APP_POSITION => a.position = Position::decode(d),
                     APP_TELEMETRY => a.telemetry = Telemetry::decode(d),
                     APP_NAME => a.name = clean_name(d),
+                    APP_ROLE => {
+                        a.role = d.first().copied();
+                        a.role_flags = d.get(1).copied();
+                    }
                     _ => {}
                 }
                 i += 2 + len as usize;
@@ -263,6 +285,20 @@ mod tests {
 
     fn pos(p: Precision) -> Position {
         Position { precision: p, lat_e7: AARHUS.0, lon_e7: AARHUS.1 }
+    }
+
+    #[test]
+    fn role_field_round_trips_and_is_skipped_by_old_parsers() {
+        let mut v = build(None, true, None, None, Some(b"Ida"));
+        push_role(&mut v, 2, ROLE_HEARS_REPEATER);
+        let a = parse(&v);
+        assert_eq!(a.role, Some(2));
+        assert_eq!(a.role_flags, Some(ROLE_HEARS_REPEATER));
+        assert_eq!(a.name.as_deref(), Some(&b"Ida"[..]));
+        // A field after the role field is still read (role has a length).
+        let _ = v.extend_from_slice(&[APP_NAME, 2, b'J', b'o']);
+        assert_eq!(parse(&v).name.as_deref(), Some(&b"Jo"[..]));
+        assert_eq!(parse(&build(None, true, None, None, None)).role, None);
     }
 
     #[test]

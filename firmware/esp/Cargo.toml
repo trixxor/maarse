@@ -9,14 +9,22 @@ description = "Må:rse-firmware til ESP32-S3 + SX1262 (Heltec V4, XIAO ESP32-S3 
 [workspace]
 
 [features]
-default = []
+default = ["ble", "wifi"]
 # Vælg præcis ét board.
 board-heltec-v4 = ["esp32s3", "display"]
 board-xiao-esp32s3 = ["esp32s3"]
+# Bluetooth (Nordic UART) to the phone app. On by default.
+ble = ["esp-radio/ble", "dep:bt-hci", "dep:trouble-host"]
+# Wi-Fi backbone. On by default together with `ble`: only one of them runs
+# at a time (the saved mode decides; hold the button 3 s or use `SetWifi` to
+# switch), so the heap only has to hold one driver and no `coex` is needed.
+# `--no-default-features --features board-heltec-v4,ble` (or `,wifi`) builds
+# a firmware with just one of them and more free RAM.
+wifi = ["esp-radio/wifi", "dep:embassy-net", "dep:smoltcp"]
 # Kun til at tjekke koden med den almindelige Rust-værktøjskæde
 # (RISC-V, ESP32-C6); kører ikke på noget rigtigt board.
-check-esp32c6 = ["esp-hal/esp32c6", "esp-rtos/esp32c6", "esp-radio/esp32c6", "esp-storage/esp32c6", "esp-bootloader-esp-idf/esp32c6"]
-esp32s3 = ["esp-hal/esp32s3", "esp-rtos/esp32s3", "esp-radio/esp32s3", "esp-storage/esp32s3", "esp-bootloader-esp-idf/esp32s3"]
+check-esp32c6 = ["esp-hal/esp32c6", "esp-rtos/esp32c6", "esp-radio/esp32c6", "esp-storage/esp32c6", "esp-bootloader-esp-idf/esp32c6", "esp-println/esp32c6"]
+esp32s3 = ["esp-hal/esp32s3", "esp-rtos/esp32s3", "esp-radio/esp32s3", "esp-storage/esp32s3", "esp-bootloader-esp-idf/esp32s3", "esp-println/esp32s3"]
 display = ["dep:ssd1306", "dep:embedded-graphics"]
 
 [dependencies]
@@ -32,13 +40,22 @@ embedded-storage = "0.3.2"
 esp-bootloader-esp-idf = { version = "0.6.0" }
 esp-hal = { version = "1.2.2", features = ["unstable"] }
 # Bluetooth: esp-radio (BLE-controller, HCI) + TrouBLE som host, som på nRF.
-esp-radio = { version = "=1.0.0-beta.1", features = ["ble", "unstable", "esp-alloc"] }
+# Wi-Fi backbone: esp-radio's Wi-Fi driver with embassy-net (TCP, DHCP, DNS).
+# Wi-Fi and Bluetooth are never on at the same time (Bluetooth is not started
+# when Wi-Fi is enabled), so no `coex`: it would cost RAM the board lacks.
+esp-radio = { version = "=1.0.0-beta.1", features = ["unstable", "esp-alloc"] }
+# Crash logging over USB: the panic handler prints the reason (esp-hal turns
+# hardware exceptions into panics too). Read with `espflash monitor`.
+esp-println = { version = "0.18", default-features = false, features = ["jtag-serial", "critical-section"] }
+embassy-net = { version = "0.9.1", optional = true, features = ["tcp", "dhcpv4", "dns", "proto-ipv4", "medium-ethernet"] }
+# Only to switch on automatic ping replies in the TCP/IP stack embassy-net uses.
+smoltcp = { version = "0.13.1", optional = true, default-features = false, features = ["auto-icmp-echo-reply"] }
 esp-rtos = { version = "0.4.0", features = ["embassy", "esp-radio", "esp-alloc"] }
 esp-storage = { version = "0.10.0", features = ["embedded-storage"] }
 heapless = "0.8"
 heapless09 = { package = "heapless", version = "0.9" }
-bt-hci = "0.10"
-trouble-host = { version = "0.8", default-features = false, features = ["derive", "gatt", "peripheral", "default-packet-pool"] }
+bt-hci = { version = "0.10", optional = true }
+trouble-host = { version = "0.8", optional = true, default-features = false, features = ["derive", "gatt", "peripheral", "default-packet-pool"] }
 lora-phy = "3.0.1"
 rand_chacha = { version = "0.3", default-features = false }
 rand_core = "0.6"

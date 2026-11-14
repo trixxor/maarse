@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Må:rse mod resten</title>
+<style>
+:root{--bg:#f7f6f2;--card:#fff;--fg:#1d1d1b;--muted:#6b6a64;--line:#e3e1d9;--acc:#1f6f5c;--acc2:#b4532a;
+--yes:#1f7a4d;--yesbg:#e3f3ea;--part:#8a6a00;--partbg:#fbf1d0;--no:#a33a2b;--nobg:#f8e2de;--na:#6b6a64;--nabg:#eeede8;
+--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161714;--card:#1f201c;--fg:#ecebe5;--muted:#a3a29a;--line:#34352f;--acc:#5cc2a4;--acc2:#e58a5f;
+--yes:#7fd6a5;--yesbg:#1d3a2b;--part:#e8c45a;--partbg:#3a321a;--no:#f0907f;--nobg:#432420;--na:#a3a29a;--nabg:#2a2b26}}
+:root[data-theme="dark"]{--bg:#161714;--card:#1f201c;--fg:#ecebe5;--muted:#a3a29a;--line:#34352f;--acc:#5cc2a4;--acc2:#e58a5f;
+--yes:#7fd6a5;--yesbg:#1d3a2b;--part:#e8c45a;--partbg:#3a321a;--no:#f0907f;--nobg:#432420;--na:#a3a29a;--nabg:#2a2b26}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1080px;margin:0 auto;padding:32px 16px 80px}
+h1{font-size:2.1rem;line-height:1.15;margin:.2em 0 .3em}
+h2{font-size:1.45rem;margin:2.4em 0 .6em;padding-top:.6em;border-top:1px solid var(--line)}
+h3{font-size:1.1rem;margin:1.6em 0 .4em}
+p{margin:.5em 0}
+.kicker{color:var(--acc);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:.8rem}
+.lead{font-size:1.1rem;color:var(--muted);max-width:760px}
+nav{display:flex;flex-wrap:wrap;gap:6px 14px;margin:18px 0 0;font-size:.92rem}
+nav a{color:var(--acc);text-decoration:none}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.card h3{margin-top:0}
+.big{font-size:1.9rem;font-weight:700;font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+.small{font-size:.88rem}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+th,td{padding:8px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-weight:600;background:var(--nabg);position:sticky;top:0}
+tr.sec td{background:var(--bg);font-weight:700;color:var(--acc)}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.b{display:inline-block;border-radius:5px;padding:1px 7px;font-size:.78rem;font-weight:600;margin-right:4px;white-space:nowrap}
+.y{background:var(--yesbg);color:var(--yes)}.p{background:var(--partbg);color:var(--part)}.n{background:var(--nobg);color:var(--no)}.u{background:var(--nabg);color:var(--na)}
+.win{font-weight:700;color:var(--yes)}
+.lose{font-weight:700;color:var(--no)}
+ul{padding-left:1.2em}li{margin:.25em 0}
+.pc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pc div{border-radius:8px;padding:8px 12px}
+.pro{background:var(--yesbg)}.con{background:var(--nobg)}
+.pro b{color:var(--yes)}.con b{color:var(--no)}
+.vote{font-family:var(--mono);font-size:.85rem}
+.verdict{display:inline-block;font-weight:700;border-radius:6px;padding:2px 9px}
+.go{background:var(--yesbg);color:var(--yes)}.maybe{background:var(--partbg);color:var(--part)}.stop{background:var(--nobg);color:var(--no)}
+.phase{border-left:4px solid var(--acc);padding:4px 0 4px 16px;margin:18px 0}
+.phase h3{margin:0 0 6px}
+.phase.p2{border-color:var(--acc2)}.phase.p3{border-color:var(--part)}.phase.p4{border-color:var(--muted)}
+code{font-family:var(--mono);font-size:.88em;background:var(--nabg);padding:1px 5px;border-radius:4px}
+.note{background:var(--partbg);border-radius:8px;padding:10px 14px;margin:12px 0}
+@media (max-width:640px){h1{font-size:1.6rem}.pc{grid-template-columns:1fr}th,td{padding:6px 7px}}
+</style>
+</head>
+<body>
+<main>
+<div class="kicker">Gennemgang · 14. november 2026 · Må:rse v0.5</div>
+<h1>Må:rse mod Meshtastic, MeshCore og Reticulum</h1>
+<p class="lead">Rapporten gennemgår alle Må:rse-funktioner, tester dem med friske kørsler og stiller dem op mod de tre andre systemer. Den forklarer, hvad vi har overset, og hvad et internt panel stemte for, både til faste opsætninger og til mobil brug. Sidst kommer et roadmap.</p>
+<nav>
+<a href="#kort">Kort fortalt</a><a href="#matrix">Funktioner side om side</a><a href="#test">Tests og simulering</a>
+<a href="#overset">Det har vi overset</a><a href="#statisk-mobil">Statisk og mobil</a><a href="#e45">Brønderslev → Fredericia</a><a href="#skov">Skov, 18 mand</a><a href="#afstemning">Forslag og afstemning</a>
+<a href="#roadmap">Roadmap</a><a href="#metode">Metode og forbehold</a>
+</nav>
+
+<h2 id="kort">Kort fortalt</h2>
+<div class="grid">
+ <div class="card"><h3>Hvor Må:rse er bedst</h3><p>Routing, global rækkevidde og kryptering. I simulering leverer Må:rse flere beskeder end flood med <b>1/5 af sendetiden</b>. Det er det eneste af de fire systemer, der både kører på chippen og når ud over internettet uden en central server.</p></div>
+ <div class="card"><h3>Hvor vi taber</h3><p>Brugere, apps (ingen iOS-app), kort og GPS, strømsparetilstand til trackere og afprøvning i felten. Rækkevidde og strømforbrug er <b>ikke målt</b>. Meshtastic og MeshCore har år med drift. Det har vi ikke.</p></div>
+ <div class="card"><h3>Nye fund i dag</h3><p>I et tæt net ved SF12 bliver kun ca. 30 % af beskederne kvitteret. Historikken på hosten ligger ukrypteret på disken. Hosten stopper, når vinduet eller sessionen, der startede den, lukker. Og brugerfladen forvirrer, når en radio sidder i USB.</p></div>
+ <div class="card"><h3>Tests</h3><p><span class="big">191</span> tests består, og ingen fejler (<code>cargo test --workspace</code>). Hertil kommer 48 simuleringskørsler, 2 kørsler på 2 timer med 1 % duty cycle og en ny test af MeshCore-ping.</p></div>
+</div>
+<p class="note"><b>Er Må:rse bedre?</b> <b>Ja</b> på arkitektur: routing, sikkerhedsmodel, rækkevidde ud over LoRa og funktioner pr. byte. <b>Nej, ikke endnu</b> i praksis, for "bedre" kræver brugere, målinger i felten og en ekstern gennemgang af kryptoen. Vejen til "bedre på alle punkter" handler mindre om nye funktioner og mere om at måle, hærde og gøre det nemt.</p>
+
+<h2 id="matrix">Funktioner side om side</h2>
+<p class="muted small">Må:rse er bedømt på det, der er bygget og testet. "delvis" betyder bygget, men med begrænsninger eller ikke prøvet på hardware. Oplysningerne om de andre systemer er fra november 2026 (kilderne står i <code>compare.md</code>).</p>
+<div class="scroll"><table>
+<thead><tr><th style="min-width:180px">Funktion</th><th>Meshtastic</th><th>MeshCore</th><th>Reticulum</th><th>Må:rse</th></tr></thead>
+<tbody>
+<tr class="sec"><td colspan="5">Routing og radio</td></tr>
+<tr><td>Princip</td><td>Styret flood</td><td>Flood, derefter lært sti</td><td>Announces, næste hop</td><td>Ruteforespørgsel, derefter kildesti valgt efter SNR</td></tr>
+<tr><td>Max hop</td><td><span class="b p">7</span></td><td><span class="b y">64</span></td><td><span class="b y">128</span></td><td><span class="b y">64</span> (over 12 med anker)</td></tr>
+<tr><td>Kvittering pr. hop og ende til ende</td><td><span class="b p">kun DM</span></td><td><span class="b y">ja</span></td><td><span class="b y">bevis</span></td><td><span class="b y">ja</span> + rutereparation</td></tr>
+<tr><td>Duty cycle og lyt før send</td><td><span class="b y">ja</span></td><td><span class="b y">ja</span></td><td><span class="b y">pr. interface</span></td><td><span class="b y">token bucket + CAD</span></td></tr>
+<tr><td>Belastningsstyring ved travl kanal</td><td><span class="b p">delvis</span></td><td><span class="b p">delvis</span></td><td><span class="b y">announce-kvoter</span></td><td><span class="b n">nej</span>: SF12-testen viser hullet</td></tr>
+<tr><td>Energistyret videresendelse</td><td><span class="b p">roller</span></td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b y">ja</span>, efter batteriniveau</td></tr>
+<tr><td>Spam-beskyttelse</td><td><span class="b p">grænser</span></td><td><span class="b p">loft over hop</span></td><td><span class="b y">stamps</span></td><td><span class="b y">arbejdsbevis</span></td></tr>
+<tr><td>Regioner</td><td><span class="b n">nej</span></td><td><span class="b y">ja</span></td><td><span class="b n">nej</span></td><td><span class="b y">ja</span>, også på backbone</td></tr>
+<tr><td>Flere frekvenser eller radioer pr. node</td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b y">ja</span></td><td><span class="b p">host: flere modemer</span></td></tr>
+<tr class="sec"><td colspan="5">Rækkevidde ud over LoRa</td></tr>
+<tr><td>Internet og TCP i samme net</td><td><span class="b p">MQTT-server</span></td><td><span class="b n">nej</span></td><td><span class="b y">ja</span></td><td><span class="b y">TCP + DHT</span></td></tr>
+<tr><td>Uden central server</td><td><span class="b n">nej</span></td><td><span class="b u">–</span></td><td><span class="b y">ja</span></td><td><span class="b y">ja</span></td></tr>
+<tr><td>Bro til de andre net</td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b p">MeshCore ja, Reticulum nej</span></td></tr>
+<tr><td>IP over nettet</td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b p">via værktøjer</span></td><td><span class="b y">IPv6-tunnel</span> (1,45 s ping over LoRa)</td></tr>
+<tr><td>Andre medier (I2P, AX.25, KISS)</td><td><span class="b n">nej</span></td><td><span class="b p">KISS-modem</span></td><td><span class="b y">mange</span></td><td><span class="b n">nej</span></td></tr>
+<tr class="sec"><td colspan="5">Sikkerhed og privatliv</td></tr>
+<tr><td>Afsender skjult i luften</td><td><span class="b n">nej</span></td><td><span class="b p">præfiks</span></td><td><span class="b y">ja</span></td><td><span class="b y">ja</span></td></tr>
+<tr><td>Forward secrecy</td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b y">links + ratchets</span></td><td><span class="b p">udkast (ratchet)</span></td></tr>
+<tr><td>Signerede pakker</td><td><span class="b p">2.8 alpha</span></td><td><span class="b p">adverts</span></td><td><span class="b y">ja</span></td><td><span class="b p">announces + firmware</span></td></tr>
+<tr><td>Bekræft nøgle (sikkerhedsnummer, QR)</td><td><span class="b y">2.7</span></td><td><span class="b p">delvis</span></td><td><span class="b p">delvis</span></td><td><span class="b y">60 cifre + QR</span></td></tr>
+<tr><td>Lukket net med netværksnøgle</td><td><span class="b p">kanal-PSK</span></td><td><span class="b n">nej</span></td><td><span class="b y">IFAC</span></td><td><span class="b n">nej</span></td></tr>
+<tr><td>Data på disk krypteret</td><td><span class="b u">app</span></td><td><span class="b u">app</span></td><td><span class="b p">delvis</span></td><td><span class="b n">historikken er klartekst</span></td></tr>
+<tr><td>Ekstern sikkerhedsgennemgang</td><td><span class="b p">delvis</span></td><td><span class="b n">nej</span></td><td><span class="b p">delvis</span></td><td><span class="b n">nej</span></td></tr>
+<tr class="sec"><td colspan="5">Tjenester</td></tr>
+<tr><td>Kanaler (offentlig, #hashtag, privat)</td><td><span class="b y">ja</span></td><td><span class="b y">ja</span></td><td><span class="b p">via apps</span></td><td><span class="b y">ja</span></td></tr>
+<tr><td>Beskeder til offline modtagere</td><td><span class="b p">S&amp;F</span></td><td><span class="b y">rum</span></td><td><span class="b y">LXMF-prop.</span></td><td><span class="b y">postkasse (host + flash)</span></td></tr>
+<tr><td>Fælles opslagstavle (BBS, rum)</td><td><span class="b n">nej</span></td><td><span class="b y">room servers</span></td><td><span class="b y">NomadNet</span></td><td><span class="b p">kun sider, ingen tavle</span></td></tr>
+<tr><td>Filer og billeder</td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b y">ja</span></td><td><span class="b y">8 KB over LoRa / 1 MB over TCP</span></td></tr>
+<tr><td>Tale</td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b y">Sideband</span></td><td><span class="b y">Codec2 + Opus-opkald</span></td></tr>
+<tr><td>Ping og trace</td><td><span class="b y">traceroute</span></td><td><span class="b y">trace path</span></td><td><span class="b y">rnpath/rnprobe</span></td><td><span class="b y">trace + MC-ping (nyt i dag)</span></td></tr>
+<tr><td>Rækkeviddetest-tilstand</td><td><span class="b y">range test-modul</span></td><td><span class="b p">delvis</span></td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td></tr>
+<tr><td>Kort over noder og dækning</td><td><span class="b y">app + MQTT-kort</span></td><td><span class="b y">app + kort</span></td><td><span class="b y">Sideband</span></td><td><span class="b n">kun liste</span></td></tr>
+<tr><td>GPS-modul og sporing</td><td><span class="b y">ja</span></td><td><span class="b y">ja</span></td><td><span class="b p">via telefon</span></td><td><span class="b p">position fra telefon, ingen GPS-driver</span></td></tr>
+<tr><td>Sensorer og Home Assistant</td><td><span class="b y">mange</span></td><td><span class="b p">sensor-noder</span></td><td><span class="b p">Sideband</span></td><td><span class="b p">batteri, temp. + HA via MQTT</span></td></tr>
+<tr><td>SOS og nødbesked</td><td><span class="b p">kanned/alert</span></td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td></tr>
+<tr class="sec"><td colspan="5">Enheder og drift</td></tr>
+<tr><td>Kører på mikrocontroller</td><td><span class="b y">ja</span></td><td><span class="b y">ja</span></td><td><span class="b n">kun modem</span></td><td><span class="b y">nRF52840 + ESP32-S3</span></td></tr>
+<tr><td>Strømsparetilstand (tracker/sleep)</td><td><span class="b y">ja</span></td><td><span class="b y">ja</span></td><td><span class="b u">–</span></td><td><span class="b n">nej</span></td></tr>
+<tr><td>Brug uden telefon (skærm/knap)</td><td><span class="b y">T-Deck, kanned</span></td><td><span class="b y">T-Deck m.fl.</span></td><td><span class="b n">nej</span></td><td><span class="b p">Heltec-skærm kun læs</span></td></tr>
+<tr><td>Android / iOS</td><td><span class="b y">begge</span></td><td><span class="b y">begge (lukket)</span></td><td><span class="b p">Android</span></td><td><span class="b p">Android + PWA; iOS kun via host</span></td></tr>
+<tr><td>Fjernadministration</td><td><span class="b y">admin-nøgler</span></td><td><span class="b y">login</span></td><td><span class="b p">delvis</span></td><td><span class="b y">kun administratorer</span></td></tr>
+<tr><td>Opdatering over luften</td><td><span class="b y">BLE/WiFi</span></td><td><span class="b y">BLE</span></td><td><span class="b u">–</span></td><td><span class="b p">signeret, USB/BLE (LoRa skrinlagt)</span></td></tr>
+<tr><td>Host som tjeneste (auto-genstart)</td><td><span class="b u">–</span></td><td><span class="b u">–</span></td><td><span class="b y">rnsd</span></td><td><span class="b n">nej</span>: stopper med sin terminal</td></tr>
+<tr><td>Brugere og modenhed</td><td><span class="b y">størst</span></td><td><span class="b y">voksende</span></td><td><span class="b p">niche</span></td><td><span class="b n">prototype</span></td></tr>
+</tbody></table></div>
+
+<h2 id="test">Tests og simulering</h2>
+<p>Kørt i dag på <code>maarse-sim</code> (frø 1–3, gennemsnit). "Flood" er simulatorens Meshtastic-lignende tilstand: alle gentager, højst 7 hop. Det er en model og ikke Meshtastics kode. MeshCore og Reticulum er ikke simuleret.</p>
+<div class="scroll"><table>
+<thead><tr><th>Scenarie</th><th>Metode</th><th class="num">Leveret</th><th class="num">Kvitteret</th><th class="num">Median</th><th class="num">Kanal nået</th><th class="num">Sendetid</th></tr></thead>
+<tbody>
+<tr class="sec"><td colspan="7">Statisk</td></tr>
+<tr><td rowspan="2">Lille by: 30 noder, 3 repeatere, 15 km</td><td>Må:rse</td><td class="num">99 %</td><td class="num win">99 %</td><td class="num">1,0 s</td><td class="num">95 %</td><td class="num win">106 s</td></tr>
+<tr><td>flood</td><td class="num">97 %</td><td class="num">91 %</td><td class="num">1,8 s</td><td class="num">84 %</td><td class="num">560 s</td></tr>
+<tr><td rowspan="2">Region: 120 noder, 30 km</td><td>Må:rse</td><td class="num">100 %</td><td class="num win">99 %</td><td class="num">2,4 s</td><td class="num">99 %</td><td class="num win">351 s</td></tr>
+<tr><td>flood</td><td class="num">97 %</td><td class="num">79 %</td><td class="num">5,9 s</td><td class="num">81 %</td><td class="num">1.760 s</td></tr>
+<tr><td rowspan="2">Stort tyndt net: 200 noder, 40 repeatere, 60 km</td><td>Må:rse</td><td class="num win">93 %</td><td class="num">84 %</td><td class="num">7,1 s</td><td class="num">81 %</td><td class="num win">932 s</td></tr>
+<tr><td>flood</td><td class="num">76 %</td><td class="num">63 %</td><td class="num">5,9 s</td><td class="num">69 %</td><td class="num">3.052 s</td></tr>
+<tr><td rowspan="2">SF12 (lang rækkevidde), 120 noder</td><td>Må:rse</td><td class="num">68 %</td><td class="num lose">30 %</td><td class="num">25 s</td><td class="num lose">25 %</td><td class="num">843 s</td></tr>
+<tr><td>flood</td><td class="num">54 %</td><td class="num">34 %</td><td class="num">63 s</td><td class="num">23 %</td><td class="num">1.620 s</td></tr>
+<tr><td rowspan="2">1 % duty cycle, 2 timer, 240 beskeder</td><td>Må:rse</td><td class="num">100 %</td><td class="num win">~100 %</td><td class="num">1,7 s</td><td class="num">95 %</td><td class="num win">1.190 s</td></tr>
+<tr><td>flood</td><td class="num">98 %</td><td class="num">94 %</td><td class="num">2,5 s</td><td class="num">100 %</td><td class="num">7.200 s, 300 pakker droppet</td></tr>
+<tr class="sec"><td colspan="7">Mobil (én bil gennem et fast net)</td></tr>
+<tr><td rowspan="2">By-kørsel 50 km/t</td><td>Må:rse</td><td class="num win">100 %</td><td class="num win">100 %</td><td class="num">3,9 s</td><td class="num">–</td><td class="num">316 s</td></tr>
+<tr><td>flood</td><td class="num">86 %</td><td class="num lose">42 %</td><td class="num">5,6 s</td><td class="num">–</td><td class="num">1.576 s</td></tr>
+<tr><td rowspan="2">Motorvej 110 km/t</td><td>Må:rse</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">3,8 s</td><td class="num">–</td><td class="num">315 s</td></tr>
+<tr><td>flood</td><td class="num">91 %</td><td class="num">58 %</td><td class="num">5,1 s</td><td class="num">–</td><td class="num">1.608 s</td></tr>
+<tr><td rowspan="2">Hurtigt tog 200 km/t</td><td>Må:rse</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">3,7 s</td><td class="num">–</td><td class="num">312 s</td></tr>
+<tr><td>flood</td><td class="num">95 %</td><td class="num">71 %</td><td class="num">4,7 s</td><td class="num">–</td><td class="num">1.650 s</td></tr>
+</tbody></table></div>
+<h3>Hvad testene viser</h3>
+<ul>
+<li><b>Må:rse vinder overalt, hvor der er repeatere.</b> Det leverer flere beskeder og bruger 1/3 til 1/6 af sendetiden. Ved 1 % duty cycle løber flood tør for budget og dropper ca. 300 pakker på 2 timer. Må:rse dropper én.</li>
+<li><b>SF12 i et tæt net er en svaghed.</b> Kun 30 % af beskederne bliver kvitteret, og kanalbeskeder når 25 % af noderne. Med <code>DEBUG_ACK=1</code> ses det, at svarene på ruteforespørgsler dør i kollision med <i>andre ruteforespørgsler</i>, mest ved en margen på 0–5 dB, og at 1.715 udsendelser blev opgivet, fordi kanalen var optaget. Flood er lige så dårlig, men det er ingen undskyldning. Vi mangler belastningsstyring.</li>
+<li><b>Mobil-testen er for snæver.</b> Én bil gennem et fast net er det letteste tilfælde for Må:rse. Det svære tilfælde er en gruppe, der bevæger sig uden repeatere (vandretur, redningshold, sejlads). Her er Meshtastics flood stærk, og Må:rse har kun skov-tilstanden med højst 4 hop. Simulatoren kan ikke vise det tilfælde endnu.</li>
+<li><b>Ingen målinger i felten.</b> Alle tal er fra simulatoren, der bruger log-distance uden terræn. Det eneste mål fra hardware er IP-ping over LoRa på 1,45 s ved SF9.</li>
+</ul>
+<h3>Erfaringer fra dagens arbejde</h3>
+<ul>
+<li>Pc'en gik ned med <code>0x3B SYSTEM_SERVICE_EXCEPTION</code> under fejlfinding med USB-radioer. Det tyder på, at USB-seriel-stakken eller strømforsyningen til boards er sårbar. Til faste opsætninger er det et argument for en Raspberry Pi eller en USB-hub med egen strøm.</li>
+<li>Hosten stoppede flere gange, når processen, der startede den, lukkede. Til faste opsætninger skal hosten kunne køre som Windows-tjeneste eller systemd-enhed.</li>
+<li>"maarse-host har ingen egen radio" forvirrede, selvom radioen sad i USB. Klienten bør se tilsluttede radioer og tilbyde at forbinde eller koble dem på.</li>
+<li>En repeater blev vist som "?", fordi MeshCore kun sender nøglen i sin første advert. Det er rettet i dag. Erfaringen er, at gateway-logik skal testes mod rigtige rammer og ikke kun rammer udledt af kildekoden.</li>
+</ul>
+
+<h2 id="overset">Det har vi overset</h2>
+<div class="grid">
+<div class="card"><h3>Fra Meshtastic</h3><ul class="small">
+<li><b>Rækkeviddetest-tilstand:</b> automatisk ping med log af SNR og position. Det billigste værktøj til at få feltdata.</li>
+<li><b>Strømsparetilstand</b> til trackere og sensorer (sover, vågner til at sende).</li>
+<li><b>GPS-driver</b> på boards med GPS (T-Beam, WisMesh Tag har GPS!).</li>
+<li><b>Færdige beskeder og SOS-knap</b>, så enheden kan bruges uden telefon.</li>
+<li><b>Kort</b> i appen og på et fælles kort.</li>
+</ul></div>
+<div class="card"><h3>Fra MeshCore</h3><ul class="small">
+<li><b>Rumservere (BBS):</b> en fælles tavle, hvor man kan læse det, der er skrevet, mens man var væk. Vores postkasse er kun til én modtager ad gangen.</li>
+<li><b>Deling af kontakter</b> som link eller QR (advert-URL).</li>
+<li><b>Automatisk annonceringsinterval</b> pr. rolle, som kan sættes fra appen.</li>
+<li><b>Konfigurerbar hash-størrelse på stier</b> (1–3 bytes) mod kollisioner i store net.</li>
+</ul></div>
+<div class="card"><h3>Fra Reticulum</h3><ul class="small">
+<li><b>Netværksnøgle (IFAC):</b> et lukket net, hvor fremmede pakker kasseres før routing. Vigtigt for beredskab og firmaer.</li>
+<li><b>Kvoter for announces</b> pr. interface, så en travl kanal ikke drukner.</li>
+<li><b>Flere medier:</b> KISS/TNC, så RNode-hardware og AX.25 kan bruges.</li>
+<li><b>Daemon og tjeneste</b> (rnsd), der kører uden brugerflade.</li>
+</ul></div>
+<div class="card"><h3>Vores egne huller</h3><ul class="small">
+<li>Historikken er <b>ukrypteret</b> på disken (<code>historik/log.txt</code>).</li>
+<li>Ingen <b>belastningsstyring</b>: se SF12-testen.</li>
+<li>Ingen simulering af en <b>mobil gruppe uden repeatere</b>.</li>
+<li>Hosten kan ikke køre som <b>tjeneste</b>.</li>
+<li>Kvitteringer <b>krydser ikke</b> MeshCore-broen.</li>
+<li>Kun én identitet pr. enhed, og <b>tilknyttede enheder</b> er ikke bygget.</li>
+</ul></div>
+</div>
+
+<h2 id="statisk-mobil">Statisk og mobil: hvad hver brug kræver</h2>
+<div class="scroll"><table>
+<thead><tr><th>Behov</th><th>Statisk (repeater, gateway, hjem)</th><th>Mobil (telefon, vandretur, bil)</th></tr></thead>
+<tbody>
+<tr><td>Routing</td><td><span class="b y">stærk</span> Kildestier, anker, regioner</td><td><span class="b p">delvis</span> Godt gennem faste net, svagt i grupper uden repeatere (højst 4 hop)</td></tr>
+<tr><td>Strøm</td><td><span class="b p">delvis</span> Energistyret videresendelse, men ingen sol- og batteriplan, og strømmen er ikke målt</td><td><span class="b n">mangler</span> Ingen strømsparetilstand. En tracker holder ikke i dagevis</td></tr>
+<tr><td>Drift</td><td><span class="b p">delvis</span> Fjernadministration findes, men hosten kører ikke som tjeneste, og der er ingen overvågning</td><td><span class="b p">delvis</span> Appen er fin, men der er ingen iOS-app og ingen brug uden telefon</td></tr>
+<tr><td>Rækkevidde</td><td><span class="b y">stærk</span> TCP-backbone og DHT, gateways</td><td><span class="b y">stærk</span> Telefonen kan bruge hjemme-hosten over VPN</td></tr>
+<tr><td>Position og kort</td><td><span class="b p">delvis</span> Fast position kan sættes</td><td><span class="b n">mangler</span> Ingen GPS-driver og intet kort</td></tr>
+<tr><td>Sikkerhed</td><td><span class="b p">delvis</span> Ingen netværksnøgle, og historikken er ukrypteret</td><td><span class="b y">stærk</span> Ingen afsender i klartekst, position privat som standard</td></tr>
+</tbody></table></div>
+<p><b>Konklusion:</b> Til faste opsætninger er Må:rse allerede bedst på papiret, men det mangler driftsmodenhed. Til mobil brug er det kun bedst, når der er en infrastruktur at støtte sig til. For grupper uden repeatere og til lange ture taber vi i dag til Meshtastic.</p>
+
+<h2 id="e45">Scenarie: Brønderslev → Fredericia i bil</h2>
+<p>Basen står i Brønderslev, og bilen kører 210 km ad E45 med 110 km/t (ca. 1 t 55 min). Basen og bilen skriver skiftevis 70 beskeder under turen. Repeaterne står langs vejen. Kørt med de nye flag <code>--repeater-km</code>, <code>--repeater-gain</code>, <code>--base-start</code> og <code>--anchor-every</code> i <code>maarse-sim</code> (frø 1–2).</p>
+<p class="muted small">Rækkevidden i modellen er vigtig. Med "lave" antenner (+6 dB pr. repeater) når to repeatere hinanden på ca. 21 km ved SF9, og bilen når en repeater på ca. 14 km. Med master (+15 dB) bliver det ca. 87 km mellem repeatere og 40 km fra bilen ved SF11. Virkeligheden afhænger af højde og terræn, og det kan kun en feltmåling afgøre.</p>
+<div class="scroll"><table>
+<thead><tr><th>Opstilling</th><th>Antenner</th><th>SF</th><th class="num">Leveret</th><th class="num">Kvitteret</th><th class="num">Median</th><th class="num">Sendetid</th></tr></thead>
+<tbody>
+<tr><td rowspan="4">Repeater hver 30. km (8 stk.)</td><td>lave</td><td>9</td><td class="num lose">9 %</td><td class="num lose">7 %</td><td class="num">–</td><td class="num">221 s</td></tr>
+<tr><td>lave</td><td>11</td><td class="num">96 %</td><td class="num">94 %</td><td class="num">12,5 s</td><td class="num">3.550 s</td></tr>
+<tr><td>master</td><td>9</td><td class="num win">100 %</td><td class="num win">100 %</td><td class="num">3,2 s</td><td class="num win">277 s</td></tr>
+<tr><td>master</td><td>11</td><td class="num">96 %</td><td class="num">95 %</td><td class="num">6,6 s</td><td class="num">1.230 s</td></tr>
+<tr><td rowspan="4">30 km, men et hul på 100 km (km 90–190)</td><td>lave</td><td>9</td><td class="num lose">9 %</td><td class="num lose">7 %</td><td class="num">–</td><td class="num">207 s</td></tr>
+<tr><td>lave</td><td>11</td><td class="num">59 %</td><td class="num">56 %</td><td class="num">8,9 s</td><td class="num">1.880 s</td></tr>
+<tr><td>master</td><td>9</td><td class="num">61 %</td><td class="num">61 %</td><td class="num">2,6 s</td><td class="num">245 s</td></tr>
+<tr><td>master</td><td>11</td><td class="num">84 %</td><td class="num">84 %</td><td class="num">7,4 s</td><td class="num">1.205 s</td></tr>
+<tr><td rowspan="2">Hver 15. km, lave antenner (ca. 14 hop)</td><td>uden ankre</td><td>9</td><td class="num">83 %</td><td class="num">81 %</td><td class="num">8,2 s</td><td class="num">788 s</td></tr>
+<tr><td>hver 4. er anker</td><td>9</td><td class="num">86 %</td><td class="num">86 %</td><td class="num">10,7 s</td><td class="num">799 s</td></tr>
+<tr><td rowspan="2">Hver 10. km, lave antenner</td><td>uden ankre</td><td>9</td><td class="num win">100 %</td><td class="num win">100 %</td><td class="num">5,4 s</td><td class="num">586 s</td></tr>
+<tr><td>hver 4. er anker</td><td>9</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">8,7 s</td><td class="num">669 s</td></tr>
+</tbody></table></div>
+<h3>Hvordan virker ankrene her?</h3>
+<p>Ankre er først nødvendige, når en rute bliver <b>længere end 12 hop</b>. Med 30 km mellem repeaterne er turen kun ca. 7 hop, så ankrene gør ingenting. Med 15 km mellem lave repeatere bliver det ca. 14 hop. Her giver ankre <b>+3 procentpoint</b> leveret, men koster ca. 2,5 s ekstra forsinkelse. Ankrene er altså ikke det, der afgør turen. <b>Dækningen er.</b></p>
+<h3>Hvordan sikrer vi forbindelse hele vejen?</h3>
+<ol>
+<li><b>Højde slår antal.</b> Otte repeatere i master hver 30. km gav 100 % ved SF9 med den laveste sendetid. Lave repeatere hver 30. km gav 9 %: de hører ikke hinanden. Sæt repeatere på master, siloer eller vindmøller, eller hold under ca. 20 km mellem lave repeatere.</li>
+<li><b>Et hul på 100 km kan LoRa ikke dække.</b> Selv med master og SF11 tabes ca. 16 % midt i hullet. Løsningen er ikke flere hop, men <b>en anden vej</b>: telefonen i bilen har mobildata, og appen kan allerede nå hjemme-hosten over VPN (TCP). Det mangler at ske <b>automatisk</b>. Når der ingen LoRa-rute er, skal noden eller appen skifte til TCP og skifte tilbage, når en repeater høres igen.</li>
+<li><b>En udbakke, der venter på dækning.</b> I dag opgiver bilen en besked efter 2 forsøg (ca. 1 minut). Beskeden bør i stedet blive liggende og sendes, så snart bilen hører en repeaters announce. Basen i Brønderslev har allerede postkassen til den modsatte vej.</li>
+<li><b>Vælg SF efter dækning.</b> SF11 lukker huller i et net med lave repeatere (96 %), men bruger 10 gange så meget sendetid. Det er godt til en enkelt bil og dårligt i et travlt net (se SF12-testen). Et "rejse-forvalg" eller adaptiv SF pr. link ville være bedre end én fast SF for hele nettet.</li>
+<li><b>Planlæg med kortet.</b> Med GPS og rækkeviddetest-tilstand kan vi lave et dækningskort langs E45 og se hullerne, før vi sætter repeatere op.</li>
+</ol>
+
+<h2 id="skov">Scenarie: skov med 18 mand spredt ud</h2>
+<p>18 personer med håndholdte noder går rundt i skoven med 5 km/t, hver mod sine egne tilfældige mål. Der er ingen repeatere. Skoven dæmper 10 dB/km ekstra, så to håndholdte når hinanden på ca. 2 km. Hver kørsel er 30 minutter med 60 direkte beskeder og 10 kanalbeskeder, gennemsnit af 3 frø. Kørt med den nye <code>--forest</code>-tilstand i <code>maarse-sim</code>.</p>
+<div class="scroll"><table>
+<thead><tr><th>Område</th><th>Rolle for alle</th><th class="num">Naboer</th><th class="num">Leveret</th><th class="num">Kvitteret</th><th class="num">Median</th><th class="num">Kanal nået</th><th class="num">Sendetid</th></tr></thead>
+<tbody>
+<tr><td rowspan="5">3 × 3 km</td><td>klient (videresender ikke)</td><td class="num">15</td><td class="num lose">86 %</td><td class="num">85 %</td><td class="num">0,7 s</td><td class="num">85 %</td><td class="num">57 s</td></tr>
+<tr><td>relay, 4 hop (skov-tilstand)</td><td class="num">14</td><td class="num win">100 %</td><td class="num">99 %</td><td class="num">0,7 s</td><td class="num">100 %</td><td class="num win">203 s</td></tr>
+<tr><td>relay, 7 hop</td><td class="num">14</td><td class="num">100 %</td><td class="num">99 %</td><td class="num">0,7 s</td><td class="num">100 %</td><td class="num">203 s</td></tr>
+<tr><td>repeater</td><td class="num">15</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">0,7 s</td><td class="num">100 %</td><td class="num">196 s</td></tr>
+<tr><td>flood, 7 hop</td><td class="num">15</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">0,5 s</td><td class="num">97 %</td><td class="num">355 s</td></tr>
+<tr><td rowspan="5">5 × 5 km</td><td>klient</td><td class="num">9</td><td class="num lose">49 %</td><td class="num">48 %</td><td class="num">0,7 s</td><td class="num">42 %</td><td class="num">79 s</td></tr>
+<tr><td>relay, 4 hop</td><td class="num">8</td><td class="num win">99 %</td><td class="num win">99 %</td><td class="num">2,1 s</td><td class="num">96 %</td><td class="num win">350 s</td></tr>
+<tr><td>relay, 7 hop</td><td class="num">9</td><td class="num">100 %</td><td class="num">99 %</td><td class="num">2,1 s</td><td class="num">97 %</td><td class="num">361 s</td></tr>
+<tr><td>repeater</td><td class="num">9</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">1,7 s</td><td class="num">97 %</td><td class="num">348 s</td></tr>
+<tr><td>flood, 7 hop</td><td class="num">9</td><td class="num">98 %</td><td class="num">91 %</td><td class="num">1,4 s</td><td class="num">97 %</td><td class="num">472 s</td></tr>
+<tr><td rowspan="5">8 × 8 km</td><td>klient</td><td class="num">4</td><td class="num lose">19 %</td><td class="num">19 %</td><td class="num">0,6 s</td><td class="num">16 %</td><td class="num">92 s</td></tr>
+<tr><td>relay, 4 hop</td><td class="num">4</td><td class="num">59 %</td><td class="num">57 %</td><td class="num">3,7 s</td><td class="num">38 %</td><td class="num">368 s</td></tr>
+<tr><td>relay, 7 hop</td><td class="num">4</td><td class="num">62 %</td><td class="num">61 %</td><td class="num">4,3 s</td><td class="num">40 %</td><td class="num">394 s</td></tr>
+<tr><td>repeater</td><td class="num">4</td><td class="num">61 %</td><td class="num">59 %</td><td class="num">3,1 s</td><td class="num">45 %</td><td class="num">405 s</td></tr>
+<tr><td>flood, 7 hop</td><td class="num">4</td><td class="num">56 %</td><td class="num">50 %</td><td class="num">2,5 s</td><td class="num">46 %</td><td class="num">305 s</td></tr>
+</tbody></table></div>
+<p class="small muted">Ekstra kørsler ved 8 × 8 km: 20 mand gav 57 % leveret. 18 mand + 2 tilfældigt placerede lave repeatere gav 70 %, og + 4 gav 62 %. SF11 gav 62 % (Må:rse) og 69 % (flood), men flood kvitterede kun 51 %, og begge brugte 4 gange så meget sendetid.</p>
+<h3>Hvad skov-testen viser</h3>
+<ul>
+<li><b>Skov-tilstanden virker.</b> Ved 3–5 km leverer relay 99–100 %, på højde med flood eller bedre, med 25–45 % mindre sendetid. Flood kvitterer ringere ved 5 km (91 %).</li>
+<li><b>Klient-rollen er en fælde i skoven.</b> Uden videresendelse når kun 49 % frem ved 5 km. Klienten bør <b>automatisk foreslå relay</b>, når den ikke hører repeatere.</li>
+<li><b>4 hop er nok</b> op til 5 km. Ved 8 km gav 7 hop kun 3 procentpoint mere, så grænsen er ikke problemet.</li>
+<li><b>Ved 8 km er gruppen delt i øer</b> med ca. 4 naboer hver. Alle metoder ender på 56–62 %, så det er ikke routingen, der fejler. Det er der ingen vej igennem i øjeblikket.</li>
+<li><b>Det, der kan løfte 8 km-tilfældet, er "bær videre"</b> (forsinkelsestolerant levering). I dag opgiver afsenderen efter 2 forsøg. Men folk bevæger sig, og en øgruppe møder ofte en anden inden for få minutter. Hvis relays holder beskeden og afleverer den, når de møder modtageren eller en, der er tættere på, kan bevægelsen selv lukke hullerne. Det kan ingen af de tre andre systemer i dag.</li>
+<li><b>Én høj repeater slår mange lave.</b> Tilfældige lave repeatere i skoven hjalp kun lidt (+3 til +11 procentpoint). En repeater på en bakke, i en bil med mast eller på en drone ville dække hele området. Det svarer til fundet fra E45-scenariet.</li>
+</ul>
+
+<h3 id="bakke">"Ham på toppen": én mand på en bakke kan nå en repeater</h3>
+<p>Der er 20 mand i skoven og én på en bakke midt i området (+10 dB for højde og sigtelinje, halv skovdæmpning ned mod de andre). En repeater står 12 km væk med en base ved siden af. Alle 60 beskeder går mellem basen og en tilfældig mand i skoven. Kørt med <code>maarse-sim --hill</code>, gennemsnit af 3 frø.</p>
+<div class="scroll"><table>
+<thead><tr><th>Manden på bakken</th><th>De andre i skoven</th><th class="num">3 km leveret</th><th class="num">5 km leveret</th><th class="num">Sendetid (5 km)</th></tr></thead>
+<tbody>
+<tr><td>går rundt som de andre</td><td>relay</td><td class="num lose">0 %</td><td class="num lose">0 %</td><td class="num">419 s</td></tr>
+<tr><td>står på bakken som klient</td><td>relay</td><td class="num lose">0 %</td><td class="num lose">0 %</td><td class="num">413 s</td></tr>
+<tr><td>står på bakken som relay</td><td>relay</td><td class="num">57 %</td><td class="num">56 %</td><td class="num">448 s</td></tr>
+<tr><td>står på bakken som repeater</td><td>relay</td><td class="num">62 %</td><td class="num">66 %</td><td class="num">413 s</td></tr>
+<tr><td>relay på bakken</td><td>klient</td><td class="num win">100 %</td><td class="num win">100 %</td><td class="num">117 s</td></tr>
+<tr><td>relay på bakken, <b>uden flood-dæmpning</b></td><td>relay</td><td class="num win">100 %</td><td class="num win">100 %</td><td class="num win">268 s</td></tr>
+</tbody></table></div>
+<p><b>Fundet:</b> Manden på bakken <i>videresender allerede</i> for de andre, hvis han er relay, men flood-dæmpningen lukker ham ned. Han hører de andre relays sende samme ruteforespørgsel med god SNR, konkluderer at "området er dækket" (<code>on_duplicate_flood</code> i <code>maarse-core/src/router.rs</code>) og tier. Men han er den <b>eneste</b>, der når repeateren, så halvdelen af ruterne går tabt. Grænsen på 4 hop og mere antennegevinst ændrer ingenting. Slås dæmpningen fra for ham alene, når 100 % frem, og der bruges endda mindre sendetid.</p>
+<p><b>Forslag: bro-tilstand.</b> En relay, der direkte (0 hop) hører en repeater eller et anker, er en bro og ignorerer flood-dæmpningen i 15 minutter. For at vide, at naboen er en repeater, får announces et nyt rollefelt (TLV, ligesom position og navn). Det er bagudkompatibelt, for ældre noder springer feltet over. Klienten viser "Du er bro til nettet", så manden på toppen ved, at han skal blive stående. Desuden bør en klient, der ikke hører repeatere, foreslå relay (se ovenfor), ellers bliver ham på toppen en blindgyde.</p>
+
+<h3 id="bro-test">Stor test af bro-reglen (1.000+ kørsler)</h3>
+<p>Seks regler er prøvet i 17 scenarier med 10 frø hver. Scenarierne er: bakke ved 3, 5 og 8 km med 10, 20 og 40 mand, skovdæmpning på 6 og 15 dB/km, bakkegevinst på 0 og 20 dB, repeatere <i>inde i</i> skoven (2–6 stk., op til 40 mand) og en kontrol uden repeatere. Kørt med <code>maarse-sim --suppress …</code>.</p>
+<div class="scroll"><table>
+<thead><tr><th>Regel</th><th>Bakke (9 scenarier)</th><th>Repeatere i skoven</th><th>Dom</th></tr></thead>
+<tbody>
+<tr><td><b>normal</b> (i dag)</td><td class="lose">55–82 % leveret</td><td>bedst: 98–100 %, lavest sendetid</td><td>Fejler for broer</td></tr>
+<tr><td><b>ingen dæmpning</b> for relays</td><td>44–100 %. Med 40 mand ender det i en <b>flood-storm</b> (44 %, 2,3 gange så meget sendetid)</td><td>dyr</td><td><span class="verdict stop">Nej</span></td></tr>
+<tr><td><b>bro</b>: hører repeater, så ingen dæmpning</td><td class="win">97–100 %, mindre sendetid</td><td class="lose">kvitteret 98,8 → 58,8 % (40 mand), sendetid × 2–4</td><td><span class="verdict stop">For grov</span></td></tr>
+<tr><td><b>bro, kun dubletter fra relays ignoreres</b></td><td class="win">97–100 %</td><td>bedre, men stadig 78,8 % kvitteret ved 40 mand</td><td><span class="verdict maybe">Delvis</span></td></tr>
+<tr><td><b>svag forbindelse</b> til repeater (SNR-grænse)</td><td>afhænger af grænsen: 0/5 dB svigter ved +20 dB-bakke</td><td>ok ved lav grænse</td><td><span class="verdict stop">Skrøbelig</span></td></tr>
+<tr><td><b>forsinket bro</b> (venter 4–12 tidsslots)</td><td class="lose">70–80 %</td><td>næsten normal</td><td><span class="verdict stop">Ødelægger bakken</span></td></tr>
+<tr><td><b>kant af dækning</b>: bro kun hvis en nabo <i>ikke</i> hører nogen repeater, og kun relay-dubletter ignoreres</td><td class="win">97–100 %, 15–35 % mindre sendetid</td><td>tæt dækning: <b>identisk med normal</b>. Delvis dækning: −3 point kvitteret, +27–32 % sendetid</td><td><span class="verdict go">Vinder</span></td></tr>
+</tbody></table></div>
+<ul>
+<li><b>Gevinsten er robust.</b> Med kant-reglen ligger bakken på 97–100 % (værste frø 88 %) i alle 9 kombinationer af område og gruppestørrelse og ved begge skovdæmpninger, mod 55–82 % i dag.</li>
+<li><b>Fysikken gælder stadig.</b> Uden højdegevinst (+0 dB) når manden på bakken slet ikke repeateren, og alle regler giver 0 %. Bro-tilstand hjælper kun, når han rent faktisk kan høre repeateren.</li>
+<li><b>Den naive løsning er farlig.</b> "Bro = slå dæmpning fra, når du hører en repeater" ødelægger tætte net med repeatere: kvitteringerne falder til 59 %, og sendetiden firdobles. Reglen <b>skal</b> begrænses til kanten af dækningen.</li>
+<li><b>Prisen ved delvis dækning:</b> +27–32 % sendetid og 1–3 point færre kvitteringer. Det er acceptabelt, men værd at finpudse, fx med en kort ventetid kun for kant-broer.</li>
+<li><b>På hardware</b> kan en node ikke "se" linkbudgettet som simulatoren. Den skal lære, at den står i kanten: den hører en repeater (rollefelt i announces), og den har naboer, hvis floods den aldrig hører en repeater gentage. Det kan beregnes ud fra nabolisten, som findes i forvejen.</li>
+</ul>
+<div class="note"><b>Implemented (update):</b> the edge rule is now built into the router, host and firmware (nRF52840 and ESP32-S3), with no oracle. Each node announces its role and a flag saying whether it hears a repeater directly (app-data field <code>0x06</code>). A relay is an edge bridge when it hears a repeater and has a neighbor that does not. As a bridge it ignores duplicate floods from non-repeaters, but a repeater's copy still silences it. Results with the real logic (10 seeds): hill scenarios 55–82 % → <b>96–100 %</b> delivered with less airtime; dense repeater coverage nearly unchanged (98.0 vs 98.8 % acked); partial coverage costs up to ~30 % airtime and 1–3 points of acks, as the oracle did. <code>maarse-sim --suppress normal</code> is now the real rule and <code>--suppress legacy</code> the old behaviour.</div>
+<p class="small muted">Kontrollen uden repeatere giver bit for bit samme resultat med alle regler, og alle 191 tests består. Routeren har fået <code>seen()</code> (kun læsning) og <code>extra_flood_delay_ms</code> (standard 0). Simulatorens knapper: <code>--suppress normal|bridge|bridge-relay|bridge-weak|bridge-weak-relay|bridge-relay-late|bridge-edge|bridge-edge-relay|none</code>, <code>BRIDGE_SNR</code>, <code>BRIDGE_LATE_SLOTS</code>.</p>
+
+<h2 id="afstemning">Forslag, for og imod og intern afstemning</h2>
+<p class="muted">Fem roller stemte om hvert forslag: <b>D</b> driftsfolk (repeatere og gateways), <b>M</b> mobil bruger (vandrer, beredskab), <b>S</b> sikkerhed, <b>N</b> nybegynder og <b>U</b> udvikler (vedligehold og risiko). Skalaen går fra +2 (skal med) til −2 (lad være). Over +5 bygges forslaget, fra +2 til +5 er det måske, og under +2 bliver det ikke bygget nu.</p>
+
+<div id="votes"></div>
+
+<h2 id="roadmap">Roadmap</h2>
+<div class="phase"><h3>Fase 1 · Nu (0–4 uger): mål og hærd</h3><ul>
+<li><b>Rækkeviddetest-tilstand</b> + første feltmåling (Heltec og XIAO, SF7–SF12, by og land) → tal ind i <code>compare.md</code>.</li>
+<li><b>Strømmåling</b> på begge boards (hvile, modtagelse, repeater).</li>
+<li><b>Krypteret historik</b> på disken (nøgle fra adgangsnøglen eller OS-nøglering).</li>
+<li><b>Host som tjeneste</b>: <code>--service install</code> på Windows og en systemd-enhed, med automatisk genstart og genforbindelse til seriel.</li>
+<li><b>Bedre radiovalg i klienten</b>: se USB-radioer, foreslå "forbind direkte" eller "kobl på hosten (<code>--serial</code>)".</li>
+</ul></div>
+<div class="phase p2"><h3>Fase 2 · Næste (1–3 måneder): luften og mobil brug</h3><ul>
+<li><b>Belastningsstyring</b>: kvote på ruteforespørgsler efter målt kanalbelastning, længere ventetid ved høj SF og en anbefaling af SF i klienten. Målet er over 70 % kvitteret ved SF12 i simulatoren.</li>
+<li><b>Automatisk skift mellem LoRa og TCP</b> for mobile noder (appen eller telefonen over mobildata til hjemme-hosten) + <b>udbakke, der venter på dækning</b> i stedet for at opgive efter 2 forsøg. Målet i E45-scenariet med 100 km-hul er over 99 % leveret.</li>
+<li><b>Bro-tilstand</b> (fase 1-kandidat: lille, målt effekt): rollefelt i announces, og en relay, der hører en repeater direkte, er undtaget fra flood-dæmpning. Bakketesten: 57 % → 100 %.</li>
+<li><b>Skov og grupper</b> (simuleringen er lavet: <code>--forest</code>):<b>automatisk relay</b>, når der ikke høres repeatere, og <b>bær videre</b>: relays holder beskeder og afleverer dem ved næste møde. Målet er over 85 % leveret for 18 mand på 8 × 8 km (i dag ca. 60 %).</li>
+<li><b>Strømsparetilstand</b> på nRF52840 til klienter og trackere.</li>
+<li><b>GPS-driver</b> (WisMesh Tag) + simpelt <b>kort</b> i klienten med offline-fliser fra hosten. Positionen er stadig privat som standard.</li>
+<li><b>Netværksnøgle</b> (valgfri, à la IFAC) til lukkede net.</li>
+</ul></div>
+<div class="phase p3"><h3>Fase 3 · Senere (3–6 måneder): tjenester og økosystem</h3><ul>
+<li><b>Opslagstavler</b> (rum som i MeshCore) på hosten og senere på repeatere med flash.</li>
+<li><b>Telefonen som egen node</b> (maarse-host i Android-appen, se det parkerede projekt).</li>
+<li><b>Gateway til Reticulum</b> (LXMF ↔ Må:rse DM).</li>
+<li><b>Ekstern kryptogennemgang</b> af ratchet og protokol, før v1.0.</li>
+<li><b>Færdige beskeder og SOS</b> på enheder med skærm og knap.</li>
+</ul></div>
+<div class="phase p4"><h3>Måske eller ikke nu</h3><ul>
+<li>Opdatering over LoRa (skrinlagt: for langsom).</li>
+<li>Indbygget iOS-app (iOS kan bruge hosten via PWA, og en app koster meget at vedligeholde).</li>
+<li>KISS/TNC og AX.25 (lille målgruppe, meget arbejde).</li>
+<li>Kvitteringer over MeshCore-broen (kræver ændringer på MeshCores side).</li>
+</ul></div>
+
+<h2 id="metode">Metode og forbehold</h2>
+<ul class="small">
+<li>Simulatoren bruger log-distance uden terræn. Tallene er til at sammenligne varianter og er ikke absolutte.</li>
+<li>"Flood" er en model, der ligner Meshtastic: alle gentager, 7 hop. Meshtastics rigtige ROUTER_LATE-logik og MeshCores stier er ikke modelleret, så sammenligningen med MeshCore er kvalitativ.</li>
+<li>Oplysninger om de andre systemer er fra <code>compare.md</code> v0.5 (kilder hentet november 2026) og kan være ældre end deres seneste udgivelser.</li>
+<li>Afstemningen er en struktureret vurdering fra fem synsvinkler og ikke en brugerundersøgelse.</li>
+<li>Gentag: <code>cargo test --workspace --release</code>, <code>maarse-sim --seed N [--mode flood] [--sf 12] [--highway --car-kmh 50] [--duty 10 --duration 7200 --messages 240]</code>.</li>
+</ul>
+</main>
+<script>
+const P = [
+ ["Rækkeviddetest-tilstand + feltmålinger","Automatisk ping med log af SNR, RSSI og position. Måling på begge boards.",
+  ["Første rigtige tal om rækkevidde","Billigt: bygger på trace og ping","Bruges også af installatører"],["Kræver tid ude i felten","Uden GPS-driver skal positionen komme fra telefonen"],[2,2,1,1,2]],
+ ["Krypteret historik på disken","Historikken i hosten krypteres i hvile.",
+  ["Lukker et konkret hul i privatlivet","Lille ændring"],["Glemt nøgle betyder tabt historik","Søgning bliver lidt sværere"],[1,1,2,1,1]],
+ ["Host som tjeneste med automatisk genstart","Windows-tjeneste og systemd, genforbinder seriel og MeshCore.",
+  ["Nødvendigt til faste gateways","Løser dagens problem med at hosten stopper"],["Forskelligt på hvert OS","Flere ting at teste"],[2,1,0,2,1]],
+ ["Belastningsstyring for ruteforespørgsler","Kvote efter kanalbelastning og ventetid efter SF.",
+  ["Retter SF12-svagheden (30 % kvitteret)","Gør nettet robust, når det vokser"],["Kan gøre ruteopslag langsommere i stille net","Skal afstemmes i simulatoren først"],[2,1,1,0,1]],
+ ["Automatisk skift mellem LoRa og TCP + udbakke, der venter","Mobile noder skifter til mobildata og hjemme-host, når der ingen LoRa-rute er. Beskeder venter på dækning.",
+  ["Lukker huller på 100 km som på E45","Bygger på fjernadgang og postkasse, som findes","Unik: ingen af de tre andre gør det automatisk"],["Kræver mobildata og VPN til hosten","Risiko for dobbelt levering, hvis begge veje sender (ID'er dedupliker allerede)"],[1,2,0,2,1]],
+ ["Bro-tilstand: ingen flood-dæmpning for den, der når en repeater","Rollefelt i announces. En relay i kanten af dækningen (hører en repeater og har naboer, der ikke gør) ser bort fra dubletter fra relays.",
+  ["Stor test: 55–82 % → 97–100 % i alle bakke-scenarier, med mindre sendetid","Uændret, hvor repeatere dækker tæt","Bagudkompatibelt (nyt TLV-felt)","Netop de situationer, hvor beredskab og jægere har brug for det"],["Ændring i routerens kerne, skal også i firmware","Flere broer tæt sammen betyder lidt mere sendetid"],[2,2,0,1,1]],
+ ["Bær videre (forsinkelsestolerant) i relay-tilstand","Relays holder beskeder og afleverer dem, når de møder modtageren eller en tættere node.",
+  ["Skov-testen: grupper delt i øer ender på ~60 % med alle metoder i dag","Bruger bevægelsen i stedet for at kæmpe imod den","Unik blandt de fire systemer"],["RAM og flash på noder er små","Beskeder kan komme minutter for sent, så brugeren skal se \"undervejs\""],[1,2,0,1,0]],
+ ["Automatisk forslag om relay, når ingen repeatere høres","Klienten skifter eller foreslår skov-tilstand.",
+  ["Klient-rollen gav 49 % ved 5 km mod 99 % med relay","Billigt at bygge"],["Flere videresendere bruger mere sendetid i tætte grupper"],[1,2,0,2,1]],
+ ["Strømsparetilstand (nRF52840)","Klienter og trackere sover mellem udsendelser.",
+  ["Nødvendig til trackere og mobil brug","nRF er god til det"],["Sovende noder kan ikke videresende","Svært at teste"],[1,2,0,1,0]],
+ ["GPS-driver + kort i klienten","WisMesh Tag GPS og kort med offline-fliser.",
+  ["Det mest efterspurgte i Meshtastic","Kort over dækningen hjælper ved placering af repeatere"],["Fliser fylder og har licensvilkår","Risiko for privatlivet ved præcis position"],[1,2,-1,2,0]],
+ ["Netværksnøgle (lukket net)","Valgfri nøgle, så fremmede pakker kasseres før routing.",
+  ["Krav fra beredskab og firmaer","Skærmer mod spam og kortlægning"],["Deler nettet op","En nøgle kan lække, og så skal alle skifte"],[1,1,2,-1,0]],
+ ["Opslagstavler (rum)","Fælles tavle på host og repeatere.",
+  ["Gør det lokale net socialt (som MeshCore-rum)","Bygger på postkassen"],["Kræver lagerplads og moderation","Flash på noder er lille"],[1,1,0,1,0]],
+ ["Telefonen som egen node","maarse-host i Android-appen med egen identitet.",
+  ["Ingen pc nødvendig","Mobil brug over internettet"],["NDK og batteriforbrug","Fordobler den kode, der skal vedligeholdes"],[0,2,0,1,-1]],
+ ["Gateway til Reticulum","Bro mellem LXMF og Må:rse.",
+  ["Når også det tredje økosystem","Reticulum-brugere er tekniske tidlige brugere"],["Lille målgruppe","Reticulums licens og fremtid er uklar"],[1,0,0,0,-1]],
+ ["Ekstern kryptogennemgang","Gennemgang af ratchet, announces og stempler.",
+  ["Nødvendig før v1.0","Giver troværdighed"],["Koster penge eller kontakter","Kan kræve ændringer i protokollen"],[1,1,2,0,1]],
+ ["Indbygget iOS-app","Swift-app med BLE.",
+  ["Mange har iPhone"],["Dyrt at vedligeholde","PWA via host virker allerede"],[0,1,0,1,-2]],
+ ["Opdatering over LoRa","Genoptag OTA over luften.",
+  ["Praktisk til repeatere i master"],["Målt for langsomt","Bruger meget af duty cycle-budgettet"],[1,-1,0,0,-1]],
+];
+const roles = ["D","M","S","N","U"];
+const box = document.getElementById("votes");
+P.map(p => ({p, sum: p[4].reduce((a, b) => a + b, 0)})).sort((a, b) => b.sum - a.sum).forEach(({p, sum}) => {
+  const v = sum > 5 ? ["go", "Byg"] : sum >= 2 ? ["maybe", "Måske"] : ["stop", "Ikke nu"];
+  const c = document.createElement("div"); c.className = "card"; c.style.margin = "12px 0";
+  const h = document.createElement("h3"); h.textContent = p[0] + " ";
+  const s = document.createElement("span"); s.className = "verdict " + v[0]; s.textContent = `${v[1]} · ${sum > 0 ? "+" : ""}${sum}`; h.append(s);
+  const d = document.createElement("p"); d.className = "muted small"; d.textContent = p[1];
+  const pc = document.createElement("div"); pc.className = "pc";
+  const mk = (cls, title, items) => { const x = document.createElement("div"); x.className = cls; const b = document.createElement("b"); b.textContent = title; x.append(b);
+    const u = document.createElement("ul"); u.className = "small"; items.forEach(t => { const li = document.createElement("li"); li.textContent = t; u.append(li); }); x.append(u); return x; };
+  pc.append(mk("pro", "For", p[2]), mk("con", "Imod", p[3]));
+  const vo = document.createElement("p"); vo.className = "vote"; vo.textContent = p[4].map((x, i) => `${roles[i]} ${x > 0 ? "+" : ""}${x}`).join("   ");
+  c.append(h, d, pc, vo); box.append(c);
+});
+</script>
+</body>
+</html>

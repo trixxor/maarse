@@ -83,6 +83,9 @@ const MAX_QUEUE: usize = 8;
 const MAX_AWAIT: usize = 32;
 const MAX_CHANNELS: usize = 8;
 const MAX_NEIGHBORS: usize = 32;
+/// How long role, forwarding and coverage observations stay valid for the
+/// edge bridge rule (ms).
+pub const EDGE_WINDOW_MS: u64 = 300_000;
 const MAX_TRACES: usize = 4;
 /// Hvor mange stykker et anker husker ad gangen (forespørgsler og beskeder).
 const MAX_ANCHORED: usize = 16;
@@ -326,6 +329,9 @@ pub struct Router<const R: usize, const D: usize> {
     /// Annullér egen videresendelse af et flood efter så mange hørte kopier
     /// med god SNR (se `on_duplicate_flood`).
     pub suppress_after: u8,
+    /// Ekstra ventetid før vi sender et flood videre (ms). Bruges af en bro,
+    /// så en repeaters kopi når frem først, hvis repeateren selv sender.
+    pub extra_flood_delay_ms: u32,
     /// Største antal hop, en relay videresender (standard 4, højst 7).
     pub relay_hops: u8,
     /// Ventetid på kvittering fra ende til ende, før ruten repareres (ms).
@@ -391,6 +397,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             slot_ms: DEFAULT_SLOT_MS,
             hop_timeout_ms: DEFAULT_HOP_TIMEOUT_MS,
             suppress_after: 1,
+            extra_flood_delay_ms: 0,
             relay_hops: DEFAULT_RELAY_HOPS,
             ack_timeout_ms: DEFAULT_ACK_TIMEOUT_MS,
             mobile: false,
@@ -437,7 +444,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         } else {
             0
         };
-        bucket as u32 * self.slot_ms + self.energy.penalty_ms() + relay
+        bucket as u32 * self.slot_ms + self.energy.penalty_ms() + relay + self.extra_flood_delay_ms
     }
 
     /// Må vi videresende et flood i `region` (0 = ingen)?
@@ -520,8 +527,13 @@ impl<const R: usize, const D: usize> Router<R, D> {
     /// til at tie. Derfor er én stærk kopi nok (`suppress_after` = 1). Talt
     /// med alle kopier ville floodet dø ud på lange kæder (motorvej), og
     /// de fundne ruter ville kun bestå af svage led.
-    fn on_duplicate_flood(&mut self, id: u64, snr_db: i8, out: &mut Actions) {
+    fn on_duplicate_flood(&mut self, id: u64, snr_db: i8, prev: Option<PathId>, now_ms: u64, out: &mut Actions) {
         if snr_db < self.weak_snr_db {
+            return;
+        }
+        // Edge bridge: a copy from a non-repeater does not prove that the
+        // repeater side is covered, so it is no reason to stay silent.
+        if self.is_edge_bridge(now_ms) && !prev.is_some_and(|p| self.is_repeater_neighbor(p, now_ms)) {
             return;
         }
         if let Some(i) = self.flood_pending.iter().position(|(x, _)| *x == id) {
@@ -531,6 +543,69 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 let _ = out.push(Action::Cancel { id });
             }
         }
+    }
+
+    /// Records a neighbor's role from its announce (role field in app-data).
+    /// Only direct (0-hop) announces should be passed in. The router has
+    /// normally recorded the neighbor already (with SNR) when the announce
+    /// arrived; otherwise it is added with the given values.
+    pub fn note_role(
+        &mut self,
+        id: PathId,
+        role: Role,
+        hears_repeater: Option<bool>,
+        rssi: i16,
+        snr_db: i8,
+        now_ms: u64,
+    ) {
+        if id == self.id {
+            return;
+        }
+        if self.neighbors.get(id).is_none() {
+            self.neighbors.heard(id, None, snr_db, rssi, now_ms);
+        }
+        self.neighbors.set_role(id, role, hears_repeater);
+    }
+
+    /// Do we hear a repeater or anchor directly? Sent in our announces
+    /// (role field flag) so neighbors can apply the edge bridge rule.
+    pub fn hears_repeater(&self, now_ms: u64) -> bool {
+        self.neighbors.iter().any(|n| self.is_repeater_neighbor(n.id, now_ms))
+    }
+
+    fn is_repeater_neighbor(&self, id: PathId, now_ms: u64) -> bool {
+        self.neighbors.get(id).is_some_and(|n| {
+            matches!(n.role, Some(Role::Repeater | Role::Anchor)) && now_ms.saturating_sub(n.last_ms) < EDGE_WINDOW_MS
+        })
+    }
+
+    /// Edge bridge: we are a relay, we hear a repeater directly, and at
+    /// least one recent neighbor does not. Then we are the group's way into
+    /// the repeater network and must not be silenced by the group's own
+    /// copies.
+    ///
+    /// A neighbor that reports the role flag is believed. For one that does
+    /// not (older firmware), we guess: it forwards floods, and no repeater
+    /// has been heard echoing it or being echoed by it.
+    pub fn is_edge_bridge(&self, now_ms: u64) -> bool {
+        if self.role != Role::Relay || !self.hears_repeater(now_ms) {
+            return false;
+        }
+        let fresh = |t: u64| t != 0 && now_ms.saturating_sub(t) < EDGE_WINDOW_MS;
+        self.neighbors.iter().any(|n| {
+            if matches!(n.role, Some(Role::Repeater | Role::Anchor)) || !fresh(n.last_ms) {
+                return false;
+            }
+            match n.hears_repeater {
+                Some(h) => !h,
+                None => fresh(n.forwarded_ms) && !fresh(n.covered_ms),
+            }
+        })
+    }
+
+    /// Har vi allerede set denne pakke (samme ID)? Ændrer intet.
+    pub fn seen(&self, buf: &[u8]) -> bool {
+        Packet::decode(buf).is_ok_and(|p| self.dedup.contains(packet_id(p.header.ptype, &p.header.dest, p.payload)))
     }
 
     /// Tidspunkt for næste gensendelse, hvis nogen.
@@ -772,6 +847,24 @@ impl<const R: usize, const D: usize> Router<R, D> {
         {
             self.neighbors.heard(id, addr, snr_db, self.rx_rssi, now_ms);
         }
+        // Flood forwarding and coverage: the last hop forwarded this request;
+        // if it is a repeater, it heard the hop before it.
+        if let (PacketType::PathRequest, Some(p)) = (&h.ptype, &h.path)
+            && let Some(&last) = p.last()
+        {
+            self.neighbors.mark_forwarded(last, now_ms);
+            if p.len() >= 2 {
+                let before = p[p.len() - 2];
+                if self.is_repeater_neighbor(last, now_ms) {
+                    // A repeater forwarded what `before` sent: it hears `before`.
+                    self.neighbors.mark_covered(before, now_ms);
+                } else if self.is_repeater_neighbor(before, now_ms) {
+                    // `last` forwarded what a repeater sent: it hears the
+                    // repeater (links are assumed to be roughly symmetric).
+                    self.neighbors.mark_covered(last, now_ms);
+                }
+            }
+        }
     }
 
     /// Kender vi en rute til `dest`?
@@ -917,7 +1010,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     if pkt.header.dest == self.addr {
                         self.consider_reply(&pkt, snr_db);
                     }
-                    self.on_duplicate_flood(id, snr_db, &mut out);
+                    let prev = pkt.header.path.as_ref().and_then(|p| p.last().copied());
+                    self.on_duplicate_flood(id, snr_db, prev, now_ms, &mut out);
                 }
             }
             (_, Some(path)) => {
@@ -932,7 +1026,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     self.on_flood(&pkt, snr_db, &mut out);
                 } else {
                     self.stats.rx_duplicates += 1;
-                    self.on_duplicate_flood(id, snr_db, &mut out);
+                    self.on_duplicate_flood(id, snr_db, None, now_ms, &mut out);
                 }
             }
         }
@@ -1956,6 +2050,72 @@ mod tests {
         let resp = reply(&mut b, 10);
         let p = Packet::decode(&resp[0]).unwrap();
         assert_eq!(p.header.path.unwrap().as_slice(), &[6, 5]);
+    }
+
+    /// A path request to someone else, as forwarded along `path`.
+    fn forwarded_request(token: u8, path: &[u16]) -> Buf {
+        let dest = Address([0x55; 16]);
+        let mut h = Header::new(PacketType::PathRequest, dest).with_path(Path::from_slice(path).unwrap());
+        h.hops = path.len() as u8;
+        let mut p: Buf = Buf::from_slice(&[token; 16]).unwrap();
+        assert!(stamp::append(PacketType::PathRequest, &dest, &mut p));
+        encode(&h, &p).unwrap()
+    }
+
+    const REP: u16 = 0x0303;
+
+    #[test]
+    fn edge_bridge_needs_a_repeater_and_an_uncovered_forwarder() {
+        let mut relay = node(2, Role::Relay);
+        assert!(!relay.is_edge_bridge(0));
+        relay.note_role(REP, Role::Repeater, None, 0, 5, 0);
+        assert!(!relay.is_edge_bridge(0), "no group neighbors yet");
+        relay.on_receive(&forwarded_request(1, &[0x0707]), 5, 10);
+        assert!(relay.is_edge_bridge(10), "0x0707 forwards and no repeater has echoed it");
+        // The repeater re-forwards a flood from 0x0707: the repeater hears it.
+        relay.on_receive(&forwarded_request(2, &[0x0707, REP]), 5, 20);
+        assert!(!relay.is_edge_bridge(20), "the group is covered by the repeater");
+        // Observations expire.
+        assert!(!relay.is_edge_bridge(20 + EDGE_WINDOW_MS));
+        // Repeaters and clients are never edge bridges.
+        let mut rep = node(3, Role::Repeater);
+        rep.note_role(0x0909, Role::Repeater, None, 0, 5, 0);
+        rep.on_receive(&forwarded_request(3, &[0x0707]), 5, 10);
+        assert!(!rep.is_edge_bridge(10));
+    }
+
+    #[test]
+    fn edge_bridge_ignores_group_copies_but_not_repeater_copies() {
+        let mut relay = node(2, Role::Relay);
+        relay.note_role(REP, Role::Repeater, None, 0, 5, 0);
+        // Becomes an edge bridge and schedules forwarding of flood 7.
+        assert_eq!(transmits(&relay.on_receive(&forwarded_request(7, &[0x0707]), 5, 10)).len(), 1);
+        assert!(relay.is_edge_bridge(10));
+        // A strong copy from another group member does not silence it ...
+        let out = relay.on_receive(&forwarded_request(7, &[0x0808]), 10, 20);
+        assert!(!out.iter().any(|a| matches!(a, Action::Cancel { .. })));
+        // ... but a copy from the repeater does: the repeater side is covered.
+        let out = relay.on_receive(&forwarded_request(7, &[0x0808, REP]), 10, 30);
+        assert!(out.iter().any(|a| matches!(a, Action::Cancel { .. })));
+        // Without the role information it behaves as before.
+        let mut plain = node(4, Role::Relay);
+        plain.on_receive(&forwarded_request(7, &[0x0707]), 5, 10);
+        let out = plain.on_receive(&forwarded_request(7, &[0x0808]), 10, 20);
+        assert!(out.iter().any(|a| matches!(a, Action::Cancel { .. })));
+    }
+
+    #[test]
+    fn edge_bridge_trusts_the_neighbors_own_report() {
+        let mut relay = node(2, Role::Relay);
+        relay.note_role(REP, Role::Repeater, None, 0, 5, 0);
+        assert!(relay.hears_repeater(0));
+        // A neighbor that says it hears a repeater: not an edge.
+        relay.note_role(0x0707, Role::Relay, Some(true), 0, 5, 0);
+        relay.on_receive(&forwarded_request(1, &[0x0707]), 5, 10);
+        assert!(!relay.is_edge_bridge(10));
+        // One that says it does not: edge, even before it forwards anything.
+        relay.note_role(0x0808, Role::Client, Some(false), 0, 5, 20);
+        assert!(relay.is_edge_bridge(20));
     }
 
     #[test]

@@ -58,7 +58,7 @@ pub enum Command {
     SetRadio(RadioConfig),
     /// 0x0b: hvilke radioindstillinger bruges?
     GetRadio,
-    /// 0x0c: send en kommando (`GetStats`, `GetRadio`, `SetRadio`) til en
+    /// 0x0c: send en kommando (`GetStats`, `GetRadio`, `SetRadio`, `SetRole`) til en
     /// fjern node, som vi er administrator for. Svaret kommer som
     /// `RemoteReply`.
     Remote { req: u16, dest: Address, frame: Text },
@@ -69,6 +69,9 @@ pub enum Command {
     /// 0x0f: klokken (Unix-sekunder). Klienten sender den ved forbindelse,
     /// så noder uden ur kan tidsstemple announces og kontrolkommandoer.
     SetTime { unix: u32 },
+    /// 0x10: vælg nodens rolle (0 = klient, 1 = repeater, 2 = relay). Gemmes
+    /// i flash og kan også sendes via `Remote`.
+    SetRole { role: u8 },
 }
 
 /// Svar og hændelser fra node til klient.
@@ -463,6 +466,7 @@ impl Command {
             }
             Command::GetAdmins => W::new(0x0e).done(),
             Command::SetTime { unix } => W::new(0x0f).b(&unix.to_le_bytes()).done(),
+            Command::SetRole { role } => W::new(0x10).b(&[*role]).done(),
         }
     }
 
@@ -509,6 +513,7 @@ impl Command {
             0x0d => Command::SetAdmins { admins: r.addrs()? },
             0x0e => Command::GetAdmins,
             0x0f => Command::SetTime { unix: r.u32()? },
+            0x10 => Command::SetRole { role: r.u8()? },
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -827,6 +832,8 @@ mod tests {
         roundtrip_cmd(Command::GetStats);
         roundtrip_cmd(Command::SetRadio(RadioConfig::EU_DEFAULT));
         roundtrip_cmd(Command::GetRadio);
+        roundtrip_cmd(Command::SetRole { role: 2 });
+        assert_eq!(&Command::SetRole { role: 0 }.encode()[..], &[2, 0, 0x10, 0]);
         roundtrip_cmd(Command::Remote { req: 4, dest: Address([6; 16]), frame: text(&[0x09]) });
         let admins: heapless::Vec<Address, 4> = [Address([1; 16]), Address([2; 16])].into_iter().collect();
         roundtrip_cmd(Command::SetAdmins { admins: admins.clone() });

@@ -74,6 +74,31 @@ pub enum Role {
     Relay,
 }
 
+impl Role {
+    /// Rollen som tal på wire/i flash (0 = klient, 1 = repeater, 2 = relay).
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Role::Client => 0,
+            Role::Repeater => 1,
+            Role::Relay => 2,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Role::Client),
+            1 => Some(Role::Repeater),
+            2 => Some(Role::Relay),
+            _ => None,
+        }
+    }
+
+    /// Videresender noden for andre (repeater eller relay)?
+    pub fn forwards(self) -> bool {
+        self != Role::Client
+    }
+}
+
 /// Energistatus, som meddeles i announces og påvirker routing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Energy {
@@ -266,6 +291,11 @@ pub struct Router<const R: usize, const D: usize> {
 }
 
 impl<const R: usize, const D: usize> Router<R, D> {
+    /// Skifter rolle under kørsel (fx efter `SetRole` fra appen).
+    pub fn set_role(&mut self, role: Role) {
+        self.role = role;
+    }
+
     pub fn new(addr: Address, role: Role) -> Self {
         Router {
             addr,

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["maarse-core", "maarse-crypto", "maarse-host", "maarse-sim", "maarse-uf2"]
+members = ["maarse-core", "maarse-crypto", "maarse-host", "maarse-sim", "maarse-uf2", "maarse-fuzz"]
 exclude = ["firmware"]
 
 [workspace.package]

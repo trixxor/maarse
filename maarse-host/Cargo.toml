@@ -11,3 +11,6 @@ sha2 = "0.10"
 maarse-core = { version = "0.1.0", path = "../maarse-core" }
 maarse-crypto = { version = "0.1.0", path = "../maarse-crypto" }
 tungstenite = "0.24"
+
+[dev-dependencies]
+maarse-fuzz = { version = "0.1.0", path = "../maarse-fuzz" }

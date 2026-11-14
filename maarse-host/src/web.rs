@@ -141,12 +141,19 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 fn websocket(stream: TcpStream, token: &str, tx: Sender<In>) {
+    let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
     let loopback = stream.peer_addr().map(|a| a.ip().is_loopback()).unwrap_or(false);
     #[allow(clippy::result_large_err)] // signaturen er givet af tungstenite
     let check = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+        let origin = req.headers().get("origin").and_then(|v| v.to_str().ok()).unwrap_or("-");
         if allowed(req, loopback, token) {
+            if !loopback {
+                println!("[web] klient forbundet fra {peer} (origin {origin})");
+            }
             Ok(resp)
         } else {
+            let has = req.uri().query().is_some_and(|q| q.contains("token="));
+            println!("[web] afvist {peer} (origin {origin}, {})", if has { "forkert nøgle" } else { "ingen nøgle" });
             let mut r = ErrorResponse::new(Some("Adgangsnøgle mangler eller er forkert".into()));
             *r.status_mut() = tungstenite::http::StatusCode::FORBIDDEN;
             Err(r)

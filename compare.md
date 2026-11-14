@@ -28,7 +28,7 @@ MIT/Apache-2.0 · Rust
 
 ### Må:rse
 
-Vores prototype (v0.4). Reticulums identitet og globale rækkevidde, MeshCores repeater-routing, kørt direkte på mikrocontrolleren. Første hardwaretest er bestået (beskeder med kvittering mellem to boards); rækkevidde og strøm er ikke målt.
+Vores prototype (v0.5). Reticulums identitet og globale rækkevidde, MeshCores repeater-routing, kørt direkte på mikrocontrolleren. Kører på hardware med gateway til MeshCore, Android-app og fjernadgang over VPN; rækkevidde og strøm er ikke målt.
 
 ## Side om side
 
@@ -55,15 +55,15 @@ javirkerdelvistmed begrænsningernejfindes ikke
 | Beskyttelse mod spam | delvistgrænser for trafik | delvistloft over flood-hop | ja"stamps" (arbejdsbevis) fra 1.6 | jaarbejdsbevis på announces og ruteforespørgsler |
 | Funktioner |  |  |  |  |
 | Offentlige kanaler | ja | jaogså #hashtag og regioner | delvistgrupper via apps | jaoffentlig, #hashtag, private kanaler og regioner |
-| Beskeder til offline | delvistStore & Forward-modul | jaroom servers | jaLXMF-propagation nodes | japostkasse på host og i flash på noder |
+| Beskeder til offline | delvistStore & Forward-modul | jaroom servers | jaLXMF-propagation nodes | japostkasse på host og i flash på noder; telefonen kan bruge hjemme-hosten over VPN |
 | Filer og billeder | nej | nej | jaresources over links | jaop til 8 KB over LoRa (også på firmware), 1 MB over internettet |
 | Sider / tjenester | nej | delvistroom servers, sensorer | jaNomadNet-sider | ja`maarse://`-sider fra maarse-host, op til 8 KB komprimeret over LoRa |
 | Tale | nej | nej | jaopkald i Sideband | jatalebeskeder (Codec2) og opkald (Opus over TCP) |
 | Fjernadministration | jaadmin-nøgler | jalogin på repeatere | delvistrnstatus, fjern-styring | jastatus og radio på andre noder, kun for administratorer |
 | Hardware og modenhed |  |  |  |  |
 | Kører på mikrocontroller | jaESP32, nRF52, RP2040 m.fl. | jaESP32, nRF52, RP2040 m.fl. | nejRNode er kun modem; Rust-versioner er unge | janRF52840 og ESP32-S3 (4 boards) |
-| Apps | Android, iOS, web, CLI | Officiel app (lukket kode) + web, tredjeparts | Sideband, NomadNet, MeshChat | Én web-klient, installérbar som app (USB, Bluetooth, WebSocket) |
-| Modenhed | Stor brugerbase, mange år | Hurtigt voksende, hyppige udgivelser | 1.0 i 2025, nu 1.6 | Prototype; 180 tests, fuzzing, simulator og testlaboratorium; første hardwaretest bestået |
+| Apps | Android, iOS, web, CLI | Officiel app (lukket kode) + web, tredjeparts | Sideband, NomadNet, MeshChat | Web-klient (PWA) og Android-app (Bluetooth til noden eller maarse-host over VPN med adgangsnøgle) |
+| Modenhed | Stor brugerbase, mange år | Hurtigt voksende, hyppige udgivelser | 1.0 i 2025, nu 1.6 | Prototype; 187 tests, browsertest, fuzzing, simulator og testlaboratorium; signerede udgivelser; afprøvet på 2 boards |
 | Licens | GPL-3.0 | MIT | MIT med tilføjede klausuler siden 2025; AGPL-fork findes | MIT eller Apache-2.0; spec under CC-BY |
 
 ## Fordele og ulemper
@@ -122,16 +122,16 @@ javirkerdelvistmed begrænsningernejfindes ikke
 
 - Kører helt på mikrocontrolleren, uden heap, i Rust.
 - Repeater-routing med bedste sti, kvittering pr. hop og ruteopdatering. I simulering bruges ca. en tredjedel af floodets sendetid.
-- Global rækkevidde: TCP-backbone og DHT, uden central server.
+- Global rækkevidde: TCP-backbone og DHT, uden central server, gateway til MeshCore og IP-tunnel.
 - Ingen afsender i klartekst, 16-byte adresser og moderne kryptering.
 - Postkasse, filer, private kanaler, signerede opdateringer over luften og gateway til MeshCore allerede i prototypen.
 
 #### Ulemper
 
 - Kun en første test på hardware; rækkevidde, strøm og mange funktioner er ikke prøvet i luften.
-- Ingen brugere, kun én web-klient (som PWA).
+- Ingen brugere endnu; Android-appen er ny og kun prøvet i emulator og over wifi.
 - Kryptografien er ikke gennemgået af andre.
-- Nogle planlagte dele er kun beskrevet (opkald, IP-tunnel, kort).
+- Nogle planlagte dele mangler (kort, gateway til Reticulum), og telefonen kan endnu ikke være sin egen node.
 
 ## Hvad Må:rse mangler, og hvad det bør have
 
@@ -152,7 +152,7 @@ MIDDEL**Node- og dækningskort**Kort over noder og målt dækning, som MeshMappe
 
 HØJ**Ekstern sikkerhedsgennemgang**Fuzzing er gjort uden fund; kryptoen, især forward secrecy (`maarse-crypto/src/ratchet.rs`), skal ses efter af andre før v1.0.
 
-MIDDEL**Native telefon-apps**Webklienten kan installeres som PWA; rigtige Android- og iOS-apps mangler.
+MIDDEL**Telefonen som egen node**Android-appen findes (Bluetooth og maarse-host over VPN). Næste trin: maarse-host i appen, så telefonen har egen identitet på TCP-backbone; derefter Bluetooth-radioen som modem. iOS mangler.
 
 LAV**Sensorer**Batteri, oppetid, energistatus og chip-temperatur (nRF52840) sendes; MQTT-broen har Home Assistant discovery. Eksterne sensorer (vejr) og temperatur på ESP32-S3 mangler.
 
@@ -183,13 +183,15 @@ LAV**Sensorer**Batteri, oppetid, energistatus og chip-temperatur (nRF52840) send
 - **IP-tunnel** (IPv6 over TCP, Wintun/TUN).
 - **Signerede udgivelser:** firmware, host og APK med udgivelsesnøgle og SHA256SUMS.sig.
 - **Nyt design af webklienten** og **Android-app** (Bluetooth til noden).
+- **Fjernadgang med adgangsnøgle:** appen og browsere kan forbinde til maarse-host over VPN eller hjemmenet; afprøvet fra en Android-telefon.
+- **Chip-temperatur** i telemetrien (nRF52840).
 - **Rolle** (klient, repeater, relay) gemmes i flash.
 
 ## Hvor står Må:rse?
 
 På papiret har Må:rse den bedste kombination: Reticulums identitet og globale rækkevidde, MeshCores effektive routing, og alt kører på chippen. Men de tre andre har det, der tæller mest i praksis: brugere, apps og år med drift.
 
-Siden første version er firmwaren kommet i luften, og gatewayen til MeshCore er bygget. Næste skridt er stadig ikke flere funktioner: mål rækkevidde og strøm, afprøv opdateringer og filer på rigtige boards, og få kryptoen set efter af andre.
+Siden første version er firmwaren kommet i luften, gatewayen til MeshCore virker, og telefonen kan bruge nettet via Bluetooth eller via hjemme-hosten over VPN. Næste skridt er at måle rækkevidde og strøm, afprøve opdateringer, filer og Bluetooth på rigtige boards, lade telefonen blive sin egen node og få kryptoen set efter af andre.
 
 Kilder (hentet november 2026):
 
@@ -200,4 +202,4 @@ Kilder (hentet november 2026):
 - [Reticulum RNS 1.6.0](https://newreleases.io/project/github/markqvist/Reticulum/release/1.6.0)
 - [FOSDEM 2026: Reticulum, what's next](https://fosdem.org/2026/events/attachments/9NCWUR-reticulum_community_meetup_implementations_migration_and_future/slides/262533/reticulum_dimz1j8.pdf) (licens og forks)
 
-Må:rse-tal kommer fra projektets egne tests og simulator (v0.4).
+Må:rse-tal kommer fra projektets egne tests og simulator (v0.5).

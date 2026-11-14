@@ -2,3 +2,4 @@ target/
 maarse-data/
 dist/
 __pycache__/
+.claude/

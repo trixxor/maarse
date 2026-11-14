@@ -132,7 +132,7 @@ async fn main(spawner: Spawner) {
     let spi = ExclusiveDevice::new(spim, cs, Delay).unwrap();
     let (mut spi, mut reset, busy) = (spi, reset, busy);
     radio_selftest(&mut spi, &mut reset, &busy).await;
-    let iv = GenericSx126xInterfaceVariant::new(reset, radio::PollPin(dio1), radio::PollPin(busy), rf_rx, None).unwrap();
+    let iv = GenericSx126xInterfaceVariant::new(reset, dio1, busy, rf_rx, None).unwrap();
     let sx_cfg = sx126x::Config {
         chip: Sx1262,
         tcxo_ctrl: Some(TcxoCtrlVoltage::Ctrl1V8),

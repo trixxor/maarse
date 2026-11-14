@@ -5,6 +5,7 @@
 //! 0x02 FS                                 (ingen data)
 //! 0x03 | længde | position               (fra og med 0x03: type | længde | data)
 //! 0x04 | længde | telemetri
+//! 0x05 | længde | visningsnavn            (UTF-8, højst 24 bytes)
 //! ```
 //!
 //! Nye felter skal stå efter `0x02`: ældre noder læser feltet `0x02` og
@@ -19,7 +20,10 @@
 //! ekstern strøm/USB, bit 1 = temperatur gyldig) | energistatus (0-3) |
 //! oppetid s (u32) | temperatur (i16, 0,1 °C).
 //!
-//! Alt i alt fylder det højst 17 + 1 + 11 + 12 = 41 bytes, under
+//! Visningsnavn: valgfrit, selvvalgt og ikke bevist. Det må kun bruges til
+//! visning; kontakter kendes stadig på adresse og sikkerhedsnummer.
+//!
+//! Alt i alt fylder det højst 17 + 1 + 11 + 12 + 26 = 67 bytes, under
 //! `MAX_APP_DATA` (99 bytes efter arbejdsbeviset).
 
 use crate::addr::Address;
@@ -28,8 +32,33 @@ pub const APP_POSTBOX: u8 = 0x01;
 pub const APP_FS: u8 = 0x02;
 pub const APP_POSITION: u8 = 0x03;
 pub const APP_TELEMETRY: u8 = 0x04;
+pub const APP_NAME: u8 = 0x05;
 
-pub type AppBuf = heapless::Vec<u8, 64>;
+/// Længste visningsnavn i bytes (UTF-8).
+pub const MAX_NAME: usize = 24;
+
+pub type AppBuf = heapless::Vec<u8, 96>;
+pub type Name = heapless::Vec<u8, MAX_NAME>;
+
+/// Renser et visningsnavn: fjerner styretegn, trimmer mellemrum og
+/// afkorter til [`MAX_NAME`] bytes uden at skære et tegn over. Tomt
+/// navn giver `None`.
+pub fn clean_name(raw: &[u8]) -> Option<Name> {
+    let s = core::str::from_utf8(raw).ok()?;
+    let mut out = Name::new();
+    let mut buf = [0u8; 4];
+    for c in s.trim().chars().filter(|c| !c.is_control()) {
+        let e = c.encode_utf8(&mut buf).as_bytes();
+        if out.extend_from_slice(e).is_err() {
+            break;
+        }
+    }
+    // Afslut ikke med mellemrum, hvis afkortningen endte der.
+    while out.last() == Some(&b' ') {
+        out.pop();
+    }
+    (!out.is_empty()).then_some(out)
+}
 
 /// Hvor præcist positionen deles. Standard er `Off` (deles ikke).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -157,12 +186,13 @@ impl Telemetry {
 }
 
 /// Afkodet app-data.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AppData {
     pub postbox: Option<Address>,
     pub fs: bool,
     pub position: Option<Position>,
     pub telemetry: Option<Telemetry>,
+    pub name: Option<Name>,
 }
 
 /// Bygger app-data. Positionen afrundes her (en præcis position sendes
@@ -172,6 +202,7 @@ pub fn build(
     fs: bool,
     position: Option<Position>,
     telemetry: Option<&Telemetry>,
+    name: Option<&[u8]>,
 ) -> AppBuf {
     let mut v = AppBuf::new();
     if let Some(p) = postbox {
@@ -186,6 +217,10 @@ pub fn build(
     }
     if let Some(t) = telemetry {
         t.encode(&mut v);
+    }
+    if let Some(n) = name.and_then(clean_name) {
+        let _ = v.extend_from_slice(&[APP_NAME, n.len() as u8]);
+        let _ = v.extend_from_slice(&n);
     }
     v
 }
@@ -209,6 +244,7 @@ pub fn parse(b: &[u8]) -> AppData {
                 match t {
                     APP_POSITION => a.position = Position::decode(d),
                     APP_TELEMETRY => a.telemetry = Telemetry::decode(d),
+                    APP_NAME => a.name = clean_name(d),
                     _ => {}
                 }
                 i += 2 + len as usize;
@@ -248,7 +284,7 @@ mod tests {
     #[test]
     fn roundtrip_and_old_parser() {
         let t = Telemetry { battery_mv: 3870, ext_power: true, energy: 2, uptime_s: 99, temp_dc: Some(-15) };
-        let b = build(Some(&Address([9; 16])), true, Some(pos(Precision::Km1)), Some(&t));
+        let b = build(Some(&Address([9; 16])), true, Some(pos(Precision::Km1)), Some(&t), None);
         assert!(b.len() <= 41);
         let a = parse(&b);
         assert_eq!(a.postbox, Some(Address([9; 16])));
@@ -258,7 +294,7 @@ mod tests {
         // Ældre noders FS-tjek ser stadig FS.
         assert!(b.contains(&APP_FS));
         // Uden position (standard) sendes ingen.
-        let b = build(None, true, Some(pos(Precision::Off)), None);
+        let b = build(None, true, Some(pos(Precision::Off)), None, None);
         assert_eq!(&b[..], &[APP_FS]);
         // Ukendt fremtidigt felt springes over.
         let mut b = AppBuf::new();
@@ -267,5 +303,28 @@ mod tests {
         assert_eq!(parse(&b).telemetry, Some(t));
         // Afkortet felt giver ingen panik.
         assert_eq!(parse(&[APP_POSITION, 9, 1]).position, None);
+    }
+
+    #[test]
+    fn names() {
+        let long = "Æblegrød-og-flødeskum-hver-dag";
+        let b = build(Some(&Address([9; 16])), true, Some(pos(Precision::Precise)), None, Some(long.as_bytes()));
+        let a = parse(&b);
+        let n = a.name.unwrap();
+        assert!(n.len() <= MAX_NAME);
+        assert!(core::str::from_utf8(&n).is_ok());
+        assert!(long.starts_with(core::str::from_utf8(&n).unwrap()));
+        assert!(a.position.is_some());
+        // Fuldt udfyldt app-data er under grænsen.
+        let t = Telemetry { battery_mv: 1, ..Default::default() };
+        let full = build(Some(&Address([9; 16])), true, Some(pos(Precision::Km1)), Some(&t), Some(long.as_bytes()));
+        assert!(full.len() <= 67);
+        assert!(parse(&full).telemetry.is_some());
+        assert_eq!(clean_name(b"  
+ "), None);
+        assert_eq!(&clean_name(b" Ida ").unwrap()[..], b"Ida");
+        assert_eq!(clean_name(&[0xff, 0xfe]), None);
+        // Ældre parser (uden 0x05) springer feltet over: fremtidige felter har længde.
+        assert_eq!(parse(&[APP_NAME, 3, b'I', b'd', b'a', APP_FS]).name.as_deref(), Some(&b"Ida"[..]));
     }
 }

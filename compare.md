@@ -154,7 +154,7 @@ HØJ**Ekstern sikkerhedsgennemgang**Fuzzing er gjort uden fund; kryptoen, især 
 
 MIDDEL**Native telefon-apps**Webklienten kan installeres som PWA; rigtige Android- og iOS-apps mangler.
 
-LAV**Sensorer**Batteri, oppetid og energistatus sendes, og MQTT-broen har Home Assistant discovery. Temperatur og vejr mangler.
+LAV**Sensorer**Batteri, oppetid, energistatus og chip-temperatur (nRF52840) sendes; MQTT-broen har Home Assistant discovery. Eksterne sensorer (vejr) og temperatur på ESP32-S3 mangler.
 
 ### Lavet siden første version
 

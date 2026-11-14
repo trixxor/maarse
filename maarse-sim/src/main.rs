@@ -12,6 +12,8 @@
 //!   cargo run --release -p maarse-sim -- --mode flood --hop-limit 7
 #![forbid(unsafe_code)]
 
+mod trace;
+
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use std::cmp::Reverse;
@@ -96,6 +98,7 @@ fn parse_args() -> Config {
             "--duration" => c.duration_s = v.parse().expect("--duration"),
             "--road-km" => c.road_km = v.parse().expect("--road-km"),
             "--car-kmh" => c.car_kmh = v.parse().expect("--car-kmh"),
+            "--trace-json" => trace::open(&v),
             "--highway" => {
                 c.highway = true;
                 i += 1;
@@ -113,7 +116,8 @@ fn parse_args() -> Config {
                     "maarse-sim [--nodes N] [--repeaters R] [--area-km A] [--messages M]\n\
                      \x20        [--channel-messages K] [--seed S] [--sf 7-12] [--duty promille]\n\
                      \x20        [--mode maarse|flood] [--hop-limit H] [--duration sekunder]\n\
-                     \x20        [--highway [--road-km 100] [--car-kmh 110]]"
+                     \x20        [--highway [--road-km 100] [--car-kmh 110]]\n\
+                     \x20        [--trace-json fil|-]   (hændelsesspor til maarse-lab)"
                 );
                 std::process::exit(0);
             }
@@ -421,6 +425,7 @@ impl Sim {
         let road = self.cfg.road_km * 1000.0;
         let step = self.cfg.car_kmh / 3.6 * 2.0;
         self.nodes[car].pos.0 = (self.nodes[car].pos.0 + step).min(road);
+        trace::moved(self.now, car, self.nodes[car].pos);
         for o in 0..self.nodes.len() {
             if o == car {
                 continue;
@@ -443,6 +448,7 @@ impl Sim {
 
     fn run(&mut self) {
         self.setup_traffic();
+        self.trace_setup();
         let end = self.cfg.duration_s * 1000;
         while let Some(Reverse((at, _, key))) = self.queue.pop() {
             if at > end {
@@ -507,6 +513,7 @@ impl Sim {
 
     fn send_direct(&mut self, msg: usize, attempt: u8) {
         let (from, to) = (self.msgs[msg].from, self.msgs[msg].to);
+        trace::send(self.now, msg, from, to);
         let payload = self.msgs[msg].payload.clone();
         let dest = self.nodes[to].router.addr;
         if attempt == 0 {
@@ -579,11 +586,15 @@ impl Sim {
                 } => self.on_deliver(node, ptype, dest, &payload),
                 Action::RouteLearned { .. } => self.stats.routes_learned += 1,
                 Action::Acked { msg_id } => {
-                    if let Some(m) = self
+                    if let Some((i, m)) = self
                         .msgs
                         .iter_mut()
-                        .find(|m| m.id == msg_id && m.from == node)
+                        .enumerate()
+                        .find(|(_, m)| m.id == msg_id && m.from == node)
                     {
+                        if !m.acked {
+                            trace::ack(self.now, i);
+                        }
                         m.acked = true;
                     }
                 }
@@ -602,10 +613,15 @@ impl Sim {
         match ptype {
             PacketType::Data => {
                 let id = packet_id(PacketType::Data, &dest, payload);
-                if let Some(m) = self.msgs.iter_mut().find(|m| m.id == id && m.to == node)
+                if let Some((i, m)) = self
+                    .msgs
+                    .iter_mut()
+                    .enumerate()
+                    .find(|(_, m)| m.id == id && m.to == node)
                     && m.delivered_ms.is_none()
                 {
                     m.delivered_ms = Some(self.now);
+                    trace::deliver(self.now, i, node);
                 }
             }
             PacketType::Channel if dest == self.public_channel => {
@@ -634,6 +650,7 @@ impl Sim {
         }
         self.flood_pending.remove(&(node, id));
         if self.channel_busy(node) {
+            trace::defer(self.now, node, "busy");
             if tries >= 8 {
                 self.stats.channel_busy_drops += 1;
                 return;
@@ -653,6 +670,7 @@ impl Sim {
         let airtime = self.radio.lora.airtime_us(packet.len());
         if !self.nodes[node].duty.try_consume(self.now, airtime) {
             let wait = self.nodes[node].duty.wait_ms(self.now, airtime);
+            trace::defer(self.now, node, "duty");
             if wait > 120_000 || tries >= 8 {
                 self.stats.duty_drops += 1;
                 return;
@@ -700,6 +718,10 @@ impl Sim {
             packet,
         });
         let id = self.txs.len() - 1;
+        if trace::on() {
+            let p = Packet::decode(&self.txs[id].packet).map_or("?".into(), |p| format!("{:?}", p.header.ptype));
+            trace::tx(self.now, node, id, end, airtime, &p);
+        }
         self.schedule(end, Event::TxEnd { tx: id });
     }
 
@@ -717,6 +739,7 @@ impl Sim {
         if std::env::var("DEBUG_ACK").is_ok() {
             self.trace_hop(tx, &overlapping);
         }
+        let mut rx = trace::Rx::default();
         for r in 0..self.nodes.len() {
             if r == sender || !self.audible(sender, r) {
                 continue;
@@ -732,8 +755,10 @@ impl Sim {
             });
             if lost && std::env::var("NO_COLL").is_err() {
                 self.stats.collisions += 1;
+                rx.coll(r);
                 continue;
             }
+            rx.ok(r);
             let snr = self.radio.snr(p).clamp(-30.0, 30.0) as i8;
             match self.cfg.mode {
                 Mode::Maarse => {
@@ -743,6 +768,38 @@ impl Sim {
                 Mode::Flood => self.flood_receive(r, &packet, snr),
             }
         }
+        rx.emit(self.now, tx);
+    }
+
+    /// Startbillede til hændelsessporet: positioner og hørbare links.
+    fn trace_setup(&self) {
+        if !trace::on() {
+            return;
+        }
+        let c = &self.cfg;
+        let nodes: Vec<(f64, f64, &str)> = self
+            .nodes
+            .iter()
+            .map(|n| {
+                let r = if n.router.mobile { "car" } else if n.repeater { "r" } else { "c" };
+                (n.pos.0, n.pos.1, r)
+            })
+            .collect();
+        let mut links = Vec::new();
+        for a in 0..self.nodes.len() {
+            for b in a + 1..self.nodes.len() {
+                if self.audible(a, b) || self.audible(b, a) {
+                    links.push((a, b, self.radio.snr(self.gain[a][b])));
+                }
+            }
+        }
+        let size = if c.highway {
+            (c.road_km * 1000.0, 6000.0)
+        } else {
+            (c.area_km * 1000.0, c.area_km * 1000.0)
+        };
+        let mode = if c.mode == Mode::Maarse { "maarse" } else { "flood" };
+        trace::setup(mode, c.highway, size, c.duration_s * 1000, &nodes, &links);
     }
 
     /// Diagnose (DEBUG_ACK): for et kildestyret hop, hørte næste repeater
@@ -816,11 +873,15 @@ impl Sim {
             return;
         }
         if h.ptype == PacketType::Ack
-            && let Some(m) = self
+            && let Some((i, m)) = self
                 .msgs
                 .iter_mut()
-                .find(|m| ack_token(m.id) == h.dest && m.from == r)
+                .enumerate()
+                .find(|(_, m)| ack_token(m.id) == h.dest && m.from == r)
         {
+            if !m.acked {
+                trace::ack(self.now, i);
+            }
             m.acked = true;
             return;
         }
@@ -1015,5 +1076,6 @@ fn main() {
     let cfg = parse_args();
     let mut sim = Sim::new(cfg);
     sim.run();
+    trace::finish();
     sim.report();
 }

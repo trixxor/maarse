@@ -49,10 +49,13 @@ use maarse_fw_common::storage::{FlashSettings, MAIL_AREA};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-/// Crash counter that survives a restart (RTC fast memory): `[magic, count]`.
-/// The panic handler counts up; after [`CRASH_LIMIT`] crashes in a row Wi-Fi
-/// is skipped, so a setting that crashes the board can still be changed over
-/// USB. It is cleared once the node has run for [`STABLE_AFTER_S`] seconds.
+/// Wi-Fi start attempts that did not survive, kept over a restart (RTC fast
+/// memory). `wifi_start_task` counts up before starting Wi-Fi and back to 0
+/// once Wi-Fi has run for 15 s; after [`CRASH_LIMIT`] failed attempts in a
+/// row Wi-Fi is skipped, so a setting that crashes the board can still be
+/// changed over USB. Crashes elsewhere do not count (a radio driver panic at
+/// boot once disabled Wi-Fi for no reason). Cleared after [`STABLE_AFTER_S`]
+/// seconds of running. The panic handler records where the last panic was.
 /// Kept at 8 bytes: with 16 bytes or more of persistent RTC data the board
 /// hung at boot (seen on a Heltec V4, cause not found). Packed as
 /// `[marker (16) | file hash (16), line (16) | count (16)]` of the last panic.
@@ -95,9 +98,8 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     // Printed over USB (read with `espflash monitor`); a client reading
     // companion frames skips text it cannot parse.
     esp_println::println!("\r\nPANIC: {info}\r");
-    let n = (crash_count() + 1).min(0xFFFF);
     let (line, file) = info.location().map(|l| (l.line().min(0xFFFF), fnv1a16(l.file()))).unwrap_or((0, 0));
-    write_crash_words([CRASH_MARK | file, (line << 16) | n]);
+    write_crash_words([CRASH_MARK | file, (line << 16) | crash_count()]);
     esp_hal::system::software_reset()
 }
 

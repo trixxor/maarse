@@ -46,6 +46,20 @@ Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge
 
 Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), USB/seriel og Bluetooth (Nordic UART). Den skalerer billeder automatisk ned, så de passer under grænsen: 8 KB over LoRa og 1 MB over maarse-host.
 
+## Webklienten som app (PWA)
+
+Webklienten kan installeres som en app, så du kan bruge en radio via Bluetooth eller USB direkte fra telefonen eller computeren, uden en PC med maarse-host. Den virker også uden net, når den først er åbnet én gang.
+
+- **Android (Chrome):** åbn klienten over https (fx fra GitHub Pages eller en anden statisk vært) eller fra maarse-host. Tryk på menuen ⋮ → **Installér app** (eller "Føj til startskærm"), eller tryk på **Installér app** i klienten. Forbind derefter med **Bluetooth** (nRF-noder) eller **USB** (kræver USB-OTG-kabel).
+- **Windows, Linux og macOS (Chrome eller Edge):** klik på installér-ikonet i adresselinjen eller på **Installér app** i klienten.
+- **iPhone/iPad:** Safari har hverken Web Bluetooth eller Web Serial. Der virker kun forbindelsen via WebSocket til en maarse-host (fx på en PC eller Raspberry Pi på samme net).
+- **Notifikationer:** tryk på **Slå notifikationer til** i sidepanelet. Så viser klienten en notifikation, når der kommer en direkte besked eller en kanalbesked, mens den ligger i baggrunden. Antallet af ulæste står i fanens titel.
+- **Opdatering:** når der findes en ny version, viser klienten "Ny version – genindlæs".
+
+Offline-cache, installation og notifikationer kræver, at siden hentes over http(s) (localhost tæller som sikker). Åbnet direkte som fil (`file://`) virker klienten som før, bare uden de ting.
+
+**Selv hoste klienten:** læg filerne i `maarse-client/` (`index.html`, `manifest.webmanifest`, `sw.js`, `icon.svg`, `icon-192.png`, `icon-512.png`) på en vilkårlig statisk https-vært, fx GitHub Pages. Hæv `VERSION` i `sw.js`, når filerne ændres, så brugerne får besked om den nye version (maarse-host gør det selv ud fra indholdet). Ikonerne laves med `python tools/make_icons.py`.
+
 ## Indhold
 
 | Del | Hvad |

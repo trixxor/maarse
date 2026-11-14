@@ -72,6 +72,10 @@ pub enum Command {
     /// 0x10: vælg nodens rolle (0 = klient, 1 = repeater, 2 = relay). Gemmes
     /// i flash og kan også sendes via `Remote`.
     SetRole { role: u8 },
+    /// 0x13: deltag i en privat kanal med en tilfældig nøgle (fra en
+    /// invitation). Format: nøgle (32 bytes) | navn (UTF-8, resten). Svaret
+    /// er `ChannelJoined` som for andre kanaler.
+    JoinPrivateChannel { key: [u8; 32], name: Text },
 }
 
 /// Svar og hændelser fra node til klient.
@@ -84,6 +88,9 @@ pub enum Event {
         version: u8,
         max_text: u8,
         max_file: u32,
+        /// Nodens offentlige nøgler (Ed25519 | X25519), til sikkerhedsnumre.
+        /// Tilføjet bagerst; ældre noder sender dem ikke.
+        identity: Option<[u8; 64]>,
     },
     /// 0x82: beskeden er sendt (eller sat i kø, mens ruten findes).
     Sent { req: u16, msg_id: u64 },
@@ -100,8 +107,9 @@ pub enum Event {
     Acked { msg_id: u64 },
     /// 0x86
     RouteLearned { dest: Address, hops: u8 },
-    /// 0x87: vi har hørt og verificeret et announce.
-    Heard { addr: Address, hops: u8 },
+    /// 0x87: vi har hørt og verificeret et announce. `identity` er
+    /// afsenderens offentlige nøgler (64 bytes bagerst, hvis kendt).
+    Heard { addr: Address, hops: u8, identity: Option<[u8; 64]> },
     /// 0x88
     ChannelJoined { channel: Address, name: Text },
     /// 0x89: en fil er på vej til os.
@@ -398,6 +406,12 @@ impl<'a> R<'a> {
         self.0 = &[];
         Ok(t)
     }
+    /// Valgfri offentlig identitet (64 bytes) bagerst i rammen.
+    fn identity(&mut self) -> Option<[u8; 64]> {
+        let mut k = [0u8; 64];
+        k.copy_from_slice(self.take(64).ok()?);
+        Some(k)
+    }
     /// Op til 4 adresser, resten af rammen.
     fn addrs(&mut self) -> Result<heapless::Vec<Address, 4>, FrameError> {
         let mut v = heapless::Vec::new();
@@ -467,6 +481,7 @@ impl Command {
             Command::GetAdmins => W::new(0x0e).done(),
             Command::SetTime { unix } => W::new(0x0f).b(&unix.to_le_bytes()).done(),
             Command::SetRole { role } => W::new(0x10).b(&[*role]).done(),
+            Command::JoinPrivateChannel { key, name } => W::new(0x13).b(key).b(name).done(),
         }
     }
 
@@ -514,6 +529,11 @@ impl Command {
             0x0e => Command::GetAdmins,
             0x0f => Command::SetTime { unix: r.u32()? },
             0x10 => Command::SetRole { role: r.u8()? },
+            0x13 => {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(r.take(32)?);
+                Command::JoinPrivateChannel { key, name: r.text()? }
+            }
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -528,10 +548,12 @@ impl Event {
                 version,
                 max_text,
                 max_file,
+                identity,
             } => W::new(0x81)
                 .b(&addr.0)
                 .b(&[*repeater as u8, *version, *max_text])
                 .b(&max_file.to_le_bytes())
+                .b(identity.as_ref().map_or(&[][..], |k| &k[..]))
                 .done(),
             Event::Sent { req, msg_id } => W::new(0x82)
                 .b(&req.to_le_bytes())
@@ -553,7 +575,11 @@ impl Event {
                 .done(),
             Event::Acked { msg_id } => W::new(0x85).b(&msg_id.to_le_bytes()).done(),
             Event::RouteLearned { dest, hops } => W::new(0x86).b(&dest.0).b(&[*hops]).done(),
-            Event::Heard { addr, hops } => W::new(0x87).b(&addr.0).b(&[*hops]).done(),
+            Event::Heard { addr, hops, identity } => W::new(0x87)
+                .b(&addr.0)
+                .b(&[*hops])
+                .b(identity.as_ref().map_or(&[][..], |k| &k[..]))
+                .done(),
             Event::ChannelJoined { channel, name } => W::new(0x88).b(&channel.0).b(name).done(),
             Event::FileIncoming {
                 file_id,
@@ -643,6 +669,7 @@ impl Event {
                 version: r.u8()?,
                 max_text: r.u8()?,
                 max_file: r.u32()?,
+                identity: r.identity(),
             },
             0x82 => Event::Sent {
                 req: r.u16()?,
@@ -667,6 +694,7 @@ impl Event {
             0x87 => Event::Heard {
                 addr: r.addr()?,
                 hops: r.u8()?,
+                identity: r.identity(),
             },
             0x88 => Event::ChannelJoined {
                 channel: r.addr()?,
@@ -833,6 +861,9 @@ mod tests {
         roundtrip_cmd(Command::SetRadio(RadioConfig::EU_DEFAULT));
         roundtrip_cmd(Command::GetRadio);
         roundtrip_cmd(Command::SetRole { role: 2 });
+        roundtrip_cmd(Command::JoinPrivateChannel { key: [9; 32], name: text("hytten æ".as_bytes()) });
+        assert_eq!(&Command::JoinPrivateChannel { key: [7; 32], name: text(b"x") }.encode()[..3], &[34, 0, 0x13]);
+        assert!(Command::decode(&[0x13, 1, 2]).is_err());
         assert_eq!(&Command::SetRole { role: 0 }.encode()[..], &[2, 0, 0x10, 0]);
         roundtrip_cmd(Command::Remote { req: 4, dest: Address([6; 16]), frame: text(&[0x09]) });
         let admins: heapless::Vec<Address, 4> = [Address([1; 16]), Address([2; 16])].into_iter().collect();
@@ -883,6 +914,15 @@ mod tests {
             version: 2,
             max_text: 147,
             max_file: 1 << 20,
+            identity: None,
+        });
+        roundtrip_ev(Event::Info {
+            addr: a,
+            repeater: false,
+            version: 2,
+            max_text: 147,
+            max_file: 0,
+            identity: Some([8; 64]),
         });
         roundtrip_ev(Event::Sent {
             req: 1,
@@ -901,7 +941,8 @@ mod tests {
         });
         roundtrip_ev(Event::Acked { msg_id: 42 });
         roundtrip_ev(Event::RouteLearned { dest: a, hops: 3 });
-        roundtrip_ev(Event::Heard { addr: a, hops: 0 });
+        roundtrip_ev(Event::Heard { addr: a, hops: 0, identity: None });
+        roundtrip_ev(Event::Heard { addr: a, hops: 2, identity: Some([5; 64]) });
         roundtrip_ev(Event::ChannelJoined {
             channel: a,
             name: text(b"#test"),

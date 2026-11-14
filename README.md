@@ -88,12 +88,14 @@ cargo test --workspace                  # 66 tests
 cargo build --release -p maarse-host
 python tools/e2e_test.py target/release/maarse-host
 python tools/dht_test.py target/release/maarse-host
+node tools/safety_number_test.mjs        # sikkerhedsnummer i JS = Rust
 cargo run --release -p maarse-sim -- --help
 ```
 
 Ende-til-ende-testen starter tre noder (A, B og en postkasse P) og afprøver:
 - beskeder begge veje,
 - en kanalbesked,
+- en besked i en privat kanal (tilfældig nøgle), som B stadig kender efter genstart,
 - en fil på 20 KB, der bliver verificeret,
 - en for stor fil, der bliver afvist,
 - at B går offline, beskeden lægges i postkassen, og B henter den, når den kommer online igen,
@@ -102,7 +104,7 @@ Ende-til-ende-testen starter tre noder (A, B og en postkasse P) og afprøver:
 
 DHT-testen starter tre backbone-hosts (B1, B2 og B3) uden pakkeforbindelse til hinanden, kun med B1 som DHT-startpunkt, samt A på B2 og C på B3. A skriver til C, som A aldrig har hørt, og beskeden kommer frem med kvittering. Svaret kommer også tilbage.
 
-Webklienten er også testet i en headless Chrome: tekst, billede og kanal mellem to noder, status- og radiosiden, og mobillayout.
+Webklienten er også testet i en headless Chrome: tekst, billede og kanal mellem to noder, status- og radiosiden, og mobillayout. Sikkerhedsnumre (ens på begge sider, markér som bekræftet) og private kanaler (opret, del invitation, deltag, send) er testet i en headless Edge.
 
 ## Simulator
 

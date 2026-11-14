@@ -79,6 +79,16 @@ try:
     b.wait(lambda f: f[0] == 0x84 and f[34:] == b"Hej kanal")
     ok("kanalbesked")
 
+    # 2b. Privat kanal med tilfældig nøgle (kommando 0x13)
+    key = os.urandom(32)
+    for c in (a, b): c.send(frame(0x13, key, "Hytten æ".encode()))
+    pj = a.wait(lambda f: f[0] == 0x88 and f[17:] == "Hytten æ".encode())
+    assert pj[1:17] == hashlib.sha256(key).digest()[:16], "forkert kanaladresse"
+    b.wait(lambda f: f[0] == 0x88 and f[17:] == "Hytten æ".encode())
+    a.send(frame(0x03, struct.pack("<H", 9), pj[1:17], b"Hemmeligt"))
+    b.wait(lambda f: f[0] == 0x84 and f[1:17] == pj[1:17] and f[34:] == b"Hemmeligt")
+    ok("privat kanalbesked")
+
     # 3. Fil (20 KB, 110 bidder)
     data = os.urandom(20_000)
     a.send(frame(0x06, struct.pack("<H", 4), addr_b, struct.pack("<I", len(data)), bytes([10]), b"image/webp", "test æ.webp".encode()))
@@ -126,6 +136,8 @@ try:
     b = Client(8182)
     b.wait(lambda f: f[0] == 0x83 and f[18:] == b"Til dig, mens du var vaek", secs=20)
     ok("B online igen: beskeden hentet fra postkassen")
+    b.wait(lambda f: f[0] == 0x88 and f[1:17] == pj[1:17] and f[17:] == "Hytten æ".encode())
+    ok("B husker den private kanal efter genstart")
 
     # 7. Forkert origin
     try:

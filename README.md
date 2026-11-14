@@ -109,6 +109,40 @@ Kanalbeskeder kan holdes inden for et område. En region er et navn med små bog
 - Når adressen er fundet, forbinder hosten direkte til gatewayen, og den almindelige routing klarer resten.
 - DHT-trafikken bruger samme TCP-port som backbone. Den kendes på de første to bytes (`D7 D7`).
 
+## Gateway til MeshCore
+
+`maarse-host` kan bygge bro til et eksisterende [MeshCore](https://github.com/meshcore-dev/MeshCore)-net, så Må:rse- og MeshCore-brugere kan skrive sammen. Hosten genimplementerer ikke MeshCores kryptering. Den styrer i stedet en almindelig MeshCore-node over USB med samme companion-protokol, som MeshCore-apps bruger.
+
+Opsætning:
+
+1. Flash en MeshCore-node (fx XIAO nRF52840, Heltec V3 eller RAK4631) med den officielle **Companion Radio (USB)**-firmware (`companion_radio_usb`) fra MeshCores web-flasher. BLE-varianten virker ikke, for hosten taler over seriel.
+2. Sæt radioindstillingerne (frekvens, SF, BW) som det lokale MeshCore-net, fx med MeshCore-appen, og giv noden et navn som `Må:rse-gateway`. Luk så appen, for kun én kan bruge porten ad gangen.
+3. Start hosten:
+
+```
+maarse-host --meshcore COM5
+maarse-host --meshcore /dev/ttyACM0 --meshcore-bridge offentlig=public --meshcore-bridge #aarhus=#aarhus
+```
+
+- `--meshcore <port>`: porten med MeshCore-noden.
+- `--meshcore-baud <hastighed>`: standard 115200.
+- `--meshcore-bridge <maarse-kanal>=<meshcore-kanal>`: kobler to kanaler sammen (kan gentages). `public` er MeshCores offentlige kanal, `#navn` en hashtagkanal. Uden `=` bruges samme navn på begge sider. Står valget der ikke, kobles `offentlig=public`.
+
+Sådan virker broen:
+
+- Beskeder får afsenderen foran: `[MC Alice] hej` på Må:rse og `[Må 1a2b3c4d] hej` i MeshCore (Må:rse-afsenderen vises med de første 8 hex-tegn af adressen). I MeshCore står gateway-nodens navn også foran, fordi MeshCore altid sætter afsenderens navn på kanalbeskeder.
+- Mangler en hashtagkanal på MeshCore-noden, oprettes den på en ledig kanalplads med nøglen SHA-256("#navn")[0..16], som MeshCore-apps bruger. Optagne pladser røres ikke.
+- Løkker undgås: tekst, der allerede er brobygget (`[MC …`/`[Må …`), sendes ikke videre, og samme tekst i samme kanal brobygges højst én gang på 5 minutter. Så kan to gateways på samme net ikke sende en besked i ring.
+- Direkte beskeder: send en Må:rse-DM til gatewayens adresse med `@Navn tekst`, så går den til MeshCore-kontakten `Navn`. Kontakten skal være kendt af MeshCore-noden, dvs. den har hørt dens advert. Svar går tilbage til den seneste Må:rse-afsender. En MeshCore-bruger kan også skrive `@<Må:rse-adresse> tekst` til gateway-noden.
+
+Begrænsninger:
+
+- Beskeder, der skrives i webklienten på selve gateway-hosten, brobygges ikke, fordi noden ikke sender ens egne kanalbeskeder tilbage til klienter. Skriv fra en anden Må:rse-node.
+- Kun offentlige kanaler og hashtagkanaler. Private kanaler, filer, lokation og MeshCores rum-servere og repeater-administration understøttes ikke.
+- MeshCore-tekst er højst 160 bytes inklusive gateway-navnet, så lange Må:rse-beskeder afkortes.
+- Kvitteringer krydser ikke broen. En DM, der er nået frem til gatewayen, siger ikke noget om, om den er nået frem på den anden side.
+- Indtil videre er broen kun testet mod rammer, der er udledt af MeshCores kildekode, ikke mod rigtig hardware.
+
 ## Test
 
 ```sh

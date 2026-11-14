@@ -72,6 +72,12 @@ pub enum Command {
     /// 0x10: vælg nodens rolle (0 = klient, 1 = repeater, 2 = relay). Gemmes
     /// i flash og kan også sendes via `Remote`.
     SetRole { role: u8 },
+    /// 0x11: sæt nodens regioner (kommasepareret, fx `dk,nordjylland`, højst
+    /// 8) og `strict` (1 = med tom liste videresendes kun floods uden region).
+    /// Gemmes i flash. Se [`crate::region`].
+    SetRegions { strict: bool, names: Text },
+    /// 0x12: vis nodens regioner.
+    GetRegions,
 }
 
 /// Svar og hændelser fra node til klient.
@@ -146,6 +152,8 @@ pub enum Event {
     RemoteReply { from: Address, frame: Text },
     /// 0x94: administratorer for denne node.
     Admins { admins: heapless::Vec<Address, 4> },
+    /// 0x95: nodens regioner (kommasepareret) og `strict`.
+    Regions { strict: bool, names: Text },
     /// 0x8f
     Error { req: u16, code: u8, text: Text },
 }
@@ -467,6 +475,10 @@ impl Command {
             Command::GetAdmins => W::new(0x0e).done(),
             Command::SetTime { unix } => W::new(0x0f).b(&unix.to_le_bytes()).done(),
             Command::SetRole { role } => W::new(0x10).b(&[*role]).done(),
+            Command::SetRegions { strict, names } => {
+                W::new(0x11).b(&[*strict as u8]).b(names).done()
+            }
+            Command::GetRegions => W::new(0x12).done(),
         }
     }
 
@@ -514,6 +526,8 @@ impl Command {
             0x0e => Command::GetAdmins,
             0x0f => Command::SetTime { unix: r.u32()? },
             0x10 => Command::SetRole { role: r.u8()? },
+            0x11 => Command::SetRegions { strict: r.u8()? != 0, names: r.text()? },
+            0x12 => Command::GetRegions,
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -619,6 +633,9 @@ impl Event {
                 }
                 w.done()
             }
+            Event::Regions { strict, names } => {
+                W::new(0x95).b(&[*strict as u8]).b(names).done()
+            }
             Event::Stats { items } => {
                 let mut w = W::new(0x91);
                 for (k, v) in items {
@@ -709,6 +726,7 @@ impl Event {
             0x90 => Event::Deposited { msg_id: r.u64()? },
             0x93 => Event::RemoteReply { from: r.addr()?, frame: r.text()? },
             0x94 => Event::Admins { admins: r.addrs()? },
+            0x95 => Event::Regions { strict: r.u8()? != 0, names: r.text()? },
             0x92 => Event::Radio(
                 RadioConfig::from_bytes(r.take(RadioConfig::LEN)?).ok_or(FrameError::TooShort)?,
             ),
@@ -839,6 +857,11 @@ mod tests {
         roundtrip_cmd(Command::SetAdmins { admins: admins.clone() });
         roundtrip_cmd(Command::SetAdmins { admins: heapless::Vec::new() });
         roundtrip_cmd(Command::GetAdmins);
+        roundtrip_cmd(Command::SetRegions { strict: true, names: text(b"dk,nordjylland") });
+        roundtrip_cmd(Command::SetRegions { strict: false, names: text(b"") });
+        roundtrip_cmd(Command::GetRegions);
+        roundtrip_ev(Event::Regions { strict: false, names: text(b"dk") });
+
         roundtrip_cmd(Command::SetTime { unix: 1_800_000_000 });
         roundtrip_ev(Event::Admins { admins });
         roundtrip_ev(Event::RemoteReply { from: Address([3; 16]), frame: text(&[0x92, 1, 2, 3]) });

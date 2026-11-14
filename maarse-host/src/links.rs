@@ -2,6 +2,13 @@
 //!
 //! TCP: hver pakke sendes som `længde (u16 LE) | pakke`.
 //!
+//! Regionshilsen over TCP: lige efter forbindelsen sender hver side en
+//! "pakke" `0xFF 'R' 'G' | strict (1) | antal (1) | region-id (u16 BE) …`
+//! med de regioner, den betjener (se `maarse_core::region`). Den afkodes
+//! aldrig som en Må:rse-pakke (version 3), så ældre hosts tæller den blot
+//! som ugyldig. Herefter sender vi kun floods med region til peers, der
+//! betjener regionen. Peers uden hilsen får alt (som før).
+//!
 //! Seriel modem-tilstand (kræver firmware, der understøtter den):
 //! * host -> node: `længde | 0x40 | pakke`         (send pakken over LoRa)
 //! * node -> host: `længde | 0xC0 | snr (i8) | pakke` (modtaget over LoRa)
@@ -17,6 +24,34 @@ use maarse_core::companion::FrameDecoder;
 
 /// SNR, vi angiver for pakker over TCP (et "perfekt" link).
 const TCP_SNR: i8 = 10;
+
+/// Start på en regionshilsen over TCP.
+pub const REGION_HELLO: [u8; 3] = [0xFF, b'R', b'G'];
+
+/// Koder en regionshilsen.
+pub fn region_hello(strict: bool, regions: &[u16]) -> Vec<u8> {
+    let mut v = REGION_HELLO.to_vec();
+    v.push(strict as u8);
+    v.push(regions.len() as u8);
+    for r in regions {
+        v.extend_from_slice(&r.to_be_bytes());
+    }
+    v
+}
+
+/// Afkoder en regionshilsen: (strict, regioner).
+pub fn parse_region_hello(data: &[u8]) -> Option<(bool, Vec<u16>)> {
+    let rest = data.strip_prefix(&REGION_HELLO)?;
+    let (&strict, rest) = rest.split_first()?;
+    let (&n, rest) = rest.split_first()?;
+    let ids = rest.get(..2 * n as usize)?;
+    let regions = ids
+        .chunks_exact(2)
+        .map(|c| u16::from_be_bytes([c[0], c[1]]))
+        .take(maarse_core::region::MAX_REGIONS)
+        .collect();
+    Some((strict != 0, regions))
+}
 
 pub fn spawn_tcp_listener(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr)?;
@@ -111,6 +146,12 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
         if reader.read_exact(&mut data).is_err() {
             break;
         }
+        if let Some((strict, regions)) = parse_region_hello(&data) {
+            if tx.send(In::LinkRegions { id, strict, regions }).is_err() {
+                break;
+            }
+            continue;
+        }
         if tx
             .send(In::Packet {
                 link: id,
@@ -126,7 +167,23 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
     let _ = tx.send(In::LinkDown { id });
 }
 
-pub fn spawn_serial(port: String, baud: u32, tx: Sender<In>) {
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn region_hello_roundtrip() {
+        let h = region_hello(true, &[1, 0xabcd]);
+        assert_eq!(parse_region_hello(&h), Some((true, vec![1, 0xabcd])));
+        assert_eq!(parse_region_hello(&region_hello(false, &[])), Some((false, vec![])));
+        assert_eq!(parse_region_hello(&h[..h.len() - 1]), None);
+        // Hilsenen kan aldrig forveksles med en Må:rse-pakke.
+        assert!(maarse_core::Packet::decode(&h).is_err());
+    }
+}
+
+pub fn spawn_serial(
+port: String, baud: u32, tx: Sender<In>) {
     thread::spawn(move || {
         loop {
             match serialport::new(&port, baud)

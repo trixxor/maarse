@@ -133,6 +133,11 @@ pub struct Node {
     /// Kanaladresse -> (navn, nøgle)
     channels: HashMap<Address, (String, [u8; 32])>,
     links: HashMap<LinkId, (String, Sender<Vec<u8>>)>,
+    /// Regioner, som backbone-peers har meldt (strict, id'er). Links uden
+    /// hilsen (ældre hosts, seriel) står ikke her og får alt.
+    link_regions: HashMap<LinkId, (bool, Vec<u16>)>,
+    /// Vores regionsnavne (små bogstaver).
+    region_names: Vec<String>,
     clients: HashMap<ClientId, Sender<Vec<u8>>>,
     timers: BinaryHeap<Reverse<(Instant, u64)>>,
     timer_items: HashMap<u64, Timer>,
@@ -265,6 +270,8 @@ impl Node {
             my_postbox: cfg.postbox,
             channels: HashMap::new(),
             links: HashMap::new(),
+            link_regions: HashMap::new(),
+            region_names: Vec::new(),
             clients: HashMap::new(),
             timers: BinaryHeap::new(),
             timer_items: HashMap::new(),
@@ -321,6 +328,16 @@ impl Node {
             node.join_channel(line, false);
         }
         node.load_mailbox();
+        // Regioner: kommandolinjen vinder over de gemte (regions.txt: ét navn
+        // pr. linje, og evt. linjen "!strict").
+        if cfg.regions.is_empty() && !cfg.strict_region {
+            let saved = fs::read_to_string(node.data_dir.join("regions.txt")).unwrap_or_default();
+            let strict = saved.lines().any(|l| l.trim() == "!strict");
+            let names: Vec<&str> = saved.lines().filter(|l| !l.trim().starts_with('!')).collect();
+            node.set_regions(&names.join(","), strict);
+        } else {
+            node.set_regions(&cfg.regions.join(","), cfg.strict_region);
+        }
         Ok(node)
     }
 
@@ -406,11 +423,21 @@ impl Node {
         match msg {
             In::LinkUp { id, name, tx } => {
                 self.log(format!("link oppe: {name}"));
+                if name.starts_with("tcp") {
+                    let _ = tx.send(self.region_hello());
+                }
                 self.links.insert(id, (name, tx));
                 self.announce();
                 self.broadcast_log(format!("Link oppe ({} i alt)", self.links.len()));
             }
+            In::LinkRegions { id, strict, regions } => {
+                if let Some((name, _)) = self.links.get(&id) {
+                    self.log(format!("{name}: regioner {regions:04x?}{}", if strict { " (strict)" } else { "" }));
+                }
+                self.link_regions.insert(id, (strict, regions));
+            }
             In::LinkDown { id } => {
+                self.link_regions.remove(&id);
                 if let Some((name, _)) = self.links.remove(&id) {
                     self.log(format!("link nede: {name}"));
                     self.broadcast_log(format!("Link nede ({} tilbage)", self.links.len()));
@@ -468,7 +495,15 @@ impl Node {
     // ---------- udsendelse ----------
 
     fn send_links(&mut self, packet: &[u8]) {
-        for (_, tx) in self.links.values() {
+        let region = Header::decode(packet).map_or(0, |(h, _)| h.region);
+        for (id, (_, tx)) in &self.links {
+            // Floods med region kun til peers, der betjener regionen.
+            if region != 0
+                && let Some((strict, regions)) = self.link_regions.get(id)
+                && !maarse_core::region::forwards(regions, *strict, region)
+            {
+                continue;
+            }
             let _ = tx.send(packet.to_vec());
             self.counters.packets_out += 1;
             self.counters.bytes_out += packet.len() as u64;
@@ -1245,11 +1280,45 @@ impl Node {
         }
     }
 
+    fn region_hello(&self) -> Vec<u8> {
+        crate::links::region_hello(self.router.strict_region, &self.router.regions)
+    }
+
+    /// Sætter regioner (kommasepareret) og fortæller backbone-peers det.
+    fn set_regions(&mut self, names: &str, strict: bool) {
+        self.region_names = maarse_core::region::names(names)
+            .map(str::to_lowercase)
+            .take(maarse_core::region::MAX_REGIONS)
+            .collect();
+        self.router.regions = maarse_core::region::parse_list(&self.region_names.join(","));
+        self.router.strict_region = strict;
+        let hello = self.region_hello();
+        for (name, tx) in self.links.values() {
+            if name.starts_with("tcp") {
+                let _ = tx.send(hello.clone());
+            }
+        }
+    }
+
+    fn regions_event(&self) -> Event {
+        let names = self.region_names.join(",");
+        Event::Regions {
+            strict: self.router.strict_region,
+            names: text(&names.as_bytes()[..names.len().min(MAX_TEXT)]),
+        }
+    }
+
     fn join_channel(&mut self, name: &str, save: bool) -> (Address, String) {
-        let (name, key) = normalize_channel(name);
+        // `navn@region`: regionen mærker beskeder, vi sender til kanalen.
+        let (base, region) = maarse_core::region::split_channel(name);
+        let (mut name, key) = normalize_channel(base);
+        if !region.is_empty() {
+            name = format!("{name}@{}", region.to_lowercase());
+        }
         let ch = channel_address(&key);
         let _ = self.router.subscribe(ch);
-        let new = self.channels.insert(ch, (name.clone(), key)).is_none();
+        let old = self.channels.insert(ch, (name.clone(), key));
+        let new = old.is_none_or(|(n, _)| n != name);
         if save && new {
             let names: Vec<String> = self
                 .channels
@@ -1295,15 +1364,16 @@ impl Node {
                 }
             }
             Command::SendChannel { req, channel, text: msg } => {
-                let Some((_, key)) = self.channels.get(&channel).cloned() else {
+                let Some((chname, key)) = self.channels.get(&channel).cloned() else {
                     return self.send_client(id, &err_ev(req, error_code::NOT_IN_CHANNEL, "Ikke med i kanalen"));
                 };
+                let region = maarse_core::region::region_id(maarse_core::region::split_channel(&chname).1);
                 let mut nonce = [0u8; 8];
                 OsRng.fill_bytes(&mut nonce);
                 let mut ct = [0u8; 255];
                 let res = seal::seal_channel(&key, &self.addr, nonce, &msg, &mut ct)
                     .ok()
-                    .and_then(|n| self.router.send_channel(channel, &ct[..n]).ok());
+                    .and_then(|n| self.router.send_channel_in(channel, region, &ct[..n]).ok());
                 match res {
                     Some(actions) => {
                         self.send_client(id, &Event::Sent { req, msg_id: 0 });
@@ -1367,6 +1437,19 @@ impl Node {
                 self.send_client(id, &self.admins_event());
             }
             Command::GetAdmins => self.send_client(id, &self.admins_event()),
+            Command::SetRegions { strict, names } => {
+                let names = String::from_utf8_lossy(&names).to_string();
+                self.set_regions(&names, strict);
+                let mut lines = self.region_names.clone();
+                if strict {
+                    lines.push("!strict".into());
+                }
+                let _ = fs::write(self.data_dir.join("regions.txt"), lines.join("\n"));
+                self.log(format!("regioner: {:?}{}", self.region_names, if strict { " (strict)" } else { "" }));
+                self.send_client(id, &self.regions_event());
+            }
+            Command::GetRegions => self.send_client(id, &self.regions_event()),
+
             Command::SetTime { .. } => {} // maarse-host har sit eget ur
             Command::GetRadio | Command::SetRadio(_) => self.send_client(
                 id,

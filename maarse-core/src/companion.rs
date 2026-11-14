@@ -260,7 +260,7 @@ impl RadioConfig {
         crate::airtime::LoraParams {
             sf: self.sf,
             bw_hz: self.bw_hz,
-            cr: self.cr - 4,
+            cr: self.cr.saturating_sub(4).max(1),
             preamble: self.preamble,
         }
     }

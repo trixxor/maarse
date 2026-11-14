@@ -71,7 +71,7 @@ pub fn start(spawner: &Spawner, wifi: esp_hal::peripherals::WIFI<'static>, setti
     );
     spawner.spawn(net_task(runner).unwrap());
     spawner.spawn(join_task(controller, station).unwrap());
-    spawner.spawn(link_task(stack, settings.peer).unwrap());
+    spawner.spawn(link_task(stack, settings.peer, settings.modem).unwrap());
     true
 }
 
@@ -117,7 +117,7 @@ fn split_peer(peer: &str) -> (&str, u16) {
 
 /// Keeps the TCP backbone link to the peer up.
 #[embassy_executor::task]
-async fn link_task(stack: Stack<'static>, peer: heapless::Vec<u8, 64>) -> ! {
+async fn link_task(stack: Stack<'static>, peer: heapless::Vec<u8, 64>, modem: bool) -> ! {
     static RX: StaticCell<[u8; 2048]> = StaticCell::new();
     static TX: StaticCell<[u8; 2048]> = StaticCell::new();
     let rx = RX.init([0; 2048]);
@@ -136,7 +136,7 @@ async fn link_task(stack: Stack<'static>, peer: heapless::Vec<u8, 64>) -> ! {
             socket.set_keep_alive(Some(Duration::from_secs(30)));
             if socket.connect((ip, port)).await.is_ok() {
                 set_state(wifi_state::LINKED);
-                run_link(&mut socket).await;
+                run_link(&mut socket, modem).await;
                 socket.abort();
                 let _ = socket.flush().await;
             }
@@ -157,9 +157,26 @@ async fn resolve(stack: Stack<'static>, host: &str) -> Option<IpAddress> {
     stack.dns_query(host, DnsQueryType::A).await.ok()?.first().copied()
 }
 
+/// Greeting that tells the host this connection is a LoRa modem, not a
+/// backbone peer (as a length it would be 19 789, larger than any packet).
+const MODEM_HELLO: [u8; 2] = *b"MM";
+
 /// Moves packets both ways until the connection fails.
-async fn run_link(socket: &mut TcpSocket<'_>) {
+///
+/// Backbone (node mode): `length (u16 LE) | packet` both ways.
+/// Modem mode: after `MM`, to the host `length | snr (i8) | packet` (heard
+/// over LoRa), from the host `length | packet` (to send over LoRa).
+async fn run_link(socket: &mut TcpSocket<'_>, modem: bool) {
     let (mut reader, mut writer) = socket.split();
+    // Say something at once: the host decides what a connection is from its
+    // first two bytes, and a node with nothing to send would otherwise not
+    // show up there until its next announce. As a backbone peer we send an
+    // empty region greeting (`0xFF 'R' 'G' | strict | count`: no regions, so
+    // the host sends us everything).
+    let hello: &[u8] = if modem { &MODEM_HELLO } else { &[5, 0, 0xFF, b'R', b'G', 0, 0] };
+    if write_all(&mut writer, hello).await.is_none() {
+        return;
+    }
     let rx = async {
         let mut len = [0u8; 2];
         let mut buf = [0u8; MAX_PACKET];
@@ -184,9 +201,17 @@ async fn run_link(socket: &mut TcpSocket<'_>) {
     };
     let tx = async {
         loop {
-            let pkt = NET_TX.receive().await;
-            let len = (pkt.len() as u16).to_le_bytes();
-            if write_all(&mut writer, &len).await.is_none() || write_all(&mut writer, &pkt).await.is_none() {
+            let (pkt, snr) = NET_TX.receive().await;
+            let ok = if modem {
+                let len = (pkt.len() as u16 + 1).to_le_bytes();
+                write_all(&mut writer, &len).await.is_some()
+                    && write_all(&mut writer, &[snr as u8]).await.is_some()
+                    && write_all(&mut writer, &pkt).await.is_some()
+            } else {
+                let len = (pkt.len() as u16).to_le_bytes();
+                write_all(&mut writer, &len).await.is_some() && write_all(&mut writer, &pkt).await.is_some()
+            };
+            if !ok {
                 return;
             }
         }

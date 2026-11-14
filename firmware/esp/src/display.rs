@@ -133,6 +133,9 @@ fn wifi_line(l: &mut Line) {
     }
     let ip = WIFI_IP.load(Relaxed).to_be_bytes();
     let _ = match WIFI_STATE.load(Relaxed) as u8 {
+        wifi_state::LINKED if maarse_fw_common::bus::WIFI_MODEM.load(Relaxed) => {
+            write!(l, "{}.{}.{}.{} modem", ip[0], ip[1], ip[2], ip[3])
+        }
         wifi_state::LINKED => write!(l, "{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]),
         wifi_state::ONLINE => write!(l, "{}.{}.{}.{} no host", ip[0], ip[1], ip[2], ip[3]),
         wifi_state::JOINING => write!(l, "WiFi joining..."),

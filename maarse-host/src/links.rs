@@ -12,10 +12,21 @@
 //! Seriel modem-tilstand (kræver firmware, der understøtter den):
 //! * host -> node: `længde | 0x40 | pakke`         (send pakken over LoRa)
 //! * node -> host: `længde | 0xC0 | snr (i8) | pakke` (modtaget over LoRa)
+//!
+//! LoRa modem over Wi-Fi: an ESP32 node in Wi-Fi modem mode connects to the
+//! backbone port and sends `MM` first ([`MODEM_HELLO`]). Then:
+//! * node -> host: `length (u16 LE) | snr (i8) | packet` (heard over LoRa)
+//! * host -> node: `length (u16 LE) | packet`           (to send over LoRa)
+//! The link is named `wifi-modem <address>` and, like a serial modem, counts
+//! as LoRa (not `tcp …`).
+//!
+//! Every link is also kept in a small registry for the device list in the
+//! web client (`/api/enheder`, see [`devices_json`]).
 
 use crate::{In, next_id};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::Mutex;
 use std::sync::mpsc::{Sender, channel};
 use std::thread;
 use std::time::Duration;
@@ -24,6 +35,87 @@ use maarse_core::companion::FrameDecoder;
 
 /// SNR, vi angiver for pakker over TCP (et "perfekt" link).
 const TCP_SNR: i8 = 10;
+
+/// First two bytes from an ESP32 node in Wi-Fi modem mode.
+pub const MODEM_HELLO: [u8; 2] = *b"MM";
+
+// ---------- device registry ----------
+
+/// One link as shown in the web client's device list.
+struct LinkInfo {
+    id: u32,
+    name: String,
+    /// `backbone`, `usb-modem` or `wifi-modem`.
+    kind: &'static str,
+    since: u64,
+    rx: u64,
+    tx: u64,
+    last_rx: u64,
+    last_snr: Option<i8>,
+}
+
+static REGISTRY: Mutex<Vec<LinkInfo>> = Mutex::new(Vec::new());
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn with_registry<T>(f: impl FnOnce(&mut Vec<LinkInfo>) -> T) -> T {
+    f(&mut REGISTRY.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+fn register(id: u32, name: &str, kind: &'static str) {
+    let now = unix_now();
+    with_registry(|r| {
+        r.push(LinkInfo { id, name: name.to_string(), kind, since: now, rx: 0, tx: 0, last_rx: 0, last_snr: None })
+    });
+}
+
+fn unregister(id: u32) {
+    with_registry(|r| r.retain(|l| l.id != id));
+}
+
+fn note_rx(id: u32, snr: Option<i8>) {
+    let now = unix_now();
+    with_registry(|r| {
+        if let Some(l) = r.iter_mut().find(|l| l.id == id) {
+            l.rx += 1;
+            l.last_rx = now;
+            if snr.is_some() {
+                l.last_snr = snr;
+            }
+        }
+    });
+}
+
+fn note_tx(id: u32) {
+    with_registry(|r| {
+        if let Some(l) = r.iter_mut().find(|l| l.id == id) {
+            l.tx += 1;
+        }
+    });
+}
+
+/// All links right now, as JSON for the web client.
+pub fn devices_json() -> String {
+    let now = unix_now();
+    let list: Vec<serde_json::Value> = with_registry(|r| {
+        r.iter()
+            .map(|l| {
+                serde_json::json!({
+                    "name": l.name,
+                    "kind": l.kind,
+                    "up_s": now.saturating_sub(l.since),
+                    "rx": l.rx,
+                    "tx": l.tx,
+                    "last_rx_s": if l.last_rx == 0 { None } else { Some(now.saturating_sub(l.last_rx)) },
+                    "snr": l.last_snr,
+                })
+            })
+            .collect()
+    });
+    serde_json::json!({ "devices": list }).to_string()
+}
 
 /// Start på en regionshilsen over TCP.
 pub const REGION_HELLO: [u8; 3] = [0xFF, b'R', b'G'];
@@ -72,6 +164,9 @@ pub fn spawn_tcp_listener(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<(
                 }
                 if first == crate::dht::MAGIC {
                     serve_dht(s, &tx);
+                } else if first == MODEM_HELLO {
+                    let name = name.replace("tcp ind", "wifi-modem");
+                    run_tcp_modem(s, name, tx);
                 } else {
                     run_tcp(s, name, tx, Some(u16::from_le_bytes(first)));
                 }
@@ -131,10 +226,13 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
             if writer.write_all(&buf).is_err() {
                 break;
             }
+            note_tx(id);
         }
         let _ = writer.shutdown(std::net::Shutdown::Both);
     });
+    register(id, &name, "backbone");
     if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
+        unregister(id);
         return;
     }
     let mut reader = stream;
@@ -160,6 +258,7 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
             }
             continue;
         }
+        note_rx(id, None);
         if tx
             .send(In::Packet {
                 link: id,
@@ -172,6 +271,59 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
         }
     }
     let _ = reader.shutdown(std::net::Shutdown::Both);
+    unregister(id);
+    let _ = tx.send(In::LinkDown { id });
+}
+
+/// An ESP32 node that is our LoRa modem over Wi-Fi (see the module docs).
+fn run_tcp_modem(stream: TcpStream, name: String, tx: Sender<In>) {
+    let _ = stream.set_nodelay(true);
+    let ka = socket2::TcpKeepalive::new().with_time(KEEPALIVE_IDLE).with_interval(KEEPALIVE_EVERY);
+    let _ = socket2::SockRef::from(&stream).set_tcp_keepalive(&ka);
+    let id = next_id();
+    let Ok(mut writer) = stream.try_clone() else {
+        return;
+    };
+    let (wtx, wrx) = channel::<Vec<u8>>();
+    thread::spawn(move || {
+        for pkt in wrx {
+            let mut buf = Vec::with_capacity(pkt.len() + 2);
+            buf.extend_from_slice(&(pkt.len() as u16).to_le_bytes());
+            buf.extend_from_slice(&pkt);
+            if writer.write_all(&buf).is_err() {
+                break;
+            }
+            note_tx(id);
+        }
+        let _ = writer.shutdown(std::net::Shutdown::Both);
+    });
+    register(id, &name, "wifi-modem");
+    if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
+        unregister(id);
+        return;
+    }
+    let mut reader = stream;
+    let mut len = [0u8; 2];
+    loop {
+        if reader.read_exact(&mut len).is_err() {
+            break;
+        }
+        let n = u16::from_le_bytes(len) as usize;
+        if n < 2 || n > MAX_PACKET + 1 {
+            break; // Not a modem stream: close.
+        }
+        let mut data = vec![0u8; n];
+        if reader.read_exact(&mut data).is_err() {
+            break;
+        }
+        let snr = data[0] as i8;
+        note_rx(id, Some(snr));
+        if tx.send(In::Packet { link: id, data: data[1..].to_vec(), snr }).is_err() {
+            break;
+        }
+    }
+    let _ = reader.shutdown(std::net::Shutdown::Both);
+    unregister(id);
     let _ = tx.send(In::LinkDown { id });
 }
 
@@ -217,7 +369,9 @@ fn run_serial(mut port: Box<dyn serialport::SerialPort>, name: String, tx: &Send
     if port.write_all(&[1, 0, 0x41]).is_err() {
         return;
     }
+    register(id, &name, "usb-modem");
     if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
+        unregister(id);
         return;
     }
     let mut dec = FrameDecoder::new();
@@ -230,6 +384,7 @@ fn run_serial(mut port: Box<dyn serialport::SerialPort>, name: String, tx: &Send
                 while let Some(f) = dec.next_frame() {
                     if f.len() >= 2 && f[0] == 0xC0 {
                         let snr = f[1] as i8;
+                        note_rx(id, Some(snr));
                         let _ = tx.send(In::Packet {
                             link: id,
                             data: f[2..].to_vec(),
@@ -249,7 +404,9 @@ fn run_serial(mut port: Box<dyn serialport::SerialPort>, name: String, tx: &Send
             if port.write_all(&out).is_err() {
                 break 'link;
             }
+            note_tx(id);
         }
     }
+    unregister(id);
     let _ = tx.send(In::LinkDown { id });
 }

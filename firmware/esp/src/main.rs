@@ -339,6 +339,11 @@ async fn main(spawner: Spawner) {
     let radio_cfg = flash.load_radio(default_radio);
     let wifi_settings = flash.load_wifi();
     let wifi_on = wifi_settings.enabled;
+    // Modem for a host over Wi-Fi: the node does not route (see wifi.rs).
+    maarse_fw_common::bus::WIFI_MODEM.store(
+        cfg!(feature = "wifi") && wifi_on && wifi_settings.modem,
+        core::sync::atomic::Ordering::Relaxed,
+    );
 
     // ----- LoRa -----
     let spi = Spi::new(

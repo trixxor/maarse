@@ -75,3 +75,8 @@ panic = "abort"
 [profile.dev]
 opt-level = "s"
 panic = "abort"
+
+# lora-phy with a fix for a panic on garbage from the radio after flashing
+# (see firmware/vendor/lora-phy/src/sx126x/mod.rs, "Må:rse patch").
+[patch.crates-io]
+lora-phy = { path = "../vendor/lora-phy" }

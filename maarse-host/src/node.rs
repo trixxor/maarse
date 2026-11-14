@@ -2,6 +2,7 @@
 //! webklienter.
 
 use crate::dht::{self, Contact, Record};
+use crate::filebox::{self, Boxed, FileBox, LORA_MAX_FILE, PathKind};
 use crate::{ClientId, Config, In, LinkId};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
@@ -81,6 +82,14 @@ struct OutFile {
     done: u16,
     in_flight: HashMap<u16, Instant>,
     created: Instant,
+    /// Filens størrelse i bytes (klartekst).
+    size: u32,
+    /// Det forseglede tilbud, som det blev sendt (til filpostkassen).
+    sealed_offer: Vec<u8>,
+    /// Forseglede bidder fra filpostkassen (ellers forsegles de undervejs).
+    sealed_chunks: Option<Vec<Vec<u8>>>,
+    /// Leveres fra filpostkassen.
+    from_box: bool,
 }
 
 struct InFile {
@@ -162,6 +171,14 @@ pub struct Node {
     in_files: HashMap<u64, InFile>,
     mailbox: HashMap<Address, HashMap<u64, Mail>>,
     max_file: u32,
+    // ---------- filgrænser og filpostkasse (se filebox.rs) ----------
+    /// Linket, den pakke vi er ved at behandle, kom ind på.
+    rx_link: Option<LinkId>,
+    /// Hvor hver adresse sidst blev hørt: link, TCP?, hop.
+    heard_via: HashMap<Address, (LinkId, bool, u8)>,
+    filebox: FileBox,
+    /// Den seneste forseglede besked fra `send_sealed`.
+    last_sealed: Vec<u8>,
     data_dir: PathBuf,
     start: Instant,
     counters: Counters,
@@ -322,6 +339,15 @@ impl Node {
             in_files: HashMap::new(),
             mailbox: HashMap::new(),
             max_file: cfg.max_file,
+            rx_link: None,
+            heard_via: HashMap::new(),
+            filebox: FileBox::open(
+                cfg.data_dir.join("filpostkasse"),
+                cfg.max_file,
+                cfg.filebox_per_recipient,
+                cfg.filebox_total,
+            ),
+            last_sealed: Vec::new(),
             data_dir: cfg.data_dir.clone(),
             start: Instant::now(),
             counters: Counters::default(),
@@ -478,6 +504,7 @@ impl Node {
             }
             In::LinkDown { id } => {
                 self.link_regions.remove(&id);
+                self.heard_via.retain(|_, v| v.0 != id);
                 if let Some((name, _)) = self.links.remove(&id) {
                     self.log(format!("link nede: {name}"));
                     self.broadcast_log(format!("Link nede ({} tilbage)", self.links.len()));
@@ -503,7 +530,9 @@ impl Node {
                 }
                 let now = self.now_ms();
                 let actions = self.router.on_receive(&data, snr, now);
+                self.rx_link = Some(link);
                 self.apply(actions.into_iter().collect());
+                self.rx_link = None;
             }
             In::ClientUp { id, tx } => {
                 self.clients.insert(id, tx);
@@ -538,8 +567,17 @@ impl Node {
     // ---------- udsendelse ----------
 
     fn send_links(&mut self, packet: &[u8]) {
-        let region = Header::decode(packet).map_or(0, |(h, _)| h.region);
-        for (id, (_, tx)) in &self.links {
+        let header = Header::decode(packet).ok().map(|(h, _)| h);
+        let region = header.as_ref().map_or(0, |h| h.region);
+        // Filbidder til en modtager, der nås over TCP, sendes ikke ud over
+        // et LoRa-modem (de ville kun optage kanalen).
+        let tcp_only = header
+            .as_ref()
+            .is_some_and(|h| h.ptype == PacketType::Fragment && self.path_kind(&h.dest) == PathKind::Tcp);
+        for (id, (name, tx)) in &self.links {
+            if tcp_only && !name.starts_with("tcp") {
+                continue;
+            }
             // Floods med region kun til peers, der betjener regionen.
             if region != 0
                 && let Some((strict, regions)) = self.link_regions.get(id)
@@ -641,6 +679,7 @@ impl Node {
             ratchet::seal(&self.identity, &recipient, &mut self.sessions, fs_ok, &mut OsRng, plain, &mut ct)
                 .map_err(|_| "Beskeden er for lang")?;
         self.sessions.save();
+        self.last_sealed = ct[..n].to_vec();
         if matches!(kind, Pending::Message) {
             self.log(format!("besked til {} ({})", short(&dest), format_name(format)));
         }
@@ -744,6 +783,10 @@ impl Node {
                     {
                         let _ = f.write_all(&a.identity.to_bytes());
                     }
+                }
+                if let Some(link) = self.rx_link {
+                    let tcp = self.links.get(&link).is_some_and(|(n, _)| n.starts_with("tcp"));
+                    self.heard_via.insert(dest, (link, tcp, hops));
                 }
                 self.broadcast(&Event::Heard { addr: dest, hops, identity: Some(a.identity.to_bytes()) });
                 if self.dht.public_ep.is_some() {
@@ -909,6 +952,10 @@ impl Node {
                         done: 0,
                         in_flight: HashMap::new(),
                         created: Instant::now(),
+                        size: up.size,
+                        sealed_offer: std::mem::take(&mut self.last_sealed),
+                        sealed_chunks: None,
+                        from_box: false,
                     },
                 );
                 self.log(format!(
@@ -937,16 +984,27 @@ impl Node {
             if !f.offer_acked || f.in_flight.len() >= FILE_WINDOW {
                 return;
             }
+            // Over 8 KB kun ad en rute, vi ved er TCP hele vejen.
+            if f.size > LORA_MAX_FILE && self.path_kind(&f.dest) != PathKind::Tcp {
+                return;
+            }
             let Some(idx) =
                 (0..f.chunks).find(|i| !f.acked[*i as usize] && !f.in_flight.contains_key(i))
             else {
                 return;
             };
-            let start = idx as usize * CHUNK_DATA;
-            let end = (start + CHUNK_DATA).min(f.data.len());
             let mut ct = [0u8; 255];
-            let Ok(n) = seal::seal_chunk(&f.key, file_id, idx, &f.data[start..end], &mut ct) else {
-                return;
+            let n = if let Some(c) = f.sealed_chunks.as_ref() {
+                let c = &c[idx as usize];
+                ct[..c.len()].copy_from_slice(c);
+                c.len()
+            } else {
+                let start = idx as usize * CHUNK_DATA;
+                let end = (start + CHUNK_DATA).min(f.data.len());
+                let Ok(n) = seal::seal_chunk(&f.key, file_id, idx, &f.data[start..end], &mut ct) else {
+                    return;
+                };
+                n
             };
             let dest = f.dest;
             let now = self.now_ms();
@@ -981,13 +1039,16 @@ impl Node {
             outgoing: true,
         });
         if done == total {
-            self.out_files.remove(&file_id);
-            self.log("fil leveret");
+            let boxed = self.out_files.remove(&file_id).is_some_and(|f| f.from_box);
+            if boxed {
+                self.filebox.remove(file_id);
+            }
+            self.log(if boxed { "fil leveret fra filpostkassen" } else { "fil leveret" });
             self.broadcast(&Event::FileDone {
                 file_id,
                 ok: true,
                 outgoing: true,
-                text: text(b"leveret"),
+                text: text(if boxed { b"leveret fra postkasse" } else { b"leveret" }),
             });
         } else {
             self.pump_file(file_id);
@@ -1096,6 +1157,140 @@ impl Node {
         });
     }
 
+    // ---------- filgrænser og filpostkasse (se filebox.rs) ----------
+
+    /// Rutens type til `dest` ud fra, hvor den sidst blev hørt.
+    fn path_kind(&self, dest: &Address) -> PathKind {
+        let heard = self.heard_via.get(dest);
+        if heard.is_none() {
+            return PathKind::Unknown;
+        }
+        let in_dht = |a: &Address| self.dht.table.closest(a, 1).first().is_some_and(|c| c.id == *a);
+        // Kendte backbone-hosts: direkte TCP-naboer (0 hop) og DHT-kontakter.
+        let host_ids: HashSet<u16> = self
+            .heard_via
+            .iter()
+            .filter(|(a, (_, tcp, hops))| *tcp && (*hops == 0 || in_dht(a)))
+            .map(|(a, _)| a.path_id())
+            .collect();
+        let route = self.router.routes().get(dest).map(|r| r.path.clone());
+        let dest_is_host = heard.is_some_and(|(_, tcp, hops)| *tcp && *hops == 0) || in_dht(dest);
+        filebox::classify(&filebox::PathFacts {
+            heard_tcp: heard.map(|h| h.1),
+            route: route.as_deref(),
+            dest_is_host,
+            host_ids: &host_ids,
+        })
+    }
+
+    fn file_limit(&self, dest: &Address) -> filebox::Limit {
+        // Hosten kender ikke modemets radioindstillinger; EU-standarden
+        // (SF9, 125 kHz, 10 % duty cycle) bruges til at anslå sendetiden.
+        let radio = maarse_core::companion::RadioConfig::EU_DEFAULT;
+        filebox::limit(self.path_kind(dest), self.max_file, self.filebox.enabled(), &radio)
+    }
+
+    /// Lægger en udgående fil i filpostkassen (forseglet tilbud og bidder).
+    fn deposit_file(&mut self, file_id: u64) -> bool {
+        let Some(f) = self.out_files.get(&file_id) else {
+            return false;
+        };
+        let mut chunks = Vec::with_capacity(f.chunks as usize);
+        for idx in 0..f.chunks {
+            let start = idx as usize * CHUNK_DATA;
+            let end = (start + CHUNK_DATA).min(f.data.len());
+            let mut ct = [0u8; 255];
+            let Ok(n) = seal::seal_chunk(&f.key, file_id, idx, &f.data[start..end], &mut ct) else {
+                return false;
+            };
+            chunks.push(ct[..n].to_vec());
+        }
+        let b = Boxed {
+            recipient: f.dest,
+            file_id,
+            stored: filebox::unix_secs(SystemTime::now()),
+            size: f.size,
+            offer: f.sealed_offer.clone(),
+            chunks,
+        };
+        match self.filebox.deposit(&b) {
+            Ok(()) => {
+                self.out_files.remove(&file_id);
+                self.counters.deposits += 1;
+                self.log(format!(
+                    "modtager svarer ikke; fil ({} bytes) lagt i filpostkassen til {}",
+                    b.size,
+                    short(&b.recipient)
+                ));
+                self.broadcast(&Event::FileDone {
+                    file_id,
+                    ok: true,
+                    outgoing: true,
+                    text: text("lagt i postkasse".as_bytes()),
+                });
+                true
+            }
+            Err(e) => {
+                self.log(format!("fil kunne ikke lægges i filpostkassen: {}", e.danish()));
+                false
+            }
+        }
+    }
+
+    /// Prøver at levere ventende filer til `recipient`. Filer over 8 KB
+    /// venter, til modtageren nås over TCP.
+    fn flush_filebox(&mut self, recipient: Address) {
+        let waiting = self.filebox.waiting_for(&recipient);
+        if waiting.is_empty() || !self.known.contains_key(&recipient) {
+            return;
+        }
+        let kind = self.path_kind(&recipient);
+        for file_id in waiting {
+            if self.out_files.contains_key(&file_id) {
+                continue;
+            }
+            let Some(b) = self.filebox.load(file_id) else {
+                continue;
+            };
+            if b.size > LORA_MAX_FILE && kind != PathKind::Tcp {
+                self.log(format!(
+                    "filpostkasse: fil til {} ({} bytes) venter på en TCP-rute",
+                    short(&recipient),
+                    b.size
+                ));
+                continue;
+            }
+            let now = self.now_ms();
+            let Ok((msg_id, actions)) = self.router.send_direct(recipient, &b.offer, token(), now) else {
+                continue;
+            };
+            self.log(format!("filpostkasse: leverer fil ({} bytes) til {}", b.size, short(&recipient)));
+            let n = b.chunks.len();
+            self.out_files.insert(
+                file_id,
+                OutFile {
+                    dest: recipient,
+                    data: Vec::new(),
+                    key: [0; 32],
+                    chunks: n as u16,
+                    offer: Vec::new(),
+                    offer_acked: false,
+                    offer_sent: Instant::now(),
+                    acked: vec![false; n],
+                    done: 0,
+                    in_flight: HashMap::new(),
+                    created: Instant::now(),
+                    size: b.size,
+                    sealed_offer: b.offer,
+                    sealed_chunks: Some(b.chunks),
+                    from_box: true,
+                },
+            );
+            self.awaiting.insert(msg_id, Pending::FileOffer(file_id));
+            self.apply(actions.into_iter().collect());
+        }
+    }
+
     // ---------- postkasse ----------
 
     fn on_deposit(&mut self, payload: &[u8]) {
@@ -1128,6 +1323,7 @@ impl Node {
 
     /// Prøver at levere ventende post til `recipient`.
     fn flush_mailbox(&mut self, recipient: Address) {
+        self.flush_filebox(recipient);
         let Some(mails) = self.mailbox.get(&recipient) else {
             return;
         };
@@ -1249,25 +1445,24 @@ impl Node {
         self.outbox
             .retain(|_, m| now.duration_since(m.sent) < Duration::from_secs(3600));
 
-        // Filer: gensend bidder uden kvittering, opgiv gamle.
+        // Filer: gensend bidder uden kvittering. Svarer modtageren ikke,
+        // lægges filen i filpostkassen (hvis den er slået til), ellers opgives den.
         let ids: Vec<u64> = self.out_files.keys().copied().collect();
         for file_id in ids {
-            let mut resend_offer = None;
-            let mut failed = false;
-            if let Some(f) = self.out_files.get_mut(&file_id) {
-                if now.duration_since(f.created) > FILE_TIMEOUT {
-                    failed = true;
-                } else {
-                    f.in_flight
-                        .retain(|_, sent| now.duration_since(*sent) < CHUNK_TIMEOUT);
-                    if !f.offer_acked && now.duration_since(f.offer_sent) > CHUNK_TIMEOUT {
-                        f.offer_sent = now;
-                        resend_offer = Some((f.dest, f.offer.clone()));
-                    }
-                }
+            let Some(f) = self.out_files.get(&file_id) else {
+                continue;
+            };
+            let age = now.duration_since(f.created);
+            let late = !f.offer_acked && age > after;
+            if !f.from_box && self.filebox.enabled() && (late || age > FILE_TIMEOUT) && self.deposit_file(file_id) {
+                continue;
             }
-            if failed {
-                self.out_files.remove(&file_id);
+            if age > FILE_TIMEOUT {
+                // Fra filpostkassen: filen bliver liggende og prøves igen,
+                // næste gang modtageren dukker op.
+                if self.out_files.remove(&file_id).is_some_and(|f| f.from_box) {
+                    continue;
+                }
                 self.broadcast(&Event::FileDone {
                     file_id,
                     ok: false,
@@ -1276,10 +1471,38 @@ impl Node {
                 });
                 continue;
             }
-            if let Some((dest, offer)) = resend_offer {
-                let _ = self.send_sealed(dest, &offer, Pending::FileOffer(file_id));
+            let mut resend_offer = None;
+            if let Some(f) = self.out_files.get_mut(&file_id) {
+                f.in_flight
+                    .retain(|_, sent| now.duration_since(*sent) < CHUNK_TIMEOUT);
+                if !f.offer_acked && now.duration_since(f.offer_sent) > CHUNK_TIMEOUT {
+                    f.offer_sent = now;
+                    resend_offer = Some((f.dest, f.offer.clone(), f.from_box, f.sealed_offer.clone()));
+                }
+            }
+            match resend_offer {
+                Some((dest, _, true, sealed)) => {
+                    let t = self.now_ms();
+                    if let Ok((msg_id, actions)) = self.router.send_direct(dest, &sealed, token(), t) {
+                        self.awaiting.insert(msg_id, Pending::FileOffer(file_id));
+                        self.apply(actions.into_iter().collect());
+                    }
+                }
+                Some((dest, offer, false, _)) => {
+                    if self.send_sealed(dest, &offer, Pending::FileOffer(file_id)).is_ok() {
+                        let sealed = std::mem::take(&mut self.last_sealed);
+                        if let Some(f) = self.out_files.get_mut(&file_id) {
+                            f.sealed_offer = sealed;
+                        }
+                    }
+                }
+                None => {}
             }
             self.pump_file(file_id);
+        }
+        // Gamle filer i filpostkassen.
+        for (r, id) in self.filebox.expire(SystemTime::now()) {
+            self.log(format!("filpostkasse: fil {id:016x} til {} udløb efter 7 dage", short(&r)));
         }
         // Halvfærdige indgående filer.
         let stale: Vec<u64> = self
@@ -1507,9 +1730,30 @@ impl Node {
                     None => self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "Beskeden er for lang")),
                 }
             }
+            Command::GetFileLimit { dest } => {
+                let l = self.file_limit(&dest);
+                self.send_client(
+                    id,
+                    &Event::FileLimit {
+                        dest,
+                        max_bytes: l.max_bytes,
+                        via_lora: l.via_lora,
+                        mailbox: l.mailbox,
+                        est_airtime_s: l.est_airtime_s,
+                    },
+                );
+            }
             Command::FileBegin { req, dest, size, mime, name } => {
-                if size > self.max_file {
-                    let m = format!("Filen er for stor (højst {} KB)", self.max_file / 1024);
+                let l = self.file_limit(&dest);
+                if size > l.max_bytes {
+                    let m = if l.via_lora && !l.mailbox {
+                        format!(
+                            "Filen er for stor: modtageren nås kun over LoRa, hvor grænsen er {} KB",
+                            l.max_bytes / 1024
+                        )
+                    } else {
+                        format!("Filen er for stor (højst {} KB)", l.max_bytes / 1024)
+                    };
                     return self.send_client(id, &err_ev(req, error_code::FILE_TOO_LARGE, &m));
                 }
                 if !self.known.contains_key(&dest) {
@@ -1933,12 +2177,12 @@ impl Node {
 }
 
 #[cfg(test)]
-mod file_interop_tests {
+pub(super) mod file_interop_tests {
     //! Firmwarens filafsender (`maarse_crypto::files`) mod hostens modtager.
     use super::*;
     use maarse_crypto::files::{AckResult, Outgoing};
 
-    fn cfg(dir: PathBuf) -> Config {
+    pub(super) fn cfg(dir: PathBuf) -> Config {
         Config {
             data_dir: dir,
             http: None,
@@ -1948,6 +2192,8 @@ mod file_interop_tests {
             baud: 115_200,
             open_browser: false,
             max_file: 1024 * 1024,
+            filebox_per_recipient: 20 << 20,
+            filebox_total: 200 << 20,
             postbox: None,
             public_addr: None,
             dht_seeds: Vec::new(),
@@ -2002,5 +2248,207 @@ mod file_interop_tests {
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(done, Some(true));
         assert_eq!(got, data);
+    }
+}
+
+#[cfg(test)]
+mod filebox_node_tests {
+    //! Filgrænser efter rute og filpostkassen (se filebox.rs).
+    use super::*;
+    use std::sync::mpsc::{Receiver, channel};
+
+    fn node(name: &str) -> (Node, Receiver<Vec<u8>>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("maarse-fb-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut c = file_interop_tests::cfg(dir.clone());
+        c.data_dir = dir.clone();
+        let mut n = Node::new(&c).unwrap();
+        let (tx, rx) = channel();
+        n.clients.insert(1, tx);
+        (n, rx, dir)
+    }
+
+    fn events(rx: &Receiver<Vec<u8>>) -> Vec<Event> {
+        rx.try_iter().filter_map(|f| Event::decode(&f[2..]).ok()).collect()
+    }
+
+    fn know(a: &mut Node, b: &Node) {
+        a.known.insert(b.addr, b.identity.public());
+    }
+
+    /// `peer` er hørt med `hops` hop over et link med navnet `link`.
+    fn heard(n: &mut Node, peer: Address, link: &str, hops: u8) {
+        let (tx, _rx) = channel();
+        let id = n.links.len() as LinkId + 1;
+        n.links.insert(id, (link.to_string(), tx));
+        n.heard_via.insert(peer, (id, link.starts_with("tcp"), hops));
+    }
+
+    fn begin(n: &mut Node, req: u16, dest: Address, size: u32) {
+        n.command(1, Command::FileBegin { req, dest, size, mime: text(b"image/webp"), name: text(b"b.webp") });
+    }
+
+    fn upload(n: &mut Node, req: u16, dest: Address, data: &[u8]) {
+        begin(n, req, dest, data.len() as u32);
+        for (i, c) in data.chunks(MAX_TEXT).enumerate() {
+            n.command(1, Command::FileData { req, offset: (i * MAX_TEXT) as u32, data: text(c) });
+        }
+        n.command(1, Command::FileEnd { req });
+    }
+
+    #[test]
+    fn path_kinds_from_links() {
+        let (mut n, _rx, dir) = node("kinds");
+        let (tcp, lora, radio_behind_host, none) =
+            (Address([1; 16]), Address([2; 16]), Address([3; 16]), Address([4; 16]));
+        heard(&mut n, tcp, "tcp ud 127.0.0.1:4242", 0);
+        heard(&mut n, lora, "seriel COM3", 0);
+        heard(&mut n, radio_behind_host, "tcp ind 10.0.0.2:5000", 1);
+        assert_eq!(n.path_kind(&tcp), PathKind::Tcp);
+        assert_eq!(n.path_kind(&lora), PathKind::Lora);
+        assert_eq!(n.path_kind(&radio_behind_host), PathKind::Lora);
+        assert_eq!(n.path_kind(&none), PathKind::Unknown);
+        // Linket går ned: så ved vi ikke længere, hvor modtageren er.
+        let id = n.heard_via[&tcp].0;
+        n.handle(In::LinkDown { id });
+        assert_eq!(n.path_kind(&tcp), PathKind::Unknown);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn file_limit_and_file_begin_by_path() {
+        let (mut a, rx, dir) = node("limit");
+        let (b, _rxb, dir_b) = node("limit-b");
+        know(&mut a, &b);
+        heard(&mut a, b.addr, "seriel COM3", 1);
+        a.command(1, Command::GetFileLimit { dest: b.addr });
+        let ev = events(&rx);
+        let Some(Event::FileLimit { max_bytes, via_lora, mailbox, est_airtime_s, .. }) =
+            ev.iter().find(|e| matches!(e, Event::FileLimit { .. })).cloned()
+        else {
+            panic!("{ev:?}")
+        };
+        assert_eq!((max_bytes, via_lora, mailbox), (8192, true, false));
+        assert!(est_airtime_s > 0);
+        // For stor til LoRa: afvist med forklaring.
+        begin(&mut a, 7, b.addr, 20_000);
+        let ev = events(&rx);
+        let err = ev.iter().find_map(|e| match e {
+            Event::Error { req: 7, code, text } => Some((*code, String::from_utf8_lossy(text).to_string())),
+            _ => None,
+        });
+        let (code, msg) = err.expect("ingen fejl");
+        assert_eq!(code, error_code::FILE_TOO_LARGE);
+        assert!(msg.contains("LoRa") && msg.contains("8 KB"), "{msg}");
+        // 8 KB går fint.
+        begin(&mut a, 8, b.addr, 8192);
+        assert!(!events(&rx).iter().any(|e| matches!(e, Event::Error { .. })));
+        // Over TCP: op til 1 MB.
+        heard(&mut a, b.addr, "tcp ud 127.0.0.1:4242", 0);
+        begin(&mut a, 9, b.addr, 1024 * 1024);
+        assert!(!events(&rx).iter().any(|e| matches!(e, Event::Error { .. })));
+        begin(&mut a, 10, b.addr, 1024 * 1024 + 1);
+        assert!(events(&rx).iter().any(|e| matches!(e, Event::Error { req: 10, .. })));
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn large_file_not_sent_over_lora() {
+        let (mut a, rx, dir) = node("gate");
+        let (b, _rxb, dir_b) = node("gate-b");
+        know(&mut a, &b);
+        heard(&mut a, b.addr, "tcp ud 127.0.0.1:4242", 0);
+        upload(&mut a, 1, b.addr, &vec![5u8; 20_000]);
+        let file_id = events(&rx)
+            .iter()
+            .find_map(|e| match e {
+                Event::FileStarted { file_id, .. } => Some(*file_id),
+                _ => None,
+            })
+            .unwrap();
+        // Ruten skifter til LoRa, før tilbuddet er kvitteret.
+        heard(&mut a, b.addr, "seriel COM3", 0);
+        a.out_files.get_mut(&file_id).unwrap().offer_acked = true;
+        a.pump_file(file_id);
+        assert!(a.out_files[&file_id].in_flight.is_empty(), "bidder sendt over LoRa");
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn deposit_then_deliver_over_tcp() {
+        let (mut a, rx, dir) = node("dep");
+        let (mut b, rxb, dir_b) = node("dep-b");
+        know(&mut a, &b);
+        know(&mut b, &a);
+        // B er offline (ingen viden om ruten): 1 MB via postkassen.
+        a.command(1, Command::GetFileLimit { dest: b.addr });
+        assert!(events(&rx).iter().any(|e| matches!(
+            e,
+            Event::FileLimit { max_bytes: 1048576, mailbox: true, .. }
+        )));
+        let data: Vec<u8> = (0..20_000u32).map(|i| (i * 13 % 251) as u8).collect();
+        upload(&mut a, 1, b.addr, &data);
+        let file_id = events(&rx)
+            .iter()
+            .find_map(|e| match e {
+                Event::FileStarted { file_id, .. } => Some(*file_id),
+                _ => None,
+            })
+            .unwrap();
+        assert!(a.deposit_file(file_id));
+        assert!(events(&rx).iter().any(|e| matches!(
+            e,
+            Event::FileDone { ok: true, outgoing: true, text, .. } if &text[..] == "lagt i postkasse".as_bytes()
+        )));
+        assert_eq!(a.filebox.waiting_for(&b.addr), vec![file_id]);
+        // B kommer tilbage, men kun over LoRa: filen (20 KB) bliver liggende.
+        heard(&mut a, b.addr, "seriel COM3", 0);
+        a.flush_filebox(b.addr);
+        assert!(!a.out_files.contains_key(&file_id));
+        // B er der igen over TCP: tilbuddet og bidderne sendes fra postkassen.
+        heard(&mut a, b.addr, "tcp ud 127.0.0.1:4242", 0);
+        a.flush_filebox(b.addr);
+        assert!(a.out_files[&file_id].from_box);
+        let boxed = a.filebox.load(file_id).unwrap();
+        // B kan åbne tilbud og bidder (krypteret ende til ende fra A).
+        b.open_direct(boxed.offer.clone(), 1, true);
+        for c in &boxed.chunks {
+            b.on_chunk(c);
+        }
+        let mut got = Vec::new();
+        let mut ok = None;
+        for e in events(&rxb) {
+            match e {
+                Event::FileChunk { file_id: f, data, .. } if f == file_id => got.extend_from_slice(&data),
+                Event::FileDone { file_id: f, ok: o, .. } if f == file_id => ok = Some(o),
+                _ => {}
+            }
+        }
+        assert_eq!(ok, Some(true));
+        assert_eq!(got, data);
+        // Kvitteringerne når A: filen slettes fra postkassen.
+        let offer_ids: Vec<u64> = a
+            .awaiting
+            .iter()
+            .filter(|(_, p)| matches!(p, Pending::FileOffer(f) if *f == file_id))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in offer_ids {
+            a.on_acked(id);
+        }
+        // (Uden rute i testen sendes bidderne ikke; kvitteringerne gives direkte.)
+        for idx in 0..boxed.chunks.len() as u16 {
+            a.chunk_acked(file_id, idx);
+        }
+        assert!(!a.out_files.contains_key(&file_id));
+        assert!(a.filebox.waiting_for(&b.addr).is_empty());
+        assert!(events(&rx).iter().any(|e| matches!(
+            e,
+            Event::FileDone { ok: true, text, .. } if &text[..] == b"leveret fra postkasse"
+        )));
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(dir_b);
     }
 }

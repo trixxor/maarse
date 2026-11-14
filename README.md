@@ -37,15 +37,24 @@ Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge
 | Krypterede direkte beskeder med "leveret" | ja | ja | ja |
 | Forward secrecy for samtaler (ratchet, udkast) | ja, sessioner gemt på disk | ja, 8 sessioner i RAM | ja, 8 sessioner i RAM |
 | Kanaler (offentlig, #hashtag) | ja | ja (højst 4) | ja (højst 4) |
-| Billeder og filer (krypteret, med kvittering pr. bid) | ja, op til 1 MB | ja, op til 8 KB (ikke testet på hardware endnu) | ja, op til 8 KB (ikke testet på hardware endnu) |
-| Postkasse til modtagere, der er offline | ja (disk, 7 dage) | ja (8 KB flash) | ja (8 KB flash) |
+| Billeder og filer (krypteret, med kvittering pr. bid) | ja, op til 1 MB over internettet, 8 KB over LoRa | ja, op til 8 KB (ikke testet på hardware endnu) | ja, op til 8 KB (ikke testet på hardware endnu) |
+| Postkasse til modtagere, der er offline | ja (disk, 7 dage; også filer op til 1 MB) | ja (8 KB flash) | ja (8 KB flash) |
 | Fjernadministration (status og radio på en anden node) | ja | ja | ja |
 | Status-side (radio, routing, postkasse, trafik, DHT) | ja | ja, med RSSI/SNR, duty cycle, CAD og fejl | ja, samme |
 | Radioindstillinger (MHz, båndbredde, SF, CR, dBm, duty %) | – | ja, gemmes i flash | ja, gemmes i flash |
 | Forbindelse | TCP-backbone + DHT, WebSocket, seriel LoRa-modem | USB og Bluetooth | USB og Bluetooth (ja, ikke afprøvet på hardware) |
 | Display | – | – | Heltec V4: 3 sider, skift med PRG-knappen |
 
-Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), USB/seriel og Bluetooth (Nordic UART). Den skalerer billeder automatisk ned, så de passer under grænsen: 8 KB over LoRa og 1 MB over maarse-host.
+Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), USB/seriel og Bluetooth (Nordic UART). Den skalerer billeder automatisk ned, så de passer under grænsen: 8 KB over LoRa og 1 MB over internettet.
+
+**Filgrænse efter rute.** Før en fil sendes, spørger klienten maarse-host om grænsen for den valgte kontakt (kommando `0x14 GetFileLimit {dest}`, svar `0x96 FileLimit {dest, max_bytes (u32), flag (u8: bit 0 = LoRa/ukendt, bit 1 = postkasse), est_airtime_s (u32)}`) og viser fx *"Billedet sendes over LoRa og skaleres ned til 8 KB (ca. 2 min. sendetid)"* eller *"Sendes over internettet (op til 1 MB)"*. Billeder skaleres ned til grænsen; andre filer over grænsen afvises med en forklaring. Firmware-noder kender ikke kommandoen, og så bruges `Info.max_file`. Hosten håndhæver også grænsen på `FileBegin`. Reglerne (`maarse-host/src/filebox.rs`):
+
+- **TCP hele vejen** (modtageren er hørt over et TCP-link, og den og alle led på ruten er kendte backbone-hosts: direkte TCP-naboer eller DHT-kontakter; en webklient hos en host har hostens adresse): op til `--max-file` (1 MB).
+- **LoRa** (hørt over et serielt modem, eller gennem et led, hosten ikke ved er en host, fx en radionode bag en anden hosts modem): 8 KB, samme som firmwaren. Sendetiden anslås ud fra EU-standardindstillingerne (SF9, 125 kHz, 10 % duty cycle), da hosten ikke kender modemets radio.
+- **Ukendt** (aldrig hørt, eller linket er gået ned): modtageren regnes som offline, og filen må være op til 1 MB, fordi den lægges i filpostkassen. Uden filpostkasse gælder 8 KB.
+- Er hosten i tvivl, er svaret aldrig TCP. Filer over 8 KB sendes aldrig ad en rute, der ikke er TCP: bidderne holdes tilbage, og filen ender i filpostkassen. Bidder til en modtager over TCP sendes ikke ud på et LoRa-modem.
+
+**Filpostkasse (kun maarse-host).** Svarer modtageren ikke (som for beskeder efter 45 s, eller når overførslen går i stå), gemmer afsenderens host filen på disken i `filpostkasse/`: det forseglede tilbud og de forseglede bidder, så hosten ikke kan læse den. Afsenderen får `FileDone` med teksten *"lagt i postkasse"*. Når modtageren dukker op igen (announce eller ny rute, samme mekanisme som postkassen for beskeder), leveres filen, og afsenderen får *"leveret fra postkasse"*. Højst 1 MB pr. fil, 20 MB pr. modtager og 200 MB i alt (`--filpostkasse-modtager-mb`, `--filpostkasse-mb`; 0 slår den fra). Filer udløber efter 7 dage. Filer lægges aldrig i radionoders flash-postkasse, og en fil over 8 KB leveres kun, når modtageren nås over TCP; nås den kun over LoRa, venter filen (eller udløber). Filpostkassen ligger hos afsenderens host, så den skal være online, når modtageren kommer tilbage.
 
 Filer på firmware-noder (`firmware/common/src/node/files.rs`, logikken i `maarse-crypto/src/files.rs`) bruger samme format som maarse-host, så de to kan sende filer til hinanden. Noden sender og modtager én fil ad gangen i hver retning (to statiske buffere på 8 KB). En modtaget fil sendes til klienten, når den er hel og tjekket; er ingen klient forbundet, bliver den liggende i RAM, til en klient forbinder (den overskrives af næste fil og forsvinder ved genstart). Filer lægges ikke i postkassen: én fil ville fylde de 8 KB flash helt.
 
@@ -178,6 +187,8 @@ Ende-til-ende-testen starter tre noder (A, B og en postkasse P) og afprøver:
 - en fil på 20 KB, der bliver verificeret,
 - en for stor fil, der bliver afvist,
 - at B går offline, beskeden lægges i postkassen, og B henter den, når den kommer online igen,
+- at en fil på 20 KB til B, mens B er offline, lægges i A's filpostkasse og leveres og verificeres, når B kommer tilbage (og at grænsen så er 1 MB over TCP),
+- at en fil på 20 KB afvises, når ruten må regnes som LoRa (8 KB),
 - fjernadministration: en administrator får adgang, og en anden node bliver afvist,
 - at en fremmed hjemmeside ikke kan forbinde.
 

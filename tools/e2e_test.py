@@ -163,6 +163,54 @@ try:
     b.wait(lambda f: f[0] == 0x88 and f[1:17] == pj[1:17] and f[17:] == "Hytten æ".encode())
     ok("B husker den private kanal efter genstart")
 
+    # 6b. Filpostkasse: B går offline, A sender en fil på 20 KB, den lægges i
+    #     A's filpostkasse og leveres over TCP, når B kommer tilbage.
+    def file_limit(c, dest):
+        c.events.clear()
+        c.send(frame(0x14, dest))
+        f = c.wait(lambda f: f[0] == 0x96 and f[1:17] == dest)
+        return struct.unpack("<I", f[17:21])[0], f[21], struct.unpack("<I", f[22:26])[0]
+    def send_file(c, req, dest, data, name=b"post.webp"):
+        c.send(frame(0x06, struct.pack("<H", req), dest, struct.pack("<I", len(data)), bytes([10]), b"image/webp", name))
+        for off in range(0, len(data), 240):
+            c.send(frame(0x07, struct.pack("<H", req), struct.pack("<I", off), data[off:off + 240]))
+        c.send(frame(0x08, struct.pack("<H", req)))
+    stop("b"); time.sleep(1)
+    mx, flags, _ = file_limit(a, addr_b)
+    assert mx == 1 << 20 and flags & 2, (mx, flags)
+    ok("B offline: GetFileLimit siger postkasse, op til 1 MB")
+    pdata = os.urandom(20_000)
+    send_file(a, 30, addr_b, pdata)
+    fid = a.wait(lambda f: f[0] == 0x8d and f[1:3] == struct.pack("<H", 30))[3:11]
+    a.wait(lambda f: f[0] == 0x8c and f[1:9] == fid and f[9] == 1 and f[11:] == b"lagt i postkasse", secs=20)
+    ok("fil på 20 KB lagt i A's filpostkasse")
+    start("b", 8182, ["--listen", "off", "--peer", "127.0.0.1:4381", "--postkasse", addr_p.hex()])
+    b = Client(8182)
+    b.wait(lambda f: f[0] == 0x8c and f[1:9] == fid, secs=40)
+    done = [f for f in b.events if f[0] == 0x8c and f[1:9] == fid][0]
+    assert done[9] == 1, "fil fra postkassen fejlede: " + done[11:].decode()
+    got = b"".join(f[13:] for f in sorted((f for f in b.events if f[0] == 0x8a and f[1:9] == fid), key=lambda f: struct.unpack("<I", f[9:13])[0]))
+    assert hashlib.sha256(got).digest() == hashlib.sha256(pdata).digest()
+    a.wait(lambda f: f[0] == 0x8c and f[1:9] == fid and f[11:] == b"leveret fra postkasse", secs=20)
+    ok("B online igen: filen leveret fra filpostkassen og verificeret")
+    mx, flags, _ = file_limit(a, addr_b)
+    assert mx == 1 << 20 and flags == 0, (mx, flags)
+    ok("B online over TCP: op til 1 MB, ikke over LoRa")
+
+    # 6c. Over grænsen: uden filpostkasse og uden viden om ruten regnes den
+    #     som LoRa (konservativt): 8 KB, og en fil på 20 KB afvises.
+    start("c", 8183, ["--listen", "off", "--peer", "127.0.0.1:4381", "--filpostkasse-mb", "0"])
+    c = Client(8183); c.info()
+    ukendt = os.urandom(16)
+    mx, flags, air = file_limit(c, ukendt)
+    assert mx == 8192 and flags == 1 and air > 0, (mx, flags, air)
+    ok(f"ukendt rute uden filpostkasse: 8 KB over LoRa (ca. {air} s sendetid)")
+    c.send(frame(0x06, struct.pack("<H", 31), ukendt, struct.pack("<I", 20_000), bytes([10]), b"image/webp", b"stor.webp"))
+    e = c.wait(lambda f: f[0] == 0x8f and f[1:3] == struct.pack("<H", 31))
+    assert e[3] == 7 and "LoRa" in e[4:].decode(), e
+    stop("c")
+    ok("fil på 20 KB over LoRa afvist: " + e[4:].decode())
+
     # 7. Forkert origin
     try:
         websocket.create_connection("ws://127.0.0.1:8181/ws", origin="http://ond.example", timeout=3)

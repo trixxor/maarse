@@ -65,6 +65,12 @@ Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), US
 
 Filer på firmware-noder (`firmware/common/src/node/files.rs`, logikken i `maarse-crypto/src/files.rs`) bruger samme format som maarse-host, så de to kan sende filer til hinanden. Noden sender og modtager én fil ad gangen i hver retning (to statiske buffere på 8 KB). En modtaget fil sendes til klienten, når den er hel og tjekket; er ingen klient forbundet, bliver den liggende i RAM, til en klient forbinder (den overskrives af næste fil og forsvinder ved genstart). Filer lægges ikke i postkassen: én fil ville fylde de 8 KB flash helt.
 
+## Android-app (APK)
+
+`python tools/build_apk.py` bygger `dist/maarse.apk` direkte med Android SDK'ens værktøjer (aapt2, javac, d8, zipalign, apksigner), uden Gradle. Kræver Android SDK (build-tools 34+, platform 35+) og en JDK; APK'en signeres med debug-nøglen.
+
+Appen (`android/`) er webklienten i en WebView plus en Bluetooth-bro i Java til nodens Nordic UART-tjeneste, fordi WebView ikke har Web Bluetooth. Webklienten ser broen (`window.MaarseAndroid`) og viser så kun Bluetooth. Appen beder om Bluetooth- og mikrofontilladelse, når de skal bruges. Installér med `adb install dist/maarse.apk` eller ved at åbne filen på telefonen (tillad ukendte kilder).
+
 ## Webklienten som app (PWA)
 
 Webklienten kan installeres som en app, så du kan bruge en radio via Bluetooth eller USB direkte fra telefonen eller computeren, uden en PC med maarse-host. Den virker også uden net, når den først er åbnet én gang.

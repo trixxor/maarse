@@ -17,171 +17,320 @@
 <!-- </pwa-head> -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%232f7d5b'/%3E%3C/svg%3E">
 <style>
+  /* Layout: app-skal i fuld højde. Sidepanel (mig, navigation, samtaler) til venstre,
+     samtale/visning til højre; på telefon er sidepanelet en skuffe over indholdet.
+     Ingen webfonte: klienten skal virke uden internet. */
   :root {
-    --bg: #f6f7f5; --panel: #ffffff; --ink: #1d2320; --muted: #66706a; --line: #dfe3df;
-    --accent: #2f7d5b; --accent-ink: #ffffff; --mine: #e3f1ea; --warn: #b5532a;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --bg: #eef2f0; --panel: #fbfcfb; --raised: #ffffff; --ink: #14201b; --muted: #5d6d66; --line: #d8e0dc;
+    --accent: #1f6f5c; --accent-ink: #ffffff; --accent-soft: #dcece6; --signal: #b8730a; --signal-soft: #fbefd9;
+    --mine: #d9ece4; --warn: #b4472a; --warn-soft: #f8e3dc; --ok: #2c7d4f;
+    --shadow: 0 1px 2px rgba(20, 32, 27, .06), 0 4px 16px rgba(20, 32, 27, .06);
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+    --r: 10px;
+    font-family: var(--font); color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #141816; --panel: #1c211e; --ink: #e6ebe7; --muted: #94a09a; --line: #2c332f;
-            --accent: #5bbf8f; --accent-ink: #0d1411; --mine: #22372c; --warn: #e28a62; }
+    :root:not([data-theme="light"]) {
+      --bg: #0f1513; --panel: #151d1a; --raised: #1b2521; --ink: #e3ebe7; --muted: #8fa199; --line: #26332e;
+      --accent: #5cc0a0; --accent-ink: #08130f; --accent-soft: #1d3a31; --signal: #f0b252; --signal-soft: #352a15;
+      --mine: #1e3a30; --warn: #ec8e70; --warn-soft: #3a211a; --ok: #6fd29f;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 20px rgba(0, 0, 0, .25);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1513; --panel: #151d1a; --raised: #1b2521; --ink: #e3ebe7; --muted: #8fa199; --line: #26332e;
+    --accent: #5cc0a0; --accent-ink: #08130f; --accent-soft: #1d3a31; --signal: #f0b252; --signal-soft: #352a15;
+    --mine: #1e3a30; --warn: #ec8e70; --warn-soft: #3a211a; --ok: #6fd29f;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 20px rgba(0, 0, 0, .25);
+    color-scheme: dark;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; background: var(--bg); color: var(--ink); height: 100vh; display: flex; flex-direction: column; }
-  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--panel);
-           border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  header h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
-  .status { font-size: 13px; color: var(--muted); }
-  .status b { color: var(--ink); }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); margin-right: 6px; }
-  .dot.on { background: var(--accent); }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); display: flex; flex-direction: column; font-size: 15px; line-height: 1.45;
+         padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+  svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- top ---------- */
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; padding-top: max(10px, env(safe-area-inset-top, 0px));
+           background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .brand { display: flex; align-items: baseline; gap: 8px; }
+  header h1 { font-size: 19px; margin: 0; letter-spacing: .2px; font-weight: 750; }
+  header h1 .colon { color: var(--accent); }
+  .morse { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 2px; }
+  .status { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted);
+            background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; }
+  .status b { color: var(--ink); font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
   .spacer { flex: 1; }
-  button { font: inherit; font-size: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
-           padding: 7px 12px; border-radius: 8px; cursor: pointer; }
-  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-  button:disabled { opacity: .5; cursor: default; }
-  input { font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
-          background: var(--bg); color: var(--ink); min-width: 0; }
-  main { flex: 1; display: grid; grid-template-columns: 280px 1fr; min-height: 0; }
-  aside { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 12px; }
-  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 16px 4px 6px; }
-  .conv { padding: 8px 10px; border-radius: 8px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+  .connect { display: flex; gap: 6px; flex-wrap: wrap; }
+  .connect button:disabled { display: none; }
+
+  /* ---------- kontroller ---------- */
+  button { font: inherit; font-size: 14px; border: 1px solid var(--line); background: var(--raised); color: var(--ink);
+           padding: 7px 12px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+           transition: background .12s, border-color .12s; }
+  button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, var(--ink)); }
+  button.ghost { background: transparent; border-color: transparent; }
+  button:disabled { opacity: .45; cursor: default; }
+  input, select, textarea { font: inherit; font-size: 14px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px;
+          background: var(--raised); color: var(--ink); min-width: 0; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  /* ---------- skal ---------- */
+  main { flex: 1; display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 0; }
+  aside { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 14px 12px 24px;
+          display: flex; flex-direction: column; gap: 4px; }
+  aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .9px; color: var(--muted); margin: 14px 8px 4px; font-weight: 650;
+             display: flex; align-items: center; justify-content: space-between; }
+
+  .me-card { background: var(--raised); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; display: grid; gap: 8px; }
+  .me-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .9px; color: var(--muted); font-weight: 650; }
+  .me { font-family: var(--mono); font-size: 12px; word-break: break-all; color: var(--muted); line-height: 1.5; }
+  .me-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .me-actions button { padding: 5px 9px; font-size: 13px; }
+
+  nav.tools { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 4px; }
+  nav.tools button { justify-content: flex-start; background: transparent; border-color: transparent; padding: 8px 10px; color: var(--ink); }
+  nav.tools button:hover:not(:disabled) { background: var(--bg); border-color: transparent; }
+  nav.tools button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  nav.tools button svg { color: var(--muted); }
+  nav.tools button.active svg { color: var(--accent); }
+
+  .conv { padding: 8px 10px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; min-width: 0; }
   .conv:hover { background: var(--bg); }
-  .conv.active { background: var(--mine); }
-  .conv .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .badge { background: var(--accent); color: var(--accent-ink); border-radius: 10px; font-size: 11px; padding: 1px 7px; }
-  .row { display: flex; gap: 6px; margin: 6px 0; }
-  .row input { flex: 1; }
-  .me { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; color: var(--muted); }
-  section.chat { display: flex; flex-direction: column; min-height: 0; }
-  .chat-head { padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
-  .chat-head .sub { font-size: 12px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
-  .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-  .msg { max-width: 75%; padding: 8px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); }
-  .msg.mine { align-self: flex-end; background: var(--mine); border-color: transparent; }
-  .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
-  .msg .from { font-size: 12px; font-weight: 600; margin-bottom: 2px; }
-  .composer { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--panel); align-items: center; }
-  .composer input { flex: 1; }
-  .count { font-size: 12px; color: var(--muted); min-width: 56px; text-align: right; }
-  .count.over { color: var(--warn); font-weight: 600; }
-  .empty { margin: auto; color: var(--muted); text-align: center; max-width: 420px; line-height: 1.5; }
-  details.log { border-top: 1px solid var(--line); background: var(--panel); }
-  details.log summary { padding: 8px 16px; cursor: pointer; font-size: 13px; color: var(--muted); }
-  #log { max-height: 180px; overflow-y: auto; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
-         padding: 0 16px 10px; white-space: pre-wrap; }
+  .conv.active { background: var(--accent-soft); }
+  .conv .av { width: 30px; height: 30px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 13px; font-weight: 700;
+              background: var(--bg); color: var(--accent); border: 1px solid var(--line); }
+  .conv.active .av { background: var(--raised); }
+  .conv .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { background: var(--signal); color: #fff; border-radius: 10px; font-size: 11px; font-weight: 700; padding: 1px 7px; }
+  .adders { display: grid; gap: 6px; margin: 6px 0 2px; }
+  details.add summary { list-style: none; cursor: pointer; font-size: 13px; color: var(--accent); padding: 6px 8px; border-radius: 8px; }
+  details.add summary::-webkit-details-marker { display: none; }
+  details.add summary:hover { background: var(--bg); }
+  details.add[open] summary { color: var(--muted); }
+  .row { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
+  .row input { flex: 1 1 140px; }
+  .hint { font-size: 12px; color: var(--muted); margin: 4px 8px; line-height: 1.45; }
+  .muted { color: var(--muted); }
+
+  /* ---------- samtale ---------- */
+  section.chat { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .chat-head { padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; }
+  #chat-title { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-head .sub { font-size: 12px; color: var(--muted); font-family: var(--mono); word-break: break-all; }
+  .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .msg { max-width: min(560px, 78%); padding: 9px 13px; border-radius: 14px 14px 14px 4px; background: var(--raised);
+         border: 1px solid var(--line); overflow-wrap: anywhere; }
+  .msg.mine { align-self: flex-end; background: var(--mine); border-color: transparent; border-radius: 14px 14px 4px 14px; }
+  .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .msg .from { font-size: 12px; font-weight: 650; margin-bottom: 2px; color: var(--accent); }
   .msg img { max-width: 100%; max-height: 320px; border-radius: 8px; display: block; }
+  .msg audio { display: block; width: min(300px, 100%); height: 36px; margin: 2px 0; }
   .msg a { color: var(--accent); }
   .progress { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
-  .progress > div { height: 100%; background: var(--accent); width: 0; }
-  table.stats { border-collapse: collapse; width: 100%; max-width: 640px; font-size: 14px; }
-  table.stats td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+  .composer { display: flex; gap: 8px; padding: 12px 20px; padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+              border-top: 1px solid var(--line); background: var(--panel); align-items: center; }
+  .composer input#text { flex: 1; padding: 10px 14px; border-radius: 999px; background: var(--bg); }
+  .composer button.icon { width: 40px; height: 40px; padding: 0; justify-content: center; border-radius: 50%; }
+  .composer #btn-send { border-radius: 999px; padding: 9px 18px; }
+  #btn-voice.rec { background: var(--warn); border-color: var(--warn); color: #fff; width: auto; padding: 0 12px; border-radius: 999px;
+                   font-variant-numeric: tabular-nums; font-size: 13px; }
+  .count { font-size: 12px; color: var(--muted); min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; }
+  .count.over { color: var(--warn); font-weight: 600; }
+
+  .empty { margin: auto; text-align: center; max-width: 440px; display: grid; gap: 14px; justify-items: center; color: var(--muted); padding: 24px 0; }
+  .empty h2 { margin: 0; color: var(--ink); font-size: 20px; text-wrap: balance; }
+  .empty .choices { display: grid; gap: 8px; width: 100%; max-width: 320px; }
+  .empty .choices div { display: flex; gap: 10px; align-items: center; text-align: left; background: var(--raised); border: 1px solid var(--line);
+                        border-radius: var(--r); padding: 10px 12px; color: var(--ink); font-size: 14px; }
+  .empty .choices svg { color: var(--accent); }
+  .empty small { font-size: 12px; }
+
+  details.log { border-top: 1px solid var(--line); background: var(--panel); }
+  details.log summary { padding: 7px 20px; cursor: pointer; font-size: 12px; color: var(--muted); }
+  #log { max-height: 180px; overflow-y: auto; font-family: var(--mono); font-size: 12px; padding: 0 20px 10px; white-space: pre-wrap; }
+
+  /* ---------- visninger (status, radio, diagnose, sider ...) ---------- */
+  table.stats { border-collapse: collapse; width: 100%; max-width: 680px; font-size: 14px; background: var(--raised);
+                border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+  table.stats td { padding: 7px 12px; border-bottom: 1px solid var(--line); }
   table.stats td.v { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
-  table.stats tr.group td { padding-top: 16px; font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); border: none; }
-  .form { max-width: 520px; display: grid; grid-template-columns: 180px 1fr; gap: 10px 12px; align-items: center; }
+  table.stats tr.group td { padding-top: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+                            background: var(--panel); font-weight: 650; }
+  .form { max-width: 560px; display: grid; grid-template-columns: 180px 1fr; gap: 10px 12px; align-items: center; }
   .form label { font-size: 14px; color: var(--muted); }
-  .form select, .form input { width: 100%; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
-  .page { max-width: 720px; line-height: 1.55; }
-  .page h2, .page h3, .page h4 { margin: 18px 0 6px; }
-  .page pre { background: var(--mine); padding: 8px 10px; border-radius: 6px; overflow-x: auto; }
-  .page blockquote { border-left: 3px solid var(--mine); margin: 8px 0; padding-left: 10px; }
-  .warn { background: var(--mine); border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.45; max-width: 520px; margin-bottom: 14px; }
-  .hint { font-size: 12px; color: var(--muted); margin: 4px; line-height: 1.4; }
-  /* sikkerhedsnumre og private kanaler */
-  .secure { max-width: 560px; }
-  .secure h3 { font-size: 14px; margin: 18px 0 6px; }
-  .safety { display: grid; grid-template-columns: repeat(4, max-content); gap: 6px 18px; font-family: ui-monospace, Consolas, monospace;
+  .form select, .form input { width: 100%; }
+  .warn { background: var(--raised); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; font-size: 14px; line-height: 1.5;
+          max-width: 560px; margin-bottom: 14px; box-shadow: var(--shadow); }
+  .warn > b:first-child { display: block; font-size: 15px; margin-bottom: 2px; }
+  .page { max-width: 720px; line-height: 1.6; background: var(--raised); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 22px 16px; }
+  .page h2, .page h3, .page h4 { margin: 18px 0 6px; text-wrap: balance; }
+  .page pre { background: var(--bg); padding: 10px 12px; border-radius: 8px; overflow-x: auto; font-family: var(--mono); font-size: 13px; }
+  .page code { font-family: var(--mono); font-size: .92em; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
+  .page blockquote { border-left: 3px solid var(--accent); margin: 10px 0; padding: 2px 12px; color: var(--muted); }
+  .page a { color: var(--accent); font-weight: 600; }
+  .secure { max-width: 580px; }
+  .secure h3 { font-size: 15px; margin: 18px 0 6px; }
+  .safety { display: grid; grid-template-columns: repeat(4, max-content); gap: 6px 18px; font-family: var(--mono);
             font-size: 20px; letter-spacing: 1px; margin: 12px 0; font-variant-numeric: tabular-nums; }
-  /* sikkerhedskopi: gendannelsesfrase */
   .phrase { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px 14px; margin: 10px 0;
-            font-family: ui-monospace, Consolas, monospace; font-size: 15px; max-width: 560px; }
-  .qr svg { display: block; max-width: 100%; height: auto; border-radius: 6px; }
-  .linktext { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; color: var(--muted); margin-top: 8px; }
-  #chat-tools { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+            font-family: var(--mono); font-size: 15px; max-width: 580px; }
+  .qr svg { display: block; max-width: 100%; height: auto; border-radius: 8px; background: #fff; padding: 8px; }
+  .linktext { font-family: var(--mono); font-size: 12px; word-break: break-all; color: var(--muted); margin-top: 8px; }
+  #chat-tools { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
   #chat-tools:empty { display: none; }
-  .verified { color: var(--accent); }
+  .verified { color: var(--ok); }
+
   /* <pwa-css> opdateringsbanner */
   #pwa-update { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 8px 12px;
                 background: var(--accent); color: var(--accent-ink); font-size: 14px; }
   #pwa-update button { background: var(--accent-ink); color: var(--accent); border-color: var(--accent-ink); padding: 4px 10px; }
   #btn-side { display: none; }
   /* </pwa-css> */
-  @media (max-width: 720px) {
-    .safety { font-size: 16px; gap: 4px 12px; }
-    main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-    aside { border-right: none; border-bottom: 1px solid var(--line); max-height: 36vh; min-width: 0; }
-    header { padding: 8px 12px; gap: 8px; }
-    header button { padding: 6px 10px; font-size: 13px; }
-    .composer { padding: 10px 12px; }
-    .msg { max-width: 90%; }
-    /* <mobil> sidepanelet foldes sammen, når en samtale eller visning er valgt */
-    #btn-side { display: inline-block; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+  @media (max-width: 760px) {
+    body { font-size: 15px; }
+    .morse { display: none; }
+    header { padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top, 0px)); gap: 8px; }
     header .spacer { display: none; }
-    header .status { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    header button:disabled { display: none; }
+    .status { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .status > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+    .connect { width: 100%; }
+    .connect button { flex: 1; justify-content: center; }
+    .connect:has(#btn-disconnect:not([hidden])) { width: auto; }
+    .connect #btn-disconnect { flex: none; padding: 6px 9px; font-size: 0; gap: 0; }
+    .connect #btn-disconnect svg { width: 18px; height: 18px; }
+    header { flex-wrap: nowrap; }
+    header:has(#btn-ws:not(:disabled)), header:has(#btn-serial:not(:disabled)) { flex-wrap: wrap; }
+    main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); position: relative; }
+    aside { border-right: none; border-bottom: 1px solid var(--line); max-height: 60vh; min-width: 0; box-shadow: var(--shadow); }
+    .messages { padding: 14px 12px; }
+    .chat-head { padding: 10px 14px; }
+    .composer { padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom, 0px)); gap: 6px; }
+    .count { display: none; }
+    .msg { max-width: 88%; }
+    /* <mobil> sidepanelet foldes sammen, når en samtale eller visning er valgt */
+    #btn-side { display: inline-flex; padding: 6px 9px; }
     body.side-closed aside { display: none; }
     body.side-closed main { grid-template-rows: minmax(0, 1fr); }
-    aside { max-height: 45vh; }
     .form { grid-template-columns: minmax(0, 1fr); gap: 4px; }
     .form > span:empty { display: none; }
     .form label { margin-top: 6px; }
-    .safety { grid-template-columns: repeat(3, max-content); }
+    .safety { grid-template-columns: repeat(3, max-content); font-size: 16px; gap: 4px 12px; }
+    .page { padding: 4px 14px 12px; }
     /* </mobil> */
   }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-host" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="i-usb" viewBox="0 0 24 24"><path d="M12 3v14M8 7l4-4 4 4M7 11v2a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-2"/><circle cx="12" cy="19" r="2"/></symbol>
+  <symbol id="i-bt" viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-status" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></symbol>
+  <symbol id="i-radio" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
+  <symbol id="i-diag" viewBox="0 0 24 24"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="17" cy="17" r="2"/><path d="M7.5 16.5l9-9M8 18h7"/></symbol>
+  <symbol id="i-pages" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></symbol>
+  <symbol id="i-chip" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/></symbol>
+  <symbol id="i-qr" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></symbol>
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 12h2M6 9v6M10 6v12M14 9v6M18 11v2M22 12h-2"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11l-8.5 8.5a5 5 0 0 1-7-7L13 4a3.3 3.3 0 0 1 4.7 4.7L9.3 17a1.7 1.7 0 0 1-2.3-2.3L15 7"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2-7z"/></symbol>
+</svg>
 <div id="pwa-update" hidden>Ny version – <button id="btn-pwa-reload">genindlæs</button></div>
 <header>
-  <button id="btn-side" title="Vis/skjul samtaler og indstillinger">☰</button>
-  <h1>Må:rse</h1>
+  <button id="btn-side" class="ghost" title="Vis/skjul samtaler og indstillinger" aria-label="Menu"><svg class="i"><use href="#i-menu"/></svg></button>
+  <div class="brand"><h1>Må<span class="colon">:</span>rse</h1><span class="morse" aria-hidden="true">−− ·−·−− ·−· ··· ·</span></div>
   <span class="status"><span id="dot" class="dot"></span><span id="status">Ikke forbundet</span></span>
   <span class="spacer"></span>
-  <button id="btn-ws" class="primary" hidden>Forbind til maarse-host</button>
-  <button id="btn-serial">USB / seriel</button>
-  <button id="btn-ble">Bluetooth</button>
-  <button id="btn-disconnect" hidden>Afbryd</button>
+  <div class="connect">
+    <button id="btn-ws" class="primary" hidden><svg class="i"><use href="#i-host"/></svg>Forbind til maarse-host</button>
+    <button id="btn-serial"><svg class="i"><use href="#i-usb"/></svg>USB</button>
+    <button id="btn-ble"><svg class="i"><use href="#i-bt"/></svg>Bluetooth</button>
+    <button id="btn-disconnect" hidden><svg class="i"><use href="#i-x"/></svg>Afbryd</button>
+  </div>
 </header>
 
 <main>
   <aside>
-    <h2>Mig</h2>
-    <div class="me" id="me">–</div>
-    <div class="row"><button id="btn-copy" disabled>Kopiér adresse</button><button id="btn-announce" disabled>Send announce</button></div>
+    <div class="me-card">
+      <span class="label">Min node</span>
+      <div class="me" id="me">–</div>
+      <div class="me-actions">
+        <button id="btn-copy" disabled><svg class="i"><use href="#i-copy"/></svg>Kopiér</button>
+        <button id="btn-myqr" disabled><svg class="i"><use href="#i-qr"/></svg>QR-kode</button>
+        <button id="btn-announce" disabled title="Fortæl nettet, at du er her"><svg class="i"><use href="#i-wave"/></svg>Announce</button>
+      </div>
+    </div>
 
-    <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button><button id="btn-diag" disabled>Diagnose</button><button id="btn-pages" disabled>Sider</button><button id="btn-firmware" disabled>Firmware</button></div>
-    <div class="row"><button id="btn-myqr" disabled>Min QR-kode</button><button id="btn-backup" title="Gendannelsesfrase og krypteret sikkerhedskopi">Sikkerhedskopi</button></div>
+    <nav class="tools" aria-label="Værktøjer">
+      <button id="btn-status" data-view="status" disabled><svg class="i"><use href="#i-status"/></svg>Status</button>
+      <button id="btn-radio" data-view="radio" disabled><svg class="i"><use href="#i-radio"/></svg>Radio</button>
+      <button id="btn-diag" data-view="diag" disabled><svg class="i"><use href="#i-diag"/></svg>Diagnose</button>
+      <button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg>Sider</button>
+      <button id="btn-firmware" data-view="firmware" disabled><svg class="i"><use href="#i-chip"/></svg>Firmware</button>
+      <button id="btn-backup" data-view="backup" title="Gendannelsesfrase og krypteret sikkerhedskopi"><svg class="i"><use href="#i-key"/></svg>Sikkerhed</button>
+    </nav>
     <div class="row"><button id="btn-notify" hidden>Slå notifikationer til</button><button id="btn-install" hidden>Installér app</button></div>
 
     <h2>Kanaler</h2>
     <div id="channels"></div>
-    <div class="row"><input id="join-name" placeholder="#kanalnavn eller #navn@region" title="Fx #tur@nordjylland: beskeder, du sender, holdes i regionen"><button id="btn-join" disabled>Deltag</button></div>
-    <div class="row"><button id="btn-private-new" disabled>Ny privat kanal</button><button id="btn-private-join" disabled>Deltag via invitation</button></div>
+    <details class="add">
+      <summary>+ Deltag i en kanal</summary>
+      <div class="adders">
+        <div class="row"><input id="join-name" placeholder="#kanal eller #kanal@region" title="Fx #tur@nordjylland: beskeder, du sender, holdes i regionen"><button id="btn-join" disabled>Deltag</button></div>
+        <div class="row"><button id="btn-private-new" disabled>Ny privat kanal</button><button id="btn-private-join" disabled>Brug invitation</button></div>
+      </div>
+    </details>
 
     <h2>Kontakter</h2>
     <div id="contacts"></div>
-    <div class="row"><input id="add-addr" placeholder="Adresse (32 hex-tegn) eller kontaktlink"></div>
-    <div class="row"><input id="add-name" placeholder="Kaldenavn (kun for dig)"><button id="btn-add">Tilføj</button></div>
-    <p class="hint">Du kan kun skrive til en node, når den har sendt et announce, som din node har hørt.</p>
+    <details class="add">
+      <summary>+ Tilføj kontakt</summary>
+      <div class="adders">
+        <input id="add-addr" placeholder="Adresse (32 hex-tegn) eller kontaktlink">
+        <div class="row"><input id="add-name" placeholder="Kaldenavn (kun for dig)"><button id="btn-add">Tilføj</button></div>
+        <p class="hint">Du kan skrive til en node, når din node har hørt dens announce.</p>
+      </div>
+    </details>
   </aside>
 
   <section class="chat">
     <div class="chat-head"><div id="chat-title">Ingen samtale valgt</div><div class="sub" id="chat-sub"></div><div id="chat-tools"></div></div>
     <div class="messages" id="messages">
       <div class="empty" id="empty">
-        Forbind til en node for at komme i gang.<br>
-        <b>maarse-host</b> på denne computer, en node via <b>USB</b>, eller via <b>Bluetooth</b>.<br>
-        USB og Bluetooth kræver Chrome eller Edge.
+        <h2>Forbind til en node</h2>
+        <div class="choices">
+          <div><svg class="i"><use href="#i-host"/></svg><span><b>maarse-host</b> på denne computer</span></div>
+          <div><svg class="i"><use href="#i-usb"/></svg><span>En radio via <b>USB</b></span></div>
+          <div><svg class="i"><use href="#i-bt"/></svg><span>En radio via <b>Bluetooth</b></span></div>
+        </div>
+        <small>USB og Bluetooth kræver Chrome eller Edge.</small>
       </div>
     </div>
     <div class="composer" id="composer">
-      <button id="btn-file" title="Send billede eller fil" disabled>📎</button>
-      <button id="btn-voice" title="Optag talebesked" disabled>🎤</button>
+      <button id="btn-file" class="icon" title="Send billede eller fil" aria-label="Send billede eller fil" disabled><svg class="i"><use href="#i-clip"/></svg></button>
+      <button id="btn-voice" class="icon" title="Optag talebesked" aria-label="Optag talebesked" disabled><svg class="i"><use href="#i-mic"/></svg></button>
       <input id="file" type="file" hidden>
       <input id="text" placeholder="Skriv en besked" disabled>
       <span class="count" id="count"></span>
-      <button id="btn-send" class="primary" disabled>Send</button>
+      <button id="btn-send" class="primary" disabled><svg class="i"><use href="#i-send"/></svg>Send</button>
     </div>
   </section>
 </main>
@@ -392,6 +541,29 @@ class SerialTransport {
   }
 }
 
+// Android-appen har ingen Web Bluetooth; den giver en bro (MaarseAndroid) til
+// Nordic UART i Java, som svarer via window.__maarseBle.
+const IN_APP = typeof window.MaarseAndroid === "object";
+class AndroidBleTransport {
+  open(onBytes, onClose) {
+    return new Promise((ok, fail) => {
+      let opened = false;
+      window.__maarseBle = {
+        onOpen: (name) => { opened = true; this.name = "Bluetooth: " + name; ok(); },
+        onData: (b64) => onBytes(Uint8Array.from(atob(b64), c => c.charCodeAt(0))),
+        onClose: () => { if (opened) onClose(); },
+        onError: (t) => { if (!opened) fail(new Error(t)); else log("Bluetooth: " + t); },
+      };
+      window.MaarseAndroid.connect();
+    });
+  }
+  async send(b) {
+    let s = ""; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+    window.MaarseAndroid.write(btoa(s));
+  }
+  async close() { window.MaarseAndroid.disconnect(); }
+}
+
 class BleTransport {
   async open(onBytes, onClose) {
     this.device = await navigator.bluetooth.requestDevice({
@@ -474,8 +646,10 @@ function convRow(key, name, title) {
   const d = document.createElement("div");
   d.className = "conv" + (state.active === key ? " active" : "");
   d.title = title;
+  const av = document.createElement("span"); av.className = "av";
+  av.textContent = key.startsWith("ch:") ? "#" : ((name.replace(/^~/, "").match(/[\p{L}\p{N}]/u) || ["?"])[0]).toUpperCase();
   const n = document.createElement("span"); n.className = "name"; n.textContent = name;
-  d.appendChild(n);
+  d.append(av, n);
   const u = state.unread.get(key);
   if (u) { const b = document.createElement("span"); b.className = "badge"; b.textContent = u; d.appendChild(b); }
   d.onclick = () => { setView("chat"); state.active = key; state.unread.delete(key); histMarkRead(key); renderSide(); renderChat(); };
@@ -755,8 +929,11 @@ async function connect(kind, quiet = false) {
       if (!("serial" in navigator)) throw new Error("Din browser understøtter ikke Web Serial (brug Chrome eller Edge)");
       transport = new SerialTransport(); await transport.open(onBytes, onClose);
     } else {
-      if (!("bluetooth" in navigator)) throw new Error("Din browser understøtter ikke Web Bluetooth (brug Chrome eller Edge)");
-      transport = new BleTransport(); await transport.open(onBytes, onClose);
+      if (IN_APP) { transport = new AndroidBleTransport(); await transport.open(onBytes, onClose); }
+      else {
+        if (!("bluetooth" in navigator)) throw new Error("Din browser understøtter ikke Web Bluetooth (brug Chrome eller Edge)");
+        transport = new BleTransport(); await transport.open(onBytes, onClose);
+      }
     }
     setConnected(true, transport.name);
     log("Forbundet via " + transport.name);
@@ -1333,6 +1510,7 @@ function setView(v) {
   if (v !== "backup") { bkReset(); bk.msg = ""; bk.qr = null; }
   else if (transport && !state.target) { transport.send(Cmd.getRegions()); transport.send(Cmd.getSharing()); transport.send(Cmd.getStats()); }
   state.view = v;
+  for (const b of document.querySelectorAll("nav.tools button")) b.classList.toggle("active", b.dataset.view === v);
   mobileSide(false); $("messages").scrollTop = 0;
   clearInterval(state.statsTimer);
   if (transport && state.target) {
@@ -2006,16 +2184,16 @@ async function voiceStart() {
   rec.on = true; rec.started = Date.now();
   rec.timer = setInterval(() => {
     const s = (Date.now() - rec.started) / 1000;
-    $("btn-voice").textContent = `⏹ ${Math.floor(s)} s`;
+    $("btn-voice").textContent = `■ ${Math.floor(s)} s`;
     if (s >= VOICE_MAX_S) voiceStop();
   }, 250);
-  $("btn-voice").textContent = "⏹ 0 s"; $("btn-voice").title = "Stop og send";
+  $("btn-voice").textContent = "■ 0 s"; $("btn-voice").classList.add("rec"); $("btn-voice").title = "Stop og send";
 }
 
 async function voiceStop() {
   if (!rec.on) return;
   rec.on = false; clearInterval(rec.timer);
-  $("btn-voice").textContent = "🎤"; $("btn-voice").title = "Optag talebesked";
+  $("btn-voice").innerHTML = '<svg class="i"><use href="#i-mic"/></svg>'; $("btn-voice").classList.remove("rec"); $("btn-voice").title = "Optag talebesked";
   rec.node.disconnect(); rec.stream.getTracks().forEach(t => t.stop());
   const rate = rec.ctx.sampleRate; await rec.ctx.close();
   const len = rec.chunks.reduce((n, c) => n + c.length, 0);
@@ -2351,8 +2529,15 @@ $("btn-add").onclick = () => {
   state.active = "dm:" + a; renderSide(); renderChat();
 };
 
+// Android-appen: Bluetooth via appen; ingen maarse-host, intet USB.
+if (IN_APP) {
+  $("btn-serial").hidden = true;
+  $("btn-ble").classList.add("primary");
+  document.querySelector(".empty .choices").replaceChildren(...[...document.querySelectorAll(".empty .choices div")].slice(2));
+  document.querySelector(".empty small").textContent = "Tryk på Bluetooth og vælg din node.";
+}
 // Serveret af maarse-host? Så forbind automatisk.
-if (location.protocol.startsWith("http")) {
+else if (location.protocol.startsWith("http")) {
   $("btn-ws").hidden = false;
   connect("ws");
 }
@@ -2481,7 +2666,7 @@ function pwaTitle() {
   let n = pwaHiddenUnread;
   for (const v of state.unread.values()) n += v;
   document.title = n ? `(${n}) Må:rse` : "Må:rse";
-  $("btn-side").textContent = n ? `☰ ${n}` : "☰";
+  $("btn-side").innerHTML = '<svg class="i"><use href="#i-menu"/></svg>' + (n ? `<span class="badge">${n}</span>` : "");
 }
 
 // Mobil: sidepanelet skjules, når man har valgt noget, og vises igen med ☰.
@@ -2533,7 +2718,7 @@ $("btn-install").onclick = async () => {
   pwaInstallPrompt = null; $("btn-install").hidden = true;
 };
 
-if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+if ("serviceWorker" in navigator && location.protocol.startsWith("http") && !IN_APP) {
   window.addEventListener("load", async () => {
     try {
       const reg = await navigator.serviceWorker.register("sw.js");

@@ -273,8 +273,8 @@ try:
 
     # 6c. Over grænsen: uden filpostkasse og uden viden om ruten regnes den
     #     som LoRa (konservativt): 8 KB, og en fil på 20 KB afvises.
-    start("c", 8183, ["--listen", "off", "--peer", "127.0.0.1:4381", "--filpostkasse-mb", "0"])
-    c = Client(8183); c.info()
+    start("c", 8184, ["--listen", "off", "--peer", "127.0.0.1:4381", "--filpostkasse-mb", "0"])
+    c = Client(8184); c.info()
     ukendt = os.urandom(16)
     mx, flags, air = file_limit(c, ukendt)
     assert mx == 8192 and flags == 1 and air > 0, (mx, flags, air)

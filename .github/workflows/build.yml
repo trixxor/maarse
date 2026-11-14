@@ -1,0 +1,66 @@
+name: Byg og test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test
+        run: cargo test --workspace
+      - name: Byg maarse-host
+        run: cargo build --release -p maarse-host
+      - name: Upload (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: maarse-host-linux
+          path: target/release/maarse-host
+      - name: Upload (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: maarse-host-windows
+          path: target/release/maarse-host.exe
+
+  firmware-nrf:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        board: [wismesh-tag, xiao-nrf52840]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - run: ./scripts/build-firmware.sh ${{ matrix.board }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maarse-${{ matrix.board }}
+          path: dist/maarse-${{ matrix.board }}.uf2
+
+  firmware-esp:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        board: [heltec-v4, xiao-esp32s3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: esp-rs/xtensa-toolchain@v1.6
+        with:
+          default: false
+          buildtargets: esp32s3
+          ldproxy: false
+      - run: cargo install espflash --locked
+      - run: ./scripts/build-firmware.sh ${{ matrix.board }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maarse-${{ matrix.board }}
+          path: dist/maarse-${{ matrix.board }}.bin

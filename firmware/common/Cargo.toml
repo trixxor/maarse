@@ -1,0 +1,17 @@
+[package]
+name = "maarse-fw-common"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Fælles firmware-logik for Må:rse: node, radio-løkke og kanaler mellem opgaver"
+
+[dependencies]
+maarse-core = { path = "../../maarse-core" }
+maarse-crypto = { path = "../../maarse-crypto" }
+embassy-sync = "0.8.0"
+embassy-time = "0.5.1"
+embassy-futures = "0.1.2"
+heapless = "0.8"
+lora-phy = "3.0.1"
+rand_core = "0.6"
+embedded-storage = "0.3.2"

@@ -1,0 +1,13 @@
+[package]
+name = "maarse-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rand_core = { version = "0.6", features = ["getrandom"] }
+serialport = { version = "4", default-features = false }
+sha2 = "0.10"
+maarse-core = { version = "0.1.0", path = "../maarse-core" }
+maarse-crypto = { version = "0.1.0", path = "../maarse-crypto" }
+tungstenite = "0.24"

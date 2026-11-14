@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Må:rse</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%232f7d5b'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f7f5; --panel: #ffffff; --ink: #1d2320; --muted: #66706a; --line: #dfe3df;
+    --accent: #2f7d5b; --accent-ink: #ffffff; --mine: #e3f1ea; --warn: #b5532a;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141816; --panel: #1c211e; --ink: #e6ebe7; --muted: #94a09a; --line: #2c332f;
+            --accent: #5bbf8f; --accent-ink: #0d1411; --mine: #22372c; --warn: #e28a62; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink); height: 100vh; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--panel);
+           border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
+  .status { font-size: 13px; color: var(--muted); }
+  .status b { color: var(--ink); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); margin-right: 6px; }
+  .dot.on { background: var(--accent); }
+  .spacer { flex: 1; }
+  button { font: inherit; font-size: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+           padding: 7px 12px; border-radius: 8px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  input { font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+          background: var(--bg); color: var(--ink); min-width: 0; }
+  main { flex: 1; display: grid; grid-template-columns: 280px 1fr; min-height: 0; }
+  aside { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 12px; }
+  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 16px 4px 6px; }
+  .conv { padding: 8px 10px; border-radius: 8px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+  .conv:hover { background: var(--bg); }
+  .conv.active { background: var(--mine); }
+  .conv .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { background: var(--accent); color: var(--accent-ink); border-radius: 10px; font-size: 11px; padding: 1px 7px; }
+  .row { display: flex; gap: 6px; margin: 6px 0; }
+  .row input { flex: 1; }
+  .me { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; color: var(--muted); }
+  section.chat { display: flex; flex-direction: column; min-height: 0; }
+  .chat-head { padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .chat-head .sub { font-size: 12px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
+  .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 75%; padding: 8px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); }
+  .msg.mine { align-self: flex-end; background: var(--mine); border-color: transparent; }
+  .msg .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .msg .from { font-size: 12px; font-weight: 600; margin-bottom: 2px; }
+  .composer { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--panel); align-items: center; }
+  .composer input { flex: 1; }
+  .count { font-size: 12px; color: var(--muted); min-width: 56px; text-align: right; }
+  .count.over { color: var(--warn); font-weight: 600; }
+  .empty { margin: auto; color: var(--muted); text-align: center; max-width: 420px; line-height: 1.5; }
+  details.log { border-top: 1px solid var(--line); background: var(--panel); }
+  details.log summary { padding: 8px 16px; cursor: pointer; font-size: 13px; color: var(--muted); }
+  #log { max-height: 180px; overflow-y: auto; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+         padding: 0 16px 10px; white-space: pre-wrap; }
+  .msg img { max-width: 100%; max-height: 320px; border-radius: 8px; display: block; }
+  .msg a { color: var(--accent); }
+  .progress { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .progress > div { height: 100%; background: var(--accent); width: 0; }
+  table.stats { border-collapse: collapse; width: 100%; max-width: 640px; font-size: 14px; }
+  table.stats td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  table.stats td.v { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  table.stats tr.group td { padding-top: 16px; font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); border: none; }
+  .form { max-width: 520px; display: grid; grid-template-columns: 180px 1fr; gap: 10px 12px; align-items: center; }
+  .form label { font-size: 14px; color: var(--muted); }
+  .form select, .form input { width: 100%; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+  .warn { background: var(--mine); border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.45; max-width: 520px; margin-bottom: 14px; }
+  .hint { font-size: 12px; color: var(--muted); margin: 4px; line-height: 1.4; }
+  @media (max-width: 720px) {
+    main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    aside { border-right: none; border-bottom: 1px solid var(--line); max-height: 36vh; min-width: 0; }
+    header { padding: 8px 12px; gap: 8px; }
+    header button { padding: 6px 10px; font-size: 13px; }
+    .composer { padding: 10px 12px; }
+    .msg { max-width: 90%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Må:rse</h1>
+  <span class="status"><span id="dot" class="dot"></span><span id="status">Ikke forbundet</span></span>
+  <span class="spacer"></span>
+  <button id="btn-ws" class="primary" hidden>Forbind til maarse-host</button>
+  <button id="btn-serial">USB / seriel</button>
+  <button id="btn-ble">Bluetooth</button>
+  <button id="btn-disconnect" hidden>Afbryd</button>
+</header>
+
+<main>
+  <aside>
+    <h2>Mig</h2>
+    <div class="me" id="me">–</div>
+    <div class="row"><button id="btn-copy" disabled>Kopiér adresse</button><button id="btn-announce" disabled>Send announce</button></div>
+
+    <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button></div>
+
+    <h2>Kanaler</h2>
+    <div id="channels"></div>
+    <div class="row"><input id="join-name" placeholder="#kanalnavn"><button id="btn-join" disabled>Deltag</button></div>
+
+    <h2>Kontakter</h2>
+    <div id="contacts"></div>
+    <div class="row"><input id="add-addr" placeholder="Adresse (32 hex-tegn)"></div>
+    <div class="row"><input id="add-name" placeholder="Kaldenavn (kun for dig)"><button id="btn-add">Tilføj</button></div>
+    <p class="hint">Du kan kun skrive til en node, når den har sendt et announce, som din node har hørt.</p>
+  </aside>
+
+  <section class="chat">
+    <div class="chat-head"><div id="chat-title">Ingen samtale valgt</div><div class="sub" id="chat-sub"></div></div>
+    <div class="messages" id="messages">
+      <div class="empty" id="empty">
+        Forbind til en node for at komme i gang.<br>
+        <b>maarse-host</b> på denne computer, en node via <b>USB</b>, eller via <b>Bluetooth</b>.<br>
+        USB og Bluetooth kræver Chrome eller Edge.
+      </div>
+    </div>
+    <div class="composer" id="composer">
+      <button id="btn-file" title="Send billede eller fil" disabled>📎</button>
+      <input id="file" type="file" hidden>
+      <input id="text" placeholder="Skriv en besked" disabled>
+      <span class="count" id="count"></span>
+      <button id="btn-send" class="primary" disabled>Send</button>
+    </div>
+  </section>
+</main>
+
+<details class="log"><summary>Log</summary><div id="log"></div></details>
+
+<script>
+"use strict";
+
+// ---------- companion-protokollen (se maarse-core/src/companion.rs) ----------
+
+const NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // vi skriver hertil
+const NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // noden notificerer herfra
+const enc = new TextEncoder(), dec = new TextDecoder();
+
+const hex = b => Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+const unhex = s => new Uint8Array(s.match(/../g).map(x => parseInt(x, 16)));
+const short = h => h.slice(0, 8);
+
+function frame(kind, ...parts) {
+  const body = [kind];
+  for (const p of parts) body.push(...p);
+  const out = new Uint8Array(body.length + 2);
+  out[0] = body.length & 0xff; out[1] = body.length >> 8;
+  out.set(body, 2);
+  return out;
+}
+const u16 = n => [n & 0xff, n >> 8];
+const u32 = n => [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >>> 24) & 0xff];
+const rd32 = (b, o) => (b[o] | b[o + 1] << 8 | b[o + 2] << 16 | b[o + 3] << 24) >>> 0;
+
+const Cmd = {
+  getInfo: () => frame(0x01),
+  sendDirect: (req, destHex, text) => frame(0x02, u16(req), unhex(destHex), enc.encode(text)),
+  sendChannel: (req, chHex, text) => frame(0x03, u16(req), unhex(chHex), enc.encode(text)),
+  join: name => frame(0x04, enc.encode(name)),
+  announce: () => frame(0x05),
+  fileBegin: (req, destHex, size, mime, name) => {
+    const m = enc.encode(mime);
+    return frame(0x06, u16(req), unhex(destHex), u32(size), [m.length], m, enc.encode(name));
+  },
+  fileData: (req, offset, data) => frame(0x07, u16(req), u32(offset), data),
+  fileEnd: req => frame(0x08, u16(req)),
+  getStats: () => frame(0x09),
+  setRadio: c => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [0]),
+  getRadio: () => frame(0x0b),
+  remote: (req, destHex, inner) => frame(0x0c, u16(req), unhex(destHex), inner.slice(2)),
+  setAdmins: list => frame(0x0d, ...list.map(unhex)),
+  getAdmins: () => frame(0x0e),
+  setTime: () => frame(0x0f, u32(Math.floor(Date.now() / 1000))),
+};
+
+function readU64(b, o) {
+  let v = 0n;
+  for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(b[o + i]);
+  return v.toString();
+}
+
+function decodeEvent(f) {
+  const t = f[0], a = (o) => hex(f.slice(o, o + 16)), txt = (o) => dec.decode(f.slice(o));
+  switch (t) {
+    case 0x81: return { type: "info", addr: a(1), repeater: !!f[17], version: f[18], maxText: f[19], maxFile: f.length >= 24 ? rd32(f, 20) : 0 };
+    case 0x82: return { type: "sent", req: f[1] | f[2] << 8, msgId: readU64(f, 3) };
+    case 0x83: return { type: "direct", from: a(1), hops: f[17], text: txt(18) };
+    case 0x84: return { type: "channel", channel: a(1), from: a(17), hops: f[33], text: txt(34) };
+    case 0x85: return { type: "acked", msgId: readU64(f, 1) };
+    case 0x86: return { type: "route", dest: a(1), hops: f[17] };
+    case 0x87: return { type: "heard", addr: a(1), hops: f[17] };
+    case 0x88: return { type: "joined", channel: a(1), name: txt(17) };
+    case 0x89: { const ml = f[29]; return { type: "fileIncoming", fileId: readU64(f, 1), from: a(9), size: rd32(f, 25),
+                 mime: dec.decode(f.slice(30, 30 + ml)), name: txt(30 + ml) }; }
+    case 0x8a: return { type: "fileChunk", fileId: readU64(f, 1), offset: rd32(f, 9), data: f.slice(13) };
+    case 0x8b: return { type: "fileProgress", fileId: readU64(f, 1), done: f[9] | f[10] << 8, total: f[11] | f[12] << 8, outgoing: !!f[13] };
+    case 0x8c: return { type: "fileDone", fileId: readU64(f, 1), ok: !!f[9], outgoing: !!f[10], text: txt(11) };
+    case 0x8d: return { type: "fileStarted", req: f[1] | f[2] << 8, fileId: readU64(f, 3), chunks: f[11] | f[12] << 8 };
+    case 0x90: return { type: "deposited", msgId: readU64(f, 1) };
+    case 0x93: return { type: "remoteReply", from: a(1), inner: decodeEvent(f.slice(17)) };
+    case 0x94: { const l = []; for (let o = 1; o + 16 <= f.length; o += 16) l.push(a(o)); return { type: "admins", list: l }; }
+    case 0x91: {
+      const items = [];
+      for (let o = 1; o + 5 <= f.length; o += 5) items.push([f[o], rd32(f, o + 1) | 0]);
+      return { type: "stats", items };
+    }
+    case 0x92: return { type: "radio", cfg: { freq: rd32(f, 1), bw: rd32(f, 5), sf: f[9], cr: f[10],
+                 power: (f[11] << 24) >> 24, duty: f[12] | f[13] << 8, preamble: f[14] | f[15] << 8 } };
+    case 0x8e: return { type: "log", text: txt(1) };
+    case 0x8f: return { type: "error", req: f[1] | f[2] << 8, code: f[3], text: txt(4) };
+    default: return { type: "unknown", kind: t };
+  }
+}
+
+class FrameDecoder {
+  constructor() { this.buf = new Uint8Array(0); }
+  push(bytes) {
+    const n = new Uint8Array(this.buf.length + bytes.length);
+    n.set(this.buf); n.set(bytes, this.buf.length); this.buf = n;
+    const out = [];
+    while (this.buf.length >= 2) {
+      const len = this.buf[0] | this.buf[1] << 8;
+      if (len === 0 || len > 300) { this.buf = this.buf.slice(1); continue; }
+      if (this.buf.length < 2 + len) break;
+      out.push(this.buf.slice(2, 2 + len));
+      this.buf = this.buf.slice(2 + len);
+    }
+    return out;
+  }
+}
+
+// ---------- transporter ----------
+
+let transport = null;
+
+class WsTransport {
+  constructor(onBytes, onClose) {
+    const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+    this.ws = new WebSocket(url);
+    this.ws.binaryType = "arraybuffer";
+    this.ready = new Promise((ok, fail) => { this.ws.onopen = ok; this.ws.onerror = () => fail(new Error("WebSocket fejlede")); });
+    this.ws.onmessage = e => onBytes(new Uint8Array(e.data));
+    this.ws.onclose = onClose;
+    this.name = "maarse-host";
+  }
+  async send(b) { this.ws.send(b); }
+  async close() { this.ws.close(); }
+}
+
+class SerialTransport {
+  async open(onBytes, onClose) {
+    this.port = await navigator.serial.requestPort();
+    await this.port.open({ baudRate: 115200 });
+    this.writer = this.port.writable.getWriter();
+    this.name = "USB";
+    (async () => {
+      try {
+        while (this.port.readable) {
+          this.reader = this.port.readable.getReader();
+          for (;;) {
+            const { value, done } = await this.reader.read();
+            if (done) break;
+            if (value) onBytes(value);
+          }
+          this.reader.releaseLock();
+        }
+      } catch (e) { log("Seriel: " + e.message); }
+      onClose();
+    })();
+  }
+  async send(b) { await this.writer.write(b); }
+  async close() {
+    try { await this.reader?.cancel(); } catch {}
+    try { this.writer.releaseLock(); } catch {}
+    try { await this.port.close(); } catch {}
+  }
+}
+
+class BleTransport {
+  async open(onBytes, onClose) {
+    this.device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [NUS_SERVICE] }], optionalServices: [NUS_SERVICE],
+    });
+    this.device.addEventListener("gattserverdisconnected", onClose);
+    const server = await this.device.gatt.connect();
+    const svc = await server.getPrimaryService(NUS_SERVICE);
+    this.rx = await svc.getCharacteristic(NUS_RX);
+    const tx = await svc.getCharacteristic(NUS_TX);
+    await tx.startNotifications();
+    tx.addEventListener("characteristicvaluechanged", e => onBytes(new Uint8Array(e.target.value.buffer)));
+    this.name = "Bluetooth: " + (this.device.name || "ukendt");
+  }
+  async send(b) {
+    // Små bidder, så det virker med standard-MTU.
+    for (let i = 0; i < b.length; i += 20) await this.rx.writeValue(b.slice(i, i + 20));
+  }
+  async close() { try { this.device.gatt.disconnect(); } catch {} }
+}
+
+// ---------- tilstand ----------
+
+const state = {
+  me: null, maxText: 148,
+  channels: new Map(),   // adresse -> navn
+  contacts: new Map(),   // adresse -> { heard: bool }
+  convs: new Map(),      // nøgle "ch:<adr>" / "dm:<adr>" -> [beskeder]
+  unread: new Map(),
+  active: null,
+  pending: new Map(),    // req -> besked
+  byMsgId: new Map(),    // msgId -> besked
+  files: new Map(),      // fileId -> besked med fil
+  maxFile: 0,
+  view: "chat",          // chat | status | radio
+  stats: null, radio: null, statsTimer: null,
+  target: null,          // null = denne node, ellers adressen på en fjern node
+  remoteStats: [], remoteRadio: null, admins: [],
+  nextReq: 1,
+};
+
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem("maarse:" + k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("maarse:" + k, JSON.stringify(v)); } catch {} },
+};
+let nicknames = store.get("nicknames", {});
+
+const $ = id => document.getElementById(id);
+
+function log(s) {
+  const el = $("log");
+  const line = document.createElement("div");
+  line.textContent = new Date().toLocaleTimeString() + "  " + s;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function label(addr) { return nicknames[addr] || short(addr); }
+
+function conv(key) {
+  if (!state.convs.has(key)) state.convs.set(key, []);
+  return state.convs.get(key);
+}
+
+function addMessage(key, msg) {
+  conv(key).push(msg);
+  if (state.active !== key) state.unread.set(key, (state.unread.get(key) || 0) + 1);
+  renderSide();
+  if (state.active === key) renderChat();
+}
+
+// ---------- visning ----------
+
+function convRow(key, name, title) {
+  const d = document.createElement("div");
+  d.className = "conv" + (state.active === key ? " active" : "");
+  d.title = title;
+  const n = document.createElement("span"); n.className = "name"; n.textContent = name;
+  d.appendChild(n);
+  const u = state.unread.get(key);
+  if (u) { const b = document.createElement("span"); b.className = "badge"; b.textContent = u; d.appendChild(b); }
+  d.onclick = () => { setView("chat"); state.active = key; state.unread.delete(key); renderSide(); renderChat(); };
+  return d;
+}
+
+function renderSide() {
+  const ch = $("channels"); ch.replaceChildren();
+  for (const [addr, name] of state.channels) ch.appendChild(convRow("ch:" + addr, name, addr));
+  const ct = $("contacts"); ct.replaceChildren();
+  const all = new Set([...state.contacts.keys(), ...Object.keys(nicknames)]);
+  for (const addr of all) {
+    const heard = state.contacts.get(addr)?.heard;
+    ct.appendChild(convRow("dm:" + addr, label(addr) + (heard ? "" : " (ikke hørt)"), addr));
+  }
+  if (!all.size) { const p = document.createElement("p"); p.className = "hint"; p.textContent = "Ingen endnu."; ct.appendChild(p); }
+}
+
+function renderChat() {
+  const key = state.active, box = $("messages");
+  box.replaceChildren();
+  $("composer").hidden = state.view !== "chat";
+  if (state.view === "status") return renderStatus(box);
+  if (state.view === "radio") return renderRadio(box);
+  if (!key) { box.appendChild($("empty") || document.createElement("div")); return; }
+  const [kind, addr] = key.split(":");
+  $("chat-title").textContent = kind === "ch" ? state.channels.get(addr) : label(addr);
+  $("chat-sub").textContent = addr;
+  for (const m of conv(key)) {
+    const d = document.createElement("div");
+    d.className = "msg" + (m.mine ? " mine" : "");
+    if (!m.mine && kind === "ch") {
+      const f = document.createElement("div"); f.className = "from"; f.textContent = label(m.from); d.appendChild(f);
+    }
+    if (m.url && m.mime?.startsWith("image/")) {
+      const img = document.createElement("img"); img.src = m.url; img.alt = m.name || "billede"; d.appendChild(img);
+    } else if (m.url) {
+      const l = document.createElement("a"); l.href = m.url; l.download = m.name || "fil"; l.textContent = "⬇ " + (m.name || "fil");
+      d.appendChild(l);
+    }
+    if (m.text) { const t = document.createElement("div"); t.textContent = m.text; d.appendChild(t); }
+    if (m.progress !== undefined && m.progress < 1) {
+      const p = document.createElement("div"); p.className = "progress";
+      const bar = document.createElement("div"); bar.style.width = Math.round(m.progress * 100) + "%";
+      p.appendChild(bar); d.appendChild(p);
+    }
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.textContent = m.time + (m.mine ? "  " + m.status : (m.hops !== undefined ? `  ${m.hops} hop` : ""));
+    d.appendChild(meta);
+    box.appendChild(d);
+  }
+  box.scrollTop = box.scrollHeight;
+  updateComposer();
+}
+
+function updateComposer() {
+  const ok = !!transport && !!state.active;
+  $("text").disabled = !ok; $("btn-send").disabled = !ok;
+  $("btn-file").disabled = !ok || !state.active?.startsWith("dm:") || !state.maxFile;
+  $("btn-file").title = state.maxFile ? "Send billede eller fil" : "Denne node kan ikke sende filer endnu";
+  const n = enc.encode($("text").value).length;
+  const max = state.active?.startsWith("ch:") ? 190 : state.maxText;
+  $("count").textContent = state.active ? `${n}/${max}` : "";
+  $("count").classList.toggle("over", n > max);
+}
+
+function setConnected(on, name) {
+  $("dot").classList.toggle("on", on);
+  $("status").innerHTML = on ? `Forbundet via <b>${name}</b>` : "Ikke forbundet";
+  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio"]) $(id).disabled = !on;
+  $("btn-disconnect").hidden = !on;
+  for (const id of ["btn-ws", "btn-serial", "btn-ble"]) $(id).disabled = on;
+  updateComposer();
+}
+
+// ---------- hændelser fra noden ----------
+
+const now = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+function onEvent(ev) {
+  switch (ev.type) {
+    case "info":
+      state.me = ev.addr; state.maxText = ev.maxText; state.maxFile = ev.maxFile;
+      $("me").textContent = ev.addr;
+      log(`Node ${short(ev.addr)} (protokol v${ev.version}, maks. ${ev.maxText} bytes pr. besked)`);
+      break;
+    case "joined":
+      state.channels.set(ev.channel, ev.name);
+      if (!state.active) state.active = "ch:" + ev.channel;
+      renderSide(); renderChat();
+      break;
+    case "heard":
+      if (ev.addr !== state.me) {
+        const isNew = !state.contacts.has(ev.addr);
+        state.contacts.set(ev.addr, { heard: true });
+        if (isNew) log(`Hørt: ${label(ev.addr)}`);
+        renderSide();
+      }
+      break;
+    case "sent": {
+      const m = state.pending.get(ev.req);
+      if (m) {
+        state.pending.delete(ev.req);
+        if (m.kind === "dm") { m.status = "sendt"; state.byMsgId.set(ev.msgId, m); } else m.status = "sendt";
+        renderChat();
+      }
+      break;
+    }
+    case "acked": {
+      const m = state.byMsgId.get(ev.msgId);
+      if (m) { m.status = "✓ leveret"; renderChat(); }
+      break;
+    }
+    case "direct":
+      state.contacts.set(ev.from, { heard: true });
+      addMessage("dm:" + ev.from, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
+      break;
+    case "channel":
+      addMessage("ch:" + ev.channel, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
+      break;
+    case "stats": state.stats = ev.items; if (state.view === "status") renderChat(); break;
+    case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
+    case "admins": state.admins = ev.list; if (state.view === "radio") renderChat(); break;
+    case "remoteReply": {
+      const i = ev.inner;
+      if (ev.from !== state.target) break;
+      if (i.type === "stats") state.remoteStats = state.remoteStats.concat(i.items);
+      else if (i.type === "radio") state.remoteRadio = i.cfg;
+      else if (i.type === "error") log(`${label(ev.from)}: ${i.text}`);
+      renderChat();
+      break;
+    }
+    case "deposited": {
+      const m = state.byMsgId.get(ev.msgId);
+      if (m) { m.status = "📫 i postkasse"; renderChat(); }
+      break;
+    }
+    case "fileStarted": {
+      const m = state.pending.get(ev.req);
+      if (m) { state.pending.delete(ev.req); m.status = `sender 0/${ev.chunks}`; m.progress = 0; state.files.set(ev.fileId, m); renderChat(); }
+      break;
+    }
+    case "fileIncoming": {
+      state.contacts.set(ev.from, { heard: true });
+      const m = { from: ev.from, name: ev.name, mime: ev.mime, size: ev.size, parts: [], progress: 0,
+                  text: `${ev.name} (${Math.ceil(ev.size / 1024)} KB) – modtager…`, time: now() };
+      state.files.set(ev.fileId, m);
+      addMessage("dm:" + ev.from, m);
+      break;
+    }
+    case "fileProgress": {
+      const m = state.files.get(ev.fileId);
+      if (m) {
+        m.progress = ev.done / ev.total;
+        if (ev.outgoing) m.status = `sender ${ev.done}/${ev.total}`;
+        else m.text = `${m.name} (${Math.ceil(m.size / 1024)} KB) – ${Math.round(m.progress * 100)} %`;
+        renderChat();
+      }
+      break;
+    }
+    case "fileChunk": {
+      const m = state.files.get(ev.fileId);
+      if (m) m.parts.push([ev.offset, ev.data]);
+      break;
+    }
+    case "fileDone": {
+      const m = state.files.get(ev.fileId);
+      if (!m) break;
+      m.progress = 1;
+      if (ev.outgoing) m.status = ev.ok ? "✓ leveret" : "fejl: " + ev.text;
+      else if (ev.ok) {
+        const buf = new Uint8Array(m.size);
+        for (const [o, d] of m.parts) buf.set(d, o);
+        m.url = URL.createObjectURL(new Blob([buf], { type: m.mime || "application/octet-stream" }));
+        m.text = m.mime?.startsWith("image/") ? "" : `${m.name} (${Math.ceil(m.size / 1024)} KB)`;
+        m.parts = [];
+      } else m.text = `${m.name}: fejl (${ev.text})`;
+      state.files.delete(ev.fileId);
+      renderChat();
+      break;
+    }
+    case "route":
+      log(`Rute fundet til ${label(ev.dest)}: ${ev.hops} hop`);
+      break;
+    case "error": {
+      const m = state.pending.get(ev.req);
+      if (m) { m.status = "fejl: " + ev.text; state.pending.delete(ev.req); renderChat(); }
+      log("Fejl: " + ev.text);
+      break;
+    }
+    case "log": log(ev.text); break;
+    default: log("Ukendt ramme 0x" + ev.kind?.toString(16));
+  }
+}
+
+// ---------- forbindelse ----------
+
+const decoder = new FrameDecoder();
+function onBytes(b) { for (const f of decoder.push(b)) onEvent(decodeEvent(f)); }
+function onClose() {
+  if (!transport) return;
+  log("Forbindelsen blev afbrudt"); transport = null; setConnected(false);
+}
+
+async function connect(kind) {
+  try {
+    if (kind === "ws") {
+      transport = new WsTransport(onBytes, onClose); await transport.ready;
+    } else if (kind === "serial") {
+      if (!("serial" in navigator)) throw new Error("Din browser understøtter ikke Web Serial (brug Chrome eller Edge)");
+      transport = new SerialTransport(); await transport.open(onBytes, onClose);
+    } else {
+      if (!("bluetooth" in navigator)) throw new Error("Din browser understøtter ikke Web Bluetooth (brug Chrome eller Edge)");
+      transport = new BleTransport(); await transport.open(onBytes, onClose);
+    }
+    setConnected(true, transport.name);
+    log("Forbundet via " + transport.name);
+    await transport.send(Cmd.getInfo());
+    await transport.send(Cmd.setTime());
+  } catch (e) {
+    transport = null; setConnected(false);
+    log("Kunne ikke forbinde: " + e.message);
+  }
+}
+
+async function send() {
+  const text = $("text").value.trim();
+  if (!text || !transport || !state.active) return;
+  const [kind, addr] = state.active.split(":");
+  const max = kind === "ch" ? 190 : state.maxText;
+  if (enc.encode(text).length > max) { log("Beskeden er for lang"); return; }
+  const req = state.nextReq++ & 0xffff;
+  const m = { mine: true, text, time: now(), status: "sender…", kind: kind === "ch" ? "ch" : "dm" };
+  state.pending.set(req, m);
+  conv(state.active).push(m);
+  $("text").value = "";
+  renderChat();
+  await transport.send(kind === "ch" ? Cmd.sendChannel(req, addr, text) : Cmd.sendDirect(req, addr, text));
+}
+
+// Over LoRa (USB/Bluetooth til en radio-node) er grænsen lav; over maarse-host højere.
+function fileLimit() {
+  const lora = transport && !(transport instanceof WsTransport);
+  const host = state.maxFile;
+  return lora ? Math.min(8 * 1024, host) : host;
+}
+
+// Skalerer et billede ned, til det passer under grænsen (WebP, ellers JPEG).
+async function shrinkImage(file, limit) {
+  const bmp = await createImageBitmap(file);
+  for (const max of [1280, 960, 640, 480, 320, 240, 160]) {
+    const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    for (const q of [0.8, 0.6, 0.45, 0.3]) {
+      let blob = await new Promise(r => c.toBlob(r, "image/webp", q));
+      if (!blob || blob.type !== "image/webp") blob = await new Promise(r => c.toBlob(r, "image/jpeg", q));
+      if (blob && blob.size <= limit) return blob;
+    }
+  }
+  return null;
+}
+
+async function sendFile(file) {
+  if (!transport || !state.active?.startsWith("dm:")) return;
+  const dest = state.active.slice(3), limit = fileLimit();
+  let blob = file, name = file.name;
+  if (file.type.startsWith("image/") && file.size > limit) {
+    blob = await shrinkImage(file, limit);
+    if (!blob) { log("Billedet kunne ikke gøres lille nok"); return; }
+    name = name.replace(/\.[^.]+$/, "") + (blob.type === "image/webp" ? ".webp" : ".jpg");
+  }
+  if (blob.size > limit) { log(`Filen er for stor: ${Math.ceil(blob.size / 1024)} KB (højst ${Math.floor(limit / 1024)} KB)`); return; }
+  const data = new Uint8Array(await blob.arrayBuffer());
+  const req = state.nextReq++ & 0xffff;
+  const m = { mine: true, name, mime: blob.type, url: URL.createObjectURL(blob), progress: 0,
+              text: blob.type.startsWith("image/") ? "" : `${name} (${Math.ceil(data.length / 1024)} KB)`,
+              time: now(), status: "forbereder…", kind: "file" };
+  state.pending.set(req, m);
+  conv(state.active).push(m);
+  renderChat();
+  await transport.send(Cmd.fileBegin(req, dest, data.length, blob.type || "application/octet-stream", name.slice(0, 60)));
+  for (let o = 0; o < data.length; o += 240) await transport.send(Cmd.fileData(req, o, data.slice(o, o + 240)));
+  await transport.send(Cmd.fileEnd(req));
+}
+
+// ---------- status og radio ----------
+
+const STAT = {
+  1: ["Generelt", "Oppetid", "tid"], 7: ["Generelt", "Rolle", "rolle"], 2: ["Generelt", "Kendte noder"], 3: ["Generelt", "Kendte ruter"],
+  4: ["Generelt", "Kanaler"], 5: ["Generelt", "Links (TCP/seriel)"], 6: ["Generelt", "Forbundne klienter"],
+  45: ["Radio", "Frekvens", "MHz"], 47: ["Radio", "Båndbredde", "kHz"], 46: ["Radio", "Spreading factor", "SF"],
+  48: ["Radio", "Sendestyrke", "dBm"], 34: ["Radio", "Seneste RSSI", "dBm"], 35: ["Radio", "Seneste SNR", "dB"],
+  36: ["Radio", "Gennemsnitlig RSSI", "dBm"], 37: ["Radio", "Gennemsnitlig SNR", "dB"], 50: ["Radio", "Svageste RSSI", "dBm"],
+  51: ["Radio", "Stærkeste RSSI", "dBm"], 30: ["Radio", "Pakker modtaget"], 32: ["Radio", "Pakker sendt"],
+  42: ["Radio", "Data modtaget", "bytes"], 43: ["Radio", "Data sendt", "bytes"], 40: ["Radio", "Sendetid i alt", "ms"],
+  41: ["Radio", "Duty cycle brugt (seneste time)", "promille"], 44: ["Radio", "Sendekø"], 38: ["Radio", "Kanal optaget (CAD)"],
+  39: ["Radio", "Udsat pga. duty cycle"], 31: ["Radio", "Modtagefejl (CRC/header)"], 33: ["Radio", "Sendefejl"],
+  52: ["Radio", "Pakker droppet"], 49: ["Radio", "Batteri", "mV"],
+  10: ["Routing", "Pakker modtaget"], 11: ["Routing", "Ugyldige pakker"], 12: ["Routing", "Dubletter"],
+  13: ["Routing", "Videresendt for andre"], 14: ["Routing", "Startet selv"], 15: ["Routing", "Leveret til mig"],
+  16: ["Routing", "Kvitteringer modtaget"], 17: ["Routing", "Ruter fundet"], 18: ["Routing", "Ruteforespørgsler"],
+  19: ["Routing", "Hop gensendt"], 20: ["Routing", "Floods annulleret"],
+  60: ["Postkasse og filer", "Modtagere med post"], 61: ["Postkasse og filer", "Beskeder i postkassen"],
+  64: ["Postkasse og filer", "Beskeder uden kvittering"], 69: ["Postkasse og filer", "Lagt i andres postkasse"],
+  70: ["Postkasse og filer", "Leveret fra postkassen"], 62: ["Postkasse og filer", "Filer under afsendelse"],
+  63: ["Postkasse og filer", "Filer under modtagelse"],
+  67: ["Netværk", "Pakker ind"], 68: ["Netværk", "Pakker ud"], 65: ["Netværk", "Data ind", "bytes"],
+  66: ["Netværk", "Data ud", "bytes"], 71: ["Netværk", "Fejl"],
+  72: ["DHT", "Kontakter"], 73: ["DHT", "Poster gemt"], 74: ["DHT", "Opslag"], 75: ["DHT", "Fundet"], 76: ["DHT", "Direkte gateways"],
+};
+const GROUPS = ["Generelt", "Radio", "Routing", "Postkasse og filer", "Netværk"];
+
+function fmt(v, unit) {
+  if (unit === "tid") { const h = Math.floor(v / 3600), m = Math.floor(v % 3600 / 60); return h ? `${h} t ${m} min` : `${m} min ${v % 60} s`; }
+  if (unit === "rolle") return ["Klient", "Repeater", "Relay"][v] || v;
+  if (unit === "MHz") return (v / 1000).toFixed(3) + " MHz";
+  if (unit === "promille") return (v / 10).toFixed(1) + " %";
+  if (unit === "bytes") return v < 10240 ? v + " B" : v < 10485760 ? (v / 1024).toFixed(1) + " KB" : (v / 1048576).toFixed(1) + " MB";
+  if (unit === "ms") return v < 10000 ? v + " ms" : (v / 1000).toFixed(1) + " s";
+  return v.toLocaleString("da-DK") + (unit && unit !== "SF" ? " " + unit : "");
+}
+
+function targetPicker(box) {
+  const row = document.createElement("div"); row.className = "row"; row.style.maxWidth = "520px"; row.style.marginBottom = "12px";
+  const sel = document.createElement("select");
+  sel.style.flex = "1"; sel.style.padding = "8px"; sel.style.borderRadius = "8px";
+  sel.append(new Option("Denne node", ""));
+  for (const a of state.contacts.keys()) sel.append(new Option("Fjern: " + label(a), a));
+  sel.value = state.target || "";
+  sel.onchange = () => { state.target = sel.value || null; setView(state.view); };
+  row.appendChild(sel);
+  if (state.target) {
+    const b = document.createElement("button"); b.textContent = "Hent igen"; b.onclick = () => setView(state.view);
+    row.appendChild(b);
+  }
+  box.appendChild(row);
+}
+
+function renderStatus(box) {
+  $("chat-title").textContent = "Status";
+  $("chat-sub").textContent = state.target ? "Hentes over nettet, når du trykker på knappen (koster sendetid)" : "Opdateres hvert 5. sekund";
+  targetPicker(box);
+  const items = state.target ? state.remoteStats : state.stats;
+  if (!items || !items.length) { box.append(state.target ? "Venter på svar… (du skal være administrator for noden)" : "Henter…"); return; }
+  const t = document.createElement("table"); t.className = "stats";
+  const byGroup = new Map(GROUPS.map(g => [g, []]));
+  for (const [k, v] of items) {
+    const meta = STAT[k] || ["Andet", "Nøgle " + k];
+    if (!byGroup.has(meta[0])) byGroup.set(meta[0], []);
+    byGroup.get(meta[0]).push([meta[1], fmt(v, meta[2])]);
+  }
+  for (const [g, rows] of byGroup) {
+    if (!rows.length) continue;
+    const gr = t.insertRow(); gr.className = "group"; gr.insertCell().textContent = g; gr.insertCell();
+    for (const [name, val] of rows) { const r = t.insertRow(); r.insertCell().textContent = name; const c = r.insertCell(); c.className = "v"; c.textContent = val; }
+  }
+  box.appendChild(t);
+}
+
+const PRESETS = {
+  "Må:rse standard (EU, 869,525 MHz)": { freq: 869525000, bw: 125000, sf: 9, cr: 5, power: 22, duty: 100, preamble: 16 },
+  "Lang rækkevidde (EU, SF11)": { freq: 869525000, bw: 125000, sf: 11, cr: 5, power: 22, duty: 100, preamble: 16 },
+  "Hurtig (EU, SF7, 250 kHz)": { freq: 869525000, bw: 250000, sf: 7, cr: 5, power: 22, duty: 100, preamble: 16 },
+  "EU 868,1 MHz (1 % duty)": { freq: 868100000, bw: 125000, sf: 9, cr: 5, power: 14, duty: 10, preamble: 16 },
+  "USA 915 MHz": { freq: 915000000, bw: 125000, sf: 9, cr: 5, power: 22, duty: 1000, preamble: 16 },
+};
+const BWS = [7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000];
+
+function renderRadio(box) {
+  $("chat-title").textContent = "Radioindstillinger"; $("chat-sub").textContent = "";
+  targetPicker(box);
+  if (!state.target) renderAdmins(box);
+  const c = state.target ? state.remoteRadio : state.radio;
+  if (!c) { box.append(state.target ? "Venter på svar… (du skal være administrator for noden)"
+                                    : "maarse-host har ingen egen radio. Forbind til en radio-node via USB."); return; }
+  const w = document.createElement("div");
+  w.innerHTML = `<div class="warn"><b>Vigtigt:</b> alle noder i et net skal bruge samme frekvens, båndbredde, spreading factor
+    og coding rate. Ellers kan de ikke høre hinanden. Duty cycle er den lovlige sendetid; i EU er den 10 % ved 869,4–869,65 MHz
+    og ellers typisk 1 %.</div>`;
+  const f = document.createElement("div"); f.className = "form";
+  const row = (label, el) => { const l = document.createElement("label"); l.textContent = label; f.append(l, el); return el; };
+  const preset = row("Forvalg", document.createElement("select"));
+  preset.append(new Option("Vælg…", ""), ...Object.keys(PRESETS).map(k => new Option(k, k)));
+  const num = (v, step) => { const i = document.createElement("input"); i.type = "number"; i.step = step || "1"; i.value = v; return i; };
+  const freq = row("Frekvens (MHz)", num((c.freq / 1e6).toFixed(3), "0.001"));
+  const bw = row("Båndbredde", document.createElement("select"));
+  bw.append(...BWS.map(b => new Option(b >= 1000 ? (b / 1000) + " kHz" : b + " Hz", b)));
+  bw.value = c.bw;
+  const sf = row("Spreading factor", document.createElement("select"));
+  sf.append(...[5, 6, 7, 8, 9, 10, 11, 12].map(x => new Option("SF" + x, x))); sf.value = c.sf;
+  const cr = row("Coding rate", document.createElement("select"));
+  cr.append(...[5, 6, 7, 8].map(x => new Option("4/" + x, x))); cr.value = c.cr;
+  const power = row("Sendestyrke (dBm)", num(c.power));
+  const duty = row("Duty cycle (%)", num((c.duty / 10).toFixed(1), "0.1"));
+  const pre = row("Præambel (symboler)", num(c.preamble));
+  preset.onchange = () => {
+    const p = PRESETS[preset.value]; if (!p) return;
+    freq.value = (p.freq / 1e6).toFixed(3); bw.value = p.bw; sf.value = p.sf; cr.value = p.cr;
+    power.value = p.power; duty.value = (p.duty / 10).toFixed(1); pre.value = p.preamble;
+  };
+  const save = document.createElement("button"); save.className = "primary"; save.textContent = "Gem på noden";
+  save.onclick = () => {
+    const cfg = { freq: Math.round(parseFloat(freq.value) * 1e6), bw: +bw.value, sf: +sf.value, cr: +cr.value,
+                  power: +power.value, duty: Math.round(parseFloat(duty.value) * 10), preamble: +pre.value };
+    if (state.target) {
+      if (!confirm("Den fjerne node skifter radioindstillinger med det samme. Har den ikke samme indstillinger som resten af nettet, mister du forbindelsen til den. Fortsæt?")) return;
+      transport?.send(Cmd.remote(state.nextReq++ & 0xffff, state.target, Cmd.setRadio(cfg)));
+    } else transport?.send(Cmd.setRadio(cfg));
+  };
+  f.append(document.createElement("span"), save);
+  w.appendChild(f);
+  box.appendChild(w);
+}
+
+function renderAdmins(box) {
+  const w = document.createElement("div"); w.className = "warn";
+  w.innerHTML = "<b>Administratorer for denne node</b> (højst 4). De kan se status og ændre radioindstillinger over nettet. Én adresse pr. linje.";
+  const ta = document.createElement("textarea");
+  ta.rows = 3; ta.style.width = "100%"; ta.style.marginTop = "8px"; ta.style.fontFamily = "ui-monospace, Consolas, monospace";
+  ta.value = state.admins.join("\n");
+  const b = document.createElement("button"); b.textContent = "Gem administratorer"; b.style.marginTop = "6px";
+  b.onclick = () => {
+    const list = ta.value.split(/\s+/).map(x => x.trim().toLowerCase()).filter(x => /^[0-9a-f]{32}$/.test(x)).slice(0, 4);
+    transport?.send(Cmd.setAdmins(list));
+  };
+  w.append(ta, b);
+  box.appendChild(w);
+}
+
+function setView(v) {
+  state.view = v;
+  clearInterval(state.statsTimer);
+  if (transport && state.target) {
+    const req = state.nextReq++ & 0xffff;
+    if (v === "status") { state.remoteStats = []; transport.send(Cmd.remote(req, state.target, Cmd.getStats())); }
+    if (v === "radio") { state.remoteRadio = null; transport.send(Cmd.remote(req, state.target, Cmd.getRadio())); }
+  } else if (transport) {
+    if (v === "status") {
+      transport.send(Cmd.getStats());
+      state.statsTimer = setInterval(() => transport?.send(Cmd.getStats()), 5000);
+    }
+    if (v === "radio") { transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); }
+  }
+  renderChat();
+}
+
+// ---------- knapper ----------
+
+$("btn-ws").onclick = () => connect("ws");
+$("btn-serial").onclick = () => connect("serial");
+$("btn-ble").onclick = () => connect("ble");
+$("btn-disconnect").onclick = async () => { const t = transport; transport = null; await t?.close(); setConnected(false); log("Afbrudt"); };
+$("btn-send").onclick = send;
+$("btn-status").onclick = () => setView("status");
+$("btn-radio").onclick = () => setView("radio");
+$("btn-file").onclick = () => $("file").click();
+$("file").onchange = async () => {
+  const f = $("file").files[0];
+  $("file").value = "";
+  if (f) await sendFile(f);
+};
+$("text").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+$("text").addEventListener("input", updateComposer);
+$("btn-copy").onclick = () => { navigator.clipboard?.writeText(state.me || ""); log("Adresse kopieret"); };
+$("btn-announce").onclick = () => transport?.send(Cmd.announce());
+$("btn-join").onclick = () => {
+  const n = $("join-name").value.trim();
+  if (n && transport) { transport.send(Cmd.join(n)); $("join-name").value = ""; }
+};
+$("btn-add").onclick = () => {
+  const a = $("add-addr").value.trim().toLowerCase(), n = $("add-name").value.trim();
+  if (!/^[0-9a-f]{32}$/.test(a)) { log("Adressen skal være 32 hex-tegn"); return; }
+  nicknames[a] = n || short(a); store.set("nicknames", nicknames);
+  $("add-addr").value = ""; $("add-name").value = "";
+  state.active = "dm:" + a; renderSide(); renderChat();
+};
+
+// Serveret af maarse-host? Så forbind automatisk.
+if (location.protocol.startsWith("http")) {
+  $("btn-ws").hidden = false;
+  connect("ws");
+}
+renderSide();
+</script>
+</body>
+</html>

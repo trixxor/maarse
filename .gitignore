@@ -1,0 +1,4 @@
+target/
+maarse-data/
+dist/
+__pycache__/

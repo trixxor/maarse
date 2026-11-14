@@ -175,6 +175,7 @@ const Cmd = {
   getStats: () => frame(0x09),
   setRadio: c => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [0]),
   getRadio: () => frame(0x0b),
+  setRole: r => frame(0x10, [r]),
   remote: (req, destHex, inner) => frame(0x0c, u16(req), unhex(destHex), inner.slice(2)),
   setAdmins: list => frame(0x0d, ...list.map(unhex)),
   getAdmins: () => frame(0x0e),
@@ -483,7 +484,7 @@ function onEvent(ev) {
     case "channel":
       addMessage("ch:" + ev.channel, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
       break;
-    case "stats": state.stats = ev.items; if (state.view === "status") renderChat(); break;
+    case "stats": state.stats = ev.items; if (state.view === "status" || state.view === "radio") renderChat(); break;
     case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
     case "admins": state.admins = ev.list; if (state.view === "radio") renderChat(); break;
     case "remoteReply": {
@@ -775,6 +776,19 @@ function renderRadio(box) {
     } else transport?.send(Cmd.setRadio(cfg));
   };
   f.append(document.createElement("span"), save);
+  // Rolle: klient videresender ikke; relay er "skov-tilstand" uden repeatere.
+  const items = state.target ? state.remoteStats : state.stats;
+  const cur = items && items.find(([k]) => k === 7);
+  const role = row("Rolle", document.createElement("select"));
+  role.append(new Option("Klient (videresender ikke)", 0), new Option("Repeater", 1), new Option("Relay (skov-tilstand)", 2));
+  role.value = cur ? cur[1] : 1;
+  const saveRole = document.createElement("button"); saveRole.textContent = "Gem rolle";
+  saveRole.onclick = () => {
+    const r = +role.value;
+    if (state.target) { state.remoteStats = []; transport?.send(Cmd.remote(state.nextReq++ & 0xffff, state.target, Cmd.setRole(r))); }
+    else transport?.send(Cmd.setRole(r));
+  };
+  f.append(document.createElement("span"), saveRole);
   w.appendChild(f);
   box.appendChild(w);
 }
@@ -806,7 +820,7 @@ function setView(v) {
       transport.send(Cmd.getStats());
       state.statsTimer = setInterval(() => transport?.send(Cmd.getStats()), 5000);
     }
-    if (v === "radio") { transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); }
+    if (v === "radio") { transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); transport.send(Cmd.getStats()); }
   }
   renderChat();
 }

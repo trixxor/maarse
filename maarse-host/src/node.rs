@@ -1346,10 +1346,10 @@ impl Node {
             Command::Remote { req, dest, frame } => {
                 let ok = matches!(
                     Command::decode(&frame),
-                    Ok(Command::GetStats | Command::GetRadio | Command::SetRadio(_))
+                    Ok(Command::GetStats | Command::GetRadio | Command::SetRadio(_) | Command::SetRole { .. })
                 );
                 if !ok {
-                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Kun status og radio kan fjernstyres"));
+                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Kun status, radio og rolle kan fjernstyres"));
                 }
                 // Tælleren følger uret, så den også stiger efter en genstart.
                 let counter = unix_now();
@@ -1374,6 +1374,14 @@ impl Node {
                     0,
                     error_code::BAD_FRAME,
                     "maarse-host har ingen egen radio. Forbind til noden via USB for at ændre radioindstillinger.",
+                ),
+            ),
+            Command::SetRole { .. } => self.send_client(
+                id,
+                &err_ev(
+                    0,
+                    error_code::BAD_FRAME,
+                    "maarse-host er en gateway og har altid rollen repeater. Forbind til noden via USB for at vælge rolle.",
                 ),
             ),
             Command::GetStats => {
@@ -1427,6 +1435,9 @@ impl Node {
             }
             Ok(Command::GetRadio | Command::SetRadio(_)) => {
                 reply(self, err_ev(0, error_code::BAD_FRAME, "maarse-host har ingen egen radio"));
+            }
+            Ok(Command::SetRole { .. }) => {
+                reply(self, err_ev(0, error_code::BAD_FRAME, "maarse-host har altid rollen repeater"));
             }
             _ => reply(self, err_ev(0, error_code::BAD_FRAME, "Kommandoen kan ikke fjernstyres")),
         }

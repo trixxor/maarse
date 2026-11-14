@@ -1,6 +1,8 @@
 // Kører webklienten i en rigtig browser (Edge/Chrome uden vindue) mod to
 // maarse-hosts og tjekker, at scriptet indlæses uden fejl, at klienten
-// forbinder, og at en maarse://-side kan hentes og vises.
+// forbinder, at en maarse://-side kan hentes og vises, og at
+// talebeskeder kan kodes og afkodes med Codec2 (WebAssembly), og at et
+// opkald (Opus over TCP) sender lyd begge veje.
 //
 //   cargo build --release -p maarse-host
 //   node tools/client_browser_test.mjs target/release/maarse-host[.exe]
@@ -52,7 +54,7 @@ try {
   await sleep(2500);
 
   const prof = join(tmp, "browser");
-  const b = spawn(browser, ["--headless=new", "--remote-debugging-port=9395", `--user-data-dir=${prof}`, "--no-first-run", "about:blank"], { stdio: "ignore" });
+  const b = spawn(browser, ["--headless=new", "--remote-debugging-port=9395", `--user-data-dir=${prof}`, "--no-first-run", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "about:blank"], { stdio: "ignore" });
   procs.push(b);
   let targets;
   for (let i = 0; i < 30 && !targets; i++) {
@@ -94,7 +96,54 @@ try {
   if (om?.endsWith("/om")) ok("link til en anden side følges"); else fail("linket blev ikke fulgt");
 
   if (await ev("!!document.querySelector('.page script, .page iframe')")) fail("siden indeholder HTML-elementer");
+
+  // Talebeskeder: Codec2 i WebAssembly koder og afkoder 2 s tone.
+  const voice = await ev(`(async () => {
+    const pcm = new Int16Array(16000).map((_, i) => Math.round(Math.sin(i * 2 * Math.PI * 220 / 8000) * 8000));
+    const enc = await voiceEncode(pcm);
+    const dec = await voiceDecode(enc);
+    const wav = wavBlob(dec);
+    return [enc.length, dec.length, wav.size, String.fromCharCode(enc[0], enc[1])].join(",");
+  })()`);
+  if (voice === "305,16000,32044,C2") ok("talebesked: Codec2 1200 bit/s koder og afkoder i browseren (2 s = 305 bytes)");
+  else fail("talebesked: uventet resultat " + voice);
   if (errors.length) fail("script-fejl undervejs: " + errors.join(" | "));
+
+  // Talebesked hele vejen: simuleret mikrofon i klienten -> fil til server-hosten,
+  // som åbnes i en anden fane og skal kunne afspille den.
+  const recv = await (await fetch("http://127.0.0.1:9395/json/new?http://127.0.0.1:8195/", { method: "PUT" })).json();
+  const ws2 = new WebSocket(recv.webSocketDebuggerUrl);
+  await new Promise((r, j) => { ws2.onopen = r; ws2.onerror = j; });
+  let id2 = 0; const wait2 = new Map();
+  ws2.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id && wait2.has(m.id)) { wait2.get(m.id)(m); wait2.delete(m.id); } };
+  const ev2 = async (expr) => (await new Promise((r) => { const i = ++id2; wait2.set(i, r);
+    ws2.send(JSON.stringify({ id: i, method: "Runtime.evaluate", params: { expression: expr, awaitPromise: true, returnByValue: true } })); })).result?.result?.value;
+  const until2 = async (expr, secs) => { for (let i = 0; i < secs * 4; i++) { const v = await ev2(expr); if (v) return v; await sleep(250); } return null; };
+  await until2("transport && transport.name === 'maarse-host'", 10);
+  await ev(`state.active = "dm:${addr}"; renderChat(); voiceStart()`);
+  await sleep(2500);
+  await ev("voiceStop()");
+  const sent = await until("conv('dm:" + addr + "').find(m => m.voice && m.status && /leveret/.test(m.status))?.text", 20);
+  if (sent) ok("talebesked optaget og leveret: " + sent); else fail("talebeskeden blev ikke leveret (" + (await ev("JSON.stringify(conv('dm:" + addr + "').map(m => m.status || m.text))")) + ")");
+  const got = await until2("[...state.convs.values()].flat().find(m => m.voice && m.url)?.text", 20);
+  if (got) ok("modtageren afkoder talebeskeden: " + got); else fail("modtageren fik ingen afspillelig talebesked");
+
+  // Opkald over TCP: A ringer til B, B svarer, lyd begge veje, A lægger på.
+  const srvAddr = addr, cliAddr = await ev("state.me");
+  await ev(`callStart("${srvAddr}")`);
+  if (await until2("call.state === 'ringing'", 10)) ok("opkald: B får opkaldet"); else fail("opkald: B ringede ikke");
+  await ev2("callAnswer()");
+  if (await until("call.state === 'active'", 10) && await until2("call.state === 'active'", 10)) ok("opkald: begge i samtale");
+  else fail("opkald: kom ikke i gang (A " + (await ev("call.state")) + ", B " + (await ev2("call.state")) + ")");
+  await sleep(3000);
+  const ab = await ev("[call.tx, call.rx].join('/')"), ba = await ev2("[call.tx, call.rx].join('/')");
+  const [atx, arx] = ab.split("/").map(Number), [btx, brx] = ba.split("/").map(Number);
+  if (atx > 10 && brx > 10 && btx > 10 && arx > 10) ok(`opkald: lyd begge veje (A sendt/modtaget ${ab}, B ${ba} pakker)`);
+  else fail(`opkald: for lidt lyd (A ${ab}, B ${ba})`);
+  await ev("callHangup()");
+  if (await until2("call.state === 'idle'", 10)) ok("opkald: lagt på hos begge"); else fail("opkald: B lagde ikke på");
+  void cliAddr;
+  ws2.close();
   ws.close();
 } catch (e) {
   fail(e.message);

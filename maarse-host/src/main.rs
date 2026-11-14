@@ -20,6 +20,7 @@ mod meshcore;
 mod mqtt;
 mod node;
 mod sessions;
+mod tunnel;
 mod web;
 
 use std::net::SocketAddr;
@@ -75,6 +76,9 @@ pub enum In {
         data: Vec<u8>,
         reply: Sender<Vec<u8>>,
     },
+    /// En IP-pakke fra TUN-adapteren (`--tun`).
+    #[cfg_attr(not(feature = "tun"), allow(dead_code))]
+    TunPacket(Vec<u8>),
     /// Et DHT-opslag (kørt i en tråd) er færdigt.
     DhtDone {
         target: maarse_core::Address,
@@ -112,6 +116,9 @@ pub struct Config {
     pub mqtt: Option<mqtt::MqttConfig>,
     /// Beskedhistorik: antal dage, der gemmes (`None` = `--no-history`).
     pub history_days: Option<u32>,
+    /// IP-tunnel: opret en TUN-adapter (`--tun`), evt. med sti til wintun.dll.
+    pub tun: bool,
+    pub wintun: Option<String>,
 }
 
 /// Offentlige backbone-noder, som `--public` forbinder til. Tom indtil
@@ -192,6 +199,8 @@ fn parse_args() -> Result<Config, String> {
         meshcore_bridge: Vec::new(),
         mqtt: None,
         history_days: Some(90),
+        tun: false,
+        wintun: None,
     };
     let mut mqtt_prefix = "maarse".to_string();
     let (mut mqtt_user, mut mqtt_pass) = (None, None);
@@ -243,6 +252,11 @@ fn parse_args() -> Result<Config, String> {
                     user: None,
                     pass: None,
                 })
+            }
+            "--tun" => c.tun = true,
+            "--wintun" => {
+                c.tun = true;
+                c.wintun = Some(val("--wintun")?);
             }
             "--mqtt-prefix" => mqtt_prefix = val("--mqtt-prefix")?.trim_end_matches('/').to_string(),
             "--mqtt-user" => mqtt_user = Some(val("--mqtt-user")?),
@@ -318,7 +332,8 @@ fn main() {
         }
     };
     let (tx, rx) = std::sync::mpsc::channel();
-    let node = match node::Node::new(&cfg) {
+    #[allow(unused_mut)]
+    let mut node = match node::Node::new(&cfg) {
         Ok(n) => n,
         Err(e) => {
             eprintln!("Fejl ved opstart: {e}");
@@ -361,6 +376,19 @@ fn main() {
             }
             Err(e) => eprintln!("  Webklient: kunne ikke starte på {addr}: {e}"),
         }
+    }
+    println!("  IP:       {} (IP-tunnel, kun over TCP)", tunnel::ip_text(&node.my_ip()));
+    if cfg.tun {
+        #[cfg(feature = "tun")]
+        match tunnel::spawn(node.my_ip(), cfg.wintun.clone(), tx.clone()) {
+            Ok(t) => {
+                node.set_tun(t);
+                println!("  TUN:      adapter 'maarse' oprettet (fd00::/8)");
+            }
+            Err(e) => eprintln!("  TUN:      kunne ikke oprette adapteren ({e}); kræver administrator/root og wintun.dll på Windows"),
+        }
+        #[cfg(not(feature = "tun"))]
+        eprintln!("  TUN:      bygget uden featuren 'tun' (cargo build --features tun)");
     }
     println!("Tryk Ctrl+C for at stoppe.\n");
     if let Some(ep) = &cfg.public_addr {

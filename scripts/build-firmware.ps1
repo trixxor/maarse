@@ -66,7 +66,11 @@ cargo +esp build --release --features "board-$Board"
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit 1 }
 Pop-Location
 $elf = "firmware\esp\target\xtensa-esp32s3-none-elf\release\maarse-fw-esp"
-espflash save-image --chip esp32s3 --merge --partition-table firmware\esp\partitions.csv $elf "dist\maarse-$Board.bin"
+# Flash-stoerrelse: Heltec V4 16 MB, XIAO ESP32-S3 8 MB (partitionstabellen kraever over 4 MB).
+$flashSize = if ($Board -eq "heltec-v4") { "16mb" } else { "8mb" }
+Remove-Item "dist\maarse-$Board.bin" -ErrorAction SilentlyContinue
+espflash save-image --chip esp32s3 --merge --flash-size $flashSize --partition-table firmware\esp\partitions.csv $elf "dist\maarse-$Board.bin"
+if ($LASTEXITCODE -ne 0) { Write-Host "Kunne ikke lave det samlede billede"; exit 1 }
 Write-Host "Faerdig: dist\maarse-$Board.bin (samlet billede, flashes fra adresse 0x0)"
 # App-imaget alene (til opdatering over luften)
 espflash save-image --chip esp32s3 $elf "dist\maarse-$Board-app.bin"

@@ -47,6 +47,7 @@ Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge
 | Position (opt-in, afrundet) og telemetri i announces | ja | ja, gemmes i flash | ja, gemmes i flash |
 | MQTT-bro med Home Assistant discovery | ja (`--mqtt`) | – | – |
 | Visningsnavn i announces | ja (`navn.txt`) | ja, gemmes i flash (ikke afprøvet på hardware) | ja, gemmes i flash (ikke afprøvet på hardware) |
+| Talebeskeder (Codec2, 1200 bit/s) | ja, i webklienten | ja, som fil (kodes i webklienten) | ja, som fil (kodes i webklienten) |
 | `maarse://`-sider | serverer `<data>/sider/` og henter sider | henter sider (serverer ikke) | henter sider (serverer ikke) |
 | Forbindelse | TCP-backbone + DHT, WebSocket, seriel LoRa-modem | USB og Bluetooth | USB og Bluetooth (ja, ikke afprøvet på hardware) |
 | Display | – | – | Heltec V4: 3 sider, skift med PRG-knappen |
@@ -63,6 +64,12 @@ Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), US
 **Filpostkasse (kun maarse-host).** Svarer modtageren ikke (som for beskeder efter 45 s, eller når overførslen går i stå), gemmer afsenderens host filen på disken i `filpostkasse/`: det forseglede tilbud og de forseglede bidder, så hosten ikke kan læse den. Afsenderen får `FileDone` med teksten *"lagt i postkasse"*. Når modtageren dukker op igen (announce eller ny rute, samme mekanisme som postkassen for beskeder), leveres filen, og afsenderen får *"leveret fra postkasse"*. Højst 1 MB pr. fil, 20 MB pr. modtager og 200 MB i alt (`--filpostkasse-modtager-mb`, `--filpostkasse-mb`; 0 slår den fra). Filer udløber efter 7 dage. Filer lægges aldrig i radionoders flash-postkasse, og en fil over 8 KB leveres kun, når modtageren nås over TCP; nås den kun over LoRa, venter filen (eller udløber). Filpostkassen ligger hos afsenderens host, så den skal være online, når modtageren kommer tilbage.
 
 Filer på firmware-noder (`firmware/common/src/node/files.rs`, logikken i `maarse-crypto/src/files.rs`) bruger samme format som maarse-host, så de to kan sende filer til hinanden. Noden sender og modtager én fil ad gangen i hver retning (to statiske buffere på 8 KB). En modtaget fil sendes til klienten, når den er hel og tjekket; er ingen klient forbundet, bliver den liggende i RAM, til en klient forbinder (den overskrives af næste fil og forsvinder ved genstart). Filer lægges ikke i postkassen: én fil ville fylde de 8 KB flash helt.
+
+## Android-app (APK)
+
+`python tools/build_apk.py` bygger `dist/maarse.apk` direkte med Android SDK'ens værktøjer (aapt2, javac, d8, zipalign, apksigner), uden Gradle. Kræver Android SDK (build-tools 34+, platform 35+) og en JDK; APK'en signeres med debug-nøglen.
+
+Appen (`android/`) er webklienten i en WebView plus en Bluetooth-bro i Java til nodens Nordic UART-tjeneste, fordi WebView ikke har Web Bluetooth. Webklienten ser broen (`window.MaarseAndroid`) og viser så kun Bluetooth. Appen beder om Bluetooth- og mikrofontilladelse, når de skal bruges. Installér med `adb install dist/maarse.apk` eller ved at åbne filen på telefonen (tillad ukendte kilder).
 
 ## Webklienten som app (PWA)
 
@@ -237,6 +244,30 @@ Andres navne kommer med i `NodeInfo` (`0xa3`) og vises i webklienten med `~` for
 
 **Et navn beviser ikke noget.** Alle kan kalde sig hvad som helst. Brug sikkerhedsnummeret, når det er vigtigt, hvem man skriver med.
 
+## Talebeskeder
+
+Tryk på 🎤 i en direkte samtale for at optage og igen for at sende (højst 20 sekunder). Webklienten nedsampler til 8 kHz og koder med **Codec2 ved 1200 bit/s**: 10 sekunder fylder ca. 1,5 KB og kan sendes over LoRa som en almindelig fil (MIME `audio/x-codec2`). Modtageren afkoder og viser en afspiller.
+
+Codec2 kommer fra `maarse-voice`, en ren Rust-implementering (`codec2`-crate'en) kompileret til WebAssembly og lagt ind i `index.html` (ca. 96 KB base64). Byg den igen med `python tools/build_voice.py`, hvis `maarse-voice` ændres. Format: `"C2" | tilstand (5 = 1200 bit/s) | antal rammer (u16) | rammer` (6 bytes pr. 40 ms ved 1200 bit/s).
+
+Host og firmware kender ikke formatet; de sender bare filen.
+
+## Opkald (Opus over TCP)
+
+I en direkte samtale via maarse-host viser webklienten **Ring op**. Lyden kodes med WebCodecs (Opus, 16 kbit/s, 20 ms-rammer, tre pr. besked) og sendes krypteret som indholdstype `0x06` (kommando `0x27 SendCall`, hændelse `0xa5 Call`). Hosten sender kun opkald, når modtageren nås over TCP hele vejen; ellers svarer den `NOT_OVER_TCP` (fejlkode 9), og opkald over LoRa er derfor ikke muligt. Firmware-noder afviser kommandoen. Indholdet: type (1 ring op, 2 svar, 3 læg på, 4 lyd) | opkalds-ID (u32) | data; lyd er løbenummer (u16) og rammer med længde foran. Kræver Chrome eller Edge (WebCodecs).
+
+## IP-tunnel
+
+Hver node har en IPv6-adresse udledt af sin Må:rse-adresse (`fd` + de første 15 bytes); maarse-host skriver den ved opstart (`IP: fd…`). IP-pakker deles i stykker og sendes krypteret som indholdstype `0x07` (`maarse-host/src/tunnel.rs`). IPv6 kræver pakker på 1280 bytes (op til 8 beskeder), så tunneltrafik sendes kun til noder, der nås over TCP hele vejen.
+
+```text
+cargo build --release -p maarse-host --features tun
+maarse-host --tun                       # Linux (root); /dev/net/tun
+maarse-host --wintun C:\sti\wintun.dll   # Windows (administrator); wintun.dll fra wintun.net
+```
+
+Hosten opretter adapteren `maarse` med sin adresse og `fd00::/8`, så `ping`, `ssh` og `mosh` til en anden nodes `fd…`-adresse går gennem Må:rse. En host uden adapter svarer stadig selv på ping til sin adresse. Kun pakker fra afsenderens egen adresse til vores slippes igennem. Afprøvet på Windows med Wintun 0.14.1: `ping -6` til en anden host gennem tunnelen, også med 1200 bytes (deles i 7 stykker).
+
 ## `maarse://`-sider
 
 En maarse-host kan dele små sider, ligesom NomadNet. Læg filer i `<data>/sider/`:
@@ -316,7 +347,7 @@ python tools/dht_test.py target/release/maarse-host
 node tools/safety_number_test.mjs        # sikkerhedsnummer i JS = Rust
 node tools/recovery_phrase_test.mjs      # gendannelsesfrase og sikkerhedskopi i JS = Rust
 node tools/client_syntax_test.mjs        # webklientens JavaScript kan parses
-node tools/client_browser_test.mjs target/release/maarse-host   # webklienten i Edge/Chrome: indlæsning, forbindelse, sider
+node tools/client_browser_test.mjs target/release/maarse-host   # webklienten i Edge/Chrome: indlæsning, forbindelse, sider, tale
 cargo run --release -p maarse-sim -- --help
 ```
 
@@ -479,6 +510,19 @@ Hvert ekstra hop gentager det hele. **Anbefaling:** opdatér naboer direkte (ét
 8. Bluetooth/LoRa kører videre under flash-skrivning (mellemlageret skrives, mens radioen er aktiv).
 
 **Redning, hvis noget går galt:** nRF52840: dobbelttryk på reset → USB-drevet kommer frem → træk `dist/maarse-<board>.uf2` over (bootloaderen røres aldrig). ESP32-S3: hold BOOT nede, tryk RESET, og flash med `espflash flash --erase-parts otadata --partition-table firmware/esp/partitions.csv <elf>` (eller `esptool.py write_flash 0x0 dist/maarse-<board>.bin`).
+
+## Udgivelser (signerede)
+
+```text
+python tools/release.py 0.5.0                    # bygger og signerer dist/release-0.5.0/
+python tools/release.py --verify dist/release-0.5.0
+maarse-sign verify-release --pubkey <hex> <mappe>  # tjek en udgivelse uden scriptet
+```
+
+Første gang laves nøglerne i `~/.maarse/release/` (aldrig i git): `release.key` (Ed25519) og `release.pub`, samt `android.keystore` med adgangskode i `android.pass`. **Tag backup af mappen.** Uden `release.key` kan noder i marken ikke opdateres over luften med nye udgivelser, og uden Android-nøglen kan appen ikke opdateres over en installeret version.
+
+En udgivelse indeholder firmware til alle fire boards bygget med udgivelsesnøglen (`MAARSE_RELEASE_PUBKEY`), så de kun tager imod opdateringer signeret med den, samt de signerede OTA-pakker (`-ota.bin` + `.manifest`), `maarse-host-<v>.exe` (med IP-tunnel), `maarse-<v>.apk` signeret med Android-nøglen og `SHA256SUMS` med `SHA256SUMS.sig`. Signaturen er Ed25519 over `"maarse-release-v1
+"` og SHA-256 af `SHA256SUMS` (`maarse-crypto/src/ota.rs`).
 
 ## Licens
 

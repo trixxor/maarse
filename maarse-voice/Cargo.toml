@@ -1,0 +1,13 @@
+[package]
+name = "maarse-voice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Talebeskeder: Codec2 (1200/3200 bit/s) som WebAssembly til webklienten"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+codec2 = "0.3"
+

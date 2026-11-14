@@ -3,6 +3,7 @@
 
 mod ext;
 mod pages;
+mod tun;
 mod hist;
 mod identity;
 
@@ -173,6 +174,10 @@ pub struct Node {
     outbox: HashMap<u64, OutMsg>,
     uploads: HashMap<(ClientId, u16), Upload>,
     pages: pages::Pages,
+    /// IP-tunnel: adapter (hvis `--tun`), samling af stykker og løbenummer.
+    tun_tx: Option<Sender<Vec<u8>>>,
+    reasm: crate::tunnel::Reassembly,
+    tun_seq: u16,
     out_files: HashMap<u64, OutFile>,
     in_files: HashMap<u64, InFile>,
     mailbox: HashMap<Address, HashMap<u64, Mail>>,
@@ -348,6 +353,9 @@ impl Node {
             outbox: HashMap::new(),
             uploads: HashMap::new(),
             pages: Default::default(),
+            tun_tx: None,
+            reasm: Default::default(),
+            tun_seq: 0,
             out_files: HashMap::new(),
             in_files: HashMap::new(),
             mailbox: HashMap::new(),
@@ -564,6 +572,7 @@ impl Node {
             In::DhtRequest { data, reply } => {
                 let _ = reply.send(self.dht_serve(&data));
             }
+            In::TunPacket(p) => self.on_tun_packet(&p),
             In::DhtDone {
                 target,
                 publish,
@@ -885,6 +894,8 @@ impl Node {
     fn on_content(&mut self, from: Address, plain: &[u8], hops: u8, format: Format) {
         match content::parse(plain) {
             Some(Content::PageRequest(path)) => self.on_page_request(from, &path),
+            Some(Content::Call(data)) => self.on_call(from, data),
+            Some(Content::Ip(data)) => self.on_ip_fragment(from, data),
             Some(Content::Resync) => {
                 self.log(format!("{} startede en ny krypteringssession", short(&from)));
             }
@@ -1899,7 +1910,8 @@ impl Node {
             | Command::GetSharing
             | Command::SetName { .. }
             | Command::GetName
-            | Command::RequestPage { .. } => {}
+            | Command::RequestPage { .. }
+            | Command::SendCall { .. } => {}
         }
     }
 }
@@ -2268,6 +2280,8 @@ pub(super) mod file_interop_tests {
             meshcore_bridge: Vec::new(),
             mqtt: None,
             history_days: None,
+            tun: false,
+            wintun: None,
         }
     }
 

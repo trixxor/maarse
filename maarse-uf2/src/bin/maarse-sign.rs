@@ -8,6 +8,11 @@
 //!                  <firmware.elf|.uf2|.bin> <ud>
 //!     Skriver <ud>.bin (imaget) og <ud>.manifest (112 bytes).
 //! maarse-sign verify (--pubkey <hex> | --dev-key) <ud.bin> <ud.manifest>
+//! maarse-sign sign-release --key <privat.key> <mappe>
+//!     Skriver <mappe>/SHA256SUMS (alle filer i mappen) og SHA256SUMS.sig
+//!     (Ed25519-signatur, hex) med udgivelsesnøglen.
+//! maarse-sign verify-release --pubkey <hex> <mappe>
+//!     Tjekker signaturen og at alle filer passer med SHA256SUMS.
 //! ```
 //!
 //! Boards: xiao-nrf52840, wismesh-tag, heltec-v4, xiao-esp32s3. På nRF52840
@@ -32,7 +37,7 @@ fn hex(b: &[u8]) -> String {
 
 fn usage() -> ! {
     eprintln!(
-        "Brug:\n  maarse-sign keygen <privat.key>\n  maarse-sign sign --board <board> --version <x.y.z> (--key <fil> | --dev-key) <firmware.elf|.uf2|.bin> <ud>\n  maarse-sign verify (--pubkey <hex> | --dev-key) <ud.bin> <ud.manifest>\nBoards: xiao-nrf52840, wismesh-tag, heltec-v4, xiao-esp32s3"
+        "Brug:\n  maarse-sign keygen <privat.key>\n  maarse-sign sign --board <board> --version <x.y.z> (--key <fil> | --dev-key) <firmware.elf|.uf2|.bin> <ud>\n  maarse-sign verify (--pubkey <hex> | --dev-key) <ud.bin> <ud.manifest>\n  maarse-sign sign-release --key <fil> <mappe>\n  maarse-sign verify-release --pubkey <hex> <mappe>\nBoards: xiao-nrf52840, wismesh-tag, heltec-v4, xiao-esp32s3"
     );
     exit(2)
 }
@@ -166,6 +171,52 @@ fn main() {
             let (ma, mi, pa) = ota::version_parts(m.version);
             println!("OK: {} version {ma}.{mi}.{pa}, {} bytes", board::name(m.board), m.size);
         }
+        Some("sign-release") => {
+            let [dir] = pos.as_slice() else { usage() };
+            let sk = read_key(&key.unwrap_or_else(|| die("angiv --key <fil>")));
+            let sums = release_sums(dir);
+            fs::write(format!("{dir}/SHA256SUMS"), &sums).unwrap_or_else(|e| die(e));
+            let sig = ota::sign_release(&sk, sums.as_bytes());
+            fs::write(format!("{dir}/SHA256SUMS.sig"), hex(&sig) + "\n").unwrap_or_else(|e| die(e));
+            print!("{sums}");
+            println!("Signeret med {}", hex(&sk.verifying_key().to_bytes()));
+        }
+        Some("verify-release") => {
+            let [dir] = pos.as_slice() else { usage() };
+            let pk = ota::parse_hex32(&pubkey.unwrap_or_else(|| die("angiv --pubkey <hex>")))
+                .unwrap_or_else(|| die("--pubkey skal være 64 hextegn"));
+            let sums = fs::read_to_string(format!("{dir}/SHA256SUMS")).unwrap_or_else(|e| die(e));
+            let sig_hex = fs::read_to_string(format!("{dir}/SHA256SUMS.sig")).unwrap_or_else(|e| die(e));
+            let t = sig_hex.trim();
+            let sig: Vec<u8> = (0..t.len() / 2).filter_map(|i| u8::from_str_radix(&t[i * 2..i * 2 + 2], 16).ok()).collect();
+            let sig: [u8; 64] = sig.try_into().unwrap_or_else(|_| die("SHA256SUMS.sig er ugyldig"));
+            if !ota::verify_release(&pk, sums.as_bytes(), &sig) {
+                die("signaturen passer ikke (forkert nøgle eller ændret SHA256SUMS)");
+            }
+            if sums != release_sums(dir) {
+                die("filerne passer ikke med SHA256SUMS");
+            }
+            println!("OK: {} filer, signeret med {}", sums.lines().count(), hex(&pk));
+        }
         _ => usage(),
     }
+}
+
+/// SHA256SUMS-indhold for alle filer i mappen (sorteret, uden SHA256SUMS*).
+fn release_sums(dir: &str) -> String {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap_or_else(|e| die(e))
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with("SHA256SUMS"))
+        .collect();
+    names.sort();
+    names
+        .iter()
+        .map(|n| {
+            let data = fs::read(format!("{dir}/{n}")).unwrap_or_else(|e| die(e));
+            format!("{}  {n}\n", hex(&ota::sha256(&data)))
+        })
+        .collect()
 }

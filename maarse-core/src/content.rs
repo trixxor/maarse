@@ -11,6 +11,10 @@
 //!   [`MAX_PAGE_PATH`] bytes). Svaret er en almindelig fil med MIME
 //!   [`PAGE_MIME`] (deflate-komprimeret sidemarkup) og stien som navn.
 //!   Se [`page_path`].
+//! * `0x06` opkald: signalering og lyd (Opus) mellem to klienter. Formatet
+//!   inden i bestemmes af klienterne; noder sender det kun videre, og kun
+//!   over TCP (maarse-host), aldrig over LoRa.
+//! * `0x07` IP-tunnel: et stykke af en IPv6-pakke, kun over TCP.
 //!
 //! Kontrolkommandoer er krypterede direkte beskeder, så modtageren ved med
 //! sikkerhed, hvem afsenderen er. Noden udfører dem kun, hvis afsenderen
@@ -28,6 +32,9 @@ pub const CONTROL: u8 = 0x02;
 pub const CONTROL_REPLY: u8 = 0x03;
 pub const RESYNC: u8 = 0x04;
 pub const PAGE_REQUEST: u8 = 0x05;
+pub const CALL: u8 = 0x06;
+/// IP-tunnel: et stykke af en IPv6-pakke (se maarse-host/src/tunnel.rs).
+pub const IP: u8 = 0x07;
 
 /// MIME for en `maarse://`-side: Må:rse-markup (UTF-8), komprimeret med
 /// rå deflate (RFC 1951). Ikke HTML: klienten viser kun tekst, overskrifter
@@ -65,6 +72,10 @@ pub enum Content<'a> {
     Resync,
     /// Anmodning om en side; stien er renset med [`page_path`].
     PageRequest(Small),
+    /// Opkald (signalering eller lyd); indholdet er klienternes.
+    Call(&'a [u8]),
+    /// IP-tunnel: pakke-ID (u16) | stykke nr. | antal | data.
+    Ip(&'a [u8]),
     Unknown(u8),
 }
 
@@ -118,6 +129,8 @@ pub fn parse(plain: &[u8]) -> Option<Content<'_>> {
             })
         }
         RESYNC => Some(Content::Resync),
+        CALL => Some(Content::Call(&plain[1..])),
+        IP => Some(Content::Ip(&plain[1..])),
         PAGE_REQUEST => Some(match page_path(&plain[1..]) {
             Some(p) => Content::PageRequest(p),
             None => Content::Unknown(PAGE_REQUEST),

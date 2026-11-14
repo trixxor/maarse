@@ -223,6 +223,59 @@ pub fn public_channel_key() -> [u8; 32] {
     Sha256::digest(b"maarse-public").into()
 }
 
+/// Domæneseparation for sikkerhedsnumre.
+const SAFETY_CONTEXT: &[u8] = b"maarse/sikkerhedsnummer/v0";
+/// Antal SHA-256-runder pr. fingeraftryk. Lavt nok til firmware, men gør det
+/// lidt dyrere at lede efter en nøgle med et bestemt nummer.
+pub const SAFETY_ITERATIONS: u32 = 512;
+
+/// 30 decimale cifre (ASCII), der kun afhænger af én identitet.
+///
+/// `h0 = SHA-256(kontekst | sign | dh)`, `h(i+1) = SHA-256(h(i) | sign | dh)`,
+/// i alt [`SAFETY_ITERATIONS`] runder. De første 30 bytes deles i 6 stykker
+/// à 5 bytes; hvert stykke læses som big-endian tal modulo 100000 og skrives
+/// med 5 cifre.
+pub fn safety_fingerprint(id: &PublicIdentity) -> [u8; 30] {
+    let key = id.to_bytes();
+    let mut h: [u8; 32] = {
+        let mut d = Sha256::new();
+        d.update(SAFETY_CONTEXT);
+        d.update(key);
+        d.finalize().into()
+    };
+    for _ in 1..SAFETY_ITERATIONS {
+        let mut d = Sha256::new();
+        d.update(h);
+        d.update(key);
+        h = d.finalize().into();
+    }
+    let mut out = [b'0'; 30];
+    for i in 0..6 {
+        let mut v: u64 = 0;
+        for b in &h[i * 5..i * 5 + 5] {
+            v = (v << 8) | *b as u64;
+        }
+        let mut n = (v % 100_000) as u32;
+        for j in (0..5).rev() {
+            out[i * 5 + j] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+    }
+    out
+}
+
+/// Sikkerhedsnummer for to kontakter: 60 cifre (ASCII), uafhængigt af
+/// rækkefølgen. De to fingeraftryk sorteres og sættes sammen. Vises typisk i
+/// 12 grupper à 5 cifre; er tallet ens på begge telefoner, er nøglerne ægte.
+pub fn safety_number(a: &PublicIdentity, b: &PublicIdentity) -> [u8; 60] {
+    let (fa, fb) = (safety_fingerprint(a), safety_fingerprint(b));
+    let (lo, hi) = if fa <= fb { (fa, fb) } else { (fb, fa) };
+    let mut out = [0u8; 60];
+    out[..30].copy_from_slice(&lo);
+    out[30..].copy_from_slice(&hi);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,5 +351,36 @@ mod tests {
         let b = channel_address(&hashtag_key("#odense"));
         assert_ne!(a, b);
         assert_ne!(a, channel_address(&public_channel_key()));
+    }
+
+    /// Testvektor. Samme tal står i `tools/safety_number_test.mjs`, som
+    /// tjekker webklientens JavaScript-udgave.
+    #[test]
+    fn safety_number_vector() {
+        let a = Identity::from_secret_bytes(&[1u8; 64]).public();
+        let b = Identity::from_secret_bytes(&[2u8; 64]).public();
+        let hex = |k: &[u8]| k.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        assert_eq!(
+            hex(&a.to_bytes()),
+            "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5ca4e09292b651c278b9772c569f5fa9bb13d906b46ab68c9df9dc2b4409f8a209"
+        );
+        assert_eq!(
+            hex(&b.to_bytes()),
+            "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394ce8d3ad1ccb633ec7b70c17814a5c76ecd029685050d344745ba05870e587d59"
+        );
+        let n = safety_number(&a, &b);
+        assert_eq!(&n[..], b"490814315733469534137526241006891633028785095264240772532833");
+        // Rækkefølgen er ligegyldig.
+        assert_eq!(n, safety_number(&b, &a));
+    }
+
+    #[test]
+    fn safety_number_changes_with_key() {
+        let a = Identity::generate(&mut OsRng).public();
+        let b = Identity::generate(&mut OsRng).public();
+        let mut b2 = b;
+        b2.dh[0] ^= 1;
+        assert_ne!(safety_number(&a, &b), safety_number(&a, &b2));
+        assert!(safety_number(&a, &b).iter().all(|c| c.is_ascii_digit()));
     }
 }

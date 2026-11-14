@@ -5,6 +5,8 @@
 //! * `0x01` filtilbud: der kommer en fil i `Fragment`-pakker
 //! * `0x02` kontrolkommando til en node: tæller (u32) + companion-kommando
 //! * `0x03` svar på en kontrolkommando: tæller (u32) + companion-hændelse
+//! * `0x04` resync: ingen data. Sendes som init i en ny FS-session, når vi
+//!   har fået en ratchet-besked, vi ikke kan læse (fx efter genstart).
 //!
 //! Kontrolkommandoer er krypterede direkte beskeder, så modtageren ved med
 //! sikkerhed, hvem afsenderen er. Noden udfører dem kun, hvis afsenderen
@@ -20,6 +22,7 @@ pub const TEXT: u8 = 0x00;
 pub const FILE_OFFER: u8 = 0x01;
 pub const CONTROL: u8 = 0x02;
 pub const CONTROL_REPLY: u8 = 0x03;
+pub const RESYNC: u8 = 0x04;
 
 /// Fast del af et filtilbud.
 pub const OFFER_FIXED: usize = 1 + 8 + 4 + 2 + 1 + 32 + 16 + 1;
@@ -46,6 +49,8 @@ pub enum Content<'a> {
     Control(u32, &'a [u8]),
     /// (tæller, companion-hændelse uden længdefelt)
     ControlReply(u32, &'a [u8]),
+    /// Afsenderen har startet en ny FS-session med os.
+    Resync,
     Unknown(u8),
 }
 
@@ -98,6 +103,7 @@ pub fn parse(plain: &[u8]) -> Option<Content<'_>> {
                 Content::ControlReply(n, &plain[5..])
             })
         }
+        RESYNC => Some(Content::Resync),
         t => Some(Content::Unknown(t)),
     }
 }
@@ -153,6 +159,7 @@ mod tests {
     fn text_and_unknown() {
         assert_eq!(parse(&text(b"hej")), Some(Content::Text(b"hej")));
         assert_eq!(parse(&[9, 1]), Some(Content::Unknown(9)));
+        assert_eq!(parse(&[RESYNC]), Some(Content::Resync));
         assert_eq!(parse(&[]), None);
         assert_eq!(parse(&[FILE_OFFER, 1, 2]), None);
     }

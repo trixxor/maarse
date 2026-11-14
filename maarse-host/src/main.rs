@@ -15,6 +15,7 @@ mod dht;
 mod fuzz_tests;
 mod links;
 mod node;
+mod sessions;
 mod web;
 
 use std::net::SocketAddr;

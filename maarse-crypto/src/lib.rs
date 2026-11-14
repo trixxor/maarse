@@ -8,11 +8,13 @@
 //! * Et announce beviser, at en adresse tilhører et nøglepar, og kan bære
 //!   lidt app-data (fx energistatus og position til kortet).
 //!
-//! Kryptering af beskeder ligger i [`seal`]. Ratchets kommer senere.
+//! Kryptering af beskeder ligger i [`seal`]; forward secrecy for samtaler
+//! (sessioner med ratchet) i [`ratchet`].
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+pub mod ratchet;
 pub mod seal;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};

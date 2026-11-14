@@ -63,12 +63,34 @@ async fn main(spawner: Spawner) {
     // (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, rf_tx, led, standard-radio)
     #[cfg(feature = "board-heltec-v4")]
     let (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, rf_tx, led, default_radio) = {
-        // PA-modul (GC1109): forsyning GPIO7, chip-enable GPIO2. GPIO46
-        // vælger PA under afsendelse (styres af radioen via rf_tx).
+        // PA-modul: V4.2 har GC1109, V4.3 har KCT8103L. Begge får strøm via
+        // GPIO7 og chip-enable på GPIO2. Hvilken der sidder, ses (som i
+        // Meshtastic) ved at læse GPIO2 som input, efter GPIO7 er tændt:
+        // høj = KCT8103L, lav = GC1109.
+        // Under afsendelse skal PA'en slås til via rf_tx, som radioen sætter
+        // høj ved TX og lav ellers:
+        //   GC1109:   GPIO46 (CPS: høj = fuld PA, lav = bypass)
+        //   KCT8103L: GPIO5  (CTX: høj = TX, lav = RX med LNA)
         let pa_power = Output::new(p.GPIO7, Level::High, OutputConfig::default());
-        let pa_en = Output::new(p.GPIO2, Level::High, OutputConfig::default());
         core::mem::forget(pa_power);
+        Timer::after_millis(1).await;
+        let mut gpio2 = p.GPIO2;
+        let kct8103l = {
+            let probe = Input::new(gpio2.reborrow(), InputConfig::default().with_pull(Pull::None));
+            Timer::after_millis(1).await;
+            probe.is_high()
+        };
+        let pa_en = Output::new(gpio2, Level::High, OutputConfig::default());
         core::mem::forget(pa_en);
+        let pa_tx = if kct8103l {
+            Output::new(p.GPIO5, Level::Low, OutputConfig::default())
+        } else {
+            Output::new(p.GPIO46, Level::Low, OutputConfig::default())
+        };
+        maarse_fw_common::bus::RADIO_DIAG[3].store(
+            if kct8103l { 2 } else { 1 },
+            core::sync::atomic::Ordering::Relaxed,
+        );
         Timer::after_millis(5).await;
         (
             p.GPIO9,
@@ -79,7 +101,7 @@ async fn main(spawner: Spawner) {
             Input::new(p.GPIO14, InputConfig::default().with_pull(Pull::None)),
             Input::new(p.GPIO13, InputConfig::default().with_pull(Pull::None)),
             None::<Output<'static>>,
-            Some(Output::new(p.GPIO46, Level::Low, OutputConfig::default())),
+            Some(pa_tx),
             Output::new(p.GPIO35, Level::Low, OutputConfig::default()),
             // PA'en giver ca. +7..+10 dB: 10 dBm ind ≈ 17–20 dBm ud.
             RadioConfig {

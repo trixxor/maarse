@@ -391,7 +391,7 @@ fn main() {
     }
     if let Some(port) = &cfg.meshcore {
         settings::report(format!("  MeshCore: {port} @ {} baud (companion_radio_usb)", cfg.meshcore_baud), false);
-        meshcore::spawn(port.clone(), cfg.meshcore_baud, cfg.meshcore_bridge.clone(), tx.clone());
+        meshcore::spawn(port.clone(), cfg.meshcore_baud, cfg.meshcore_bridge.clone(), cfg.data_dir.clone(), tx.clone());
     }
     if let Some(m) = &cfg.mqtt {
         settings::report(format!("  MQTT:     {} (emner under {}/)", m.addr, m.prefix), false);

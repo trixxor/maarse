@@ -129,6 +129,16 @@ pub struct Neighbor {
     pub rssi: i16,
     pub last_ms: u64,
     pub count: u32,
+    /// Role from the neighbor's own announce (role TLV), if heard.
+    pub role: Option<crate::router::Role>,
+    /// Last time we heard this neighbor forward a flood (0 = never).
+    pub forwarded_ms: u64,
+    /// Last time we heard a repeater re-forward a flood this neighbor
+    /// forwarded, i.e. a repeater can hear it (0 = never).
+    pub covered_ms: u64,
+    /// The neighbor's own report (role field flag) of whether it hears a
+    /// repeater directly. `None` if it has not said (older firmware).
+    pub hears_repeater: Option<bool>,
 }
 
 /// Tabel over direkte naboer. Fuld: den længst ikke hørte erstattes.
@@ -158,13 +168,54 @@ impl<const N: usize> NeighborTable<N> {
             }
             return;
         }
-        let n = Neighbor { id, addr, snr, rssi, last_ms: now_ms, count: 1 };
+        let n = Neighbor { id, addr, snr, rssi, last_ms: now_ms, count: 1, role: None, forwarded_ms: 0, covered_ms: 0, hears_repeater: None };
+        // Full: drop the neighbor heard longest ago, but keep repeaters and
+        // anchors (the edge bridge rule needs them) while others can go.
+        let infra = |n: &Neighbor| matches!(n.role, Some(crate::router::Role::Repeater | crate::router::Role::Anchor));
         if self.items.is_full()
-            && let Some(i) = self.items.iter().enumerate().min_by_key(|(_, n)| n.last_ms).map(|(i, _)| i)
+            && let Some(i) = self
+                .items
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, n)| (infra(n), n.last_ms))
+                .map(|(i, _)| i)
         {
             self.items.swap_remove(i);
         }
         let _ = self.items.push(n);
+    }
+
+    /// Records a neighbor's role and, if known, whether it hears a
+    /// repeater (from its announce).
+    pub fn set_role(&mut self, id: PathId, role: crate::router::Role, hears_repeater: Option<bool>) {
+        if let Some(n) = self.items.iter_mut().find(|n| n.id == id) {
+            n.role = Some(role);
+            if hears_repeater.is_some() {
+                n.hears_repeater = hears_repeater;
+            }
+        }
+    }
+
+    pub fn get(&self, id: PathId) -> Option<&Neighbor> {
+        self.items.iter().find(|n| n.id == id)
+    }
+
+    /// The neighbor forwarded a flood we heard.
+    pub fn mark_forwarded(&mut self, id: PathId, now_ms: u64) {
+        if let Some(n) = self.items.iter_mut().find(|n| n.id == id) {
+            n.forwarded_ms = now_ms;
+        }
+    }
+
+    /// A repeater re-forwarded a flood from this neighbor.
+    pub fn mark_covered(&mut self, id: PathId, now_ms: u64) {
+        if let Some(n) = self.items.iter_mut().find(|n| n.id == id) {
+            n.covered_ms = now_ms;
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Neighbor> {
+        self.items.iter()
     }
 
     /// Sorteret efter senest hørt først.

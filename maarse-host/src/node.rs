@@ -1886,6 +1886,10 @@ impl Node {
             Command::SetIdentity { confirm, secret } => self.set_identity(id, confirm, secret),
 
             Command::SetTime { .. } => {} // maarse-host har sit eget ur
+            Command::SetWifi(_) | Command::GetWifi => self.send_client(
+                id,
+                &err_ev(0, error_code::BAD_FRAME, "maarse-host uses the computer's network; Wi-Fi settings are for ESP32 nodes."),
+            ),
             Command::GetRadio | Command::SetRadio(_) => self.send_client(
                 id,
                 &err_ev(

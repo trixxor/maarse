@@ -35,6 +35,7 @@ pub type Ble = ExternalController<BleConnector<'static>, 20>;
 
 #[embassy_executor::task]
 pub async fn ble_task(sdc: Ble, mac: [u8; 6], name: &'static str) {
+    maarse_fw_common::bus::BLE_ACTIVE.store(true, core::sync::atomic::Ordering::Relaxed);
     let mut resources: HostResources<DefaultPacketPool, 1, 2> = HostResources::new();
     let stack = trouble_host::new(sdc, &mut resources)
         .set_random_address(Address::random(mac))
@@ -62,7 +63,9 @@ pub async fn ble_task(sdc: Ble, mac: [u8; 6], name: &'static str) {
                 };
                 // Gamle rammer fra før forbindelsen smides væk.
                 while BLE_OUT.try_receive().is_ok() {}
+                maarse_fw_common::bus::BLE_CONNECTED.store(true, core::sync::atomic::Ordering::Relaxed);
                 select(rx_task(&server, &conn), tx_task(&server, &conn)).await;
+                maarse_fw_common::bus::BLE_CONNECTED.store(false, core::sync::atomic::Ordering::Relaxed);
             }
         },
     )

@@ -57,7 +57,10 @@ impl Node {
             temp_dc: None,
         });
         let name = (!self.ext.name.is_empty()).then_some(self.ext.name.as_bytes());
-        appdata::build(self.my_postbox.as_ref(), true, s.position(), tel.as_ref(), name).to_vec()
+        let mut v = appdata::build(self.my_postbox.as_ref(), true, s.position(), tel.as_ref(), name);
+        let flags = if self.router.hears_repeater(self.now_ms()) { appdata::ROLE_HEARS_REPEATER } else { 0 };
+        appdata::push_role(&mut v, self.router.role.as_u8(), flags);
+        v.to_vec()
     }
 
     /// Kommandoer til diagnose og deling. Returnerer kommandoen, hvis den
@@ -123,6 +126,13 @@ impl Node {
     /// Position og telemetri fra et verificeret announce.
     pub(super) fn on_app_data(&mut self, from: Address, hops: u8, app_data: &[u8]) {
         let a = appdata::parse(app_data);
+        if hops == 0
+            && let Some(role) = a.role.and_then(maarse_core::router::Role::from_u8)
+        {
+            let now = self.now_ms();
+            let hears = a.role_flags.map(|f| f & appdata::ROLE_HEARS_REPEATER != 0);
+            self.router.note_role(from.path_id(), role, hears, 0, 0, now);
+        }
         match &a.name {
             Some(n) => {
                 self.ext.names.insert(from, (n.clone(), hops));

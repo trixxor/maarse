@@ -58,7 +58,12 @@ fn handle(stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
     let n = stream.peek(&mut peek).unwrap_or(0);
     let head = String::from_utf8_lossy(&peek[..n]).to_ascii_lowercase();
     if head.contains("upgrade: websocket") {
-        websocket(stream, token, tx);
+        let path = head.split_whitespace().nth(1).unwrap_or("");
+        if path == "/mc" || path.starts_with("/mc?") {
+            mc_socket(stream, token);
+        } else {
+            websocket(stream, token, tx);
+        }
     } else {
         http(stream, token, data_dir);
     }
@@ -215,7 +220,10 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn websocket(stream: TcpStream, token: &str, tx: Sender<In>) {
+type Ws = tungstenite::WebSocket<TcpStream>;
+
+/// WebSocket-håndtryk med adgangstjek (se [`allowed`]).
+fn accept(stream: TcpStream, token: &str) -> Option<Ws> {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
     // Lokal: loopback, eller samme maskine via dens egen netværksadresse
     // (fx en browser på PC'en, der åbner http://<pc-ens-ip>:8080/).
@@ -227,7 +235,7 @@ fn websocket(stream: TcpStream, token: &str, tx: Sender<In>) {
         let get = |n: &str| h.get(n).and_then(|v| v.to_str().ok());
         if allowed(req.uri().query().unwrap_or(""), get("host"), get("origin"), loopback, token) {
             if !loopback {
-                println!("[web] klient forbundet fra {peer} (origin {origin})");
+                println!("[web] klient forbundet fra {peer} (origin {origin}, {})", req.uri().path());
             }
             Ok(resp)
         } else {
@@ -238,12 +246,52 @@ fn websocket(stream: TcpStream, token: &str, tx: Sender<In>) {
             Err(r)
         }
     };
-    let Ok(mut ws) = tungstenite::accept_hdr(stream, check) else {
+    let ws = tungstenite::accept_hdr(stream, check).ok()?;
+    let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(30)));
+    Some(ws)
+}
+
+/// `/mc`: MeshCore-styring med JSON-tekstbeskeder (se meshcore.rs).
+fn mc_socket(stream: TcpStream, token: &str) {
+    let Some(mut ws) = accept(stream, token) else { return };
+    let rx = crate::meshcore::subscribe();
+    let enabled = crate::meshcore::command(r#"{"op":"state"}"#.into());
+    if !enabled && ws.send(Message::Text(crate::meshcore::disabled_state())).is_err() {
         return;
-    };
-    let _ = ws
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(30)));
+    }
+    loop {
+        match ws.read() {
+            Ok(Message::Text(t)) => {
+                if !crate::meshcore::command(t.clone()) {
+                    let op = serde_json::from_str::<serde_json::Value>(&t)
+                        .ok()
+                        .and_then(|v| v["op"].as_str().map(str::to_string))
+                        .unwrap_or_default();
+                    let reply = if op == "state" {
+                        crate::meshcore::disabled_state()
+                    } else {
+                        serde_json::json!({"ev":"err","op":op,"msg":"MeshCore er ikke slået til"}).to_string()
+                    };
+                    if ws.send(Message::Text(reply)).is_err() {
+                        break;
+                    }
+                }
+            }
+            Ok(Message::Close(_)) => break,
+            Ok(_) => {}
+            Err(WsError::Io(e)) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+            Err(_) => break,
+        }
+        while let Ok(s) = rx.try_recv() {
+            if ws.send(Message::Text(s)).is_err() {
+                return;
+            }
+        }
+    }
+}
+
+fn websocket(stream: TcpStream, token: &str, tx: Sender<In>) {
+    let Some(mut ws) = accept(stream, token) else { return };
     let id = next_id();
     let (ctx, crx) = channel::<Vec<u8>>();
     if tx.send(In::ClientUp { id, tx: ctx }).is_err() {

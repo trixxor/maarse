@@ -77,6 +77,22 @@ Ved opstart skriver hosten en **adgangsnøgle** (gemt i `<data>/adgangsnoegle.tx
 
 Lad kun hosten lytte på et netværk, du stoler på (VPN eller hjemmenet). Nøglen beskytter adgangen, men forbindelsen selv er ikke krypteret uden VPN.
 
+## Wi-Fi backbone on ESP32-S3 nodes
+
+A Heltec V4 or XIAO ESP32-S3 can join a Wi-Fi network (for example a phone hotspot on a hilltop) and keep a TCP backbone link to a maarse-host. Everyone who can reach the node over LoRa then reaches the rest of the network: the home host, the DHT and anyone behind it.
+
+- **Setup:** connect to the node over USB or Bluetooth, open *Radio* in the web client and fill in *Wi-Fi backbone*: network name, password and host (`host:port`, port 4242 by default). Saving stores the settings in flash and restarts the node. Leaving the password empty for the same network keeps the saved one.
+- **The host side:** any maarse-host listening on its backbone port (`--listen`, default `0.0.0.0:4242`). The node connects *out*, so it works behind a hotspot's NAT, but the host must be reachable from that network: a public address, a forwarded port or a VPN.
+- **How it works** (`firmware/esp/src/wifi.rs`): esp-radio's Wi-Fi driver with embassy-net (DHCP, DNS, TCP). Frames are the backbone's `length (u16 LE) | packet`; a host's region greeting is skipped. The node sends every packet over both LoRa and the link and treats packets from the link as a perfect radio link (SNR 10), like maarse-host does with TCP. The router's duplicate filter stops loops. The link reconnects every 5 s after a failure; joining is retried the same way.
+- **Edge bridge:** the host's announce carries the role *repeater*, so the node hears a repeater over the link. A node with the role *relay* then becomes an edge bridge for its LoRa group automatically (see "Edge bridge").
+- **Protocol:** command `0x28 SetWifi` (`enabled | ssid_len ssid | pass_len pass | peer`, local only: it is refused through `Remote`, as it carries the password), `0x29 GetWifi`, and event `0xa6 Wifi` (`enabled | state | ip (4) | ssid_len ssid | peer`; state 0 off, 1 joining, 2 online, 3 linked). The password is never sent back. Flash: `WIF1` at offset `0x340` of the settings page. nRF52840 boards and maarse-host answer `SetWifi` with an error.
+- **One radio at a time:** the firmware contains both Bluetooth and Wi-Fi, but runs only one. With Wi-Fi enabled, Bluetooth is not started (the phone app then reaches the node through the host instead). **Hold the PRG button for 3 s** to switch between them (the node saves the choice and restarts), or use `SetWifi` over USB. The heap then only holds one driver (Bluetooth about 34 KB, Wi-Fi about 37 KB), so `coex` is not needed. `--no-default-features --features board-heltec-v4,ble` (or `,wifi`) builds a firmware with just one of them.
+- **Display (Heltec V4):** a line with the links in use (`USB`, `BT` connected or `(BT)` advertising, `WiFi`), the IP address in Wi-Fi mode (or `WiFi joining...`, `no host`), and a short note after a long press.
+- **RAM (no PSRAM on the Heltec V4):** the node runs in its own task and the router (about 53 KB) has its own static. Before, the main task's future held the whole node (67 KB), and the stack frame that builds it stayed reserved for the whole run; with both radio drivers built in, the stack overflowed 0.2 s after boot. Boot now uses about 45 KB of stack and leaves about 52 KB unused.
+- **Safety:** Wi-Fi starts 10 s after boot, so USB is always reachable first. If starting it crashes the board twice in a row, it is skipped (state 10) until the board has run stably for 60 s. Panics are printed over USB (`PANIC: …`). The status page shows free stack and heap and the crash count (keys 87–92).
+- **Tested on hardware** (Heltec V4.3, 14 Nov 2026): joins a WPA2 network, gets an address by DHCP, answers ping (6–20 ms), keeps the link to a maarse-host (`LINKED`) and joins again after the access point restarts; switching between Bluetooth and Wi-Fi with the button works both ways. Not yet tested: messages from LoRa through the Wi-Fi link, DNS names as host, and the XIAO ESP32-S3.
+- **Host:** backbone links use TCP keepalive (30 s idle, then every 10 s), so a node that drops off its hotspot without closing the link is noticed and the link is closed.
+
 ## Android-app (APK)
 
 `python tools/build_apk.py` bygger `dist/maarse.apk` direkte med Android SDK'ens værktøjer (aapt2, javac, d8, zipalign, apksigner), uden Gradle. Kræver Android SDK (build-tools 34+, platform 35+) og en JDK; APK'en signeres med debug-nøglen.
@@ -135,6 +151,15 @@ En maarse-host derhjemme kan fungere som én fælles indbakke, som telefonen, de
 - **Reparation af ruter:** uden kvittering inden for 20 s glemmes ruten, og beskeden sendes igen med en ny ruteforespørgsel (op til 2 gange). Ubesvarede ruteforespørgsler gentages efter 45 s (svaret kan være længe undervejs i et stort net), og et sent svar på en ældre forespørgsel gælder stadig.
 - **Mobile noder** (`mobile = true`) stoler ikke på ruter, der er ældre end 30 s.
 - Roller: `Client`, `Repeater` og `Relay` (skov-tilstand, højst 4 hop).
+
+### Edge bridge (relays at the edge of repeater coverage)
+
+A relay that can reach a repeater (say, someone who climbs a hill) is often the group's only way into the repeater network. Normal flood suppression silenced it: it heard the group's own copies of a flood with good SNR, concluded that "the area is covered" and stayed quiet, so about half of all routes were lost.
+
+- **Role field in announces:** app-data field `0x06 | 2 | role | flags` (`maarse-core/src/appdata.rs`). Flag bit 0 (`ROLE_HEARS_REPEATER`) means "I hear a repeater or anchor directly". Older nodes skip the field.
+- **Neighbor table:** each neighbor stores its role and its own report, when it last forwarded a flood, and when a repeater was heard echoing it ("covered"). Repeaters and anchors are kept when the table is full.
+- **Rule** (`Router::is_edge_bridge`): a relay that hears a repeater and has a recent neighbor that does not (by its own report, or, for older firmware, a forwarding neighbor no repeater has echoed) ignores duplicate floods from non-repeaters. A copy from a repeater still silences it, so it does not add traffic where the repeater already covers the group. Observations expire after 5 minutes (`EDGE_WINDOW_MS`).
+- **Simulation** (`maarse-sim --hill`, 10 seeds each): with 10–40 people on 3–8 km and one person on a hill that reaches a repeater 12 km away, delivery to the base rises from 55–82 % to 96–100 %, with less airtime. Where repeaters stand inside the forest, the rule costs 0–3 points of acks and up to about 30 % more airtime with partial coverage; with dense coverage it is close to unchanged. `--suppress legacy` runs the old behaviour for comparison. The simulator does not send announces; it hands each node what a neighbor's announce would say.
 
 ## Spam-beskyttelse (arbejdsbevis)
 

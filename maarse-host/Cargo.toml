@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# TCP keepalive on backbone links, so a peer that vanished (a node on a phone
+# hotspot, a restart) is noticed and its link closed.
+socket2 = { version = "0.6", features = ["all"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 serialport = { version = "4", default-features = false }
 sha2 = "0.10"
@@ -13,6 +16,7 @@ miniz_oxide = "0.8"
 maarse-core = { version = "0.1.0", path = "../maarse-core" }
 maarse-crypto = { version = "0.1.0", path = "../maarse-crypto" }
 tungstenite = "0.24"
+serde_json = "1"
 tun-rs = { version = "2.8", optional = true }
 
 [features]

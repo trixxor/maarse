@@ -19,6 +19,10 @@ pub async fn usb_task(usb: USB_DEVICE<'static>) {
                 Ok(n) if n > 0 => {
                     dec.push(&buf[..n]);
                     while let Some(f) = dec.next_frame() {
+                        maarse_fw_common::bus::USB_LAST_RX.store(
+                            embassy_time::Instant::now().as_secs().max(1) as u32,
+                            core::sync::atomic::Ordering::Relaxed,
+                        );
                         USB_IN.send(f).await;
                     }
                 }

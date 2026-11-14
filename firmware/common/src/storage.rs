@@ -10,6 +10,8 @@
 //!   0x180: "ROL1" + rolle (1: 0 = klient, 1 = repeater, 2 = relay)
 //!   0x200: "REG1" + strict (1) + længde (1) + regionsnavne (≤ 120, kommasepareret)
 //!   0x300: "SHR1" + delingsindstillinger (10, se `companion::Sharing`)
+//!   0x320: "NAM1" + length (1) + display name (≤ 24)
+//!   0x340: "WIF1" + enabled (1) + SSID (1 + 32) + password (1 + 64) + peer (1 + 64)
 //!   ```
 //!   Uden "SHR1" deles hverken position eller telemetri (standard).
 //!   Skrives kun første gang og når radio/administratorer/rolle/regioner ændres.
@@ -46,8 +48,12 @@ const SHARING_MAGIC: &[u8; 4] = b"SHR1";
 const SHARING_OFF: usize = 0x300;
 const NAME_MAGIC: &[u8; 4] = b"NAM1";
 const NAME_OFF: usize = 0x320;
+const WIFI_MAGIC: &[u8; 4] = b"WIF1";
+const WIFI_OFF: usize = 0x340;
+const WIFI_LEN: usize = 4 + 1 + 33 + 65 + 65;
+const _: () = assert!(NAME_OFF + 5 + maarse_core::appdata::MAX_NAME <= WIFI_OFF);
 /// Brugt del af siden, rundet op til hele ord.
-const USED: usize = (NAME_OFF + 5 + maarse_core::appdata::MAX_NAME).div_ceil(4) * 4;
+const USED: usize = (WIFI_OFF + WIFI_LEN).div_ceil(4) * 4;
 const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
 
 const MAIL_MAGIC: u8 = 0xA5;
@@ -341,6 +347,38 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         self.write_page(&buf);
     }
 
+    fn save_wifi(&mut self, w: &maarse_core::companion::WifiSettings) {
+        let mut buf = self.read_page();
+        let b = &mut buf[WIFI_OFF..WIFI_OFF + WIFI_LEN];
+        b.fill(0);
+        b[..4].copy_from_slice(WIFI_MAGIC);
+        b[4] = w.enabled as u8;
+        let mut put = |at: usize, s: &[u8]| {
+            b[at] = s.len() as u8;
+            b[at + 1..at + 1 + s.len()].copy_from_slice(s);
+        };
+        put(5, &w.ssid);
+        put(5 + 33, &w.password);
+        put(5 + 33 + 65, &w.peer);
+        self.write_page(&buf);
+    }
+    fn load_wifi(&mut self) -> maarse_core::companion::WifiSettings {
+        let buf = self.read_page();
+        let b = &buf[WIFI_OFF..WIFI_OFF + WIFI_LEN];
+        if &b[..4] != WIFI_MAGIC {
+            return Default::default();
+        }
+        fn get<const N: usize>(b: &[u8], at: usize) -> heapless::Vec<u8, N> {
+            let n = (b[at] as usize).min(N);
+            heapless::Vec::from_slice(&b[at + 1..at + 1 + n]).unwrap_or_default()
+        }
+        maarse_core::companion::WifiSettings {
+            enabled: b[4] == 1,
+            ssid: get(b, 5),
+            password: get(b, 5 + 33),
+            peer: get(b, 5 + 33 + 65),
+        }
+    }
     fn load_name(&mut self) -> maarse_core::appdata::Name {
         let buf = self.read_page();
         if &buf[NAME_OFF..NAME_OFF + 4] != NAME_MAGIC {

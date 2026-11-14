@@ -48,6 +48,29 @@ struct Config {
     highway: bool,
     road_km: f64,
     car_kmh: f64,
+    /// Repeaternes positioner langs vejen (km); tom = jævnt fordelt.
+    repeater_km: Vec<f64>,
+    /// Basen står i vejens start (bilen kører væk fra den).
+    base_start: bool,
+    /// Hver N'te repeater får rollen anker (0 = ingen).
+    anchor_every: usize,
+    /// Skov: alle ikke-repeatere går rundt, og skoven dæmper ekstra.
+    forest: bool,
+    /// Ekstra dæmpning i skov (dB pr. km).
+    forest_db_km: f64,
+    walk_kmh: f64,
+    /// Rolle for alle deltagere (ikke-repeatere) i skov-tilstand.
+    group_role: Role,
+    relay_hops: Option<u8>,
+    /// Skov med bakke: repeater 12 km væk, base ved repeateren og én mand
+    /// på en bakke midt i skoven (`None` = han går rundt som de andre).
+    hill: bool,
+    hill_role: Option<Role>,
+    /// Ekstra antennegevinst for manden på bakken (højde, sigtelinje).
+    hill_gain_db: f64,
+    /// Flood-dæmpning for relays: 0 = normal, 1 = bro (relays, der hører en
+    /// repeater direkte, tier ikke), 2 = ingen dæmpning for relays.
+    suppress: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -75,6 +98,18 @@ impl Default for Config {
             highway: false,
             road_km: 100.0,
             car_kmh: 110.0,
+            repeater_km: Vec::new(),
+            base_start: false,
+            anchor_every: 0,
+            forest: false,
+            forest_db_km: 10.0,
+            walk_kmh: 5.0,
+            group_role: Role::Relay,
+            relay_hops: None,
+            hill: false,
+            hill_role: Some(Role::Relay),
+            hill_gain_db: 10.0,
+            suppress: 0,
         }
     }
 }
@@ -98,7 +133,68 @@ fn parse_args() -> Config {
             "--duration" => c.duration_s = v.parse().expect("--duration"),
             "--road-km" => c.road_km = v.parse().expect("--road-km"),
             "--car-kmh" => c.car_kmh = v.parse().expect("--car-kmh"),
+            "--suppress" => {
+                c.suppress = match v.as_str() {
+                    "normal" => 0,
+                    "legacy" => 9,
+                    "bridge" => 1,
+                    "none" => 2,
+                    "bridge-relay" => 3,
+                    "bridge-weak" => 4,
+                    "bridge-weak-relay" => 5,
+                    "bridge-relay-late" => 6,
+                    "bridge-edge" => 7,
+                    "bridge-edge-relay" => 8,
+                    _ => panic!("--suppress normal|bridge|none"),
+                }
+            }
+            "--hill-gain" => c.hill_gain_db = v.parse().expect("--hill-gain"),
+            "--hill-role" => {
+                c.hill_role = match v.as_str() {
+                    "client" => Some(Role::Client),
+                    "relay" => Some(Role::Relay),
+                    "repeater" => Some(Role::Repeater),
+                    "none" => None,
+                    _ => panic!("--hill-role client|relay|repeater|none"),
+                }
+            }
+            "--forest-db-km" => c.forest_db_km = v.parse().expect("--forest-db-km"),
+            "--walk-kmh" => c.walk_kmh = v.parse().expect("--walk-kmh"),
+            "--relay-hops" => c.relay_hops = Some(v.parse().expect("--relay-hops")),
+            "--role" => {
+                c.group_role = match v.as_str() {
+                    "client" => Role::Client,
+                    "relay" => Role::Relay,
+                    "repeater" => Role::Repeater,
+                    _ => panic!("--role client|relay|repeater"),
+                }
+            }
+            "--anchor-every" => c.anchor_every = v.parse().expect("--anchor-every"),
+            "--repeater-gain" => c.repeater_gain_db = v.parse().expect("--repeater-gain (dB)"),
+            "--repeater-km" => {
+                c.repeater_km = v.split(',').map(|x| x.trim().parse().expect("--repeater-km")).collect();
+                c.repeaters = c.repeater_km.len();
+                c.highway = true;
+            }
             "--trace-json" => trace::open(&v),
+            "--hill" => {
+                c.hill = true;
+                c.forest = true;
+                c.repeaters = 1;
+                i += 1;
+                continue;
+            }
+            "--forest" => {
+                c.forest = true;
+                c.repeaters = c.hill as usize;
+                i += 1;
+                continue;
+            }
+            "--base-start" => {
+                c.base_start = true;
+                i += 1;
+                continue;
+            }
             "--highway" => {
                 c.highway = true;
                 i += 1;
@@ -116,7 +212,11 @@ fn parse_args() -> Config {
                     "maarse-sim [--nodes N] [--repeaters R] [--area-km A] [--messages M]\n\
                      \x20        [--channel-messages K] [--seed S] [--sf 7-12] [--duty promille]\n\
                      \x20        [--mode maarse|flood] [--hop-limit H] [--duration sekunder]\n\
-                     \x20        [--highway [--road-km 100] [--car-kmh 110]]\n\
+                     \x20        [--highway [--road-km 100] [--car-kmh 110] [--base-start]]\n\
+                     \x20        [--repeater-km 0,30,...] [--repeater-gain dB] [--anchor-every N]\n\
+                     \x20        [--forest [--forest-db-km 10] [--walk-kmh 5] [--role client|relay|repeater] [--relay-hops H]]\n\
+                     \x20        [--hill [--hill-role relay|client|repeater|none] [--hill-gain 10]]\n\
+                     \x20        [--suppress normal|legacy|bridge|bridge-relay|bridge-weak|bridge-weak-relay|none]   (flood-dæmpning for relays i skov)\n\
                      \x20        [--trace-json fil|-]   (hændelsesspor til maarse-lab)"
                 );
                 std::process::exit(0);
@@ -138,6 +238,8 @@ struct Radio {
     noise_dbm: f64,
     /// Mindste SNR, der kan modtages ved denne spreading factor.
     snr_min: f64,
+    /// Ekstra dæmpning (dB pr. meter), fx skov.
+    extra_db_m: f64,
 }
 
 impl Radio {
@@ -157,13 +259,14 @@ impl Radio {
             tx_dbm,
             noise_dbm,
             snr_min,
+            extra_db_m: 0.0,
         }
     }
 
     fn rx_dbm(&self, dist_m: f64, gain_db: f64) -> f64 {
         let d = dist_m.max(1.0);
         let path_loss = 31.2 + 30.0 * d.log10();
-        self.tx_dbm + gain_db - path_loss
+        self.tx_dbm + gain_db - path_loss - self.extra_db_m * d
     }
 
     fn snr(&self, rx_dbm: f64) -> f64 {
@@ -258,6 +361,10 @@ struct Sim {
     msgs: Vec<Msg>,
     stats: Stats,
     public_channel: Address,
+    /// Skov: hver deltagers næste mål.
+    waypoints: Vec<(f64, f64)>,
+    /// Broer i `--suppress bridge-relay`: ser bort fra dubletter fra relays.
+    bridges: Vec<bool>,
     cancelled: HashSet<(usize, u64)>,
     /// Svar-ID -> (højeste hop nået, stiens længde, antal udsendelser)
     resp_track: HashMap<u64, (u8, u8, u32)>,
@@ -270,7 +377,8 @@ struct Sim {
 impl Sim {
     fn new(cfg: Config) -> Self {
         let mut rng = SmallRng::seed_from_u64(cfg.seed);
-        let radio = Radio::new(cfg.sf, cfg.tx_dbm);
+        let mut radio = Radio::new(cfg.sf, cfg.tx_dbm);
+        let _ = &mut radio; // skovens dæmpning regnes i Sim::link_rx
         let side = cfg.area_km * 1000.0;
         let public_channel = Address([0xc0; 16]);
         let mut nodes = Vec::new();
@@ -278,8 +386,12 @@ impl Sim {
             let repeater = i < cfg.repeaters;
             let mut addr = [0u8; 16];
             rng.fill(&mut addr[..]);
-            let role = if repeater {
+            let role = if repeater && cfg.anchor_every > 0 && i % cfg.anchor_every == cfg.anchor_every - 1 {
+                Role::Anchor
+            } else if repeater {
                 Role::Repeater
+            } else if cfg.forest {
+                cfg.group_role
             } else {
                 Role::Client
             };
@@ -288,6 +400,12 @@ impl Sim {
             if cfg.highway && i == cfg.nodes - 1 {
                 router.mobile = true; // bilen
             }
+            if cfg.forest && !repeater {
+                router.mobile = true;
+                if let Some(h) = cfg.relay_hops {
+                    router.relay_hops = h;
+                }
+            }
             nodes.push(SimNode {
                 router,
                 flood_seen: HashSet::new(),
@@ -295,11 +413,15 @@ impl Sim {
                     let road = cfg.road_km * 1000.0;
                     if repeater {
                         // Jævnt fordelt langs vejen, lidt fra kørebanen.
-                        (i as f64 * road / (cfg.repeaters.max(2) - 1) as f64, 300.0)
+                        match cfg.repeater_km.get(i) {
+                            Some(km) => (km * 1000.0, 300.0),
+                            None => (i as f64 * road / (cfg.repeaters.max(2) - 1) as f64, 300.0),
+                        }
                     } else if i == cfg.nodes - 1 {
                         (0.0, 0.0) // bilen starter ved vejens begyndelse
                     } else if i == cfg.repeaters {
-                        (road, 1500.0) // fast node i vejens ende
+                        // fast node i vejens ende (eller start med --base-start)
+                        (if cfg.base_start { 0.0 } else { road }, 1500.0)
                     } else {
                         (rng.gen_range(0.0..road), rng.gen_range(-3000.0..3000.0))
                     }
@@ -340,6 +462,8 @@ impl Sim {
             msgs: Vec::new(),
             stats: Stats::default(),
             public_channel,
+            waypoints: Vec::new(),
+            bridges: Vec::new(),
             cancelled: HashSet::new(),
             resp_track: HashMap::new(),
             flood_pending: HashSet::new(),
@@ -363,15 +487,31 @@ impl Sim {
         if self.cfg.highway {
             return self.setup_highway();
         }
+        if self.cfg.hill {
+            self.setup_hill();
+        } else if self.cfg.forest {
+            self.recompute_links();
+        }
         let clients: Vec<usize> = (self.cfg.repeaters..self.cfg.nodes).collect();
+        let hill = self.hill_nodes();
         assert!(clients.len() >= 2, "der skal være mindst to klienter");
         let span = self.cfg.duration_s * 1000 * 2 / 3;
         for m in 0..self.cfg.messages {
-            let from = clients[self.rng.gen_range(0..clients.len())];
-            let mut to = from;
-            while to == from {
-                to = clients[self.rng.gen_range(0..clients.len())];
-            }
+            let (from, to) = if let Some((base, h)) = hill {
+                // Base <-> en tilfældig mand i skoven (ikke ham på bakken).
+                let mut w = base;
+                while w == base || (w == h && self.cfg.hill_role.is_some()) {
+                    w = clients[self.rng.gen_range(0..clients.len())];
+                }
+                if m % 2 == 0 { (base, w) } else { (w, base) }
+            } else {
+                let from = clients[self.rng.gen_range(0..clients.len())];
+                let mut to = from;
+                while to == from {
+                    to = clients[self.rng.gen_range(0..clients.len())];
+                }
+                (from, to)
+            };
             let mut payload = format!("besked {m} fra {from} til {to}: ").into_bytes();
             payload.resize(60, b'.');
             let id = packet_id(PacketType::Data, &self.nodes[to].router.addr, &payload);
@@ -392,6 +532,179 @@ impl Sim {
             let at = self.rng.gen_range(1000..span.max(1001));
             self.schedule(at, Event::SendChannel { from, n });
         }
+        if self.cfg.forest {
+            self.schedule(5000, Event::Move);
+        }
+    }
+
+    /// Indeks for basen og manden på bakken (kun med `--hill`).
+    fn hill_nodes(&self) -> Option<(usize, usize)> {
+        self.cfg.hill.then(|| (self.cfg.repeaters, self.cfg.nodes - 1))
+    }
+
+    /// Står manden på bakken (og ikke bare går rundt)?
+    fn on_hill(&self, i: usize) -> bool {
+        self.cfg.hill_role.is_some() && self.hill_nodes().is_some_and(|(_, h)| h == i)
+    }
+
+    /// Går noden rundt i skoven?
+    fn walker(&self, i: usize) -> bool {
+        if self.nodes[i].repeater || self.on_hill(i) {
+            return false;
+        }
+        self.hill_nodes().is_none_or(|(base, _)| i != base)
+    }
+
+    /// Modtaget effekt fra a til b. Skoven dæmper kun, når mindst én af dem
+    /// står i skoven; fra bakken ned i skoven dæmper den det halve.
+    fn link_rx(&self, a: usize, b: usize) -> f64 {
+        let (pa, pb) = (self.nodes[a].pos, self.nodes[b].pos);
+        let d = ((pa.0 - pb.0).powi(2) + (pa.1 - pb.1).powi(2)).sqrt();
+        let mut g = self.cfg.repeater_gain_db * (self.nodes[a].repeater as u8 + self.nodes[b].repeater as u8) as f64;
+        let hill = self.on_hill(a) || self.on_hill(b);
+        if hill {
+            g += self.cfg.hill_gain_db;
+        }
+        let forest = match (self.walker(a), self.walker(b)) {
+            (true, true) => 1.0,
+            (true, false) | (false, true) if hill => 0.5,
+            (true, false) | (false, true) => 1.0,
+            (false, false) if self.cfg.hill => 0.0,
+            (false, false) => 1.0,
+        };
+        self.radio.rx_dbm(d, g) - self.cfg.forest_db_km / 1000.0 * d * forest
+    }
+
+    /// Bakke-scenariet: placér repeater, base og manden på bakken.
+    fn setup_hill(&mut self) {
+        let side = self.cfg.area_km * 1000.0;
+        let (base, hill) = self.hill_nodes().unwrap();
+        self.nodes[0].pos = (side + 12_000.0, side / 2.0);
+        self.nodes[base].pos = (side + 12_300.0, side / 2.0 + 200.0);
+        self.nodes[base].router.mobile = false;
+        self.nodes[base].router.role = Role::Client;
+        if let Some(r) = self.cfg.hill_role {
+            self.nodes[hill].pos = (side / 2.0, side / 2.0);
+            self.nodes[hill].router.role = r;
+            self.nodes[hill].router.mobile = false;
+        }
+        self.recompute_links();
+    }
+
+    fn recompute_links(&mut self) {
+        let n = self.nodes.len();
+        for a in 0..n {
+            for b in a + 1..n {
+                let rx = self.link_rx(a, b);
+                self.gain[a][b] = rx;
+                self.gain[b][a] = rx;
+            }
+        }
+        self.apply_suppress();
+    }
+
+    /// Bro-tilstand (forslag): en relay, der hører en repeater direkte, er
+    /// undtaget fra flood-dæmpning. Simulatoren bruger linkbudgettet som
+    /// "hørt"; på hardware ville det være et announce med rollefelt.
+    fn apply_suppress(&mut self) {
+        let n = self.nodes.len();
+        // Real behaviour: nodes learn their repeater neighbours from 0-hop
+        // announces with the role field. The simulator does not send
+        // announces, so it hands each node what such an announce would say.
+        if self.cfg.suppress == 0 {
+            let now = self.now;
+            // What each node would put in its announce right now.
+            let reports: Vec<(u16, Role, bool)> = (0..n)
+                .map(|j| {
+                    let rt = &self.nodes[j].router;
+                    (rt.addr.path_id(), rt.role, rt.hears_repeater(now))
+                })
+                .collect();
+            for i in 0..n {
+                for j in 0..n {
+                    if j == i || !(self.audible(j, i) && self.audible(i, j)) {
+                        continue;
+                    }
+                    let (id, role, hears) = reports[j];
+                    let snr = self.radio.snr(self.gain[j][i]).clamp(-30.0, 30.0) as i8;
+                    let rt = &mut self.nodes[i].router;
+                    rt.neighbors.heard(id, None, snr, 0, now);
+                    rt.neighbors.set_role(id, role, Some(hears));
+                }
+            }
+        }
+        for i in 0..n {
+            if self.nodes[i].router.role != Role::Relay {
+                continue;
+            }
+            let hears_rep = (0..n).any(|r| r != i && self.nodes[r].repeater && self.audible(r, i) && self.audible(i, r));
+            // Bedste SNR til en repeater; "svag" = under routerens grænse for
+            // svage kopier (kanten af dækningen).
+            let best = (0..n)
+                .filter(|&r| r != i && self.nodes[r].repeater && self.audible(r, i) && self.audible(i, r))
+                .map(|r| self.radio.snr(self.gain[r][i]))
+                .fold(f64::NEG_INFINITY, f64::max);
+            // Kant: vi hører en repeater, og mindst én af vores naboer (ikke
+            // repeater) hører ingen repeater. Så er vi nødvendige som bro.
+            let edge = hears_rep
+                && (0..n).any(|j| {
+                    j != i
+                        && !self.nodes[j].repeater
+                        && self.audible(j, i)
+                        && self.audible(i, j)
+                        && !(0..n).any(|r| self.nodes[r].repeater && self.audible(j, r) && self.audible(r, j))
+                });
+            let limit = std::env::var("BRIDGE_SNR").ok().and_then(|v| v.parse().ok()).unwrap_or(self.nodes[i].router.weak_snr_db as f64);
+            let weak = hears_rep && best < limit;
+            if self.bridges.len() != n {
+                self.bridges = vec![false; n];
+            }
+            self.bridges[i] = (matches!(self.cfg.suppress, 3 | 6) && hears_rep)
+                || (self.cfg.suppress == 5 && weak)
+                || (self.cfg.suppress == 8 && edge);
+            let late = std::env::var("BRIDGE_LATE_SLOTS").ok().and_then(|v| v.parse().ok()).unwrap_or(8u32);
+            self.nodes[i].router.extra_flood_delay_ms =
+                if self.cfg.suppress == 6 && hears_rep { late * maarse_core::router::DEFAULT_SLOT_MS } else { 0 };
+            let quiet = match self.cfg.suppress {
+                1 => hears_rep,
+                4 => weak,
+                7 => edge,
+                2 => true,
+                _ => false,
+            };
+            self.nodes[i].router.suppress_after = if quiet { u8::MAX } else { 1 };
+        }
+    }
+
+    /// Skov: hver deltager går mod et tilfældigt mål og vælger et nyt ved
+    /// ankomst. Links til og fra deltagerne regnes om hvert 5. sekund.
+    fn move_walkers(&mut self) {
+        let side = self.cfg.area_km * 1000.0;
+        let n = self.nodes.len();
+        if self.waypoints.is_empty() {
+            for _ in 0..n {
+                let w = (self.rng.gen_range(0.0..side), self.rng.gen_range(0.0..side));
+                self.waypoints.push(w);
+            }
+        }
+        let step = self.cfg.walk_kmh / 3.6 * 5.0;
+        for i in 0..n {
+            if !self.walker(i) {
+                continue;
+            }
+            let (p, w) = (self.nodes[i].pos, self.waypoints[i]);
+            let (dx, dy) = (w.0 - p.0, w.1 - p.1);
+            let d = (dx * dx + dy * dy).sqrt();
+            if d <= step {
+                self.nodes[i].pos = w;
+                self.waypoints[i] = (self.rng.gen_range(0.0..side), self.rng.gen_range(0.0..side));
+            } else {
+                self.nodes[i].pos = (p.0 + dx / d * step, p.1 + dy / d * step);
+            }
+            trace::moved(self.now, i, self.nodes[i].pos);
+        }
+        self.recompute_links();
+        self.schedule(self.now + 5000, Event::Move);
     }
 
     /// Motorvej: den faste node i vejens ende og bilen skriver skiftevis.
@@ -465,6 +778,7 @@ impl Sim {
     fn handle(&mut self, ev: Event) {
         match ev {
             Event::SendDirect { msg } => self.send_direct(msg, 0),
+            Event::Move if self.cfg.forest => self.move_walkers(),
             Event::Move => self.move_car(),
             Event::CheckAck { msg, attempt } => {
                 let m = &self.msgs[msg];
@@ -759,7 +1073,15 @@ impl Sim {
                 continue;
             }
             rx.ok(r);
-            let snr = self.radio.snr(p).clamp(-30.0, 30.0) as i8;
+            let mut snr = self.radio.snr(p).clamp(-30.0, 30.0) as i8;
+            // Bro-regel (forslag): en dublet fra en relay tæller ikke med i
+            // broens flood-dæmpning; en dublet fra en repeater gør.
+            if self.bridges.get(r).copied().unwrap_or(false)
+                && self.nodes[sender].router.role == Role::Relay
+                && self.nodes[r].router.seen(&packet)
+            {
+                snr = -30;
+            }
             match self.cfg.mode {
                 Mode::Maarse => {
                     let actions = self.nodes[r].router.on_receive(&packet, snr, self.now);

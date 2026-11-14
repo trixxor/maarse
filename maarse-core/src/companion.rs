@@ -24,6 +24,35 @@ pub const MAX_TEXT: usize = 240;
 pub const PROTOCOL_VERSION: u8 = 2;
 
 pub type Text = heapless::Vec<u8, MAX_TEXT>;
+
+/// Wi-Fi backbone settings for nodes with Wi-Fi (ESP32-S3): the node joins
+/// the network `ssid` and keeps a TCP backbone link to `peer` (`host:port`,
+/// a maarse-host listening with `--listen`). Command `0x28`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WifiSettings {
+    pub enabled: bool,
+    pub ssid: heapless::Vec<u8, 32>,
+    pub password: heapless::Vec<u8, 64>,
+    pub peer: heapless::Vec<u8, 64>,
+}
+
+/// Wi-Fi state in [`Event::Wifi`].
+pub mod wifi_state {
+    /// Wi-Fi is off (disabled, or enabled but the node has not restarted yet).
+    pub const OFF: u8 = 0;
+    /// Joining the Wi-Fi network.
+    pub const JOINING: u8 = 1;
+    /// On the network with an IP address, connecting to the peer.
+    pub const ONLINE: u8 = 2;
+    /// Backbone link to the peer is up.
+    pub const LINKED: u8 = 3;
+    /// Not started: the board crashed twice in a row with Wi-Fi on.
+    pub const SKIPPED_AFTER_CRASH: u8 = 10;
+    /// Not started: the SSID or password is not valid for the driver.
+    pub const BAD_SETTINGS: u8 = 11;
+    /// Not started: the Wi-Fi driver could not be initialised.
+    pub const DRIVER_FAILED: u8 = 12;
+}
 pub type FrameBuf = heapless::Vec<u8, { MAX_FRAME + 2 }>;
 
 /// Kommandoer fra klient til node.
@@ -101,6 +130,13 @@ pub enum Command {
     SetName { name: Text },
     /// 0x25: hent visningsnavnet. Svar: `Name`.
     GetName,
+    /// 0x28: set the Wi-Fi backbone settings (local only: USB or Bluetooth,
+    /// never through `Remote`, as it carries the password). Saved; the node
+    /// restarts to apply them. Reply: `Wifi`. Nodes without Wi-Fi answer
+    /// `Error`.
+    SetWifi(WifiSettings),
+    /// 0x29: Wi-Fi status. Reply: `Wifi` (never contains the password).
+    GetWifi,
     /// 0x26: bed `dest` om siden `path` (`maarse://<dest>/<path>`). Svar:
     /// `Sent`; siden kommer som en fil med MIME
     /// [`crate::content::PAGE_MIME`]. Ugyldig sti giver `Error`.
@@ -372,6 +408,15 @@ pub enum Event {
     Name { name: Text },
     /// 0xa5: opkaldsdata fra `from` (se `SendCall`).
     Call { from: Address, data: Text },
+    /// 0xa6: Wi-Fi backbone status (see [`wifi_state`]). `ip` is 0.0.0.0
+    /// until the node has an address.
+    Wifi {
+        enabled: bool,
+        state: u8,
+        ip: [u8; 4],
+        ssid: heapless::Vec<u8, 32>,
+        peer: heapless::Vec<u8, 64>,
+    },
     /// 0xa3: position og/eller telemetri fra en anden nodes announce.
     /// Format: adresse (16) | hop | app-data-felter (0x03/0x04, se
     /// [`crate::appdata`]).
@@ -575,6 +620,18 @@ pub mod stat {
     pub const BATTERY_PERCENT: u8 = 85;
     /// Chip-temperatur i 0,1 °C (lidt over omgivelserne).
     pub const TEMPERATURE_DC: u8 = 86;
+    /// Main stack never used since boot (bytes); firmware diagnostics.
+    pub const STACK_FREE: u8 = 87;
+    /// Free heap right now (bytes).
+    pub const HEAP_FREE: u8 = 88;
+    /// Smallest free heap since boot (bytes).
+    pub const HEAP_MIN_FREE: u8 = 89;
+    /// Crashes in a row (firmware restarts from a panic), see Wi-Fi guard.
+    pub const CRASHES: u8 = 90;
+    /// Line of the last panic (firmware diagnostics, 0 = none).
+    pub const PANIC_LINE: u8 = 91;
+    /// Hash of the last panic's file name (FNV-1a, 32 bit).
+    pub const PANIC_FILE: u8 = 92;
 }
 
 /// Fejlkoder i `Event::Error`.
@@ -649,6 +706,12 @@ impl<'a> R<'a> {
     fn addr(&mut self) -> Result<Address, FrameError> {
         Address::from_slice(self.take(16)?).ok_or(FrameError::TooShort)
     }
+    /// A string with a one-byte length in front, at most `N` bytes.
+    fn short<const N: usize>(&mut self) -> Result<heapless::Vec<u8, N>, FrameError> {
+        let n = self.u8()? as usize;
+        heapless::Vec::from_slice(self.take(n)?).map_err(|_| FrameError::TooLong)
+    }
+
     fn text(&mut self) -> Result<Text, FrameError> {
         let t = Text::from_slice(self.0).map_err(|_| FrameError::TooLong)?;
         self.0 = &[];
@@ -739,6 +802,14 @@ impl Command {
             Command::SetSharing(s) => W::new(0x22).b(&s.to_bytes()).done(),
             Command::GetSharing => W::new(0x23).done(),
             Command::SetName { name } => W::new(0x24).b(name).done(),
+            Command::SetWifi(w) => W::new(0x28)
+                .b(&[w.enabled as u8, w.ssid.len() as u8])
+                .b(&w.ssid)
+                .b(&[w.password.len() as u8])
+                .b(&w.password)
+                .b(&w.peer)
+                .done(),
+            Command::GetWifi => W::new(0x29).done(),
             Command::GetName => W::new(0x25).done(),
             Command::RequestPage { req, dest, path } => W::new(0x26).b(&req.to_le_bytes()).b(&dest.0).b(path).done(),
             Command::SendCall { dest, data } => W::new(0x27).b(&dest.0).b(data).done(),
@@ -814,6 +885,14 @@ impl Command {
             0x22 => Command::SetSharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
             0x23 => Command::GetSharing,
             0x24 => Command::SetName { name: r.text()? },
+            0x28 => {
+                let enabled = r.u8()? != 0;
+                let ssid = r.short()?;
+                let password = r.short()?;
+                let peer = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
+                Command::SetWifi(WifiSettings { enabled, ssid, password, peer })
+            }
+            0x29 => Command::GetWifi,
             0x25 => Command::GetName,
             0x26 => Command::RequestPage { req: r.u16()?, dest: r.addr()?, path: r.text()? },
             0x27 => Command::SendCall { dest: r.addr()?, data: r.text()? },
@@ -996,6 +1075,13 @@ impl Event {
             Event::Sharing(s) => W::new(0xa2).b(&s.to_bytes()).done(),
             Event::Name { name } => W::new(0xa4).b(name).done(),
             Event::Call { from, data } => W::new(0xa5).b(&from.0).b(data).done(),
+            Event::Wifi { enabled, state, ip, ssid, peer } => W::new(0xa6)
+                .b(&[*enabled as u8, *state])
+                .b(ip)
+                .b(&[ssid.len() as u8])
+                .b(ssid)
+                .b(peer)
+                .done(),
             Event::NodeInfo { addr, hops, position, telemetry, name } => {
                 let data = crate::appdata::build(None, false, *position, telemetry.as_ref(), name.as_deref());
                 W::new(0xa3).b(&addr.0).b(&[*hops]).b(&data).done()
@@ -1162,6 +1248,15 @@ impl Event {
             }
             0xa4 => Event::Name { name: r.text()? },
             0xa5 => Event::Call { from: r.addr()?, data: r.text()? },
+            0xa6 => {
+                let enabled = r.u8()? != 0;
+                let state = r.u8()?;
+                let mut ip = [0u8; 4];
+                ip.copy_from_slice(r.take(4)?);
+                let ssid = r.short()?;
+                let peer = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
+                Event::Wifi { enabled, state, ip, ssid, peer }
+            }
             0xb4 => {
                 let addr = r.addr()?;
                 let identity = r.identity().ok_or(FrameError::TooShort)?;
@@ -1515,6 +1610,26 @@ mod tests {
         roundtrip_cmd(Command::GetName);
         roundtrip_cmd(Command::RequestPage { req: 9, dest: Address([3; 16]), path: text(b"vejr") });
         roundtrip_cmd(Command::SetName { name: text("Ida".as_bytes()) });
+        roundtrip_cmd(Command::SetWifi(WifiSettings {
+            enabled: true,
+            ssid: heapless::Vec::from_slice(b"Telefon").unwrap(),
+            password: heapless::Vec::from_slice(b"hemmelig kode").unwrap(),
+            peer: heapless::Vec::from_slice(b"example.org:4242").unwrap(),
+        }));
+        roundtrip_cmd(Command::SetWifi(WifiSettings::default()));
+        roundtrip_cmd(Command::GetWifi);
+        roundtrip_ev(Event::Wifi {
+            enabled: true,
+            state: wifi_state::LINKED,
+            ip: [192, 168, 43, 17],
+            ssid: heapless::Vec::from_slice(b"Telefon").unwrap(),
+            peer: heapless::Vec::from_slice(b"10.8.0.2:4242").unwrap(),
+        });
+        // A 33-byte SSID does not fit.
+        let mut long = vec![0x28, 1, 33];
+        long.extend_from_slice(&[b'x'; 33]);
+        long.push(0);
+        assert!(Command::decode(&long).is_err());
         roundtrip_ev(Event::Name { name: text(b"Ida") });
         roundtrip_cmd(Command::SendCall { dest: Address([4; 16]), data: text(&[1, 2, 3]) });
         roundtrip_ev(Event::Call { from: Address([4; 16]), data: text(&[9]) });

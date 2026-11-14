@@ -120,6 +120,15 @@
   .row input { flex: 1 1 140px; }
   .hint { font-size: 12px; color: var(--muted); margin: 4px 8px; line-height: 1.45; }
   .muted { color: var(--muted); }
+  .net { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .4px; padding: 0 5px; border-radius: 4px; line-height: 16px;
+         vertical-align: 1px; text-transform: none; border: 1px solid var(--line); }
+  .net.maa { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .net.mc { color: var(--signal); background: var(--signal-soft); border-color: transparent; }
+  .mc-cli { font-family: var(--mono); font-size: 12px; background: var(--raised); border: 1px solid var(--line); border-radius: 8px;
+            padding: 8px 10px; max-height: 320px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .mc-cli .cmd { color: var(--accent); }
+  .mc-stat { display: grid; grid-template-columns: 180px 1fr; gap: 4px 12px; font-size: 14px; max-width: 560px; }
+  .mc-stat span:nth-child(odd) { color: var(--muted); }
 
   /* ---------- samtale ---------- */
   section.chat { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
@@ -316,6 +325,7 @@
         <p class="hint">Du kan skrive til en node, når din node har hørt dens announce.</p>
       </div>
     </details>
+    <div id="mc-side" hidden></div>
   </aside>
 
   <section class="chat">
@@ -400,6 +410,12 @@ const Cmd = {
   getSharing: () => frame(0x23),
   setName: (name) => frame(0x24, enc.encode(name)),
   getName: () => frame(0x25),
+  // Wi-Fi backbone (ESP32 nodes): enabled | ssid (len-prefixed) | password (len-prefixed) | peer
+  setWifi: (enabled, ssid, password, peer) => {
+    const s = enc.encode(ssid).slice(0, 32), p = enc.encode(password).slice(0, 64);
+    return frame(0x28, new Uint8Array([enabled ? 1 : 0, s.length]), s, new Uint8Array([p.length]), p, enc.encode(peer).slice(0, 64));
+  },
+  getWifi: () => frame(0x29),
   requestPage: (req, destHex, path) => frame(0x26, u16(req), unhex(destHex), enc.encode(path)),
   otaBegin: (req, flags, manifest) => frame(0x18, u16(req), [flags], manifest),
   otaChunk: (req, offset, data) => frame(0x19, u16(req), u32(offset), data),
@@ -478,6 +494,11 @@ function decodeEvent(f) {
     case 0xb4: return { type: "identityChanged", addr: a(1), identity: f.slice(17, 81) };
     case 0xa4: return { type: "name", name: txt(1) };
     case 0xa5: return { type: "call", from: a(1), data: f.slice(17) };
+    case 0xa6: {
+      const n = f[7];
+      return { type: "wifi", enabled: !!f[1], state: f[2], ip: Array.from(f.slice(3, 7)).join("."),
+               ssid: dec.decode(f.slice(8, 8 + n)), peer: dec.decode(f.slice(8 + n)) };
+    }
     case 0xa3: return { type: "nodeInfo", addr: a(1), hops: f[17], ...parseAppData(f.slice(18)) };
     case 0x8e: return { type: "log", text: txt(1) };
     case 0x8f: return { type: "error", req: f[1] | f[2] << 8, code: f[3], text: txt(4) };
@@ -707,6 +728,7 @@ function renderChat() {
   if (state.view === "firmware") return renderFirmware(box);
   if (state.view === "backup") return renderBackup(box);
   if (state.view === "settings") return renderSettings(box);
+  if (state.view === "mc") return renderMc(box);
   renderChatTools();
   if (renderSecurityView(box)) return;
   if (!key) { box.appendChild($("empty") || document.createElement("div")); return; }
@@ -716,8 +738,12 @@ function renderChat() {
   for (const m of conv(key)) {
     const d = document.createElement("div");
     d.className = "msg" + (m.mine ? " mine" : "");
+    const br = !m.mine && kind === "ch" && !m.url && m.text ? mcBridged(m.text) : null;
     if (!m.mine && kind === "ch") {
-      const f = document.createElement("div"); f.className = "from"; f.textContent = label(m.from); d.appendChild(f);
+      const f = document.createElement("div"); f.className = "from";
+      if (br) f.append(el("span", { className: "net mc", textContent: "MC", title: "Fra MeshCore via broen" }), " " + br.name);
+      else { if (mcBridgedTo(state.channels.get(addr))) f.append(el("span", { className: "net maa", textContent: "Må" }), " "); f.append(label(m.from)); }
+      d.appendChild(f);
     }
     if (m.url && m.voice) {
       const a = document.createElement("audio"); a.controls = true; a.src = m.url; a.preload = "metadata"; d.appendChild(a);
@@ -727,7 +753,7 @@ function renderChat() {
       const l = document.createElement("a"); l.href = m.url; l.download = m.name || "fil"; l.textContent = "⬇ " + (m.name || "fil");
       d.appendChild(l);
     }
-    if (m.text) { const t = document.createElement("div"); t.textContent = m.text; d.appendChild(t); }
+    if (m.text) { const t = document.createElement("div"); t.textContent = br ? br.text : m.text; d.appendChild(t); }
     if (m.progress !== undefined && m.progress < 1) {
       const p = document.createElement("div"); p.className = "progress";
       const bar = document.createElement("div"); bar.style.width = Math.round(m.progress * 100) + "%";
@@ -760,6 +786,7 @@ function setConnected(on, name) {
   for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-diag", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
   $("btn-settings").disabled = !(on && transport instanceof WsTransport);
+  if (on && transport instanceof WsTransport) mcConnect(); else mcClose();
   $("btn-disconnect").hidden = !on;
   for (const id of ["btn-ws", "btn-serial", "btn-ble"]) $(id).disabled = on;
   updateComposer();
@@ -916,6 +943,7 @@ function onEvent(ev) {
     case "sharing": state.sharing = ev; if (state.view === "diag") renderChat(); break;
     case "call": onCallData(ev.from, ev.data); break;
     case "name": state.myName = ev.name; if (state.view === "diag") renderChat(); break;
+    case "wifi": state.wifi = ev; if (state.view === "radio") renderChat(); break;
     case "nodeInfo": {
       const old = state.nodeInfo.get(ev.addr) || {};
       const nameChanged = old.name !== ev.name;
@@ -1224,6 +1252,39 @@ function renderRadio(box) {
   };
   f.append(document.createElement("span"), saveRole);
   w.appendChild(f);
+  box.appendChild(w);
+  if (!state.target && state.wifi) renderWifi(box);
+}
+
+// Wi-Fi backbone for ESP32 nodes: the node joins a network (e.g. a phone
+// hotspot) and keeps a TCP link to a maarse-host, so a LoRa group reaches
+// the rest of the network. Only shown when the node answered GetWifi.
+const WIFI_STATES = ["Off", "Joining the Wi-Fi network…", "On the network, connecting to the host…", "Connected to the host"];
+function renderWifi(box) {
+  const wf = state.wifi;
+  const w = document.createElement("div"); w.className = "warn";
+  w.innerHTML = "<b>Wi-Fi backbone</b> — the node joins a Wi-Fi network (e.g. a phone hotspot) and keeps a connection to a " +
+    "maarse-host, so everyone who can reach this node over LoRa can reach the rest of the network. The host must be reachable " +
+    "on its backbone port (<code>--listen</code>, default 4242), e.g. over a VPN or a forwarded port. Saving restarts the node.";
+  const st = document.createElement("p"); st.className = "hint";
+  st.textContent = "Status: " + (WIFI_STATES[wf.state] || "?") + (wf.ip !== "0.0.0.0" ? ` (IP ${wf.ip})` : "") +
+    (wf.enabled && wf.state === 0 ? " — restart the node to start Wi-Fi" : "");
+  const f = document.createElement("div"); f.className = "form";
+  const row = (label, el) => { const l = document.createElement("label"); l.textContent = label; f.append(l, el); return el; };
+  const on = row("Enabled", document.createElement("input")); on.type = "checkbox"; on.checked = wf.enabled;
+  const ssid = row("Network (SSID)", document.createElement("input")); ssid.value = wf.ssid; ssid.maxLength = 32;
+  const pw = row("Password", document.createElement("input")); pw.type = "password"; pw.maxLength = 64;
+  pw.placeholder = wf.ssid ? "empty = keep the saved password" : "empty = open network";
+  const peer = row("Host (host:port)", document.createElement("input")); peer.value = wf.peer; peer.maxLength = 64;
+  peer.placeholder = "10.8.0.2:4242";
+  const save = document.createElement("button"); save.textContent = "Save and restart";
+  save.onclick = () => {
+    if (on.checked && (!ssid.value.trim() || !peer.value.trim())) { log("Wi-Fi needs a network name and a host"); return; }
+    transport?.send(Cmd.setWifi(on.checked, ssid.value.trim(), pw.value, peer.value.trim()));
+    log("Wi-Fi settings sent; the node restarts");
+  };
+  f.append(document.createElement("span"), save);
+  w.append(st, f);
   box.appendChild(w);
 }
 
@@ -1556,7 +1617,10 @@ function setView(v) {
       transport.send(Cmd.getStats());
       state.statsTimer = setInterval(() => transport?.send(Cmd.getStats()), 5000);
     }
-    if (v === "radio") { transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); transport.send(Cmd.getRegions()); transport.send(Cmd.getStats()); }
+    if (v === "radio") {
+      transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); transport.send(Cmd.getRegions()); transport.send(Cmd.getStats());
+      if (!(transport instanceof WsTransport)) transport.send(Cmd.getWifi());
+    }
     if (v === "diag") {
       const poll = () => { transport?.send(Cmd.getNeighbors()); transport?.send(Cmd.getStats()); };
       poll(); transport.send(Cmd.getSharing()); transport.send(Cmd.getName());
@@ -2437,6 +2501,376 @@ function renderRemote(box) {
   const row = el("div", { className: "row" }); row.append(go, forget);
   w.append(f, row);
   box.append(w);
+}
+
+// ---------- MeshCore (via maarse-host, WebSocket /mc med JSON) ----------
+
+const MC_MAX = 500; // loft pr. samtale i hukommelsen
+const MC_TYPES = { chat: ["Klient", "K"], repeater: ["Repeater", "R"], room: ["Rumserver", "Rum"], sensor: ["Sensor", "S"], "?": ["Ukendt", "?"] };
+const mc = { ws: null, st: null, msgs: new Map(), unread: new Map(), sel: null, logins: new Map(), status: new Map(), cli: new Map(), pings: new Map(),
+             note: "", retry: null, want: false };
+
+function mcUrl() { return wsUrl().replace(/\/ws(\?|$)/, "/mc$1"); }
+function mcConnect() {
+  mc.want = true;
+  if (mc.ws) return;
+  clearTimeout(mc.retry);
+  let ws;
+  try { ws = new WebSocket(mcUrl()); } catch (e) { mcRetry(); return; }
+  mc.ws = ws;
+  ws.onopen = () => mcSend({ op: "state" });
+  ws.onmessage = e => { let ev; try { ev = JSON.parse(e.data); } catch { return; } mcOnEvent(ev); };
+  ws.onclose = () => { if (mc.ws === ws) { mc.ws = null; mcRetry(); } };
+  mcRenderSide();
+}
+function mcRetry() { if (mc.want) mc.retry = setTimeout(() => { if (mc.want && transport instanceof WsTransport) mcConnect(); }, 5000); }
+function mcClose() {
+  mc.want = false; clearTimeout(mc.retry);
+  const ws = mc.ws; mc.ws = null; mc.st = null; ws?.close();
+  if (state.view === "mc") setView("chat");
+  mcRenderSide();
+}
+function mcSend(o) {
+  if (mc.ws?.readyState !== WebSocket.OPEN) { log("MeshCore: ikke forbundet"); return false; }
+  mc.ws.send(JSON.stringify(o)); return true;
+}
+
+// "[MC Navn] tekst" i en Må:rse-kanal er en brobygget besked fra MeshCore.
+function mcBridged(text) { const m = /^\[MC ([^\]]+)\] ([\s\S]*)$/.exec(text); return m ? { name: m[1], text: m[2] } : null; }
+function mcBridgedTo(maarseName) { return !!maarseName && !!mc.st?.channels?.some(c => c.bridge && c.bridge === maarseName); }
+
+const mcContacts = () => mc.st?.contacts || [];
+function mcContact(key) {
+  if (!key) return null;
+  return mcContacts().find(c => c.key === key) || (key.length < 64 ? mcContacts().find(c => c.key.startsWith(key)) : null);
+}
+function mcAgo(ts) {
+  if (!ts) return "aldrig";
+  const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
+  if (s < 60) return "lige nu";
+  if (s < 3600) return Math.floor(s / 60) + " min siden";
+  if (s < 86400) return Math.floor(s / 3600) + " t siden";
+  return Math.floor(s / 86400) + " d siden";
+}
+const mcTime = ts => (ts ? new Date(ts * 1000) : new Date()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const mcSelKey = sel => sel ? (sel.kind === "chan" ? "c:" + sel.idx : sel.kind === "dm" ? "d:" + sel.key : sel.kind === "node" ? "n:" + sel.key : "o") : "";
+
+function mcPush(key, m) {
+  if (!mc.msgs.has(key)) mc.msgs.set(key, []);
+  const a = mc.msgs.get(key); a.push(m);
+  if (a.length > MC_MAX) a.splice(0, a.length - MC_MAX);
+  const open = state.view === "mc" && mcSelKey(mc.sel) === key;
+  if (!open && !m.mine) mc.unread.set(key, (mc.unread.get(key) || 0) + 1);
+  mcRenderSide();
+  if (open) renderChat();
+}
+
+function mcOnEvent(ev) {
+  const redraw = () => { mcRenderSide(); if (state.view === "mc") renderChat(); };
+  switch (ev.ev) {
+    case "state": mc.st = ev; redraw(); break;
+    case "advert": {
+      if (!mc.st) break;
+      mc.st.contacts = mc.st.contacts || [];
+      const c = mc.st.contacts.find(x => x.key === ev.key);
+      if (c) { if (ev.name) c.name = ev.name; if (ev.type) c.type = ev.type; c.last_advert = ev.ts || c.last_advert; }
+      else mc.st.contacts.push({ key: ev.key, name: ev.name || ev.key.slice(0, 12), type: ev.type || "?", last_advert: ev.ts, path_len: -1 });
+      redraw(); break;
+    }
+    case "msg":
+      if (ev.kind === "chan") {
+        const i = (ev.text || "").indexOf(": ");
+        const from = i > 0 && i < 40 ? ev.text.slice(0, i) : null;
+        mcPush("c:" + ev.idx, { from, text: from ? ev.text.slice(i + 2) : ev.text, ts: ev.ts, snr: ev.snr, hops: ev.path_len });
+      } else if (ev.kind === "dm") {
+        const c = mcContact(ev.key);
+        const key = c?.key || ev.key;
+        // Svar fra en repeater/rum uden for konsollen vises i DM-samtalen.
+        mcPush("d:" + key, { from: ev.name || c?.name, text: ev.text, ts: ev.ts, snr: ev.snr });
+      }
+      break;
+    case "sent": break;
+    case "ok": if (["chan_set", "chan_del", "bridge", "contact_del", "advert"].includes(ev.op)) { mc.note = "✓ Udført (" + ev.op + ")"; redraw(); } break;
+    case "err":
+      if (ev.op === "ping") for (const p of mc.pings.values()) if (p.pending) { clearTimeout(p.timer); p.pending = false; }
+      mc.note = "Fejl (" + (ev.op || "?") + "): " + ev.msg; log("MeshCore: " + ev.msg); redraw(); break;
+    case "login":
+      mc.logins.set(ev.key, { ok: !!ev.ok, admin: !!ev.admin });
+      if (!ev.ok) mc.note = "Login afvist";
+      else { mc.note = ""; mcSend({ op: "status", key: ev.key }); }
+      redraw(); break;
+    case "status": mc.status.set(ev.key, { fields: ev.fields || {}, at: Date.now() }); redraw(); break;
+    case "pong": {
+      const p = mc.pings.get(ev.key) || { log: [] };
+      clearTimeout(p.timer); p.pending = false;
+      p.log.unshift({ ms: ev.ms, snrs: ev.snrs || [], last: ev.last, at: Date.now() }); p.log.length = Math.min(p.log.length, 5);
+      mc.pings.set(ev.key, p); redraw(); break;
+    }
+    case "cli": mcCli(ev.key, { text: ev.text }); break;
+    case "log": log("MeshCore: " + ev.text); break;
+  }
+}
+function mcCli(key, entry) {
+  const c = mcContact(key); key = c?.key || key;
+  if (!mc.cli.has(key)) mc.cli.set(key, []);
+  const a = mc.cli.get(key); a.push(entry);
+  if (a.length > MC_MAX) a.splice(0, a.length - MC_MAX);
+  if (state.view === "mc" && mc.sel?.key === key) renderChat();
+}
+
+function mcOpen(sel) {
+  setView("mc"); mc.sel = sel; mc.note = "";
+  mc.unread.delete(mcSelKey(sel));
+  mcRenderSide(); renderChat();
+}
+function mcRow(sel, avText, name, title, extra) {
+  const key = mcSelKey(sel);
+  const d = el("div", { className: "conv" + (state.view === "mc" && mcSelKey(mc.sel) === key ? " active" : ""), title });
+  d.append(el("span", { className: "av", textContent: avText }), el("span", { className: "name", textContent: name }));
+  if (extra) d.append(el("span", { className: "hint", textContent: extra, style: "margin:0;white-space:nowrap" }));
+  const u = mc.unread.get(key);
+  if (u) d.append(el("span", { className: "badge", textContent: u }));
+  d.onclick = () => mcOpen(sel);
+  return d;
+}
+
+function mcRenderSide() {
+  const box = $("mc-side");
+  if (!box) return;
+  box.hidden = !(transport instanceof WsTransport);
+  box.replaceChildren();
+  if (box.hidden) return;
+  box.append(el("h2", {}, el("span", {}, "MeshCore ", el("span", { className: "net mc", textContent: "MC" }))));
+  if (!mc.st) { box.append(el("p", { className: "hint", textContent: mc.ws ? "Henter …" : "Ingen forbindelse til /mc endnu." })); return; }
+  if (!mc.st.connected) {
+    const p = el("p", { className: "hint" }, "MeshCore er ikke slået til på hosten. Åbn ");
+    const a = el("a", { href: "#", textContent: "Indstillinger" });
+    a.onclick = e => { e.preventDefault(); $("btn-settings").click(); };
+    p.append(a, " og angiv MeshCore-radioens serielle port i feltet --meshcore.");
+    box.append(p); return;
+  }
+  box.append(mcRow({ kind: "overview" }, "⚙", mc.st.self?.name || "MeshCore-node", "Annoncering og kanaler"));
+  box.append(el("h2", { textContent: "MC-kanaler" }));
+  for (const c of mc.st.channels || []) {
+    if (!c.name) continue;
+    box.append(mcRow({ kind: "chan", idx: c.idx }, "#", c.name, "Kanal " + c.idx + (c.bridge ? " · bro til " + c.bridge : ""), c.bridge ? "⇄ " + c.bridge : ""));
+  }
+  box.append(el("h2", { textContent: "MC-kontakter" }));
+  const list = [...mcContacts()].sort((a, b) => (b.last_advert || 0) - (a.last_advert || 0));
+  for (const c of list) {
+    const t = MC_TYPES[c.type] || MC_TYPES["?"];
+    const sel = c.type === "repeater" || c.type === "room" ? { kind: "node", key: c.key } : { kind: "dm", key: c.key };
+    const hop = c.path_len >= 0 ? ` · ${c.path_len} hop` : " · flood";
+    box.append(mcRow(sel, t[1], c.name || c.key.slice(0, 12), `${t[0]} · ${c.key}`, mcAgo(c.last_advert) + hop));
+  }
+  if (!list.length) box.append(el("p", { className: "hint", textContent: "Ingen kontakter endnu." }));
+}
+setInterval(() => { if (mc.st?.connected) mcRenderSide(); }, 60000); // relativ tid
+
+function mcComposer(box, onSend, max = 160) {
+  const f = el("form", { className: "row", style: "margin-top:12px" });
+  const inp = el("input", { placeholder: "Skriv en besked …", maxLength: max });
+  f.append(inp, el("button", { className: "primary", type: "submit", textContent: "Send" }));
+  f.onsubmit = e => { e.preventDefault(); const t = inp.value.trim(); if (t && onSend(t)) inp.value = ""; };
+  box.append(f);
+  setTimeout(() => inp.focus(), 0);
+}
+function mcMessages(box, key) {
+  const wrap = el("div", { style: "display:flex;flex-direction:column;gap:8px" });
+  const list = mc.msgs.get(key) || [];
+  if (!list.length) wrap.append(el("p", { className: "hint", textContent: "Ingen beskeder endnu (gemmes kun, mens siden er åben)." }));
+  for (const m of list) {
+    const d = el("div", { className: "msg" + (m.mine ? " mine" : "") });
+    if (!m.mine) {
+      // "[Må Navn] tekst" er vores egen bro i den anden retning.
+      const br = /^\[Må ([^\]]+)\] ([\s\S]*)$/.exec(m.text || "");
+      const tag = br ? el("span", { className: "net maa", textContent: "Må" }) : el("span", { className: "net mc", textContent: "MC" });
+      d.append(el("div", { className: "from" }, tag, " " + (br ? br[1] : m.from || "ukendt")));
+      d.append(el("div", { textContent: br ? br[2] : m.text }));
+    } else d.append(el("div", { textContent: m.text }));
+    const meta = [mcTime(m.ts)];
+    if (m.mine) meta.push(m.status || "");
+    if (m.hops != null && m.hops >= 0) meta.push(m.hops + " hop");
+    if (m.snr != null) meta.push("SNR " + snrText(m.snr));
+    d.append(el("div", { className: "meta", textContent: meta.join("  ") }));
+    wrap.append(d);
+  }
+  box.append(wrap);
+}
+
+function renderMc(box) {
+  $("chat-tools").replaceChildren();
+  const wrap = el("div", { className: "secure" });
+  box.append(wrap);
+  if (!mc.st?.connected) {
+    $("chat-title").textContent = "MeshCore"; $("chat-sub").textContent = "";
+    wrap.append(el("p", { className: "warn" }, el("b", { textContent: "MeshCore er ikke tilgængelig" }),
+      "Slå MeshCore til under Indstillinger (feltet --meshcore med den serielle port til MeshCore-radioen)."));
+    return;
+  }
+  if (mc.note) wrap.append(el("p", { className: "hint", textContent: mc.note }));
+  const sel = mc.sel || { kind: "overview" };
+  if (sel.kind === "chan") return mcRenderChan(wrap, sel.idx);
+  if (sel.kind === "dm") return mcRenderDm(wrap, sel.key);
+  if (sel.kind === "node") return mcRenderNode(wrap, sel.key);
+  mcRenderOverview(wrap);
+}
+
+function mcRenderOverview(wrap) {
+  const s = mc.st.self || {};
+  $("chat-title").textContent = s.name || "MeshCore-node";
+  $("chat-sub").textContent = (s.key || "") + (mc.st.port ? " · " + mc.st.port : "");
+  if (s.freq) wrap.append(el("p", { className: "hint", textContent: `${s.freq} MHz · BW ${s.bw} kHz · SF${s.sf} · CR${s.cr} · ${s.tx_power} dBm` }));
+  wrap.append(el("h3", { textContent: "Annoncering" }));
+  const z = el("button", { textContent: "Send annoncering (zero-hop)" }); z.onclick = () => mcSend({ op: "advert", flood: false });
+  const f = el("button", { textContent: "Send annoncering (flood)" }); f.onclick = () => mcSend({ op: "advert", flood: true });
+  const re = el("button", { textContent: "Hent kontakter og kanaler igen" }); re.onclick = () => mcSend({ op: "refresh" });
+  wrap.append(el("div", { className: "row" }, z, f, re));
+  wrap.append(el("h3", { textContent: "Tilføj kanal" }));
+  const used = new Set((mc.st.channels || []).filter(c => c.name).map(c => c.idx));
+  let free = 0; while (used.has(free)) free++;
+  const form = el("div", { className: "form" });
+  const idx = el("input", { type: "number", min: 0, max: 63, value: free });
+  const name = el("input", { placeholder: "#hashtag eller navn" });
+  const sec = el("input", { placeholder: "32 hex-tegn (tom for #hashtag)", maxLength: 32 });
+  form.append(el("label", { textContent: "Plads (idx)" }), idx, el("label", { textContent: "Navn" }), name, el("label", { textContent: "Nøgle" }), sec);
+  wrap.append(form);
+  const add = el("button", { className: "primary", textContent: "Tilføj kanal" });
+  add.onclick = () => {
+    const n = name.value.trim(), k = sec.value.trim().toLowerCase();
+    if (!n) return;
+    if (k && !/^[0-9a-f]{32}$/.test(k)) { mc.note = "Nøglen skal være 32 hex-tegn"; renderChat(); return; }
+    if (!k && !n.startsWith("#")) { mc.note = "Uden nøgle skal navnet starte med #"; renderChat(); return; }
+    const o = { op: "chan_set", idx: +idx.value, name: n }; if (k) o.secret = k;
+    if (mcSend(o)) { mc.note = "Sendt …"; renderChat(); }
+  };
+  wrap.append(el("div", { className: "row" }, add));
+  wrap.append(el("p", { className: "hint", textContent: "Hashtag-kanaler (#navn) får nøglen udledt af navnet, ligesom i MeshCore-appen." }));
+}
+
+function mcRenderChan(wrap, idx) {
+  const c = (mc.st.channels || []).find(x => x.idx === idx);
+  if (!c || !c.name) { wrap.append(el("p", { className: "hint", textContent: "Kanalen findes ikke længere." })); return; }
+  $("chat-title").textContent = c.name; $("chat-sub").textContent = "MeshCore-kanal " + idx;
+  const bsel = el("select", { title: "Bro til Må:rse-kanal" });
+  bsel.append(el("option", { value: "", textContent: "Ingen bro til Må:rse" }));
+  const names = new Set(state.channels.values()); if (c.bridge) names.add(c.bridge);
+  for (const n of names) bsel.append(el("option", { value: n, textContent: "⇄ Må:rse " + n, selected: n === c.bridge }));
+  bsel.onchange = () => mcSend({ op: "bridge", idx, maarse: bsel.value || null });
+  const del = el("button", { textContent: "Slet kanal" });
+  del.onclick = () => { if (confirm(`Slet MeshCore-kanalen ${c.name}?`)) { mcSend({ op: "chan_del", idx }); mc.sel = { kind: "overview" }; } };
+  $("chat-tools").append(el("span", { className: "net mc", textContent: "MC" }), " ", bsel, " ", del);
+  mcMessages(wrap, "c:" + idx);
+  mcComposer(wrap, t => {
+    if (!mcSend({ op: "chan_send", idx, text: t })) return false;
+    mcPush("c:" + idx, { mine: true, text: t, ts: Date.now() / 1000, status: "sendt" }); return true;
+  });
+}
+
+function mcContactTools(c) {
+  const t = MC_TYPES[c.type] || MC_TYPES["?"];
+  const del = el("button", { textContent: "Slet kontakt" });
+  del.onclick = () => { if (confirm(`Fjern ${c.name || c.key.slice(0, 12)} fra MeshCore-noden?`)) { mcSend({ op: "contact_del", key: c.key }); mc.sel = { kind: "overview" }; } };
+  $("chat-tools").append(el("span", { className: "net mc", textContent: "MC" }), " ",
+    el("span", { className: "hint", textContent: `${t[0]} · hørt ${mcAgo(c.last_advert)} · ${c.path_len >= 0 ? c.path_len + " hop" : "flood"}` }), " ", del);
+}
+
+function mcRenderDm(wrap, key) {
+  const c = mcContact(key) || { key, name: key.slice(0, 12), type: "?" };
+  $("chat-title").textContent = c.name || key.slice(0, 12); $("chat-sub").textContent = key;
+  mcContactTools(c);
+  mcMessages(wrap, "d:" + key);
+  mcComposer(wrap, t => {
+    if (!mcSend({ op: "send", to: key, text: t })) return false;
+    mcPush("d:" + key, { mine: true, text: t, ts: Date.now() / 1000, status: "sendt" }); return true;
+  });
+}
+
+// Ping = MeshCore trace path ud ad kendt rute og tilbage; kun repeatere/rum svarer.
+function mcPingBox(wrap, c) {
+  const p = mc.pings.get(c.key) || { log: [] };
+  wrap.append(el("h3", { textContent: "Ping" }));
+  const b = el("button", { textContent: p.pending ? "Venter på svar …" : "Ping", disabled: !!p.pending });
+  b.onclick = () => {
+    if (!mcSend({ op: "ping", key: c.key })) return;
+    p.pending = true; mc.pings.set(c.key, p);
+    p.timer = setTimeout(() => { p.pending = false; p.log.unshift({ lost: true, at: Date.now() }); p.log.length = Math.min(p.log.length, 5); renderChat(); }, 30000);
+    renderChat();
+  };
+  const hint = c.path_len >= 0 ? `Rute: ${c.path_len} hop. Sender en trace ud og tilbage og måler svartid og SNR pr. hop.`
+    : "Ingen kendt rute endnu – ping virker, når kontakten har svaret eller annonceret direkte.";
+  wrap.append(el("div", { className: "row" }, b), el("p", { className: "hint", textContent: hint }));
+  for (const r of p.log) {
+    const t = new Date(r.at).toLocaleTimeString("da-DK");
+    wrap.append(el("div", { className: "hint", textContent: r.lost ? `${t}: intet svar (30 s)`
+      : `${t}: ${r.ms} ms · SNR pr. hop ${r.snrs.map(s => s.toFixed(1)).join(" → ") || "–"} → os ${r.last.toFixed(1)} dB` }));
+  }
+}
+
+function mcRenderNode(wrap, key) {
+  const c = mcContact(key) || { key, name: key.slice(0, 12), type: "?" };
+  $("chat-title").textContent = c.name || key.slice(0, 12); $("chat-sub").textContent = key;
+  mcContactTools(c);
+  mcPingBox(wrap, c);
+  const lg = mc.logins.get(key);
+  if (!lg?.ok) {
+    wrap.append(el("h3", { textContent: "Log ind" }));
+    const pwKey = "mcPw:" + key;
+    const pw = el("input", { type: "password", placeholder: "Adgangskode", value: store.get(pwKey, "") });
+    const keep = el("input", { type: "checkbox", checked: !!store.get(pwKey, "") });
+    const go = el("button", { className: "primary", textContent: "Log ind" });
+    go.onclick = () => {
+      store.set(pwKey, keep.checked ? pw.value : "");
+      if (mcSend({ op: "login", key, password: pw.value })) { mc.note = "Logger ind …"; renderChat(); }
+    };
+    pw.onkeydown = e => { if (e.key === "Enter") go.click(); };
+    wrap.append(el("div", { className: "row" }, pw, go), el("label", { className: "hint" }, keep, " Husk adgangskoden i denne browser"));
+    if (c.type === "room") {
+      const dm = el("button", { textContent: "Åbn beskeder fra rummet" }); dm.onclick = () => mcOpen({ kind: "dm", key });
+      wrap.append(el("div", { className: "row" }, dm));
+    }
+    return;
+  }
+  wrap.append(el("p", { className: "hint", textContent: lg.admin ? "Logget ind som administrator." : "Logget ind som gæst (admin-konsollen kræver admin-adgangskode)." }));
+  wrap.append(el("h3", { textContent: "Status" }));
+  const st = mc.status.get(key);
+  if (st) {
+    const f = st.fields, g = el("div", { className: "mc-stat" });
+    const up = s => s == null ? null : `${Math.floor(s / 86400)} d ${Math.floor(s % 86400 / 3600)} t ${Math.floor(s % 3600 / 60)} min`;
+    const rows = [
+      ["Batteri", f.batt_mv != null ? (f.batt_mv / 1000).toFixed(2) + " V" : null],
+      ["Oppetid", up(f.uptime_s)],
+      ["Støjgulv", f.noise_floor != null ? f.noise_floor + " dBm" : null],
+      ["Sidste RSSI", f.last_rssi != null ? f.last_rssi + " dBm" : null],
+      ["Sidste SNR", f.last_snr != null ? snrText(f.last_snr) : null],
+      ["Sendt / modtaget (flood)", f.n_sent_flood != null ? `${f.n_sent_flood} / ${f.n_recv_flood ?? "–"}` : null],
+      ["Sendekø", f.tx_queue], ["Sendetid", f.airtime_s != null ? f.airtime_s + " s" : null],
+    ];
+    const known = new Set(["batt_mv", "uptime_s", "noise_floor", "last_rssi", "last_snr", "n_sent_flood", "n_recv_flood", "tx_queue", "airtime_s"]);
+    for (const [k, v] of Object.entries(f)) if (!known.has(k)) rows.push([k, v]);
+    for (const [k, v] of rows) if (v != null) g.append(el("span", { textContent: k }), el("span", { textContent: String(v) }));
+    wrap.append(g, el("p", { className: "hint", textContent: "Hentet " + new Date(st.at).toLocaleTimeString() }));
+  } else wrap.append(el("p", { className: "hint", textContent: "Venter på status …" }));
+  const upd = el("button", { textContent: "Opdater" }); upd.onclick = () => mcSend({ op: "status", key });
+  const lo = el("button", { textContent: "Log ud" }); lo.onclick = () => { mc.logins.delete(key); renderChat(); };
+  wrap.append(el("div", { className: "row" }, upd, lo));
+
+  wrap.append(el("h3", { textContent: "Admin-konsol" }));
+  const hist = el("div", { className: "mc-cli" });
+  const entries = mc.cli.get(key) || [];
+  for (const e of entries) hist.append(e.cmd ? el("div", { className: "cmd", textContent: "> " + e.cmd }) : el("div", { textContent: e.text }));
+  if (!entries.length) hist.append(el("span", { className: "muted", textContent: "Ingen kommandoer endnu." }));
+  wrap.append(hist);
+  const run = cmd => { if (cmd && mcSend({ op: "cli", key, cmd })) mcCli(key, { cmd }); };
+  const quick = el("div", { className: "row" });
+  for (const q of ["get name", "ver", "neighbors", "advert", "clock"]) { const b = el("button", { textContent: q }); b.onclick = () => run(q); quick.append(b); }
+  wrap.append(quick);
+  const f = el("form", { className: "row" });
+  const inp = el("input", { placeholder: "Kommando, fx set tx 20", style: "font-family:var(--mono)" });
+  f.append(inp, el("button", { className: "primary", type: "submit", textContent: "Kør" }));
+  f.onsubmit = e => { e.preventDefault(); run(inp.value.trim()); inp.value = ""; };
+  wrap.append(f);
+  setTimeout(() => { hist.scrollTop = hist.scrollHeight; }, 0);
 }
 
 function el(tag, props = {}, ...kids) {

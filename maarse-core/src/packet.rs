@@ -59,6 +59,9 @@ pub enum PacketType {
     Channel = 8,
     /// Besked til en postkasse: modtagerens adresse (16) + krypteret besked.
     Deposit = 9,
+    /// Datagram: direkte pakke uden kvittering fra ende til ende (bruges af
+    /// IP-tunnelen). Kvittering og gensending pr. hop gælder stadig.
+    Datagram = 10,
 }
 
 impl TryFrom<u8> for PacketType {
@@ -76,6 +79,7 @@ impl TryFrom<u8> for PacketType {
             7 => Probe,
             8 => Channel,
             9 => Deposit,
+            10 => Datagram,
             _ => return Err(DecodeError::UnknownType(v)),
         })
     }

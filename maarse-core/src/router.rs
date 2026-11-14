@@ -844,7 +844,9 @@ impl<const R: usize, const D: usize> Router<R, D> {
     ) {
         self.stats.originated += 1;
         let msg_id = packet_id(ptype, &dest, payload);
-        if let Some(a) = self.awaiting.iter_mut().find(|a| a.msg_id == msg_id) {
+        if ptype == PacketType::Datagram {
+            // Ingen kvittering fra ende til ende: tunnelen klarer selv tab (NACK).
+        } else if let Some(a) = self.awaiting.iter_mut().find(|a| a.msg_id == msg_id) {
             a.sent_ms = now_ms;
         } else {
             if self.awaiting.is_full() {
@@ -1140,7 +1142,9 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     self.emit_routed(&header, &[], SOURCE_ROUTE_DELAY_MS, now_ms, out);
                 }
             }
-            PacketType::Data | PacketType::Fragment | PacketType::Deposit if self.role == Role::Anchor => {
+            PacketType::Data | PacketType::Fragment | PacketType::Deposit | PacketType::Datagram
+                if self.role == Role::Anchor =>
+            {
                 self.anchor_forward(pkt, path, id, now_ms, out);
             }
             _ => {}

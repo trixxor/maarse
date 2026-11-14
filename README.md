@@ -270,15 +270,25 @@ I en direkte samtale via maarse-host viser webklienten **Ring op**. Lyden kodes 
 
 ## IP-tunnel
 
-Hver node har en IPv6-adresse udledt af sin Må:rse-adresse (`fd` + de første 15 bytes); maarse-host skriver den ved opstart (`IP: fd…`). IP-pakker deles i stykker og sendes krypteret som indholdstype `0x07` (`maarse-host/src/tunnel.rs`). IPv6 kræver pakker på 1280 bytes (op til 8 beskeder), så tunneltrafik sendes kun til noder, der nås over TCP hele vejen.
+Hver node har en IPv6-adresse udledt af sin Må:rse-adresse (`fd` + de første 15 bytes); maarse-host skriver den ved opstart (`IP: fd…`). Detaljer i `maarse-host/src/tunnel.rs`.
 
 ```text
 cargo build --release -p maarse-host --features tun
-maarse-host --tun                       # Linux (root); /dev/net/tun
-maarse-host --wintun C:\sti\wintun.dll   # Windows (administrator); wintun.dll fra wintun.net
+maarse-host --tun                         # Linux (root); /dev/net/tun
+maarse-host --wintun C:\sti\wintun.dll     # Windows (administrator); wintun.dll fra wintun.net
+maarse-host ... --tun-lora                # tillad også tunnel over LoRa (ellers kun TCP)
 ```
 
-Hosten opretter adapteren `maarse` med sin adresse og `fd00::/8`, så `ping`, `ssh` og `mosh` til en anden nodes `fd…`-adresse går gennem Må:rse. En host uden adapter svarer stadig selv på ping til sin adresse. Kun pakker fra afsenderens egen adresse til vores slippes igennem. Afprøvet på Windows med Wintun 0.14.1: `ping -6` til en anden host gennem tunnelen, også med 1200 bytes (deles i 7 stykker).
+Optimeret til LoRa:
+
+- **Session:** en tilfældig nøgle sendes én gang krypteret (indholdstype `0x07`); derefter går IP-trafikken som `Datagram`-pakker (pakketype 10) med 28 bytes overhead og uden kvittering fra ende til ende. Nøglen skiftes hvert 5. minut, og gentagne pakker afvises.
+- **Header-komprimering:** IPv6-headeren (40 bytes) bliver 2-7 bytes, UDP-headeren 6.
+- **MSS-clamping:** TCP-SYN får MSS 142, så et segment passer i én LoRa-pakke.
+- **Opdeling og NACK:** større pakker deles i stykker; mangler der stykker efter 2 s, beder modtageren om netop dem.
+
+En host uden adapter svarer selv på ping til sin adresse. Kun pakker fra afsenderens egen adresse til vores slippes igennem.
+
+Målt 14. november 2026 (Windows, Wintun; Heltec V4 ↔ XIAO nRF52840 på samme bord, SF9/125 kHz): `ping -6` over LoRa ca. **1,45 s** tur-retur (første 4,2 s inkl. rute og nøgle), 300 bytes (2 stykker hver vej) ca. 5,5 s. Over TCP: 3 ms. Ved SF7/250 kHz hørte Heltec'en ikke XIAO'en (kun den anden vej), så den hurtige indstilling er ikke målt endnu. Brug mosh frem for SSH over LoRa; web og filoverførsel er ikke realistisk.
 
 ## `maarse://`-sider
 

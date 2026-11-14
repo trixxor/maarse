@@ -176,8 +176,9 @@ pub struct Node {
     pages: pages::Pages,
     /// IP-tunnel: adapter (hvis `--tun`), samling af stykker og løbenummer.
     tun_tx: Option<Sender<Vec<u8>>>,
-    reasm: crate::tunnel::Reassembly,
-    tun_seq: u16,
+    tunnel: crate::tunnel::Tunnel,
+    /// Tillad tunneltrafik over LoRa (`--tun-lora`).
+    tun_lora: bool,
     out_files: HashMap<u64, OutFile>,
     in_files: HashMap<u64, InFile>,
     mailbox: HashMap<Address, HashMap<u64, Mail>>,
@@ -354,8 +355,8 @@ impl Node {
             uploads: HashMap::new(),
             pages: Default::default(),
             tun_tx: None,
-            reasm: Default::default(),
-            tun_seq: 0,
+            tunnel: Default::default(),
+            tun_lora: cfg.tun_lora,
             out_files: HashMap::new(),
             in_files: HashMap::new(),
             mailbox: HashMap::new(),
@@ -768,6 +769,7 @@ impl Node {
             PacketType::Data => self.open_direct(payload.to_vec(), hops, true),
             PacketType::Fragment => self.on_chunk(payload),
             PacketType::Deposit => self.on_deposit(payload),
+            PacketType::Datagram => self.on_tun_datagram(payload),
             PacketType::Probe => self.on_trace(dest, payload),
             PacketType::Channel => {
                 let Some((_, key)) = self.channels.get(&dest) else {
@@ -895,7 +897,7 @@ impl Node {
         match content::parse(plain) {
             Some(Content::PageRequest(path)) => self.on_page_request(from, &path),
             Some(Content::Call(data)) => self.on_call(from, data),
-            Some(Content::Ip(data)) => self.on_ip_fragment(from, data),
+            Some(Content::Ip(data)) => self.on_tun_control(from, data),
             Some(Content::Resync) => {
                 self.log(format!("{} startede en ny krypteringssession", short(&from)));
             }
@@ -1462,6 +1464,7 @@ impl Node {
     // ---------- vedligehold ----------
 
     fn housekeeping(&mut self) {
+        self.tun_tick();
         self.hist_maintain();
         let now = Instant::now();
         // Beskeder uden kvittering: læg dem i modtagerens postkasse.
@@ -2282,6 +2285,7 @@ pub(super) mod file_interop_tests {
             history_days: None,
             tun: false,
             wintun: None,
+            tun_lora: false,
         }
     }
 

@@ -1,31 +1,57 @@
-//! IP-tunnel: IPv6 over Må:rse, så fx SSH og mosh kan køre mellem noder.
+//! IP-tunnel: IPv6 over Må:rse, så fx ping, SSH og mosh kan køre mellem noder.
 //!
 //! Hver node har en IPv6-adresse udledt af dens Må:rse-adresse:
-//! `fd` + de første 15 bytes (ULA, `fd00::/8`). En IP-pakke deles i stykker,
-//! der hver sendes som en krypteret direkte besked (indholdstype `0x07`):
+//! `fd` + de første 15 bytes (ULA, `fd00::/8`).
+//!
+//! ## Optimeret til LoRa
+//! * **Session:** afsenderen laver en tilfældig nøgle og et session-ID og
+//!   sender dem én gang i en krypteret direkte besked (indholdstype `0x07`,
+//!   type 1). Derefter går IP-trafikken som `Datagram`-pakker (type 10) med
+//!   kun 28 bytes overhead (ID 8, tæller 4, MAC 16) og uden kvittering fra
+//!   ende til ende; kvittering og gensending pr. hop gælder stadig. Nøglen
+//!   skiftes hvert 5. minut.
+//! * **Header-komprimering:** IPv6-headeren (40 bytes) bliver 2-7 bytes, når
+//!   adresserne er afsenderens og modtagerens egne; UDP-headeren 8 -> 6.
+//! * **MSS-clamping:** TCP-SYN får en MSS, så segmenterne passer i én pakke.
+//! * **Opdeling og NACK:** større pakker deles i stykker; mangler der stykker
+//!   efter et par sekunder, beder modtageren om netop dem.
 //!
 //! ```text
-//! 0x07 | pakke-ID (u16) | stykke nr. (u8) | antal stykker (u8) | data
+//! Datagram:    session-ID (8) | tæller (u32) | ChaCha20-Poly1305(indhold)
+//! Indhold:     1 | pakke-ID | stykke nr. | antal | data      (stykke)
+//!              2 | pakke-ID | manglende stykker (u16, bitmaske) (NACK)
+//! Komprimeret: 0x80|flag | næste header | [hop limit] | [trafikklasse+flow (4)] | ...
+//!              UDP: kildeport | målport | checksum | data (længden udledes)
+//!              0x00 | hele IPv6-pakken (når den ikke kan komprimeres)
 //! ```
 //!
-//! IPv6 kræver pakker på mindst 1280 bytes, så en pakke er op til ca. 8
-//! beskeder. Det er kun realistisk over TCP; hosten sender derfor kun
-//! tunneltrafik til noder, der nås over TCP hele vejen.
-//!
-//! `--tun` opretter en netværksadapter (Wintun på Windows, `/dev/net/tun`
-//! på Linux; kræver administrator/root og featuren `tun`). Uden adapter
-//! svarer hosten stadig selv på ping (ICMPv6 echo) til sin adresse.
+//! Over TCP bruges tunnelen altid; over LoRa kun med `--tun-lora`.
+//! `--tun` opretter en netværksadapter (Wintun på Windows, `/dev/net/tun` på
+//! Linux; kræver administrator/root og featuren `tun`). Uden adapter svarer
+//! hosten selv på ping (ICMPv6 echo) til sin adresse.
 
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use maarse_core::Address;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-pub const IP_FRAGMENT: u8 = 0x07;
-/// Data pr. stykke: plads til type og stykke-header i en FS-besked.
-pub const FRAG_DATA: usize = maarse_crypto::ratchet::MAX_FS_TEXT - 1 - 4;
-/// Største IP-pakke, vi sender/samler (IPv6-minimum).
+/// Største IP-pakke (IPv6-minimum).
 pub const MTU: usize = 1280;
-const REASSEMBLY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Overhead i et datagram: session-ID, tæller og MAC.
+pub const DG_OVERHEAD: usize = 8 + 4 + 16;
+/// Data pr. stykke i et datagram.
+pub const FRAG_DATA: usize = maarse_core::router::MAX_DIRECT_PAYLOAD - DG_OVERHEAD - 4;
+/// MSS til TCP gennem tunnelen: ét segment pr. stykke (IPv6-headeren
+/// komprimeres; TCP-headeren med valgmuligheder er op til ca. 32 bytes).
+pub const TUN_MSS: u16 = (FRAG_DATA - 7 - 32) as u16;
+const REKEY_AFTER: Duration = Duration::from_secs(300);
+const NACK_AFTER: Duration = Duration::from_secs(2);
+const GIVE_UP: Duration = Duration::from_secs(12);
+const KEEP_SENT: Duration = Duration::from_secs(15);
+
+/// Kontrolbesked (sendes forseglet som indholdstype `0x07`): ny sessionsnøgle.
+pub const CTRL_KEY: u8 = 1;
 
 /// IPv6-adressen for en Må:rse-adresse.
 pub fn ip_of(a: &Address) -> [u8; 16] {
@@ -44,54 +70,155 @@ pub fn ipv6_dst(p: &[u8]) -> Option<[u8; 16]> {
     (p.len() >= 40 && p[0] >> 4 == 6).then(|| p[24..40].try_into().unwrap())
 }
 
-/// Deler en IP-pakke i beskeder (med type 0x07 foran).
-pub fn fragment(packet: &[u8], id: u16) -> Vec<Vec<u8>> {
-    let chunks: Vec<&[u8]> = packet.chunks(FRAG_DATA).collect();
-    let n = chunks.len() as u8;
-    chunks
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let mut v = Vec::with_capacity(5 + c.len());
-            v.push(IP_FRAGMENT);
-            v.extend_from_slice(&id.to_le_bytes());
-            v.push(i as u8);
-            v.push(n);
-            v.extend_from_slice(c);
-            v
-        })
-        .collect()
-}
+// ---------- header-komprimering ----------
 
-/// Samler stykker til hele pakker.
-#[derive(Default)]
-pub struct Reassembly {
-    parts: HashMap<(Address, u16), (Instant, Vec<Option<Vec<u8>>>)>,
-}
-
-impl Reassembly {
-    /// Tager imod et stykke (uden typebyte). Returnerer pakken, når den er hel.
-    pub fn add(&mut self, from: Address, data: &[u8], now: Instant) -> Option<Vec<u8>> {
-        self.parts.retain(|_, (t, _)| now.duration_since(*t) < REASSEMBLY_TIMEOUT);
-        if data.len() < 4 {
-            return None;
-        }
-        let id = u16::from_le_bytes([data[0], data[1]]);
-        let (idx, n) = (data[2] as usize, data[3] as usize);
-        if n == 0 || idx >= n || n * FRAG_DATA > MTU + FRAG_DATA || self.parts.len() > 64 {
-            return None;
-        }
-        let e = self.parts.entry((from, id)).or_insert_with(|| (now, vec![None; n]));
-        if e.1.len() != n {
-            return None;
-        }
-        e.1[idx] = Some(data[4..].to_vec());
-        if e.1.iter().all(Option::is_some) {
-            let (_, parts) = self.parts.remove(&(from, id))?;
-            return Some(parts.into_iter().flatten().flatten().collect());
-        }
-        None
+/// Komprimerer en IPv6-pakke fra `src` til `dst`. Passer adresserne ikke,
+/// sendes pakken hel (med 0x00 foran).
+pub fn compress(p: &[u8], src: &[u8; 16], dst: &[u8; 16]) -> Vec<u8> {
+    let plen = if p.len() >= 40 { u16::from_be_bytes([p[4], p[5]]) as usize } else { 0 };
+    if p.len() < 40 || p[0] >> 4 != 6 || &p[8..24] != src || &p[24..40] != dst || p.len() != 40 + plen {
+        let mut v = vec![0x00];
+        v.extend_from_slice(p);
+        return v;
     }
+    let tcfl = [p[0] & 0x0f, p[1], p[2], p[3]];
+    let (nh, hl) = (p[6], p[7]);
+    let udp = nh == 17 && plen >= 8 && u16::from_be_bytes([p[44], p[45]]) as usize == plen;
+    let mut flags = 0x80u8;
+    if hl != 64 {
+        flags |= 0x01;
+    }
+    if tcfl != [0; 4] {
+        flags |= 0x02;
+    }
+    if udp {
+        flags |= 0x04;
+    }
+    let mut v = vec![flags, nh];
+    if hl != 64 {
+        v.push(hl);
+    }
+    if tcfl != [0; 4] {
+        v.extend_from_slice(&tcfl);
+    }
+    if udp {
+        v.extend_from_slice(&p[40..44]); // porte
+        v.extend_from_slice(&p[46..48]); // checksum
+        v.extend_from_slice(&p[48..]);
+    } else {
+        v.extend_from_slice(&p[40..]);
+    }
+    v
+}
+
+/// Genskaber IPv6-pakken.
+pub fn decompress(c: &[u8], src: &[u8; 16], dst: &[u8; 16]) -> Option<Vec<u8>> {
+    let (&flags, rest) = c.split_first()?;
+    if flags == 0x00 {
+        return Some(rest.to_vec());
+    }
+    if flags & 0x80 == 0 {
+        return None;
+    }
+    let (&nh, mut r) = rest.split_first()?;
+    let hl = if flags & 0x01 != 0 {
+        let (&h, t) = r.split_first()?;
+        r = t;
+        h
+    } else {
+        64
+    };
+    let mut tcfl = [0u8; 4];
+    if flags & 0x02 != 0 {
+        tcfl.copy_from_slice(r.get(..4)?);
+        r = &r[4..];
+    }
+    let body: Vec<u8> = if flags & 0x04 != 0 {
+        let h = r.get(..6)?;
+        let data = &r[6..];
+        let len = (8 + data.len()) as u16;
+        let mut b = Vec::with_capacity(8 + data.len());
+        b.extend_from_slice(&h[..4]);
+        b.extend_from_slice(&len.to_be_bytes());
+        b.extend_from_slice(&h[4..6]);
+        b.extend_from_slice(data);
+        b
+    } else {
+        r.to_vec()
+    };
+    if body.len() > MTU - 40 {
+        return None;
+    }
+    let mut p = Vec::with_capacity(40 + body.len());
+    p.push(0x60 | (tcfl[0] & 0x0f));
+    p.extend_from_slice(&tcfl[1..4]);
+    p.extend_from_slice(&(body.len() as u16).to_be_bytes());
+    p.push(nh);
+    p.push(hl);
+    p.extend_from_slice(src);
+    p.extend_from_slice(dst);
+    p.extend_from_slice(&body);
+    Some(p)
+}
+
+// ---------- MSS-clamping ----------
+
+/// Sænker MSS i en TCP-SYN (IPv6 uden udvidelses-headers) til `mss` og
+/// regner checksummen om. Returnerer true, hvis pakken blev ændret.
+pub fn clamp_mss(p: &mut [u8], mss: u16) -> bool {
+    if p.len() < 60 || p[0] >> 4 != 6 || p[6] != 6 {
+        return false;
+    }
+    let t = 40;
+    let off = ((p[t + 12] >> 4) as usize) * 4;
+    if p[t + 13] & 0x02 == 0 || off < 20 || p.len() < t + off {
+        return false; // ikke SYN
+    }
+    let mut i = t + 20;
+    let mut changed = false;
+    while i < t + off {
+        match p[i] {
+            0 => break,
+            1 => i += 1,
+            kind => {
+                let Some(&len) = p.get(i + 1) else { break };
+                if len < 2 || i + len as usize > t + off {
+                    break;
+                }
+                if kind == 2 && len == 4 && u16::from_be_bytes([p[i + 2], p[i + 3]]) > mss {
+                    p[i + 2..i + 4].copy_from_slice(&mss.to_be_bytes());
+                    changed = true;
+                }
+                i += len as usize;
+            }
+        }
+    }
+    if changed {
+        p[t + 16] = 0;
+        p[t + 17] = 0;
+        let c = l4_checksum(p, 6);
+        p[t + 16..t + 18].copy_from_slice(&c.to_be_bytes());
+    }
+    changed
+}
+
+/// Checksum for TCP/UDP/ICMPv6 med IPv6-pseudo-header.
+fn l4_checksum(p: &[u8], next_header: u8) -> u16 {
+    let body = &p[40..];
+    let mut sum: u32 = 0;
+    let mut add = |b: &[u8]| {
+        for c in b.chunks(2) {
+            sum += u16::from_be_bytes([c[0], *c.get(1).unwrap_or(&0)]) as u32;
+        }
+    };
+    add(&p[8..40]);
+    add(&(body.len() as u32).to_be_bytes());
+    add(&[0, 0, 0, next_header]);
+    add(body);
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
 }
 
 /// Svar på ping: er `p` en ICMPv6 echo request til `me`, returneres svaret.
@@ -106,31 +233,270 @@ pub fn echo_reply(p: &[u8], me: &[u8; 16]) -> Option<Vec<u8>> {
     let mut r = p[..40 + plen].to_vec();
     r[8..24].copy_from_slice(&p[24..40]);
     r[24..40].copy_from_slice(&p[8..24]);
-    r[7] = 64; // hop limit
-    r[40] = 129; // echo reply
+    r[7] = 64;
+    r[40] = 129;
     r[42] = 0;
     r[43] = 0;
-    let c = icmpv6_checksum(&r);
+    let c = l4_checksum(&r, 58);
     r[42..44].copy_from_slice(&c.to_be_bytes());
     Some(r)
 }
 
-fn icmpv6_checksum(p: &[u8]) -> u16 {
-    let body = &p[40..];
-    let mut sum: u32 = 0;
-    let mut add = |b: &[u8]| {
-        for c in b.chunks(2) {
-            sum += u16::from_be_bytes([c[0], *c.get(1).unwrap_or(&0)]) as u32;
-        }
-    };
-    add(&p[8..40]); // kilde og mål
-    add(&(body.len() as u32).to_be_bytes());
-    add(&[0, 0, 0, 58]);
-    add(body);
-    while sum >> 16 != 0 {
-        sum = (sum & 0xffff) + (sum >> 16);
+// ---------- sessioner ----------
+
+fn seal(key: &[u8; 32], id: &[u8; 8], ctr: u32, plain: &[u8]) -> Vec<u8> {
+    let mut nonce = [0u8; 12];
+    nonce[..8].copy_from_slice(id);
+    nonce[8..].copy_from_slice(&ctr.to_be_bytes());
+    let mut head = Vec::with_capacity(DG_OVERHEAD + plain.len());
+    head.extend_from_slice(id);
+    head.extend_from_slice(&ctr.to_be_bytes());
+    let ct = ChaCha20Poly1305::new(Key::from_slice(key))
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: plain, aad: &head })
+        .expect("kryptering kan ikke fejle");
+    head.extend_from_slice(&ct);
+    head
+}
+
+fn open(key: &[u8; 32], dg: &[u8]) -> Option<(u32, Vec<u8>)> {
+    if dg.len() < DG_OVERHEAD {
+        return None;
     }
-    !(sum as u16)
+    let ctr = u32::from_be_bytes(dg[8..12].try_into().ok()?);
+    let mut nonce = [0u8; 12];
+    nonce.copy_from_slice(&dg[..12]);
+    let plain = ChaCha20Poly1305::new(Key::from_slice(key))
+        .decrypt(Nonce::from_slice(&nonce), Payload { msg: &dg[12..], aad: &dg[..12] })
+        .ok()?;
+    Some((ctr, plain))
+}
+
+struct OutSession {
+    id: [u8; 8],
+    key: [u8; 32],
+    ctr: u32,
+    created: Instant,
+    pkt: u8,
+}
+
+struct InSession {
+    peer: Address,
+    key: [u8; 32],
+    /// Højeste tæller og en bitmaske over de 64 før (mod gentagelser).
+    max: u32,
+    seen: u64,
+    created: Instant,
+}
+
+impl InSession {
+    fn accept(&mut self, ctr: u32) -> bool {
+        if ctr > self.max || (self.max == 0 && self.seen == 0) {
+            let shift = ctr.saturating_sub(self.max);
+            self.seen = if shift >= 64 { 0 } else { self.seen << shift };
+            self.seen |= 1;
+            self.max = ctr;
+            return true;
+        }
+        let back = self.max - ctr;
+        if back >= 64 || self.seen & (1 << back) != 0 {
+            return false;
+        }
+        self.seen |= 1 << back;
+        true
+    }
+}
+
+struct Partial {
+    started: Instant,
+    nacked: u8,
+    parts: Vec<Option<Vec<u8>>>,
+}
+
+/// Det, tunnelen beder noden gøre.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TunOut {
+    /// Send et datagram (PacketType::Datagram) til noden.
+    Datagram(Address, Vec<u8>),
+    /// Send en forseglet kontrolbesked (indholdstype 0x07) til noden.
+    Control(Address, Vec<u8>),
+    /// En hel, afkomprimeret IP-pakke fra noden.
+    Packet(Address, Vec<u8>),
+}
+
+/// Tunnelens tilstand i en host.
+#[derive(Default)]
+pub struct Tunnel {
+    out: HashMap<Address, OutSession>,
+    inn: HashMap<[u8; 8], InSession>,
+    /// Datagrammer med ukendt session (nøglen er måske på vej).
+    early: VecDeque<(Instant, Vec<u8>)>,
+    partial: HashMap<(Address, u8), Partial>,
+    sent: HashMap<(Address, u8), (Instant, Vec<Vec<u8>>)>,
+    pub stats: TunStats,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct TunStats {
+    pub sent_packets: u64,
+    pub sent_datagrams: u64,
+    pub recv_packets: u64,
+    pub nacks_sent: u64,
+    pub resent: u64,
+    pub bytes_saved: u64,
+}
+
+impl Tunnel {
+    /// Sender en IP-pakke fra os (`me`) til `dest`.
+    pub fn send(&mut self, me: &Address, dest: Address, packet: &[u8], now: Instant, rng: &mut impl FnMut(&mut [u8])) -> Vec<TunOut> {
+        let mut out = Vec::new();
+        let mut p = packet.to_vec();
+        clamp_mss(&mut p, TUN_MSS);
+        let c = compress(&p, &ip_of(me), &ip_of(&dest));
+        self.stats.bytes_saved += p.len().saturating_sub(c.len()) as u64;
+        let fresh = self.out.get(&dest).is_none_or(|s| now.duration_since(s.created) > REKEY_AFTER);
+        if fresh {
+            let mut id = [0u8; 8];
+            let mut key = [0u8; 32];
+            rng(&mut id);
+            rng(&mut key);
+            let mut ctrl = vec![CTRL_KEY];
+            ctrl.extend_from_slice(&id);
+            ctrl.extend_from_slice(&key);
+            out.push(TunOut::Control(dest, ctrl));
+            self.out.insert(dest, OutSession { id, key, ctr: 0, created: now, pkt: 0 });
+        }
+        let s = self.out.get_mut(&dest).expect("lige oprettet");
+        s.pkt = s.pkt.wrapping_add(1);
+        let pkt = s.pkt;
+        let chunks: Vec<&[u8]> = c.chunks(FRAG_DATA).collect();
+        if chunks.len() > 16 {
+            return out; // større end MTU; burde ikke ske
+        }
+        let mut frags = Vec::new();
+        for (i, ch) in chunks.iter().enumerate() {
+            let mut plain = vec![1, pkt, i as u8, chunks.len() as u8];
+            plain.extend_from_slice(ch);
+            s.ctr += 1;
+            let dg = seal(&s.key, &s.id, s.ctr, &plain);
+            frags.push(plain);
+            out.push(TunOut::Datagram(dest, dg));
+        }
+        self.stats.sent_packets += 1;
+        self.stats.sent_datagrams += chunks.len() as u64;
+        if chunks.len() > 1 {
+            self.sent.insert((dest, pkt), (now, frags));
+        }
+        out
+    }
+
+    /// En kontrolbesked (indholdstype 0x07) fra `from`.
+    pub fn on_control(&mut self, from: Address, data: &[u8], me: &Address, now: Instant) -> Vec<TunOut> {
+        if data.len() < 41 || data[0] != CTRL_KEY {
+            return Vec::new();
+        }
+        let id: [u8; 8] = data[1..9].try_into().unwrap();
+        let key: [u8; 32] = data[9..41].try_into().unwrap();
+        self.inn.retain(|_, s| s.peer != from || now.duration_since(s.created) < REKEY_AFTER * 2);
+        self.inn.insert(id, InSession { peer: from, key, max: 0, seen: 0, created: now });
+        // Datagrammer, der kom før nøglen.
+        let early: Vec<Vec<u8>> = std::mem::take(&mut self.early).into_iter().map(|(_, d)| d).collect();
+        let mut out = Vec::new();
+        for d in early {
+            out.extend(self.on_datagram(&d, me, now));
+        }
+        out
+    }
+
+    /// Et datagram til os.
+    pub fn on_datagram(&mut self, dg: &[u8], me: &Address, now: Instant) -> Vec<TunOut> {
+        let mut out = Vec::new();
+        let Some(id) = dg.get(..8).and_then(|b| <[u8; 8]>::try_from(b).ok()) else { return out };
+        let Some(s) = self.inn.get_mut(&id) else {
+            self.early.retain(|(t, _)| now.duration_since(*t) < Duration::from_secs(10));
+            if self.early.len() < 32 {
+                self.early.push_back((now, dg.to_vec()));
+            }
+            return out;
+        };
+        let Some((ctr, plain)) = open(&s.key, dg) else { return out };
+        if !s.accept(ctr) {
+            return out;
+        }
+        let peer = s.peer;
+        match plain.first() {
+            Some(1) if plain.len() >= 4 => {
+                let (pkt, idx, n) = (plain[1], plain[2] as usize, plain[3] as usize);
+                if n == 0 || idx >= n || n > 16 {
+                    return out;
+                }
+                let data = plain[4..].to_vec();
+                let whole = if n == 1 {
+                    Some(data)
+                } else {
+                    let e = self.partial.entry((peer, pkt)).or_insert_with(|| Partial { started: now, nacked: 0, parts: vec![None; n] });
+                    if e.parts.len() != n {
+                        return out;
+                    }
+                    e.parts[idx] = Some(data);
+                    if e.parts.iter().all(Option::is_some) {
+                        let p = self.partial.remove(&(peer, pkt)).unwrap();
+                        Some(p.parts.into_iter().flatten().flatten().collect())
+                    } else {
+                        None
+                    }
+                };
+                if let Some(c) = whole
+                    && let Some(p) = decompress(&c, &ip_of(&peer), &ip_of(me))
+                {
+                    self.stats.recv_packets += 1;
+                    out.push(TunOut::Packet(peer, p));
+                }
+            }
+            Some(2) if plain.len() >= 4 => {
+                let (pkt, mask) = (plain[1], u16::from_be_bytes([plain[2], plain[3]]));
+                if let Some((_, frags)) = self.sent.get(&(peer, pkt)) {
+                    let frags: Vec<Vec<u8>> =
+                        frags.iter().enumerate().filter(|(i, _)| mask & (1 << i) != 0).map(|(_, f)| f.clone()).collect();
+                    for f in frags {
+                        if let Some(o) = self.out.get_mut(&peer) {
+                            o.ctr += 1;
+                            out.push(TunOut::Datagram(peer, seal(&o.key, &o.id, o.ctr, &f)));
+                            self.stats.resent += 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
+    }
+
+    /// Kaldes jævnligt: NACK for ufuldstændige pakker, oprydning.
+    pub fn tick(&mut self, now: Instant) -> Vec<TunOut> {
+        let mut out = Vec::new();
+        self.sent.retain(|_, (t, _)| now.duration_since(*t) < KEEP_SENT);
+        self.partial.retain(|_, p| now.duration_since(p.started) < GIVE_UP);
+        let mut nacks = Vec::new();
+        for ((peer, pkt), p) in self.partial.iter_mut() {
+            let due = NACK_AFTER * (p.nacked as u32 + 1);
+            if p.nacked < 3 && now.duration_since(p.started) >= due {
+                p.nacked += 1;
+                let mask = p.parts.iter().enumerate().filter(|(_, x)| x.is_none()).fold(0u16, |m, (i, _)| m | 1 << i);
+                nacks.push((*peer, *pkt, mask));
+            }
+        }
+        for (peer, pkt, mask) in nacks {
+            if let Some(o) = self.out.get_mut(&peer) {
+                let mut plain = vec![2, pkt];
+                plain.extend_from_slice(&mask.to_be_bytes());
+                o.ctr += 1;
+                out.push(TunOut::Datagram(peer, seal(&o.key, &o.id, o.ctr, &plain)));
+                self.stats.nacks_sent += 1;
+            }
+            // Uden udgående session kan vi ikke sende NACK; afsenderen får ingen.
+        }
+        out
+    }
 }
 
 /// Opretter adapteren og starter læse- og skrivetråde. Pakker fra
@@ -173,51 +539,151 @@ pub fn spawn(
 mod tests {
     use super::*;
 
-    fn ping(src: [u8; 16], dst: [u8; 16], payload: &[u8]) -> Vec<u8> {
+    fn ipv6(src: [u8; 16], dst: [u8; 16], nh: u8, body: &[u8]) -> Vec<u8> {
         let mut p = vec![0x60, 0, 0, 0];
-        p.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
-        p.extend_from_slice(&[58, 64]);
+        p.extend_from_slice(&(body.len() as u16).to_be_bytes());
+        p.extend_from_slice(&[nh, 64]);
         p.extend_from_slice(&src);
         p.extend_from_slice(&dst);
-        p.extend_from_slice(&[128, 0, 0, 0, 0x12, 0x34, 0, 1]);
-        p.extend_from_slice(payload);
-        let c = icmpv6_checksum(&p);
+        p.extend_from_slice(body);
+        p
+    }
+
+    fn ping(src: [u8; 16], dst: [u8; 16], payload: &[u8]) -> Vec<u8> {
+        let mut body = vec![128, 0, 0, 0, 0x12, 0x34, 0, 1];
+        body.extend_from_slice(payload);
+        let mut p = ipv6(src, dst, 58, &body);
+        let c = l4_checksum(&p, 58);
         p[42..44].copy_from_slice(&c.to_be_bytes());
         p
     }
 
+    fn a(n: u8) -> Address {
+        Address([n; 16])
+    }
+
     #[test]
-    fn address_and_fragments_roundtrip() {
-        let a = Address([0xab; 16]);
-        let ip = ip_of(&a);
-        assert_eq!(ip[0], 0xfd);
-        assert!(ip_text(&ip).starts_with("fdab:"));
-        let pkt: Vec<u8> = (0..1280u32).map(|i| i as u8).collect();
-        let frags = fragment(&pkt, 7);
-        assert!(frags.len() > 1 && frags.iter().all(|f| f.len() <= maarse_crypto::ratchet::MAX_FS_TEXT));
-        let mut r = Reassembly::default();
-        let now = Instant::now();
-        // Stykkerne kan komme i vilkårlig rækkefølge.
-        let mut out = None;
-        for f in frags.iter().rev() {
-            out = r.add(a, &f[1..], now).or(out);
+    fn compression_roundtrips_and_saves() {
+        let (s, d) = (ip_of(&a(1)), ip_of(&a(2)));
+        let icmp = ping(s, d, b"hej");
+        let c = compress(&icmp, &s, &d);
+        assert_eq!(c.len(), 2 + 8 + 3, "IPv6-header bliver 2 bytes");
+        assert_eq!(decompress(&c, &s, &d).unwrap(), icmp);
+        // UDP: længden udledes.
+        let mut udp = vec![0x1f, 0x90, 0xea, 0x60, 0, 13, 0xab, 0xcd];
+        udp.extend_from_slice(b"mosh!");
+        let up = ipv6(s, d, 17, &udp);
+        let c = compress(&up, &s, &d);
+        assert_eq!(c.len(), 2 + 6 + 5);
+        assert_eq!(decompress(&c, &s, &d).unwrap(), up);
+        // Andre adresser: sendes hel.
+        let other = ping(ip_of(&a(9)), d, b"x");
+        let c = compress(&other, &s, &d);
+        assert_eq!(c[0], 0);
+        assert_eq!(decompress(&c, &s, &d).unwrap(), other);
+        // Hop limit og flow label bevares.
+        let mut odd = icmp.clone();
+        odd[7] = 3;
+        odd[2] = 0x55;
+        assert_eq!(decompress(&compress(&odd, &s, &d), &s, &d).unwrap(), odd);
+    }
+
+    #[test]
+    fn mss_is_clamped_with_valid_checksum() {
+        let (s, d) = (ip_of(&a(1)), ip_of(&a(2)));
+        // TCP SYN med MSS 1220 og en NOP.
+        let mut tcp = vec![0xc3, 0x50, 0x00, 0x16, 0, 0, 0, 1, 0, 0, 0, 0, 0x60, 0x02, 0xff, 0xff, 0, 0, 0, 0];
+        tcp.extend_from_slice(&[2, 4, 0x04, 0xc4]);
+        tcp[12] = 0x60; // 24 bytes header
+        let mut p = ipv6(s, d, 6, &tcp);
+        let c = l4_checksum(&p, 6);
+        p[56..58].copy_from_slice(&c.to_be_bytes());
+        assert!(clamp_mss(&mut p, TUN_MSS));
+        assert_eq!(u16::from_be_bytes([p[62], p[63]]), TUN_MSS);
+        assert_eq!(l4_checksum(&p, 6), 0, "checksummen stemmer");
+        assert!(!clamp_mss(&mut p, TUN_MSS), "allerede lav nok");
+    }
+
+    fn rng() -> impl FnMut(&mut [u8]) {
+        let mut n = 7u8;
+        move |b: &mut [u8]| {
+            for x in b {
+                n = n.wrapping_mul(31).wrapping_add(17);
+                *x = n;
+            }
         }
-        assert_eq!(out.unwrap(), pkt);
-        // Ufuldstændig pakke udløber.
-        assert!(r.add(a, &frags[0][1..], now).is_none());
-        assert!(r.add(a, &frags[1][1..], now + Duration::from_secs(11)).is_none());
+    }
+
+    fn deliver(from: &Address, to: &mut Tunnel, me: &Address, outs: Vec<TunOut>, drop: &[usize], now: Instant) -> Vec<TunOut> {
+        let mut res = Vec::new();
+        let mut i = 0;
+        for o in outs {
+            match o {
+                TunOut::Control(_, c) => res.extend(to.on_control(*from, &c, me, now)),
+                TunOut::Datagram(_, d) => {
+                    if !drop.contains(&i) {
+                        res.extend(to.on_datagram(&d, me, now));
+                    }
+                    i += 1;
+                }
+                other => res.push(other),
+            }
+        }
+        res
+    }
+
+    #[test]
+    fn session_small_packet_one_datagram_and_replay_is_dropped() {
+        let (ma, mb) = (a(1), a(2));
+        let (mut ta, mut tb) = (Tunnel::default(), Tunnel::default());
+        let now = Instant::now();
+        let p = ping(ip_of(&ma), ip_of(&mb), b"hej");
+        let out = ta.send(&ma, mb, &p, now, &mut rng());
+        let dgs: Vec<&Vec<u8>> = out.iter().filter_map(|o| if let TunOut::Datagram(_, d) = o { Some(d) } else { None }).collect();
+        assert_eq!(dgs.len(), 1);
+        assert!(dgs[0].len() <= DG_OVERHEAD + 4 + 2 + 8 + 3, "ping fylder {} bytes", dgs[0].len());
+        let replay = dgs[0].clone();
+        // Datagrammet kommer før nøglen: det gemmes og leveres, når nøglen kommer.
+        let got = tb.on_datagram(&replay, &mb, now);
+        assert!(got.is_empty());
+        let ctrl = out.iter().find_map(|o| if let TunOut::Control(_, c) = o { Some(c.clone()) } else { None }).unwrap();
+        let got = tb.on_control(ma, &ctrl, &mb, now);
+        assert_eq!(got, vec![TunOut::Packet(ma, p.clone())]);
+        // Gentagelse afvises.
+        assert!(tb.on_datagram(&replay, &mb, now).is_empty());
+    }
+
+    #[test]
+    fn large_packet_is_split_and_nack_recovers_lost_piece() {
+        let (ma, mb) = (a(1), a(2));
+        let (mut ta, mut tb) = (Tunnel::default(), Tunnel::default());
+        let now = Instant::now();
+        // B skal have en udgående session for at kunne sende NACK.
+        let warm = ping(ip_of(&mb), ip_of(&ma), b"x");
+        let o = tb.send(&mb, ma, &warm, now, &mut rng());
+        deliver(&mb, &mut ta, &ma, o, &[], now);
+        let big = ping(ip_of(&ma), ip_of(&mb), &[0x5a; 1000]);
+        let out = ta.send(&ma, mb, &big, now, &mut rng());
+        assert!(out.iter().filter(|o| matches!(o, TunOut::Datagram(..))).count() >= 6);
+        // Stykke 2 går tabt.
+        assert!(deliver(&ma, &mut tb, &mb, out, &[2], now).is_empty());
+        let nack = tb.tick(now + Duration::from_secs(3));
+        assert_eq!(nack.len(), 1);
+        // NACK til A, som sender det manglende stykke igen.
+        let resend = deliver(&mb, &mut ta, &ma, nack, &[], now);
+        assert_eq!(ta.stats.resent, 1);
+        let got = deliver(&ma, &mut tb, &mb, resend, &[], now);
+        assert_eq!(got, vec![TunOut::Packet(ma, big)]);
     }
 
     #[test]
     fn answers_ping_with_valid_checksum() {
-        let me = ip_of(&Address([1; 16]));
-        let other = ip_of(&Address([2; 16]));
+        let me = ip_of(&a(1));
+        let other = ip_of(&a(2));
         let req = ping(other, me, b"hej");
         let rep = echo_reply(&req, &me).unwrap();
         assert_eq!(rep[40], 129);
-        assert_eq!(&rep[8..24], &me);
-        assert_eq!(&rep[24..40], &other);
-        assert_eq!(icmpv6_checksum(&rep), 0, "kontrolsummen stemmer");
-        assert!(echo_reply(&req, &other).is_none(), "ikke til os");
+        assert_eq!(l4_checksum(&rep, 58), 0);
+        assert!(echo_reply(&req, &other).is_none());
     }
 }

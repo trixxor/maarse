@@ -8,6 +8,7 @@ license.workspace = true
 rand_core = { version = "0.6", features = ["getrandom"] }
 serialport = { version = "4", default-features = false }
 sha2 = "0.10"
+chacha20poly1305 = "0.10"
 miniz_oxide = "0.8"
 maarse-core = { version = "0.1.0", path = "../maarse-core" }
 maarse-crypto = { version = "0.1.0", path = "../maarse-crypto" }

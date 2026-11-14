@@ -3,6 +3,7 @@
 
 mod ext;
 mod hist;
+mod identity;
 
 use crate::dht::{self, Contact, Record};
 use crate::filebox::{self, Boxed, FileBox, LORA_MAX_FILE, PathKind};
@@ -311,7 +312,7 @@ impl Node {
             }
             _ => {
                 let id = Identity::generate(&mut OsRng);
-                fs::write(&key_path, id.to_secret_bytes())?;
+                identity::write_identity(&cfg.data_dir, &id.to_secret_bytes())?;
                 id
             }
         };
@@ -1857,6 +1858,7 @@ impl Node {
                 self.send_client(id, &ota_unsupported(req))
             }
             Command::OtaStatus => self.send_client(id, &ota_unsupported(0)),
+            Command::SetIdentity { confirm, secret } => self.set_identity(id, confirm, secret),
 
             Command::SetTime { .. } => {} // maarse-host har sit eget ur
             Command::GetRadio | Command::SetRadio(_) => self.send_client(

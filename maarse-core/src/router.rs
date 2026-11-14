@@ -322,6 +322,22 @@ impl<const R: usize, const D: usize> Router<R, D> {
         self.role = role;
     }
 
+    /// Skifter nodens adresse (ny identitet, se `Command::SetIdentity`).
+    /// Ruter, ventende afsendelser og kvitteringer hørte til den gamle
+    /// adresse og glemmes; kanaler, regioner, rolle og naboer bevares.
+    pub fn set_address(&mut self, addr: Address) {
+        self.addr = addr;
+        self.id = addr.path_id();
+        self.routes = RouteTable::new();
+        self.pending.clear();
+        self.queue.clear();
+        self.awaiting.clear();
+        self.forwards.clear();
+        self.replies.clear();
+        self.flood_pending.clear();
+        self.traces.clear();
+    }
+
     pub fn new(addr: Address, role: Role) -> Self {
         Router {
             addr,

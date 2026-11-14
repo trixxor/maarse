@@ -4,7 +4,7 @@
 //!
 //! * Indstillingssiden (én slettesektor, 4 KB):
 //!   ```text
-//!   0x000: "MRS1" + hemmelig nøgle (64)
+//!   0x000: "MRS1" + hemmelig nøgle (64; erstattes af `SetIdentity`)
 //!   0x080: "RCF1" + radioindstillinger (16)
 //!   0x100: "ADM1" + antal (1) + administratorer (4 × 16)
 //!   0x180: "ROL1" + rolle (1: 0 = klient, 1 = repeater, 2 = relay)
@@ -256,6 +256,16 @@ impl<F: NorFlash> crate::ota::OtaPort for FlashSettings<F> {
 impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
     fn ota(&mut self) -> Option<&mut dyn crate::ota::OtaPort> {
         if self.ota.is_some() { Some(self) } else { None }
+    }
+
+    fn save_identity(&mut self, secret: &[u8; 64]) -> bool {
+        let mut buf = self.read_page();
+        buf[..4].copy_from_slice(ID_MAGIC);
+        buf[4..68].copy_from_slice(secret);
+        self.write_page(&buf);
+        // Læs tilbage: siden slettes og skrives, så tjek at det lykkedes.
+        let back = self.read_page();
+        back[..4] == *ID_MAGIC && back[4..68] == secret[..]
     }
 
     fn save_radio(&mut self, cfg: &RadioConfig) {

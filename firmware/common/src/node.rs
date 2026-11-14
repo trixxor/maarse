@@ -31,6 +31,12 @@ pub trait Settings {
     fn save_radio(&mut self, cfg: &RadioConfig);
     fn save_admins(&mut self, admins: &[Address]);
     fn load_admins(&mut self) -> heapless::Vec<Address, 4>;
+    /// Gemmer nodens rolle. Standard: gemmes ikke.
+    fn save_role(&mut self, _role: Role) {}
+    /// Gemt rolle; standard (og ældre flash uden rolle) er repeater.
+    fn load_role(&mut self) -> Role {
+        Role::Repeater
+    }
 
     // ----- postkasse (valgfri; standard: ingen) -----
 
@@ -106,8 +112,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             u32::from_be_bytes([addr.0[0], addr.0[1], addr.0[2], addr.0[3]]),
             Relaxed,
         );
-        // En node med fast strøm er repeater. Rollen kan senere vælges i
-        // appen (klient / relay); til test er repeater det mest nyttige.
+        // Rollen vælges i appen (`SetRole`) og hentes fra flash nedenfor;
+        // standard er repeater (fast strøm).
         let router = Router::new(addr, Role::Repeater);
         let mut n = FwNode {
             router,
@@ -129,6 +135,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             mail_delivered: 0,
         };
         n.admins = n.settings.load_admins();
+        let role = n.settings.load_role();
+        n.router.set_role(role);
         n.join("offentlig");
         n
     }
@@ -340,7 +348,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         // Status og radioindstillinger må hentes uden at forlade modem-tilstand.
         if !matches!(
             cmd,
-            Command::GetStats | Command::GetRadio | Command::SetRadio(_)
+            Command::GetStats | Command::GetRadio | Command::SetRadio(_) | Command::SetRole { .. }
         ) {
             self.modem = false;
         }
@@ -361,10 +369,19 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 }
                 Err(e) => err(0, error_code::BAD_FRAME, e),
             },
+            Command::SetRole { role } => match self.set_role(role) {
+                Ok(name) => {
+                    let mut items = self.stats();
+                    self.mail_stats(&mut items);
+                    emit(&Event::Stats { items });
+                    log(name);
+                }
+                Err(e) => err(0, error_code::BAD_FRAME, e),
+            },
             Command::GetInfo => {
                 emit(&Event::Info {
                     addr: self.addr,
-                    repeater: true,
+                    repeater: self.router.role.forwards(),
                     version: PROTOCOL_VERSION,
                     max_text: (MAX_DM_TEXT - 1) as u8,
                     max_file: 0,
@@ -445,9 +462,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::Remote { req, dest, frame } => {
                 if !matches!(
                     Command::decode(&frame),
-                    Ok(Command::GetStats | Command::GetRadio | Command::SetRadio(_))
+                    Ok(Command::GetStats | Command::GetRadio | Command::SetRadio(_) | Command::SetRole { .. })
                 ) {
-                    return err(req, error_code::BAD_FRAME, "Kun status og radio kan fjernstyres");
+                    return err(req, error_code::BAD_FRAME, "Kun status, radio og rolle kan fjernstyres");
                 }
                 let Some(counter) = self.unix_now() else {
                     return err(req, error_code::BAD_FRAME, "Klokken er ikke sat (forbind igen)");
@@ -558,8 +575,30 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 }
                 Err(e) => reply(self, deny(e)),
             },
+            Ok(Command::SetRole { role }) => match self.set_role(role) {
+                Ok(_) => {
+                    let mut items = self.stats();
+                    self.mail_stats(&mut items);
+                    for chunk in items.chunks(25) {
+                        reply(self, Event::Stats { items: chunk.iter().copied().collect() });
+                    }
+                }
+                Err(e) => reply(self, deny(e)),
+            },
             _ => reply(self, deny("Kommandoen kan ikke fjernstyres")),
         }
+    }
+
+    /// Skifter rolle og gemmer den i flash. Returnerer en logtekst.
+    fn set_role(&mut self, role: u8) -> Result<&'static str, &'static str> {
+        let r = Role::from_u8(role).ok_or("Ukendt rolle (0 = klient, 1 = repeater, 2 = relay)")?;
+        self.router.set_role(r);
+        self.settings.save_role(r);
+        Ok(match r {
+            Role::Client => "Rolle gemt: klient",
+            Role::Repeater => "Rolle gemt: repeater",
+            Role::Relay => "Rolle gemt: relay",
+        })
     }
 
     fn stats(&self) -> Stats {
@@ -571,7 +610,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             let _ = items.push((k, v));
         };
         put(stat::UPTIME_S, self.started.elapsed().as_secs() as i32);
-        put(stat::ROLE, 1);
+        put(stat::ROLE, self.router.role.as_u8() as i32);
         put(stat::KNOWN_NODES, self.known.len() as i32);
         put(stat::ROUTES, self.router.routes().len() as i32);
         put(stat::CHANNELS, self.channels.len() as i32);

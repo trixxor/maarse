@@ -47,16 +47,46 @@ fn http(mut stream: TcpStream) {
     }
     let line = String::from_utf8_lossy(&req);
     let path = line.split_whitespace().nth(1).unwrap_or("/");
-    let (status, ctype, body) = match path {
-        "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX_HTML),
-        _ => ("404 Not Found", "text/plain; charset=utf-8", "Ikke fundet"),
+    let path = path.split('?').next().unwrap_or("/");
+    let sw;
+    let (status, ctype, body): (&str, &str, &[u8]) = match path {
+        "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX_HTML.as_bytes()),
+        "/manifest.webmanifest" => ("200 OK", "application/manifest+json", MANIFEST.as_bytes()),
+        "/sw.js" => {
+            sw = service_worker();
+            ("200 OK", "text/javascript; charset=utf-8", sw.as_bytes())
+        }
+        "/icon.svg" => ("200 OK", "image/svg+xml", ICON_SVG.as_bytes()),
+        "/icon-192.png" => ("200 OK", "image/png", ICON_192),
+        "/icon-512.png" => ("200 OK", "image/png", ICON_512),
+        _ => ("404 Not Found", "text/plain; charset=utf-8", "Ikke fundet".as_bytes()),
     };
     let resp = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         body.len()
     );
     let _ = stream.write_all(resp.as_bytes());
-    let _ = stream.write_all(body.as_bytes());
+    let _ = stream.write_all(body);
+}
+
+// ---------- PWA: manifest, service worker og ikoner ----------
+
+const MANIFEST: &str = include_str!("../../maarse-client/manifest.webmanifest");
+const SW_JS: &str = include_str!("../../maarse-client/sw.js");
+const ICON_SVG: &str = include_str!("../../maarse-client/icon.svg");
+const ICON_192: &[u8] = include_bytes!("../../maarse-client/icon-192.png");
+const ICON_512: &[u8] = include_bytes!("../../maarse-client/icon-512.png");
+
+/// Service workeren får en cache-version ud fra indholdet af de indbyggede filer.
+/// Så opdager browseren en ny klient af sig selv, når maarse-host er opdateret.
+fn service_worker() -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a
+    for part in [INDEX_HTML.as_bytes(), MANIFEST.as_bytes(), SW_JS.as_bytes(), ICON_SVG.as_bytes(), ICON_192, ICON_512] {
+        for &b in part {
+            h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    SW_JS.replacen("\"maarse-v1\"", &format!("\"maarse-{h:016x}\""), 1)
 }
 
 /// Kun sider fra samme vært må styre noden. Ellers kunne enhver hjemmeside,

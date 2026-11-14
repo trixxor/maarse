@@ -4,6 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Må:rse</title>
+<!-- <pwa-head> app-installation; manifestet tilføjes kun over http(s), se <pwa> nederst -->
+<meta name="theme-color" content="#2f7d5b">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="icon-192.png">
+<script>
+  if (location.protocol.startsWith("http")) {
+    const l = document.createElement("link"); l.rel = "manifest"; l.href = "manifest.webmanifest";
+    document.head.appendChild(l);
+  }
+</script>
+<!-- </pwa-head> -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%232f7d5b'/%3E%3C/svg%3E">
 <style>
   :root {
@@ -83,6 +94,12 @@
   #chat-tools { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
   #chat-tools:empty { display: none; }
   .verified { color: var(--accent); }
+  /* <pwa-css> opdateringsbanner */
+  #pwa-update { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 8px 12px;
+                background: var(--accent); color: var(--accent-ink); font-size: 14px; }
+  #pwa-update button { background: var(--accent-ink); color: var(--accent); border-color: var(--accent-ink); padding: 4px 10px; }
+  #btn-side { display: none; }
+  /* </pwa-css> */
   @media (max-width: 720px) {
     .safety { font-size: 16px; gap: 4px 12px; }
     main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
@@ -91,11 +108,26 @@
     header button { padding: 6px 10px; font-size: 13px; }
     .composer { padding: 10px 12px; }
     .msg { max-width: 90%; }
+    /* <mobil> sidepanelet foldes sammen, når en samtale eller visning er valgt */
+    #btn-side { display: inline-block; }
+    header .spacer { display: none; }
+    header .status { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    header button:disabled { display: none; }
+    body.side-closed aside { display: none; }
+    body.side-closed main { grid-template-rows: minmax(0, 1fr); }
+    aside { max-height: 45vh; }
+    .form { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    .form > span:empty { display: none; }
+    .form label { margin-top: 6px; }
+    .safety { grid-template-columns: repeat(3, max-content); }
+    /* </mobil> */
   }
 </style>
 </head>
 <body>
+<div id="pwa-update" hidden>Ny version – <button id="btn-pwa-reload">genindlæs</button></div>
 <header>
+  <button id="btn-side" title="Vis/skjul samtaler og indstillinger">☰</button>
   <h1>Må:rse</h1>
   <span class="status"><span id="dot" class="dot"></span><span id="status">Ikke forbundet</span></span>
   <span class="spacer"></span>
@@ -113,6 +145,7 @@
 
     <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button></div>
     <div class="row"><button id="btn-myqr" disabled>Min QR-kode</button></div>
+    <div class="row"><button id="btn-notify" hidden>Slå notifikationer til</button><button id="btn-install" hidden>Installér app</button></div>
 
     <h2>Kanaler</h2>
     <div id="channels"></div>
@@ -398,6 +431,7 @@ function renderSide() {
     ct.appendChild(convRow("dm:" + addr, label(addr) + (isVerified(addr) ? " ✓" : "") + (heard ? "" : " (ikke hørt)"), addr));
   }
   if (!all.size) { const p = document.createElement("p"); p.className = "hint"; p.textContent = "Ingen endnu."; ct.appendChild(p); }
+  pwaTitle();
 }
 
 function renderChat() {
@@ -503,9 +537,11 @@ function onEvent(ev) {
     case "direct":
       state.contacts.set(ev.from, { heard: true });
       addMessage("dm:" + ev.from, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
+      pwaIncoming("dm:" + ev.from, label(ev.from), ev.text);
       break;
     case "channel":
       addMessage("ch:" + ev.channel, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
+      pwaIncoming("ch:" + ev.channel, (state.channels.get(ev.channel) || "kanal") + " · " + label(ev.from), ev.text);
       break;
     case "stats": state.stats = ev.items; if (state.view === "status" || state.view === "radio") renderChat(); break;
     case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
@@ -853,6 +889,7 @@ function renderRegions(box) {
 
 function setView(v) {
   state.view = v;
+  mobileSide(false); $("messages").scrollTop = 0;
   clearInterval(state.statsTimer);
   if (transport && state.target) {
     const req = state.nextReq++ & 0xffff;
@@ -1336,6 +1373,89 @@ if (location.protocol.startsWith("http")) {
   connect("ws");
 }
 renderSide();
+
+// ---------- <pwa> installérbar app, offline-cache, notifikationer og ulæst-tæller ----------
+// Alt her er progressivt: åbnet som fil (file://) bruges ingen service worker, og
+// notifikationer kræver, at brugeren selv slår dem til.
+var pwaHiddenUnread = 0; // beskeder i den aktive samtale, mens siden er skjult
+
+function pwaTitle() {
+  let n = pwaHiddenUnread;
+  for (const v of state.unread.values()) n += v;
+  document.title = n ? `(${n}) Må:rse` : "Må:rse";
+  $("btn-side").textContent = n ? `☰ ${n}` : "☰";
+}
+
+// Mobil: sidepanelet skjules, når man har valgt noget, og vises igen med ☰.
+function mobileSide(open) { document.body.classList.toggle("side-closed", !open); }
+$("btn-side").onclick = () => mobileSide(document.body.classList.contains("side-closed"));
+
+function pwaIncoming(key, title, text) {
+  if (!document.hidden) return;
+  if (state.active === key) pwaHiddenUnread++;
+  pwaTitle();
+  if (!("Notification" in window) || Notification.permission !== "granted" || !store.get("notify", false)) return;
+  const opts = { body: text, tag: key, icon: "icon-192.png", badge: "icon-192.png", data: key };
+  // Installeret på Android kræver notifikationer en service worker; ellers almindelig Notification.
+  const viaSw = navigator.serviceWorker?.controller
+    ? navigator.serviceWorker.ready.then(r => r.showNotification(title, opts)) : Promise.reject();
+  viaSw.catch(() => { try { const n = new Notification(title, opts); n.onclick = () => { window.focus(); n.close(); }; } catch {} });
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    if (state.active) state.unread.delete(state.active);
+    pwaHiddenUnread = 0; renderSide();
+  }
+});
+
+function pwaNotifyButton() {
+  const b = $("btn-notify");
+  if (!("Notification" in window)) { b.hidden = true; return; }
+  b.hidden = false;
+  const on = Notification.permission === "granted" && store.get("notify", false);
+  b.textContent = Notification.permission === "denied" ? "Notifikationer blokeret" : on ? "Slå notifikationer fra" : "Slå notifikationer til";
+  b.disabled = Notification.permission === "denied";
+  b.title = "Vis en notifikation, når der kommer en besked, mens Må:rse er i baggrunden";
+}
+$("btn-notify").onclick = async () => {
+  if (Notification.permission === "granted" && store.get("notify", false)) store.set("notify", false);
+  else if ((await Notification.requestPermission()) === "granted") store.set("notify", true);
+  pwaNotifyButton();
+};
+pwaNotifyButton();
+
+// "Installér app" (Chrome/Edge giver os prompten, hvis siden kan installeres).
+let pwaInstallPrompt = null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); pwaInstallPrompt = e; $("btn-install").hidden = false; });
+window.addEventListener("appinstalled", () => { pwaInstallPrompt = null; $("btn-install").hidden = true; log("Må:rse er installeret som app"); });
+$("btn-install").onclick = async () => {
+  if (!pwaInstallPrompt) return;
+  pwaInstallPrompt.prompt(); await pwaInstallPrompt.userChoice;
+  pwaInstallPrompt = null; $("btn-install").hidden = true;
+};
+
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("sw.js");
+      const offer = w => {
+        if (!w || !navigator.serviceWorker.controller) return; // første installation: intet at genindlæse
+        $("pwa-update").hidden = false;
+        $("btn-pwa-reload").onclick = () => w.postMessage("skipWaiting");
+      };
+      if (reg.waiting) offer(reg.waiting);
+      reg.addEventListener("updatefound", () => {
+        const w = reg.installing;
+        w?.addEventListener("statechange", () => { if (w.state === "installed") offer(w); });
+      });
+      let reloading = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => { if (!reloading && !$("pwa-update").hidden) { reloading = true; location.reload(); } });
+      setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+    } catch (e) { log("Offline-cache er ikke tilgængelig: " + e.message); }
+  });
+}
+// ---------- </pwa> ----------
 </script>
 </body>
 </html>

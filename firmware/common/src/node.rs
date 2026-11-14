@@ -591,6 +591,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 log("Regioner gemt");
             }
             Command::GetRegions => emit(&self.regions_event()),
+            // Kun hosten kender ruten godt nok til at svare; klienten falder
+            // tilbage til `Info.max_file` (8 KB på firmware).
+            Command::GetFileLimit { .. } => err(0, error_code::BAD_FRAME, "ukendt kommando"),
             Command::SetTime { unix } => {
                 self.boot_unix = Some(unix.saturating_sub(self.started.elapsed().as_secs() as u32));
             }

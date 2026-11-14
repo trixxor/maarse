@@ -82,6 +82,10 @@ pub enum Command {
     /// invitation). Format: nøgle (32 bytes) | navn (UTF-8, resten). Svaret
     /// er `ChannelJoined` som for andre kanaler.
     JoinPrivateChannel { key: [u8; 32], name: Text },
+    /// 0x14: hvor stor en fil må sendes til `dest` ad den aktuelle rute?
+    /// Svaret er `FileLimit`. Firmware-noder kender ikke kommandoen (de
+    /// svarer med `Error`); klienten bruger så `Info.max_file`.
+    GetFileLimit { dest: Address },
 }
 
 /// Svar og hændelser fra node til klient.
@@ -162,6 +166,17 @@ pub enum Event {
     Admins { admins: heapless::Vec<Address, 4> },
     /// 0x95: nodens regioner (kommasepareret) og `strict`.
     Regions { strict: bool, names: Text },
+    /// 0x96: svar på `GetFileLimit`. Format: dest (16) | max_bytes (u32) |
+    /// flag (u8: bit 0 = over LoRa eller ukendt rute, bit 1 = modtageren er
+    /// ikke at nå, filen lægges i postkasse) | est_airtime_s (u32, anslået
+    /// sendetid for `max_bytes` over LoRa; 0 over internettet).
+    FileLimit {
+        dest: Address,
+        max_bytes: u32,
+        via_lora: bool,
+        mailbox: bool,
+        est_airtime_s: u32,
+    },
     /// 0x8f
     Error { req: u16, code: u8, text: Text },
 }
@@ -496,6 +511,7 @@ impl Command {
             }
             Command::GetRegions => W::new(0x12).done(),
             Command::JoinPrivateChannel { key, name } => W::new(0x13).b(key).b(name).done(),
+            Command::GetFileLimit { dest } => W::new(0x14).b(&dest.0).done(),
         }
     }
 
@@ -550,6 +566,7 @@ impl Command {
                 key.copy_from_slice(r.take(32)?);
                 Command::JoinPrivateChannel { key, name: r.text()? }
             }
+            0x14 => Command::GetFileLimit { dest: r.addr()? },
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -671,6 +688,12 @@ impl Event {
                 }
                 w.done()
             }
+            Event::FileLimit { dest, max_bytes, via_lora, mailbox, est_airtime_s } => W::new(0x96)
+                .b(&dest.0)
+                .b(&max_bytes.to_le_bytes())
+                .b(&[*via_lora as u8 | (*mailbox as u8) << 1])
+                .b(&est_airtime_s.to_le_bytes())
+                .done(),
             Event::Error { req, code, text } => W::new(0x8f)
                 .b(&req.to_le_bytes())
                 .b(&[*code])
@@ -757,6 +780,18 @@ impl Event {
             0x93 => Event::RemoteReply { from: r.addr()?, frame: r.text()? },
             0x94 => Event::Admins { admins: r.addrs()? },
             0x95 => Event::Regions { strict: r.u8()? != 0, names: r.text()? },
+            0x96 => {
+                let dest = r.addr()?;
+                let max_bytes = r.u32()?;
+                let flags = r.u8()?;
+                Event::FileLimit {
+                    dest,
+                    max_bytes,
+                    via_lora: flags & 1 != 0,
+                    mailbox: flags & 2 != 0,
+                    est_airtime_s: r.u32()?,
+                }
+            }
             0x92 => Event::Radio(
                 RadioConfig::from_bytes(r.take(RadioConfig::LEN)?).ok_or(FrameError::TooShort)?,
             ),
@@ -893,6 +928,27 @@ mod tests {
         roundtrip_cmd(Command::SetRegions { strict: true, names: text(b"dk,nordjylland") });
         roundtrip_cmd(Command::SetRegions { strict: false, names: text(b"") });
         roundtrip_cmd(Command::GetRegions);
+        roundtrip_cmd(Command::GetFileLimit { dest: Address([9; 16]) });
+        assert_eq!(&Command::GetFileLimit { dest: Address([9; 16]) }.encode()[..3], &[17, 0, 0x14]);
+        roundtrip_ev(Event::FileLimit {
+            dest: Address([9; 16]),
+            max_bytes: 8192,
+            via_lora: true,
+            mailbox: false,
+            est_airtime_s: 130,
+        });
+        roundtrip_ev(Event::FileLimit {
+            dest: Address([8; 16]),
+            max_bytes: 1 << 20,
+            via_lora: false,
+            mailbox: true,
+            est_airtime_s: 0,
+        });
+        assert_eq!(
+            Event::FileLimit { dest: Address([0; 16]), max_bytes: 1, via_lora: true, mailbox: true, est_airtime_s: 2 }
+                .encode()[23],
+            3
+        );
         roundtrip_ev(Event::Regions { strict: false, names: text(b"dk") });
 
         roundtrip_cmd(Command::SetTime { unix: 1_800_000_000 });

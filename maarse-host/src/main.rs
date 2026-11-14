@@ -12,6 +12,7 @@
 
 mod dht;
 mod filebox;
+mod history;
 #[cfg(test)]
 mod fuzz_tests;
 mod links;
@@ -109,6 +110,8 @@ pub struct Config {
     pub meshcore_bridge: Vec<meshcore::Mapping>,
     /// MQTT-bro (`--mqtt`).
     pub mqtt: Option<mqtt::MqttConfig>,
+    /// Beskedhistorik: antal dage, der gemmes (`None` = `--no-history`).
+    pub history_days: Option<u32>,
 }
 
 /// Offentlige backbone-noder, som `--public` forbinder til. Tom indtil
@@ -128,6 +131,10 @@ Brug: maarse-host [valg]
   --baud <hastighed>    baudrate til seriel (standard: 115200)
   --public              forbind også til de offentlige backbone-noder
   --max-file <KB>       største fil, der sendes og modtages (standard: 1024)
+  --history-days <N>    gem beskedhistorik i N dage, så flere skærme ser hele
+                        samtalen (standard: 90). OBS: gemmes ukrypteret i
+                        <data>/historik
+  --no-history          gem ingen beskedhistorik på disken
   --postkasse <adresse> brug denne node som min postkasse, når jeg er offline
   --filpostkasse-mb <MB>
                         plads til filer til modtagere, der er offline (standard:
@@ -184,6 +191,7 @@ fn parse_args() -> Result<Config, String> {
         meshcore_baud: 115_200,
         meshcore_bridge: Vec::new(),
         mqtt: None,
+        history_days: Some(90),
     };
     let mut mqtt_prefix = "maarse".to_string();
     let (mut mqtt_user, mut mqtt_pass) = (None, None);
@@ -207,6 +215,13 @@ fn parse_args() -> Result<Config, String> {
             "--serial" => c.serial = Some(val("--serial")?),
             "--baud" => c.baud = val("--baud")?.parse().map_err(|_| "--baud: ugyldigt tal")?,
             "--no-browser" => c.open_browser = false,
+            "--no-history" => c.history_days = None,
+            "--history-days" => {
+                let n: u32 = val("--history-days")?
+                    .parse()
+                    .map_err(|_| "--history-days: ugyldigt tal")?;
+                c.history_days = Some(n.max(1));
+            }
             "--public-addr" => c.public_addr = Some(val("--public-addr")?),
             "--dht" => c.dht_seeds.push(val("--dht")?),
             "--region" => c.regions.push(val("--region")?.trim().to_lowercase()),

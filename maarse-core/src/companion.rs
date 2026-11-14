@@ -12,6 +12,10 @@
 //!
 //! Klienten sender kommandoer (type < 0x80); noden sender svar og
 //! hændelser (type >= 0x80).
+//!
+//! Kommandoerne 0x30-0x33 og hændelserne 0xB0-0xB3 er reserveret til
+//! beskedhistorikken i maarse-host (se `maarse-host/src/history.rs`). De
+//! afkodes kun dér; firmware svarer med `Error` (ugyldig ramme).
 
 use crate::addr::Address;
 

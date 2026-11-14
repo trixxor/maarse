@@ -308,7 +308,7 @@ function decodeEvent(f) {
     case 0xa3: return { type: "nodeInfo", addr: a(1), hops: f[17], ...parseAppData(f.slice(18)) };
     case 0x8e: return { type: "log", text: txt(1) };
     case 0x8f: return { type: "error", req: f[1] | f[2] << 8, code: f[3], text: txt(4) };
-    default: return { type: "unknown", kind: t };
+    default: return histDecode(f, t) ?? { type: "unknown", kind: t };
   }
 }
 
@@ -444,6 +444,7 @@ function conv(key) {
 function addMessage(key, msg) {
   conv(key).push(msg);
   if (state.active !== key) state.unread.set(key, (state.unread.get(key) || 0) + 1);
+  else histMarkRead(key);
   renderSide();
   if (state.active === key) renderChat();
 }
@@ -458,7 +459,7 @@ function convRow(key, name, title) {
   d.appendChild(n);
   const u = state.unread.get(key);
   if (u) { const b = document.createElement("span"); b.className = "badge"; b.textContent = u; d.appendChild(b); }
-  d.onclick = () => { setView("chat"); state.active = key; state.unread.delete(key); renderSide(); renderChat(); };
+  d.onclick = () => { setView("chat"); state.active = key; state.unread.delete(key); histMarkRead(key); renderSide(); renderChat(); };
   return d;
 }
 
@@ -466,7 +467,8 @@ function renderSide() {
   const ch = $("channels"); ch.replaceChildren();
   for (const [addr, name] of state.channels) ch.appendChild(convRow("ch:" + addr, name, addr));
   const ct = $("contacts"); ct.replaceChildren();
-  const all = new Set([...state.contacts.keys(), ...Object.keys(nicknames)]);
+  const all = new Set([...state.contacts.keys(), ...Object.keys(nicknames),
+    ...[...state.convs.keys()].filter(k => k.startsWith("dm:")).map(k => k.slice(3))]);
   for (const addr of all) {
     const heard = state.contacts.get(addr)?.heard;
     ct.appendChild(convRow("dm:" + addr, label(addr) + (isVerified(addr) ? " ✓" : "") + (heard ? "" : " (ikke hørt)"), addr));
@@ -512,7 +514,7 @@ function renderChat() {
     d.appendChild(meta);
     box.appendChild(d);
   }
-  box.scrollTop = box.scrollHeight;
+  if (!histKeepScroll(box)) box.scrollTop = box.scrollHeight;
   updateComposer();
 }
 
@@ -542,6 +544,7 @@ function setConnected(on, name) {
 const now = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 function onEvent(ev) {
+  if (histOnEvent(ev)) return;
   switch (ev.type) {
     case "info":
       state.me = ev.addr; state.maxText = ev.maxText; state.maxFile = ev.maxFile;
@@ -1752,6 +1755,120 @@ if (location.protocol.startsWith("http")) {
 }
 renderSide();
 
+// ---------- <historik> fælles indbakke på maarse-host: flere skærme, historik og ulæst-synk ----------
+// maarse-host gemmer beskeder (se maarse-host/src/history.rs) og sender HistoryInfo (0xB3) ved
+// forbindelse. Først da bruges historikken; firmware-noder sender den aldrig, og så virker alt som før.
+const hist = { on: false, loading: false, req: 0x7000, items: [], more: new Map(), busy: false, keep: null };
+const u64 = s => { let v = BigInt(s || 0); const o = []; for (let i = 0; i < 8; i++) { o.push(Number(v & 0xffn)); v >>= 8n; } return o; };
+const HIST_ALL = new Uint8Array(16);
+const histCmd = {
+  get: (req, convHex, before, limit) => frame(0x30, u16(req), convHex ? unhex(convHex) : HIST_ALL, u64(before), [limit]),
+  markRead: (convHex, upTo) => frame(0x31, unhex(convHex), u64(upTo)),
+};
+
+function histDecode(f, t) {
+  const a = o => hex(f.slice(o, o + 16));
+  switch (t) {
+    case 0xb0: return { type: "historyItem", id: readU64(f, 1), ts: rd32(f, 9), outgoing: !!(f[13] & 1), live: !!(f[13] & 2),
+      kind: f[14], st: f[15], hops: f[16], msgId: readU64(f, 17), conv: a(25), from: a(41), content: f.slice(57) };
+    case 0xb1: return { type: "historyEnd", req: f[1] | f[2] << 8, conv: a(3), count: f[19], more: !!f[20], oldest: readU64(f, 21) };
+    case 0xb2: return { type: "readMark", conv: a(1), upTo: readU64(f, 17), unread: f[25] | f[26] << 8 };
+    case 0xb3: return { type: "historyInfo", days: f[2] | f[3] << 8, count: rd32(f, 4) };
+  }
+  return null;
+}
+
+const HIST_STATUS = ["", "sendt", "✓ leveret", "📫 i postkasse"];
+function histTime(ts) {
+  const d = new Date(ts * 1000), t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? t : d.toLocaleDateString([], { day: "numeric", month: "short" }) + " " + t;
+}
+function histKey(ev) { return (ev.kind === 2 ? "ch:" : "dm:") + ev.conv; }
+function histMsg(ev) {
+  const m = { id: ev.id, from: ev.from, time: histTime(ev.ts), mine: ev.outgoing, kind: ev.kind === 2 ? "ch" : "dm" };
+  if (ev.kind === 3) {
+    const size = rd32(ev.content, 0), ml = ev.content[4];
+    const mime = dec.decode(ev.content.slice(5, 5 + ml)), name = dec.decode(ev.content.slice(5 + ml));
+    m.text = `📎 ${name} (${Math.ceil(size / 1024)} KB${mime ? ", " + mime : ""}) – filen gemmes ikke i historikken`;
+  } else m.text = dec.decode(ev.content);
+  if (ev.outgoing) { m.status = HIST_STATUS[ev.st] || "sendt"; if (ev.msgId !== "0") state.byMsgId.set(ev.msgId, m); }
+  else m.hops = ev.hops;
+  return m;
+}
+// Indsætter efter id (ældste først) og springer dubletter over.
+function histInsert(key, msgs) {
+  const list = conv(key), seen = new Set(list.filter(m => m.id).map(m => m.id));
+  const fresh = msgs.filter(m => !seen.has(m.id));
+  const withId = list.filter(m => m.id), without = list.filter(m => !m.id);
+  const merged = withId.concat(fresh).sort((x, y) => (BigInt(x.id) < BigInt(y.id) ? -1 : 1));
+  state.convs.set(key, merged.concat(without));
+}
+function histSend(f) { if (transport) Promise.resolve(transport.send(f)).catch(() => {}); }
+
+function histMarkRead(key) {
+  if (!hist.on || !key || document.hidden) return;
+  histSend(histCmd.markRead(key.split(":")[1], "0"));
+}
+
+function histLoadOlder() {
+  const key = state.active;
+  if (!hist.on || hist.busy || !key || hist.more.get(key) === false) return;
+  const first = conv(key).find(m => m.id);
+  hist.busy = true; hist.items = [];
+  histSend(histCmd.get(++hist.req & 0xffff, key.split(":")[1], first ? first.id : "0", 50));
+}
+
+// Returnerer true, hvis hændelsen er håndteret her.
+function histOnEvent(ev) {
+  switch (ev.type) {
+    case "info": hist.on = false; hist.loading = false; hist.busy = false; return false;
+    case "historyInfo":
+      hist.on = true; hist.loading = true; hist.busy = true; hist.items = []; hist.more.clear();
+      state.convs.clear(); state.unread.clear(); state.byMsgId.clear();
+      log(`Historik på hosten: ${ev.count} beskeder (gemmes ${ev.days} dage)`);
+      histSend(histCmd.get(++hist.req & 0xffff, null, "0", 200));
+      return true;
+    case "historyItem":
+      if (ev.live) {
+        // Sendt fra en anden skærm, der følger samme host.
+        if (ev.kind !== 2 && !state.contacts.has(ev.conv)) state.contacts.set(ev.conv, { heard: false });
+        histInsert(histKey(ev), [histMsg(ev)]);
+        renderSide(); if (state.active === histKey(ev)) renderChat();
+      } else hist.items.push(ev);
+      return true;
+    case "historyEnd": {
+      const byKey = new Map();
+      for (const it of hist.items) { const k = histKey(it); if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(histMsg(it)); }
+      const all = ev.conv === hex(HIST_ALL), box = $("messages");
+      if (!all) hist.keep = box.scrollHeight - box.scrollTop;
+      for (const [k, msgs] of byKey) histInsert(k, msgs);
+      if (!all) hist.more.set((state.channels.has(ev.conv) ? "ch:" : "dm:") + ev.conv, ev.more);
+      hist.items = []; hist.loading = false; hist.busy = false;
+      renderSide(); renderChat();
+      return true;
+    }
+    case "readMark": {
+      // Læst på en anden skærm (eller ulæste ved forbindelse).
+      const k = (state.channels.has(ev.conv) ? "ch:" : "dm:") + ev.conv;
+      if (ev.unread && state.active !== k) state.unread.set(k, ev.unread); else state.unread.delete(k);
+      renderSide();
+      return true;
+    }
+    // Under indlæsningen kommer beskederne også med i historikken.
+    case "direct": case "channel": return hist.loading;
+  }
+  return false;
+}
+
+// Bevarer scrollpositionen, når ældre beskeder sættes ind øverst.
+function histKeepScroll(box) {
+  if (hist.keep === null) return false;
+  box.scrollTop = box.scrollHeight - hist.keep; hist.keep = null;
+  return true;
+}
+$("messages").addEventListener("scroll", () => { if (state.view === "chat" && $("messages").scrollTop < 40) histLoadOlder(); });
+// ---------- </historik> ----------
+
 // ---------- <pwa> installérbar app, offline-cache, notifikationer og ulæst-tæller ----------
 // Alt her er progressivt: åbnet som fil (file://) bruges ingen service worker, og
 // notifikationer kræver, at brugeren selv slår dem til.
@@ -1782,7 +1899,7 @@ function pwaIncoming(key, title, text) {
 
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
-    if (state.active) state.unread.delete(state.active);
+    if (state.active) { state.unread.delete(state.active); histMarkRead(state.active); }
     pwaHiddenUnread = 0; renderSide();
   }
 });

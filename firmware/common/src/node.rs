@@ -855,6 +855,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Role::Client => "Rolle gemt: klient",
             Role::Repeater => "Rolle gemt: repeater",
             Role::Relay => "Rolle gemt: relay",
+            Role::Anchor => "Rolle gemt: anker",
         })
     }
 

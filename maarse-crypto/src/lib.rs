@@ -26,7 +26,8 @@ pub const SIGNATURE_LEN: usize = 64;
 /// Fast del af et announce: nøgler + tidsstempel + længde af app-data.
 pub const ANNOUNCE_FIXED: usize = PUBLIC_IDENTITY_LEN + 4 + 1;
 /// Største app-data i et announce, så det stadig passer i én LoRa-pakke.
-pub const MAX_APP_DATA: usize = maarse_core::MAX_PACKET - 18 - ANNOUNCE_FIXED - SIGNATURE_LEN;
+pub const MAX_APP_DATA: usize =
+    maarse_core::MAX_PACKET - 18 - ANNOUNCE_FIXED - SIGNATURE_LEN - maarse_core::stamp::STAMP_LEN;
 
 /// Domæneseparation, så en announce-signatur ikke kan genbruges til andet.
 const ANNOUNCE_CONTEXT: &[u8] = b"maarse/announce/v0";
@@ -138,6 +139,9 @@ impl Identity {
     }
 }
 
+/// Payload til et announce (se [`Identity::announce`]).
+pub type AnnounceBuf = heapless::Vec<u8, { maarse_core::MAX_PACKET }>;
+
 /// Et verificeret announce.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Announce<'a> {
@@ -244,9 +248,19 @@ mod tests {
 
     #[test]
     fn announce_fits_in_one_packet() {
+        use maarse_core::packet::{Header, Packet, encode};
+        use maarse_core::stamp::{self, STAMP_LEN};
+        use maarse_core::PacketType;
         let id = Identity::generate(&mut OsRng);
-        let payload = id.announce(0, &[0u8; MAX_APP_DATA]).unwrap();
-        assert_eq!(payload.len() + 18, maarse_core::MAX_PACKET);
+        let mut payload = id.announce(0, &[0u8; MAX_APP_DATA]).unwrap();
+        assert_eq!(payload.len() + 18 + STAMP_LEN, maarse_core::MAX_PACKET);
+        // Med stempel fylder det præcis en pakke, og det kan stadig verificeres.
+        let dest = id.address();
+        assert!(stamp::append(PacketType::Announce, &dest, &mut payload));
+        let pkt = encode(&Header::new(PacketType::Announce, dest), &payload).unwrap();
+        let p = Packet::decode(&pkt).unwrap();
+        let body = stamp::verify(PacketType::Announce, &dest, p.payload).unwrap();
+        assert!(verify_announce(&dest, body).is_ok());
         assert!(id.announce(0, &[0u8; MAX_APP_DATA + 1]).is_none());
     }
 

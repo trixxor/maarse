@@ -321,6 +321,8 @@ pub mod stat {
     pub const DHT_LOOKUPS: u8 = 74;
     pub const DHT_FOUND: u8 = 75;
     pub const DHT_PEERS: u8 = 76;
+    /// Announces og ruteforespørgsler smidt væk pga. manglende/forkert stempel.
+    pub const BAD_STAMPS: u8 = 77;
 }
 
 /// Fejlkoder i `Event::Error`.

@@ -72,6 +72,21 @@ Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), US
 - **Mobile noder** (`mobile = true`) stoler ikke på ruter, der er ældre end 30 s.
 - Roller: `Client`, `Repeater` og `Relay` (skov-tilstand, højst 4 hop).
 
+## Spam-beskyttelse (arbejdsbevis)
+
+Announces og ruteforespørgsler bærer et lille arbejdsbevis (et "stempel", inspireret af Reticulum 1.6), så ingen kan oversvømme nettet billigt. Stemplet er en nonce, så `SHA-256("maarse/stamp" | version | type | destination | binding | nonce)` har nok foranstillede nul-bits. At tjekke koster én hash.
+
+| Pakke | Binding | Sværhedsgrad (v1) | nRF52840 (skøn) | PC (målt) |
+| --- | --- | --- | --- | --- |
+| Announce | identitet (destination) + tidsstempel | 12 bit, 4.096 forsøg i snit | ca. 0,3 s | ca. 0,2 ms |
+| Ruteforespørgsel | mål + svar-token | 8 bit, 256 forsøg i snit | ca. 20 ms | ca. 0,01 ms |
+
+- Repeatere og klienter smider pakker uden gyldigt stempel væk: de behandles ikke og sendes ikke videre. De tælles i statistikken som "Uden arbejdsbevis" (nøgle 77).
+- Firmwaren regner announce-stemplet ud i bidder på 256 forsøg (ca. 20 ms) og giver executoren fri imellem. Ruteforespørgslens stempel er så billigt, at routeren regner det ud med det samme.
+- Sværhedsgraden ligger fast pr. pakketype og stempel-version, så den kan hæves med en ny version. Detaljer i `maarse-core/src/stamp.rs`.
+
+**Ændring af pakkeformatet (v0.4):** announces og ruteforespørgsler har nu 5 bytes ekstra sidst i payloaden: stempel-version (1) og nonce (4, big-endian). Største app-data i et announce er derfor 5 bytes mindre (99 bytes). Ældre noder uden stempel bliver ikke hørt af nye noder, og nye announces afvises af gamle noder (længden passer ikke). Companion-rammerne er uændrede; appen ser announces uden stempel.
+
 ## Backbone-DHT
 
 - Kademlia-agtig, med XOR-afstand på 16-byte-adresser, K = 8 og 3 forespørgsler pr. runde.
@@ -84,7 +99,7 @@ Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), US
 ## Test
 
 ```sh
-cargo test --workspace                  # 66 tests
+cargo test --workspace                  # 73 tests
 cargo build --release -p maarse-host
 python tools/e2e_test.py target/release/maarse-host
 python tools/dht_test.py target/release/maarse-host

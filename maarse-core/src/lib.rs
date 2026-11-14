@@ -20,6 +20,7 @@ pub mod duty;
 pub mod packet;
 pub mod router;
 pub mod routes;
+pub mod stamp;
 
 pub use addr::{Address, PathId};
 pub use packet::{Header, Packet, PacketType, Path};

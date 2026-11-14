@@ -20,6 +20,7 @@ use crate::addr::{Address, PathId};
 use crate::dedup::{DedupCache, packet_id};
 use crate::packet::{Header, Packet, PacketType, Path, encode};
 use crate::routes::{Route, RouteTable};
+use crate::stamp;
 use crate::{LOCAL_SCOPE, MAX_HOPS, MAX_PACKET, MAX_PATH};
 
 pub type Buf = heapless::Vec<u8, MAX_PACKET>;
@@ -254,6 +255,9 @@ pub struct RouterStats {
     pub hop_retries: u32,
     /// Flood-udsendelser annulleret, fordi naboer havde dækket området.
     pub floods_cancelled: u32,
+    /// Announces og ruteforespørgsler smidt væk, fordi arbejdsbeviset
+    /// (stemplet) manglede eller var forkert (se [`crate::stamp`]).
+    pub bad_stamps: u32,
 }
 
 /// Routing-motor med `R` ruter og et dublet-filter på `D` pakker.
@@ -667,7 +671,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             .queue
             .iter()
             .find(|q| q.dest == dest && q.ptype == PacketType::Data)
-            && 16 + q.payload.len() <= MAX_DIRECT_PAYLOAD
+            && 16 + q.payload.len() + stamp::STAMP_LEN <= MAX_DIRECT_PAYLOAD
             && payload.extend_from_slice(&q.payload).is_ok()
         {
             carried = Some(packet_id(PacketType::Data, &dest, &q.payload));
@@ -680,6 +684,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
             retry_at_ms: now_ms + PATH_RETRY_MS,
             tries,
         });
+        // Arbejdsbevis bundet til målet og tokenet (ca. 256 forsøg i snit).
+        stamp::append(PacketType::PathRequest, &dest, &mut payload);
         let header = Header::new(PacketType::PathRequest, dest).with_path(Path::new());
         self.emit(&header, &payload, 0, out);
     }
@@ -736,6 +742,14 @@ impl<const R: usize, const D: usize> Router<R, D> {
             self.stats.rx_invalid += 1;
             return out;
         };
+        // Announces og ruteforespørgsler uden gyldigt arbejdsbevis behandles
+        // ikke og sendes ikke videre. Det koster én hash at tjekke.
+        if stamp::required(pkt.header.ptype)
+            && stamp::verify(pkt.header.ptype, &pkt.header.dest, pkt.payload).is_err()
+        {
+            self.stats.bad_stamps += 1;
+            return out;
+        }
         self.stats.rx_packets += 1;
         let id = packet_id(pkt.header.ptype, &pkt.header.dest, pkt.payload);
         match (&pkt.header.ptype, &pkt.header.path) {
@@ -806,7 +820,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             };
             // Indeholder forespørgslen en besked, leveres den nu. Svaret
             // fungerer så også som kvittering.
-            let data = &pkt.payload[16..];
+            let data = &stamp::strip(PacketType::PathRequest, pkt.payload)[16..];
             if !data.is_empty()
                 && self
                     .dedup
@@ -985,11 +999,14 @@ impl<const R: usize, const D: usize> Router<R, D> {
     }
 }
 
+/// Leverer pakken til appen. Et stempel fjernes først, så appen ser samme
+/// payload, som afsenderen lavede (fx et signeret announce).
 fn deliver(pkt: &Packet, out: &mut Actions) {
+    let payload = stamp::strip(pkt.header.ptype, pkt.payload);
     let _ = out.push(Action::Deliver {
         ptype: pkt.header.ptype,
         dest: pkt.header.dest,
-        payload: Buf::from_slice(pkt.payload).unwrap_or_default(),
+        payload: Buf::from_slice(payload).unwrap_or_default(),
         hops: pkt.header.hops,
     });
 }
@@ -1035,6 +1052,44 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn drops_packets_without_valid_stamp() {
+        let mut r = node(2, Role::Repeater);
+        let dest = Address([5; 16]);
+        // Ruteforespørgsel uden stempel.
+        let h = Header::new(PacketType::PathRequest, dest).with_path(Path::new());
+        let out = r.on_receive(&encode(&h, &[9u8; 16]).unwrap(), 0, 0);
+        assert!(out.is_empty());
+        // Announce med forkert stempel (rigtigt stempel, men andet tidsstempel).
+        let mut body: Buf = Buf::from_slice(&[1u8; 69]).unwrap();
+        assert!(stamp::append(PacketType::Announce, &dest, &mut body));
+        body[67] ^= 0xff;
+        let h = Header::new(PacketType::Announce, dest);
+        let out = r.on_receive(&encode(&h, &body).unwrap(), 0, 0);
+        assert!(out.is_empty());
+        assert_eq!(r.stats.bad_stamps, 2);
+        assert_eq!(r.stats.rx_packets, 0);
+        assert_eq!(r.stats.forwarded, 0);
+    }
+
+    #[test]
+    fn stamped_announce_is_delivered_without_stamp_and_forwarded_with_it() {
+        let mut r = node(2, Role::Repeater);
+        let dest = Address([5; 16]);
+        let body: Buf = Buf::from_slice(&[1u8; 140]).unwrap();
+        let mut stamped = body.clone();
+        assert!(stamp::append(PacketType::Announce, &dest, &mut stamped));
+        let pkt = encode(&Header::new(PacketType::Announce, dest), &stamped).unwrap();
+        let out = r.on_receive(&pkt, 0, 0);
+        assert!(out.iter().any(
+            |x| matches!(x, Action::Deliver { payload, .. } if payload.as_slice() == body.as_slice())
+        ));
+        let fwd = transmits(&out);
+        assert_eq!(fwd.len(), 1);
+        assert_eq!(Packet::decode(&fwd[0]).unwrap().payload, stamped.as_slice());
+        assert_eq!(r.stats.bad_stamps, 0);
     }
 
     /// Kæde: A (klient) - R1 - R2 - B (klient). Hver hører kun sine naboer.
@@ -1420,7 +1475,9 @@ mod tests {
         let mk = |path: &[u16]| {
             let mut h = Header::new(PacketType::PathRequest, dest).with_path(Path::from_slice(path).unwrap());
             h.hops = path.len() as u8;
-            encode(&h, &token).unwrap()
+            let mut p: Buf = Buf::from_slice(&token).unwrap();
+            assert!(stamp::append(PacketType::PathRequest, &dest, &mut p));
+            encode(&h, &p).unwrap()
         };
         // Første kopi: 1 hop, men næsten ved støjgrænsen.
         b.on_receive(&mk(&[7]), -11, 0);

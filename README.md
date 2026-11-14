@@ -164,6 +164,31 @@ Webklienten har en **Diagnose**-side (knappen ved Status/Radio):
 
 Position deles **ikke** som standard. Under Diagnose kan man vælge præcision (slukket / ca. 10 km / ca. 1 km / præcis) og telemetri (batteri, oppetid, energistatus); kommando `0x22`/`0x23`, svar `0xA2`. Noden gemmer positionen, men sender den afrundet til midten af en gittercelle (0,1° eller 0,01°); kun "præcis" sender den nøjagtige position (klienten spørger først). Felterne ligger i announcets app-data efter FS-feltet (`0x03` position, `0x04` telemetri, type | længde | data, i alt højst 41 af 99 bytes), så ældre noder ignorerer dem. Modtagne positioner og telemetri vises som en liste (hændelse `0xA3`), uden kort udefra. Temperatur er med i formatet, men nRF52840's TEMP-enhed ejes af Bluetooth (MPSL), så den sendes ikke endnu.
 
+## Sikkerhedskopi og gendannelsesfrase
+
+Under **Sikkerhedskopi** i webklienten kan man lave en ny identitet ud fra en **gendannelsesfrase på 24 ord** eller gendanne en identitet fra en frase. Frasen laves og vises kun i browseren (aldrig i localStorage), og brugeren skal bekræfte tre tilfældige ord, før den installeres på noden.
+
+**Der er ingen bagdør: den, der har frasen, ER dig.** Mister du den, kan ingen gendanne identiteten.
+
+Afledning (`maarse-crypto/src/recovery.rs`, samme i webklienten):
+
+```text
+32 bytes tilfældig entropi -> 24 ord (BIP39's engelske ordliste, 8 bit tjeksum)
+seed   = PBKDF2-HMAC-SHA512(frase, "mnemonic" + adgangsord, 2048)   # præcis BIP39; adgangsord valgfrit
+master = HKDF-SHA256(salt "maarse/master/v1", seed, info "") -> 64 bytes
+identitet = Identity::from_secret_bytes(master)   # Ed25519-frø | X25519-nøgle
+```
+
+Testvektor: "abandon × 23 art" uden adgangsord giver adressen `6ef182b74279e05122977ced600ae3e6`.
+
+Klienten installerer identiteten med `SetIdentity` (`0x34`: flag (1 = bekræftet) | hemmelighed (64)), svar `IdentityChanged` (`0xB4`: adresse | offentlig identitet). Kommandoen virker kun lokalt (USB, Bluetooth, maarse-hosts WebSocket på 127.0.0.1) og afvises via `Remote`. Noden gemmer nøglen (firmware: identitetsfeltet i flash; maarse-host: `identity.key` skrives atomisk, den gamle gemmes som `identity.old`), glemmer ruter og forward secrecy-sessioner og sender et nyt announce. `0x35`–`0x37` og `0xB5`–`0xB7` er holdt fri til tilknyttede enheder.
+
+Noden kan **ikke** udlevere sin hemmelige nøgle (ingen `GetIdentitySecret`): en identitet, der er oprettet tilfældigt (før frasen fandtes), kan derfor ikke sikkerhedskopieres. Vejen videre er at oprette en ny identitet med frase. Adressen skifter, og kontakter skal tilføje dig og bekræfte sikkerhedsnummeret igen.
+
+**Overgangsregel:** i dag ER nodens identitet frasens identitet, så samme frase giver samme adresse og sikkerhedsnummer. Senere, med *tilknyttede enheder*, bliver frasen din master-identitet, og hver enhed får sin egen nøgle, som master underskriver (samme afledning, så nutidens fraser stadig gælder). Indtil da: **brug kun identiteten på én enhed ad gangen.** To noder med samme identitet forstyrrer ruter og forward secrecy-sessioner, så beskeder kan gå tabt.
+
+**Krypteret eksport (`.maarse-backup`)** indeholder klientens tilstand: kaldenavne, kontakternes nøgler og bekræftelser, private kanaler (med nøgler), regioner, rolle og deling. Identiteten er ikke med (den gendannes med frasen). Filen er JSON: `{format: "maarse-backup", v: 1, kdf: "PBKDF2-SHA256", iter: 600000, salt, cipher: "AES-256-GCM", iv, ct}` (base64). Hovedet er AAD, så parametrene ikke kan ændres ubemærket. Adgangskoden skal have mindst 12 tegn. Vi bruger PBKDF2 (600.000 runder, OWASP's anbefaling for PBKDF2-HMAC-SHA256) i WebCrypto i stedet for Argon2id, fordi Argon2id kræver WASM eller en langsom JS-implementering på flere hundrede linjer. Er filen lille nok, vises den også som QR-kode. Ved import flettes tilstanden ind, og private kanaler, regioner, deling og rolle sendes til noden igen.
+
 ## MQTT og Home Assistant
 
 ```
@@ -223,6 +248,7 @@ cargo build --release -p maarse-host
 python tools/e2e_test.py target/release/maarse-host
 python tools/dht_test.py target/release/maarse-host
 node tools/safety_number_test.mjs        # sikkerhedsnummer i JS = Rust
+node tools/recovery_phrase_test.mjs      # gendannelsesfrase og sikkerhedskopi i JS = Rust
 cargo run --release -p maarse-sim -- --help
 ```
 

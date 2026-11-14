@@ -281,6 +281,34 @@ try:
     n.send(frame(0x1b))
     n.wait(lambda f: f[0] == 0x9a and f[3] == 5)
     ok("OtaStatus besvaret (maarse-host: ikke understøttet)")
+
+    # 9. Gendannelsesfrase: SetIdentity (0x34) med master-hemmeligheden for
+    #    "abandon … art" (uden adgangsord, se maarse-crypto/src/recovery.rs).
+    MASTER = bytes.fromhex("743d6ccda8a1826db3ef1df490b9d6d82f4b3920c76335447f21b261e4bf7252"
+                           "5485ca54b88ea0c0358d84254ee7c92855aa5ec5fec21de960bf6f00996c80a4")
+    WANT = bytes.fromhex("6ef182b74279e05122977ced600ae3e6")
+    start("i", 8193, ["--listen", "off"])
+    i = Client(8193); old = i.info()
+    i.send(frame(0x34, bytes([0]), MASTER))
+    i.wait(lambda f: f[0] == 0x8f)
+    assert i.info() == old
+    ok("SetIdentity uden bekræftelse afvist")
+    i.send(frame(0x0c, struct.pack("<H", 30), old, frame(0x34, bytes([1]), MASTER)[2:]))
+    i.wait(lambda f: f[0] == 0x8f and b"fjernstyres" in f[4:])
+    ok("SetIdentity via Remote afvist")
+    i.events.clear()
+    i.send(frame(0x34, bytes([1]), MASTER))
+    ch = i.wait(lambda f: f[0] == 0xb4)
+    assert ch[1:17] == WANT, ch[1:17].hex()
+    assert hashlib.sha256(ch[17:81]).digest()[:16] == WANT
+    assert i.wait(lambda f: f[0] == 0x81)[1:17] == WANT
+    with open(os.path.join(TMP, "i", "identity.key"), "rb") as f: assert f.read() == MASTER
+    assert os.path.getsize(os.path.join(TMP, "i", "identity.old")) == 64
+    ok("SetIdentity: adressen er den forventede, og den gamle nøgle ligger i identity.old")
+    i.ws.close(); stop("i"); start("i", 8193, ["--listen", "off"])
+    i = Client(8193)
+    assert i.info() == WANT
+    ok("identiteten fra frasen overlever genstart")
     print("ALLE TESTS OK")
 finally:
     for n in list(procs): 

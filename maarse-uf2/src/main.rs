@@ -2,6 +2,7 @@
 //! trækkes over på boardets USB-drev. Ingen eksterne værktøjer.
 //!
 //!   maarse-uf2 <firmware.elf> <ud.uf2> [familie-id, standard 0xADA52840]
+#![forbid(unsafe_code)]
 
 use std::fs;
 

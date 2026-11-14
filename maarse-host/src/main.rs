@@ -8,8 +8,11 @@
 //!
 //! Start:  maarse-host
 //! Hjælp:  maarse-host --help
+#![forbid(unsafe_code)]
 
 mod dht;
+#[cfg(test)]
+mod fuzz_tests;
 mod links;
 mod node;
 mod web;

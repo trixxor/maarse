@@ -328,11 +328,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "maarse-fuzz"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+ "maarse-core",
+ "maarse-crypto",
+ "rand_core",
+]
+
+[[package]]
 name = "maarse-host"
 version = "0.1.0"
 dependencies = [
  "maarse-core",
  "maarse-crypto",
+ "maarse-fuzz",
  "rand_core",
  "serialport",
  "sha2",

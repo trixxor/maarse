@@ -56,6 +56,7 @@ Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), US
 | `maarse-client` | webklient i én HTML-fil. |
 | `maarse-sim` | simulator med radiomodel, kollisioner, duty cycle, motorvejsscenarie og flood-tilstand til sammenligning. |
 | `maarse-uf2` | laver UF2-filer af firmwaren (ingen eksterne værktøjer). |
+| `maarse-fuzz` | portabel fuzzing af alle dekodere, der læser bytes udefra. |
 | `firmware/common` | fælles firmware-logik: node, radio-løkke, statistik og flash-lager (indstillinger og postkasse). |
 | `firmware/nrf` | nRF52840-firmware: WisMesh Tag og XIAO nRF52840 + Wio-SX1262, med Bluetooth. |
 | `firmware/esp` | ESP32-S3-firmware: Heltec V4 (med OLED) og XIAO ESP32-S3 + Wio-SX1262. |
@@ -132,6 +133,21 @@ Ende-til-ende-testen starter tre noder (A, B og en postkasse P) og afprøver:
 DHT-testen starter tre backbone-hosts (B1, B2 og B3) uden pakkeforbindelse til hinanden, kun med B1 som DHT-startpunkt, samt A på B2 og C på B3. A skriver til C, som A aldrig har hørt, og beskeden kommer frem med kvittering. Svaret kommer også tilbage.
 
 Webklienten er også testet i en headless Chrome: tekst, billede og kanal mellem to noder, status- og radiosiden, og mobillayout. Sikkerhedsnumre (ens på begge sider, markér som bekræftet) og private kanaler (opret, del invitation, deltag, send) er testet i en headless Edge.
+
+### Fuzzing
+
+Alle dekodere, der læser bytes udefra, fuzzes med en lille, portabel motor i `maarse-fuzz` (deterministisk PRNG og mutator, ingen eksterne værktøjer; virker også på Windows/MSVC, hvor cargo-fuzz/libFuzzer ikke er pålidelig). Hvert mål kører halvt helt tilfældige input og halvt mutationer af gyldige rammer, og hvor det giver mening tjekkes det også, at dekodet input kan kodes og dekodes igen uændret.
+
+Mål: `Packet::decode`, companion `Command::decode`/`Event::decode`, `FrameDecoder` (strøm klippet i tilfældige stykker), `content::parse`, `verify_announce`, `open_direct`, `open_channel`, `open_chunk`, og DHT'ens `decode_req`/`decode_resp` (inkl. validering og lagring af STORE).
+
+```sh
+cargo test -p maarse-fuzz --release                     # 100 000 input pr. mål
+cargo test -p maarse-host --release fuzz_
+MAARSE_FUZZ_ITERS=20000000 cargo test -p maarse-fuzz --release -- --nocapture   # længere kørsel
+MAARSE_FUZZ_SEED=42 cargo test -p maarse-fuzz --release                         # andet frø
+```
+
+Ved en fejl skrives frø, iteration og input i hex, så den kan genskabes og lægges ind som regressionstest.
 
 ## Simulator
 

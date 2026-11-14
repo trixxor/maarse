@@ -310,6 +310,7 @@ name = "maarse-core"
 version = "0.1.0"
 dependencies = [
  "heapless",
+ "sha2",
 ]
 
 [[package]]

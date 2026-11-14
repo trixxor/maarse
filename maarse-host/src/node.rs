@@ -14,7 +14,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use maarse_core::companion::{Command, Event, MAX_TEXT, Stats, error_code, stat, text};
 use maarse_core::content::{self, Content, FileOffer, Small};
-use maarse_core::packet::{Header, encode};
+use maarse_core::packet::{Header, Packet, encode};
+use maarse_core::stamp;
 use maarse_core::router::MAX_DIRECT_PAYLOAD;
 use maarse_core::{Action, Address, PacketType, Role, Router};
 use maarse_crypto::seal::{self, CHUNK_DATA, CryptoError, MAX_DM_TEXT};
@@ -426,9 +427,12 @@ impl Node {
                 {
                     self.counters.last_snr = Some(snr);
                 }
-                if let Ok((h, _)) = Header::decode(&data)
-                    && h.ptype == PacketType::PathRequest
+                // Kun ruteforespørgsler med gyldigt arbejdsbevis udløser opslag.
+                if let Ok(p) = Packet::decode(&data)
+                    && p.header.ptype == PacketType::PathRequest
+                    && stamp::verify(p.header.ptype, &p.header.dest, p.payload).is_ok()
                 {
+                    let h = p.header;
                     self.dht_maybe_lookup(h.dest);
                 }
                 let now = self.now_ms();
@@ -532,8 +536,13 @@ impl Node {
         let Some(payload) = self.identity.announce(unix_now(), &app) else {
             return;
         };
+        // Arbejdsbevis (ca. 4.096 forsøg, under 1 ms på en PC).
+        let mut stamped = payload.clone();
+        if !stamp::append(PacketType::Announce, &self.addr, &mut stamped) {
+            return;
+        }
         let header = Header::new(PacketType::Announce, self.addr);
-        if let Ok(pkt) = encode(&header, &payload) {
+        if let Ok(pkt) = encode(&header, &stamped) {
             self.send_links(&pkt);
         }
         // Vores egen adresse kan altid nås her.
@@ -1466,6 +1475,7 @@ impl Node {
             (stat::PATH_REQUESTS, r.path_requests as i32),
             (stat::HOP_RETRIES, r.hop_retries as i32),
             (stat::FLOODS_CANCELLED, r.floods_cancelled as i32),
+            (stat::BAD_STAMPS, r.bad_stamps as i32),
             (stat::LINK_PACKETS_IN, clamp(c.packets_in)),
             (stat::LINK_PACKETS_OUT, clamp(c.packets_out)),
             (stat::LINK_BYTES_IN, clamp(c.bytes_in)),

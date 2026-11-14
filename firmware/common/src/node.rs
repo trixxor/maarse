@@ -9,6 +9,7 @@ use crate::bus::{
 };
 use core::sync::atomic::Ordering::Relaxed;
 use embassy_futures::select::{Either3, select3};
+use embassy_futures::yield_now;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::FnvIndexMap;
 use rand_core::{CryptoRng, RngCore};
@@ -16,6 +17,7 @@ use maarse_core::companion::{Command, Event, PROTOCOL_VERSION, error_code, text}
 use maarse_core::companion::{RadioConfig, Stats, stat};
 use maarse_core::content::{self, Content};
 use maarse_core::packet::{Header, encode};
+use maarse_core::stamp::StampSearch;
 use maarse_core::{Action, Address, PacketType, Role, Router};
 use maarse_crypto::seal::{self, CryptoError, MAX_DM_TEXT};
 use maarse_crypto::{
@@ -23,6 +25,9 @@ use maarse_crypto::{
 };
 
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(900);
+/// Forsøg pr. bid, når et announce-stempel regnes ud. 256 SHA-256-blokke
+/// tager ca. 20 ms på en 64 MHz Cortex-M4; derefter får executoren fri.
+const STAMP_CHUNK: u32 = 256;
 
 type Name = heapless::String<24>;
 
@@ -73,6 +78,8 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     /// Post fra postkassen, der er sendt og venter på kvittering: msg_id -> post-ID.
     mail_inflight: FnvIndexMap<u64, u32, 16>,
     mail_delivered: u32,
+    /// Announce, hvis arbejdsbevis er ved at blive regnet ud (se `run`).
+    stamping: Option<(maarse_crypto::AnnounceBuf, StampSearch)>,
 }
 
 fn now_ms() -> u64 {
@@ -133,6 +140,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             boot_unix: None,
             mail_inflight: FnvIndexMap::new(),
             mail_delivered: 0,
+            stamping: None,
         };
         n.admins = n.settings.load_admins();
         let role = n.settings.load_role();
@@ -141,14 +149,49 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         n
     }
 
+    /// Hovedløkken. Er et announce-stempel ved at blive regnet ud (ca.
+    /// 4.096 forsøg, 0,3 s på en nRF52840), tages det i bidder på
+    /// [`STAMP_CHUNK`] forsøg. Mellem bidderne giver vi executoren fri med
+    /// `yield_now`, så radio, USB og Bluetooth ikke venter mere end ca. 20 ms,
+    /// og modtagne pakker og kommandoer behandles som normalt.
     pub async fn run(&mut self) -> ! {
         loop {
+            if self.stamping.is_some() {
+                self.stamp_step();
+                match select3(RADIO_RX.receive(), USB_IN.receive(), yield_now()).await {
+                    Either3::First((pkt, snr)) => self.on_radio(pkt, snr),
+                    Either3::Second(frame) => self.on_frame(frame),
+                    Either3::Third(()) => {
+                        if Instant::now() >= self.next_deadline() {
+                            self.on_timer();
+                        }
+                    }
+                }
+                continue;
+            }
             let deadline = self.next_deadline();
             match select3(RADIO_RX.receive(), USB_IN.receive(), Timer::at(deadline)).await {
                 Either3::First((pkt, snr)) => self.on_radio(pkt, snr),
                 Either3::Second(frame) => self.on_frame(frame),
                 Either3::Third(()) => self.on_timer(),
             }
+        }
+    }
+
+    /// Ét bid af stempel-søgningen. Sender announcet, når stemplet er fundet.
+    fn stamp_step(&mut self) {
+        let Some((payload, search)) = self.stamping.as_mut() else {
+            return;
+        };
+        let Some(stamp) = search.step(STAMP_CHUNK) else {
+            return;
+        };
+        let mut payload = payload.clone();
+        self.stamping = None;
+        if payload.extend_from_slice(&stamp).is_ok()
+            && let Ok(pkt) = encode(&Header::new(PacketType::Announce, self.addr), &payload)
+        {
+            self.transmit(pkt, 0, 0);
         }
     }
 
@@ -187,8 +230,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let Some(payload) = self.identity.announce(ts, &[]) else {
             return;
         };
-        if let Ok(pkt) = encode(&Header::new(PacketType::Announce, self.addr), &payload) {
-            self.transmit(pkt, 0, 0);
+        // Stemplet regnes ud i baggrunden af `run` (se `stamp_step`). Et nyt
+        // announce erstatter et, der endnu ikke er færdigt.
+        if let Some(search) = StampSearch::new(PacketType::Announce, &self.addr, &payload) {
+            self.stamping = Some((payload, search));
         }
     }
 
@@ -401,7 +446,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             }
             Command::AnnounceNow => {
                 self.announce();
-                log("Announce sendt");
+                log("Announce sendes, når arbejdsbeviset er regnet ud");
             }
             Command::JoinChannel { name } => {
                 let name = core::str::from_utf8(&name).unwrap_or("");
@@ -625,6 +670,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         put(stat::PATH_REQUESTS, r.path_requests as i32);
         put(stat::HOP_RETRIES, r.hop_retries as i32);
         put(stat::FLOODS_CANCELLED, r.floods_cancelled as i32);
+        put(stat::BAD_STAMPS, r.bad_stamps as i32);
         put(stat::RADIO_RX_OK, u(&rs.rx_ok));
         put(stat::RADIO_RX_ERR, u(&rs.rx_err));
         put(stat::RADIO_TX_OK, u(&rs.tx_ok));

@@ -14,6 +14,7 @@ mod dht;
 #[cfg(test)]
 mod fuzz_tests;
 mod links;
+mod meshcore;
 mod node;
 mod web;
 
@@ -96,6 +97,10 @@ pub struct Config {
     /// Regioner fra kommandolinjen (`--region`); tom = brug gemte.
     pub regions: Vec<String>,
     pub strict_region: bool,
+    /// MeshCore-gateway: seriel port til en companion_radio_usb-node.
+    pub meshcore: Option<String>,
+    pub meshcore_baud: u32,
+    pub meshcore_bridge: Vec<meshcore::Mapping>,
 }
 
 /// Offentlige backbone-noder, som `--public` forbinder til. Tom indtil
@@ -125,6 +130,13 @@ Brug: maarse-host [valg]
                         nordjylland (kan gentages, højst 8). Uden regioner
                         videresendes alt
   --strict-region       uden regioner: videresend kun beskeder uden region
+  --meshcore <port>     gateway til MeshCore: en MeshCore-node med firmwaren
+                        companion_radio_usb på denne port, fx COM5
+  --meshcore-baud <hastighed>
+                        baudrate til MeshCore-noden (standard: 115200)
+  --meshcore-bridge <maarse-kanal>=<meshcore-kanal>
+                        kobl to kanaler sammen, fx offentlig=public eller
+                        #aarhus=#aarhus (kan gentages; standard: offentlig=public)
   --no-browser          åbn ikke browseren automatisk
   --help                vis denne tekst
 
@@ -148,6 +160,9 @@ fn parse_args() -> Result<Config, String> {
         dht_seeds: Vec::new(),
         regions: Vec::new(),
         strict_region: false,
+        meshcore: None,
+        meshcore_baud: 115_200,
+        meshcore_bridge: Vec::new(),
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -173,6 +188,15 @@ fn parse_args() -> Result<Config, String> {
             "--dht" => c.dht_seeds.push(val("--dht")?),
             "--region" => c.regions.push(val("--region")?.trim().to_lowercase()),
             "--strict-region" => c.strict_region = true,
+            "--meshcore" => c.meshcore = Some(val("--meshcore")?),
+            "--meshcore-baud" => {
+                c.meshcore_baud = val("--meshcore-baud")?
+                    .parse()
+                    .map_err(|_| "--meshcore-baud: ugyldigt tal")?
+            }
+            "--meshcore-bridge" => c
+                .meshcore_bridge
+                .push(meshcore::parse_mapping(&val("--meshcore-bridge")?)?),
 
             "--public" => c.peers.extend(PUBLIC_PEERS.iter().map(|s| s.to_string())),
             "--max-file" => {
@@ -250,6 +274,10 @@ fn main() {
     if let Some(port) = &cfg.serial {
         println!("  Seriel:   {port} @ {} baud (modem-tilstand)", cfg.baud);
         links::spawn_serial(port.clone(), cfg.baud, tx.clone());
+    }
+    if let Some(port) = &cfg.meshcore {
+        println!("  MeshCore: {port} @ {} baud (companion_radio_usb)", cfg.meshcore_baud);
+        meshcore::spawn(port.clone(), cfg.meshcore_baud, cfg.meshcore_bridge.clone(), tx.clone());
     }
     if let Some(addr) = cfg.http {
         match web::spawn(addr, tx.clone()) {

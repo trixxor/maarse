@@ -16,6 +16,7 @@
 mod ble;
 #[cfg(feature = "display")]
 mod display;
+mod ota;
 mod radio;
 mod usb;
 
@@ -49,10 +50,13 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     esp_hal::system::software_reset()
 }
 
-/// Må:rse-partitionen (se partitions.csv): indstillinger + postkasse.
+/// Må:rse-partitionen (se partitions.csv): indstillinger, postkasse og
+/// OTA-metaside.
 const MAARSE_PART: u32 = 0x210000;
 const CFG_ADDR: u32 = MAARSE_PART;
 const MAIL_START: u32 = MAARSE_PART + 0x1000;
+/// Metaside til firmwareopdatering (manifest + fremskridt), se ota.rs.
+const OTA_META: u32 = MAARSE_PART + 0x3000;
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
@@ -160,12 +164,12 @@ async fn main(spawner: Spawner) {
     let mut rng = ChaCha20Rng::from_seed(seed);
 
     static MAIL_BUF: StaticCell<[u8; MAIL_AREA]> = StaticCell::new();
-    let mut flash = FlashSettings::new(
-        FlashStorage::new(p.FLASH),
-        CFG_ADDR,
-        MAIL_START,
-        MAIL_BUF.init([0xFF; MAIL_AREA]),
-    );
+    let mut storage = FlashStorage::new(p.FLASH);
+    let ota_cfg = ota::config(&mut storage, OTA_META);
+    let mut flash = FlashSettings::new(storage, CFG_ADDR, MAIL_START, MAIL_BUF.init([0xFF; MAIL_AREA]));
+    if let Some(c) = ota_cfg {
+        flash = flash.with_ota(c);
+    }
     let identity = flash.load_or_create_identity(&mut rng);
     let radio_cfg = flash.load_radio(default_radio);
 

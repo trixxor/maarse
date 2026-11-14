@@ -62,6 +62,19 @@ pub struct FlashSettings<F: NorFlash + 'static> {
     cfg: u32,
     mail: u32,
     buf: &'static mut [u8; MAIL_AREA],
+    ota: Option<OtaConfig<F>>,
+}
+
+/// Firmwareopdatering: hvor mellemlageret og metasiden ligger (absolutte
+/// flash-adresser, 4 KB-justeret) og hvordan boardet installerer.
+pub struct OtaConfig<F> {
+    pub board: u16,
+    pub staging: u32,
+    pub capacity: u32,
+    pub meta: u32,
+    /// Installerer det verificerede image og genstarter; returnerer kun
+    /// ved fejl.
+    pub install: fn(&mut F, &maarse_crypto::ota::Manifest, &OtaConfig<F>) -> &'static str,
 }
 
 impl<F: NorFlash> FlashSettings<F> {
@@ -71,7 +84,14 @@ impl<F: NorFlash> FlashSettings<F> {
             cfg,
             mail,
             buf,
+            ota: None,
         }
+    }
+
+    /// Slår firmwareopdatering til (se [`OtaConfig`]).
+    pub fn with_ota(mut self, ota: OtaConfig<F>) -> Self {
+        self.ota = Some(ota);
+        self
     }
 
     fn mail_end(&self) -> u32 {
@@ -167,7 +187,73 @@ fn scan<F: NorFlash>(
     a
 }
 
+impl<F: NorFlash> maarse_crypto::ota::Staging for FlashSettings<F> {
+    fn erase_block(&mut self, offset: u32) -> Result<(), ()> {
+        let o = self.ota.as_ref().ok_or(())?;
+        if offset + PAGE > o.capacity {
+            return Err(());
+        }
+        let a = o.staging + offset;
+        self.flash.erase(a, a + PAGE).map_err(|_| ())
+    }
+    fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), ()> {
+        let o = self.ota.as_ref().ok_or(())?;
+        if offset + data.len() as u32 > o.capacity {
+            return Err(());
+        }
+        let a = o.staging + offset;
+        self.flash.write(a, data).map_err(|_| ())
+    }
+    fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), ()> {
+        let o = self.ota.as_ref().ok_or(())?;
+        if offset + buf.len() as u32 > o.capacity {
+            return Err(());
+        }
+        let a = o.staging + offset;
+        self.flash.read(a, buf).map_err(|_| ())
+    }
+    fn erase_meta(&mut self) -> Result<(), ()> {
+        let a = self.ota.as_ref().ok_or(())?.meta;
+        self.flash.erase(a, a + PAGE).map_err(|_| ())
+    }
+    fn write_meta(&mut self, offset: u32, data: &[u8]) -> Result<(), ()> {
+        let a = self.ota.as_ref().ok_or(())?.meta;
+        if offset + data.len() as u32 > PAGE {
+            return Err(());
+        }
+        self.flash.write(a + offset, data).map_err(|_| ())
+    }
+    fn read_meta(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), ()> {
+        let a = self.ota.as_ref().ok_or(())?.meta;
+        if offset + buf.len() as u32 > PAGE {
+            return Err(());
+        }
+        self.flash.read(a + offset, buf).map_err(|_| ())
+    }
+}
+
+impl<F: NorFlash> crate::ota::OtaPort for FlashSettings<F> {
+    fn board(&self) -> u16 {
+        self.ota.as_ref().map_or(0, |o| o.board)
+    }
+    fn capacity(&self) -> u32 {
+        self.ota.as_ref().map_or(0, |o| o.capacity)
+    }
+    fn install(&mut self, m: &maarse_crypto::ota::Manifest) -> &'static str {
+        let Some(o) = self.ota.take() else {
+            return "Opdatering er ikke slået til";
+        };
+        let err = (o.install)(&mut self.flash, m, &o);
+        self.ota = Some(o);
+        err
+    }
+}
+
 impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
+    fn ota(&mut self) -> Option<&mut dyn crate::ota::OtaPort> {
+        if self.ota.is_some() { Some(self) } else { None }
+    }
+
     fn save_radio(&mut self, cfg: &RadioConfig) {
         let mut buf = self.read_page();
         buf[RADIO_OFF..RADIO_OFF + 4].copy_from_slice(RADIO_MAGIC);

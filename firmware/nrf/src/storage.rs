@@ -4,7 +4,8 @@
 //! * 0xEA000–0xEBFFF: postkasse (8 KB)
 //! * 0xEC000: identitet, radio og administratorer (4 KB)
 //!
-//! Appen slutter ved 0xEA000 (se build.rs); bootloaderen ligger fra 0xF4000.
+//! Appen slutter senest ved 0x88000 (se build.rs); derefter mellemlager og
+//! metaside til firmwareopdatering (se ota.rs). Bootloaderen ligger fra 0xF4000.
 
 use embassy_nrf::nvmc::Nvmc;
 use maarse_fw_common::storage::FlashSettings;

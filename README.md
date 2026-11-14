@@ -518,7 +518,9 @@ Den nye app (ca. 300 KB i dag) skrives til mellemlageret. Ved installation tjekk
 | SF7, 250 kHz | 0,19 s | 0,10 s | 0,24 t | 0,15 t | ca. 1,5 t | ca. 15 t |
 | SF11, 125 kHz | 4,7 s | 2,6 s | 6,2 t | 3,8 t | ca. 38 t | – |
 
-Hvert ekstra hop gentager det hele. **Anbefaling:** opdatér naboer direkte (ét hop) på 869,4–869,65 MHz (10 %), skift både repeater og afsender midlertidigt til "Hurtig (SF7, 250 kHz)" under opdateringen, og skift tilbage bagefter. Overførslen kan stoppes og genoptages, fx over flere nætter.
+**Skrinlagt (november 2026):** opdatering over LoRa tager for lang tid (ca. 1,6 t for nRF52840 og 3 t for Heltec V4 på SF7/250 kHz, mange timer på SF9) og bruges ikke. Opdatér over USB eller Bluetooth. Koden er bevaret.
+
+Hvert ekstra hop gentager det hele. **Oprindelig anbefaling:** opdatér naboer direkte (ét hop) på 869,4–869,65 MHz (10 %), skift både repeater og afsender midlertidigt til "Hurtig (SF7, 250 kHz)" under opdateringen, og skift tilbage bagefter. Overførslen kan stoppes og genoptages, fx over flere nætter.
 
 **Skal testes på hardware før brug i marken:**
 
@@ -527,7 +529,7 @@ Hvert ekstra hop gentager det hele. **Anbefaling:** opdatér naboer direkte (ét
 3. Afbrudt overførsel (træk USB, genstart noden) genoptages fra første ufærdige blok.
 4. Afvisning: forkert board, samme/ældre version, forkert nøgle, ødelagt image (SHA-256).
 5. Bluetooth-opdatering (Nordic UART, 240-byte bidder).
-6. Fjernopdatering via `Remote` over ét hop på SF7/250 kHz og på SF9; duty cycle overholdes; genoptag efter afbrydelse.
+6. ~~Fjernopdatering over LoRa~~ (skrinlagt).
 7. ESP32-S3: første USB-flash med ny partitionstabel bevarer identitet; OTA til `ota_1`, derefter `ota_0`; ugyldigt image i den anden partition får bootloaderen til at starte den gamle.
 8. Bluetooth/LoRa kører videre under flash-skrivning (mellemlageret skrives, mens radioen er aktiv).
 

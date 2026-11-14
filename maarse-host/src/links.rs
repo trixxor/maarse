@@ -54,7 +54,7 @@ pub fn parse_region_hello(data: &[u8]) -> Option<(bool, Vec<u16>)> {
 }
 
 pub fn spawn_tcp_listener(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<()> {
-    let listener = TcpListener::bind(addr)?;
+    let listener = crate::settings::bind(addr)?;
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let tx = tx.clone();

@@ -20,6 +20,7 @@ mod meshcore;
 mod mqtt;
 mod node;
 mod sessions;
+mod settings;
 mod tunnel;
 mod web;
 
@@ -179,7 +180,7 @@ Eksempel med to computere:
   computer B:  maarse-host --peer <A's IP>:4242
 ";
 
-fn parse_args() -> Result<Config, String> {
+pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
     let mut c = Config {
         data_dir: PathBuf::from("maarse-data"),
         http: Some("127.0.0.1:8080".parse().unwrap()),
@@ -207,7 +208,7 @@ fn parse_args() -> Result<Config, String> {
     };
     let mut mqtt_prefix = "maarse".to_string();
     let (mut mqtt_user, mut mqtt_pass) = (None, None);
-    let mut args = std::env::args().skip(1);
+    let mut args = argv.into_iter();
     while let Some(a) = args.next() {
         let mut val = |name: &str| args.next().ok_or(format!("{name} mangler en værdi"));
         let addr = |v: String, name: &str| -> Result<Option<SocketAddr>, String> {
@@ -328,7 +329,33 @@ fn open_browser(url: &str) {
 }
 
 fn main() {
-    let cfg = match parse_args() {
+    // Indstillinger fra webklienten (<data>/indstillinger.txt) først, så
+    // kommandolinjen, som dermed vinder.
+    let cli: Vec<String> = std::env::args().skip(1).collect();
+    let data_dir = cli
+        .iter()
+        .position(|a| a == "--data")
+        .and_then(|i| cli.get(i + 1))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("maarse-data"));
+    let saved = match settings::to_args(&settings::load(&data_dir)) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("Advarsel: {e} – ignorerer {}", settings::file(&data_dir).display());
+            Vec::new()
+        }
+    };
+    let mut all = saved.clone();
+    all.extend(cli.iter().cloned());
+    let parsed = match parse_from(all) {
+        Ok(c) => Ok(c),
+        Err(e) if !saved.is_empty() => {
+            eprintln!("Advarsel: indstillingerne kunne ikke bruges ({e}); starter uden dem");
+            parse_from(cli)
+        }
+        Err(e) => Err(e),
+    };
+    let cfg = match parsed {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Fejl: {e}");
@@ -345,69 +372,70 @@ fn main() {
         }
     };
     println!("Må:rse-host v{}", env!("CARGO_PKG_VERSION"));
-    println!("  Adresse:  {}", node.address());
-    println!("  Data:     {}", cfg.data_dir.display());
+    settings::report(format!("  Adresse:  {}", node.address()), false);
+    settings::report(format!("  Data:     {}", cfg.data_dir.display()), false);
 
     if let Some(addr) = cfg.listen {
         match links::spawn_tcp_listener(addr, tx.clone()) {
-            Ok(()) => println!("  Backbone: lytter på {addr}"),
-            Err(e) => eprintln!("  Backbone: kunne ikke lytte på {addr}: {e}"),
+            Ok(()) => settings::report(format!("  Backbone: lytter på {addr}"), false),
+            Err(e) => settings::report(format!("  Backbone: kunne ikke lytte på {addr}: {e}"), true),
         }
     }
     for p in &cfg.peers {
-        println!("  Backbone: forbinder til {p}");
+        settings::report(format!("  Backbone: forbinder til {p}"), false);
         links::spawn_tcp_peer(p.clone(), tx.clone());
     }
     if let Some(port) = &cfg.serial {
-        println!("  Seriel:   {port} @ {} baud (modem-tilstand)", cfg.baud);
+        settings::report(format!("  Seriel:   {port} @ {} baud (modem-tilstand)", cfg.baud), false);
         links::spawn_serial(port.clone(), cfg.baud, tx.clone());
     }
     if let Some(port) = &cfg.meshcore {
-        println!("  MeshCore: {port} @ {} baud (companion_radio_usb)", cfg.meshcore_baud);
+        settings::report(format!("  MeshCore: {port} @ {} baud (companion_radio_usb)", cfg.meshcore_baud), false);
         meshcore::spawn(port.clone(), cfg.meshcore_baud, cfg.meshcore_bridge.clone(), tx.clone());
     }
     if let Some(m) = &cfg.mqtt {
-        println!("  MQTT:     {} (emner under {}/)", m.addr, m.prefix);
+        settings::report(format!("  MQTT:     {} (emner under {}/)", m.addr, m.prefix), false);
     }
     if let Some(addr) = cfg.http {
         let token = web::access_token(&cfg.data_dir);
-        match web::spawn(addr, token.clone(), tx.clone()) {
+        match web::spawn(addr, token.clone(), cfg.data_dir.clone(), tx.clone()) {
             Ok(()) => {
                 let url = format!("http://{addr}/");
-                println!("  Webklient: {url}");
+                settings::report(format!("  Webklient: {url}"), false);
                 if !addr.ip().is_loopback() {
                     let shown = if addr.ip().is_unspecified() { format!("<denne-pc>:{}", addr.port()) } else { addr.to_string() };
                     println!("  Fjernadgang: kræver adgangsnøglen (se {})", cfg.data_dir.join("adgangsnoegle.txt").display());
                     println!("    Browser: http://{shown}/#token={token}");
                     println!("    App:     adresse {shown}, nøgle {token}");
                 }
-                if cfg.open_browser {
+                if cfg.open_browser && !settings::restarted() {
                     open_browser(&url);
                 }
             }
-            Err(e) => eprintln!("  Webklient: kunne ikke starte på {addr}: {e}"),
+            Err(e) => settings::report(format!("  Webklient: kunne ikke starte på {addr}: {e}"), true),
         }
     }
-    println!(
+    settings::report(format!(
         "  IP:       {} (IP-tunnel{})",
         tunnel::ip_text(&node.my_ip()),
         if cfg.tun_lora { ", også over LoRa" } else { ", kun over TCP" }
-    );
+    ), false);
     if cfg.tun {
         #[cfg(feature = "tun")]
         match tunnel::spawn(node.my_ip(), cfg.wintun.clone(), tx.clone()) {
             Ok(t) => {
                 node.set_tun(t);
-                println!("  TUN:      adapter 'maarse' oprettet (fd00::/8)");
+                settings::TUN_UP.store(true, std::sync::atomic::Ordering::Relaxed);
+                settings::report("  TUN:      adapter 'maarse' oprettet (fd00::/8)", false);
             }
-            Err(e) => eprintln!("  TUN:      kunne ikke oprette adapteren ({e}); kræver administrator/root og wintun.dll på Windows"),
+            Err(e) => settings::report(format!("  TUN:      kunne ikke oprette adapteren ({e}); kræver administrator/root og wintun.dll på Windows"), true),
         }
         #[cfg(not(feature = "tun"))]
-        eprintln!("  TUN:      bygget uden featuren 'tun' (cargo build --features tun)");
+        settings::report("  TUN:      bygget uden featuren 'tun' (cargo build --features tun)", true);
     }
     println!("Tryk Ctrl+C for at stoppe.\n");
     if let Some(ep) = &cfg.public_addr {
-        println!("  DHT:      offentlig som {ep}");
+        settings::report(format!("  DHT:      offentlig som {ep}"), false);
     }
     node.run(rx, tx);
 }

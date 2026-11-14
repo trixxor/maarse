@@ -16,6 +16,7 @@ tungstenite = "0.24"
 tun-rs = { version = "2.8", optional = true }
 
 [features]
+default = ["tun"]
 # IP-tunnel (--tun): TUN-adapter via Wintun (Windows) eller /dev/net/tun (Linux).
 tun = ["dep:tun-rs"]
 

@@ -11,7 +11,7 @@ use core::sync::atomic::Ordering::Relaxed;
 use embassy_futures::select::{Either3, select3};
 use embassy_futures::yield_now;
 use embassy_time::{Duration, Instant, Timer};
-use heapless::FnvIndexMap;
+use heapless::{FnvIndexMap, FnvIndexSet};
 use rand_core::{CryptoRng, RngCore};
 use maarse_core::companion::{Command, Event, PROTOCOL_VERSION, error_code, text};
 use maarse_core::companion::{RadioConfig, Stats, stat};
@@ -19,7 +19,8 @@ use maarse_core::content::{self, Content};
 use maarse_core::packet::{Header, encode};
 use maarse_core::stamp::StampSearch;
 use maarse_core::{Action, Address, PacketType, Role, Router};
-use maarse_crypto::seal::{self, CryptoError, MAX_DM_TEXT};
+use maarse_crypto::ratchet::{self, FixedStore, Format, MAX_FS_TEXT};
+use maarse_crypto::seal::{self, CryptoError};
 use maarse_crypto::{
     Identity, PublicIdentity, channel_address, hashtag_key, public_channel_key, verify_announce,
 };
@@ -28,6 +29,13 @@ const ANNOUNCE_EVERY: Duration = Duration::from_secs(900);
 /// Forsøg pr. bid, når et announce-stempel regnes ud. 256 SHA-256-blokke
 /// tager ca. 20 ms på en 64 MHz Cortex-M4; derefter får executoren fri.
 const STAMP_CHUNK: u32 = 256;
+/// Forward secrecy-sessioner i RAM (ca. 650 bytes hver). De gemmes ikke i
+/// flash: flash slettes ikke sikkert (gamle nøgler ville kunne genskabes) og
+/// slides af hyppige skrivninger. Efter genstart starter noden en ny session,
+/// når den får en besked, den ikke kan læse (se `resync`).
+const SESSIONS: usize = 8;
+/// En ny session pga. en ulæselig besked højst så ofte pr. kontakt.
+const RESYNC_EVERY: Duration = Duration::from_secs(60);
 
 type Name = heapless::String<40>;
 /// Regionsnavne, kommasepareret (fx `dk,nordjylland`).
@@ -71,6 +79,10 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     identity: Identity,
     addr: Address,
     known: FnvIndexMap<Address, PublicIdentity, 64>,
+    /// Kontakter, der kan forward secrecy (announce eller FS-besked).
+    fs_peers: FnvIndexSet<Address, 64>,
+    sessions: FixedStore<SESSIONS>,
+    resynced: FnvIndexMap<Address, Instant, 8>,
     channels: heapless::Vec<(Address, [u8; 32], Name), 4>,
     rng: R,
     modem: bool,
@@ -136,6 +148,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             identity,
             addr,
             known: FnvIndexMap::new(),
+            fs_peers: FnvIndexSet::new(),
+            sessions: FixedStore::new(),
+            resynced: FnvIndexMap::new(),
             channels: heapless::Vec::new(),
             rng,
             modem: false,
@@ -239,7 +254,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     fn announce(&mut self) {
         let ts = self.unix_now().unwrap_or((now_ms() / 1000) as u32);
-        let Some(payload) = self.identity.announce(ts, &[]) else {
+        let Some(payload) = self.identity.announce(ts, &[ratchet::APP_FS]) else {
             return;
         };
         // Stemplet regnes ud i baggrunden af `run` (se `stamp_step`). Et nyt
@@ -310,6 +325,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         }
                         let _ = self.known.insert(dest, a.identity);
                     }
+                    if ratchet::announces_fs(a.app_data) {
+                        self.mark_fs(dest);
+                    }
                     crate::bus::KNOWN_NODES.store(self.known.len() as u32, Relaxed);
                     emit(&Event::Heard { addr: dest, hops, identity: Some(a.identity.to_bytes()) });
                     self.flush_mail(dest);
@@ -318,13 +336,21 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             PacketType::Data => {
                 let mut out = [0u8; 256];
                 let known = &self.known;
-                match seal::open_direct(
+                let res = ratchet::open(
                     &self.identity,
                     payload,
+                    &mut self.sessions,
                     |a| known.get(a).copied(),
                     &mut out,
-                ) {
+                );
+                if let Ok(o) = &res
+                    && o.format != Format::Static
+                {
+                    self.mark_fs(o.from);
+                }
+                match res.map(|o| (o.from, o.len)) {
                     Ok((from, n)) => match content::parse(&out[..n]) {
+                        Some(Content::Resync) => log("Kontakten startede en ny krypteringssession"),
                         Some(Content::Text(t)) => {
                             crate::bus::note_message(&from, t);
                             emit(&Event::DirectReceived {
@@ -348,6 +374,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     },
                     Err(CryptoError::UnknownSender(_)) => {
                         log("Besked fra ukendt afsender (intet announce endnu)")
+                    }
+                    Err(CryptoError::NoSession(a) | CryptoError::Desync(a)) => {
+                        log("Besked kunne ikke læses (krypteringssessionen er tabt)");
+                        self.resync(a);
                     }
                     Err(_) => {}
                 }
@@ -440,7 +470,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     addr: self.addr,
                     repeater: self.router.role.forwards(),
                     version: PROTOCOL_VERSION,
-                    max_text: (MAX_DM_TEXT - 1) as u8,
+                    max_text: (MAX_FS_TEXT - 1) as u8,
                     max_file: 0,
                     identity: Some(self.identity.public().to_bytes()),
                 });
@@ -483,9 +513,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 };
                 let plain = content::text(&msg);
                 let mut ct = [0u8; 255];
-                let Ok(n) =
-                    seal::seal_direct(&self.identity, &recipient, &mut self.rng, &plain, &mut ct)
-                else {
+                let Ok(n) = self.seal(&recipient, &plain, &mut ct) else {
                     return err(req, error_code::TOO_LARGE, "Beskeden er for lang");
                 };
                 let mut token = [0u8; 16];
@@ -590,12 +618,49 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         self.boot_unix.map(|b| b + self.started.elapsed().as_secs() as u32)
     }
 
+    /// Krypterer med forward secrecy, hvis modparten kan, ellers statisk.
+    fn seal(
+        &mut self,
+        recipient: &PublicIdentity,
+        plain: &[u8],
+        out: &mut [u8],
+    ) -> Result<usize, CryptoError> {
+        let dest = recipient.address();
+        let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
+        ratchet::seal(&self.identity, recipient, &mut self.sessions, fs_ok, &mut self.rng, plain, out)
+            .map(|(n, _)| n)
+    }
+
+    fn mark_fs(&mut self, a: Address) {
+        if self.fs_peers.insert(a).is_err() {
+            self.fs_peers.clear();
+            let _ = self.fs_peers.insert(a);
+        }
+    }
+
+    /// Ny session med `peer` og en tom resync-besked, så modparten skifter.
+    fn resync(&mut self, peer: Address) {
+        let Some(id) = self.known.get(&peer).copied() else {
+            return;
+        };
+        if self.resynced.get(&peer).is_some_and(|t| t.elapsed() < RESYNC_EVERY) {
+            return;
+        }
+        if self.resynced.insert(peer, Instant::now()).is_err() {
+            self.resynced.clear();
+            let _ = self.resynced.insert(peer, Instant::now());
+        }
+        if ratchet::reset(&self.identity, &id, &mut self.sessions, &mut self.rng).is_ok() {
+            self.mark_fs(peer);
+            let _ = self.send_plain(peer, &[content::RESYNC]);
+        }
+    }
+
     /// Krypterer og sender en direkte besked.
     fn send_plain(&mut self, dest: Address, plain: &[u8]) -> Result<u64, &'static str> {
         let recipient = *self.known.get(&dest).ok_or("Modtageren er ikke hørt endnu")?;
         let mut ct = [0u8; 255];
-        let n = seal::seal_direct(&self.identity, &recipient, &mut self.rng, plain, &mut ct)
-            .map_err(|_| "Beskeden er for lang")?;
+        let n = self.seal(&recipient, plain, &mut ct).map_err(|_| "Beskeden er for lang")?;
         let mut token = [0u8; 16];
         self.rng.fill_bytes(&mut token);
         let (msg_id, actions) = self

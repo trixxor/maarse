@@ -87,3 +87,37 @@ fn fuzz_open_chunk() {
         let _ = open_chunk(&key, p, &mut small);
     });
 }
+
+#[test]
+fn fuzz_open_ratchet() {
+    use maarse_crypto::ratchet::{self, FixedStore, Session, SessionStore};
+    let (a, b) = ids();
+    let mut rng = rand_core::OsRng;
+    let a_pub = a.public();
+    let b_pub = b.public();
+    // Korpus: init, svar (ratchet) og næste tur fra A.
+    let mut sa: FixedStore<2> = FixedStore::new();
+    let mut sb: FixedStore<2> = FixedStore::new();
+    let mut corpus = Vec::new();
+    let mut out = [0u8; 255];
+    let mut pt = [0u8; 255];
+    let n = ratchet::seal(&a, &b_pub, &mut sa, true, &mut rng, b"hej", &mut out).unwrap().0;
+    corpus.push(out[..n].to_vec());
+    ratchet::open(&b, &out[..n], &mut sb, |_| Some(a_pub), &mut pt).unwrap();
+    let n = ratchet::seal(&b, &a_pub, &mut sb, true, &mut rng, &[9u8; 80], &mut out).unwrap().0;
+    corpus.push(out[..n].to_vec());
+    ratchet::open(&a, &out[..n], &mut sa, |_| Some(b_pub), &mut pt).unwrap();
+    let n = ratchet::seal(&a, &b_pub, &mut sa, true, &mut rng, b"igen", &mut out).unwrap().0;
+    corpus.push(out[..n].to_vec());
+    let b_state = sb.get_mut(&a_pub.address()).unwrap().clone();
+    run("open-ratchet", &corpus, 270, |p| {
+        // Hver kørsel på en frisk kopi af B's tilstand.
+        let mut store: FixedStore<2> = FixedStore::new();
+        store.insert(b_state.clone());
+        let mut out = [0u8; 255];
+        let _ = ratchet::open(&b, p, &mut store, |_| Some(a_pub), &mut out);
+        let mut small = [0u8; 8];
+        let _ = ratchet::open(&b, p, &mut store, |_| Some(a_pub), &mut small);
+        let _ = Session::from_bytes(p);
+    });
+}

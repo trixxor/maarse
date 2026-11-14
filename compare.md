@@ -200,9 +200,10 @@ Bygget siden sammenligningen blev skrevet:
 - **Bekræft nøgler:** sikkerhedsnummer (60 cifre) og QR-kode i webklienten.
 - **Private kanaler:** tilfældig nøgle, invitation som link og QR-kode.
 - **Fuzzing:** alle decodere, ingen fejl fundet.
+- **Forward secrecy (udkast):** sessioner med ratchet pr. kontakt (`maarse-crypto/src/ratchet.rs`), 5 bytes ekstra pr. besked, falder tilbage til det gamle format. Mangler ekstern gennemgang.
 - **Rolle kan vælges** (klient, repeater, relay) og gemmes i flash.
 
-Stadig åbent: forward secrecy, opdatering over luften, telefon-apps, filer på firmware, Bluetooth på ESP32, gateways til MeshCore og Reticulum, ekstern gennemgang af kryptografien.
+Stadig åbent: opdatering over luften, telefon-apps, filer på firmware, Bluetooth på ESP32, gateways til MeshCore og Reticulum, ekstern gennemgang af kryptografien.
 
 ## Hvor står Må:rse?
 

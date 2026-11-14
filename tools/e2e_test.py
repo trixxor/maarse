@@ -51,6 +51,15 @@ class Client:
 
 def ok(msg): print("  OK  " + msg)
 
+def log_has(name, *parts, secs=5):
+    """Venter på en linje i nodens log (fx hvilket krypteringsformat der blev brugt)."""
+    end = time.time() + secs
+    while time.time() < end:
+        with open(os.path.join(TMP, name, "log.txt"), encoding="utf-8", errors="replace") as f:
+            if any(all(t in line for t in parts) for line in f): return
+        time.sleep(0.2)
+    raise AssertionError(f"{name}: {parts} mangler i loggen")
+
 TMP = tempfile.mkdtemp(prefix="maarse-e2e-")
 try:
     start("p", 8180, ["--listen", "127.0.0.1:4380"])
@@ -70,6 +79,16 @@ try:
     b.send(frame(0x02, struct.pack("<H", 2), addr_a, b"Hej A"))
     a.wait(lambda f: f[0] == 0x83 and f[18:] == b"Hej A")
     ok("direkte besked B -> A")
+
+    # 1b. Forward secrecy: første besked starter en session (init), svaret og
+    #     alt derefter bruger ratchet-formatet.
+    log_has("b", "besked fra " + addr_a.hex()[:8], "forward secrecy: init)")
+    log_has("a", "besked fra " + addr_b.hex()[:8], "hop, forward secrecy)")
+    a.send(frame(0x02, struct.pack("<H", 10), addr_b, b"Nu med ratchet"))
+    b.wait(lambda f: f[0] == 0x83 and f[18:] == b"Nu med ratchet")
+    log_has("a", "besked til " + addr_b.hex()[:8] + " (forward secrecy)")
+    log_has("b", "besked fra " + addr_a.hex()[:8], "hop, forward secrecy)")
+    ok("direkte beskeder mellem to hosts bruger forward secrecy (init, så ratchet)")
 
     # 2. Kanal
     for c in (a, b): c.send(frame(0x04, b"#test"))
@@ -136,6 +155,11 @@ try:
     b = Client(8182)
     b.wait(lambda f: f[0] == 0x83 and f[18:] == b"Til dig, mens du var vaek", secs=20)
     ok("B online igen: beskeden hentet fra postkassen")
+    # B's session overlevede genstarten (sessioner.bin), så posten var FS.
+    with open(os.path.join(TMP, "b", "log.txt"), encoding="utf-8", errors="replace") as f:
+        lines = [l for l in f if "besked fra " + addr_a.hex()[:8] in l]
+    assert "forward secrecy)" in lines[-1], lines[-1]
+    ok("post fra postkassen åbnet med den gemte forward secrecy-session")
     b.wait(lambda f: f[0] == 0x88 and f[1:17] == pj[1:17] and f[17:] == "Hytten æ".encode())
     ok("B husker den private kanal efter genstart")
 

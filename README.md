@@ -35,6 +35,7 @@ Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge
 | Funktion | maarse-host (PC) | nRF52840 | ESP32-S3 |
 | --- | --- | --- | --- |
 | Krypterede direkte beskeder med "leveret" | ja | ja | ja |
+| Forward secrecy for samtaler (ratchet, udkast) | ja, sessioner gemt på disk | ja, 8 sessioner i RAM | ja, 8 sessioner i RAM |
 | Kanaler (offentlig, #hashtag) | ja | ja (højst 4) | ja (højst 4) |
 | Billeder og filer (krypteret, med kvittering pr. bid) | ja, op til 1 MB | ikke endnu | ikke endnu |
 | Postkasse til modtagere, der er offline | ja (disk, 7 dage) | ja (8 KB flash) | ja (8 KB flash) |
@@ -51,7 +52,7 @@ Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), US
 | Del | Hvad |
 | --- | --- |
 | `maarse-core` | pakkeformat, routing-motor, rutetabel, duty cycle, companion-protokol og indholdstyper. `no_std`, uden heap. |
-| `maarse-crypto` | identiteter, announces, kryptering af direkte beskeder, kanaler og fil-bidder. `no_std`. |
+| `maarse-crypto` | identiteter, announces, kryptering af direkte beskeder (med forward secrecy-sessioner, se `ratchet.rs`), kanaler og fil-bidder. `no_std`. |
 | `maarse-host` | gateway og testnode: én fil, ingen installation. |
 | `maarse-client` | webklient i én HTML-fil. |
 | `maarse-sim` | simulator med radiomodel, kollisioner, duty cycle, motorvejsscenarie og flood-tilstand til sammenligning. |

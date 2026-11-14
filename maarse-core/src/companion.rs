@@ -566,6 +566,8 @@ pub mod stat {
     pub const POSITION_PRECISION: u8 = 84;
     /// Batteri i procent (omtrentligt, ud fra spændingen).
     pub const BATTERY_PERCENT: u8 = 85;
+    /// Chip-temperatur i 0,1 °C (lidt over omgivelserne).
+    pub const TEMPERATURE_DC: u8 = 86;
 }
 
 /// Fejlkoder i `Event::Error`.

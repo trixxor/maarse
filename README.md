@@ -67,6 +67,18 @@ Offline-cache, installation og notifikationer kræver, at siden hentes over http
 
 **Selv hoste klienten:** læg filerne i `maarse-client/` (`index.html`, `manifest.webmanifest`, `sw.js`, `icon.svg`, `icon-192.png`, `icon-512.png`) på en vilkårlig statisk https-vært, fx GitHub Pages. Hæv `VERSION` i `sw.js`, når filerne ændres, så brugerne får besked om den nye version (maarse-host gør det selv ud fra indholdet). Ikonerne laves med `python tools/make_icons.py`.
 
+## Én indbakke på flere skærme (historik på maarse-host)
+
+En maarse-host derhjemme kan fungere som én fælles indbakke, som telefonen, den bærbare og den stationære følger samtidig. Hosten gemmer beskedhistorikken, og hver skærm, der forbinder, henter den:
+
+- Gemmes: modtagne direkte beskeder og kanalbeskeder, egne sendte beskeder (fra alle skærme), leveringstilstand (sendt, kvitteret, i postkasse) og filers metadata (navn, type, størrelse). **Filernes indhold gemmes ikke** – en fil vises kun på de skærme, der var forbundet, da den kom.
+- Sender du fra én skærm, vises beskeden med det samme på de andre. Læser du en samtale på én skærm, forsvinder ulæst-tælleren også på de andre.
+- Klienten henter de seneste 200 beskeder ved forbindelse og ældre, når du scroller op i en samtale.
+- `--history-days N` (standard 90) bestemmer, hvor længe beskeder gemmes; ældre slettes ved opstart og hver time. `--no-history` slår historikken helt fra.
+- Firmware-noder (Bluetooth/USB) har ingen historik; klienten virker der som før.
+
+**Privatliv:** beskederne er ende-til-ende-krypteret på radio og backbone, men hosten dekrypterer dem, og historikken ligger **ukrypteret** i `<data>/historik/log.txt`. Alle med adgang til hostens disk kan læse den. Brug `--no-history` på en delt maskine, og slet mappen for at fjerne historikken. Formatet og protokollen (kommandoer 0x30–0x32, hændelser 0xB0–0xB3) er beskrevet i `maarse-host/src/history.rs`.
+
 ## Indhold
 
 | Del | Hvad |
@@ -235,6 +247,7 @@ Ende-til-ende-testen starter tre noder (A, B og en postkasse P) og afprøver:
 - at B går offline, beskeden lægges i postkassen, og B henter den, når den kommer online igen,
 - fjernadministration: en administrator får adgang, og en anden node bliver afvist,
 - at en fremmed hjemmeside ikke kan forbinde.
+- historik med flere skærme på samme host: en besked sendt fra skærm 1 vises live på skærm 2, en ny skærm 3 henter historikken (i sider, med kvittering), og "læst" sendes til alle skærme.
 
 DHT-testen starter tre backbone-hosts (B1, B2 og B3) uden pakkeforbindelse til hinanden, kun med B1 som DHT-startpunkt, samt A på B2 og C på B3. A skriver til C, som A aldrig har hørt, og beskeden kommer frem med kvittering. Svaret kommer også tilbage.
 

@@ -2,6 +2,7 @@
 //! webklienter.
 
 mod ext;
+mod hist;
 
 use crate::dht::{self, Contact, Record};
 use crate::{ClientId, Config, In, LinkId};
@@ -181,6 +182,8 @@ pub struct Node {
     dht: Dht,
     /// Diagnose, deling og MQTT (se node/ext.rs).
     ext: ext::Ext,
+    /// Beskedhistorik til flere skærme (se history.rs og node/hist.rs).
+    hist: hist::Hist,
 }
 
 /// Backbone-DHT'ens tilstand (se dht.rs).
@@ -359,6 +362,7 @@ impl Node {
                 &cfg.data_dir,
                 cfg.mqtt.clone().map(|m| crate::mqtt::Mqtt::spawn(m, format!("maarse-{}", short(&addr)))),
             ),
+            hist: hist::Hist::open(&cfg.data_dir, cfg.history_days),
         };
         let saved = fs::read_to_string(node.data_dir.join("admins.txt")).unwrap_or_default();
         node.admins = saved.lines().filter_map(parse_addr).collect();
@@ -532,6 +536,9 @@ impl Node {
                 publish,
                 result,
             } => self.dht_done(target, publish, result),
+            In::ClientFrame { id, frame } if crate::history::is_history_command(&frame) => {
+                self.hist_command(id, &frame)
+            }
             In::ClientFrame { id, frame } => match Command::decode(&frame) {
                 Ok(cmd) => self.command(id, cmd),
                 Err(_) => self.send_client(
@@ -902,8 +909,10 @@ impl Node {
             name: up.name,
         };
         let plain = offer.encode();
+        let meta = crate::history::file_content(up.size, &offer.mime, &offer.name);
         match self.send_sealed(up.dest, &plain, Pending::FileOffer(file_id)) {
             Ok(_) => {
+                self.hist_sent(id, crate::history::KIND_FILE, up.dest, 0, &meta);
                 self.out_files.insert(
                     file_id,
                     OutFile {
@@ -1238,6 +1247,7 @@ impl Node {
     // ---------- vedligehold ----------
 
     fn housekeeping(&mut self) {
+        self.hist_maintain();
         let now = Instant::now();
         // Beskeder uden kvittering: læg dem i modtagerens postkasse.
         // MAARSE_DEPOSIT_AFTER_S gør det muligt at teste postkassen hurtigt.
@@ -1326,6 +1336,7 @@ impl Node {
     }
 
     fn broadcast(&mut self, ev: &Event) {
+        self.hist_observe(ev);
         if matches!(ev, Event::DirectReceived { .. } | Event::ChannelReceived { .. }) {
             if self.inbox.len() >= 100 {
                 self.inbox.pop_front();
@@ -1358,6 +1369,7 @@ impl Node {
         for (a, pk) in &self.known {
             self.send_client(id, &Event::Heard { addr: *a, hops: 0, identity: Some(pk.to_bytes()) });
         }
+        self.hist_greet(id);
         for ev in &self.inbox {
             self.send_client(id, ev);
         }
@@ -1494,7 +1506,10 @@ impl Node {
                     return self.send_client(id, &Event::Log { text: text(t.as_bytes()) });
                 }
                 match self.send_sealed(dest, &content::text(&msg), Pending::Message) {
-                    Ok(msg_id) => self.send_client(id, &Event::Sent { req, msg_id }),
+                    Ok(msg_id) => {
+                        self.send_client(id, &Event::Sent { req, msg_id });
+                        self.hist_sent(id, crate::history::KIND_DIRECT, dest, msg_id, &msg);
+                    }
                     Err(e) => self.send_client(id, &err_ev(req, error_code::UNKNOWN_DEST, e)),
                 }
             }
@@ -1512,6 +1527,7 @@ impl Node {
                 match res {
                     Some(actions) => {
                         self.send_client(id, &Event::Sent { req, msg_id: 0 });
+                        self.hist_sent(id, crate::history::KIND_CHANNEL, channel, 0, &msg);
                         self.apply(actions.into_iter().collect());
                     }
                     None => self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "Beskeden er for lang")),
@@ -1850,7 +1866,10 @@ impl Node {
         }
         for (id, req, msg) in waiting {
             match self.send_sealed(target, &content::text(&msg), Pending::Message) {
-                Ok(msg_id) => self.send_client(id, &Event::Sent { req, msg_id }),
+                Ok(msg_id) => {
+                    self.send_client(id, &Event::Sent { req, msg_id });
+                    self.hist_sent(id, crate::history::KIND_DIRECT, target, msg_id, &msg);
+                }
                 Err(_) => self.send_client(
                     id,
                     &err_ev(req, error_code::UNKNOWN_DEST, "Adressen blev ikke fundet i DHT'en"),
@@ -1986,6 +2005,7 @@ mod file_interop_tests {
             meshcore_baud: 115_200,
             meshcore_bridge: Vec::new(),
             mqtt: None,
+            history_days: None,
         }
     }
 

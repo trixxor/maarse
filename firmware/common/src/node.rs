@@ -567,6 +567,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 dest,
                 text: msg,
             } => self.send_content(req, dest, &content::text(&msg)),
+            Command::SendCall { .. } => err(0, error_code::NOT_OVER_TCP, "Opkald kræver maarse-host (TCP)"),
             Command::RequestPage { req, dest, path } => match content::page_request(&path) {
                 Some(plain) => self.send_content(req, dest, &plain),
                 None => err(req, error_code::TOO_LARGE, "Ugyldig sti"),

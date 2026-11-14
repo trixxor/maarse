@@ -197,6 +197,12 @@
   #btn-side { display: none; }
   /* </pwa-css> */
 
+  #call-bar { display: flex; align-items: center; gap: 10px; padding: 10px 20px; background: var(--accent-soft);
+              border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  #call-bar .call-text { flex: 1; font-weight: 600; min-width: 0; font-variant-numeric: tabular-nums; }
+  #call-bar .call-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); animation: pulse 1.4s infinite; }
+  button.danger { background: var(--warn); border-color: var(--warn); color: #fff; font-weight: 600; }
+  @keyframes pulse { 50% { opacity: .35; } }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
   @media (max-width: 760px) {
@@ -470,6 +476,7 @@ function decodeEvent(f) {
     case 0xa2: return { type: "sharing", prec: f[1], lat: i32(f, 2) / 1e7, lon: i32(f, 6) / 1e7, telemetry: !!f[10] };
     case 0xb4: return { type: "identityChanged", addr: a(1), identity: f.slice(17, 81) };
     case 0xa4: return { type: "name", name: txt(1) };
+    case 0xa5: return { type: "call", from: a(1), data: f.slice(17) };
     case 0xa3: return { type: "nodeInfo", addr: a(1), hops: f[17], ...parseAppData(f.slice(18)) };
     case 0x8e: return { type: "log", text: txt(1) };
     case 0x8f: return { type: "error", req: f[1] | f[2] << 8, code: f[3], text: txt(4) };
@@ -870,6 +877,7 @@ function onEvent(ev) {
       const m = state.pending.get(ev.req);
       if (m) { m.status = "fejl: " + ev.text; state.pending.delete(ev.req); renderChat(); }
       if (pages.reqs.has(ev.req)) { pages.reqs.delete(ev.req); pages.status = "Fejl: " + ev.text; if (state.view === "pages") renderChat(); }
+      if (ev.code === 9 && call.state !== "idle") callStop(ev.text);
       log("Fejl: " + ev.text);
       break;
     }
@@ -885,6 +893,7 @@ function onEvent(ev) {
       if (ev.last) { state.neighbors = state.neighborsNext; if (state.view === "diag") renderChat(); }
       break;
     case "sharing": state.sharing = ev; if (state.view === "diag") renderChat(); break;
+    case "call": onCallData(ev.from, ev.data); break;
     case "name": state.myName = ev.name; if (state.view === "diag") renderChat(); break;
     case "nodeInfo": {
       const old = state.nodeInfo.get(ev.addr) || {};
@@ -910,6 +919,7 @@ function onClose() {
   const wasWs = transport instanceof WsTransport;
   if (wasWs && !transport.up) return; // forsøget fejlede; connect() rydder op
   log("Forbindelsen blev afbrudt"); transport = null; setConnected(false);
+  if (call.state !== "idle") callStop("Forbindelsen blev afbrudt");
   if (wasWs) scheduleWsRetry();
 }
 function scheduleWsRetry() {
@@ -2231,6 +2241,152 @@ async function voiceReceived(m) {
   renderChat();
 }
 
+// ---------- opkald (Opus over TCP) ----------
+// Kun via maarse-host og kun når modtageren nås over internettet hele vejen
+// (hosten afviser ellers med NOT_OVER_TCP). Lyd kodes med WebCodecs Opus ved
+// 16 kbit/s i 20 ms-rammer; tre rammer pr. besked (ca. 16 beskeder/s).
+// Indhold (0x27 SendCall / 0xa5 Call): type (u8) | opkalds-ID (u32) | data
+//   1 = ring op, 2 = svar, 3 = læg på / afvis, 4 = lyd: løbenr. (u16) | (længde (u8) | Opus-ramme)…
+const CALL = { RING: 1, ANSWER: 2, END: 3, AUDIO: 4 };
+const call = { state: "idle", peer: null, id: 0, seq: 0, ctx: null, stream: null, node: null, enc: null, dec: null,
+               pending: [], playAt: 0, rx: 0, tx: 0, started: 0, timer: null, ringTimer: null };
+
+const callSupported = () => transport instanceof WsTransport && "AudioEncoder" in window && "AudioDecoder" in window;
+function callFrame(kind, extra = []) {
+  const id = [call.id & 255, call.id >> 8 & 255, call.id >> 16 & 255, call.id >>> 24];
+  return Uint8Array.from([kind, ...id, ...extra]);
+}
+function callSend(kind, extra) {
+  transport?.send(frame(0x27, unhex(call.peer), callFrame(kind, extra)));
+}
+
+function callStart(peer) {
+  if (call.state !== "idle" || !callSupported()) return;
+  Object.assign(call, { state: "calling", peer, id: crypto.getRandomValues(new Uint32Array(1))[0], seq: 0, rx: 0, tx: 0 });
+  callSend(CALL.RING);
+  call.ringTimer = setTimeout(() => { if (call.state === "calling") { callSend(CALL.END); callStop("Intet svar"); } }, 45000);
+  renderCallBar();
+}
+
+async function callAnswer() {
+  if (call.state !== "ringing") return;
+  callSend(CALL.ANSWER);
+  await callMedia();
+}
+
+function callHangup() {
+  if (call.state === "idle") return;
+  callSend(CALL.END);
+  callStop("Lagt på");
+}
+
+function callStop(why) {
+  clearTimeout(call.ringTimer); clearInterval(call.timer);
+  try { call.node?.disconnect(); } catch {}
+  call.stream?.getTracks().forEach(t => t.stop());
+  try { call.enc?.close(); } catch {}
+  try { call.dec?.close(); } catch {}
+  call.ctx?.close().catch(() => {});
+  if (why && call.peer) log(`Opkald med ${label(call.peer)}: ${why}`);
+  Object.assign(call, { state: "idle", peer: null, ctx: null, stream: null, node: null, enc: null, dec: null, pending: [] });
+  renderCallBar();
+}
+
+async function callMedia() {
+  try {
+    call.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  } catch (e) { callSend(CALL.END); callStop("Mikrofon: " + e.message); return; }
+  call.ctx = new AudioContext({ sampleRate: 48000 });
+  call.playAt = 0;
+  call.dec = new AudioDecoder({
+    output: (d) => {
+      const pcm = new Float32Array(d.numberOfFrames);
+      d.copyTo(pcm, { planeIndex: 0, format: "f32-planar" }); d.close();
+      const b = call.ctx.createBuffer(1, pcm.length, 48000); b.copyToChannel(pcm, 0);
+      const src = call.ctx.createBufferSource(); src.buffer = b; src.connect(call.ctx.destination);
+      const now = call.ctx.currentTime;
+      // Lille jitter-buffer: 120 ms; kommer vi for langt bagud, hop frem.
+      if (call.playAt < now + 0.04 || call.playAt > now + 0.6) call.playAt = now + 0.12;
+      src.start(call.playAt); call.playAt += b.duration;
+    },
+    error: (e) => log("Opkald, afkodning: " + e.message),
+  });
+  call.dec.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 1 });
+  call.enc = new AudioEncoder({
+    output: (chunk) => {
+      const b = new Uint8Array(chunk.byteLength); chunk.copyTo(b);
+      call.pending.push(b);
+      if (call.pending.length >= 3) {
+        const parts = [call.seq & 255, call.seq >> 8 & 255];
+        for (const p of call.pending) parts.push(p.length, ...p);
+        call.pending = []; call.seq = (call.seq + 1) & 0xffff; call.tx++;
+        callSend(CALL.AUDIO, parts);
+      }
+    },
+    error: (e) => log("Opkald, kodning: " + e.message),
+  });
+  call.enc.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 1, bitrate: 16000, opus: { frameDuration: 20000 } });
+  const src = call.ctx.createMediaStreamSource(call.stream);
+  call.node = call.ctx.createScriptProcessor(2048, 1, 1);
+  let ts = 0;
+  call.node.onaudioprocess = (e) => {
+    if (call.enc?.state !== "configured") return;
+    const data = new Float32Array(e.inputBuffer.getChannelData(0));
+    call.enc.encode(new AudioData({ format: "f32-planar", sampleRate: 48000, numberOfFrames: data.length, numberOfChannels: 1, timestamp: ts, data }));
+    ts += data.length / 48 * 1000;
+    e.outputBuffer.getChannelData(0).fill(0);
+  };
+  src.connect(call.node); call.node.connect(call.ctx.destination);
+  call.state = "active"; call.started = Date.now();
+  call.timer = setInterval(renderCallBar, 1000);
+  renderCallBar();
+}
+
+// Opkaldsdata fra en anden node (0xa5).
+function onCallData(from, d) {
+  if (d.length < 5) return;
+  const kind = d[0], id = d[1] | d[2] << 8 | d[3] << 16 | d[4] << 24 >>> 0;
+  if (kind === CALL.RING) {
+    if (call.state !== "idle") { // optaget
+      transport?.send(frame(0x27, unhex(from), Uint8Array.from([CALL.END, d[1], d[2], d[3], d[4]])));
+      return;
+    }
+    Object.assign(call, { state: "ringing", peer: from, id: id >>> 0, seq: 0, rx: 0, tx: 0 });
+    pwaIncoming("dm:" + from, `${label(from)} ringer`, "Åbn Må:rse for at svare");
+    renderCallBar();
+    return;
+  }
+  if (from !== call.peer || (id >>> 0) !== (call.id >>> 0)) return;
+  if (kind === CALL.ANSWER && call.state === "calling") { clearTimeout(call.ringTimer); callMedia(); }
+  else if (kind === CALL.END) callStop(call.state === "calling" ? "Afvist eller optaget" : "Den anden lagde på");
+  else if (kind === CALL.AUDIO && call.state === "active" && call.dec?.state === "configured") {
+    call.rx++;
+    let o = 7;
+    while (o < d.length) {
+      const n = d[o]; const f = d.slice(o + 1, o + 1 + n); o += 1 + n;
+      if (f.length === n && n) call.dec.decode(new EncodedAudioChunk({ type: "key", timestamp: 0, data: f }));
+    }
+  }
+}
+
+function renderCallBar() {
+  let bar = $("call-bar");
+  if (call.state === "idle") { bar?.remove(); renderChatTools(); return; }
+  if (!bar) { bar = el("div", { id: "call-bar" }); document.querySelector("section.chat").prepend(bar); }
+  const who = label(call.peer);
+  const secs = call.started ? Math.floor((Date.now() - call.started) / 1000) : 0;
+  const txt = { calling: `Ringer til ${who} …`, ringing: `${who} ringer`,
+                active: `I opkald med ${who} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}` }[call.state];
+  const btns = [];
+  if (call.state === "ringing") {
+    const a = el("button", { className: "primary", textContent: "Svar" }); a.onclick = callAnswer; btns.push(a);
+    const r = el("button", { textContent: "Afvis" }); r.onclick = callHangup; btns.push(r);
+  } else {
+    const h = el("button", { className: "danger", textContent: "Læg på" }); h.onclick = callHangup; btns.push(h);
+  }
+  bar.replaceChildren(el("span", { className: "call-dot" }), el("span", { className: "call-text" }, txt), ...btns);
+}
+
 function el(tag, props = {}, ...kids) {
   const e = document.createElement(tag);
   Object.assign(e, props);
@@ -2259,6 +2415,11 @@ function renderChatTools() {
     const b = el("button", { textContent: isVerified(addr) ? "✓ Bekræftet" : "Bekræft nøgle" });
     b.onclick = () => setView("verify");
     box.append(b);
+    if (callSupported() && call.state === "idle") {
+      const c = el("button", { textContent: "Ring op", title: "Opkald over internettet (kræver TCP hele vejen)" });
+      c.onclick = () => callStart(addr);
+      box.append(c);
+    }
   } else if (privateChannels[addr]) {
     const b = el("button", { textContent: "Del invitation" });
     b.onclick = () => setView("invite");

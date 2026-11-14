@@ -885,6 +885,7 @@ impl Node {
     fn on_content(&mut self, from: Address, plain: &[u8], hops: u8, format: Format) {
         match content::parse(plain) {
             Some(Content::PageRequest(path)) => self.on_page_request(from, &path),
+            Some(Content::Call(data)) => self.on_call(from, data),
             Some(Content::Resync) => {
                 self.log(format!("{} startede en ny krypteringssession", short(&from)));
             }
@@ -1899,7 +1900,8 @@ impl Node {
             | Command::GetSharing
             | Command::SetName { .. }
             | Command::GetName
-            | Command::RequestPage { .. } => {}
+            | Command::RequestPage { .. }
+            | Command::SendCall { .. } => {}
         }
     }
 }

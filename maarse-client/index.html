@@ -89,6 +89,9 @@
   .secure h3 { font-size: 14px; margin: 18px 0 6px; }
   .safety { display: grid; grid-template-columns: repeat(4, max-content); gap: 6px 18px; font-family: ui-monospace, Consolas, monospace;
             font-size: 20px; letter-spacing: 1px; margin: 12px 0; font-variant-numeric: tabular-nums; }
+  /* sikkerhedskopi: gendannelsesfrase */
+  .phrase { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px 14px; margin: 10px 0;
+            font-family: ui-monospace, Consolas, monospace; font-size: 15px; max-width: 560px; }
   .qr svg { display: block; max-width: 100%; height: auto; border-radius: 6px; }
   .linktext { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; color: var(--muted); margin-top: 8px; }
   #chat-tools { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
@@ -144,7 +147,7 @@
     <div class="row"><button id="btn-copy" disabled>Kopiér adresse</button><button id="btn-announce" disabled>Send announce</button></div>
 
     <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button><button id="btn-diag" disabled>Diagnose</button><button id="btn-firmware" disabled>Firmware</button></div>
-    <div class="row"><button id="btn-myqr" disabled>Min QR-kode</button></div>
+    <div class="row"><button id="btn-myqr" disabled>Min QR-kode</button><button id="btn-backup" title="Gendannelsesfrase og krypteret sikkerhedskopi">Sikkerhedskopi</button></div>
     <div class="row"><button id="btn-notify" hidden>Slå notifikationer til</button><button id="btn-install" hidden>Installér app</button></div>
 
     <h2>Kanaler</h2>
@@ -237,6 +240,8 @@ const Cmd = {
   otaChunk: (req, offset, data) => frame(0x19, u16(req), u32(offset), data),
   otaEnd: (req, apply) => frame(0x1a, u16(req), [apply ? 1 : 0]),
   otaStatus: () => frame(0x1b),
+  // 0x34: kun lokalt; flag 1 = brugeren har bekræftet (se renderBackup).
+  setIdentity: secret => frame(0x34, [1], secret),
 };
 const s8 = x => x << 24 >> 24, s16 = (b, o) => (b[o] | b[o + 1] << 8) << 16 >> 16, i32 = (b, o) => rd32(b, o) | 0;
 // App-data-felter (0x03 position, 0x04 telemetri) som i maarse-core::appdata.
@@ -303,6 +308,7 @@ function decodeEvent(f) {
       return { type: "neighbors", part: f[1], last: !!f[2], items };
     }
     case 0xa2: return { type: "sharing", prec: f[1], lat: i32(f, 2) / 1e7, lon: i32(f, 6) / 1e7, telemetry: !!f[10] };
+    case 0xb4: return { type: "identityChanged", addr: a(1), identity: f.slice(17, 81) };
     case 0xa3: return { type: "nodeInfo", addr: a(1), hops: f[17], ...parseAppData(f.slice(18)) };
     case 0x8e: return { type: "log", text: txt(1) };
     case 0x8f: return { type: "error", req: f[1] | f[2] << 8, code: f[3], text: txt(4) };
@@ -481,6 +487,7 @@ function renderChat() {
   if (state.view === "radio") return renderRadio(box);
   if (state.view === "diag") return renderDiag(box);
   if (state.view === "firmware") return renderFirmware(box);
+  if (state.view === "backup") return renderBackup(box);
   renderChatTools();
   if (renderSecurityView(box)) return;
   if (!key) { box.appendChild($("empty") || document.createElement("div")); return; }
@@ -588,6 +595,11 @@ function onEvent(ev) {
     case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
     case "admins": state.admins = ev.list; if (state.view === "radio") renderChat(); break;
     case "regions": state.regions = ev; if (state.view === "radio") renderChat(); break;
+    case "identityChanged":
+      state.me = ev.addr; $("me").textContent = ev.addr;
+      onIdentityInfo(ev);
+      bkOnIdentity(ev);
+      break;
     case "ota": if (!ota.target) otaOnState(ev); break;
     case "remoteReply": {
       const i = ev.inner;
@@ -1059,6 +1071,8 @@ function renderDiag(box) {
     k.position ? PRECISION[k.position.prec] : "–",
     k.telemetry ? (k.telemetry.mv ? (k.telemetry.mv / 1000).toFixed(2) + " V" : k.telemetry.usb ? "USB" : "ukendt") + ` · ${ENERGY[k.telemetry.energy]}` : "–",
     k.telemetry ? fmt(k.telemetry.uptime, "tid") : "–", k.hops])));
+}
+
 // ---------- firmwareopdatering (se maarse-crypto/src/ota.rs) ----------
 // Stop-and-wait: næste bid sendes, når noden har svaret med næste offset.
 // Afbrydes overførslen, fortsætter "Genoptag" fra det sted, noden har gemt
@@ -1220,6 +1234,8 @@ function renderFirmware(box) {
 }
 
 function setView(v) {
+  if (v !== "backup") { bkReset(); bk.msg = ""; bk.qr = null; }
+  else if (transport && !state.target) { transport.send(Cmd.getRegions()); transport.send(Cmd.getSharing()); transport.send(Cmd.getStats()); }
   state.view = v;
   mobileSide(false); $("messages").scrollTop = 0;
   clearInterval(state.statsTimer);
@@ -1308,6 +1324,112 @@ function safetyNumber(keyA, keyB) {
   return a <= b ? a + b : b + a;
 }
 // </sikkerhedsnummer>
+
+// ---------- gendannelsesfrase og krypteret sikkerhedskopi (samme som maarse-crypto::recovery) ----------
+// Testes af tools/recovery_phrase_test.mjs mod Rust-vektorerne. Kun WebCrypto; intet gemmes.
+// <gendannelse>
+// BIP39's officielle engelske ordliste (SHA-256 af filen: 2f5eed53…b24dbda, tjekkes i testen).
+const BIP39_WORDS = "abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire across act action actor actress actual adapt add addict address adjust admit adult advance advice aerobic affair afford afraid again age agent agree ahead aim air airport aisle alarm album alcohol alert alien all alley allow almost alone alpha already also alter always amateur amazing among amount amused analyst anchor ancient anger angle angry animal ankle announce annual another answer antenna antique anxiety any apart apology appear apple approve april arch arctic area arena argue arm armed armor army around arrange arrest arrive arrow art artefact artist artwork ask aspect assault asset assist assume asthma athlete atom attack attend attitude attract auction audit august aunt author auto autumn average avocado avoid awake aware away awesome awful awkward axis baby bachelor bacon badge bag balance balcony ball bamboo banana banner bar barely bargain barrel base basic basket battle beach bean beauty because become beef before begin behave behind believe below belt bench benefit best betray better between beyond bicycle bid bike bind biology bird birth bitter black blade blame blanket blast bleak bless blind blood blossom blouse blue blur blush board boat body boil bomb bone bonus book boost border boring borrow boss bottom bounce box boy bracket brain brand brass brave bread breeze brick bridge brief bright bring brisk broccoli broken bronze broom brother brown brush bubble buddy budget buffalo build bulb bulk bullet bundle bunker burden burger burst bus business busy butter buyer buzz cabbage cabin cable cactus cage cake call calm camera camp can canal cancel candy cannon canoe canvas canyon capable capital captain car carbon card cargo carpet carry cart case cash casino castle casual cat catalog catch category cattle caught cause caution cave ceiling celery cement census century cereal certain chair chalk champion change chaos chapter charge chase chat cheap check cheese chef cherry chest chicken chief child chimney choice choose chronic chuckle chunk churn cigar cinnamon circle citizen city civil claim clap clarify claw clay clean clerk clever click client cliff climb clinic clip clock clog close cloth cloud clown club clump cluster clutch coach coast coconut code coffee coil coin collect color column combine come comfort comic common company concert conduct confirm congress connect consider control convince cook cool copper copy coral core corn correct cost cotton couch country couple course cousin cover coyote crack cradle craft cram crane crash crater crawl crazy cream credit creek crew cricket crime crisp critic crop cross crouch crowd crucial cruel cruise crumble crunch crush cry crystal cube culture cup cupboard curious current curtain curve cushion custom cute cycle dad damage damp dance danger daring dash daughter dawn day deal debate debris decade december decide decline decorate decrease deer defense define defy degree delay deliver demand demise denial dentist deny depart depend deposit depth deputy derive describe desert design desk despair destroy detail detect develop device devote diagram dial diamond diary dice diesel diet differ digital dignity dilemma dinner dinosaur direct dirt disagree discover disease dish dismiss disorder display distance divert divide divorce dizzy doctor document dog doll dolphin domain donate donkey donor door dose double dove draft dragon drama drastic draw dream dress drift drill drink drip drive drop drum dry duck dumb dune during dust dutch duty dwarf dynamic eager eagle early earn earth easily east easy echo ecology economy edge edit educate effort egg eight either elbow elder electric elegant element elephant elevator elite else embark embody embrace emerge emotion employ empower empty enable enact end endless endorse enemy energy enforce engage engine enhance enjoy enlist enough enrich enroll ensure enter entire entry envelope episode equal equip era erase erode erosion error erupt escape essay essence estate eternal ethics evidence evil evoke evolve exact example excess exchange excite exclude excuse execute exercise exhaust exhibit exile exist exit exotic expand expect expire explain expose express extend extra eye eyebrow fabric face faculty fade faint faith fall false fame family famous fan fancy fantasy farm fashion fat fatal father fatigue fault favorite feature february federal fee feed feel female fence festival fetch fever few fiber fiction field figure file film filter final find fine finger finish fire firm first fiscal fish fit fitness fix flag flame flash flat flavor flee flight flip float flock floor flower fluid flush fly foam focus fog foil fold follow food foot force forest forget fork fortune forum forward fossil foster found fox fragile frame frequent fresh friend fringe frog front frost frown frozen fruit fuel fun funny furnace fury future gadget gain galaxy gallery game gap garage garbage garden garlic garment gas gasp gate gather gauge gaze general genius genre gentle genuine gesture ghost giant gift giggle ginger giraffe girl give glad glance glare glass glide glimpse globe gloom glory glove glow glue goat goddess gold good goose gorilla gospel gossip govern gown grab grace grain grant grape grass gravity great green grid grief grit grocery group grow grunt guard guess guide guilt guitar gun gym habit hair half hammer hamster hand happy harbor hard harsh harvest hat have hawk hazard head health heart heavy hedgehog height hello helmet help hen hero hidden high hill hint hip hire history hobby hockey hold hole holiday hollow home honey hood hope horn horror horse hospital host hotel hour hover hub huge human humble humor hundred hungry hunt hurdle hurry hurt husband hybrid ice icon idea identify idle ignore ill illegal illness image imitate immense immune impact impose improve impulse inch include income increase index indicate indoor industry infant inflict inform inhale inherit initial inject injury inmate inner innocent input inquiry insane insect inside inspire install intact interest into invest invite involve iron island isolate issue item ivory jacket jaguar jar jazz jealous jeans jelly jewel job join joke journey joy judge juice jump jungle junior junk just kangaroo keen keep ketchup key kick kid kidney kind kingdom kiss kit kitchen kite kitten kiwi knee knife knock know lab label labor ladder lady lake lamp language laptop large later latin laugh laundry lava law lawn lawsuit layer lazy leader leaf learn leave lecture left leg legal legend leisure lemon lend length lens leopard lesson letter level liar liberty library license life lift light like limb limit link lion liquid list little live lizard load loan lobster local lock logic lonely long loop lottery loud lounge love loyal lucky luggage lumber lunar lunch luxury lyrics machine mad magic magnet maid mail main major make mammal man manage mandate mango mansion manual maple marble march margin marine market marriage mask mass master match material math matrix matter maximum maze meadow mean measure meat mechanic medal media melody melt member memory mention menu mercy merge merit merry mesh message metal method middle midnight milk million mimic mind minimum minor minute miracle mirror misery miss mistake mix mixed mixture mobile model modify mom moment monitor monkey monster month moon moral more morning mosquito mother motion motor mountain mouse move movie much muffin mule multiply muscle museum mushroom music must mutual myself mystery myth naive name napkin narrow nasty nation nature near neck need negative neglect neither nephew nerve nest net network neutral never news next nice night noble noise nominee noodle normal north nose notable note nothing notice novel now nuclear number nurse nut oak obey object oblige obscure observe obtain obvious occur ocean october odor off offer office often oil okay old olive olympic omit once one onion online only open opera opinion oppose option orange orbit orchard order ordinary organ orient original orphan ostrich other outdoor outer output outside oval oven over own owner oxygen oyster ozone pact paddle page pair palace palm panda panel panic panther paper parade parent park parrot party pass patch path patient patrol pattern pause pave payment peace peanut pear peasant pelican pen penalty pencil people pepper perfect permit person pet phone photo phrase physical piano picnic picture piece pig pigeon pill pilot pink pioneer pipe pistol pitch pizza place planet plastic plate play please pledge pluck plug plunge poem poet point polar pole police pond pony pool popular portion position possible post potato pottery poverty powder power practice praise predict prefer prepare present pretty prevent price pride primary print priority prison private prize problem process produce profit program project promote proof property prosper protect proud provide public pudding pull pulp pulse pumpkin punch pupil puppy purchase purity purpose purse push put puzzle pyramid quality quantum quarter question quick quit quiz quote rabbit raccoon race rack radar radio rail rain raise rally ramp ranch random range rapid rare rate rather raven raw razor ready real reason rebel rebuild recall receive recipe record recycle reduce reflect reform refuse region regret regular reject relax release relief rely remain remember remind remove render renew rent reopen repair repeat replace report require rescue resemble resist resource response result retire retreat return reunion reveal review reward rhythm rib ribbon rice rich ride ridge rifle right rigid ring riot ripple risk ritual rival river road roast robot robust rocket romance roof rookie room rose rotate rough round route royal rubber rude rug rule run runway rural sad saddle sadness safe sail salad salmon salon salt salute same sample sand satisfy satoshi sauce sausage save say scale scan scare scatter scene scheme school science scissors scorpion scout scrap screen script scrub sea search season seat second secret section security seed seek segment select sell seminar senior sense sentence series service session settle setup seven shadow shaft shallow share shed shell sheriff shield shift shine ship shiver shock shoe shoot shop short shoulder shove shrimp shrug shuffle shy sibling sick side siege sight sign silent silk silly silver similar simple since sing siren sister situate six size skate sketch ski skill skin skirt skull slab slam sleep slender slice slide slight slim slogan slot slow slush small smart smile smoke smooth snack snake snap sniff snow soap soccer social sock soda soft solar soldier solid solution solve someone song soon sorry sort soul sound soup source south space spare spatial spawn speak special speed spell spend sphere spice spider spike spin spirit split spoil sponsor spoon sport spot spray spread spring spy square squeeze squirrel stable stadium staff stage stairs stamp stand start state stay steak steel stem step stereo stick still sting stock stomach stone stool story stove strategy street strike strong struggle student stuff stumble style subject submit subway success such sudden suffer sugar suggest suit summer sun sunny sunset super supply supreme sure surface surge surprise surround survey suspect sustain swallow swamp swap swarm swear sweet swift swim swing switch sword symbol symptom syrup system table tackle tag tail talent talk tank tape target task taste tattoo taxi teach team tell ten tenant tennis tent term test text thank that theme then theory there they thing this thought three thrive throw thumb thunder ticket tide tiger tilt timber time tiny tip tired tissue title toast tobacco today toddler toe together toilet token tomato tomorrow tone tongue tonight tool tooth top topic topple torch tornado tortoise toss total tourist toward tower town toy track trade traffic tragic train transfer trap trash travel tray treat tree trend trial tribe trick trigger trim trip trophy trouble truck true truly trumpet trust truth try tube tuition tumble tuna tunnel turkey turn turtle twelve twenty twice twin twist two type typical ugly umbrella unable unaware uncle uncover under undo unfair unfold unhappy uniform unique unit universe unknown unlock until unusual unveil update upgrade uphold upon upper upset urban urge usage use used useful useless usual utility vacant vacuum vague valid valley valve van vanish vapor various vast vault vehicle velvet vendor venture venue verb verify version very vessel veteran viable vibrant vicious victory video view village vintage violin virtual virus visa visit visual vital vivid vocal voice void volcano volume vote voyage wage wagon wait walk wall walnut want warfare warm warrior wash wasp waste water wave way wealth weapon wear weasel weather web wedding weekend weird welcome west wet whale what wheat wheel when where whip whisper wide width wife wild will win window wine wing wink winner winter wire wisdom wise wish witness wolf woman wonder wood wool word work world worry worth wrap wreck wrestle wrist write wrong yard year yellow you young youth zebra zero zone zoo".split(" ");
+const MASTER_SALT = "maarse/master/v1";
+
+const subtle = () => globalThis.crypto.subtle;
+const sha256a = async b => new Uint8Array(await subtle().digest("SHA-256", b));
+
+// 32 bytes entropi -> 24 ord (8 bit tjeksum til sidst).
+async function phraseFromEntropy(e) {
+  const bits = [...e, (await sha256a(e))[0]];
+  const words = [];
+  for (let i = 0; i < 24; i++) {
+    let v = 0;
+    for (let b = 0; b < 11; b++) { const p = i * 11 + b; v = (v << 1) | ((bits[p >> 3] >> (7 - (p & 7))) & 1); }
+    words.push(BIP39_WORDS[v]);
+  }
+  return words.join(" ");
+}
+
+// Frase -> 32 bytes entropi. Kaster en fejl med dansk tekst ved forkerte ord/tjeksum.
+async function entropyFromPhrase(s) {
+  const words = s.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length !== 24) throw new Error(`Frasen skal have 24 ord (fandt ${words.length})`);
+  const bits = new Uint8Array(33);
+  words.forEach((w, n) => {
+    const idx = BIP39_WORDS.indexOf(w);
+    if (idx < 0) throw new Error(`Ord nr. ${n + 1} ("${w}") findes ikke i ordlisten`);
+    for (let b = 0; b < 11; b++) if ((idx >> (10 - b)) & 1) { const p = n * 11 + b; bits[p >> 3] |= 1 << (7 - (p & 7)); }
+  });
+  const e = bits.slice(0, 32);
+  if ((await sha256a(e))[0] !== bits[32]) throw new Error("Tjeksummen passer ikke — et ord er skrevet forkert eller byttet om");
+  return e;
+}
+
+// BIP39-seed: PBKDF2-HMAC-SHA512(frase, "mnemonic" + adgangsord, 2048). NFKD som BIP39 kræver.
+async function phraseSeed(phrase, pass = "") {
+  const key = await subtle().importKey("raw", enc.encode(phrase.normalize("NFKD")), "PBKDF2", false, ["deriveBits"]);
+  const salt = enc.encode(("mnemonic" + pass).normalize("NFKD"));
+  return new Uint8Array(await subtle().deriveBits({ name: "PBKDF2", hash: "SHA-512", salt, iterations: 2048 }, key, 512));
+}
+
+// Master-hemmelighed: HKDF-SHA256(salt "maarse/master/v1", seed, info "") -> 64 bytes.
+async function masterSecret(seed) {
+  const key = await subtle().importKey("raw", seed, "HKDF", false, ["deriveBits"]);
+  return new Uint8Array(await subtle().deriveBits({ name: "HKDF", hash: "SHA-256", salt: enc.encode(MASTER_SALT), info: new Uint8Array() }, key, 512));
+}
+
+// Offentlig identitet (Ed25519 | X25519, 64 bytes) for en hemmelighed, hvis
+// browseren kan Ed25519/X25519 i WebCrypto; ellers null (noden svarer alligevel).
+async function publicOfSecret(secret) {
+  const b64u = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+  const pub = async (oid, alg, priv) => {
+    const der = new Uint8Array([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, oid, 0x04, 0x22, 0x04, 0x20, ...priv]);
+    const k = await subtle().importKey("pkcs8", der, alg, true, alg === "Ed25519" ? ["sign"] : ["deriveBits"]);
+    return b64u((await subtle().exportKey("jwk", k)).x);
+  };
+  try {
+    return new Uint8Array([...await pub(0x70, "Ed25519", secret.slice(0, 32)), ...await pub(0x6e, "X25519", secret.slice(32))]);
+  } catch { return null; }
+}
+
+// Hele vejen: frase (+ adgangsord) -> { secret (64), pub (64|null), addr (hex|null) }.
+async function identityFromPhrase(phrase, pass = "") {
+  const canon = await phraseFromEntropy(await entropyFromPhrase(phrase));
+  const secret = await masterSecret(await phraseSeed(canon, pass));
+  const pub = await publicOfSecret(secret);
+  return { phrase: canon, secret, pub, addr: pub ? hex((await sha256a(pub)).slice(0, 16)) : null };
+}
+
+// Krypteret sikkerhedskopi (.maarse-backup): PBKDF2-HMAC-SHA256 (600.000
+// runder, 16 bytes salt) -> AES-256-GCM (12 bytes nonce). Hovedet (uden
+// "ct") er AAD, så parametrene ikke kan ændres ubemærket.
+const BACKUP_ITER = 600000;
+const b64 = b => { let s = ""; for (const x of b) s += String.fromCharCode(x); return btoa(s); };
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+async function backupKey(pass, salt, iter, usage) {
+  const k = await subtle().importKey("raw", enc.encode(pass.normalize("NFC")), "PBKDF2", false, ["deriveKey"]);
+  return subtle().deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, k, { name: "AES-GCM", length: 256 }, false, [usage]);
+}
+const backupAad = h => enc.encode(JSON.stringify([h.format, h.v, h.kdf, h.iter, h.salt, h.cipher, h.iv]));
+
+async function encryptBackup(obj, pass, iter = BACKUP_ITER) {
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const h = { format: "maarse-backup", v: 1, kdf: "PBKDF2-SHA256", iter, salt: b64(salt), cipher: "AES-256-GCM", iv: b64(iv) };
+  const key = await backupKey(pass, salt, iter, "encrypt");
+  const ct = await subtle().encrypt({ name: "AES-GCM", iv, additionalData: backupAad(h) }, key, enc.encode(JSON.stringify(obj)));
+  return JSON.stringify({ ...h, ct: b64(new Uint8Array(ct)) });
+}
+
+async function decryptBackup(text, pass) {
+  let h;
+  try { h = JSON.parse(text); } catch { throw new Error("Det er ikke en Må:rse-sikkerhedskopi"); }
+  if (h.format !== "maarse-backup" || h.v !== 1 || h.kdf !== "PBKDF2-SHA256" || h.cipher !== "AES-256-GCM") throw new Error("Ukendt sikkerhedskopiformat");
+  if (!(h.iter >= 100000 && h.iter <= 10000000)) throw new Error("Ugyldige parametre i sikkerhedskopien");
+  const key = await backupKey(pass, unb64(h.salt), h.iter, "decrypt");
+  try {
+    const pt = await subtle().decrypt({ name: "AES-GCM", iv: unb64(h.iv), additionalData: backupAad(h) }, key, unb64(h.ct));
+    return JSON.parse(dec.decode(pt));
+  } catch { throw new Error("Forkert adgangskode, eller filen er ødelagt"); }
+}
+// </gendannelse>
 
 // ---------- base32 (RFC 4648, uden '=') til invitationer og kontaktlinks ----------
 const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -1668,7 +1790,157 @@ function renderSecurityView(box) {
   return true;
 }
 
+// ---------- sikkerhedskopi: visning ----------
+// Frasen findes kun i hukommelsen, mens visningen er åben (aldrig i localStorage).
+
+const bk = { phrase: null, quiz: null, expect: null, busy: false, msg: "", qr: null };
+
+function bkReset() { bk.phrase = null; bk.quiz = null; bk.busy = false; }
+
+// Svar fra noden på SetIdentity.
+function bkOnIdentity(ev) {
+  const want = bk.expect; bk.expect = null;
+  bkReset();
+  bk.msg = want && want !== ev.addr
+    ? `ADVARSEL: noden fik adressen ${ev.addr}, men frasen giver ${want}.`
+    : `✓ Noden bruger nu identiteten ${ev.addr}.`;
+  log(bk.msg);
+  if (state.view === "backup") renderChat();
+}
+
+async function bkInstall(phrase, pass) {
+  if (!transport) throw new Error("Ikke forbundet til en node");
+  const id = await identityFromPhrase(phrase, pass);
+  if (id.addr && id.addr === state.me) { bk.msg = "Noden har allerede denne identitet."; bkReset(); return; }
+  bk.expect = id.addr;
+  bk.busy = true;
+  await transport.send(Cmd.setIdentity(id.secret));
+  id.secret.fill(0);
+}
+
+function bkState() {
+  const role = (state.stats || []).find(([k]) => k === 7);
+  return {
+    app: "maarse", v: 1, created: new Date().toISOString(), node: state.me,
+    nicknames, keys: contactKeys, verified, private: privateChannels, notify: store.get("notify", false),
+    regions: state.regions ? { strict: state.regions.strict, names: state.regions.names } : null,
+    sharing: state.sharing ? { prec: state.sharing.prec, lat: state.sharing.lat, lon: state.sharing.lon, telemetry: state.sharing.telemetry } : null,
+    role: role ? role[1] : null,
+  };
+}
+
+// Lægger en dekrypteret sikkerhedskopi ind (fletter med det, der er) og
+// sender private kanaler, regioner, deling og rolle til noden igen.
+function bkApply(b) {
+  if (b?.app !== "maarse" || b.v !== 1) throw new Error("Ukendt indhold i sikkerhedskopien");
+  const obj = x => (x && typeof x === "object" ? x : {});
+  Object.assign(nicknames, obj(b.nicknames)); store.set("nicknames", nicknames);
+  Object.assign(contactKeys, obj(b.keys)); store.set("keys", contactKeys);
+  Object.assign(verified, obj(b.verified)); store.set("verified", verified);
+  Object.assign(privateChannels, obj(b.private)); store.set("private", privateChannels);
+  if (b.notify) store.set("notify", true);
+  if (transport) {
+    for (const p of Object.values(obj(b.private))) if (/^[0-9a-f]{64}$/.test(p.key)) transport.send(Cmd.joinPrivate(unhex(p.key), String(p.name).slice(0, 24)));
+    if (b.regions) transport.send(Cmd.setRegions(!!b.regions.strict, String(b.regions.names || "")));
+    if (b.sharing) transport.send(Cmd.setSharing(b.sharing.prec | 0, Math.round(b.sharing.lat * 1e7), Math.round(b.sharing.lon * 1e7), !!b.sharing.telemetry));
+    if (b.role !== null && b.role !== undefined) transport.send(Cmd.setRole(b.role | 0));
+  }
+  renderSide();
+  return Object.keys(obj(b.nicknames)).length;
+}
+
+function renderBackup(box) {
+  $("chat-title").textContent = "Sikkerhedskopi"; $("chat-sub").textContent = "";
+  const wrap = el("div", { className: "secure" });
+  box.append(wrap);
+  const busy = async (btn, f) => {
+    btn.disabled = true;
+    try { await f(); } catch (e) { bk.msg = e.message; log(e.message); }
+    btn.disabled = false; renderChat();
+  };
+  wrap.append(
+    el("p", { className: "warn", textContent: "Der er ingen bagdør. Den, der har din gendannelsesfrase, ER dig: kan læse dine beskeder og skrive i dit navn. Skriv den på papir, gem den sikkert, og vis den aldrig til nogen — heller ikke \"support\". Mister du frasen, kan ingen gendanne identiteten for dig." }),
+    el("p", { className: "warn", textContent: "Brug kun identiteten på én enhed ad gangen. To noder med samme identitet forstyrrer ruterne og forward secrecy (beskeder kan gå tabt). Senere (tilknyttede enheder) vil frasen være din master-identitet, og hver enhed får sin egen nøgle underskrevet af den — indtil da ER nodens identitet frasen." }));
+  if (bk.msg) wrap.append(el("p", { textContent: bk.msg }));
+  const pass = (ph = "Ekstra adgangsord (valgfrit — glemmer du det, er frasen værdiløs)") => el("input", { type: "password", placeholder: ph, autocomplete: "off" });
+  const ack = text => { const c = el("input", { type: "checkbox" }); return [c, el("label", {}, c, " " + text)]; };
+
+  // 1. Ny identitet med frase.
+  wrap.append(el("h3", { textContent: "Opret ny identitet med gendannelsesfrase" }));
+  if (!bk.phrase) {
+    wrap.append(el("p", { className: "hint", textContent: "Laver 24 ord og en ny identitet ud fra dem. Nodens adresse og sikkerhedsnummer skifter: kontakter skal tilføje dig igen og bekræfte nøglen på ny. Er din nuværende identitet oprettet tilfældigt (uden frase), kan den ikke sikkerhedskopieres — dette er vejen over til en identitet, der kan." }));
+    const go = el("button", { textContent: "Lav gendannelsesfrase" });
+    go.onclick = () => busy(go, async () => {
+      bk.phrase = await phraseFromEntropy(crypto.getRandomValues(new Uint8Array(32)));
+      const pos = new Set(); while (pos.size < 3) pos.add(Math.floor(Math.random() * 24));
+      bk.quiz = [...pos].sort((a, b) => a - b); bk.msg = "";
+    });
+    wrap.append(el("div", { className: "row" }, go));
+  } else {
+    const grid = el("div", { className: "phrase" });
+    bk.phrase.split(" ").forEach((w, i) => grid.append(el("span", { textContent: `${i + 1}. ${w}` })));
+    const inputs = bk.quiz.map(i => el("input", { placeholder: `Ord nr. ${i + 1}`, autocomplete: "off", spellcheck: false }));
+    const pw = pass(), [c, l] = ack("Jeg har skrevet frasen ned og forstår, at nodens adresse skifter.");
+    const install = el("button", { className: "primary", textContent: "Installér på noden", disabled: !transport });
+    const cancel = el("button", { textContent: "Annullér" });
+    cancel.onclick = () => { bkReset(); bk.msg = ""; renderChat(); };
+    install.onclick = () => busy(install, async () => {
+      const words = bk.phrase.split(" ");
+      if (bk.quiz.some((i, k) => inputs[k].value.trim().toLowerCase() !== words[i])) throw new Error("Ordene passer ikke. Tjek det, du har skrevet ned.");
+      if (!c.checked) throw new Error("Bekræft, at du har skrevet frasen ned.");
+      await bkInstall(bk.phrase, pw.value);
+      bk.msg = "Sendt til noden — venter på svar …";
+    });
+    wrap.append(el("p", { className: "hint", textContent: "Skriv ordene ned i rækkefølge. De vises kun nu." }), grid,
+      el("p", { className: "hint", textContent: "Bekræft, at du har skrevet dem ned:" }), el("div", { className: "row" }, ...inputs),
+      el("div", { className: "row" }, pw), el("div", { className: "row" }, l), el("div", { className: "row" }, install, cancel));
+  }
+
+  // 2. Gendan fra frase.
+  wrap.append(el("h3", { textContent: "Gendan fra gendannelsesfrase" }));
+  const ta = el("textarea", { rows: 3, placeholder: "24 ord adskilt af mellemrum", autocomplete: "off", spellcheck: false, style: "width:100%;max-width:520px" });
+  const rpw = pass("Ekstra adgangsord (kun hvis du brugte et)"), [rc, rl] = ack("Erstat nodens nuværende identitet (den kan ikke hentes tilbage uden dens egen frase).");
+  const restore = el("button", { className: "primary", textContent: "Gendan på noden", disabled: !transport });
+  restore.onclick = () => busy(restore, async () => {
+    if (!rc.checked) throw new Error("Bekræft, at nodens identitet må erstattes.");
+    await bkInstall(ta.value, rpw.value); ta.value = "";
+    bk.msg = bk.busy ? "Sendt til noden — venter på svar …" : bk.msg;
+  });
+  wrap.append(ta, el("div", { className: "row" }, rpw), el("div", { className: "row" }, rl), el("div", { className: "row" }, restore));
+
+  // 3. Krypteret eksport.
+  wrap.append(el("h3", { textContent: "Eksportér kontakter og indstillinger" }),
+    el("p", { className: "hint", textContent: "Kontakter, kaldenavne, nøgler og bekræftelser, private kanaler (med nøgler), regioner, rolle og deling — krypteret med en adgangskode (PBKDF2-SHA256, 600.000 runder, AES-256-GCM). Identiteten er IKKE med: den gendannes med frasen." }));
+  const ep1 = pass("Adgangskode (mindst 12 tegn)"), ep2 = pass("Gentag adgangskoden");
+  const exp = el("button", { textContent: "Eksportér", disabled: !state.me });
+  exp.onclick = () => busy(exp, async () => {
+    if (ep1.value.length < 12) throw new Error("Adgangskoden skal have mindst 12 tegn.");
+    if (ep1.value !== ep2.value) throw new Error("Adgangskoderne er ikke ens.");
+    const text = await encryptBackup(bkState(), ep1.value);
+    const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "application/json" })), download: `maarse-${short(state.me || "ukendt")}.maarse-backup` });
+    a.click();
+    bk.msg = "Sikkerhedskopien er gemt som fil.";
+    bk.qr = text.length <= 2300 ? text : null;
+  });
+  wrap.append(el("div", { className: "row" }, ep1, ep2, exp));
+  if (bk.qr) wrap.append(el("p", { className: "hint", textContent: "Også som QR-kode (krypteret):" }), qrBox(bk.qr));
+
+  // 4. Import.
+  wrap.append(el("h3", { textContent: "Importér sikkerhedskopi" }));
+  const file = el("input", { type: "file", accept: ".maarse-backup,application/json" });
+  const paste = el("textarea", { rows: 2, placeholder: "… eller indsæt indholdet her", style: "width:100%;max-width:520px" });
+  const ip = pass("Adgangskode");
+  const imp = el("button", { className: "primary", textContent: "Importér" });
+  imp.onclick = () => busy(imp, async () => {
+    const text = file.files[0] ? await file.files[0].text() : paste.value;
+    const n = bkApply(await decryptBackup(text.trim(), ip.value));
+    bk.msg = `✓ Importeret (${n} kontakter). Private kanaler, regioner, rolle og deling er sendt til noden.`;
+  });
+  wrap.append(file, paste, el("div", { className: "row" }, ip, imp));
+}
+
 $("btn-myqr").onclick = () => setView("myqr");
+$("btn-backup").onclick = () => setView("backup");
 $("btn-private-new").onclick = () => setView("newprivate");
 $("btn-private-join").onclick = () => setView("joininvite");
 

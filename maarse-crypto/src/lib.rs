@@ -17,6 +17,7 @@
 pub mod files;
 pub mod ota;
 pub mod ratchet;
+pub mod recovery;
 pub mod seal;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};

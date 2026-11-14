@@ -5,6 +5,7 @@
 //! alt modtaget sendes til hosten som `0xC0 | snr | pakke`.
 
 mod ext;
+mod identity;
 
 use crate::bus::{
     Frame, Pkt, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_TX, RSTATS, TxReq, USB_IN, USB_OUT,
@@ -61,6 +62,11 @@ pub trait Settings {
     /// Gemte regioner; standard (og ældre flash) er ingen.
     fn load_regions(&mut self) -> (bool, RegionNames) {
         (false, RegionNames::new())
+    }
+    /// Erstatter den gemte identitet (64 hemmelige bytes). Returnerer
+    /// `false`, hvis den ikke kunne gemmes. Standard: kan ikke.
+    fn save_identity(&mut self, _secret: &[u8; 64]) -> bool {
+        false
     }
     /// Gemmer delingsindstillinger (position/telemetri). Standard: gemmes ikke.
     fn save_sharing(&mut self, _s: &maarse_core::companion::Sharing) {}
@@ -656,6 +662,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             }
             Command::FileData { req, offset, data } => self.file_data(req, offset, &data),
             Command::FileEnd { req } => self.file_end(req),
+            Command::SetIdentity { confirm, secret } => self.set_identity(confirm, &secret),
         }
     }
 

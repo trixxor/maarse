@@ -44,6 +44,13 @@ impl Sessions {
         self.map.len()
     }
 
+    /// Glemmer alle sessioner (ny identitet) og skriver det til disk.
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.dirty = true;
+        self.save();
+    }
+
     /// Skriver til disk, hvis noget er ændret siden sidst.
     pub fn save(&mut self) {
         if !self.dirty {

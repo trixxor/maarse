@@ -1056,7 +1056,7 @@ const STAT = {
   42: ["Radio", "Data modtaget", "bytes"], 43: ["Radio", "Data sendt", "bytes"], 40: ["Radio", "Sendetid i alt", "ms"],
   41: ["Radio", "Duty cycle brugt (seneste time)", "promille"], 44: ["Radio", "Sendekø"], 38: ["Radio", "Kanal optaget (CAD)"],
   39: ["Radio", "Udsat pga. duty cycle"], 31: ["Radio", "Modtagefejl (CRC/header)"], 33: ["Radio", "Sendefejl"],
-  52: ["Radio", "Pakker droppet"], 49: ["Strøm og diagnose", "Batteri", "mV"], 85: ["Strøm og diagnose", "Batteri (omtrent)", "%"],
+  52: ["Radio", "Pakker droppet"], 49: ["Strøm og diagnose", "Batteri", "mV"], 85: ["Strøm og diagnose", "Batteri (omtrent)", "%"], 86: ["Strøm og diagnose", "Chip-temperatur", "temp"],
   80: ["Strøm og diagnose", "Støjgulv (anslået)", "dBm"], 81: ["Strøm og diagnose", "Energistatus", "energi"],
   82: ["Strøm og diagnose", "USB-strøm", "usb"], 83: ["Strøm og diagnose", "Direkte naboer"],
   84: ["Strøm og diagnose", "Deler position", "præcision"],
@@ -1078,8 +1078,9 @@ const PRECISION = ["Slukket", "ca. 10 km", "ca. 1 km", "Præcis"];
 
 function fmt(v, unit) {
   if (unit === "tid") { const h = Math.floor(v / 3600), m = Math.floor(v % 3600 / 60); return h ? `${h} t ${m} min` : `${m} min ${v % 60} s`; }
-  if (unit === "rolle") return ["Klient", "Repeater", "Relay"][v] || v;
+  if (unit === "rolle") return ["Klient", "Repeater", "Relay", "Anker"][v] || v;
   if (unit === "energi") return ENERGY[v] ?? v;
+  if (unit === "temp") return (v / 10).toFixed(1).replace(".", ",") + " °C";
   if (unit === "usb") return v < 0 ? "Ukendt" : v ? "Ja" : "Nej";
   if (unit === "præcision") return PRECISION[v] ?? v;
   if (unit === "MHz") return (v / 1000).toFixed(3) + " MHz";
@@ -1181,7 +1182,7 @@ function renderRadio(box) {
   const items = state.target ? state.remoteStats : state.stats;
   const cur = items && items.find(([k]) => k === 7);
   const role = row("Rolle", document.createElement("select"));
-  role.append(new Option("Klient (videresender ikke)", 0), new Option("Repeater", 1), new Option("Relay (skov-tilstand)", 2));
+  role.append(new Option("Klient (videresender ikke)", 0), new Option("Repeater", 1), new Option("Relay (skov-tilstand)", 2), new Option("Anker (deler lange stier)", 3));
   role.value = cur ? cur[1] : 1;
   const saveRole = document.createElement("button"); saveRole.textContent = "Gem rolle";
   saveRole.onclick = () => {
@@ -1338,11 +1339,12 @@ function renderDiag(box) {
   const kw = sec("Andre noders position og telemetri", "Fra modtagne announces. Ingen kort hentes udefra.");
   const known = [...state.nodeInfo.values()];
   if (!known.length) kw.append(el("div", { className: "muted" }, "Ingen har delt noget endnu."));
-  else kw.append(table(["Node", "Position", "Præcision", "Batteri", "Oppetid", "Hop"], known.map(k => [
+  else kw.append(table(["Node", "Position", "Præcision", "Batteri", "Temp.", "Oppetid", "Hop"], known.map(k => [
     label(k.addr),
     k.position ? `${k.position.lat.toFixed(k.position.prec === 3 ? 5 : 2)}, ${k.position.lon.toFixed(k.position.prec === 3 ? 5 : 2)}` : "–",
     k.position ? PRECISION[k.position.prec] : "–",
     k.telemetry ? (k.telemetry.mv ? (k.telemetry.mv / 1000).toFixed(2) + " V" : k.telemetry.usb ? "USB" : "ukendt") + ` · ${ENERGY[k.telemetry.energy]}` : "–",
+    k.telemetry?.temp != null ? k.telemetry.temp.toFixed(1).replace(".", ",") + " °C" : "–",
     k.telemetry ? fmt(k.telemetry.uptime, "tid") : "–", k.hops])));
 }
 

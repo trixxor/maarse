@@ -159,7 +159,7 @@ fn fuzz_router_on_receive() {
     let frame = |p: &[u8]| [&[p.len() as u8, 5][..], p].concat();
     let mut corpus: Vec<Vec<u8>> = pkts.iter().map(|p| frame(p)).collect();
     corpus.push(pkts.iter().take(6).flat_map(|p| frame(p)).collect());
-    for role in [Role::Repeater, Role::Client, Role::Relay] {
+    for role in [Role::Repeater, Role::Client, Role::Relay, Role::Anchor] {
         let mut now = 0u64;
         run(&format!("router-{role:?}"), &corpus, 4 * MAX_PACKET, |b| {
             let mut r = Router::<16, 64>::new(me, role);

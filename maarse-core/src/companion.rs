@@ -106,6 +106,10 @@ pub enum Command {
     OtaEnd { req: u16, apply: bool },
     /// 0x1b: hvor langt er en opdatering? Svaret er `OtaState`.
     OtaStatus,
+    /// 0x14: hvor stor en fil må sendes til `dest` ad den aktuelle rute?
+    /// Svaret er `FileLimit`. Firmware-noder kender ikke kommandoen (de
+    /// svarer med `Error`); klienten bruger så `Info.max_file`.
+    GetFileLimit { dest: Address },
 }
 
 /// Delingsindstillinger (10 bytes): præcision (u8, se
@@ -302,6 +306,17 @@ pub enum Event {
     /// næste forventede offset, `size` og `version` fra manifestet (0 uden),
     /// `current` den kørende version. Tekst forklarer fejl.
     OtaState { req: u16, state: u8, next: u32, size: u32, version: u32, current: u32, text: Text },
+    /// 0x96: svar på `GetFileLimit`. Format: dest (16) | max_bytes (u32) |
+    /// flag (u8: bit 0 = over LoRa eller ukendt rute, bit 1 = modtageren er
+    /// ikke at nå, filen lægges i postkasse) | est_airtime_s (u32, anslået
+    /// sendetid for `max_bytes` over LoRa; 0 over internettet).
+    FileLimit {
+        dest: Address,
+        max_bytes: u32,
+        via_lora: bool,
+        mailbox: bool,
+        est_airtime_s: u32,
+    },
     /// 0x8f
     Error { req: u16, code: u8, text: Text },
     /// 0xa0: svar på `TraceRoute`. `path` er repeaternes sti-ID'er; `out` er
@@ -690,6 +705,7 @@ impl Command {
             }
             Command::OtaEnd { req, apply } => W::new(0x1a).b(&req.to_le_bytes()).b(&[*apply as u8]).done(),
             Command::OtaStatus => W::new(0x1b).done(),
+            Command::GetFileLimit { dest } => W::new(0x14).b(&dest.0).done(),
         }
     }
 
@@ -752,6 +768,7 @@ impl Command {
             0x19 => Command::OtaChunk { req: r.u16()?, offset: r.u32()?, data: r.text()? },
             0x1a => Command::OtaEnd { req: r.u16()?, apply: r.u8()? != 0 },
             0x1b => Command::OtaStatus,
+            0x14 => Command::GetFileLimit { dest: r.addr()? },
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -882,6 +899,12 @@ impl Event {
                 }
                 w.done()
             }
+            Event::FileLimit { dest, max_bytes, via_lora, mailbox, est_airtime_s } => W::new(0x96)
+                .b(&dest.0)
+                .b(&max_bytes.to_le_bytes())
+                .b(&[*via_lora as u8 | (*mailbox as u8) << 1])
+                .b(&est_airtime_s.to_le_bytes())
+                .done(),
             Event::Error { req, code, text } => W::new(0x8f)
                 .b(&req.to_le_bytes())
                 .b(&[*code])
@@ -1006,6 +1029,18 @@ impl Event {
                 current: r.u32()?,
                 text: r.text()?,
             },
+            0x96 => {
+                let dest = r.addr()?;
+                let max_bytes = r.u32()?;
+                let flags = r.u8()?;
+                Event::FileLimit {
+                    dest,
+                    max_bytes,
+                    via_lora: flags & 1 != 0,
+                    mailbox: flags & 2 != 0,
+                    est_airtime_s: r.u32()?,
+                }
+            }
             0x92 => Event::Radio(
                 RadioConfig::from_bytes(r.take(RadioConfig::LEN)?).ok_or(FrameError::TooShort)?,
             ),
@@ -1201,6 +1236,27 @@ mod tests {
         roundtrip_cmd(Command::SetRegions { strict: true, names: text(b"dk,nordjylland") });
         roundtrip_cmd(Command::SetRegions { strict: false, names: text(b"") });
         roundtrip_cmd(Command::GetRegions);
+        roundtrip_cmd(Command::GetFileLimit { dest: Address([9; 16]) });
+        assert_eq!(&Command::GetFileLimit { dest: Address([9; 16]) }.encode()[..3], &[17, 0, 0x14]);
+        roundtrip_ev(Event::FileLimit {
+            dest: Address([9; 16]),
+            max_bytes: 8192,
+            via_lora: true,
+            mailbox: false,
+            est_airtime_s: 130,
+        });
+        roundtrip_ev(Event::FileLimit {
+            dest: Address([8; 16]),
+            max_bytes: 1 << 20,
+            via_lora: false,
+            mailbox: true,
+            est_airtime_s: 0,
+        });
+        assert_eq!(
+            Event::FileLimit { dest: Address([0; 16]), max_bytes: 1, via_lora: true, mailbox: true, est_airtime_s: 2 }
+                .encode()[23],
+            3
+        );
         roundtrip_ev(Event::Regions { strict: false, names: text(b"dk") });
 
         roundtrip_cmd(Command::SetTime { unix: 1_800_000_000 });

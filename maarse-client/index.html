@@ -143,7 +143,7 @@
     <div class="me" id="me">–</div>
     <div class="row"><button id="btn-copy" disabled>Kopiér adresse</button><button id="btn-announce" disabled>Send announce</button></div>
 
-    <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button></div>
+    <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button><button id="btn-firmware" disabled>Firmware</button></div>
     <div class="row"><button id="btn-myqr" disabled>Min QR-kode</button></div>
     <div class="row"><button id="btn-notify" hidden>Slå notifikationer til</button><button id="btn-install" hidden>Installér app</button></div>
 
@@ -229,6 +229,10 @@ const Cmd = {
   setRegions: (strict, names) => frame(0x11, [strict ? 1 : 0], enc.encode(names)),
   getRegions: () => frame(0x12),
   setTime: () => frame(0x0f, u32(Math.floor(Date.now() / 1000))),
+  otaBegin: (req, flags, manifest) => frame(0x18, u16(req), [flags], manifest),
+  otaChunk: (req, offset, data) => frame(0x19, u16(req), u32(offset), data),
+  otaEnd: (req, apply) => frame(0x1a, u16(req), [apply ? 1 : 0]),
+  otaStatus: () => frame(0x1b),
 };
 
 function readU64(b, o) {
@@ -259,6 +263,8 @@ function decodeEvent(f) {
     case 0x93: return { type: "remoteReply", from: a(1), inner: decodeEvent(f.slice(17)) };
     case 0x94: { const l = []; for (let o = 1; o + 16 <= f.length; o += 16) l.push(a(o)); return { type: "admins", list: l }; }
     case 0x95: return { type: "regions", strict: !!f[1], names: txt(2) };
+    case 0x9a: return { type: "ota", req: f[1] | f[2] << 8, state: f[3], next: rd32(f, 4), size: rd32(f, 8),
+                        version: rd32(f, 12), current: rd32(f, 16), text: txt(20) };
     case 0x91: {
       const items = [];
       for (let o = 1; o + 5 <= f.length; o += 5) items.push([f[o], rd32(f, o + 1) | 0]);
@@ -440,6 +446,7 @@ function renderChat() {
   $("composer").hidden = state.view !== "chat";
   if (state.view === "status") return renderStatus(box);
   if (state.view === "radio") return renderRadio(box);
+  if (state.view === "firmware") return renderFirmware(box);
   renderChatTools();
   if (renderSecurityView(box)) return;
   if (!key) { box.appendChild($("empty") || document.createElement("div")); return; }
@@ -487,7 +494,7 @@ function updateComposer() {
 function setConnected(on, name) {
   $("dot").classList.toggle("on", on);
   $("status").innerHTML = on ? `Forbundet via <b>${name}</b>` : "Ikke forbundet";
-  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
+  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
   $("btn-disconnect").hidden = !on;
   for (const id of ["btn-ws", "btn-serial", "btn-ble"]) $(id).disabled = on;
@@ -547,12 +554,14 @@ function onEvent(ev) {
     case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
     case "admins": state.admins = ev.list; if (state.view === "radio") renderChat(); break;
     case "regions": state.regions = ev; if (state.view === "radio") renderChat(); break;
+    case "ota": if (!ota.target) otaOnState(ev); break;
     case "remoteReply": {
       const i = ev.inner;
       if (ev.from !== state.target) break;
       if (i.type === "stats") state.remoteStats = state.remoteStats.concat(i.items);
       else if (i.type === "radio") state.remoteRadio = i.cfg;
       else if (i.type === "error") log(`${label(ev.from)}: ${i.text}`);
+      else if (i.type === "ota" && ev.from === ota.target) { otaOnState(i); break; }
       renderChat();
       break;
     }
@@ -884,6 +893,166 @@ function renderRegions(box) {
     transport?.send(Cmd.setRegions(cb.checked, names));
   };
   w.append(inp, lbl, b);
+  box.appendChild(w);
+}
+
+// ---------- firmwareopdatering (se maarse-crypto/src/ota.rs) ----------
+// Stop-and-wait: næste bid sendes, når noden har svaret med næste offset.
+// Afbrydes overførslen, fortsætter "Genoptag" fra det sted, noden har gemt
+// (også efter genstart af noden).
+
+const OTA_STATES = ["klar", "modtager", "verificeret", "installerer", "fejl", "ikke understøttet"];
+const OTA_BOARDS = { 1: "xiao-nrf52840", 2: "wismesh-tag", 3: "heltec-v4", 4: "xiao-esp32s3" };
+const ota = { image: null, manifest: null, info: null, target: null, running: false, next: 0, last: null,
+              timer: null, downgrade: false, apply: true, started: 0, sentBytes: 0, retries: 0 };
+const verStr = v => `${v >> 16}.${(v >> 8) & 255}.${v & 255}`;
+
+function parseManifest(b) {
+  if (b.length !== 112 || dec.decode(b.slice(0, 4)) !== "MOTA" || b[4] !== 1) return null;
+  return { board: b[6] | b[7] << 8, version: rd32(b, 8), size: rd32(b, 12), sha: hex(b.slice(16, 48)) };
+}
+
+// Samme regel som maarse_uf2::flatten: alle 256-byte-sider fra laveste til
+// højeste, huller fyldt med 0xFF.
+function uf2ToImage(u) {
+  if (u.length % 512) throw new Error("ikke en UF2-fil");
+  const pages = new Map();
+  for (let o = 0; o < u.length; o += 512) {
+    if (rd32(u, o) !== 0x0A324655 || rd32(u, o + 4) !== 0x9E5D5157) throw new Error("ugyldig UF2-blok");
+    const addr = rd32(u, o + 12), n = rd32(u, o + 16);
+    for (let i = 0; i < n; i++) {
+      const a = addr + i, pg = a & ~255;
+      if (!pages.has(pg)) pages.set(pg, new Uint8Array(256).fill(0xff));
+      pages.get(pg)[a - pg] = u[o + 32 + i];
+    }
+  }
+  const keys = [...pages.keys()].sort((a, b) => a - b);
+  const start = keys[0], img = new Uint8Array(keys[keys.length - 1] + 256 - start).fill(0xff);
+  for (const k of keys) img.set(pages.get(k), k - start);
+  return img;
+}
+
+async function otaLoadFiles(files) {
+  for (const f of files) {
+    const b = new Uint8Array(await f.arrayBuffer());
+    if (f.name.toLowerCase().endsWith(".manifest")) ota.manifest = b;
+    else if (f.name.toLowerCase().endsWith(".uf2")) ota.image = uf2ToImage(b);
+    else ota.image = b;
+  }
+  ota.info = ota.manifest ? parseManifest(ota.manifest) : null;
+  ota.check = "";
+  if (ota.manifest && !ota.info) ota.check = "Manifestet er ugyldigt.";
+  else if (ota.info && ota.image) {
+    const sha = hex(new Uint8Array(await crypto.subtle.digest("SHA-256", ota.image)));
+    if (ota.image.length !== ota.info.size || sha !== ota.info.sha) ota.check = "Imaget passer ikke med manifestet (størrelse eller SHA-256).";
+  }
+  renderChat();
+}
+
+function otaSend(inner) {
+  const req = state.nextReq++ & 0xffff;
+  if (!transport) return;
+  if (ota.target) transport.send(Cmd.remote(req, ota.target, inner));
+  else transport.send(inner);
+  clearTimeout(ota.timer);
+  // Intet svar: spørg om status (giver næste offset) og fortsæt derfra.
+  ota.timer = setTimeout(() => {
+    if (!ota.running) return;
+    ota.retries++;
+    log(`Firmware: intet svar, spørger igen (${ota.retries})`);
+    otaSend(Cmd.otaStatus());
+  }, ota.target ? 60000 : 5000);
+}
+
+function otaStart() {
+  if (!ota.image || !ota.info || ota.check) return;
+  ota.running = true; ota.retries = 0; ota.started = Date.now(); ota.sentBytes = 0; ota.last = null;
+  otaSend(Cmd.otaBegin(0, ota.downgrade && !ota.target ? 1 : 0, ota.manifest));
+  renderChat();
+}
+
+function otaStop() { ota.running = false; clearTimeout(ota.timer); renderChat(); }
+
+function otaOnState(ev) {
+  ota.last = ev; ota.next = ev.next;
+  if (!ota.running) { if (state.view === "firmware") renderChat(); return; }
+  clearTimeout(ota.timer);
+  if (ev.state === 1 && ota.image) {
+    const size = ota.target ? 128 : 240;
+    const data = ota.image.slice(ev.next, Math.min(ev.next + size, ota.image.length));
+    if (data.length) { ota.sentBytes += data.length; otaSend(Cmd.otaChunk(0, ev.next, data)); }
+  } else if (ev.state === 2) {
+    if (ota.apply) otaSend(Cmd.otaEnd(0, true));
+    else { ota.running = false; log("Firmware overført og verificeret"); }
+  } else {
+    ota.running = false;
+    if (ev.state === 3) log("Firmware installeres; noden genstarter");
+    else log("Firmware: " + (ev.text || OTA_STATES[ev.state]));
+  }
+  if (state.view === "firmware") renderChat();
+}
+
+function renderFirmware(box) {
+  $("chat-title").textContent = "Firmware-opdatering";
+  $("chat-sub").textContent = "Signeret firmware over USB, Bluetooth eller nettet";
+  targetPicker(box);
+  if (!ota.running) ota.target = state.target;
+  const w = document.createElement("div");
+  w.innerHTML = `<div class="warn">Vælg firmware (<code>.bin</code> eller <code>.uf2</code>) og dens <code>.manifest</code>
+    fra <code>maarse-sign</code>. Noden installerer kun firmware, der er signeret med udgivelsesnøglen, er til netop dette board
+    og er nyere end den kørende. Over nettet er det kun administratorer, der kan opdatere, og det tager lang tid:
+    ca. 300 KB er over 2.300 bidder. Skift gerne til en hurtig radioindstilling (SF7, 250 kHz) først.
+    Mister noden strømmen under selve installationen (ca. 10 sek. på nRF52840), skal den reddes med USB (dobbelttryk på reset).</div>`;
+  const f = document.createElement("div"); f.className = "form";
+  const row = (lbl, el) => { const l = document.createElement("label"); l.textContent = lbl; f.append(l, el); return el; };
+  const pick = row("Filer", document.createElement("input"));
+  pick.type = "file"; pick.multiple = true; pick.accept = ".bin,.uf2,.manifest";
+  pick.disabled = ota.running;
+  pick.onchange = () => otaLoadFiles([...pick.files]);
+  const info = row("Valgt", document.createElement("span"));
+  info.textContent = ota.info
+    ? `${OTA_BOARDS[ota.info.board] || "board " + ota.info.board}, version ${verStr(ota.info.version)}, ${Math.ceil(ota.info.size / 1024)} KB`
+      + (ota.image ? "" : " – mangler image")
+    : (ota.image ? `${Math.ceil(ota.image.length / 1024)} KB – mangler manifest` : "–");
+  if (ota.check) { const c = row("", document.createElement("b")); c.textContent = ota.check; }
+  const apply = row("", document.createElement("label"));
+  const cbA = document.createElement("input"); cbA.type = "checkbox"; cbA.checked = ota.apply;
+  cbA.onchange = () => { ota.apply = cbA.checked; };
+  apply.append(cbA, " Installér og genstart, når den er overført");
+  if (!state.target) {
+    const dg = row("", document.createElement("label"));
+    const cbD = document.createElement("input"); cbD.type = "checkbox"; cbD.checked = ota.downgrade;
+    cbD.onchange = () => { ota.downgrade = cbD.checked; };
+    dg.append(cbD, " Tillad ældre version (kun lokalt)");
+  }
+  const st = ota.last;
+  const total = st?.size || ota.info?.size || 0;
+  const prog = row("Fremskridt", document.createElement("div"));
+  if (st) {
+    const pct = total ? Math.floor(100 * st.next / total) : 0;
+    const secs = (Date.now() - ota.started) / 1000;
+    const rate = ota.running && secs > 2 ? ota.sentBytes / secs : 0;
+    const left = rate ? Math.round((total - st.next) / rate) : 0;
+    prog.textContent = `${OTA_STATES[st.state] || st.state}: ${st.next} / ${total} bytes (${pct} %)`
+      + (left ? ` – ca. ${left > 3600 ? (left / 3600).toFixed(1) + " t" : Math.ceil(left / 60) + " min"} tilbage` : "")
+      + ` · kører ${verStr(st.current)}` + (st.text ? ` · ${st.text}` : "");
+    const bar = document.createElement("div"); bar.className = "progress";
+    const fill = document.createElement("div"); fill.style.width = pct + "%";
+    bar.appendChild(fill); prog.appendChild(bar);
+  } else prog.textContent = "–";
+  const go = document.createElement("button"); go.className = "primary";
+  go.textContent = st && st.state === 1 && !ota.running ? "Genoptag" : "Start";
+  go.disabled = ota.running || !ota.image || !ota.info || !!ota.check || !transport;
+  go.onclick = () => {
+    if (ota.target && !confirm("Firmwaren sendes over nettet til den fjerne node. Det bruger meget sendetid. Fortsæt?")) return;
+    otaStart();
+  };
+  const stop = document.createElement("button"); stop.textContent = "Stop"; stop.disabled = !ota.running; stop.onclick = otaStop;
+  const ask = document.createElement("button"); ask.textContent = "Hent status"; ask.disabled = ota.running || !transport;
+  ask.onclick = () => { ota.target = state.target; otaSend(Cmd.otaStatus()); clearTimeout(ota.timer); };
+  const btns = document.createElement("div"); btns.className = "row"; btns.append(go, stop, ask);
+  f.append(document.createElement("span"), btns);
+  w.appendChild(f);
   box.appendChild(w);
 }
 
@@ -1344,6 +1513,7 @@ $("btn-disconnect").onclick = async () => { const t = transport; transport = nul
 $("btn-send").onclick = send;
 $("btn-status").onclick = () => setView("status");
 $("btn-radio").onclick = () => setView("radio");
+$("btn-firmware").onclick = () => setView("firmware");
 $("btn-file").onclick = () => $("file").click();
 $("file").onchange = async () => {
   const f = $("file").files[0];

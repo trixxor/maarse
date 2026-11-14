@@ -203,7 +203,10 @@ Bygget siden sammenligningen blev skrevet:
 - **Forward secrecy (udkast):** sessioner med ratchet pr. kontakt (`maarse-crypto/src/ratchet.rs`), 5 bytes ekstra pr. besked, falder tilbage til det gamle format. Mangler ekstern gennemgang.
 - **Rolle kan vælges** (klient, repeater, relay) og gemmes i flash.
 
-Stadig åbent: opdatering over luften, telefon-apps, filer på firmware, Bluetooth på ESP32, gateways til MeshCore og Reticulum, ekstern gennemgang af kryptografien.
+- **Opdatering af firmware over luften (udkast):** signeret med Ed25519 (`maarse-sign`), anti-rollback og board-tjek, over USB, Bluetooth og via `Remote` til fjerne noder, genoptages efter afbrydelse. nRF52840 kopierer fra et mellemlager med en rutine i RAM; ESP32-S3 bruger to OTA-partitioner. Ikke afprøvet på hardware. Se README ("Firmwareopdatering").
+- **Signerede udgivelser (firmware):** manifest med SHA-256 og Ed25519-signatur; udgivelsesnøglen bygges ind i firmwaren. Host-builds er ikke signeret endnu.
+
+Stadig åbent: afprøvning af opdatering over luften på hardware, telefon-apps, filer på firmware, Bluetooth på ESP32, gateways til MeshCore og Reticulum, ekstern gennemgang af kryptografien.
 
 ## Hvor står Må:rse?
 

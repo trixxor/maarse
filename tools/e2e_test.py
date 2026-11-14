@@ -201,6 +201,12 @@ try:
     n.send(frame(0x11, bytes([1]), b""))
     r = n.wait(lambda f: f[0] == 0x95 and f[1] == 1)
     ok("SetRegions (strict, tom liste) besvaret")
+
+    # Firmwareopdatering (0x1b OtaStatus): maarse-host opdateres ikke over
+    # luften og svarer "ikke understøttet" (tilstand 5) i OtaState (0x9a).
+    n.send(frame(0x1b))
+    n.wait(lambda f: f[0] == 0x9a and f[3] == 5)
+    ok("OtaStatus besvaret (maarse-host: ikke understøttet)")
     print("ALLE TESTS OK")
 finally:
     for n in list(procs): 

@@ -121,3 +121,95 @@ fn fuzz_open_ratchet() {
         let _ = Session::from_bytes(p);
     });
 }
+
+/// Firmware-manifestet læses fra radio/USB, før noget andet tjekkes.
+#[test]
+fn fuzz_ota_manifest() {
+    use maarse_crypto::ota::{self, Manifest, Policy};
+    let key = ota::dev_signing_key();
+    let corpus = vec![
+        Manifest::sign(&key, ota::board::HELTEC_V4, 0x000200, b"firmware").to_bytes().to_vec(),
+        Manifest::sign(&key, ota::board::XIAO_NRF52840, 0x010000, &[0; 300]).to_bytes().to_vec(),
+    ];
+    let policy = Policy {
+        public_key: ota::dev_public_key(),
+        board: ota::board::HELTEC_V4,
+        current_version: 0x000100,
+        capacity: 1 << 20,
+    };
+    run("ota-manifest", &corpus, 130, |b| {
+        if let Ok(m) = Manifest::parse(b) {
+            assert_eq!(&m.to_bytes()[..], b);
+            let _ = m.check(&policy, false);
+            let _ = m.check(&policy, true);
+        }
+    });
+}
+
+/// Modtageren styret af vilkårlige bidder (offset, længde) mod flash i RAM.
+#[test]
+fn fuzz_ota_receiver() {
+    use maarse_crypto::ota::{self, BLOCK, Manifest, Policy, Receiver, Staging};
+    struct Ram(Vec<u8>, Vec<u8>);
+    fn nor(mem: &mut [u8], o: u32, d: &[u8]) -> Result<(), ()> {
+        let t = mem.get_mut(o as usize..o as usize + d.len()).ok_or(())?;
+        t.iter_mut().zip(d).for_each(|(a, b)| *a &= b);
+        Ok(())
+    }
+    impl Staging for Ram {
+        fn erase_block(&mut self, o: u32) -> Result<(), ()> {
+            self.0.get_mut(o as usize..(o + BLOCK) as usize).ok_or(())?.fill(0xFF);
+            Ok(())
+        }
+        fn write(&mut self, o: u32, d: &[u8]) -> Result<(), ()> {
+            nor(&mut self.0, o, d)
+        }
+        fn read(&mut self, o: u32, b: &mut [u8]) -> Result<(), ()> {
+            b.copy_from_slice(self.0.get(o as usize..o as usize + b.len()).ok_or(())?);
+            Ok(())
+        }
+        fn erase_meta(&mut self) -> Result<(), ()> {
+            self.1.fill(0xFF);
+            Ok(())
+        }
+        fn write_meta(&mut self, o: u32, d: &[u8]) -> Result<(), ()> {
+            nor(&mut self.1, o, d)
+        }
+        fn read_meta(&mut self, o: u32, b: &mut [u8]) -> Result<(), ()> {
+            b.copy_from_slice(self.1.get(o as usize..o as usize + b.len()).ok_or(())?);
+            Ok(())
+        }
+    }
+    let img: Vec<u8> = (0..9000u32).map(|i| (i * 31) as u8).collect();
+    let m = Manifest::sign(&ota::dev_signing_key(), 1, 2, &img);
+    let policy = Policy { public_key: ota::dev_public_key(), board: 1, current_version: 1, capacity: 16384 };
+    // Startet én gang (signaturtjek er langsomt uden optimering), kopieres pr. kørsel.
+    let mut st0 = Ram(vec![0xFF; 16384], vec![0xFF; BLOCK as usize]);
+    let mut r0 = Receiver::new();
+    r0.begin(&mut st0, m, &policy, false).unwrap();
+    run("ota-receiver", &[vec![0, 128, 0, 0, 128, 0], vec![1, 2, 3, 7, 5, 6]], 64, |ops| {
+        let mut st = Ram(st0.0.clone(), st0.1.clone());
+        let mut r = r0.clone();
+        for op in ops.chunks(3) {
+            // Enten den rigtige næste bid eller et vilkårligt offset.
+            let len = *op.get(1).unwrap_or(&0) as usize * 4;
+            let off = if op[0] & 1 == 0 {
+                r.next
+            } else {
+                u32::from(op[0]) * 4 + u32::from(*op.get(2).unwrap_or(&0))
+            };
+            let end = (off as usize + len).min(img.len());
+            let data = img.get(off as usize..end).unwrap_or(&[]);
+            let _ = r.chunk(&mut st, off, data);
+            if op[0] == 7 {
+                // "Genstart": en ny modtager genoptager fra metasiden.
+                r = Receiver::new();
+                r.begin(&mut st, m, &policy, false).unwrap();
+            }
+        }
+        // Bliver imaget færdigt, skal det være korrekt.
+        if r.end().is_ok() {
+            assert_eq!(&st.0[..img.len()], &img[..]);
+        }
+    });
+}

@@ -250,13 +250,80 @@ Simulatorens hændelsesspor (`--trace-json <fil|->`) er én JSON-linje pr. hænd
 - **nRF52840:** kompileret for begge boards (ca. 270 KB flash, 95 KB RAM). Bluetooth (Nordic UART) er med.
   - WisMesh Tag: app ved 0x26000 (S140 v6).
   - XIAO: app ved 0x27000 (S140 v7).
-  - Flash-placering: postkasse ved 0xEA000–0xEBFFF, indstillinger ved 0xEC000.
+  - Flash-placering: app højst til 0x88000, mellemlager til opdatering 0x88000–0xE8FFF, OTA-metaside 0xE9000, postkasse ved 0xEA000–0xEBFFF, indstillinger ved 0xEC000 (se "Firmwareopdatering").
 - **ESP32-S3:** bygget for begge boards med Espressifs Xtensa-værktøjskæde (ca. 550 KB app på Heltec V4, heraf ca. 220 KB til Bluetooth; app-partitionen er 2 MB). `--features check-esp32c6` type-tjekker stadig koden mod ESP32-C6.
-  - Indstillinger og postkasse ligger i partitionen `maarse` ved 0x210000 (se `firmware/esp/partitions.csv`).
+  - Indstillinger og postkasse ligger i partitionen `maarse` ved 0x210000 (se `firmware/esp/partitions.csv`). Appen ligger i `ota_0`/`ota_1` (se "Firmwareopdatering").
   - Heltec V4: standard-sendestyrken er 10 dBm, fordi PA'en lægger ca. 7–10 dB oveni. PA-styringen (GPIO7/2/46) følger Meshtastic for GC1109-udgaven. Har dit board KCT8103L (nyere V4), skal styringen måske justeres.
   - Bluetooth (Nordic UART) er med: esp-radios BLE-controller med TrouBLE som host, samme GATT-tjeneste, rammer og navn (`Maarse-xxxx`) som på nRF. Controlleren bruger en heap på 72 KB (esp-alloc). Ikke afprøvet på hardware, især ikke samspillet med LoRa og USB.
 - **Mangler:** filer over LoRa på firmware, batterimåling og segmenterede stier over 12 hop.
 - Ben-tildelingen er hentet fra Meshtastics board-filer.
+
+## Firmwareopdatering (signeret, over USB, Bluetooth og nettet)
+
+Så sol-repeatere i marken kan opdateres uden at blive hentet ind. **Ikke afprøvet på hardware endnu** (se tjeklisten nedenfor).
+
+**Signering.** En udgivelse er et image og et manifest på 112 bytes: board-ID, version, størrelse, SHA-256 og en Ed25519-signatur (formatet står i `maarse-crypto/src/ota.rs`). Noden installerer kun, når signaturen passer med udgivelsesnøglen i firmwaren, board-ID passer, og versionen er nyere end den kørende (anti-rollback). Kun lokalt (USB/Bluetooth) kan en ældre version tillades med et flag; via nettet ignoreres flaget.
+
+```sh
+cargo run -p maarse-uf2 --bin maarse-sign -- keygen release.key       # én gang; skriver den offentlige nøgle
+export MAARSE_RELEASE_PUBKEY=<hex>  MAARSE_FW_VERSION=0.2.0           # bygges ind i firmwaren
+MAARSE_SIGN_KEY=release.key ./scripts/build-firmware.sh xiao-nrf52840  # -> dist/maarse-xiao-nrf52840-ota.bin + .manifest
+```
+
+- Uden `MAARSE_RELEASE_PUBKEY` stoler firmwaren på en **offentlig udviklingsnøgle** (`maarse-sign --dev-key`, `MAARSE_SIGN_KEY=dev`). Byggeriet advarer, og noden skriver en advarsel ved `OtaBegin`. Byg aldrig udgivelser sådan.
+- `maarse-sign sign` tager en ELF, `.uf2` eller `.bin`. På nRF52840 er imaget appen fra dens startadresse (0x27000 XIAO / 0x26000 WisMesh; forkert board afvises); på ESP32-S3 et ESP-IDF app-image fra `espflash save-image` (bygge-scriptet laver `dist/maarse-<board>-app.bin`).
+- Versionen er `major.minor.patch` (u32: major << 16 | minor << 8 | patch). Uden `MAARSE_FW_VERSION` bruges crate-versionen.
+
+**Companion-kommandoer** (0x14–0x17 holdt fri til parallelt arbejde):
+
+| Kode | Navn | Indhold |
+|---|---|---|
+| 0x18 | `OtaBegin` | req (u16), flag (bit 0: tillad ældre, kun lokalt), manifest (112) |
+| 0x19 | `OtaChunk` | req, offset (u32), data (≤ 240 lokalt, 128 over radio; offset og længde delelige med 4 undtagen sidste bid) |
+| 0x1a | `OtaEnd` | req, apply (u8): installér og genstart |
+| 0x1b | `OtaStatus` | – |
+| 0x9a | `OtaState` | req, tilstand (0 klar, 1 modtager, 2 verificeret, 3 installerer, 4 fejl, 5 ikke understøttet), næste offset, størrelse, version, kørende version, tekst |
+
+Alle fire kan sendes via `Remote` (0x0c) til en node, man er administrator for; svaret kommer som `RemoteReply`. Overførslen er stop-and-wait: klienten sender næste bid, når svaret med næste offset er kommet, så duty cycle og tab klares af sig selv. Fremskridtet gemmes pr. 4 KB-blok på en metaside i flash, så en afbrudt overførsel genoptages fra første ufærdige blok – også efter genstart. SHA-256 tjekkes, når sidste bid er skrevet, og igen lige før installation. Kontroltælleren i `Remote` stiger nu altid (også flere gange pr. sekund).
+
+**Webklienten:** knappen *Firmware* – vælg `.bin`/`.uf2` + `.manifest`, denne node eller en fjern node, fremskridt med anslået tid, *Stop*, *Genoptag* og *Hent status*. Klienten tjekker størrelse og SHA-256 mod manifestet, før den sender. En `.uf2` omsættes til samme image som `maarse-sign` (alle 256-byte-sider fra laveste til højeste, huller = 0xFF). Uden svar i 5 s (lokalt) / 60 s (radio) spørges der om status, og overførslen fortsætter derfra. maarse-host opdateres ikke selv, men videresender til radio-noder.
+
+**nRF52840 (Adafruit UF2-bootloader).** Bootloaderens dual bank-DFU styres af dens egne indstillinger under en BLE/seriel DFU-session og kan ikke bruges til et image, appen selv har skrevet. Derfor:
+
+```text
+0x00000  MBR            0x26000/0x27000  app (højst til 0x87FFF)   0xE9000  OTA-metaside
+0x01000  S140           0x88000          mellemlager (388 KB)       0xEA000  postkasse
+                                                                    0xEC000  indstillinger
+                                                                    0xF4000  bootloader (røres aldrig)
+```
+
+Den nye app (ca. 300 KB i dag) skrives til mellemlageret. Ved installation tjekkes vektortabellen, interrupts slås fra, og en lille rutine i RAM (`firmware/nrf/src/ota.rs`, kalder intet i flash) sletter appens sider, kopierer imaget side for side med kontrollæsning og genstarter. Det tager ca. 10 sekunder. Bootloader, SoftDevice, identitet og indstillinger røres ikke. **Risiko:** strømsvigt i de 10 sekunder efterlader en halv app; bootloaderen er intakt, så noden reddes altid med dobbelttryk på reset og en `.uf2` – men det kræver fysisk adgang. Appen er nu begrænset til 388 KB (WisMesh 392 KB).
+
+**ESP32-S3** (`esp-bootloader-esp-idf` 0.6 har `OtaUpdater`): ny partitionstabel med `otadata` (0xD000, 8 KB; `nvs` krympet til 16 KB), `ota_0` ved 0x10000 (hvor `factory` lå), `maarse` uændret ved 0x210000 (OTA-metaside ved 0x213000) og `ota_1` ved 0x220000 – i alt 4,1 MB, så boardet skal have mindst 8 MB flash. Den nye app skrives til den partition, der ikke kører; `otadata` peger på den, og noden genstarter. Er den nye app ugyldig, starter bootloaderen den gamle. Ved opstart markeres den kørende app som gyldig. **Overgang:** noder med den gamle tabel (`factory`) skal flashes én gang over USB med den nye tabel (`build-firmware.sh <board> flash`, som også sletter `otadata`); identitet og indstillinger bevares, fordi `maarse` ikke flytter. Med den gamle tabel svarer noden "ikke understøttet".
+
+**Sendetid over LoRa** for et image på 300 KB (2.378 bidder à 128 bytes; pr. bid en pakke på ca. 230 bytes, et svar på ca. 113 bytes og to kvitteringer; ét hop):
+
+| Radio | Bid | Svar | Sendetid i alt | Afsenderens del | Mindst ved 10 % duty | ved 1 % |
+|---|---|---|---|---|---|---|
+| SF9, 125 kHz (standard) | 1,18 s | 0,65 s | 1,6 t | 0,95 t | ca. 10 t | ca. 95 t |
+| SF7, 125 kHz | 0,37 s | 0,20 s | 0,5 t | 0,3 t | ca. 3 t | ca. 30 t |
+| SF7, 250 kHz | 0,19 s | 0,10 s | 0,24 t | 0,15 t | ca. 1,5 t | ca. 15 t |
+| SF11, 125 kHz | 4,7 s | 2,6 s | 6,2 t | 3,8 t | ca. 38 t | – |
+
+Hvert ekstra hop gentager det hele. **Anbefaling:** opdatér naboer direkte (ét hop) på 869,4–869,65 MHz (10 %), skift både repeater og afsender midlertidigt til "Hurtig (SF7, 250 kHz)" under opdateringen, og skift tilbage bagefter. Overførslen kan stoppes og genoptages, fx over flere nætter.
+
+**Skal testes på hardware før brug i marken:**
+
+1. nRF52840 (XIAO og WisMesh): USB-opdatering af en nyere version; noden genstarter i ny version med samme identitet, indstillinger og postkasse.
+2. Bootloaderen starter appen efter kopien (tjek, at Adafruit-bootloaderen ikke kræver en CRC i sine indstillinger for en app, der ikke er skrevet af den selv – ellers bliver den i DFU-tilstand; reddes med en `.uf2`).
+3. Afbrudt overførsel (træk USB, genstart noden) genoptages fra første ufærdige blok.
+4. Afvisning: forkert board, samme/ældre version, forkert nøgle, ødelagt image (SHA-256).
+5. Bluetooth-opdatering (Nordic UART, 240-byte bidder).
+6. Fjernopdatering via `Remote` over ét hop på SF7/250 kHz og på SF9; duty cycle overholdes; genoptag efter afbrydelse.
+7. ESP32-S3: første USB-flash med ny partitionstabel bevarer identitet; OTA til `ota_1`, derefter `ota_0`; ugyldigt image i den anden partition får bootloaderen til at starte den gamle.
+8. Bluetooth/LoRa kører videre under flash-skrivning (mellemlageret skrives, mens radioen er aktiv).
+
+**Redning, hvis noget går galt:** nRF52840: dobbelttryk på reset → USB-drevet kommer frem → træk `dist/maarse-<board>.uf2` over (bootloaderen røres aldrig). ESP32-S3: hold BOOT nede, tryk RESET, og flash med `espflash flash --erase-parts otadata --partition-table firmware/esp/partitions.csv <elf>` (eller `esptool.py write_flash 0x0 dist/maarse-<board>.bin`).
 
 ## Licens
 

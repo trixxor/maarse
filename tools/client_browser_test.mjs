@@ -1,7 +1,8 @@
 // Kører webklienten i en rigtig browser (Edge/Chrome uden vindue) mod to
 // maarse-hosts og tjekker, at scriptet indlæses uden fejl, at klienten
 // forbinder, at en maarse://-side kan hentes og vises, og at
-// talebeskeder kan kodes og afkodes med Codec2 (WebAssembly).
+// talebeskeder kan kodes og afkodes med Codec2 (WebAssembly), og at et
+// opkald (Opus over TCP) sender lyd begge veje.
 //
 //   cargo build --release -p maarse-host
 //   node tools/client_browser_test.mjs target/release/maarse-host[.exe]
@@ -126,6 +127,22 @@ try {
   if (sent) ok("talebesked optaget og leveret: " + sent); else fail("talebeskeden blev ikke leveret (" + (await ev("JSON.stringify(conv('dm:" + addr + "').map(m => m.status || m.text))")) + ")");
   const got = await until2("[...state.convs.values()].flat().find(m => m.voice && m.url)?.text", 20);
   if (got) ok("modtageren afkoder talebeskeden: " + got); else fail("modtageren fik ingen afspillelig talebesked");
+
+  // Opkald over TCP: A ringer til B, B svarer, lyd begge veje, A lægger på.
+  const srvAddr = addr, cliAddr = await ev("state.me");
+  await ev(`callStart("${srvAddr}")`);
+  if (await until2("call.state === 'ringing'", 10)) ok("opkald: B får opkaldet"); else fail("opkald: B ringede ikke");
+  await ev2("callAnswer()");
+  if (await until("call.state === 'active'", 10) && await until2("call.state === 'active'", 10)) ok("opkald: begge i samtale");
+  else fail("opkald: kom ikke i gang (A " + (await ev("call.state")) + ", B " + (await ev2("call.state")) + ")");
+  await sleep(3000);
+  const ab = await ev("[call.tx, call.rx].join('/')"), ba = await ev2("[call.tx, call.rx].join('/')");
+  const [atx, arx] = ab.split("/").map(Number), [btx, brx] = ba.split("/").map(Number);
+  if (atx > 10 && brx > 10 && btx > 10 && arx > 10) ok(`opkald: lyd begge veje (A sendt/modtaget ${ab}, B ${ba} pakker)`);
+  else fail(`opkald: for lidt lyd (A ${ab}, B ${ba})`);
+  await ev("callHangup()");
+  if (await until2("call.state === 'idle'", 10)) ok("opkald: lagt på hos begge"); else fail("opkald: B lagde ikke på");
+  void cliAddr;
   ws2.close();
   ws.close();
 } catch (e) {

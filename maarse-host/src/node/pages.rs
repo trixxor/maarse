@@ -92,8 +92,13 @@ impl Node {
         }
     }
 
-    /// `RequestPage`. Returnerer kommandoen, hvis den ikke hører til her.
+    /// `RequestPage` og `SendCall`. Returnerer kommandoen, hvis den ikke
+    /// hører til her.
     pub(super) fn page_command(&mut self, id: ClientId, cmd: Command) -> Option<Command> {
+        if let Command::SendCall { dest, data } = cmd {
+            self.send_call(id, dest, &data);
+            return None;
+        }
         let Command::RequestPage { req, dest, path } = cmd else { return Some(cmd) };
         let Some(plain) = content::page_request(&path) else {
             self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "Ugyldig sti"));
@@ -105,6 +110,27 @@ impl Node {
             Err(e) => self.send_client(id, &err_ev(req, error_code::UNKNOWN_DEST, e)),
         }
         None
+    }
+}
+
+impl Node {
+    /// Opkaldsdata: kun når modtageren nås over TCP hele vejen.
+    fn send_call(&mut self, id: ClientId, dest: Address, data: &[u8]) {
+        if self.file_limit(&dest).via_lora {
+            self.send_client(id, &err_ev(0, error_code::NOT_OVER_TCP, "Opkald kræver forbindelse over internettet hele vejen"));
+            return;
+        }
+        let mut plain = Vec::with_capacity(1 + data.len());
+        plain.push(content::CALL);
+        plain.extend_from_slice(data);
+        if let Err(e) = self.send_sealed(dest, &plain, super::Pending::Control) {
+            self.send_client(id, &err_ev(0, error_code::UNKNOWN_DEST, e));
+        }
+    }
+
+    pub(super) fn on_call(&mut self, from: Address, data: &[u8]) {
+        let ev = Event::Call { from, data: maarse_core::companion::text(data) };
+        self.broadcast(&ev);
     }
 }
 

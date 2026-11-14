@@ -105,6 +105,11 @@ pub enum Command {
     /// `Sent`; siden kommer som en fil med MIME
     /// [`crate::content::PAGE_MIME`]. Ugyldig sti giver `Error`.
     RequestPage { req: u16, dest: Address, path: Text },
+    /// 0x27: opkaldsdata til `dest` (signalering eller Opus-lyd, formatet
+    /// er klienternes). Kun over TCP: når `dest` kun kan nås over LoRa,
+    /// svares `Error` med `NOT_OVER_TCP`. Ingen kvittering til klienten og
+    /// ingen postkasse; gamle lydpakker er værdiløse.
+    SendCall { dest: Address, data: Text },
     /// 0x18: start (eller genoptag) en firmwareopdatering. `manifest` er det
     /// signerede manifest (112 bytes, se `maarse_crypto::ota`). Flag bit 0:
     /// tillad ældre version (kun lokalt, ignoreres via `Remote`). Svaret er
@@ -365,6 +370,8 @@ pub enum Event {
     Sharing(Sharing),
     /// 0xa4: nodens eget visningsnavn (tomt = intet).
     Name { name: Text },
+    /// 0xa5: opkaldsdata fra `from` (se `SendCall`).
+    Call { from: Address, data: Text },
     /// 0xa3: position og/eller telemetri fra en anden nodes announce.
     /// Format: adresse (16) | hop | app-data-felter (0x03/0x04, se
     /// [`crate::appdata`]).
@@ -580,6 +587,8 @@ pub mod error_code {
     pub const UNKNOWN_SENDER: u8 = 6;
     pub const FILE_TOO_LARGE: u8 = 7;
     pub const NO_FILE: u8 = 8;
+    /// Opkald kræver TCP hele vejen (se `SendCall`).
+    pub const NOT_OVER_TCP: u8 = 9;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -732,6 +741,7 @@ impl Command {
             Command::SetName { name } => W::new(0x24).b(name).done(),
             Command::GetName => W::new(0x25).done(),
             Command::RequestPage { req, dest, path } => W::new(0x26).b(&req.to_le_bytes()).b(&dest.0).b(path).done(),
+            Command::SendCall { dest, data } => W::new(0x27).b(&dest.0).b(data).done(),
             Command::OtaBegin { req, flags, manifest } => {
                 W::new(0x18).b(&req.to_le_bytes()).b(&[*flags]).b(manifest).done()
             }
@@ -806,6 +816,7 @@ impl Command {
             0x24 => Command::SetName { name: r.text()? },
             0x25 => Command::GetName,
             0x26 => Command::RequestPage { req: r.u16()?, dest: r.addr()?, path: r.text()? },
+            0x27 => Command::SendCall { dest: r.addr()?, data: r.text()? },
             0x18 => Command::OtaBegin { req: r.u16()?, flags: r.u8()?, manifest: r.text()? },
             0x19 => Command::OtaChunk { req: r.u16()?, offset: r.u32()?, data: r.text()? },
             0x1a => Command::OtaEnd { req: r.u16()?, apply: r.u8()? != 0 },
@@ -984,6 +995,7 @@ impl Event {
             }
             Event::Sharing(s) => W::new(0xa2).b(&s.to_bytes()).done(),
             Event::Name { name } => W::new(0xa4).b(name).done(),
+            Event::Call { from, data } => W::new(0xa5).b(&from.0).b(data).done(),
             Event::NodeInfo { addr, hops, position, telemetry, name } => {
                 let data = crate::appdata::build(None, false, *position, telemetry.as_ref(), name.as_deref());
                 W::new(0xa3).b(&addr.0).b(&[*hops]).b(&data).done()
@@ -1149,6 +1161,7 @@ impl Event {
                 Event::NodeInfo { addr, hops, position: a.position, telemetry: a.telemetry, name: a.name }
             }
             0xa4 => Event::Name { name: r.text()? },
+            0xa5 => Event::Call { from: r.addr()?, data: r.text()? },
             0xb4 => {
                 let addr = r.addr()?;
                 let identity = r.identity().ok_or(FrameError::TooShort)?;
@@ -1503,6 +1516,8 @@ mod tests {
         roundtrip_cmd(Command::RequestPage { req: 9, dest: Address([3; 16]), path: text(b"vejr") });
         roundtrip_cmd(Command::SetName { name: text("Ida".as_bytes()) });
         roundtrip_ev(Event::Name { name: text(b"Ida") });
+        roundtrip_cmd(Command::SendCall { dest: Address([4; 16]), data: text(&[1, 2, 3]) });
+        roundtrip_ev(Event::Call { from: Address([4; 16]), data: text(&[9]) });
     }
 
     #[test]

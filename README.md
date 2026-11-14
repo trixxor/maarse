@@ -250,7 +250,11 @@ Tryk på 🎤 i en direkte samtale for at optage og igen for at sende (højst 20
 
 Codec2 kommer fra `maarse-voice`, en ren Rust-implementering (`codec2`-crate'en) kompileret til WebAssembly og lagt ind i `index.html` (ca. 96 KB base64). Byg den igen med `python tools/build_voice.py`, hvis `maarse-voice` ændres. Format: `"C2" | tilstand (5 = 1200 bit/s) | antal rammer (u16) | rammer` (6 bytes pr. 40 ms ved 1200 bit/s).
 
-Host og firmware kender ikke formatet; de sender bare filen. Live-opkald (Opus over TCP) er ikke lavet.
+Host og firmware kender ikke formatet; de sender bare filen.
+
+## Opkald (Opus over TCP)
+
+I en direkte samtale via maarse-host viser webklienten **Ring op**. Lyden kodes med WebCodecs (Opus, 16 kbit/s, 20 ms-rammer, tre pr. besked) og sendes krypteret som indholdstype `0x06` (kommando `0x27 SendCall`, hændelse `0xa5 Call`). Hosten sender kun opkald, når modtageren nås over TCP hele vejen; ellers svarer den `NOT_OVER_TCP` (fejlkode 9), og opkald over LoRa er derfor ikke muligt. Firmware-noder afviser kommandoen. Indholdet: type (1 ring op, 2 svar, 3 læg på, 4 lyd) | opkalds-ID (u32) | data; lyd er løbenummer (u16) og rammer med længde foran. Kræver Chrome eller Edge (WebCodecs).
 
 ## `maarse://`-sider
 

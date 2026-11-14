@@ -65,9 +65,12 @@ async fn main(spawner: Spawner) {
     let p = esp_hal::init(esp_hal::Config::default());
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
-    // Heap til BLE-controlleren (esp-radio). Resten af firmwaren bruger
-    // ingen heap.
-    esp_alloc::heap_allocator!(size: 72 * 1024);
+    // Heap til BLE-controlleren (esp-radio), 72 KB. Resten af firmwaren
+    // bruger ingen heap. De 64 KB ligger i RAM, som bootloaderen frigiver
+    // efter opstart; ellers fylder de statiske data så meget, at stakken
+    // ikke er plads ("stack pointer out of range" og genstart ved opstart).
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
+    esp_alloc::heap_allocator!(size: 8 * 1024);
 
     // ----- board-specifikke ben -----
     // (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, rf_tx, led, standard-radio)

@@ -12,10 +12,13 @@
 #![forbid(unsafe_code)]
 
 pub mod addr;
+pub mod appdata;
+pub mod battery;
 pub mod airtime;
 pub mod companion;
 pub mod content;
 pub mod dedup;
+pub mod diag;
 pub mod duty;
 pub mod packet;
 pub mod region;

@@ -21,6 +21,7 @@ use crate::dedup::{DedupCache, packet_id};
 use crate::packet::{Header, Packet, PacketType, Path, encode};
 use crate::routes::{Route, RouteTable};
 use crate::stamp;
+use crate::diag;
 use crate::{LOCAL_SCOPE, MAX_HOPS, MAX_PACKET, MAX_PATH};
 
 pub type Buf = heapless::Vec<u8, MAX_PACKET>;
@@ -69,6 +70,8 @@ const MAX_FLOOD_PENDING: usize = 16;
 const MAX_QUEUE: usize = 8;
 const MAX_AWAIT: usize = 32;
 const MAX_CHANNELS: usize = 8;
+const MAX_NEIGHBORS: usize = 32;
+const MAX_TRACES: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -304,6 +307,13 @@ pub struct Router<const R: usize, const D: usize> {
     /// Med tom regionsliste: videresend kun floods uden region.
     pub strict_region: bool,
     pub stats: RouterStats,
+    /// Direkte naboer (se [`crate::diag`]).
+    pub neighbors: crate::diag::NeighborTable<MAX_NEIGHBORS>,
+    /// RSSI (dBm) for den pakke, der behandles nu; sættes af radiolaget før
+    /// `on_receive` (0 = ukendt).
+    pub rx_rssi: i16,
+    /// Trace routes: (mål, token, sendt). Venter på en rute, til den er sendt.
+    traces: heapless::Vec<(Address, Address, bool), MAX_TRACES>,
 }
 
 impl<const R: usize, const D: usize> Router<R, D> {
@@ -337,6 +347,9 @@ impl<const R: usize, const D: usize> Router<R, D> {
             regions: crate::region::Regions::new(),
             strict_region: false,
             stats: RouterStats::default(),
+            neighbors: crate::diag::NeighborTable::new(),
+            rx_rssi: 0,
+            traces: heapless::Vec::new(),
         }
     }
 
@@ -660,6 +673,55 @@ impl<const R: usize, const D: usize> Router<R, D> {
         Ok((packet_id(PacketType::Fragment, &dest, payload), out))
     }
 
+    /// Sender en trace route til `dest` (se [`crate::diag`]). Kendes ingen
+    /// rute, findes den først. Svaret kommer som `Action::Deliver` med
+    /// `ptype = Probe`, `dest` = målet og payloaden som trace-svar.
+    pub fn send_trace(&mut self, dest: Address, token: [u8; 16], now_ms: u64) -> Actions {
+        let mut out = Actions::new();
+        let token = Address(token);
+        if self.traces.is_full() {
+            self.traces.remove(0);
+        }
+        if let Some(route) = self.routes.get(&dest) {
+            let path = route.path.clone();
+            let _ = self.traces.push((dest, token, true));
+            self.emit_trace(dest, token, path, now_ms, &mut out);
+        } else {
+            let _ = self.traces.push((dest, token, false));
+            if !self.pending.iter().any(|p| p.target == dest) {
+                self.request_path(dest, token.0, now_ms, &mut out);
+            }
+        }
+        out
+    }
+
+    fn emit_trace(&mut self, dest: Address, token: Address, path: Path, now_ms: u64, out: &mut Actions) {
+        self.stats.originated += 1;
+        let header = Header::new(PacketType::Probe, dest).with_path(path);
+        self.emit_routed(&header, &diag::trace_request(&token), 0, now_ms, out);
+    }
+
+    /// Husker den nabo, der sendte pakken, hvis det kan ses: forrige hop i
+    /// en kildesti eller et spor, eller afsenderen af et announce uden hop.
+    fn note_neighbor(&mut self, pkt: &Packet, snr_db: i8, now_ms: u64) {
+        let h = &pkt.header;
+        let from = match (&h.ptype, &h.path) {
+            (PacketType::PathRequest, Some(p)) => p.last().map(|id| (*id, None)),
+            (PacketType::PathRequest, None) => None,
+            (_, Some(p)) => (h.hops as usize)
+                .checked_sub(1)
+                .and_then(|i| p.get(i))
+                .map(|id| (*id, None)),
+            (PacketType::Announce, None) if h.hops == 0 => Some((h.dest.path_id(), Some(h.dest))),
+            _ => None,
+        };
+        if let Some((id, addr)) = from
+            && id != self.id
+        {
+            self.neighbors.heard(id, addr, snr_db, self.rx_rssi, now_ms);
+        }
+    }
+
     /// Kender vi en rute til `dest`?
     pub fn has_route(&self, dest: &Address) -> bool {
         self.routes.get(dest).is_some()
@@ -790,6 +852,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             return out;
         }
         self.stats.rx_packets += 1;
+        self.note_neighbor(&pkt, snr_db, now_ms);
         let id = packet_id(pkt.header.ptype, &pkt.header.dest, pkt.payload);
         match (&pkt.header.ptype, &pkt.header.path) {
             (PacketType::PathRequest, _) => {
@@ -808,7 +871,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 let hops = pkt.header.hops;
                 self.forwards.retain(|f| !(f.id == id && hops > f.hops));
                 let path = path.clone();
-                self.on_source_routed(&pkt, &path, id, now_ms, &mut out);
+                self.on_source_routed(&pkt, &path, id, snr_db, now_ms, &mut out);
             }
             (_, None) => {
                 if self.dedup.insert(id) {
@@ -907,6 +970,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         pkt: &Packet,
         path: &Path,
         id: u64,
+        snr_db: i8,
         now_ms: u64,
         out: &mut Actions,
     ) {
@@ -922,7 +986,14 @@ impl<const R: usize, const D: usize> Router<R, D> {
             let mut header = h.clone();
             header.hops += 1;
             self.stats.forwarded += 1;
-            self.emit_routed(&header, pkt.payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
+            if h.ptype == PacketType::Probe && diag::trace_fixed_len(pkt.payload).is_some() {
+                // Trace: læg den SNR, vi hørte pakken med, til.
+                let mut p = diag::TraceBuf::from_slice(pkt.payload).unwrap_or_default();
+                diag::trace_append(&mut p, snr_db);
+                self.emit_routed(&header, &p, SOURCE_ROUTE_DELAY_MS, now_ms, out);
+            } else {
+                self.emit_routed(&header, pkt.payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
+            }
             return;
         }
         if idx != path.len() {
@@ -965,6 +1036,35 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 let msg_id = self.awaiting.remove(i).msg_id;
                 let _ = out.push(Action::Acked { msg_id });
             }
+            PacketType::Probe if h.dest == self.addr => {
+                // Trace til os: svar ad den omvendte sti til tokenet.
+                let Some((token, snrs)) = diag::parse_request(pkt.payload) else { return };
+                if !self.dedup.insert(id) {
+                    return;
+                }
+                let mut out_snrs: heapless::Vec<u8, { diag::MAX_SNRS }> = heapless::Vec::new();
+                let _ = out_snrs.extend_from_slice(&snrs[..snrs.len().min(diag::MAX_SNRS - 1)]);
+                let _ = out_snrs.push(snr_db as u8);
+                let resp = diag::trace_response(path, &out_snrs);
+                let header = Header::new(PacketType::Probe, token).with_path(reversed(path));
+                self.emit_routed(&header, &resp, SOURCE_ROUTE_DELAY_MS, now_ms, out);
+            }
+            PacketType::Probe => {
+                // Svar på vores egen trace?
+                let Some(i) = self.traces.iter().position(|t| t.1 == h.dest) else { return };
+                if !self.dedup.insert(id) {
+                    return;
+                }
+                let (dest, _, _) = self.traces.remove(i);
+                let mut p = diag::TraceBuf::from_slice(pkt.payload).unwrap_or_default();
+                diag::trace_append(&mut p, snr_db);
+                let _ = out.push(Action::Deliver {
+                    ptype: PacketType::Probe,
+                    dest,
+                    payload: Buf::from_slice(&p).unwrap_or_default(),
+                    hops: h.hops,
+                });
+            }
             _ if h.dest == self.addr => {
                 // En gentaget besked leveres ikke igen, men kvitteres igen,
                 // for den første kvittering kan være gået tabt.
@@ -994,6 +1094,14 @@ impl<const R: usize, const D: usize> Router<R, D> {
             learned_ms: now_ms,
         });
         let _ = out.push(Action::RouteLearned { dest: target, hops });
+        // Trace routes, der ventede på ruten.
+        for i in 0..self.traces.len() {
+            let (dest, token, sent) = self.traces[i];
+            if dest == target && !sent {
+                self.traces[i].2 = true;
+                self.emit_trace(dest, token, path.clone(), now_ms, out);
+            }
+        }
         // Send beskeder, der ventede på ruten.
         let mut i = 0;
         while i < self.queue.len() {
@@ -1183,6 +1291,55 @@ mod tests {
             a.on_receive(&k1[0], 5, 0)
                 .contains(&Action::Acked { msg_id })
         );
+    }
+
+    #[test]
+    fn trace_route_records_snr_both_ways_and_neighbors() {
+        let mut a = node(1, Role::Client);
+        let mut r1 = node(2, Role::Repeater);
+        let mut r2 = node(3, Role::Repeater);
+        let mut b = node(4, Role::Client);
+        // Ingen rute endnu: traceen venter på ruteforespørgslen.
+        let req = transmits(&a.send_trace(b.addr, [9; 16], 0));
+        assert_eq!(Packet::decode(&req[0]).unwrap().header.ptype, PacketType::PathRequest);
+        let f1 = transmits(&r1.on_receive(&req[0], 5, 0));
+        let f2 = transmits(&r2.on_receive(&f1[0], 5, 0));
+        b.on_receive(&f2[0], 5, 0);
+        let resp = reply(&mut b, 0);
+        let s2 = transmits(&r2.on_receive(&resp[0], 5, 0));
+        let s1 = transmits(&r1.on_receive(&s2[0], 5, 0));
+        let got = a.on_receive(&s1[0], 5, 0);
+        // Ruten er lært, og traceen sendes nu: A -> R1 -> R2 -> B.
+        let t = transmits(&got);
+        assert_eq!(Packet::decode(&t[0]).unwrap().header.ptype, PacketType::Probe);
+        let t1 = transmits(&r1.on_receive(&t[0], 7, 0));
+        let t2 = transmits(&r2.on_receive(&t1[0], -3, 0));
+        let back = transmits(&b.on_receive(&t2[0], 4, 0));
+        let b2 = transmits(&r2.on_receive(&back[0], 6, 0));
+        let b1 = transmits(&r1.on_receive(&b2[0], 2, 0));
+        let done = a.on_receive(&b1[0], 8, 0);
+        let payload = done
+            .iter()
+            .find_map(|x| match x {
+                Action::Deliver { ptype: PacketType::Probe, dest, payload, .. } if *dest == b.addr => {
+                    Some(payload.clone())
+                }
+                _ => None,
+            })
+            .expect("trace-svar");
+        let r = diag::parse_response(&payload).unwrap();
+        assert_eq!(&r.path[..], &[2, 3]);
+        assert_eq!(&r.out[..], &[7, -3, 4]);
+        assert_eq!(&r.back[..], &[6, 2, 8]);
+        // Hop-gensendelse virker stadig, selvom payloaden vokser: R1 har
+        // hørt R2 sende videre og glemmer sin kopi.
+        assert!(!r1.forwards.is_empty());
+        r1.on_receive(&t2[0], 5, 0);
+        assert!(r1.forwards.is_empty());
+        // Naboer: R1 har hørt R2 (sti-ID 3) direkte, A har hørt R1.
+        assert!(r1.neighbors.sorted().iter().any(|n| n.id == 3));
+        assert!(a.neighbors.sorted().iter().any(|n| n.id == 2 && n.snr == 8));
+        assert!(!a.neighbors.sorted().iter().any(|n| n.id == 3));
     }
 
     #[test]

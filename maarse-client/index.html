@@ -143,7 +143,7 @@
     <div class="me" id="me">–</div>
     <div class="row"><button id="btn-copy" disabled>Kopiér adresse</button><button id="btn-announce" disabled>Send announce</button></div>
 
-    <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button></div>
+    <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button><button id="btn-diag" disabled>Diagnose</button></div>
     <div class="row"><button id="btn-myqr" disabled>Min QR-kode</button></div>
     <div class="row"><button id="btn-notify" hidden>Slå notifikationer til</button><button id="btn-install" hidden>Installér app</button></div>
 
@@ -229,7 +229,24 @@ const Cmd = {
   setRegions: (strict, names) => frame(0x11, [strict ? 1 : 0], enc.encode(names)),
   getRegions: () => frame(0x12),
   setTime: () => frame(0x0f, u32(Math.floor(Date.now() / 1000))),
+  traceRoute: (req, destHex) => frame(0x20, u16(req), unhex(destHex)),
+  getNeighbors: () => frame(0x21),
+  setSharing: (prec, latE7, lonE7, tel) => frame(0x22, [prec], u32(latE7), u32(lonE7), [tel ? 1 : 0]),
+  getSharing: () => frame(0x23),
 };
+const s8 = x => x << 24 >> 24, s16 = (b, o) => (b[o] | b[o + 1] << 8) << 16 >> 16, i32 = (b, o) => rd32(b, o) | 0;
+// App-data-felter (0x03 position, 0x04 telemetri) som i maarse-core::appdata.
+function parseAppData(b) {
+  const r = {};
+  for (let i = 0; i + 1 < b.length;) {
+    const t = b[i], n = b[i + 1], d = b.slice(i + 2, i + 2 + n);
+    if (t === 0x03 && n >= 9) r.position = { prec: d[0], lat: i32(d, 1) / 1e7, lon: i32(d, 5) / 1e7 };
+    if (t === 0x04 && n >= 10) r.telemetry = { mv: d[0] | d[1] << 8, usb: !!(d[2] & 1), energy: d[3], uptime: rd32(d, 4),
+      temp: d[2] & 2 ? s16(d, 8) / 10 : null };
+    i += 2 + n;
+  }
+  return r;
+}
 
 function readU64(b, o) {
   let v = 0n;
@@ -266,6 +283,21 @@ function decodeEvent(f) {
     }
     case 0x92: return { type: "radio", cfg: { freq: rd32(f, 1), bw: rd32(f, 5), sf: f[9], cr: f[10],
                  power: (f[11] << 24) >> 24, duty: f[12] | f[13] << 8, preamble: f[14] | f[15] << 8 } };
+    case 0xa0: {
+      const k = f[19], ids = []; for (let i = 0; i < k; i++) ids.push(f[20 + 2 * i] | f[21 + 2 * i] << 8);
+      const m = f[20 + 2 * k], o = 21 + 2 * k;
+      return { type: "trace", req: f[1] | f[2] << 8, dest: hex(f.slice(3, 19)), path: ids,
+        out: Array.from(f.slice(o, o + m), s8), back: Array.from(f.slice(o + m), s8) };
+    }
+    case 0xa1: {
+      const items = [];
+      for (let o = 3; o + 15 <= f.length; o += 15)
+        items.push({ id: f[o] | f[o + 1] << 8, prefix: hex(f.slice(o + 2, o + 6)), snr: s8(f[o + 6]), rssi: s16(f, o + 7),
+          age: rd32(f, o + 9), count: f[o + 13] | f[o + 14] << 8 });
+      return { type: "neighbors", part: f[1], last: !!f[2], items };
+    }
+    case 0xa2: return { type: "sharing", prec: f[1], lat: i32(f, 2) / 1e7, lon: i32(f, 6) / 1e7, telemetry: !!f[10] };
+    case 0xa3: return { type: "nodeInfo", addr: a(1), hops: f[17], ...parseAppData(f.slice(18)) };
     case 0x8e: return { type: "log", text: txt(1) };
     case 0x8f: return { type: "error", req: f[1] | f[2] << 8, code: f[3], text: txt(4) };
     default: return { type: "unknown", kind: t };
@@ -370,7 +402,8 @@ const state = {
   byMsgId: new Map(),    // msgId -> besked
   files: new Map(),      // fileId -> besked med fil
   maxFile: 0,
-  view: "chat",          // chat | status | radio
+  view: "chat",          // chat | status | radio | diag
+  traces: [], neighbors: [], neighborsNext: [], sharing: null, nodeInfo: new Map(), traceReq: new Map(),
   stats: null, radio: null, statsTimer: null,
   target: null,          // null = denne node, ellers adressen på en fjern node
   remoteStats: [], remoteRadio: null, admins: [], regions: null,
@@ -440,6 +473,7 @@ function renderChat() {
   $("composer").hidden = state.view !== "chat";
   if (state.view === "status") return renderStatus(box);
   if (state.view === "radio") return renderRadio(box);
+  if (state.view === "diag") return renderDiag(box);
   renderChatTools();
   if (renderSecurityView(box)) return;
   if (!key) { box.appendChild($("empty") || document.createElement("div")); return; }
@@ -487,7 +521,7 @@ function updateComposer() {
 function setConnected(on, name) {
   $("dot").classList.toggle("on", on);
   $("status").innerHTML = on ? `Forbundet via <b>${name}</b>` : "Ikke forbundet";
-  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
+  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-diag", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
   $("btn-disconnect").hidden = !on;
   for (const id of ["btn-ws", "btn-serial", "btn-ble"]) $(id).disabled = on;
@@ -543,7 +577,7 @@ function onEvent(ev) {
       addMessage("ch:" + ev.channel, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
       pwaIncoming("ch:" + ev.channel, (state.channels.get(ev.channel) || "kanal") + " · " + label(ev.from), ev.text);
       break;
-    case "stats": state.stats = ev.items; if (state.view === "status" || state.view === "radio") renderChat(); break;
+    case "stats": state.stats = ev.items; if (["status", "radio", "diag"].includes(state.view)) renderChat(); break;
     case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
     case "admins": state.admins = ev.list; if (state.view === "radio") renderChat(); break;
     case "regions": state.regions = ev; if (state.view === "radio") renderChat(); break;
@@ -612,6 +646,24 @@ function onEvent(ev) {
       const m = state.pending.get(ev.req);
       if (m) { m.status = "fejl: " + ev.text; state.pending.delete(ev.req); renderChat(); }
       log("Fejl: " + ev.text);
+      break;
+    }
+    case "trace": {
+      const dest = state.traceReq.get(ev.req) || ev.dest; state.traceReq.delete(ev.req);
+      state.traces.unshift({ ...ev, dest, at: new Date() }); state.traces.length = Math.min(state.traces.length, 10);
+      if (state.view === "diag") renderChat();
+      break;
+    }
+    case "neighbors":
+      if (ev.part === 0) state.neighborsNext = [];
+      state.neighborsNext.push(...ev.items);
+      if (ev.last) { state.neighbors = state.neighborsNext; if (state.view === "diag") renderChat(); }
+      break;
+    case "sharing": state.sharing = ev; if (state.view === "diag") renderChat(); break;
+    case "nodeInfo": {
+      const old = state.nodeInfo.get(ev.addr) || {};
+      state.nodeInfo.set(ev.addr, { ...old, ...ev, at: new Date() });
+      if (state.view === "diag") renderChat();
       break;
     }
     case "log": log(ev.text); break;
@@ -723,7 +775,10 @@ const STAT = {
   42: ["Radio", "Data modtaget", "bytes"], 43: ["Radio", "Data sendt", "bytes"], 40: ["Radio", "Sendetid i alt", "ms"],
   41: ["Radio", "Duty cycle brugt (seneste time)", "promille"], 44: ["Radio", "Sendekø"], 38: ["Radio", "Kanal optaget (CAD)"],
   39: ["Radio", "Udsat pga. duty cycle"], 31: ["Radio", "Modtagefejl (CRC/header)"], 33: ["Radio", "Sendefejl"],
-  52: ["Radio", "Pakker droppet"], 49: ["Radio", "Batteri", "mV"],
+  52: ["Radio", "Pakker droppet"], 49: ["Strøm og diagnose", "Batteri", "mV"], 85: ["Strøm og diagnose", "Batteri (omtrent)", "%"],
+  80: ["Strøm og diagnose", "Støjgulv (anslået)", "dBm"], 81: ["Strøm og diagnose", "Energistatus", "energi"],
+  82: ["Strøm og diagnose", "USB-strøm", "usb"], 83: ["Strøm og diagnose", "Direkte naboer"],
+  84: ["Strøm og diagnose", "Deler position", "præcision"],
   10: ["Routing", "Pakker modtaget"], 11: ["Routing", "Ugyldige pakker"], 12: ["Routing", "Dubletter"],
   13: ["Routing", "Videresendt for andre"], 14: ["Routing", "Startet selv"], 15: ["Routing", "Leveret til mig"],
   16: ["Routing", "Kvitteringer modtaget"], 17: ["Routing", "Ruter fundet"], 18: ["Routing", "Ruteforespørgsler"],
@@ -736,11 +791,16 @@ const STAT = {
   66: ["Netværk", "Data ud", "bytes"], 71: ["Netværk", "Fejl"],
   72: ["DHT", "Kontakter"], 73: ["DHT", "Poster gemt"], 74: ["DHT", "Opslag"], 75: ["DHT", "Fundet"], 76: ["DHT", "Direkte gateways"],
 };
-const GROUPS = ["Generelt", "Radio", "Routing", "Postkasse og filer", "Netværk"];
+const GROUPS = ["Generelt", "Strøm og diagnose", "Radio", "Routing", "Postkasse og filer", "Netværk"];
+const ENERGY = ["Kritisk", "Lav", "Ok", "Fuld"];
+const PRECISION = ["Slukket", "ca. 10 km", "ca. 1 km", "Præcis"];
 
 function fmt(v, unit) {
   if (unit === "tid") { const h = Math.floor(v / 3600), m = Math.floor(v % 3600 / 60); return h ? `${h} t ${m} min` : `${m} min ${v % 60} s`; }
   if (unit === "rolle") return ["Klient", "Repeater", "Relay"][v] || v;
+  if (unit === "energi") return ENERGY[v] ?? v;
+  if (unit === "usb") return v < 0 ? "Ukendt" : v ? "Ja" : "Nej";
+  if (unit === "præcision") return PRECISION[v] ?? v;
   if (unit === "MHz") return (v / 1000).toFixed(3) + " MHz";
   if (unit === "promille") return (v / 10).toFixed(1) + " %";
   if (unit === "bytes") return v < 10240 ? v + " B" : v < 10485760 ? (v / 1024).toFixed(1) + " KB" : (v / 1048576).toFixed(1) + " MB";
@@ -887,6 +947,111 @@ function renderRegions(box) {
   box.appendChild(w);
 }
 
+// ---------- diagnose: trace route, naboer, støjgulv, deling ----------
+
+function statValue(k) { return (state.stats || []).find(([key]) => key === k)?.[1]; }
+function nodeName(prefix) {
+  for (const a of state.contacts.keys()) if (a.startsWith(prefix)) return label(a);
+  return prefix === "00000000" ? "" : prefix;
+}
+function idName(id) {
+  const p = id.toString(16).padStart(4, "0");
+  for (const a of [...state.contacts.keys(), state.me || ""]) if (a.startsWith(p)) return label(a);
+  return p + "…";
+}
+function snrText(v) { return v === undefined ? "–" : (v > 0 ? "+" : "") + v + " dB"; }
+
+function renderDiag(box) {
+  $("chat-title").textContent = "Diagnose"; $("chat-sub").textContent = "Trace route, naboer, støjgulv og deling";
+  const sec = (title, help) => {
+    const w = el("div", { className: "warn" }); w.style.maxWidth = "640px"; w.style.marginBottom = "12px";
+    w.append(el("b", {}, title)); if (help) w.append(el("div", { className: "muted" }, help));
+    box.appendChild(w); return w;
+  };
+  const table = (head, rows) => {
+    const t = el("table", { className: "stats" }); t.style.marginTop = "8px";
+    const h = t.insertRow(); h.className = "group"; for (const x of head) h.insertCell().textContent = x;
+    for (const r of rows) { const tr = t.insertRow(); for (const x of r) tr.insertCell().textContent = x; }
+    return t;
+  };
+
+  // Strøm og støj
+  const st = sec("Strøm og radio");
+  const mv = statValue(49), pct = statValue(85), noise = statValue(80), en = statValue(81), usb = statValue(82);
+  st.append(table(["", ""], [
+    ["Batteri", mv ? `${(mv / 1000).toFixed(2)} V${pct !== undefined ? ` (ca. ${pct} %)` : ""}` : "Ukendt"],
+    ["USB-strøm", usb === undefined || usb < 0 ? "Ukendt" : usb ? "Ja" : "Nej"],
+    ["Energistatus", en === undefined ? "–" : ENERGY[en]],
+    ["Støjgulv (anslået ud fra modtagne pakker)", noise === undefined ? "Ingen pakker endnu" : noise + " dBm"],
+  ]));
+
+  // Trace route
+  const tw = sec("Trace route", "Følger ruten til noden og viser SNR for hvert spring begge veje. Findes ingen rute, søges der først (koster sendetid).");
+  const row = el("div", { className: "row" }); row.style.marginTop = "8px";
+  const sel = el("select"); sel.style.flex = "1";
+  for (const a of state.contacts.keys()) sel.append(new Option(label(a), a));
+  const inp = el("input", { placeholder: "eller adresse (32 hex-tegn)" }); inp.style.flex = "1";
+  const go = el("button", { textContent: "Trace" });
+  go.onclick = () => {
+    const d = (inp.value.trim().toLowerCase() || sel.value);
+    if (!/^[0-9a-f]{32}$/.test(d)) return log("Vælg en node eller skriv en adresse");
+    const req = state.nextReq++ & 0xffff;
+    state.traceReq.set(req, d);
+    transport?.send(Cmd.traceRoute(req, d));
+    log(`Trace route til ${label(d)} sendt`);
+  };
+  row.append(sel, inp, go); tw.append(row);
+  for (const t of state.traces) {
+    const rows = [["Mig", "", ""]];
+    t.path.forEach((id, i) => rows.push([idName(id), snrText(t.out[i]), snrText(t.back[t.back.length - 1 - i - 1])]));
+    rows.push([label(t.dest), snrText(t.out[t.path.length]), ""]);
+    rows[0][2] = snrText(t.back[t.back.length - 1]);
+    const d = el("div"); d.style.marginTop = "10px";
+    d.append(el("div", {}, `${label(t.dest)}: ${t.path.length} repeater${t.path.length === 1 ? "" : "e"} (${t.at.toLocaleTimeString("da-DK")})`),
+      table(["Hop", "SNR ud (hørt her)", "SNR tilbage (hørt her)"], rows));
+    tw.append(d);
+  }
+
+  // Naboer
+  const nw = sec("Direkte naboer", "Noder hørt uden mellemled (announces og videresendte pakker). Opdateres hvert 10. sekund.");
+  if (!state.neighbors.length) nw.append(el("div", { className: "muted" }, "Ingen hørt endnu."));
+  else nw.append(table(["Nabo", "SNR", "RSSI", "Sidst hørt", "Pakker"], state.neighbors.map(n => [
+    nodeName(n.prefix) || idName(n.id), snrText(n.snr), n.rssi ? n.rssi + " dBm" : "–",
+    n.age < 60 ? `${n.age} s siden` : n.age < 3600 ? `${Math.floor(n.age / 60)} min siden` : `${Math.floor(n.age / 3600)} t siden`, n.count])));
+
+  // Deling
+  const sw = sec("Deling i announces", "Positionen er slået fra som standard. Vælger du en præcision, afrundes den på noden til et gitter " +
+    "(ca. 10 km eller 1 km), før den sendes – kun \"præcis\" sender den nøjagtige position. Telemetri: batteri, oppetid og energistatus.");
+  const sh = state.sharing || { prec: 0, lat: 0, lon: 0, telemetry: false };
+  const ps = el("select"); PRECISION.forEach((n, i) => ps.append(new Option(n, i))); ps.value = sh.prec;
+  const lat = el("input", { placeholder: "Bredde, fx 56.1567", value: sh.lat ? sh.lat.toFixed(5) : "" });
+  const lon = el("input", { placeholder: "Længde, fx 10.2107", value: sh.lon ? sh.lon.toFixed(5) : "" });
+  const tel = el("input", { type: "checkbox" }); tel.checked = sh.telemetry;
+  const geo = el("button", { textContent: "Brug min position" });
+  geo.onclick = () => navigator.geolocation?.getCurrentPosition(p => { lat.value = p.coords.latitude.toFixed(5); lon.value = p.coords.longitude.toFixed(5); },
+    e => log("Position: " + e.message));
+  const save = el("button", { textContent: "Gem deling", className: "primary" });
+  save.onclick = () => {
+    const prec = +ps.value, la = parseFloat(lat.value.replace(",", ".")) || 0, lo = parseFloat(lon.value.replace(",", ".")) || 0;
+    if (prec === 3 && !confirm("Præcis position kan alle i nettet se. Er du sikker?")) return;
+    transport?.send(Cmd.setSharing(prec, Math.round(la * 1e7), Math.round(lo * 1e7), tel.checked));
+  };
+  const r1 = el("div", { className: "row" }); r1.style.marginTop = "8px"; r1.append(ps, lat, lon, geo);
+  const lbl = el("label"); lbl.style.display = "block"; lbl.style.marginTop = "6px"; lbl.append(tel, " Del telemetri (batteri, oppetid, energistatus)");
+  sw.append(r1, lbl, save);
+
+  // Kendte positioner og telemetri
+  const kw = sec("Andre noders position og telemetri", "Fra modtagne announces. Ingen kort hentes udefra.");
+  const known = [...state.nodeInfo.values()];
+  if (!known.length) kw.append(el("div", { className: "muted" }, "Ingen har delt noget endnu."));
+  else kw.append(table(["Node", "Position", "Præcision", "Batteri", "Oppetid", "Hop"], known.map(k => [
+    label(k.addr),
+    k.position ? `${k.position.lat.toFixed(k.position.prec === 3 ? 5 : 2)}, ${k.position.lon.toFixed(k.position.prec === 3 ? 5 : 2)}` : "–",
+    k.position ? PRECISION[k.position.prec] : "–",
+    k.telemetry ? (k.telemetry.mv ? (k.telemetry.mv / 1000).toFixed(2) + " V" : k.telemetry.usb ? "USB" : "ukendt") + ` · ${ENERGY[k.telemetry.energy]}` : "–",
+    k.telemetry ? fmt(k.telemetry.uptime, "tid") : "–", k.hops])));
+}
+
 function setView(v) {
   state.view = v;
   mobileSide(false); $("messages").scrollTop = 0;
@@ -901,6 +1066,11 @@ function setView(v) {
       state.statsTimer = setInterval(() => transport?.send(Cmd.getStats()), 5000);
     }
     if (v === "radio") { transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); transport.send(Cmd.getRegions()); transport.send(Cmd.getStats()); }
+    if (v === "diag") {
+      const poll = () => { transport?.send(Cmd.getNeighbors()); transport?.send(Cmd.getStats()); };
+      poll(); transport.send(Cmd.getSharing());
+      state.statsTimer = setInterval(poll, 10000);
+    }
 
   }
   renderChat();
@@ -1344,6 +1514,7 @@ $("btn-disconnect").onclick = async () => { const t = transport; transport = nul
 $("btn-send").onclick = send;
 $("btn-status").onclick = () => setView("status");
 $("btn-radio").onclick = () => setView("radio");
+$("btn-diag").onclick = () => { state.target = null; setView("diag"); };
 $("btn-file").onclick = () => $("file").click();
 $("file").onchange = async () => {
   const f = $("file").files[0];

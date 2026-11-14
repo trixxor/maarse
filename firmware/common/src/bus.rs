@@ -85,6 +85,7 @@ pub static RSTATS: RadioStats = RadioStats {
 impl RadioStats {
     pub fn received(&self, len: usize, rssi: i32, snr: i32) {
         let first = self.rx_ok.fetch_add(1, Relaxed) == 0;
+        crate::power::note_packet(rssi, snr);
         self.bytes_rx.fetch_add(len as u32, Relaxed);
         self.last_rssi.store(rssi, Relaxed);
         self.last_snr.store(snr, Relaxed);

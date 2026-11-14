@@ -68,8 +68,8 @@ Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), US
 
 - Ruter findes med et flood gennem repeatere. Første besked rejser med i forespørgslen og bliver kvitteret med svaret.
 - Repeatere med dårligere SNR sender først, og repeatere med lavt batteri venter længere.
-- Flood-dæmpning, kvittering pr. hop med gensendelse, og kvittering fra ende til ende.
-- **Reparation af ruter:** uden kvittering inden for 20 s glemmes ruten, og beskeden sendes igen med en ny ruteforespørgsel (op til 2 gange). Ubesvarede ruteforespørgsler gentages efter 15 s, og et sent svar på en ældre forespørgsel gælder stadig.
+- Flood-dæmpning (en repeater tier, når en nær nabo med god SNR har sendt det samme), kvittering pr. hop med gensendelse, og kvittering fra ende til ende.
+- **Reparation af ruter:** uden kvittering inden for 20 s glemmes ruten, og beskeden sendes igen med en ny ruteforespørgsel (op til 2 gange). Ubesvarede ruteforespørgsler gentages efter 45 s (svaret kan være længe undervejs i et stort net), og et sent svar på en ældre forespørgsel gælder stadig.
 - **Mobile noder** (`mobile = true`) stoler ikke på ruter, der er ældre end 30 s.
 - Roller: `Client`, `Repeater` og `Relay` (skov-tilstand, højst 4 hop).
 
@@ -153,14 +153,28 @@ Ved en fejl skrives frø, iteration og input i hex, så den kan genskabes og læ
 
 | Scenarie | Tilstand | Leveret | Kvitteret | Median | Sendetid |
 | --- | --- | --- | --- | --- | --- |
-| 120 noder, 30×30 km (3 frø) | Må:rse | 97–98 % | 70–82 % | 2,6–4,2 s | 585–750 s |
-| | flood, 7 hop | 92–100 % | 73–83 % | 5,0–6,5 s | 1.700–1.790 s |
-| 200 noder, 60×60 km | Må:rse | 72 % | 53 % | 6,6 s | 1.021 s |
-| | flood, 7 hop | 67 % | 47 % | 6,2 s | 2.919 s |
-| Motorvej 100 km, bil i 110 km/t | Må:rse | 100 % | 100 % | 3,8 s | 346 s |
-| | flood, 7 hop | 90 % | 60 % | 5,4 s | 1.573 s |
+| 120 noder, 30×30 km (3 frø) | Må:rse | 100 % | 98–100 % | 2,3–2,6 s | 341–363 s |
+| | flood, 7 hop | 92–100 % | 73–83 % | 5,0–6,5 s | 1.703–1.789 s |
+| 200 noder (40 repeatere), 60×60 km (3 frø) | Må:rse | 92–95 % | 73–93 % | 5,2–9,2 s | 889–995 s |
+| | flood, 7 hop | 65–83 % | 57–70 % | 5,2–7,0 s | 2.887–3.170 s |
+| Motorvej 100 km, bil i 110 km/t (3 frø) | Må:rse | 100 % | 100 % | 3,8–3,9 s | 313–318 s |
+| | flood, 7 hop | 88–95 % | 52–63 % | 4,7–5,4 s | 1.573–1.643 s |
 
-Må:rse leverer mindst lige så mange beskeder som flood med cirka en tredjedel af sendetiden, og håndterer bilen på motorvejen. **Svagheden** er store, tynde net: i 200-node-scenariet er mange noder kun dårligt dækket, og kvitteringerne tilbage går tabt oftere end ønsket. Det er næste ting at forbedre.
+```sh
+cargo run --release -p maarse-sim -- --seed 1                                    # 120 noder
+cargo run --release -p maarse-sim -- --nodes 200 --repeaters 40 --area-km 60 --seed 1
+cargo run --release -p maarse-sim -- --highway --seed 1
+# tilføj --mode flood for sammenligningen; DEBUG_ACK=1 viser, hvor svar går tabt
+```
+
+Må:rse leverer flere beskeder end flood med en tredjedel til en femtedel af sendetiden, og håndterer bilen på motorvejen.
+
+**Store, tynde net (v0.5).** Før leverede 200-node-nettet 78–92 % og kvitterede kun 35–53 % (snit over 24 frø: 83 % / 50 %, 1.453 s sendetid). Diagnosen (`DEBUG_ACK=1`): næsten alle beskeder rejser med ruteforespørgslen, så kvitteringen er ruteforespørgslens svar. Svaret gik tabt allerede på første hop tilbage, i 60 % af forsøgene i kollision med *andre ruteforespørgsler*. Afsenderen gentog nemlig sin forespørgsel efter 15 s, mens svaret stadig var på vej over mange hop med gensendelser; hvert nyt flood overdøvede svaret og gav anledning til endnu en gentagelse. To ændringer, begge uden ændring af pakkeformatet eller af routerens RAM-forbrug:
+
+1. **Ruteforespørgsler gentages efter 45 s i stedet for 15 s.** Snit over 24 frø: 92 % leveret, 82 % kvitteret.
+2. **Flood-dæmpning tæller kun stærke kopier.** En repeater tier nu, så snart den har hørt én kopi med god SNR (over `weak_snr_db`) fra en nabo; svage kopier kommer langvejsfra og tæller ikke. Før tav den efter to kopier uanset SNR. Det halverer floods i tætte net og dæmper dem i tynde, og kanalbeskeder når længere ud (snit over 6 frø: 65 → 74 % af noderne i det tynde net, 84 → 98 % i det tætte). At tie efter én vilkårlig kopi fik derimod floodet til at dø ud på motorvejen.
+
+Samlet, snit over 24 frø for det tynde net: 94 % leveret, 89 % kvitteret, 901 s sendetid. Resten af tabet er hop over svage led (under 5 dB margen går 40–70 % af dem tabt i kollision). At udskyde forespørgsler over svage led, så stærke led vælges, gav ikke flere kvitteringer, gav længere ruter og ødelagde motorvejen, så det er ikke med. Det samme gælder længere ventetid før svaret, voksende pause mellem hop-gensendelser og flere hop-gensendelser (6 i stedet for 4): ingen målbar forskel.
 
 Radiomodellen er grov (log-distance, ingen terræn). Tallene er til at sammenligne varianter.
 

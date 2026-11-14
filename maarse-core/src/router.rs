@@ -54,7 +54,14 @@ pub const E2E_RETRIES: u8 = 2;
 /// En mobil node stoler ikke på ruter ældre end dette (ms).
 pub const MOBILE_ROUTE_MS: u64 = 30_000;
 /// Ventetid før en ubesvaret ruteforespørgsel gentages (ms).
-pub const PATH_RETRY_MS: u64 = 15_000;
+///
+/// Svaret kan være længe undervejs: over mange hop, hvor hvert hop kan
+/// gensendes flere gange med `DEFAULT_HOP_TIMEOUT_MS` imellem. Gentages
+/// forespørgslen for tidligt, floodes nettet igen, mens svaret stadig er på
+/// vej, og det nye flood overdøver svaret. I simulatoren var det hovedårsagen
+/// til tabte kvitteringer i store, tynde net (15 s gav 50 % kvitteret, 45 s
+/// gav over 80 %).
+pub const PATH_RETRY_MS: u64 = 45_000;
 /// Antal gentagelser af en ruteforespørgsel.
 pub const PATH_RETRIES: u8 = 2;
 const MAX_FORWARDS: usize = 32;
@@ -280,7 +287,8 @@ pub struct Router<const R: usize, const D: usize> {
     pub slot_ms: u32,
     /// Ventetid på implicit kvittering pr. hop (ms).
     pub hop_timeout_ms: u32,
-    /// Annullér egen videresendelse af et flood efter så mange hørte kopier.
+    /// Annullér egen videresendelse af et flood efter så mange hørte kopier
+    /// med god SNR (se `on_duplicate_flood`).
     pub suppress_after: u8,
     /// Største antal hop, en relay videresender (standard 4, højst 7).
     pub relay_hops: u8,
@@ -321,7 +329,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             flood_pending: heapless::Vec::new(),
             slot_ms: DEFAULT_SLOT_MS,
             hop_timeout_ms: DEFAULT_HOP_TIMEOUT_MS,
-            suppress_after: 2,
+            suppress_after: 1,
             relay_hops: DEFAULT_RELAY_HOPS,
             ack_timeout_ms: DEFAULT_ACK_TIMEOUT_MS,
             mobile: false,
@@ -440,7 +448,17 @@ impl<const R: usize, const D: usize> Router<R, D> {
 
     /// En kopi af et flood, vi allerede har set. Har vi selv planlagt at
     /// sende det videre, og har naboer allerede gjort det, annulleres vores.
-    fn on_duplicate_flood(&mut self, id: u64, out: &mut Actions) {
+    ///
+    /// Kun kopier hørt med god SNR tæller: de kommer fra en nær nabo, hvis
+    /// udsendelse dækker stort set det samme område som vores. En svag kopi
+    /// kommer langvejsfra og dækker et andet område, så den er ikke grund
+    /// til at tie. Derfor er én stærk kopi nok (`suppress_after` = 1). Talt
+    /// med alle kopier ville floodet dø ud på lange kæder (motorvej), og
+    /// de fundne ruter ville kun bestå af svage led.
+    fn on_duplicate_flood(&mut self, id: u64, snr_db: i8, out: &mut Actions) {
+        if snr_db < self.weak_snr_db {
+            return;
+        }
         if let Some(i) = self.flood_pending.iter().position(|(x, _)| *x == id) {
             self.flood_pending[i].1 += 1;
             if self.flood_pending[i].1 >= self.suppress_after {
@@ -782,7 +800,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     if pkt.header.dest == self.addr {
                         self.consider_reply(&pkt, snr_db);
                     }
-                    self.on_duplicate_flood(id, &mut out);
+                    self.on_duplicate_flood(id, snr_db, &mut out);
                 }
             }
             (_, Some(path)) => {
@@ -797,7 +815,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     self.on_flood(&pkt, snr_db, &mut out);
                 } else {
                     self.stats.rx_duplicates += 1;
-                    self.on_duplicate_flood(id, &mut out);
+                    self.on_duplicate_flood(id, snr_db, &mut out);
                 }
             }
         }
@@ -1193,6 +1211,15 @@ mod tests {
         assert!(transmits(&c.on_receive(&transmits(&out)[0], 0, 0)).is_empty());
     }
 
+    /// Routerens størrelse i firmwaren (nRF52840 har 256 KB RAM). Kør med
+    /// `--nocapture` for at se tallet.
+    #[test]
+    fn router_size_in_firmware() {
+        let size = core::mem::size_of::<Router<256, 1024>>();
+        std::println!("size_of::<Router<256, 1024>>() = {size} bytes");
+        assert!(size < 96 * 1024);
+    }
+
     #[test]
     fn duplicates_are_dropped() {
         let mut a = node(1, Role::Client);
@@ -1200,7 +1227,10 @@ mod tests {
         let out = a.send_channel(Address([9; 16]), b"x").unwrap();
         let pkt = &transmits(&out)[0];
         assert_eq!(transmits(&r.on_receive(pkt, 0, 0)).len(), 1);
-        assert!(r.on_receive(pkt, 0, 0).is_empty());
+        // En svag kopi behandles ikke igen (og annullerer intet).
+        assert!(r.on_receive(pkt, -15, 0).is_empty());
+        // En stærk kopi behandles heller ikke igen; den annullerer kun.
+        assert!(transmits(&r.on_receive(pkt, 0, 0)).is_empty());
     }
 
     #[test]
@@ -1321,9 +1351,9 @@ mod tests {
             Action::Transmit { packet, id, .. } => (packet.clone(), *id),
             _ => panic!("forventede videresendelse"),
         };
-        // Første kopi fra en nabo: vent stadig.
-        assert!(r.on_receive(&fwd, 0, 0).is_empty());
-        // Anden kopi: området er dækket, annullér.
+        // En svag kopi kommer langvejsfra: den dækker ikke vores område.
+        assert!(r.on_receive(&fwd, -15, 0).is_empty());
+        // En stærk kopi fra en nær nabo: området er dækket, annullér.
         assert_eq!(
             r.on_receive(&fwd, 0, 0).as_slice(),
             &[Action::Cancel { id }]

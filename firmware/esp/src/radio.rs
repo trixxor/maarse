@@ -1,0 +1,38 @@
+//! LoRa-opgaven til ESP32-S3: konkrete typer omkring den fælles radio-løkke.
+
+use embassy_time::Delay;
+use embedded_hal_bus::spi::ExclusiveDevice;
+use esp_hal::Async;
+use esp_hal::gpio::{Input, Output};
+use esp_hal::spi::master::Spi;
+use lora_phy::LoRa;
+use lora_phy::iv::GenericSx126xInterfaceVariant;
+use lora_phy::sx126x::{Sx126x, Sx1262};
+use maarse_core::companion::RadioConfig;
+
+pub type Radio = LoRa<
+    Sx126x<
+        ExclusiveDevice<Spi<'static, Async>, Output<'static>, Delay>,
+        GenericSx126xInterfaceVariant<Output<'static>, Input<'static>>,
+        Sx1262,
+    >,
+    Delay,
+>;
+
+#[embassy_executor::task]
+pub async fn radio_task(
+    mut lora: Radio,
+    mut led: Output<'static>,
+    led_on_high: bool,
+    seed: u64,
+    cfg: RadioConfig,
+) {
+    let set = move |on: bool| {
+        if on == led_on_high {
+            led.set_high()
+        } else {
+            led.set_low()
+        }
+    };
+    maarse_fw_common::radio::radio_loop(&mut lora, set, seed, cfg).await;
+}

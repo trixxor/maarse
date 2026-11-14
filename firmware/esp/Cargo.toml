@@ -1,0 +1,54 @@
+[package]
+name = "maarse-fw-esp"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Må:rse-firmware til ESP32-S3 + SX1262 (Heltec V4, XIAO ESP32-S3 + Wio-SX1262)"
+
+# Egen workspace: bygges med Espressifs Xtensa-værktøjskæde (espup).
+[workspace]
+
+[features]
+default = []
+# Vælg præcis ét board.
+board-heltec-v4 = ["esp32s3", "display"]
+board-xiao-esp32s3 = ["esp32s3"]
+# Kun til at tjekke koden med den almindelige Rust-værktøjskæde
+# (RISC-V, ESP32-C6); kører ikke på noget rigtigt board.
+check-esp32c6 = ["esp-hal/esp32c6", "esp-rtos/esp32c6", "esp-storage/esp32c6", "esp-bootloader-esp-idf/esp32c6"]
+esp32s3 = ["esp-hal/esp32s3", "esp-rtos/esp32s3", "esp-storage/esp32s3", "esp-bootloader-esp-idf/esp32s3"]
+display = ["dep:ssd1306", "dep:embedded-graphics"]
+
+[dependencies]
+embassy-executor = { version = "0.10.0" }
+embassy-futures = "0.1.2"
+embassy-sync = "0.8.0"
+embassy-time = "0.5.1"
+embedded-graphics = { version = "0.8.2", optional = true }
+embedded-hal-bus = { version = "0.3.0", features = ["async"] }
+embedded-io-async = "0.7"
+embedded-storage = "0.3.2"
+esp-bootloader-esp-idf = { version = "0.6.0" }
+esp-hal = { version = "1.2.2", features = ["unstable"] }
+esp-rtos = { version = "0.4.0", features = ["embassy"] }
+esp-storage = { version = "0.10.0", features = ["embedded-storage"] }
+heapless = "0.8"
+lora-phy = "3.0.1"
+rand_chacha = { version = "0.3", default-features = false }
+rand_core = "0.6"
+ssd1306 = { version = "0.10.0", optional = true }
+static_cell = "2.1.1"
+maarse-core = { path = "../../maarse-core" }
+maarse-crypto = { path = "../../maarse-crypto" }
+maarse-fw-common = { path = "../common" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[profile.dev]
+opt-level = "s"
+panic = "abort"

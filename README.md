@@ -511,6 +511,19 @@ Hvert ekstra hop gentager det hele. **Anbefaling:** opdatér naboer direkte (ét
 
 **Redning, hvis noget går galt:** nRF52840: dobbelttryk på reset → USB-drevet kommer frem → træk `dist/maarse-<board>.uf2` over (bootloaderen røres aldrig). ESP32-S3: hold BOOT nede, tryk RESET, og flash med `espflash flash --erase-parts otadata --partition-table firmware/esp/partitions.csv <elf>` (eller `esptool.py write_flash 0x0 dist/maarse-<board>.bin`).
 
+## Udgivelser (signerede)
+
+```text
+python tools/release.py 0.5.0                    # bygger og signerer dist/release-0.5.0/
+python tools/release.py --verify dist/release-0.5.0
+maarse-sign verify-release --pubkey <hex> <mappe>  # tjek en udgivelse uden scriptet
+```
+
+Første gang laves nøglerne i `~/.maarse/release/` (aldrig i git): `release.key` (Ed25519) og `release.pub`, samt `android.keystore` med adgangskode i `android.pass`. **Tag backup af mappen.** Uden `release.key` kan noder i marken ikke opdateres over luften med nye udgivelser, og uden Android-nøglen kan appen ikke opdateres over en installeret version.
+
+En udgivelse indeholder firmware til alle fire boards bygget med udgivelsesnøglen (`MAARSE_RELEASE_PUBKEY`), så de kun tager imod opdateringer signeret med den, samt de signerede OTA-pakker (`-ota.bin` + `.manifest`), `maarse-host-<v>.exe` (med IP-tunnel), `maarse-<v>.apk` signeret med Android-nøglen og `SHA256SUMS` med `SHA256SUMS.sig`. Signaturen er Ed25519 over `"maarse-release-v1
+"` og SHA-256 af `SHA256SUMS` (`maarse-crypto/src/ota.rs`).
+
 ## Licens
 
 Koden er udgivet under enten MIT eller Apache-2.0, efter eget valg. Specifikationen er udgivet under CC-BY 4.0.

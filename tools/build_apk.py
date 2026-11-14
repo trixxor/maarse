@@ -6,7 +6,8 @@ værktøjer: aapt2, javac, d8, zipalign og apksigner.
 Webklienten (maarse-client/) lægges ind som assets. Kræver Android SDK
 (ANDROID_HOME, ellers %LOCALAPPDATA%/Android/Sdk) med build-tools og en
 platform (35+), samt en JDK (JAVA_HOME eller javac i PATH). APK'en signeres
-med en debug-nøgle (~/.android/debug.keystore, laves hvis den mangler).
+med en debug-nøgle (~/.android/debug.keystore, laves hvis den mangler), eller
+med MAARSE_APK_KEYSTORE/MAARSE_APK_PASS ved en udgivelse.
 """
 import glob, os, shutil, subprocess, sys, zipfile
 
@@ -90,15 +91,18 @@ with zipfile.ZipFile(unsigned, "a", zipfile.ZIP_DEFLATED) as z:
 aligned = os.path.join(OUT, "aligned.apk")
 run(os.path.join(bt, "zipalign" + EXE), "-f", "-p", "4", unsigned, aligned)
 
-ks = os.path.expanduser("~/.android/debug.keystore")
-if not os.path.exists(ks):
+# Udgivelse: MAARSE_APK_KEYSTORE + MAARSE_APK_PASS (fx fra tools/release.py);
+# ellers debug-nøglen.
+ks = os.environ.get("MAARSE_APK_KEYSTORE") or os.path.expanduser("~/.android/debug.keystore")
+ks_pass = os.environ.get("MAARSE_APK_PASS", "android")
+if not os.environ.get("MAARSE_APK_KEYSTORE") and not os.path.exists(ks):
     os.makedirs(os.path.dirname(ks), exist_ok=True)
     run(tool("keytool"), "-genkeypair", "-keystore", ks, "-storepass", "android", "-keypass", "android",
         "-alias", "androiddebugkey", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
         "-dname", "CN=Android Debug,O=Android,C=US")
 os.makedirs(os.path.join(ROOT, "dist"), exist_ok=True)
 apk = os.path.join(ROOT, "dist", "maarse.apk")
-run(os.path.join(bt, "apksigner" + BAT), "sign", "--ks", ks, "--ks-pass", "pass:android",
-    "--key-pass", "pass:android", "--out", apk, aligned)
+run(os.path.join(bt, "apksigner" + BAT), "sign", "--ks", ks, "--ks-pass", "pass:" + ks_pass,
+    "--key-pass", "pass:" + ks_pass, "--out", apk, aligned)
 run(os.path.join(bt, "apksigner" + BAT), "verify", apk)
 print(f"Færdig: {apk} ({os.path.getsize(apk) // 1024} KB)")

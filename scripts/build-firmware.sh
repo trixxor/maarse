@@ -62,7 +62,10 @@ case "$BOARD" in
     command -v espflash >/dev/null 2>&1 || cargo install espflash --locked
     (cd firmware/esp && cargo +esp build --release --features "board-$BOARD")
     ELF=firmware/esp/target/xtensa-esp32s3-none-elf/release/maarse-fw-esp
-    espflash save-image --chip esp32s3 --merge \
+    # Flash-størrelse: Heltec V4 16 MB, XIAO ESP32-S3 8 MB (tabellen kræver over 4 MB).
+    if [ "$BOARD" = heltec-v4 ]; then FLASH=16mb; else FLASH=8mb; fi
+    rm -f "dist/maarse-$BOARD.bin"
+    espflash save-image --chip esp32s3 --merge --flash-size "$FLASH" \
       --partition-table firmware/esp/partitions.csv "$ELF" "dist/maarse-$BOARD.bin"
     echo "Færdig: dist/maarse-$BOARD.bin (samlet billede, flashes fra adresse 0x0)"
     # App-imaget alene (til opdatering over luften).

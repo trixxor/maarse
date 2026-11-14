@@ -12,6 +12,11 @@ miniz_oxide = "0.8"
 maarse-core = { version = "0.1.0", path = "../maarse-core" }
 maarse-crypto = { version = "0.1.0", path = "../maarse-crypto" }
 tungstenite = "0.24"
+tun-rs = { version = "2.8", optional = true }
+
+[features]
+# IP-tunnel (--tun): TUN-adapter via Wintun (Windows) eller /dev/net/tun (Linux).
+tun = ["dep:tun-rs"]
 
 [dev-dependencies]
 maarse-fuzz = { version = "0.1.0", path = "../maarse-fuzz" }

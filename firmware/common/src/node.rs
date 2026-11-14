@@ -4,6 +4,8 @@
 //! routingen, og noden er kun radio. `0x40 | pakke` sendes over LoRa, og
 //! alt modtaget sendes til hosten som `0xC0 | snr | pakke`.
 
+mod ext;
+
 use crate::bus::{
     Frame, Pkt, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_TX, RSTATS, TxReq, USB_IN, USB_OUT,
 };
@@ -60,6 +62,12 @@ pub trait Settings {
     fn load_regions(&mut self) -> (bool, RegionNames) {
         (false, RegionNames::new())
     }
+    /// Gemmer delingsindstillinger (position/telemetri). Standard: gemmes ikke.
+    fn save_sharing(&mut self, _s: &maarse_core::companion::Sharing) {}
+    /// Gemte delingsindstillinger; standard er ingen deling.
+    fn load_sharing(&mut self) -> maarse_core::companion::Sharing {
+        Default::default()
+    }
 
     // ----- postkasse (valgfri; standard: ingen) -----
 
@@ -105,6 +113,8 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     region_names: RegionNames,
     /// Billeder og filer (se [`files`]).
     files: files::Files,
+    /// Diagnose, batteri og deling (se node/ext.rs).
+    ext: ext::Ext,
 }
 
 fn now_ms() -> u64 {
@@ -171,7 +181,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             stamping: None,
             region_names: RegionNames::new(),
             files: files::Files::new(),
+            ext: ext::Ext::new(),
         };
+        n.ext.sharing = n.settings.load_sharing();
         let (strict, names) = n.settings.load_regions();
         n.apply_regions(strict, names);
         n.admins = n.settings.load_admins();
@@ -228,7 +240,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     fn next_deadline(&self) -> Instant {
-        let mut d = self.next_announce;
+        let mut d = self.next_announce.min(self.ext.next_power);
         if let Some(t) = self.router.next_deadline() {
             let t = Instant::from_millis(t);
             if t < d {
@@ -247,6 +259,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let actions = self.router.tick(now_ms());
         self.apply(actions);
         self.file_tick();
+        self.power_tick();
         if Instant::now() >= self.next_announce {
             if !self.modem {
                 self.announce();
@@ -265,7 +278,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     fn announce(&mut self) {
         let ts = self.unix_now().unwrap_or((now_ms() / 1000) as u32);
-        let Some(payload) = self.identity.announce(ts, &[ratchet::APP_FS]) else {
+        let app = self.app_data();
+        let Some(payload) = self.identity.announce(ts, &app) else {
             return;
         };
         // Stemplet regnes ud i baggrunden af `run` (se `stamp_step`). Et nyt
@@ -321,6 +335,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             let _ = USB_OUT.try_send(f);
             return;
         }
+        self.router.rx_rssi = RSTATS.last_rssi.load(Relaxed) as i16;
         let actions = self.router.on_receive(&pkt, snr, now_ms());
         self.apply(actions);
     }
@@ -339,6 +354,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     if ratchet::announces_fs(a.app_data) {
                         self.mark_fs(dest);
                     }
+                    self.on_app_data(dest, hops, a.app_data);
                     crate::bus::KNOWN_NODES.store(self.known.len() as u32, Relaxed);
                     emit(&Event::Heard { addr: dest, hops, identity: Some(a.identity.to_bytes()) });
                     self.flush_mail(dest);
@@ -392,6 +408,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 }
             }
             PacketType::Fragment => self.file_chunk(payload),
+            PacketType::Probe => self.on_trace(dest, payload),
             PacketType::Deposit => {
                 // Vi er postkasse for en anden: gem beskeden til modtageren.
                 if let Some(recipient) = Address::from_slice(payload) {
@@ -441,6 +458,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
         let Ok(cmd) = Command::decode(&frame) else {
             return err(0, error_code::BAD_FRAME, "ugyldig ramme");
+        };
+        let Some(cmd) = self.ext_command(cmd) else {
+            self.modem = false;
+            return;
         };
         // Status og radioindstillinger må hentes uden at forlade modem-tilstand.
         if !matches!(
@@ -594,6 +615,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::SetTime { unix } => {
                 self.boot_unix = Some(unix.saturating_sub(self.started.elapsed().as_secs() as u32));
             }
+            // Håndteres i node/ext.rs.
+            Command::TraceRoute { .. }
+            | Command::GetNeighbors
+            | Command::SetSharing(_)
+            | Command::GetSharing => {}
             Command::FileBegin { req, dest, size, mime, name } => {
                 self.file_begin(req, dest, size, &mime, &name)
             }
@@ -824,6 +850,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         put(stat::SF, self.radio.sf as i32);
         put(stat::BW_KHZ, (self.radio.bw_hz / 1000) as i32);
         put(stat::TX_POWER_DBM, self.radio.tx_power_dbm as i32);
+        self.ext_stats(&mut items);
         items
     }
 

@@ -108,6 +108,80 @@ try:
     b.wait(lambda f: f[0] == 0x84 and f[1:17] == pj[1:17] and f[34:] == b"Hemmeligt")
     ok("privat kanalbesked")
 
+    # 2c. Diagnose: trace route B -> P går via A (B er kun forbundet til A).
+    b.send(frame(0x20, struct.pack("<H", 30), addr_p))
+    tr = b.wait(lambda f: f[0] == 0xA0 and f[1:3] == struct.pack("<H", 30), secs=15)
+    assert tr[3:19] == addr_p
+    k = tr[19]
+    ids = [struct.unpack("<H", tr[20 + 2 * i:22 + 2 * i])[0] for i in range(k)]
+    m = tr[20 + 2 * k]
+    snr_out, snr_back = tr[21 + 2 * k:21 + 2 * k + m], tr[21 + 2 * k + m:]
+    assert ids == [int.from_bytes(addr_a[:2], "big")], ids
+    assert len(snr_out) == 2 and len(snr_back) == 2, (snr_out, snr_back)
+    ok(f"trace route B -> P via A (SNR ud {list(snr_out)}, tilbage {list(snr_back)})")
+
+    # 2d. Naboliste: A har hørt B og P direkte.
+    a.send(frame(0x21))
+    nb = a.wait(lambda f: f[0] == 0xA1 and f[2] == 1)
+    prefixes = [nb[2 + 15 * i + 3:2 + 15 * i + 7] for i in range((len(nb) - 3) // 15)]
+    assert addr_b[:4] in prefixes and addr_p[:4] in prefixes, prefixes
+    ok(f"naboliste hos A: {len(prefixes)} naboer, inkl. B og P")
+
+    # 2e. Position (opt-in, ~1 km) og telemetri i announces, plus MQTT-bro
+    #     til en lille mock-broker.
+    import socket, threading
+    published = []
+    srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1)
+    mqtt_port = srv.getsockname()[1]
+    def broker():
+        c, _ = srv.accept(); c.settimeout(30); buf = b""
+        def take():
+            nonlocal buf
+            while True:
+                if len(buf) >= 2:
+                    ln, mul, i = 0, 1, 1
+                    while i < len(buf) and i < 5:
+                        ln += (buf[i] & 0x7f) * mul; mul *= 128
+                        if buf[i] & 0x80 == 0: break
+                        i += 1
+                    if i < len(buf) and len(buf) >= i + 1 + ln:
+                        pkt, buf = buf[:i + 1 + ln], buf[i + 1 + ln:]
+                        return pkt[0], pkt[i + 1:]
+                d = c.recv(4096)
+                if not d: raise EOFError
+                buf += d
+        try:
+            kind, _ = take(); assert kind == 0x10
+            c.sendall(bytes([0x20, 2, 0, 0]))
+            while True:
+                kind, body = take()
+                if kind & 0xF0 == 0x30:
+                    tl = struct.unpack(">H", body[:2])[0]
+                    published.append((body[2:2 + tl].decode(), body[2 + tl:].decode()))
+        except Exception:
+            pass
+    threading.Thread(target=broker, daemon=True).start()
+    start("m", 8183, ["--listen", "off", "--peer", "127.0.0.1:4381", "--mqtt", f"127.0.0.1:{mqtt_port}"])
+    mc = Client(8183); mc.info()
+    a.send(frame(0x23))
+    sh = a.wait(lambda f: f[0] == 0xA2)
+    assert sh[1] == 0, "position skal være slukket som standard"
+    a.send(frame(0x22, bytes([2]), struct.pack("<ii", 561_567_000, 102_107_000), bytes([1])))
+    a.wait(lambda f: f[0] == 0xA2 and f[1] == 2)
+    ni = b.wait(lambda f: f[0] == 0xA3 and f[1:17] == addr_a, secs=10)
+    lat, lon = struct.unpack("<ii", ni[21:29])
+    assert ni[20] == 2 and (lat, lon) == (561_550_000, 102_150_000), (ni[20], lat, lon)
+    ok("A deler position (afrundet til ~1 km-celle) og telemetri; B ser den")
+    end = time.time() + 10
+    want = f"maarse/node/{addr_a.hex()}/telemetry"
+    while time.time() < end and not any(t == want for t, _ in published): time.sleep(0.2)
+    topics = [t for t, _ in published]
+    assert "maarse/status" in topics and want in topics, topics
+    assert any(t.startswith("homeassistant/sensor/maarse_" + addr_a.hex()[:8]) for t in topics), topics
+    assert any(t == f"maarse/node/{addr_a.hex()}/position" for t in topics), topics
+    a.send(frame(0x22, bytes([0]), struct.pack("<ii", 0, 0), bytes([0])))  # slå deling fra igen
+    ok(f"MQTT-bro: {len(published)} emner sendt (status, Home Assistant discovery, telemetri, position)")
+
     # 3. Fil (20 KB, 110 bidder)
     data = os.urandom(20_000)
     a.send(frame(0x06, struct.pack("<H", 4), addr_b, struct.pack("<I", len(data)), bytes([10]), b"image/webp", "test æ.webp".encode()))

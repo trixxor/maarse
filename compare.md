@@ -146,7 +146,7 @@ HØJ**Test på hardware**Flash de fire boards, mål rækkevidde, strømforbrug o
 
 HØJ**Gateways til MeshCore og Reticulum**Et af de oprindelige mål. Uden dem starter Må:rse fra nul brugere.
 
-HØJ**Batterimåling og energistyret routing på firmware**Routeren kan allerede tage hensyn til energi, men firmwaren måler ikke batteriet. Vigtigt for sol-repeatere.
+HØJ**Batterimåling og energistyret routing på firmware**Lavet: firmwaren måler batteriet (alle boards undtagen XIAO ESP32-S3) og sætter routerens energistatus. Vigtigt for sol-repeatere.
 
 MIDDEL**Filer og billeder på firmware**Virker i dag kun via host.
 
@@ -180,13 +180,13 @@ MIDDEL**Regioner for kanaler**Kanalbeskeder bliver i et område i stedet for at 
 
 MIDDEL**Opdatering af firmware over luften**Så sol-repeatere i marken kan opdateres uden at blive hentet ind.fra MeshCore
 
-MIDDEL**Diagnose-værktøjer**Sporing af ruter, naboliste med SNR og måling af støjgulv på repeatere.fra MeshCore
+MIDDEL**Diagnose-værktøjer**Lavet: trace route med SNR begge veje, naboliste med SNR/RSSI og anslået støjgulv.fra MeshCore
 
-MIDDEL**Position privat som standard**Del kun omtrentlig position, og kun når man selv vælger det.fra Meshtastic 2.8
+MIDDEL**Position privat som standard**Lavet: position er slået fra som standard og afrundes til ca. 10 km eller 1 km, medmindre man vælger præcis.fra Meshtastic 2.8
 
 MIDDEL**Telefon-apps**Android og iOS ovenpå web-klienten (fx som PWA), så almindelige brugere kan være med.
 
-LAV**Telemetri og sensorer**Batteri, temperatur og vejr fra noder, plus bro til MQTT og Home Assistant.fra Meshtastic
+LAV**Telemetri og sensorer**Lavet (delvist): batteri, oppetid og energistatus i announces, plus MQTT-bro med Home Assistant discovery i maarse-host. Sensorer (temperatur, vejr) mangler.fra Meshtastic
 
 LAV**Signerede udgivelser**Signér firmware og host-builds, så brugere kan tjekke, at de er ægte.fra Reticulum
 

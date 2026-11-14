@@ -15,6 +15,7 @@ mod dht;
 mod fuzz_tests;
 mod links;
 mod meshcore;
+mod mqtt;
 mod node;
 mod sessions;
 mod web;
@@ -102,6 +103,8 @@ pub struct Config {
     pub meshcore: Option<String>,
     pub meshcore_baud: u32,
     pub meshcore_bridge: Vec<meshcore::Mapping>,
+    /// MQTT-bro (`--mqtt`).
+    pub mqtt: Option<mqtt::MqttConfig>,
 }
 
 /// Offentlige backbone-noder, som `--public` forbinder til. Tom indtil
@@ -138,6 +141,11 @@ Brug: maarse-host [valg]
   --meshcore-bridge <maarse-kanal>=<meshcore-kanal>
                         kobl to kanaler sammen, fx offentlig=public eller
                         #aarhus=#aarhus (kan gentages; standard: offentlig=public)
+  --mqtt <vært:port>    MQTT-bro: send modtaget telemetri, positioner og
+                        kanalbeskeder som JSON, med Home Assistant discovery
+  --mqtt-prefix <emne>  emne-præfiks (standard: maarse)
+  --mqtt-user <navn>    brugernavn til brokeren
+  --mqtt-pass <kode>    adgangskode til brokeren
   --no-browser          åbn ikke browseren automatisk
   --help                vis denne tekst
 
@@ -164,7 +172,10 @@ fn parse_args() -> Result<Config, String> {
         meshcore: None,
         meshcore_baud: 115_200,
         meshcore_bridge: Vec::new(),
+        mqtt: None,
     };
+    let mut mqtt_prefix = "maarse".to_string();
+    let (mut mqtt_user, mut mqtt_pass) = (None, None);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut val = |name: &str| args.next().ok_or(format!("{name} mangler en værdi"));
@@ -199,6 +210,17 @@ fn parse_args() -> Result<Config, String> {
                 .meshcore_bridge
                 .push(meshcore::parse_mapping(&val("--meshcore-bridge")?)?),
 
+            "--mqtt" => {
+                c.mqtt = Some(mqtt::MqttConfig {
+                    addr: val("--mqtt")?,
+                    prefix: String::new(),
+                    user: None,
+                    pass: None,
+                })
+            }
+            "--mqtt-prefix" => mqtt_prefix = val("--mqtt-prefix")?.trim_end_matches('/').to_string(),
+            "--mqtt-user" => mqtt_user = Some(val("--mqtt-user")?),
+            "--mqtt-pass" => mqtt_pass = Some(val("--mqtt-pass")?),
             "--public" => c.peers.extend(PUBLIC_PEERS.iter().map(|s| s.to_string())),
             "--max-file" => {
                 let kb: u32 = val("--max-file")?
@@ -224,6 +246,13 @@ fn parse_args() -> Result<Config, String> {
             }
             other => return Err(format!("ukendt valg: {other} (prøv --help)")),
         }
+    }
+    if let Some(m) = c.mqtt.as_mut() {
+        m.prefix = mqtt_prefix;
+        m.user = mqtt_user;
+        m.pass = mqtt_pass;
+    } else if mqtt_user.is_some() || mqtt_pass.is_some() {
+        return Err("--mqtt-user/--mqtt-pass kræver --mqtt".into());
     }
     Ok(c)
 }
@@ -279,6 +308,9 @@ fn main() {
     if let Some(port) = &cfg.meshcore {
         println!("  MeshCore: {port} @ {} baud (companion_radio_usb)", cfg.meshcore_baud);
         meshcore::spawn(port.clone(), cfg.meshcore_baud, cfg.meshcore_bridge.clone(), tx.clone());
+    }
+    if let Some(m) = &cfg.mqtt {
+        println!("  MQTT:     {} (emner under {}/)", m.addr, m.prefix);
     }
     if let Some(addr) = cfg.http {
         match web::spawn(addr, tx.clone()) {

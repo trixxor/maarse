@@ -8,7 +8,13 @@
 //! ```
 //!
 //! Flag-byten: bit 7-6 version, bit 5-2 pakketype, bit 1 sti til stede,
-//! bit 0 reserveret til "kompakt tilstand" (skal være 0 i v0.1).
+//! bit 0 region til stede (tidligere reserveret til "kompakt tilstand").
+//!
+//! Er bit 0 sat, følger 2 bytes region (big endian) lige efter stien (eller
+//! efter destinationen, hvis der ikke er nogen sti). Se [`crate::region`].
+//! Regionen bruges kun på floods (kanaler); en pakke uden region er bit for
+//! bit som før. Ældre noder afviser pakker med bit 0 sat og videresender
+//! derfor ikke regionsbeskeder – floods uden region virker som altid.
 //!
 //! Afsenderen står aldrig i headeren. AEAD-tagget er en del af payloaden
 //! og håndteres af kryptolaget.
@@ -26,7 +32,7 @@ pub const VERSION: u8 = 0;
 pub const FIXED_HEADER: usize = 18;
 
 const FLAG_HAS_PATH: u8 = 0b10;
-const FLAG_COMPACT: u8 = 0b01;
+const FLAG_REGION: u8 = 0b01;
 
 pub type Path = heapless::Vec<PathId, MAX_PATH>;
 
@@ -80,8 +86,6 @@ pub enum DecodeError {
     TooShort,
     BadVersion(u8),
     UnknownType(u8),
-    /// Kompakt tilstand er reserveret og ikke understøttet i v0.1.
-    CompactUnsupported,
     PathTooLong(u8),
     HopLimit(u8),
 }
@@ -100,6 +104,8 @@ pub struct Header {
     pub hops: u8,
     pub dest: Address,
     pub path: Option<Path>,
+    /// Region (0 = ingen). Se [`crate::region`].
+    pub region: u16,
 }
 
 impl Header {
@@ -109,7 +115,13 @@ impl Header {
             hops: 0,
             dest,
             path: None,
+            region: 0,
         }
+    }
+
+    pub fn with_region(mut self, region: u16) -> Self {
+        self.region = region;
+        self
     }
 
     pub fn with_path(mut self, path: Path) -> Self {
@@ -118,7 +130,9 @@ impl Header {
     }
 
     pub fn encoded_len(&self) -> usize {
-        FIXED_HEADER + self.path.as_ref().map_or(0, |p| 1 + 2 * p.len())
+        FIXED_HEADER
+            + self.path.as_ref().map_or(0, |p| 1 + 2 * p.len())
+            + if self.region != 0 { 2 } else { 0 }
     }
 
     /// Hvor mange bytes der er plads til i payloaden med denne header.
@@ -135,6 +149,9 @@ impl Header {
         if self.path.is_some() {
             flags |= FLAG_HAS_PATH;
         }
+        if self.region != 0 {
+            flags |= FLAG_REGION;
+        }
         out[0] = flags;
         out[1] = self.hops;
         out[2..18].copy_from_slice(&self.dest.0);
@@ -143,6 +160,9 @@ impl Header {
             for (i, id) in path.iter().enumerate() {
                 out[19 + 2 * i..21 + 2 * i].copy_from_slice(&id.to_be_bytes());
             }
+        }
+        if self.region != 0 {
+            out[len - 2..len].copy_from_slice(&self.region.to_be_bytes());
         }
         Ok(len)
     }
@@ -156,9 +176,6 @@ impl Header {
         let version = flags >> 6;
         if version != VERSION {
             return Err(DecodeError::BadVersion(version));
-        }
-        if flags & FLAG_COMPACT != 0 {
-            return Err(DecodeError::CompactUnsupported);
         }
         let ptype = PacketType::try_from((flags >> 2) & 0x0f)?;
         let hops = buf[1];
@@ -186,12 +203,19 @@ impl Header {
         } else {
             None
         };
+        let mut region = 0;
+        if flags & FLAG_REGION != 0 {
+            let b = buf.get(used..used + 2).ok_or(DecodeError::TooShort)?;
+            region = u16::from_be_bytes([b[0], b[1]]);
+            used += 2;
+        }
         Ok((
             Header {
                 ptype,
                 hops,
                 dest,
                 path,
+                region,
             },
             used,
         ))
@@ -283,9 +307,10 @@ mod tests {
         assert_eq!(Packet::decode(&[0; 10]), Err(DecodeError::TooShort));
 
         let h = Header::new(PacketType::Data, Address::default());
+        // Regionsflag uden plads til regionen.
         let mut buf = encode(&h, b"x").unwrap();
         buf[0] |= 0b01;
-        assert_eq!(Packet::decode(&buf), Err(DecodeError::CompactUnsupported));
+        assert_eq!(Packet::decode(&buf), Err(DecodeError::TooShort));
 
         let mut buf = encode(&h, b"x").unwrap();
         buf[0] |= 1 << 6;
@@ -311,6 +336,28 @@ mod tests {
         assert_eq!(Packet::decode(&buf), Err(DecodeError::PathTooLong(13)));
         buf[18] = 5; // længere end bufferen
         assert_eq!(Packet::decode(&buf), Err(DecodeError::TooShort));
+    }
+
+    #[test]
+    fn roundtrip_with_region() {
+        let h = Header::new(PacketType::Channel, Address([3; 16])).with_region(0xbeef);
+        assert_eq!(h.encoded_len(), 20);
+        let buf = encode(&h, b"hej").unwrap();
+        assert_eq!(buf[0] & 1, 1);
+        assert_eq!(&buf[18..20], &[0xbe, 0xef]);
+        let p = Packet::decode(&buf).unwrap();
+        assert_eq!(p.header, h);
+        assert_eq!(p.payload, b"hej");
+
+        // Sammen med sti: regionen står efter stien.
+        let h = h.with_path(path(&[7, 8]));
+        let buf = encode(&h, b"x").unwrap();
+        assert_eq!(&buf[23..25], &[0xbe, 0xef]);
+        assert_eq!(Packet::decode(&buf).unwrap().header, h);
+
+        // Uden region er formatet uændret.
+        let h = Header::new(PacketType::Channel, Address([3; 16]));
+        assert_eq!(encode(&h, b"x").unwrap()[0] & 1, 0);
     }
 
     #[test]

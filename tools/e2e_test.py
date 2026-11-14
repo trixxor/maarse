@@ -133,6 +133,38 @@ try:
         raise AssertionError("forkert origin blev accepteret")
     except websocket.WebSocketBadStatusException:
         ok("WebSocket fra fremmed side afvist")
+
+    # 8. Regioner over backbone: H (dk + nordjylland) med to peers,
+    #    N (nordjylland) og K (dk). Nordjylland-beskeder når kun N.
+    start("h", 8190, ["--listen", "127.0.0.1:4390", "--region", "dk", "--region", "nordjylland"])
+    start("n", 8191, ["--listen", "off", "--peer", "127.0.0.1:4390", "--region", "nordjylland"])
+    start("k", 8192, ["--listen", "off", "--peer", "127.0.0.1:4390", "--region", "dk"])
+    h, n, k = Client(8190), Client(8191), Client(8192)
+    for c in (h, n, k): c.info()
+    h.send(frame(0x12))
+    r = h.wait(lambda f: f[0] == 0x95)
+    assert r[1] == 0 and r[2:] == b"dk,nordjylland", r
+    ok("regioner sat med --region og hentet med GetRegions")
+    time.sleep(1.5)  # regionshilsner udveksles
+    for c in (n, k): c.send(frame(0x04, b"#tur"))
+    h.send(frame(0x04, b"#tur@nordjylland"))
+    j = h.wait(lambda f: f[0] == 0x88 and f[17:] == b"#tur@nordjylland")
+    h.send(frame(0x03, struct.pack("<H", 20), j[1:17], b"Kun Nordjylland"))
+    n.wait(lambda f: f[0] == 0x84 and f[34:] == b"Kun Nordjylland")
+    k.pump(2)
+    assert not any(f[0] == 0x84 and f[34:] == b"Kun Nordjylland" for f in k.events), "K fik en nordjysk besked"
+    ok("#tur@nordjylland når N, men ikke K")
+    h.send(frame(0x04, b"#tur@dk"))
+    h.wait(lambda f: f[0] == 0x88 and f[17:] == b"#tur@dk")
+    h.send(frame(0x03, struct.pack("<H", 21), j[1:17], b"Hele Danmark"))
+    k.wait(lambda f: f[0] == 0x84 and f[34:] == b"Hele Danmark")
+    n.pump(2)
+    assert not any(f[0] == 0x84 and f[34:] == b"Hele Danmark" for f in n.events), "N (kun nordjylland) fik en dk-besked"
+    ok("#tur@dk når K, men ikke N (der kun betjener nordjylland)")
+    # Tom liste og strict via companion-kommandoen.
+    n.send(frame(0x11, bytes([1]), b""))
+    r = n.wait(lambda f: f[0] == 0x95 and f[1] == 1)
+    ok("SetRegions (strict, tom liste) besvaret")
     print("ALLE TESTS OK")
 finally:
     for n in list(procs): 

@@ -287,6 +287,10 @@ pub struct Router<const R: usize, const D: usize> {
     /// Et sidste spring med SNR under dette regnes for svagt. Brug
     /// [`weak_snr_for_sf`] til den valgte spreading factor.
     pub weak_snr_db: i8,
+    /// Regioner, noden videresender floods for (se [`crate::region`]).
+    pub regions: crate::region::Regions,
+    /// Med tom regionsliste: videresend kun floods uden region.
+    pub strict_region: bool,
     pub stats: RouterStats,
 }
 
@@ -318,6 +322,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
             ack_timeout_ms: DEFAULT_ACK_TIMEOUT_MS,
             mobile: false,
             weak_snr_db: weak_snr_for_sf(9),
+            regions: crate::region::Regions::new(),
+            strict_region: false,
             stats: RouterStats::default(),
         }
     }
@@ -355,6 +361,11 @@ impl<const R: usize, const D: usize> Router<R, D> {
             0
         };
         bucket as u32 * self.slot_ms + self.energy.penalty_ms() + relay
+    }
+
+    /// Må vi videresende et flood i `region` (0 = ingen)?
+    pub fn forwards_region(&self, region: u16) -> bool {
+        crate::region::forwards(&self.regions, self.strict_region, region)
     }
 
     /// Må vi videresende en pakke, der har taget `hops` hop?
@@ -717,8 +728,18 @@ impl<const R: usize, const D: usize> Router<R, D> {
 
     /// Sender en besked til en kanal (floodes lokalt).
     pub fn send_channel(&mut self, channel: Address, payload: &[u8]) -> Result<Actions, SendError> {
+        self.send_channel_in(channel, 0, payload)
+    }
+
+    /// Sender en kanalbesked mærket med en region (0 = ingen).
+    pub fn send_channel_in(
+        &mut self,
+        channel: Address,
+        region: u16,
+        payload: &[u8],
+    ) -> Result<Actions, SendError> {
         self.stats.originated += 1;
-        let header = Header::new(PacketType::Channel, channel);
+        let header = Header::new(PacketType::Channel, channel).with_region(region);
         if payload.len() > header.max_payload() {
             return Err(SendError::TooLarge);
         }
@@ -974,7 +995,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             Energy::Critical => false,
         };
         let scope = if local { LOCAL_SCOPE } else { MAX_HOPS };
-        if !allowed || h.hops >= scope {
+        if !allowed || h.hops >= scope || !self.forwards_region(h.region) {
             return;
         }
         let mut header = h.clone();
@@ -1143,6 +1164,45 @@ mod tests {
         let mut r2 = node(3, Role::Repeater);
         pkt[1] = LOCAL_SCOPE;
         assert!(transmits(&r2.on_receive(&pkt, 0, 0)).is_empty());
+    }
+
+    #[test]
+    fn scoped_channel_forwarded_only_inside_region() {
+        use crate::region::region_id;
+        let (dk, nj) = (region_id("dk"), region_id("nordjylland"));
+        let ch = Address([9; 16]);
+        let mut a = node(1, Role::Client);
+        let pkt = transmits(&a.send_channel_in(ch, nj, b"hej").unwrap())[0].clone();
+        assert_eq!(Packet::decode(&pkt).unwrap().header.region, nj);
+
+        // Aalborg: dk + nordjylland -> videresender, regionen bevares.
+        let mut aalborg = node(2, Role::Repeater);
+        aalborg.regions = crate::region::Regions::from_slice(&[dk, nj]).unwrap();
+        let fwd = transmits(&aalborg.on_receive(&pkt, 0, 0));
+        assert_eq!(fwd.len(), 1);
+        assert_eq!(Packet::decode(&fwd[0]).unwrap().header.region, nj);
+
+        // Aarhus: kun dk -> videresender ikke, men leverer til egen bruger.
+        let mut aarhus = node(3, Role::Repeater);
+        aarhus.regions = crate::region::Regions::from_slice(&[dk]).unwrap();
+        aarhus.subscribe(ch).unwrap();
+        let got = aarhus.on_receive(&pkt, 0, 0);
+        assert!(transmits(&got).is_empty());
+        assert!(got.iter().any(|x| matches!(x, Action::Deliver { .. })));
+        // ... men en dk-besked og en global besked videresendes.
+        let dkpkt = transmits(&a.send_channel_in(ch, dk, b"x").unwrap())[0].clone();
+        assert_eq!(transmits(&aarhus.on_receive(&dkpkt, 0, 0)).len(), 1);
+        let global = transmits(&a.send_channel(ch, b"y").unwrap())[0].clone();
+        assert_eq!(transmits(&aarhus.on_receive(&global, 0, 0)).len(), 1);
+
+        // Tom liste: alt videresendes; strict: kun globalt.
+        let mut open = node(4, Role::Repeater);
+        assert_eq!(transmits(&open.on_receive(&pkt, 0, 0)).len(), 1);
+        let mut strict = node(5, Role::Repeater);
+        strict.strict_region = true;
+        assert!(transmits(&strict.on_receive(&pkt, 0, 0)).is_empty());
+        let global2 = transmits(&a.send_channel(ch, b"z").unwrap())[0].clone();
+        assert_eq!(transmits(&strict.on_receive(&global2, 0, 0)).len(), 1);
     }
 
     #[test]

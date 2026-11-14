@@ -39,6 +39,12 @@ pub enum In {
     LinkDown {
         id: LinkId,
     },
+    /// En backbone-peer har fortalt, hvilke regioner den betjener.
+    LinkRegions {
+        id: LinkId,
+        strict: bool,
+        regions: Vec<u16>,
+    },
     Packet {
         link: LinkId,
         data: Vec<u8>,
@@ -84,6 +90,9 @@ pub struct Config {
     pub public_addr: Option<String>,
     /// DHT-startpunkter (kun opslag, ingen pakkeforbindelse).
     pub dht_seeds: Vec<String>,
+    /// Regioner fra kommandolinjen (`--region`); tom = brug gemte.
+    pub regions: Vec<String>,
+    pub strict_region: bool,
 }
 
 /// Offentlige backbone-noder, som `--public` forbinder til. Tom indtil
@@ -109,6 +118,10 @@ Brug: maarse-host [valg]
                         andre kan slå de adresser op, jeg kan nå
   --dht <vært:port>     DHT-startpunkt (kun opslag, kan gentages). --peer og
                         --public bruges også som startpunkter
+  --region <navn>       region, jeg videresender kanalbeskeder for, fx dk eller
+                        nordjylland (kan gentages, højst 8). Uden regioner
+                        videresendes alt
+  --strict-region       uden regioner: videresend kun beskeder uden region
   --no-browser          åbn ikke browseren automatisk
   --help                vis denne tekst
 
@@ -130,6 +143,8 @@ fn parse_args() -> Result<Config, String> {
         postbox: None,
         public_addr: None,
         dht_seeds: Vec::new(),
+        regions: Vec::new(),
+        strict_region: false,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -153,6 +168,9 @@ fn parse_args() -> Result<Config, String> {
             "--no-browser" => c.open_browser = false,
             "--public-addr" => c.public_addr = Some(val("--public-addr")?),
             "--dht" => c.dht_seeds.push(val("--dht")?),
+            "--region" => c.regions.push(val("--region")?.trim().to_lowercase()),
+            "--strict-region" => c.strict_region = true,
+
             "--public" => c.peers.extend(PUBLIC_PEERS.iter().map(|s| s.to_string())),
             "--max-file" => {
                 let kb: u32 = val("--max-file")?

@@ -24,7 +24,9 @@ use maarse_crypto::{
 
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(900);
 
-type Name = heapless::String<24>;
+type Name = heapless::String<40>;
+/// Regionsnavne, kommasepareret (fx `dk,nordjylland`).
+pub type RegionNames = heapless::Vec<u8, 120>;
 
 /// Hvor radioindstillinger gemmes (flash på boardet).
 pub trait Settings {
@@ -36,6 +38,12 @@ pub trait Settings {
     /// Gemt rolle; standard (og ældre flash uden rolle) er repeater.
     fn load_role(&mut self) -> Role {
         Role::Repeater
+    }
+    /// Gemmer regionsliste og `strict`. Standard: gemmes ikke.
+    fn save_regions(&mut self, _strict: bool, _names: &[u8]) {}
+    /// Gemte regioner; standard (og ældre flash) er ingen.
+    fn load_regions(&mut self) -> (bool, RegionNames) {
+        (false, RegionNames::new())
     }
 
     // ----- postkasse (valgfri; standard: ingen) -----
@@ -73,6 +81,7 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     /// Post fra postkassen, der er sendt og venter på kvittering: msg_id -> post-ID.
     mail_inflight: FnvIndexMap<u64, u32, 16>,
     mail_delivered: u32,
+    region_names: RegionNames,
 }
 
 fn now_ms() -> u64 {
@@ -133,7 +142,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             boot_unix: None,
             mail_inflight: FnvIndexMap::new(),
             mail_delivered: 0,
+            region_names: RegionNames::new(),
         };
+        let (strict, names) = n.settings.load_regions();
+        n.apply_regions(strict, names);
         n.admins = n.settings.load_admins();
         let role = n.settings.load_role();
         n.router.set_role(role);
@@ -441,16 +453,17 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 channel,
                 text: msg,
             } => {
-                let Some((_, key, _)) = self.channels.iter().find(|(a, _, _)| *a == channel) else {
+                let Some((_, key, nm)) = self.channels.iter().find(|(a, _, _)| *a == channel) else {
                     return err(req, error_code::NOT_IN_CHANNEL, "Ikke med i kanalen");
                 };
                 let key = *key;
+                let region = maarse_core::region::region_id(maarse_core::region::split_channel(nm).1);
                 let mut nonce = [0u8; 8];
                 self.rng.fill_bytes(&mut nonce);
                 let mut ct = [0u8; 255];
                 let res = seal::seal_channel(&key, &self.addr, nonce, &msg, &mut ct)
                     .ok()
-                    .and_then(|n| self.router.send_channel(channel, &ct[..n]).ok());
+                    .and_then(|n| self.router.send_channel_in(channel, region, &ct[..n]).ok());
                 match res {
                     Some(actions) => {
                         emit(&Event::Sent { req, msg_id: 0 });
@@ -481,6 +494,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 emit(&Event::Admins { admins: self.admins.clone() });
             }
             Command::GetAdmins => emit(&Event::Admins { admins: self.admins.clone() }),
+            Command::SetRegions { strict, names } => {
+                let names = RegionNames::from_slice(&names[..names.len().min(120)]).unwrap_or_default();
+                self.apply_regions(strict, names);
+                self.settings.save_regions(strict, &self.region_names);
+                emit(&self.regions_event());
+                log("Regioner gemt");
+            }
+            Command::GetRegions => emit(&self.regions_event()),
             Command::SetTime { unix } => {
                 self.boot_unix = Some(unix.saturating_sub(self.started.elapsed().as_secs() as u32));
             }
@@ -589,6 +610,32 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
+    /// Sætter routerens regioner ud fra en kommasepareret navneliste.
+    fn apply_regions(&mut self, strict: bool, names: RegionNames) {
+        let s = core::str::from_utf8(&names).unwrap_or("");
+        self.router.regions = maarse_core::region::parse_list(s);
+        self.router.strict_region = strict;
+        // Gem normaliseret: små bogstaver, uden mellemrum, højst 8.
+        let mut norm = RegionNames::new();
+        for n in maarse_core::region::names(s).take(maarse_core::region::MAX_REGIONS) {
+            if !norm.is_empty() {
+                let _ = norm.push(b',');
+            }
+            for c in n.chars().flat_map(char::to_lowercase) {
+                let mut b = [0u8; 4];
+                let _ = norm.extend_from_slice(c.encode_utf8(&mut b).as_bytes());
+            }
+        }
+        self.region_names = norm;
+    }
+
+    fn regions_event(&self) -> Event {
+        Event::Regions {
+            strict: self.router.strict_region,
+            names: text(&self.region_names),
+        }
+    }
+
     /// Skifter rolle og gemmer den i flash. Returnerer en logtekst.
     fn set_role(&mut self, role: u8) -> Result<&'static str, &'static str> {
         let r = Role::from_u8(role).ok_or("Ukendt rolle (0 = klient, 1 = repeater, 2 = relay)")?;
@@ -665,7 +712,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     fn join(&mut self, name: &str) {
-        let lower = name.trim();
+        // `navn@region`: regionen mærker beskeder, vi sender til kanalen.
+        let (lower, region) = maarse_core::region::split_channel(name);
         let (label, key): (&str, [u8; 32]) = match lower {
             "" | "offentlig" | "#offentlig" | "public" | "#public" => {
                 ("offentlig", public_channel_key())
@@ -685,17 +733,22 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             }),
         };
         let addr = channel_address(&key);
-        if !self.channels.iter().any(|(a, _, _)| *a == addr) {
-            let mut nm = Name::new();
-            if label != "offentlig" && !label.starts_with('#') {
-                let _ = nm.push('#');
+        let mut nm = Name::new();
+        if label != "offentlig" && !label.starts_with('#') {
+            let _ = nm.push('#');
+        }
+        let region_part = if region.is_empty() { None } else { Some(region) };
+        for c in label.chars().chain(region_part.into_iter().flat_map(|r| core::iter::once('@').chain(r.chars()))) {
+            for l in c.to_lowercase() {
+                let _ = nm.push(l);
             }
-            for c in label.chars() {
-                for l in c.to_lowercase() {
-                    let _ = nm.push(l);
-                }
-            }
+        }
+        if let Some(ch) = self.channels.iter_mut().find(|(a, _, _)| *a == addr) {
+            // Allerede med: opdatér navnet (og dermed regionen).
+            ch.2 = nm;
+        } else {
             if self.channels.push((addr, key, nm)).is_err() {
+
                 return log("Højst 4 kanaler på denne node");
             }
             let _ = self.router.subscribe(addr);

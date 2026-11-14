@@ -82,6 +82,114 @@ pub enum Command {
     /// invitation). Format: nøgle (32 bytes) | navn (UTF-8, resten). Svaret
     /// er `ChannelJoined` som for andre kanaler.
     JoinPrivateChannel { key: [u8; 32], name: Text },
+    /// 0x20: trace route til `dest`: SNR for hvert spring begge veje. Svaret
+    /// er `TraceResult` (eller `Error` med `req`). Se [`crate::diag`].
+    TraceRoute { req: u16, dest: Address },
+    /// 0x21: vis direkte naboer. Svaret er en eller flere `Neighbors`.
+    GetNeighbors,
+    /// 0x22: hvad noden deler i sine announces: position (præcision 0 =
+    /// slukket, standard) og telemetri. Gemmes. Svaret er `Sharing`.
+    SetSharing(Sharing),
+    /// 0x23: vis delingsindstillingerne.
+    GetSharing,
+}
+
+/// Delingsindstillinger (10 bytes): præcision (u8, se
+/// [`crate::appdata::Precision`]) | bredde (i32, 1e-7°) | længde (i32)
+/// | telemetri (u8, 0/1). Positionen gemmes præcist på noden, men sendes
+/// kun afrundet til den valgte præcision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Sharing {
+    pub precision: u8,
+    pub lat_e7: i32,
+    pub lon_e7: i32,
+    pub telemetry: bool,
+}
+
+impl Sharing {
+    pub const LEN: usize = 10;
+    pub fn to_bytes(&self) -> [u8; Self::LEN] {
+        let mut b = [0u8; Self::LEN];
+        b[0] = self.precision;
+        b[1..5].copy_from_slice(&self.lat_e7.to_le_bytes());
+        b[5..9].copy_from_slice(&self.lon_e7.to_le_bytes());
+        b[9] = self.telemetry as u8;
+        b
+    }
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        if b.len() < Self::LEN {
+            return None;
+        }
+        Some(Sharing {
+            precision: b[0].min(3),
+            lat_e7: i32::from_le_bytes(b[1..5].try_into().ok()?),
+            lon_e7: i32::from_le_bytes(b[5..9].try_into().ok()?),
+            telemetry: b[9] != 0,
+        })
+    }
+    /// Positionen, som den sendes (afrundet), eller `None` (slukket).
+    pub fn position(&self) -> Option<crate::appdata::Position> {
+        crate::appdata::Position {
+            precision: crate::appdata::Precision::from_u8(self.precision),
+            lat_e7: self.lat_e7,
+            lon_e7: self.lon_e7,
+        }
+        .quantised()
+    }
+}
+
+/// En nabo i `Event::Neighbors` (15 bytes): sti-ID (u16) | adresse-
+/// præfiks (4, nuller = ukendt) | SNR (i8) | RSSI (i16, 0 = ukendt) |
+/// sekunder siden (u32) | antal pakker (u16).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NeighborInfo {
+    pub id: u16,
+    pub prefix: [u8; 4],
+    pub snr: i8,
+    pub rssi: i16,
+    pub age_s: u32,
+    pub count: u16,
+}
+
+impl NeighborInfo {
+    pub fn from_neighbor(n: &crate::diag::Neighbor, now_ms: u64) -> Self {
+        let mut prefix = [0u8; 4];
+        if let Some(a) = n.addr {
+            prefix.copy_from_slice(&a.0[..4]);
+        }
+        NeighborInfo {
+            id: n.id,
+            prefix,
+            snr: n.snr,
+            rssi: n.rssi,
+            age_s: (now_ms.saturating_sub(n.last_ms) / 1000) as u32,
+            count: n.count.min(u16::MAX as u32) as u16,
+        }
+    }
+}
+
+/// Højst så mange naboer pr. `Neighbors`-ramme.
+pub const NEIGHBORS_PER_FRAME: usize = 16;
+
+/// Bygger `Neighbors`-rammer ud fra en nabotabel (mindst én, også tom).
+pub fn neighbor_events<const N: usize>(
+    t: &crate::diag::NeighborTable<N>,
+    now_ms: u64,
+) -> heapless::Vec<Event, 4> {
+    let all = t.sorted();
+    let mut out = heapless::Vec::new();
+    let mut part = 0u8;
+    let mut chunks = all.chunks(NEIGHBORS_PER_FRAME).peekable();
+    if chunks.peek().is_none() {
+        let _ = out.push(Event::Neighbors { part: 0, last: true, items: heapless::Vec::new() });
+    }
+    while let Some(c) = chunks.next() {
+        let items = c.iter().map(|n| NeighborInfo::from_neighbor(n, now_ms)).collect();
+        let last = chunks.peek().is_none();
+        let _ = out.push(Event::Neighbors { part, last, items });
+        part += 1;
+    }
+    out
 }
 
 /// Svar og hændelser fra node til klient.
@@ -164,6 +272,35 @@ pub enum Event {
     Regions { strict: bool, names: Text },
     /// 0x8f
     Error { req: u16, code: u8, text: Text },
+    /// 0xa0: svar på `TraceRoute`. `path` er repeaternes sti-ID'er; `out` er
+    /// SNR for hvert spring ud (sidste = målets), `back` for hvert spring
+    /// tilbage (sidste = vores). Format: req (u16) | mål (16) | k | k × ID
+    /// (u16) | m | m × SNR (i8) | SNR tilbage (resten).
+    TraceResult {
+        req: u16,
+        dest: Address,
+        path: heapless::Vec<u16, 12>,
+        out: heapless::Vec<i8, 13>,
+        back: heapless::Vec<i8, 13>,
+    },
+    /// 0xa1: direkte naboer, senest hørt først. `part` tæller fra 0;
+    /// `last` er sat på sidste ramme. Format: part | last | naboer (15 B).
+    Neighbors {
+        part: u8,
+        last: bool,
+        items: heapless::Vec<NeighborInfo, NEIGHBORS_PER_FRAME>,
+    },
+    /// 0xa2: delingsindstillinger (se [`Sharing`]).
+    Sharing(Sharing),
+    /// 0xa3: position og/eller telemetri fra en anden nodes announce.
+    /// Format: adresse (16) | hop | app-data-felter (0x03/0x04, se
+    /// [`crate::appdata`]).
+    NodeInfo {
+        addr: Address,
+        hops: u8,
+        position: Option<crate::appdata::Position>,
+        telemetry: Option<crate::appdata::Telemetry>,
+    },
 }
 
 /// LoRa-radioens indstillinger.
@@ -339,6 +476,19 @@ pub mod stat {
     pub const DHT_PEERS: u8 = 76;
     /// Announces og ruteforespørgsler smidt væk pga. manglende/forkert stempel.
     pub const BAD_STAMPS: u8 = 77;
+    // Diagnose og strøm
+    /// Anslået støjgulv (dBm) ud fra modtagne pakkers RSSI og SNR.
+    pub const NOISE_FLOOR_DBM: u8 = 80;
+    /// Energistatus (0 = kritisk, 1 = lav, 2 = ok, 3 = fuld).
+    pub const ENERGY: u8 = 81;
+    /// Ekstern strøm (USB): 0 = nej, 1 = ja, -1 = ukendt.
+    pub const EXT_POWER: u8 = 82;
+    /// Antal direkte naboer.
+    pub const NEIGHBORS: u8 = 83;
+    /// Delt positionspræcision (0 = slukket ... 3 = præcis).
+    pub const POSITION_PRECISION: u8 = 84;
+    /// Batteri i procent (omtrentligt, ud fra spændingen).
+    pub const BATTERY_PERCENT: u8 = 85;
 }
 
 /// Fejlkoder i `Event::Error`.
@@ -496,6 +646,10 @@ impl Command {
             }
             Command::GetRegions => W::new(0x12).done(),
             Command::JoinPrivateChannel { key, name } => W::new(0x13).b(key).b(name).done(),
+            Command::TraceRoute { req, dest } => W::new(0x20).b(&req.to_le_bytes()).b(&dest.0).done(),
+            Command::GetNeighbors => W::new(0x21).done(),
+            Command::SetSharing(s) => W::new(0x22).b(&s.to_bytes()).done(),
+            Command::GetSharing => W::new(0x23).done(),
         }
     }
 
@@ -550,6 +704,10 @@ impl Command {
                 key.copy_from_slice(r.take(32)?);
                 Command::JoinPrivateChannel { key, name: r.text()? }
             }
+            0x20 => Command::TraceRoute { req: r.u16()?, dest: r.addr()? },
+            0x21 => Command::GetNeighbors,
+            0x22 => Command::SetSharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
+            0x23 => Command::GetSharing,
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -676,6 +834,35 @@ impl Event {
                 .b(&[*code])
                 .b(text)
                 .done(),
+            Event::TraceResult { req, dest, path, out, back } => {
+                let mut w = W::new(0xa0).b(&req.to_le_bytes()).b(&dest.0).b(&[path.len() as u8]);
+                for id in path {
+                    w = w.b(&id.to_le_bytes());
+                }
+                w = w.b(&[out.len() as u8]);
+                for v in out.iter().chain(back.iter()) {
+                    w = w.b(&[*v as u8]);
+                }
+                w.done()
+            }
+            Event::Neighbors { part, last, items } => {
+                let mut w = W::new(0xa1).b(&[*part, *last as u8]);
+                for n in items {
+                    w = w
+                        .b(&n.id.to_le_bytes())
+                        .b(&n.prefix)
+                        .b(&[n.snr as u8])
+                        .b(&n.rssi.to_le_bytes())
+                        .b(&n.age_s.to_le_bytes())
+                        .b(&n.count.to_le_bytes());
+                }
+                w.done()
+            }
+            Event::Sharing(s) => W::new(0xa2).b(&s.to_bytes()).done(),
+            Event::NodeInfo { addr, hops, position, telemetry } => {
+                let data = crate::appdata::build(None, false, *position, telemetry.as_ref());
+                W::new(0xa3).b(&addr.0).b(&[*hops]).b(&data).done()
+            }
         }
     }
 
@@ -774,6 +961,46 @@ impl Event {
                 code: r.u8()?,
                 text: r.text()?,
             },
+            0xa0 => {
+                let (req, dest) = (r.u16()?, r.addr()?);
+                let k = r.u8()? as usize;
+                let mut path = heapless::Vec::new();
+                for _ in 0..k {
+                    path.push(r.u16()?).map_err(|_| FrameError::TooLong)?;
+                }
+                let m = r.u8()? as usize;
+                let snr = |b: &[u8]| -> Result<heapless::Vec<i8, 13>, FrameError> {
+                    if b.len() > 13 {
+                        return Err(FrameError::TooLong);
+                    }
+                    Ok(b.iter().map(|&x| x as i8).collect())
+                };
+                let out = snr(r.take(m)?)?;
+                let back = snr(r.0)?;
+                Event::TraceResult { req, dest, path, out, back }
+            }
+            0xa1 => {
+                let (part, last) = (r.u8()?, r.u8()? != 0);
+                let mut items = heapless::Vec::new();
+                while !r.0.is_empty() {
+                    let id = r.u16()?;
+                    let mut prefix = [0u8; 4];
+                    prefix.copy_from_slice(r.take(4)?);
+                    let snr = r.u8()? as i8;
+                    let rssi = r.u16()? as i16;
+                    let (age_s, count) = (r.u32()?, r.u16()?);
+                    items
+                        .push(NeighborInfo { id, prefix, snr, rssi, age_s, count })
+                        .map_err(|_| FrameError::TooLong)?;
+                }
+                Event::Neighbors { part, last, items }
+            }
+            0xa2 => Event::Sharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
+            0xa3 => {
+                let (addr, hops) = (r.addr()?, r.u8()?);
+                let a = crate::appdata::parse(r.0);
+                Event::NodeInfo { addr, hops, position: a.position, telemetry: a.telemetry }
+            }
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -1024,6 +1251,55 @@ mod tests {
             code: error_code::TOO_LARGE,
             text: text(b"for lang"),
         });
+    }
+
+    #[test]
+    fn diagnostics_roundtrip() {
+        roundtrip_cmd(Command::TraceRoute { req: 5, dest: Address([4; 16]) });
+        roundtrip_cmd(Command::GetNeighbors);
+        roundtrip_cmd(Command::GetSharing);
+        let sh = Sharing { precision: 2, lat_e7: 561_567_000, lon_e7: -102_107_000, telemetry: true };
+        roundtrip_cmd(Command::SetSharing(sh));
+        roundtrip_ev(Event::Sharing(sh));
+        assert_eq!(Command::SetSharing(Sharing::default()).encode()[2], 0x22);
+        roundtrip_ev(Event::TraceResult {
+            req: 3,
+            dest: Address([2; 16]),
+            path: [0x0102, 0xfffe].into_iter().collect(),
+            out: [5, -7, 1].into_iter().collect(),
+            back: [-20, 3, 9].into_iter().collect(),
+        });
+        roundtrip_ev(Event::TraceResult {
+            req: 0,
+            dest: Address([2; 16]),
+            path: heapless::Vec::new(),
+            out: [4].into_iter().collect(),
+            back: heapless::Vec::new(),
+        });
+        let mut t: crate::diag::NeighborTable<40> = crate::diag::NeighborTable::new();
+        for i in 0..20u16 {
+            t.heard(i, (i == 3).then_some(Address([0xab; 16])), -(i as i8), -100 - i as i16, i as u64 * 1000);
+        }
+        let evs = neighbor_events(&t, 30_000);
+        assert_eq!(evs.len(), 2);
+        for e in &evs {
+            assert!(e.encode().len() <= MAX_FRAME + 2);
+            roundtrip_ev(e.clone());
+        }
+        let Event::Neighbors { part: 0, last: false, items } = &evs[0] else { panic!() };
+        assert_eq!(items[0].id, 19);
+        assert_eq!(items[0].age_s, 11);
+        assert_eq!(items[0].rssi, -119);
+        assert!(matches!(&evs[1], Event::Neighbors { part: 1, last: true, .. }));
+        let empty = neighbor_events(&crate::diag::NeighborTable::<4>::new(), 0);
+        assert!(matches!(&empty[0], Event::Neighbors { part: 0, last: true, items } if items.is_empty()));
+        roundtrip_ev(Event::NodeInfo {
+            addr: Address([1; 16]),
+            hops: 2,
+            position: sh.position(),
+            telemetry: Some(crate::appdata::Telemetry { battery_mv: 3700, energy: 2, uptime_s: 5, ..Default::default() }),
+        });
+        roundtrip_ev(Event::NodeInfo { addr: Address([1; 16]), hops: 0, position: None, telemetry: None });
     }
 
     #[test]

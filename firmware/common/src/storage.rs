@@ -9,7 +9,9 @@
 //!   0x100: "ADM1" + antal (1) + administratorer (4 × 16)
 //!   0x180: "ROL1" + rolle (1: 0 = klient, 1 = repeater, 2 = relay)
 //!   0x200: "REG1" + strict (1) + længde (1) + regionsnavne (≤ 120, kommasepareret)
+//!   0x300: "SHR1" + delingsindstillinger (10, se `companion::Sharing`)
 //!   ```
+//!   Uden "SHR1" deles hverken position eller telemetri (standard).
 //!   Skrives kun første gang og når radio/administratorer/rolle/regioner ændres.
 //!   Ældre flash uden "ROL1" (slettet = 0xFF) giver repeater; uden "REG1"
 //!   ingen regioner (videresend alt).
@@ -40,8 +42,10 @@ const ROLE_OFF: usize = 0x180;
 const REGION_MAGIC: &[u8; 4] = b"REG1";
 const REGION_OFF: usize = 0x200;
 const REGION_MAX: usize = 120;
+const SHARING_MAGIC: &[u8; 4] = b"SHR1";
+const SHARING_OFF: usize = 0x300;
 /// Brugt del af siden, rundet op til hele ord.
-const USED: usize = (REGION_OFF + 4 + 2 + REGION_MAX).div_ceil(4) * 4;
+const USED: usize = (SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN).div_ceil(4) * 4;
 
 const MAIL_MAGIC: u8 = 0xA5;
 /// Største besked i postkassen.
@@ -211,6 +215,22 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         let names = crate::node::RegionNames::from_slice(&buf[REGION_OFF + 6..REGION_OFF + 6 + n])
             .unwrap_or_default();
         (buf[REGION_OFF + 4] == 1, names)
+    }
+
+    fn save_sharing(&mut self, s: &maarse_core::companion::Sharing) {
+        let mut buf = self.read_page();
+        buf[SHARING_OFF..SHARING_OFF + 4].copy_from_slice(SHARING_MAGIC);
+        buf[SHARING_OFF + 4..SHARING_OFF + 14].copy_from_slice(&s.to_bytes());
+        self.write_page(&buf);
+    }
+
+    fn load_sharing(&mut self) -> maarse_core::companion::Sharing {
+        let buf = self.read_page();
+        if &buf[SHARING_OFF..SHARING_OFF + 4] == SHARING_MAGIC {
+            maarse_core::companion::Sharing::from_bytes(&buf[SHARING_OFF + 4..]).unwrap_or_default()
+        } else {
+            Default::default()
+        }
     }
 
     fn save_admins(&mut self, admins: &[Address]) {

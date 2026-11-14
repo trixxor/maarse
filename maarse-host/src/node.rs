@@ -1,6 +1,8 @@
 //! Nodens hovedløkke: routing, kryptering, announces, filer, postkasser og
 //! webklienter.
 
+mod ext;
+
 use crate::dht::{self, Contact, Record};
 use crate::{ClientId, Config, In, LinkId};
 use rand_core::{OsRng, RngCore};
@@ -175,6 +177,8 @@ pub struct Node {
     /// Til tråde (DHT-opslag) og nye forbindelser.
     tx: Option<Sender<In>>,
     dht: Dht,
+    /// Diagnose, deling og MQTT (se node/ext.rs).
+    ext: ext::Ext,
 }
 
 /// Backbone-DHT'ens tilstand (se dht.rs).
@@ -348,6 +352,10 @@ impl Node {
                 lookups: 0,
                 found: 0,
             },
+            ext: ext::Ext::load(
+                &cfg.data_dir,
+                cfg.mqtt.clone().map(|m| crate::mqtt::Mqtt::spawn(m, format!("maarse-{}", short(&addr)))),
+            ),
         };
         let saved = fs::read_to_string(node.data_dir.join("admins.txt")).unwrap_or_default();
         node.admins = saved.lines().filter_map(parse_addr).collect();
@@ -602,12 +610,7 @@ impl Node {
     }
 
     fn announce(&mut self) {
-        let mut app = Vec::new();
-        if let Some(p) = self.my_postbox {
-            app.push(APP_POSTBOX);
-            app.extend_from_slice(&p.0);
-        }
-        app.push(ratchet::APP_FS);
+        let app = self.app_data();
         let Some(payload) = self.identity.announce(unix_now(), &app) else {
             return;
         };
@@ -703,6 +706,7 @@ impl Node {
             PacketType::Data => self.open_direct(payload.to_vec(), hops, true),
             PacketType::Fragment => self.on_chunk(payload),
             PacketType::Deposit => self.on_deposit(payload),
+            PacketType::Probe => self.on_trace(dest, payload),
             PacketType::Channel => {
                 let Some((_, key)) = self.channels.get(&dest) else {
                     return;
@@ -710,6 +714,7 @@ impl Node {
                 let mut out = [0u8; 256];
                 match seal::open_channel(key, payload, &mut out) {
                     Ok((from, n)) if from != self.addr => {
+                        self.mqtt_channel(&dest, &from, hops, &out[..n]);
                         self.broadcast(&Event::ChannelReceived {
                             channel: dest,
                             from,
@@ -735,6 +740,7 @@ impl Node {
                 if ratchet::announces_fs(a.app_data) {
                     self.fs_peers.insert(dest);
                 }
+                self.on_app_data(dest, hops, a.app_data);
                 if self.known.insert(dest, a.identity).is_none() {
                     self.log(format!("ny node hørt: {}", short(&dest)));
                     if let Ok(mut f) = fs::OpenOptions::new()
@@ -1449,6 +1455,7 @@ impl Node {
     }
 
     fn command(&mut self, id: ClientId, cmd: Command) {
+        let Some(cmd) = self.ext_command(id, cmd) else { return };
         match cmd {
             Command::GetInfo => self.send_client(id, &self.info()),
             Command::AnnounceNow => {
@@ -1596,6 +1603,11 @@ impl Node {
                 let ev = Event::Stats { items: self.stats() };
                 self.send_client(id, &ev);
             }
+            // Håndteres i node/ext.rs.
+            Command::TraceRoute { .. }
+            | Command::GetNeighbors
+            | Command::SetSharing(_)
+            | Command::GetSharing => {}
         }
     }
 }
@@ -1699,6 +1711,7 @@ impl Node {
         if let Some(snr) = c.last_snr {
             items.push((stat::LAST_SNR_DB, snr as i32));
         }
+        self.ext_stats(&mut items);
         items.into_iter().collect()
     }
 }

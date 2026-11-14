@@ -90,6 +90,45 @@ try:
     log_has("b", "besked fra " + addr_a.hex()[:8], "hop, forward secrecy)")
     ok("direkte beskeder mellem to hosts bruger forward secrecy (init, så ratchet)")
 
+    # 1c. Historik: flere skærme på samme host. Skærm 1 (a) sender, skærm 2
+    #     (a2) ser det live; skærm 3 (a3) forbinder bagefter og henter historikken.
+    #     HistoryItem (0xB0): id | unix | flag | art | tilstand | hop | msg_id | samtale | fra | tekst
+    a2 = Client(8181); a2.info()
+    a.send(frame(0x02, struct.pack("<H", 40), addr_b, "Fra skærm 1".encode()))
+    sent = a.wait(lambda f: f[0] == 0x82 and f[1:3] == struct.pack("<H", 40))
+    live = a2.wait(lambda f: f[0] == 0xB0 and f[57:] == "Fra skærm 1".encode())
+    assert live[13] & 3 == 3 and live[25:41] == addr_b and live[17:25] == sent[3:11], live
+    assert not any(f[0] == 0xB0 and f[57:] == "Fra skærm 1".encode() for f in a.events), "afsenderen fik sin egen besked igen"
+    b.wait(lambda f: f[0] == 0x83 and f[18:] == "Fra skærm 1".encode())
+    a2.wait(lambda f: f[0] == 0x85 and f[1:9] == sent[3:11])
+    ok("besked sendt fra skærm 1 vises live på skærm 2 (samme host)")
+    a3 = Client(8181)
+    info = a3.wait(lambda f: f[0] == 0xB3)
+    assert info[1] == 1 and struct.unpack("<H", info[2:4])[0] == 90, info
+    rm = a3.wait(lambda f: f[0] == 0xB2 and f[1:17] == addr_b)
+    assert struct.unpack("<H", rm[25:27])[0] >= 1, "B's besked burde være ulæst"
+    a3.send(frame(0x30, struct.pack("<H", 41), addr_b, struct.pack("<Q", 0), bytes([50])))
+    end = a3.wait(lambda f: f[0] == 0xB1 and f[1:3] == struct.pack("<H", 41))
+    items = [f for f in a3.events if f[0] == 0xB0 and f[25:41] == addr_b]
+    texts = [(f[13] & 1, f[57:]) for f in items]
+    assert (0, b"Hej A") in texts and (1, "Hej B – æøå".encode()) in texts and (1, "Fra skærm 1".encode()) in texts, texts
+    mine = [f for f in items if f[57:] == "Fra skærm 1".encode()][0]
+    assert mine[15] == 2, "kvitteringen skulle være gemt (tilstand 2)"
+    assert end[19] == len(items), (end[19], len(items))
+    ok(f"ny skærm 3 henter historikken ({len(items)} beskeder med B, inkl. kvittering)")
+    a3.send(frame(0x30, struct.pack("<H", 42), addr_b, struct.pack("<Q", 0), bytes([1])))
+    e1 = a3.wait(lambda f: f[0] == 0xB1 and f[1:3] == struct.pack("<H", 42))
+    assert e1[19] == 1 and e1[20] == 1, "side 1 skulle have flere"
+    oldest = e1[21:29]
+    a3.send(frame(0x30, struct.pack("<H", 43), addr_b, oldest, bytes([200])))
+    e2 = a3.wait(lambda f: f[0] == 0xB1 and f[1:3] == struct.pack("<H", 43))
+    assert e2[19] == len(items) - 1 and e2[20] == 0, (e2[19], e2[20])
+    ok("historik i sider (før id)")
+    a3.send(frame(0x31, addr_b, struct.pack("<Q", 0)))
+    for c in (a, a2, a3):
+        m = c.wait(lambda f: f[0] == 0xB2 and f[1:17] == addr_b and f[25:27] == bytes(2))
+    ok("læst på skærm 3 sendes til alle skærme (ulæste = 0)")
+
     # 2. Kanal
     for c in (a, b): c.send(frame(0x04, b"#test"))
     j = a.wait(lambda f: f[0] == 0x88 and f[17:] == b"#test")

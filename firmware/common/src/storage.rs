@@ -7,8 +7,10 @@
 //!   0x000: "MRS1" + hemmelig nøgle (64)
 //!   0x080: "RCF1" + radioindstillinger (16)
 //!   0x100: "ADM1" + antal (1) + administratorer (4 × 16)
+//!   0x180: "ROL1" + rolle (1: 0 = klient, 1 = repeater, 2 = relay)
 //!   ```
-//!   Skrives kun første gang og når radio/administratorer ændres.
+//!   Skrives kun første gang og når radio/administratorer/rolle ændres.
+//!   Ældre flash uden "ROL1" (slettet = 0xFF) giver repeater.
 //!
 //! * Postkassen (to sektorer, 8 KB): poster skrives efter hinanden — et
 //!   hovedord `[0xA5, status, længde lo, længde hi]`, modtager (16) og den
@@ -21,6 +23,7 @@
 use embedded_storage::nor_flash::NorFlash;
 use rand_core::{CryptoRng, RngCore};
 use maarse_core::Address;
+use maarse_core::router::Role;
 use maarse_core::companion::RadioConfig;
 use maarse_crypto::Identity;
 
@@ -30,8 +33,10 @@ const RADIO_MAGIC: &[u8; 4] = b"RCF1";
 const RADIO_OFF: usize = 0x80;
 const ADMIN_MAGIC: &[u8; 4] = b"ADM1";
 const ADMIN_OFF: usize = 0x100;
+const ROLE_MAGIC: &[u8; 4] = b"ROL1";
+const ROLE_OFF: usize = 0x180;
 /// Brugt del af siden, rundet op til hele ord.
-const USED: usize = (ADMIN_OFF + 4 + 1 + 4 * 16).div_ceil(4) * 4;
+const USED: usize = (ROLE_OFF + 4 + 1).div_ceil(4) * 4;
 
 const MAIL_MAGIC: u8 = 0xA5;
 /// Største besked i postkassen.
@@ -163,6 +168,23 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         buf[RADIO_OFF..RADIO_OFF + 4].copy_from_slice(RADIO_MAGIC);
         buf[RADIO_OFF + 4..RADIO_OFF + 4 + RadioConfig::LEN].copy_from_slice(&cfg.to_bytes());
         self.write_page(&buf);
+    }
+
+    fn save_role(&mut self, role: Role) {
+        let mut buf = self.read_page();
+        buf[ROLE_OFF..ROLE_OFF + 4].copy_from_slice(ROLE_MAGIC);
+        buf[ROLE_OFF + 4] = role.as_u8();
+        self.write_page(&buf);
+    }
+
+    fn load_role(&mut self) -> Role {
+        let buf = self.read_page();
+        if &buf[ROLE_OFF..ROLE_OFF + 4] == ROLE_MAGIC
+            && let Some(r) = Role::from_u8(buf[ROLE_OFF + 4])
+        {
+            return r;
+        }
+        Role::Repeater
     }
 
     fn save_admins(&mut self, admins: &[Address]) {

@@ -42,6 +42,10 @@ Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge
 | Fjernadministration (status og radio på en anden node) | ja | ja | ja |
 | Status-side (radio, routing, postkasse, trafik, DHT) | ja | ja, med RSSI/SNR, duty cycle, CAD og fejl | ja, samme |
 | Radioindstillinger (MHz, båndbredde, SF, CR, dBm, duty %) | – | ja, gemmes i flash | ja, gemmes i flash |
+| Batterimåling og energistyret routing | – (altid fuld) | ja, begge boards, + USB-strøm | Heltec V4 ja; XIAO ESP32-S3: ukendt (ingen deler) |
+| Diagnose: trace route, naboliste, støjgulv | trace og naboer | ja | ja |
+| Position (opt-in, afrundet) og telemetri i announces | ja | ja, gemmes i flash | ja, gemmes i flash |
+| MQTT-bro med Home Assistant discovery | ja (`--mqtt`) | – | – |
 | Forbindelse | TCP-backbone + DHT, WebSocket, seriel LoRa-modem | USB og Bluetooth | USB og Bluetooth (ja, ikke afprøvet på hardware) |
 | Display | – | – | Heltec V4: 3 sider, skift med PRG-knappen |
 
@@ -125,6 +129,57 @@ Kanalbeskeder kan holdes inden for et område. En region er et navn med små bog
 - Når en host ser en ruteforespørgsel til en ukendt adresse, slår den adressen op. Det sker også, når en klient skriver til en ukendt adresse; så venter beskeden på svaret.
 - Når adressen er fundet, forbinder hosten direkte til gatewayen, og den almindelige routing klarer resten.
 - DHT-trafikken bruger samme TCP-port som backbone. Den kendes på de første to bytes (`D7 D7`).
+
+## Batteri og energistyret routing
+
+Firmwaren måler batteriet hvert 60. sekund (8 målinger i gennemsnit) og sætter routerens energistatus ud fra spændingen (`maarse-core/src/battery.rs`):
+
+| Spænding | Status | Videresender |
+| --- | --- | --- |
+| ≥ 3,90 V eller USB-strøm | fuld | alt |
+| 3,60–3,90 V | ok | alt, lidt senere i floods |
+| 3,40–3,60 V | lav | kun direkte beskeder og ruteforespørgsler |
+| < 3,40 V | kritisk | intet |
+
+Tærsklerne følger Li-ion-kurven (RAK's OCV-tabel i Meshtastic): 3,9 V ≈ 75 %, 3,6 V er "knæet" (≈ 10–15 %), under 3,4 V er cellen næsten tom. For at gå et trin op skal spændingen være 50 mV over tærsklen (hysterese). Spænding, procent, USB-strøm og energistatus står på status-siden (nøgle 49, 85, 82, 81).
+
+| Board | Måling | Kilde |
+| --- | --- | --- |
+| XIAO nRF52840 | P0.31 (AIN7), deler 1 MΩ/510 kΩ (× 2,961), tændt med P0.14 lav; 3,0 V reference, 12 bit | Meshtastic `seeed_xiao_nrf52840_kit`, MeshCore `XiaoNrf52Board` |
+| WisMesh Tag (RAK4630) | P0.05 (AIN3), deler 1 MΩ/1,5 MΩ (× 1,73); 3,0 V reference, 12 bit | Meshtastic `rak_wismeshtag` |
+| Heltec V4 | GPIO1 (ADC1), deler tændt med GPIO37 høj, × 5,12 (4,9 × 1,045), 2,5 dB dæmpning | Meshtastic `heltec_v4` |
+| XIAO ESP32-S3 + Wio | ingen batterideler: "ukendt" | – |
+
+USB-strøm ses på nRF52840 i POWER-registeret (VBUSDETECT); ESP32-boardene rapporterer "ukendt".
+
+## Diagnose
+
+Webklienten har en **Diagnose**-side (knappen ved Status/Radio):
+
+- **Trace route** (kommando `0x20`, svar `0xA0`): en `Probe`-pakke følger den kendte rute (eller finder en først), og hver repeater lægger den SNR, den hørte pakken med, til. Målet svarer ad den omvendte vej, og repeaterne lægger igen deres SNR til. Resultatet er SNR for hvert spring begge veje. Pakke-ID'et regnes kun over den faste del, så implicitte kvitteringer pr. hop virker som for andre pakker. Ældre noder sender pakken uændret videre. Format i `maarse-core/src/diag.rs`.
+- **Naboliste** (`0x21`, svar `0xA1`): noder hørt direkte (announces uden hop og forrige hop i kildestier og ruteforespørgsler) med SNR, RSSI, tid og antal pakker.
+- **Støjgulv** (status-nøgle 80): lora-phy giver ikke den øjeblikkelige RSSI, så støjgulvet anslås ud fra modtagne pakker: N = RSSI − 10·log10(1 + 10^(SNR/10)), glidende gennemsnit.
+
+## Position og telemetri
+
+Position deles **ikke** som standard. Under Diagnose kan man vælge præcision (slukket / ca. 10 km / ca. 1 km / præcis) og telemetri (batteri, oppetid, energistatus); kommando `0x22`/`0x23`, svar `0xA2`. Noden gemmer positionen, men sender den afrundet til midten af en gittercelle (0,1° eller 0,01°); kun "præcis" sender den nøjagtige position (klienten spørger først). Felterne ligger i announcets app-data efter FS-feltet (`0x03` position, `0x04` telemetri, type | længde | data, i alt højst 41 af 99 bytes), så ældre noder ignorerer dem. Modtagne positioner og telemetri vises som en liste (hændelse `0xA3`), uden kort udefra. Temperatur er med i formatet, men nRF52840's TEMP-enhed ejes af Bluetooth (MPSL), så den sendes ikke endnu.
+
+## MQTT og Home Assistant
+
+```
+maarse-host --mqtt 127.0.0.1:1883 [--mqtt-prefix maarse] [--mqtt-user navn --mqtt-pass kode]
+```
+
+Hosten sender modtaget telemetri, positioner og kanalbeskeder som JSON (QoS 0, med en lille indbygget MQTT 3.1.1-klient uden ekstra afhængigheder):
+
+| Emne | Indhold |
+| --- | --- |
+| `maarse/status` | `online`/`offline` (will, bevares) |
+| `maarse/node/<adresse>/telemetry` | `{"battery_mv":3870,"battery_v":3.870,"battery_percent":70,"ext_power":false,"energy":2,"uptime_s":61,...}` |
+| `maarse/node/<adresse>/position` | `{"lat":56.155,"lon":10.215,"precision":"1km",...}` |
+| `maarse/channel/<kanal>` | `{"channel":"#aarhus","from":"…","hops":1,"text":"…"}` |
+
+Første gang en node sender telemetri, udgives Home Assistant discovery (`homeassistant/sensor/maarse_<kort adresse>/<sensor>/config`) for batterispænding, batteri %, energistatus, oppetid, temperatur og hop, samlet som én enhed pr. node.
 
 ## Gateway til MeshCore
 
@@ -257,7 +312,8 @@ Simulatorens hændelsesspor (`--trace-json <fil|->`) er én JSON-linje pr. hænd
   - Indstillinger og postkasse ligger i partitionen `maarse` ved 0x210000 (se `firmware/esp/partitions.csv`).
   - Heltec V4: standard-sendestyrken er 10 dBm, fordi PA'en lægger ca. 7–10 dB oveni. PA-styringen (GPIO7/2/46) følger Meshtastic for GC1109-udgaven. Har dit board KCT8103L (nyere V4), skal styringen måske justeres.
   - Bluetooth (Nordic UART) er med: esp-radios BLE-controller med TrouBLE som host, samme GATT-tjeneste, rammer og navn (`Maarse-xxxx`) som på nRF. Controlleren bruger en heap på 72 KB (esp-alloc). Ikke afprøvet på hardware, især ikke samspillet med LoRa og USB.
-- **Mangler:** filer over LoRa på firmware, batterimåling og segmenterede stier over 12 hop.
+- **Mangler:** filer over LoRa på firmware og segmenterede stier over 12 hop.
+- **Afprøv på hardware (batteri og diagnose):** sammenlign batterispændingen på status-siden med et multimeter på hvert board (justér faktoren i `firmware/*/src/battery.rs` ved afvigelse over ca. 50 mV); træk USB ud og se USB-strøm skifte (nRF); se energistatus falde under 3,6/3,4 V (fx med et laboratorieaggregat); trace route over 2–3 repeatere og tjek, at SNR-værdierne svarer til status-sidens; naboliste efter et announce; støjgulv i et stille og et støjende miljø; position med 1 km-præcision vist afrundet hos en anden node.
 - Ben-tildelingen er hentet fra Meshtastics board-filer.
 
 ## Licens

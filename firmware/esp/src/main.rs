@@ -13,6 +13,8 @@
 #![no_std]
 #![no_main]
 
+#[cfg(feature = "board-heltec-v4")]
+mod battery;
 mod ble;
 #[cfg(feature = "display")]
 mod display;
@@ -150,7 +152,9 @@ async fn main(spawner: Spawner) {
 
     // ----- tilfældighed og identitet -----
     // Ægte tilfældighed fra ADC-støj, kun brugt som frø.
-    let trng_src = TrngSource::new(p.RNG, p.ADC1);
+    #[allow(unused_mut)]
+    let mut adc1 = p.ADC1;
+    let trng_src = TrngSource::new(p.RNG, adc1.reborrow());
     let mut seed = [0u8; 32];
     match Trng::try_new() {
         Ok(mut t) => t.fill_bytes(&mut seed),
@@ -216,6 +220,16 @@ async fn main(spawner: Spawner) {
         let controller: ble::Ble = bt_hci::controller::ExternalController::new(connector);
         spawner.spawn(ble::ble_task(controller, mac, name.as_str()).unwrap());
     }
+
+    // ----- batteri (Heltec V4; XIAO ESP32-S3 har ingen deler: ukendt) -----
+    #[cfg(feature = "board-heltec-v4")]
+    {
+        let (adc, pin) = battery::setup(adc1, p.GPIO1);
+        let ctrl = Output::new(p.GPIO37, Level::Low, OutputConfig::default());
+        spawner.spawn(battery::battery_task(adc, pin, ctrl).unwrap());
+    }
+    #[cfg(not(feature = "board-heltec-v4"))]
+    let _ = adc1;
 
     // ----- display (Heltec V4) -----
     #[cfg(feature = "board-heltec-v4")]

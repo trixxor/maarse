@@ -11,6 +11,7 @@
 #![no_std]
 #![no_main]
 
+mod battery;
 mod ble;
 mod radio;
 mod storage;
@@ -40,6 +41,7 @@ bind_interrupts!(pub struct Irqs {
     SPI2 => spim::InterruptHandler<peripherals::SPI2>;
     USBD => embassy_nrf::usb::InterruptHandler<peripherals::USBD>;
     RNG => rng::InterruptHandler<peripherals::RNG>;
+    SAADC => embassy_nrf::saadc::InterruptHandler;
     EGU0_SWI0 => nrf_sdc::mpsl::LowPrioInterruptHandler;
     CLOCK_POWER => nrf_sdc::mpsl::ClockInterruptHandler;
     RADIO => nrf_sdc::mpsl::HighPrioInterruptHandler;
@@ -65,6 +67,7 @@ async fn main(spawner: Spawner) {
     interrupt::SPI2.set_priority(Priority::P3);
     interrupt::USBD.set_priority(Priority::P3);
     interrupt::RNG.set_priority(Priority::P3);
+    interrupt::SAADC.set_priority(Priority::P3);
 
     // ----- board-specifikke ben -----
     #[cfg(feature = "board-wismesh-tag")]
@@ -105,6 +108,24 @@ async fn main(spawner: Spawner) {
             false,
         ),
     );
+
+    // ----- batteri (se battery.rs) -----
+    {
+        use embassy_nrf::saadc::{ChannelConfig, Config, Gain, Saadc, Time};
+        #[cfg(feature = "board-xiao-nrf52840")]
+        let (pin, enable) = (
+            p.P0_31,
+            // VBAT_ENABLE (P0.14) lav = deleren tændt.
+            Some(Output::new(p.P0_14, Level::Low, OutputDrive::Standard)),
+        );
+        #[cfg(feature = "board-wismesh-tag")]
+        let (pin, enable) = (p.P0_05, None::<Output<'static>>);
+        let mut ch = ChannelConfig::single_ended(pin);
+        ch.gain = Gain::Gain1_5; // 0,6 V / (1/5) = 3,0 V fuldt udslag
+        ch.time = Time::_40US; // høj kildeimpedans (MΩ-deler)
+        let adc = Saadc::new(p.SAADC, Irqs, Config::default(), [ch]);
+        spawner.spawn(battery::battery_task(adc, enable).unwrap());
+    }
 
     // ----- tilfældighed og identitet -----
     // Hardware-tilfældighed: bruges af Bluetooth-controlleren og som frø til

@@ -16,6 +16,11 @@ pub fn packet_id(ptype: PacketType, dest: &Address, payload: &[u8]) -> u64 {
         h ^= b as u64;
         h = h.wrapping_mul(PRIME);
     };
+    // En trace får SNR lagt til undervejs; ID'et regnes over den faste del.
+    let payload = match ptype {
+        PacketType::Probe => crate::diag::trace_fixed_len(payload).map_or(payload, |n| &payload[..n]),
+        _ => payload,
+    };
     feed(ptype as u8);
     dest.0.iter().copied().for_each(&mut feed);
     payload.iter().copied().for_each(&mut feed);

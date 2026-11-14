@@ -1101,6 +1101,8 @@ function renderDiag(box) {
     k.position ? PRECISION[k.position.prec] : "–",
     k.telemetry ? (k.telemetry.mv ? (k.telemetry.mv / 1000).toFixed(2) + " V" : k.telemetry.usb ? "USB" : "ukendt") + ` · ${ENERGY[k.telemetry.energy]}` : "–",
     k.telemetry ? fmt(k.telemetry.uptime, "tid") : "–", k.hops])));
+}
+
 // ---------- firmwareopdatering (se maarse-crypto/src/ota.rs) ----------
 // Stop-and-wait: næste bid sendes, når noden har svaret med næste offset.
 // Afbrydes overførslen, fortsætter "Genoptag" fra det sted, noden har gemt

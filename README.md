@@ -87,6 +87,18 @@ Announces og ruteforespørgsler bærer et lille arbejdsbevis (et "stempel", insp
 
 **Ændring af pakkeformatet (v0.4):** announces og ruteforespørgsler har nu 5 bytes ekstra sidst i payloaden: stempel-version (1) og nonce (4, big-endian). Største app-data i et announce er derfor 5 bytes mindre (99 bytes). Ældre noder uden stempel bliver ikke hørt af nye noder, og nye announces afvises af gamle noder (længden passer ikke). Companion-rammerne er uændrede; appen ser announces uden stempel.
 
+## Regioner
+
+Kanalbeskeder kan holdes inden for et område. En region er et navn med små bogstaver, fx `dk` eller `nordjylland`.
+
+- **Kanal med region:** deltag i `navn@region`, fx `offentlig@dk` eller `#tur@nordjylland`. Det, du sender til kanalen, mærkes med regionen. `#tur` uden `@` er global som før. Kanalens nøgle afhænger kun af navnet, så `#tur` og `#tur@nordjylland` er samme samtale.
+- **Noder med regioner:** hver node har en liste med op til 8 regioner, den videresender for. Hierarki klares med konfiguration: en repeater i Aalborg har `dk, nordjylland`, en i Aarhus har `dk, østjylland`. En besked i `#tur@nordjylland` når så hele Nordjylland, men stopper ved Aarhus-repeateren; en besked i `offentlig@dk` går gennem dem begge.
+- **Uden regioner** videresender en node alt, så nettet virker, før nogen har sat regioner op. Med **streng** (`strict`) videresender en node uden regioner kun beskeder uden region.
+- Det er kun **videresendelse**, der filtreres. Beskeder til din egen node leveres altid, og direkte beskeder (der følger ruter) er ikke berørt.
+- **Opsætning:** i webklienten under *Radio* (kommasepareret liste + "Streng"), eller for maarse-host med `--region dk --region nordjylland` og `--strict-region`. Firmware gemmer listen i flash, maarse-host i `regions.txt`.
+- **Backbone:** gateways udveksler deres regioner, når en TCP-forbindelse kommer op, og sender kun beskeder med region til peers, der betjener regionen. En Nordjylland-gateway og en anden Nordjylland-gateway deler altså `#tur@nordjylland` over internettet, mens en gateway i København kun får `dk`-beskeder.
+- **På luften:** bit 0 i flag-byten betyder "region følger", og regionen er 2 bytes (16-bit hash af navnet) efter stien. Pakker uden region er uændrede; ældre firmware videresender ikke pakker med region.
+
 ## Backbone-DHT
 
 - Kademlia-agtig, med XOR-afstand på 16-byte-adresser, K = 8 og 3 forespørgsler pr. runde.

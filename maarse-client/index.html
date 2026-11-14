@@ -505,15 +505,32 @@ class FrameDecoder {
 
 let transport = null;
 
+// Fjern-host (fx over VPN): adresse og adgangsnøgle huskes. "#token=…" i
+// adressen gemmes automatisk (maarse-host skriver den ved opstart).
+const remoteHost = {
+  get: () => store.get("remoteHost", null),
+  set: (v) => store.set("remoteHost", v),
+};
+{
+  const m = location.hash.match(/token=([0-9a-fA-F]{16,})/);
+  if (m) { store.set("hostToken", m[1]); history.replaceState(null, "", location.pathname); }
+}
+function wsUrl() {
+  const r = remoteHost.get();
+  if (r?.addr) return `ws://${r.addr}/ws?token=${encodeURIComponent(r.token || "")}`;
+  const t = store.get("hostToken", "");
+  return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws" + (t ? `?token=${t}` : "");
+}
+
 class WsTransport {
   constructor(onBytes, onClose) {
-    const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+    const url = wsUrl();
     this.ws = new WebSocket(url);
     this.ws.binaryType = "arraybuffer";
     this.ready = new Promise((ok, fail) => { this.ws.onopen = () => { this.up = true; ok(); }; this.ws.onerror = () => fail(new Error("WebSocket fejlede")); });
     this.ws.onmessage = e => onBytes(new Uint8Array(e.data));
     this.ws.onclose = onClose;
-    this.name = "maarse-host";
+    this.name = remoteHost.get()?.addr ? "maarse-host " + remoteHost.get().addr : "maarse-host";
   }
   async send(b) { this.ws.send(b); }
   async close() { this.ws.close(); }
@@ -685,6 +702,7 @@ function renderChat() {
   if (state.view === "radio") return renderRadio(box);
   if (state.view === "diag") return renderDiag(box);
   if (state.view === "pages") return renderPages(box);
+  if (state.view === "remote") return renderRemote(box);
   if (state.view === "firmware") return renderFirmware(box);
   if (state.view === "backup") return renderBackup(box);
   renderChatTools();
@@ -947,6 +965,7 @@ async function connect(kind, quiet = false) {
     }
     setConnected(true, transport.name);
     log("Forbundet via " + transport.name);
+    if (state.view === "remote") { setView("chat"); mobileSide(true); }
     await transport.send(Cmd.getInfo());
     transport.send(Cmd.getName());
     await transport.send(Cmd.setTime());
@@ -2387,6 +2406,36 @@ function renderCallBar() {
   bar.replaceChildren(el("span", { className: "call-dot" }), el("span", { className: "call-text" }, txt), ...btns);
 }
 
+// Forbindelse til en maarse-host på en anden maskine (fx hjemme over VPN).
+function renderRemote(box) {
+  $("chat-title").textContent = "maarse-host"; $("chat-sub").textContent = "Forbind til din host over netværket (fx VPN)";
+  const r = remoteHost.get() || {};
+  const w = el("div", { className: "warn" });
+  w.append(el("b", {}, "Forbind til maarse-host"), el("div", { className: "muted" },
+    "Start hosten derhjemme med fx --http 0.0.0.0:8080. Den skriver adressen og adgangsnøglen ved opstart " +
+    "(nøglen ligger også i adgangsnoegle.txt i datamappen). Du kan også indsætte hele browser-adressen med #token=."));
+  const addr = el("input", { id: "remote-addr", placeholder: "Adresse, fx 10.8.0.2:8080", value: r.addr || "" });
+  const tok = el("input", { id: "remote-token", placeholder: "Adgangsnøgle (32 tegn)", value: r.token || "" });
+  addr.onchange = () => {
+    const m = addr.value.match(/^(?:https?:\/\/)?([^/#\s]+)\/?(?:#token=([0-9a-fA-F]+))?/);
+    if (m) { addr.value = m[1]; if (m[2]) tok.value = m[2]; }
+  };
+  const go = el("button", { className: "primary", textContent: "Forbind" });
+  go.onclick = () => {
+    addr.onchange();
+    if (!/^[\w.\-\[\]:]+:\d+$/.test(addr.value)) { log("Skriv adressen som vært:port"); return; }
+    remoteHost.set({ addr: addr.value.trim(), token: tok.value.trim() });
+    connect("ws");
+  };
+  const forget = el("button", { textContent: "Glem host" });
+  forget.onclick = () => { remoteHost.set(null); renderChat(); };
+  const f = el("div", { className: "form" });
+  f.append(el("label", { htmlFor: "remote-addr" }, "Adresse"), addr, el("label", { htmlFor: "remote-token" }, "Adgangsnøgle"), tok);
+  const row = el("div", { className: "row" }); row.append(go, forget);
+  w.append(f, row);
+  box.append(w);
+}
+
 function el(tag, props = {}, ...kids) {
   const e = document.createElement(tag);
   Object.assign(e, props);
@@ -2695,6 +2744,13 @@ $("btn-add").onclick = () => {
 // Android-appen: Bluetooth via appen; ingen maarse-host, intet USB.
 if (IN_APP) {
   $("btn-serial").hidden = true;
+  $("btn-ws").hidden = false;
+  $("btn-ws").lastChild.textContent = "maarse-host";
+  $("btn-ws").classList.remove("primary");
+  $("btn-ws").onclick = () => remoteHost.get()?.addr ? connect("ws") : setView("remote");
+  { const d = document.createElement("div"); d.innerHTML = '<svg class="i"><use href="#i-host"/></svg><span><b>maarse-host</b> derhjemme (VPN)</span>';
+    document.querySelector(".empty .choices").append(d); }
+  if (remoteHost.get()?.addr) connect("ws"); // husket host: forbind ved start
   $("btn-ble").classList.add("primary");
   document.querySelector(".empty .choices").replaceChildren(...[...document.querySelectorAll(".empty .choices div")].slice(2));
   document.querySelector(".empty small").textContent = "Tryk på Bluetooth og vælg din node.";

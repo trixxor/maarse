@@ -62,6 +62,10 @@ pub enum PacketType {
     /// Datagram: direkte pakke uden kvittering fra ende til ende (bruges af
     /// IP-tunnelen). Kvittering og gensending pr. hop gælder stadig.
     Datagram = 10,
+    /// Store-carry-forward: a direct message handed to one neighbour to carry
+    /// (or to its destination), see `Router` "Carry". Addressed with a
+    /// one-element path naming the receiving neighbour; never flooded.
+    Carry = 11,
 }
 
 impl TryFrom<u8> for PacketType {
@@ -80,6 +84,7 @@ impl TryFrom<u8> for PacketType {
             8 => Channel,
             9 => Deposit,
             10 => Datagram,
+            11 => Carry,
             _ => return Err(DecodeError::UnknownType(v)),
         })
     }

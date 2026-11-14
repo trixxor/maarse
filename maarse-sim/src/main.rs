@@ -71,6 +71,9 @@ struct Config {
     /// Flood-dæmpning for relays: 0 = normal, 1 = bro (relays, der hører en
     /// repeater direkte, tier ikke), 2 = ingen dæmpning for relays.
     suppress: u8,
+    /// Carry (store-carry-forward) in the router: copies per message that
+    /// could not be delivered; 0 = off (see `Router` "Carry").
+    carry_copies: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -110,6 +113,7 @@ impl Default for Config {
             hill_role: Some(Role::Relay),
             hill_gain_db: 10.0,
             suppress: 0,
+            carry_copies: 0,
         }
     }
 }
@@ -133,6 +137,7 @@ fn parse_args() -> Config {
             "--duration" => c.duration_s = v.parse().expect("--duration"),
             "--road-km" => c.road_km = v.parse().expect("--road-km"),
             "--car-kmh" => c.car_kmh = v.parse().expect("--car-kmh"),
+            "--carry" => c.carry_copies = v.parse().expect("--carry (copies)"),
             "--suppress" => {
                 c.suppress = match v.as_str() {
                     "normal" => 0,
@@ -216,7 +221,7 @@ fn parse_args() -> Config {
                      \x20        [--repeater-km 0,30,...] [--repeater-gain dB] [--anchor-every N]\n\
                      \x20        [--forest [--forest-db-km 10] [--walk-kmh 5] [--role client|relay|repeater] [--relay-hops H]]\n\
                      \x20        [--hill [--hill-role relay|client|repeater|none] [--hill-gain 10]]\n\
-                     \x20        [--suppress normal|legacy|bridge|bridge-relay|bridge-weak|bridge-weak-relay|none]   (flood-dæmpning for relays i skov)\n\
+                     \x20        [--carry copies] [--suppress normal|legacy|bridge|bridge-relay|bridge-weak|bridge-weak-relay|none]   (flood-dæmpning for relays i skov)\n\
                      \x20        [--trace-json fil|-]   (hændelsesspor til maarse-lab)"
                 );
                 std::process::exit(0);
@@ -400,6 +405,7 @@ impl Sim {
             if cfg.highway && i == cfg.nodes - 1 {
                 router.mobile = true; // bilen
             }
+            router.carry_copies = cfg.carry_copies;
             if cfg.forest && !repeater {
                 router.mobile = true;
                 if let Some(h) = cfg.relay_hops {
@@ -749,6 +755,11 @@ impl Sim {
             let rx = self.radio.rx_dbm(d, g);
             self.gain[car][o] = rx;
             self.gain[o][car] = rx;
+        }
+        if self.cfg.carry_copies > 0 {
+            // The simulator sends no announces; give the routers what they
+            // would learn from them (neighbours and their roles).
+            self.apply_suppress();
         }
         self.schedule(self.now + 2000, Event::Move);
     }
@@ -1303,6 +1314,14 @@ impl Sim {
         if c.mode == Mode::Maarse {
             println!("  Ruter fundet:   {}", self.stats.routes_learned);
         }
+        if c.carry_copies > 0 {
+            println!(
+                "  Carried:        {} delivered by carrying, {} handoffs ({} copies)",
+                self.nodes.iter().map(|n| n.router.stats.carry_delivered).sum::<u32>(),
+                self.nodes.iter().map(|n| n.router.stats.carry_handoffs).sum::<u32>(),
+                c.carry_copies
+            );
+        }
         println!();
         println!("Kanalbeskeder ({}):", self.stats.channel_sent);
         println!(
@@ -1359,6 +1378,21 @@ impl Sim {
                     "  [debug] uden kvittering: {} -> {} sendt {} leveret {:?}",
                     m.from, m.to, m.sent_ms, m.delivered_ms
                 );
+            }
+        }
+        if std::env::var("DEBUG_CARRY").is_ok() {
+            for m in self.msgs.iter().filter(|m| m.delivered_ms.is_none()) {
+                println!("  [carry] lost {} -> {} sent {:.0} s", m.from, m.to, m.sent_ms as f64 / 1000.0);
+            }
+            for (i, n) in self.nodes.iter().enumerate() {
+                if n.router.carried_count() > 0 || n.router.stats.carry_handoffs > 0 {
+                    println!(
+                        "  [carry] node {i}: carries {}, handoffs {}, x {:.0} m",
+                        n.router.carried_count(),
+                        n.router.stats.carry_handoffs,
+                        n.pos.0
+                    );
+                }
             }
         }
         println!("Radio:");

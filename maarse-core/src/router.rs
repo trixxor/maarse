@@ -28,6 +28,23 @@
 //! Kvitteringer følger samme vej tilbage. Pakkeformatet er uændret, og flere
 //! ankre efter hinanden virker af sig selv (op til `MAX_HOPS` i alt).
 
+//! ## Carry (store-carry-forward)
+//! With `carry_copies > 0`, a direct message the router gives up on (no
+//! route found, or no acknowledgement after the retries) is not dropped but
+//! carried: the node keeps it with `carry_copies` tokens ("binary spray and
+//! wait"). Every few seconds the router looks at the neighbours it has heard
+//! recently: if one is the destination, the message is handed to it; if not,
+//! a holder with more than one token gives half of them to a neighbour that
+//! has none. People move, so islands of a group meet again, and the message
+//! gets across. Copies expire after [`CARRY_TTL_MS`].
+//!
+//! On the air this is a [`PacketType::Carry`] packet with a one-element path
+//! naming the receiving neighbour and the payload
+//! `tokens (1) | ttl left in s (u16 BE) | from (PathId, u16 BE) | message`.
+//! The destination delivers the message as an ordinary `Data` message (it is
+//! still end-to-end encrypted, so carriers cannot read it). There is no
+//! acknowledgement back to the sender yet.
+
 use crate::addr::{Address, PathId};
 use crate::dedup::{DedupCache, packet_id};
 use crate::packet::{Header, Packet, PacketType, Path, encode};
@@ -86,6 +103,39 @@ const MAX_NEIGHBORS: usize = 32;
 /// How long role, forwarding and coverage observations stay valid for the
 /// edge bridge rule (ms).
 pub const EDGE_WINDOW_MS: u64 = 300_000;
+/// Messages a node carries at most (see "Carry").
+pub const CARRY_MAX: usize = 8;
+/// How long a carried copy lives.
+pub const CARRY_TTL_MS: u64 = 30 * 60 * 1000;
+/// How often the router looks for neighbours to hand carried messages to.
+const CARRY_EVERY_MS: u64 = 5_000;
+/// A neighbour heard this recently counts as "here" for carrying.
+const CARRY_FRESH_MS: u64 = 30_000;
+/// Wait this long before handing the same message to the destination again.
+const CARRY_RETRY_MS: u64 = 60_000;
+
+/// A message we carry for someone else (or for ourselves, as its sender).
+#[derive(Clone)]
+struct Carried {
+    dest: Address,
+    payload: Buf,
+    id: u64,
+    tokens: u8,
+    until_ms: u64,
+    /// Neighbours that got a copy from us (or gave us ours).
+    given: heapless::Vec<PathId, 8>,
+    /// Last time we handed it to the destination (0 = never).
+    tried_ms: u64,
+    /// Last time we tried ordinary routing again near a repeater (0 = never).
+    routed_ms: u64,
+    /// We sent this message ourselves (only the sender tries routing again).
+    own: bool,
+}
+
+/// A carrier near a repeater tries ordinary routing again this often: the
+/// destination may be reachable through the repeater network by now (a car
+/// out of a coverage gap, a base station waiting for it).
+const CARRY_REROUTE_MS: u64 = 300_000;
 const MAX_TRACES: usize = 4;
 /// Hvor mange stykker et anker husker ad gangen (forespørgsler og beskeder).
 const MAX_ANCHORED: usize = 16;
@@ -299,6 +349,9 @@ pub struct RouterStats {
     pub path_requests: u32,
     /// Hop gensendt, fordi næste repeater ikke blev hørt.
     pub hop_retries: u32,
+    /// Carry packets sent and messages delivered to us by carrying.
+    pub carry_handoffs: u32,
+    pub carry_delivered: u32,
     /// Flood-udsendelser annulleret, fordi naboer havde dækket området.
     pub floods_cancelled: u32,
     /// Announces og ruteforespørgsler smidt væk, fordi arbejdsbeviset
@@ -332,6 +385,15 @@ pub struct Router<const R: usize, const D: usize> {
     /// Ekstra ventetid før vi sender et flood videre (ms). Bruges af en bro,
     /// så en repeaters kopi når frem først, hvis repeateren selv sender.
     pub extra_flood_delay_ms: u32,
+    /// Copies per message for store-carry-forward; 0 = off (see "Carry").
+    pub carry_copies: u8,
+    carried: heapless::Vec<Carried, CARRY_MAX>,
+    next_carry_ms: u64,
+    /// Neighbours seen at the previous carry step: handoffs only go to new
+    /// encounters, not to the same neighbours again and again.
+    carry_seen: heapless::Vec<PathId, 32>,
+    /// We heard a repeater at the previous carry step.
+    carry_near_repeater: bool,
     /// Største antal hop, en relay videresender (standard 4, højst 7).
     pub relay_hops: u8,
     /// Ventetid på kvittering fra ende til ende, før ruten repareres (ms).
@@ -398,6 +460,11 @@ impl<const R: usize, const D: usize> Router<R, D> {
             hop_timeout_ms: DEFAULT_HOP_TIMEOUT_MS,
             suppress_after: 1,
             extra_flood_delay_ms: 0,
+            carry_copies: 0,
+            carried: heapless::Vec::new(),
+            next_carry_ms: 0,
+            carry_seen: heapless::Vec::new(),
+            carry_near_repeater: false,
             relay_hops: DEFAULT_RELAY_HOPS,
             ack_timeout_ms: DEFAULT_ACK_TIMEOUT_MS,
             mobile: false,
@@ -615,13 +682,18 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let t = self.ack_timeout_ms as u64;
         let ack = self.awaiting.iter().map(|a| a.sent_ms + t);
         let rep = self.replies.iter().map(|r| r.reply_at_ms);
-        fwd.chain(req).chain(ack).chain(rep).min()
+        let carry = (!self.carried.is_empty()).then_some(self.next_carry_ms);
+        fwd.chain(req).chain(ack).chain(rep).chain(carry).min()
     }
 
     /// Kaldes, når `next_deadline` er nået: gensender hop, der ikke er
     /// blevet sendt videre, og opgiver dem efter `HOP_RETRIES` forsøg.
     pub fn tick(&mut self, now_ms: u64) -> Actions {
         let mut out = Actions::new();
+        if !self.carried.is_empty() && now_ms >= self.next_carry_ms {
+            self.next_carry_ms = now_ms + CARRY_EVERY_MS;
+            self.carry_step(now_ms, &mut out);
+        }
         // Svar på ruteforespørgsler ad det bedste spor, vi har hørt.
         while let Some(i) = self.replies.iter().position(|r| r.reply_at_ms <= now_ms) {
             let r = self.replies.swap_remove(i);
@@ -643,7 +715,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 continue;
             }
             if self.awaiting[i].tries >= E2E_RETRIES {
-                self.awaiting.remove(i);
+                let a = self.awaiting.remove(i);
+                if a.ptype == PacketType::Data {
+                    self.start_carry(a.dest, &a.payload, now_ms);
+                }
                 continue;
             }
             let a = &mut self.awaiting[i];
@@ -675,7 +750,16 @@ impl<const R: usize, const D: usize> Router<R, D> {
             if p.tries >= PATH_RETRIES {
                 // Opgiv: modtageren kan ikke findes nu. Beskeder i køen til den
                 // droppes, så køen ikke fyldes op (appen kan bruge postkassen).
+                // With carrying on, direct messages are carried instead.
+                let mut carry: heapless::Vec<Buf, 4> = heapless::Vec::new();
+                for q in self.queue.iter().filter(|q| q.dest == p.target && q.ptype == PacketType::Data) {
+                    let _ = carry.push(q.payload.clone());
+                }
                 self.queue.retain(|q| q.dest != p.target);
+                self.awaiting.retain(|a| a.dest != p.target);
+                for m in carry {
+                    self.start_carry(p.target, &m, now_ms);
+                }
                 continue;
             }
             let mut token = p.token;
@@ -867,6 +951,166 @@ impl<const R: usize, const D: usize> Router<R, D> {
         }
     }
 
+    /// Messages we carry right now.
+    pub fn carried_count(&self) -> usize {
+        self.carried.len()
+    }
+
+    /// Starts carrying a direct message we could not deliver (see "Carry").
+    fn start_carry(&mut self, dest: Address, payload: &[u8], now_ms: u64) {
+        if self.carry_copies == 0 || dest == self.addr {
+            return;
+        }
+        self.add_carried(dest, payload, self.carry_copies, CARRY_TTL_MS, None, now_ms);
+    }
+
+    fn add_carried(
+        &mut self,
+        dest: Address,
+        payload: &[u8],
+        tokens: u8,
+        ttl_ms: u64,
+        from: Option<PathId>,
+        now_ms: u64,
+    ) {
+        let id = packet_id(PacketType::Data, &dest, payload);
+        if self.carried.iter().any(|c| c.id == id) || tokens == 0 {
+            return;
+        }
+        let Ok(payload) = Buf::from_slice(payload) else { return };
+        if self.carried.is_full()
+            && let Some(i) = self.carried.iter().enumerate().min_by_key(|(_, c)| c.until_ms).map(|(i, _)| i)
+        {
+            self.carried.swap_remove(i);
+        }
+        let mut given = heapless::Vec::new();
+        if let Some(f) = from {
+            let _ = given.push(f);
+        }
+        let _ = self.carried.push(Carried { dest, payload, id, tokens, until_ms: now_ms + ttl_ms, given, tried_ms: 0, routed_ms: 0, own: from.is_none() });
+    }
+
+    /// Hands carried messages to neighbours heard recently.
+    fn carry_step(&mut self, now_ms: u64, out: &mut Actions) {
+        self.carried.retain(|c| c.until_ms > now_ms);
+        let here: heapless::Vec<PathId, 32> = self
+            .neighbors
+            .iter()
+            .filter(|n| now_ms.saturating_sub(n.last_ms) < CARRY_FRESH_MS)
+            .map(|n| n.id)
+            .collect();
+        // Near a repeater: try ordinary routing again (the outbox that waits
+        // for coverage). The message stays carried until it expires; the
+        // destination's duplicate filter drops copies.
+        let near_repeater = here.iter().any(|&n| self.is_repeater_neighbor(n, now_ms));
+        let regained = near_repeater && !self.carry_near_repeater;
+        self.carry_near_repeater = near_repeater;
+        if near_repeater {
+            let due: heapless::Vec<(Address, Buf, u64), CARRY_MAX> = self
+                .carried
+                .iter()
+                .filter(|c| c.own && (regained || c.routed_ms == 0 || now_ms.saturating_sub(c.routed_ms) >= CARRY_REROUTE_MS))
+                .map(|c| (c.dest, c.payload.clone(), c.id))
+                .collect();
+            for (dest, payload, id) in due {
+                if let Some(c) = self.carried.iter_mut().find(|c| c.id == id) {
+                    c.routed_ms = now_ms;
+                }
+                let mut token = [0u8; 16];
+                token[..8].copy_from_slice(&(id ^ now_ms.rotate_left(29)).to_le_bytes());
+                token[8] = 0xCA;
+                if let Ok((_, more)) = self.send_typed(PacketType::Data, dest, &payload, token, now_ms) {
+                    for m in more {
+                        let _ = out.push(m);
+                    }
+                }
+            }
+        }
+        let fresh: heapless::Vec<PathId, 32> = here
+            .iter()
+            .copied()
+            .filter(|n| !self.carry_seen.contains(n))
+            .filter(|n| !self.neighbors.get(*n).is_some_and(|x| matches!(x.role, Some(Role::Repeater | Role::Anchor))))
+            .collect();
+        self.carry_seen = here.clone();
+        let mut sent = 0;
+        for i in 0..self.carried.len() {
+            if sent >= 2 {
+                break; // a few per step: the channel is shared
+            }
+            let c = &self.carried[i];
+            let dest_id = c.dest.path_id();
+            let ttl_s = (c.until_ms.saturating_sub(now_ms) / 1000).min(u16::MAX as u64) as u16;
+            if here.contains(&dest_id) {
+                if c.tried_ms != 0 && now_ms.saturating_sub(c.tried_ms) < CARRY_RETRY_MS {
+                    continue;
+                }
+                let (dest, payload) = (c.dest, c.payload.clone());
+                self.carried[i].tried_ms = now_ms;
+                self.emit_carry(dest, dest_id, 0, ttl_s, &payload, now_ms, out);
+                sent += 1;
+                continue;
+            }
+            if c.tokens > 1
+                && let Some(&nb) = fresh.iter().find(|n| !c.given.contains(n) && **n != dest_id)
+            {
+                let give = c.tokens / 2;
+                let (dest, payload) = (c.dest, c.payload.clone());
+                let c = &mut self.carried[i];
+                c.tokens -= give;
+                let _ = c.given.push(nb);
+                self.emit_carry(dest, nb, give, ttl_s, &payload, now_ms, out);
+                sent += 1;
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_carry(&mut self, dest: Address, to: PathId, tokens: u8, ttl_s: u16, msg: &[u8], now_ms: u64, out: &mut Actions) {
+        let mut payload = Buf::new();
+        let _ = payload.push(tokens);
+        let _ = payload.extend_from_slice(&ttl_s.to_be_bytes());
+        let _ = payload.extend_from_slice(&self.id.to_be_bytes());
+        if payload.extend_from_slice(msg).is_err() {
+            return;
+        }
+        let Ok(path) = Path::from_slice(&[to]) else { return };
+        let header = Header::new(PacketType::Carry, dest).with_path(path);
+        self.stats.carry_handoffs += 1;
+        let _ = now_ms;
+        self.emit(&header, &payload, SOURCE_ROUTE_DELAY_MS, out);
+    }
+
+    /// A carried message handed to us.
+    fn on_carry(&mut self, pkt: &Packet, now_ms: u64, out: &mut Actions) {
+        let h = &pkt.header;
+        let Some(path) = &h.path else { return };
+        if path.first() != Some(&self.id) || pkt.payload.len() < 5 {
+            return;
+        }
+        let tokens = pkt.payload[0];
+        let ttl_s = u16::from_be_bytes([pkt.payload[1], pkt.payload[2]]);
+        let from = u16::from_be_bytes([pkt.payload[3], pkt.payload[4]]);
+        let msg = &pkt.payload[5..];
+        let id = packet_id(PacketType::Data, &h.dest, msg);
+        if h.dest == self.addr {
+            if self.dedup.insert(id) {
+                self.stats.carry_delivered += 1;
+                let _ = out.push(Action::Deliver {
+                    ptype: PacketType::Data,
+                    dest: self.addr,
+                    payload: Buf::from_slice(msg).unwrap_or_default(),
+                    hops: 0,
+                });
+            }
+            return;
+        }
+        if self.carry_copies == 0 || self.dedup.contains(id) {
+            return; // not carrying, or already delivered through us
+        }
+        self.add_carried(h.dest, msg, tokens, ttl_s as u64 * 1000, Some(from), now_ms);
+    }
+
     /// Kender vi en rute til `dest`?
     pub fn has_route(&self, dest: &Address) -> bool {
         self.routes.get(dest).is_some()
@@ -1000,6 +1244,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
         }
         self.stats.rx_packets += 1;
         self.note_neighbor(&pkt, snr_db, now_ms);
+        if pkt.header.ptype == PacketType::Carry {
+            self.on_carry(&pkt, now_ms, &mut out);
+            return out;
+        }
         let id = packet_id(pkt.header.ptype, &pkt.header.dest, pkt.payload);
         match (&pkt.header.ptype, &pkt.header.path) {
             (PacketType::PathRequest, _) => {
@@ -2102,6 +2350,47 @@ mod tests {
         plain.on_receive(&forwarded_request(7, &[0x0707]), 5, 10);
         let out = plain.on_receive(&forwarded_request(7, &[0x0808]), 10, 20);
         assert!(out.iter().any(|a| matches!(a, Action::Cancel { .. })));
+    }
+
+    #[test]
+    fn carry_hands_off_and_delivers() {
+        let mut a = node(1, Role::Relay);
+        let mut b = node(4, Role::Relay);
+        let mut dest = node(5, Role::Client);
+        a.carry_copies = 4;
+        b.carry_copies = 4;
+        // A gives up on a message to `dest` and starts carrying it.
+        a.start_carry(dest.addr, b"sealed", 0);
+        assert_eq!(a.carried_count(), 1);
+        // A meets B (heard recently): half the tokens go to B.
+        a.neighbors.heard(b.id, None, 5, 0, 1_000);
+        let out = a.tick(10_000);
+        let pkt = transmits(&out)[0].clone();
+        assert_eq!(Packet::decode(&pkt).unwrap().header.ptype, PacketType::Carry);
+        assert!(b.on_receive(&pkt, 5, 10_100).is_empty());
+        assert_eq!(b.carried_count(), 1, "B carries a copy");
+        // B meets the destination and hands it over; it is delivered as Data.
+        b.neighbors.heard(dest.id, None, 5, 0, 20_000);
+        let out = b.tick(20_000);
+        let pkt = transmits(&out)[0].clone();
+        let got = dest.on_receive(&pkt, 5, 20_100);
+        assert!(got.iter().any(|x| matches!(x, Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == b"sealed")));
+        // A second copy is not delivered again.
+        assert!(dest.on_receive(&pkt, 5, 20_200).is_empty());
+        // Copies expire.
+        let _ = b.tick(20_000 + CARRY_TTL_MS + 1);
+        assert_eq!(b.carried_count(), 0);
+        // Off by default: a node without carrying ignores carried messages.
+        let mut off = node(6, Role::Relay);
+        let p = {
+            let mut c = node(7, Role::Relay);
+            c.carry_copies = 4;
+            c.start_carry(dest.addr, b"x", 0);
+            c.neighbors.heard(off.id, None, 5, 0, 1_000);
+            transmits(&c.tick(5_000))[0].clone()
+        };
+        let _ = off.on_receive(&p, 5, 5_100);
+        assert_eq!(off.carried_count(), 0);
     }
 
     #[test]

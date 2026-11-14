@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Må:rse testlaboratorium</title>
+<style>
+:root {
+  --bg: #f5f6f8; --panel: #ffffff; --panel2: #eef0f4; --text: #1b1f27; --muted: #5d6675;
+  --line: #d9dde5; --accent: #2a6ae0; --ok: #1f9d55; --fail: #d63c3c; --warn: #c98a12; --idle: #9aa3b2;
+  --code: #f0f2f6; --canvas: #fbfcfe;
+  --c-announce: #8b5cf6; --c-preq: #e0a10f; --c-presp: #0ea5b7; --c-data: #2a6ae0; --c-ack: #1f9d55; --c-channel: #db2777; --c-other: #8a94a6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151b; --panel: #1a1e26; --panel2: #232833; --text: #e4e8ef; --muted: #98a2b3; --line: #2e3542;
+    --accent: #5b93ff; --ok: #38c172; --fail: #ff6b6b; --warn: #f0b429; --idle: #5d6675; --code: #141820; --canvas: #0f1217;
+    --c-announce: #a78bfa; --c-preq: #fbbf24; --c-presp: #22d3ee; --c-data: #60a5fa; --c-ack: #4ade80; --c-channel: #f472b6; --c-other: #94a3b8;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151b; --panel: #1a1e26; --panel2: #232833; --text: #e4e8ef; --muted: #98a2b3; --line: #2e3542;
+  --accent: #5b93ff; --ok: #38c172; --fail: #ff6b6b; --warn: #f0b429; --idle: #5d6675; --code: #141820; --canvas: #0f1217;
+  --c-announce: #a78bfa; --c-preq: #fbbf24; --c-presp: #22d3ee; --c-data: #60a5fa; --c-ack: #4ade80; --c-channel: #f472b6; --c-other: #94a3b8;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; font-weight: 650; white-space: nowrap; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav button { background: none; border: 0; color: var(--muted); padding: 6px 12px; border-radius: 6px; font: inherit; cursor: pointer; }
+nav button.on { background: var(--panel2); color: var(--text); font-weight: 600; }
+.spacer { flex: 1; }
+button.b { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 12px; font: inherit; cursor: pointer; white-space: nowrap; }
+button.b:hover:not(:disabled) { border-color: var(--accent); }
+button.b.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.b:disabled { opacity: .45; cursor: default; }
+.conn { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--idle); display: inline-block; flex: none; }
+.dot.ok { background: var(--ok); } .dot.fail { background: var(--fail); } .dot.run { background: var(--warn); animation: pulse 1s infinite; } .dot.queued { background: var(--accent); opacity: .6; }
+@keyframes pulse { 50% { opacity: .35; } }
+main { padding: 18px 20px 60px; max-width: 1500px; margin: 0 auto; }
+.tab { display: none; } .tab.on { display: block; }
+.summary { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; min-width: 130px; }
+.tile .k { font-size: 12px; color: var(--muted); } .tile .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+h2 { font-size: 15px; margin: 22px 0 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 12px; }
+@media (max-width: 520px) { .grid { grid-template-columns: 1fr; } main { padding: 12px 16px 40px; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.card.running { border-color: var(--warn); } .card.ok { border-left: 4px solid var(--ok); } .card.fail { border-left: 4px solid var(--fail); }
+.card .top { display: flex; align-items: center; gap: 10px; }
+.card .title { font-weight: 600; font-family: ui-monospace, Consolas, monospace; font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .meta { font-size: 12px; color: var(--muted); min-height: 1em; font-variant-numeric: tabular-nums; }
+.card .desc { color: var(--muted); font-size: 13px; }
+.tag { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--panel2); color: var(--muted); white-space: nowrap; }
+.tag.hw { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+.items { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
+details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; user-select: none; }
+.rows { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; margin-top: 4px; }
+.rows .g { font-size: 11.5px; color: var(--muted); background: var(--panel2); padding: 3px 8px; position: sticky; top: 0; }
+.r { display: flex; gap: 8px; padding: 2px 8px; font-size: 12.5px; align-items: baseline; border-top: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
+.r .ic { width: 14px; flex: none; text-align: center; font-weight: 700; }
+.r.ok .ic { color: var(--ok); } .r.fail .ic { color: var(--fail); } .r.fail { background: color-mix(in srgb, var(--fail) 10%, transparent); }
+.r.ignored .ic, .r.pending .ic { color: var(--idle); } .r.pending .n { color: var(--muted); }
+.r .n { flex: 1; font-family: ui-monospace, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.r .t { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+pre.log { background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 11.5px/1.4 ui-monospace, Consolas, monospace; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 0; }
+pre.log .err { color: var(--muted); } pre.log .info { color: var(--accent); }
+.bar { height: 4px; background: var(--panel2); border-radius: 2px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--ok); width: 0; transition: width .2s; }
+/* simulator */
+.controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.controls label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 3px; }
+.controls input[type=number], .controls select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: inherit; width: 90px; }
+.controls select { width: auto; }
+.controls .chk { flex-direction: row; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
+.speed { min-width: 200px; } .speed b { color: var(--text); font-variant-numeric: tabular-nums; }
+.panels { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
+.panels.two { grid-template-columns: 1fr 1fr; }
+@media (max-width: 1000px) { .panels.two { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.panel h3 { margin: 0 0 6px; font-size: 14px; display: flex; gap: 10px; align-items: center; }
+.panel canvas { width: 100%; height: 520px; display: block; background: var(--canvas); border-radius: 6px; border: 1px solid var(--line); }
+.panel.hw canvas { height: 520px; }
+.counters { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; margin-top: 8px; }
+.counters div { background: var(--panel2); border-radius: 6px; padding: 4px 8px; }
+.counters .k { font-size: 11px; color: var(--muted); } .counters .v { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; background: var(--c); }
+.simreport { font: 11.5px/1.4 ui-monospace, Consolas, monospace; white-space: pre-wrap; color: var(--muted); max-height: 200px; overflow: auto; margin-top: 8px; }
+.prog { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.prog .bar { flex: 1; }
+/* historik */
+table { border-collapse: collapse; width: 100%; font-size: 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; background: var(--panel2); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 12px; }
+@media (max-width: 520px) { .charts { grid-template-columns: 1fr; } }
+.chart { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.chart h4 { margin: 0 0 4px; font-size: 13px; }
+.chart svg { width: 100%; height: 170px; display: block; }
+.chart .lg { font-size: 12px; color: var(--muted); display: flex; gap: 14px; }
+.chart .lg i { display: inline-block; width: 12px; height: 3px; vertical-align: 3px; margin-right: 4px; }
+.empty { color: var(--muted); padding: 20px; text-align: center; background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; }
+.hwgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin-top: 8px; }
+.hwgrid div { background: var(--panel2); border-radius: 6px; padding: 4px 8px; }
+.hwgrid .k { font-size: 11px; color: var(--muted); } .hwgrid .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+code { font-family: ui-monospace, Consolas, monospace; background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Må:rse testlaboratorium</h1>
+  <nav id="nav">
+    <button data-tab="tests" class="on">Testoversigt</button>
+    <button data-tab="sim">Simulator live</button>
+    <button data-tab="hw">Hardware</button>
+    <button data-tab="hist">Historik</button>
+  </nav>
+  <div class="spacer"></div>
+  <span class="conn"><span class="dot" id="conndot"></span><span id="conntxt">forbinder …</span></span>
+  <button class="b primary" id="runall">Kør alt</button>
+  <button class="b" id="stop">Stop</button>
+  <button class="b" id="theme" title="Skift mellem lyst og mørkt tema">Tema</button>
+</header>
+<main>
+  <section class="tab on" id="tab-tests">
+    <div class="summary" id="summary"></div>
+    <div id="groups"></div>
+  </section>
+
+  <section class="tab" id="tab-sim">
+    <div class="controls">
+      <label>Scenarie
+        <select id="s-scen">
+          <option value="custom">Tilfældigt område</option>
+          <option value="120">120 noder, 30×30 km</option>
+          <option value="200">200 noder, 60×60 km</option>
+          <option value="hw">Motorvej 100 km, bil i 110 km/t</option>
+        </select>
+      </label>
+      <label>Noder <input type="number" id="s-nodes" value="30" min="3" max="400"></label>
+      <label>Repeatere <input type="number" id="s-rep" value="8" min="0" max="400"></label>
+      <label>Område (km) <input type="number" id="s-area" value="10" min="1" max="200"></label>
+      <label>Beskeder <input type="number" id="s-msgs" value="20" min="0" max="500"></label>
+      <label>Varighed (s) <input type="number" id="s-dur" value="300" min="30" max="3600"></label>
+      <label>Frø <input type="number" id="s-seed" value="1" min="0"></label>
+      <label>Tilstand
+        <select id="s-mode"><option value="maarse">Må:rse</option><option value="flood">flood, 7 hop</option></select>
+      </label>
+      <label class="chk"><input type="checkbox" id="s-cmp"> Side om side med flood</label>
+      <button class="b primary" id="s-start">Start simulering</button>
+      <button class="b" id="s-pause" disabled>Pause</button>
+      <button class="b" id="s-step" disabled title="Spring frem til næste udsendelse">Trin</button>
+      <label class="speed">Hastighed: <b id="s-speedv">5×</b>
+        <input type="range" id="s-speed" min="0" max="7" step="1" value="4">
+      </label>
+      <label>Farve
+        <select id="s-color"><option value="role">efter rolle</option><option value="energy">efter brugt sendetid</option></select>
+      </label>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="panels" id="panels"></div>
+  </section>
+
+  <section class="tab" id="tab-hw">
+    <div id="hwbody"></div>
+  </section>
+
+  <section class="tab" id="tab-hist">
+    <div style="display:flex;gap:10px;align-items:center"><h2 style="flex:1">Udvikling over kørsler</h2><button class="b" id="clearhist">Ryd historik</button></div>
+    <div class="charts" id="charts"></div>
+    <h2>Seneste kørsler</h2>
+    <div id="histtable"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtMs = ms => ms < 1000 ? ms + " ms" : (ms / 1000).toLocaleString("da-DK", { maximumFractionDigits: ms < 10000 ? 2 : 1 }) + " s";
+const fmtN = (n, d = 1) => Number(n).toLocaleString("da-DK", { maximumFractionDigits: d });
+const axisN = (v, span) => Math.abs(v) >= 1e6 ? fmtN(v / 1e6, 1) + " mio." : Math.abs(v) >= 1e4 ? fmtN(v / 1e3, 0) + " t." : fmtN(v, span < 5 ? 1 : 0);
+const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+
+// ---------- tema og faner ----------
+const themeSaved = store.get("lab-theme");
+if (themeSaved) document.documentElement.dataset.theme = themeSaved;
+$("#theme").onclick = () => {
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next; store.set("lab-theme", next);
+  sim.redrawStatic();
+};
+function showTab(t) {
+  document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  document.querySelectorAll(".tab").forEach(s => s.classList.toggle("on", s.id === "tab-" + t));
+  store.set("lab-tab", t);
+  if (t === "sim") sim.resize();
+  if (t === "hist") renderHistory();
+}
+document.querySelectorAll("#nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+// ---------- forbindelse ----------
+let ws, state = { suites: [], tests: {}, history: [], queue: [], running: null, ports: [] };
+const runs = {}; // suite -> {rows: Map, log: [], status, t0}
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+function connect() {
+  ws = new WebSocket("ws://" + location.host + "/ws");
+  ws.onopen = () => { $("#conndot").className = "dot ok"; $("#conntxt").textContent = "forbundet"; };
+  ws.onclose = () => { $("#conndot").className = "dot fail"; $("#conntxt").textContent = "afbrudt – prøver igen"; setTimeout(connect, 1500); };
+  ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (_) { return; } handle(m); };
+}
+window.labStats = { msgs: 0, simEvents: 0, rows: 0 };
+function handle(m) {
+  labStats.msgs++;
+  switch (m.type) {
+    case "hello":
+      Object.assign(state, m); state.tests = m.tests || {};
+      renderSuites(); renderHistory(); renderHw();
+      break;
+    case "tests": state.tests = m.tests || {}; renderSuites(); break;
+    case "discovering": $("#summary").dataset.disc = m.on ? "1" : ""; renderSummary(); break;
+    case "queue": state.queue = m.queue; state.running = m.running; updateStatuses(); break;
+    case "start": {
+      const r = runs[m.suite] = { rows: new Map(), log: [], status: "running", t0: Date.now(), passed: 0, failed: 0 };
+      const c = cardEl(m.suite); if (c) { $(".log", c).innerHTML = ""; resetRows(m.suite); }
+      updateStatuses(); break;
+    }
+    case "line": addLog(m.suite, m.stream, m.text); break;
+    case "row": addRow(m); break;
+    case "done": {
+      const r = runs[m.rec.suite] || (runs[m.rec.suite] = { rows: new Map(), log: [] });
+      r.status = m.rec.ok ? "ok" : "fail"; r.rec = m.rec;
+      state.history.push(m.rec); updateStatuses(); renderSummary();
+      if ($("#tab-hist").classList.contains("on")) renderHistory();
+      break;
+    }
+    case "history": state.history = m.history; renderHistory(); break;
+    case "simevs": sim.events(m.tag, m.es); break;
+    case "simtext": sim.text(m.tag, m.text); break;
+    case "simdone": sim.done(m.tag, m.report); break;
+    case "hw": hwUpdate(m); break;
+  }
+}
+
+// ---------- testoversigt ----------
+const groupOrder = ["Enhedstests (cargo test)", "Fuzzing", "Ende-til-ende", "Simulator", "Ydelse", "Hardware"];
+function cardEl(id) { return document.querySelector(`.card[data-id="${CSS.escape(id)}"]`); }
+function lastRec(id) { for (let i = state.history.length - 1; i >= 0; i--) if (state.history[i].suite === id) return state.history[i]; return null; }
+function crateTests(id) {
+  const m = /^cargo:(.+)$/.exec(id) || (id === "fuzz" ? [0, "maarse-fuzz"] : null);
+  return m ? state.tests[m[1]] || null : null;
+}
+const normGroup = g => g.startsWith("doc-tests") ? "doc-tests" : g;
+function renderSuites() {
+  const byGroup = {};
+  for (const s of state.suites) (byGroup[s.group] = byGroup[s.group] || []).push(s);
+  let html = "";
+  for (const g of groupOrder.concat(Object.keys(byGroup).filter(k => !groupOrder.includes(k)))) {
+    if (!byGroup[g]) continue;
+    html += `<h2>${esc(g)}</h2><div class="grid">`;
+    for (const s of byGroup[g]) {
+      const ct = crateTests(s.id);
+      const n = ct ? ct.reduce((a, t) => a + t.tests.length, 0) : 0;
+      html += `<div class="card" data-id="${esc(s.id)}">
+        <div class="top"><span class="dot"></span><span class="title" title="${esc(s.title)}">${esc(s.title)}</span>
+          ${s.hardware ? '<span class="tag hw">kræver boards</span>' : ""}${ct ? `<span class="tag">${n} ${n === 1 ? "test" : "tests"}</span>` : ""}
+          <button class="b run" ${s.runnable ? "" : "disabled"}>Kør</button></div>
+        <div class="meta"></div><div class="bar"><div></div></div>
+        <div class="desc">${esc(s.desc)}</div>
+        ${!ct && s.items.length ? `<details ${s.group === "Ende-til-ende" ? "open" : ""}><summary>Hvad testes</summary><ul class="items">${s.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul></details>` : ""}
+        <details class="dr" ${ct ? "" : "open"}><summary>${ct ? "Tests" : "Resultater"}</summary><div class="rows"></div></details>
+        <details><summary>Log</summary><pre class="log"></pre></details>
+      </div>`;
+    }
+    html += "</div>";
+  }
+  $("#groups").innerHTML = html;
+  document.querySelectorAll(".card button.run").forEach(b => b.onclick = () => send({ cmd: "run", suite: b.closest(".card").dataset.id }));
+  for (const s of state.suites) {
+    resetRows(s.id);
+    const r = runs[s.id];
+    if (r) { for (const row of r.rows.values()) paintRow(s.id, row); const c = cardEl(s.id); $(".log", c).innerHTML = r.log.join(""); }
+  }
+  updateStatuses(); renderSummary();
+}
+function resetRows(id) {
+  const c = cardEl(id); if (!c) return;
+  const box = $(".rows", c); box.innerHTML = "";
+  const ct = crateTests(id);
+  if (ct) for (const t of ct) {
+    if (!t.tests.length) continue;
+    const g = groupBox(box, normGroup(t.target));
+    for (const n of t.tests) g.insertAdjacentHTML("beforeend", rowHtml({ name: n, status: "pending" }));
+  }
+  if (!box.children.length) box.innerHTML = `<div class="r pending"><span class="ic">·</span><span class="n">ikke kørt endnu</span></div>`;
+}
+function groupBox(box, g) {
+  let el = [...box.children].find(x => x.dataset.g === g);
+  if (!el) { el = document.createElement("div"); el.dataset.g = g; el.innerHTML = `<div class="g">${esc(g)}</div>`; box.appendChild(el); }
+  return el;
+}
+const icon = { ok: "✓", fail: "✗", ignored: "–", pending: "·" };
+function rowHtml(r) {
+  const t = r.ms != null ? `<span class="t">${r.cargo ? "efter " : ""}${fmtMs(r.ms)}</span>` : "";
+  return `<div class="r ${r.status}" data-n="${esc(r.name)}"><span class="ic">${icon[r.status] || "·"}</span><span class="n">${esc(r.name)}</span>${t}</div>`;
+}
+function addRow(m) {
+  labStats.rows++;
+  const r = runs[m.suite] || (runs[m.suite] = { rows: new Map(), log: [], status: "running" });
+  const s = state.suites.find(x => x.id === m.suite);
+  m.cargo = !!crateTests(m.suite) || (s && s.id === "pow" && m.group !== "benchmark");
+  r.rows.set(m.group + "\u0000" + m.name, m);
+  if (m.status === "ok") r.passed = (r.passed || 0) + 1; else if (m.status === "fail") r.failed = (r.failed || 0) + 1;
+  paintRow(m.suite, m); updateMeta(m.suite);
+}
+function paintRow(id, m) {
+  const c = cardEl(id); if (!c) return;
+  const box = $(".rows", c);
+  const p = box.querySelector(".r.pending:only-child"); if (p && !crateTests(id)) p.remove();
+  const g = groupBox(box, normGroup(m.group || ""));
+  const ex = [...g.querySelectorAll(".r")].find(x => x.dataset.n === m.name);
+  if (ex) ex.outerHTML = rowHtml(m); else g.insertAdjacentHTML("beforeend", rowHtml(m));
+  if (m.status === "fail") $(".dr", c).open = true;
+}
+function addLog(id, stream, text) {
+  const r = runs[id] || (runs[id] = { rows: new Map(), log: [] });
+  const line = `<span class="${stream}">${esc(text)}</span>\n`;
+  r.log.push(line); if (r.log.length > 1500) r.log.splice(0, r.log.length - 1500);
+  const c = cardEl(id); if (!c) return;
+  const pre = $(".log", c);
+  const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+  pre.insertAdjacentHTML("beforeend", line);
+  while (pre.childNodes.length > 3000) pre.removeChild(pre.firstChild);
+  if (atEnd) pre.scrollTop = pre.scrollHeight;
+}
+function updateMeta(id) {
+  const c = cardEl(id); if (!c) return;
+  const r = runs[id], rec = (r && r.rec) || lastRec(id);
+  let t = "";
+  if (r && r.status === "running") {
+    t = `${r.passed || 0} ok · ${r.failed || 0} fejl · ${fmtMs(Date.now() - r.t0)}`;
+    const ct = crateTests(id), total = ct ? ct.reduce((a, x) => a + x.tests.length, 0) : 0;
+    $(".bar > div", c).style.width = total ? Math.min(100, ((r.passed || 0) + (r.failed || 0)) / total * 100) + "%" : "100%";
+    $(".bar > div", c).style.background = r.failed ? "var(--fail)" : "var(--warn)";
+  } else if (rec) {
+    const when = new Date(rec.at * 1000).toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
+    t = `${rec.passed} ok · ${rec.failed} fejl · ${fmtMs(rec.ms)} · kl. ${when}`;
+    $(".bar > div", c).style.width = "100%"; $(".bar > div", c).style.background = rec.ok ? "var(--ok)" : "var(--fail)";
+  }
+  $(".meta", c).textContent = t;
+}
+function updateStatuses() {
+  for (const s of state.suites) {
+    const c = cardEl(s.id); if (!c) continue;
+    const r = runs[s.id], rec = lastRec(s.id);
+    let st = "";
+    if (state.running === s.id) st = "running";
+    else if (state.queue.includes(s.id)) st = "queued";
+    else if (r && r.status && r.status !== "running") st = r.status;
+    else if (rec) st = rec.ok ? "ok" : "fail";
+    $(".dot", c).className = "dot " + (st === "running" ? "run" : st);
+    c.classList.toggle("running", st === "running");
+    c.classList.toggle("ok", st === "ok"); c.classList.toggle("fail", st === "fail");
+    const b = $("button.run", c); b.textContent = st === "running" ? "Kører …" : st === "queued" ? "I kø" : "Kør";
+    b.disabled = !s.runnable || st === "running" || st === "queued";
+    updateMeta(s.id);
+  }
+  renderSummary();
+}
+setInterval(() => { if (state.running) updateMeta(state.running); }, 500);
+function renderSummary() {
+  let ok = 0, fail = 0, never = 0, tests = 0, testsFail = 0;
+  for (const s of state.suites) {
+    const rec = lastRec(s.id);
+    if (!rec) never++; else if (rec.ok) ok++; else fail++;
+    if (rec) { tests += rec.passed; testsFail += rec.failed; }
+  }
+  const disc = $("#summary").dataset.disc;
+  const tile = (k, v, col) => `<div class="tile"><div class="k">${k}</div><div class="v" style="${col ? "color:" + col : ""}">${v}</div></div>`;
+  $("#summary").innerHTML = tile("Suiter bestået", ok, "var(--ok)") + tile("Suiter fejlet", fail, fail ? "var(--fail)" : "") + tile("Ikke kørt", never) +
+    tile("Testtilfælde ok / fejl (seneste)", `${tests} / ${testsFail}`) +
+    tile("Kører nu", state.running ? esc((state.suites.find(s => s.id === state.running) || {}).title || state.running) : "–") +
+    tile("I kø", state.queue.length) +
+    (disc ? tile("Testliste", "henter …") : `<div class="tile"><div class="k">Testliste</div><button class="b" id="disc" style="margin-top:4px">Opdater</button></div>`);
+  const d = $("#disc"); if (d) d.onclick = () => send({ cmd: "discover" });
+}
+$("#runall").onclick = () => send({ cmd: "runall" });
+$("#stop").onclick = () => { send({ cmd: "stop" }); send({ cmd: "simstop" }); };
+
+// ---------- historik ----------
+$("#clearhist").onclick = () => { if (confirm("Slet al historik?")) send({ cmd: "clearhist" }); };
+function lineChart(title, series, unit) {
+  // series: [{name, color, pts: [[i, v, label]]}]
+  const W = 420, H = 170, L = 40, R = 10, T = 10, B = 24;
+  const all = series.flatMap(s => s.pts.map(p => p[1]));
+  if (!all.length) return "";
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (unit === "%") { lo = Math.min(lo, 50); hi = 100; lo = Math.floor(lo / 10) * 10; }
+  if (hi - lo < Math.abs(hi) * 0.02 + 1e-9) { const d = Math.max(1, Math.abs(hi) * 0.05); hi += d; lo = Math.max(0, lo - d); }
+  const n = Math.max(...series.map(s => s.pts.length), 2);
+  const x = i => L + i / (n - 1) * (W - L - R), y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  let g = "";
+  for (let k = 0; k <= 4; k++) {
+    const v = lo + (hi - lo) * k / 4;
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-width="1"/>` +
+      `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="var(--muted)">${axisN(v, hi - lo)}</text>`;
+  }
+  g += `<text x="${L}" y="${H - 6}" font-size="10" fill="var(--muted)">ældst</text><text x="${W - R}" y="${H - 6}" text-anchor="end" font-size="10" fill="var(--muted)">nyest</text>`;
+  for (const s of series) {
+    if (!s.pts.length) continue;
+    const off = n - s.pts.length;
+    const d = s.pts.map((p, i) => `${i ? "L" : "M"}${x(i + off).toFixed(1)},${y(p[1]).toFixed(1)}`).join("");
+    g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
+    g += s.pts.map((p, i) => `<circle cx="${x(i + off)}" cy="${y(p[1])}" r="3" fill="${s.color}"><title>${esc(s.name)}: ${fmtN(p[1], 2)} ${unit} (${esc(p[2])})</title></circle>`).join("");
+  }
+  const lg = series.map(s => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("");
+  return `<div class="chart"><h4>${esc(title)}</h4><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${g}</svg><div class="lg">${lg}</div></div>`;
+}
+function renderHistory() {
+  const h = state.history;
+  const when = r => new Date(r.at * 1000).toLocaleString("da-DK", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  let charts = "";
+  for (const s of state.suites.filter(s => s.group === "Simulator")) {
+    const recs = h.filter(r => r.suite === s.id && r.metrics).slice(-30);
+    if (!recs.length) continue;
+    const ser = (mode, color, key) => ({ name: mode + " " + key, color, pts: recs.filter(r => r.metrics[mode] && r.metrics[mode][key] != null).map(r => [0, r.metrics[mode][key], when(r)]) });
+    charts += lineChart(`${s.title}: leveret og kvitteret (%)`, [ser("Må:rse", "var(--c-data)", "leveret"), ser("Må:rse", "var(--c-presp)", "kvitteret"), ser("flood, 7 hop", "var(--c-preq)", "leveret"), ser("flood, 7 hop", "var(--c-channel)", "kvitteret")], "%");
+    charts += lineChart(`${s.title}: sendetid i alt (s)`, [ser("Må:rse", "var(--c-data)", "sendetid_s"), ser("flood, 7 hop", "var(--c-preq)", "sendetid_s")], "s");
+  }
+  const pow = h.filter(r => r.suite === "pow" && r.metrics && r.metrics["forsøg_pr_s"]).slice(-30);
+  if (pow.length) charts += lineChart("Arbejdsbevis: forsøg pr. sekund", [{ name: "forsøg/s", color: "var(--c-announce)", pts: pow.map(r => [0, r.metrics["forsøg_pr_s"], when(r)]) }], "/s");
+  const dur = {};
+  for (const r of h.filter(r => r.suite.startsWith("cargo:") || r.suite === "fuzz")) (dur[r.suite] = dur[r.suite] || []).push(r);
+  const durSeries = Object.entries(dur).slice(0, 7).map(([k, v], i) => ({ name: k.replace("cargo:", ""), color: ["var(--c-data)", "var(--c-ack)", "var(--c-preq)", "var(--c-announce)", "var(--c-channel)", "var(--c-presp)", "var(--c-other)"][i], pts: v.slice(-30).map(r => [0, r.ms / 1000, when(r)]) }));
+  if (durSeries.length) charts += lineChart("Varighed af testsuiter (s)", durSeries, "s");
+  $("#charts").innerHTML = charts || `<div class="empty">Ingen kørsler med nøgletal endnu. Kør en simulator-suite eller benchmarket for at se udviklingen.</div>`;
+  const rows = h.slice(-60).reverse().map(r => {
+    const m = r.metrics && r.metrics["Må:rse"] ? `Må:rse ${fmtN(r.metrics["Må:rse"].leveret)} % leveret` : r.metrics && r.metrics["forsøg_pr_s"] ? `${fmtN(r.metrics["forsøg_pr_s"], 0)} forsøg/s` : "";
+    return `<tr><td>${when(r)}</td><td><span class="dot ${r.ok ? "ok" : "fail"}"></span> ${esc(r.title)}</td><td class="num">${r.passed}</td><td class="num">${r.failed}</td><td class="num">${fmtMs(r.ms)}</td><td>${esc(m)}</td></tr>`;
+  }).join("");
+  $("#histtable").innerHTML = rows ? `<div style="overflow:auto"><table><tr><th>Tid</th><th>Suite</th><th style="text-align:right">OK</th><th style="text-align:right">Fejl</th><th style="text-align:right">Varighed</th><th>Nøgletal</th></tr>${rows}</table></div>` : `<div class="empty">Ingen kørsler endnu.</div>`;
+}
+
+// ---------- hardware ----------
+const STAT = { 1: "oppetid (s)", 2: "kendte noder", 3: "ruter", 7: "rolle", 10: "rx pakker", 11: "rx ugyldige", 13: "videresendt", 15: "leveret", 16: "kvitteret",
+  30: "radio rx ok", 31: "radio rx fejl", 32: "radio tx ok", 33: "radio tx fejl", 34: "sidste RSSI (dBm)", 35: "sidste SNR (dB)", 36: "gns. RSSI", 37: "gns. SNR",
+  38: "CAD optaget", 39: "duty udsat", 40: "sendetid (ms)", 41: "duty brugt ‰", 44: "tx-kø", 45: "frekvens (kHz)", 46: "SF", 47: "båndbredde (kHz)", 48: "sendeeffekt (dBm)",
+  49: "batteri (mV)", 52: "radio droppet", 53: "radiotrin", 54: "radioløkker", 55: "diag syncword", 56: "diag status", 57: "diag fejl", 58: "diag busy", 77: "dårlige stempler" };
+const KEY_STATS = [34, 35, 30, 31, 32, 33, 53, 7, 44, 40, 41, 2, 3, 49];
+const hwHist = {};
+function renderHw() {
+  if (!state.ports || !state.ports.length) {
+    $("#hwbody").innerHTML = `<div class="empty">Ingen boards valgt. Start laboratoriet med fx <code>maarse-lab --port COM6 --port COM7</code> for at se rigtige boards live (RSSI/SNR, tx/rx, radiotrin, rolle).<br>Uden <code>--port</code> åbnes ingen serielle porte.</div>`;
+    return;
+  }
+  $("#hwbody").innerHTML = `<div class="panels two">` + state.ports.map(p => `<div class="panel hwp" data-port="${esc(p)}"><h3><span class="dot"></span>${esc(p)} <span class="muted st" style="font-weight:400;font-size:12px"></span></h3><div class="muted info"></div><svg class="spark" viewBox="0 0 400 80" preserveAspectRatio="none" style="width:100%;height:80px;background:var(--canvas);border-radius:6px;border:1px solid var(--line);margin-top:6px"></svg><div class="hwgrid"></div><details><summary>Øvrige værdier og log</summary><div class="hwgrid all"></div><pre class="log"></pre></details></div>`).join("") + `</div>`;
+}
+function hwUpdate(m) {
+  const el = document.querySelector(`.hwp[data-port="${CSS.escape(m.port)}"]`); if (!el) return;
+  $(".st", el).textContent = m.status || "";
+  $(".dot", el).className = "dot " + (m.status === "forbundet" ? "ok" : /pause/.test(m.status) ? "queued" : "fail");
+  const st = m.stats || {};
+  const role = st[7] != null ? ["klient", "repeater", "rumrepeater"][st[7]] || st[7] : (m.repeater ? "repeater" : "klient");
+  const r = m.radio;
+  $(".info", el).textContent = [m.addr ? "adresse " + m.addr.slice(0, 16) + "…" : "", "rolle " + role,
+    r ? `${(r.freq_hz / 1e6).toFixed(3)} MHz, SF${r.sf}, ${r.bw_hz / 1000} kHz, ${r.dbm} dBm, duty ${r.duty_permille / 10} %` : "", "FEM: ikke rapporteret af firmwaren"].filter(Boolean).join(" · ");
+  const cell = k => `<div><div class="k">${esc(STAT[k] || "stat " + k)}</div><div class="v">${st[k] != null ? fmtN(st[k], 0) : "–"}</div></div>`;
+  $(".hwgrid", el).innerHTML = KEY_STATS.map(cell).join("");
+  $(".hwgrid.all", el).innerHTML = Object.keys(st).filter(k => !KEY_STATS.includes(+k)).map(k => cell(+k)).join("");
+  $(".log", el).textContent = (m.log || []).join("\n");
+  const h = hwHist[m.port] = hwHist[m.port] || [];
+  if (m.updated && (!h.length || h[h.length - 1].u !== m.updated)) { h.push({ u: m.updated, rssi: st[34], snr: st[35] }); if (h.length > 120) h.shift(); }
+  const sp = $(".spark", el), path = (key, lo, hi, col) => {
+    const pts = h.map((p, i) => p[key] == null ? null : [i / 119 * 400, 80 - (p[key] - lo) / (hi - lo) * 80]).filter(Boolean);
+    return pts.length ? `<path d="${pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join("")}" fill="none" stroke="${col}" stroke-width="2"/>` : "";
+  };
+  sp.innerHTML = path("rssi", -130, -20, "var(--c-data)") + path("snr", -20, 15, "var(--c-ack)") + `<text x="4" y="12" font-size="10" fill="var(--muted)">RSSI (blå, −130…−20 dBm) · SNR (grøn, −20…15 dB)</text>`;
+}
+
+// ---------- simulator live ----------
+const PT = {
+  Announce: ["var(--c-announce)", "announce"], PathRequest: ["var(--c-preq)", "ruteforespørgsel"], PathResponse: ["var(--c-presp)", "rutesvar"],
+  Data: ["var(--c-data)", "besked"], Ack: ["var(--c-ack)", "e2e-kvittering"], Channel: ["var(--c-channel)", "kanalbesked"], other: ["var(--c-other)", "andet"],
+};
+$("#legend").innerHTML = Object.values(PT).map(([c, n]) => `<span style="--c:${c}">${n}</span>`).join("") +
+  `<span style="--c:var(--fail)">kollision</span><span style="--c:var(--ok)">leveret</span><span class="muted">▪ repeater · ● klient · ▲ bil · linjer = radioforbindelser (tydeligere = bedre SNR) · hop-kvitteringer er implicitte (næste hop høres sende videre)</span>`;
+const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20, 50];
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const sim = {
+  panels: {}, simT: 0, playing: false, speed: 5, last: 0, colors: {},
+  readColors() { for (const k of ["--c-announce", "--c-preq", "--c-presp", "--c-data", "--c-ack", "--c-channel", "--c-other", "--fail", "--ok", "--text", "--muted", "--accent", "--warn", "--line", "--idle", "--canvas"]) this.colors[k] = cssVar(k); },
+  ptColor(p) { const m = { Announce: "--c-announce", PathRequest: "--c-preq", PathResponse: "--c-presp", Data: "--c-data", Ack: "--c-ack", Channel: "--c-channel" }; return this.colors[m[p] || "--c-other"]; },
+  start() {
+    send({ cmd: "simstop" });
+    const cmp = $("#s-cmp").checked, scen = $("#s-scen").value;
+    const base = [];
+    if (scen === "hw") base.push("--highway");
+    else base.push("--nodes", $("#s-nodes").value, "--repeaters", $("#s-rep").value, "--area-km", $("#s-area").value);
+    base.push("--messages", $("#s-msgs").value, "--seed", $("#s-seed").value, "--duration", $("#s-dur").value);
+    const tags = cmp ? [["a", "maarse"], ["b", "flood"]] : [["a", $("#s-mode").value]];
+    this.panels = {}; this.simT = 0;
+    $("#panels").className = "panels" + (cmp ? " two" : "");
+    $("#panels").innerHTML = tags.map(([t, mode]) => `<div class="panel" data-tag="${t}"><h3><span class="dot run"></span>${mode === "maarse" ? "Må:rse" : "flood, 7 hop"} <span class="muted st" style="font-weight:400;font-size:12px">starter …</span></h3>
+      <div class="prog"><span class="tt">0 s</span><div class="bar"><div></div></div><span class="td"></span></div>
+      <canvas></canvas><div class="counters"></div><details><summary>Simulatorens rapport</summary><div class="simreport"></div></details></div>`).join("");
+    for (const [t, mode] of tags) {
+      const el = document.querySelector(`.panel[data-tag="${t}"]`);
+      this.panels[t] = { el, cv: $("canvas", el), mode, ev: [], idx: 0, setup: null, links: null, nodes: [], pulses: [], lines: [], marks: [], report: "", done: false,
+        st: { sent: 0, deliv: 0, acked: 0, tx: 0, air: 0, coll: 0, duty: 0, busy: 0, lat: [] }, txs: new Map(), msgs: new Map() };
+      const args = base.slice(); if (mode === "flood") args.push("--mode", "flood", "--hop-limit", "7");
+      send({ cmd: "sim", tag: t, args });
+    }
+    this.playing = true; $("#s-pause").disabled = false; $("#s-step").disabled = false; $("#s-pause").textContent = "Pause";
+    this.readColors(); this.resize();
+  },
+  events(tag, es) {
+    const P = this.panels[tag]; if (!P) return;
+    labStats.simEvents += es.length;
+    for (const e of es) {
+      if (e.ev === "setup") { P.setup = e; P.nodes = e.nodes.map(([x, y, r]) => ({ x, y, r, air: 0, coll: -1e9, deliv: -1e9, send: -1e9 })); this.layout(P); }
+      else if (e.ev === "links") { P.links = e.l; this.drawStatic(P); }
+      else if (e.ev === "end") { }
+      else P.ev.push(e);
+    }
+    $(".st", P.el).textContent = P.done ? "" : `beregner … ${fmtN(P.ev.length, 0)} hændelser modtaget`;
+  },
+  text(tag, t) { const P = this.panels[tag]; if (!P) return; P.report += t + "\n"; $(".simreport", P.el).textContent = P.report; },
+  done(tag, rep) {
+    const P = this.panels[tag]; if (!P) return; P.done = true; P.rep = rep;
+    $(".st", P.el).textContent = `færdigberegnet: ${fmtN(P.ev.length, 0)} hændelser` + (rep && rep.leveret != null ? ` · slutresultat ${fmtN(rep.leveret)} % leveret, ${fmtN(rep.kvitteret)} % kvitteret` : "");
+  },
+  resize() {
+    for (const P of Object.values(this.panels)) {
+      const r = P.cv.getBoundingClientRect(); if (!r.width) continue;
+      const dpr = window.devicePixelRatio || 1;
+      P.cv.width = Math.round(r.width * dpr); P.cv.height = Math.round(r.height * dpr); P.dpr = dpr;
+      this.layout(P);
+    }
+  },
+  layout(P) {
+    if (!P.setup || !P.cv.width) return;
+    const xs = P.nodes.map(n => n.x), ys = P.nodes.map(n => n.y);
+    let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    if (P.setup.highway) { x0 = 0; x1 = P.setup.w; } else { x0 = Math.min(x0, 0); y0 = Math.min(y0, 0); x1 = Math.max(x1, P.setup.w); y1 = Math.max(y1, P.setup.h); }
+    const m = 22 * P.dpr, W = P.cv.width - 2 * m, H = P.cv.height - 2 * m;
+    let sx = W / Math.max(1, x1 - x0), sy = H / Math.max(1, y1 - y0);
+    if (!P.setup.highway) { sx = sy = Math.min(sx, sy); }
+    const ox = m + (W - (x1 - x0) * sx) / 2, oy = m + (H - (y1 - y0) * sy) / 2;
+    P.tx = x => ox + (x - x0) * sx; P.ty = y => oy + (y1 - y) * sy; P.scale = Math.min(sx, sy);
+    this.drawStatic(P);
+  },
+  drawStatic(P) {
+    if (!P.setup || !P.cv.width) return;
+    const c = P.static || (P.static = document.createElement("canvas"));
+    c.width = P.cv.width; c.height = P.cv.height;
+    const g = c.getContext("2d"); g.clearRect(0, 0, c.width, c.height);
+    g.lineWidth = 1 * P.dpr; g.strokeStyle = this.colors["--muted"];
+    if (P.links) for (const [a, b, snr] of P.links) {
+      if (P.nodes[a].r === "car" || P.nodes[b].r === "car") continue;
+      g.globalAlpha = Math.max(0.03, Math.min(0.45, (snr + 13) / 70));
+      g.beginPath(); g.moveTo(P.tx(P.nodes[a].x), P.ty(P.nodes[a].y)); g.lineTo(P.tx(P.nodes[b].x), P.ty(P.nodes[b].y)); g.stroke();
+    }
+    g.globalAlpha = 1;
+    // målestok
+    const km = P.setup.highway ? 10 : (P.setup.w > 40000 ? 10 : P.setup.w > 12000 ? 5 : 1);
+    const len = km * 1000 * (P.setup.highway ? (P.tx(1000) - P.tx(0)) / 1000 : P.scale);
+    g.fillStyle = this.colors["--muted"]; g.fillRect(10 * P.dpr, c.height - 10 * P.dpr, len, 2 * P.dpr);
+    g.font = `${11 * P.dpr}px system-ui`; g.fillText(km + " km" + (P.setup.highway ? " (lodret skala forstørret)" : ""), 10 * P.dpr, c.height - 14 * P.dpr);
+  },
+  redrawStatic() { this.readColors(); for (const P of Object.values(this.panels)) this.drawStatic(P); },
+  apply(P, e) {
+    const st = P.st, vis = Math.max(350, 600 * this.speed);
+    switch (e.ev) {
+      case "tx": st.tx++; st.air += e.air; if (P.nodes[e.n]) P.nodes[e.n].air += e.air; P.txs.set(e.id, e); P.pulses.push({ n: e.n, t0: e.t, t1: Math.max(e.end, e.t + vis), p: e.p }); break;
+      case "rx": { const tx = P.txs.get(e.id); if (!tx) break; P.txs.delete(e.id);
+        for (const r of e.ok) P.lines.push({ a: tx.n, b: r, t0: e.t, t1: e.t + vis, p: tx.p });
+        for (const r of e.coll) { st.coll++; if (P.nodes[r]) P.nodes[r].coll = e.t; } break; }
+      case "defer": if (e.why === "duty") st.duty++; else st.busy++; break;
+      case "send": if (!P.msgs.has(e.msg)) { st.sent++; P.msgs.set(e.msg, e); if (P.nodes[e.from]) P.nodes[e.from].send = e.t; P.marks.push({ a: e.from, b: e.to, t0: e.t, t1: e.t + vis * 2 }); } break;
+      case "deliver": st.deliv++; if (P.nodes[e.n]) P.nodes[e.n].deliv = e.t; { const m = P.msgs.get(e.msg); if (m) st.lat.push(e.t - m.t); } break;
+      case "ack": st.acked++; break;
+      case "move": if (P.nodes[e.n]) { P.nodes[e.n].x = e.x; P.nodes[e.n].y = e.y; } break;
+    }
+  },
+  frame(ts) {
+    const dt = this.last ? Math.min(100, ts - this.last) : 0; this.last = ts;
+    const Ps = Object.values(this.panels);
+    if (this.playing && Ps.length) {
+      let lim = Infinity;
+      for (const P of Ps) { const dur = P.setup ? P.setup.dur : 0; lim = Math.min(lim, P.done ? dur : (P.ev.length ? P.ev[P.ev.length - 1].t : 0)); }
+      this.simT = Math.min(this.simT + dt * this.speed, lim);
+      if (Ps.every(P => P.done) && this.simT >= lim) { this.playing = false; $("#s-pause").textContent = "Afspil igen"; }
+    }
+    for (const P of Ps) { while (P.idx < P.ev.length && P.ev[P.idx].t <= this.simT) this.apply(P, P.ev[P.idx++]); this.draw(P); }
+    requestAnimationFrame(t => this.frame(t));
+  },
+  step() {
+    this.playing = false; $("#s-pause").textContent = "Fortsæt";
+    let next = Infinity;
+    for (const P of Object.values(this.panels)) for (let i = P.idx; i < P.ev.length; i++) if (P.ev[i].ev === "tx") { next = Math.min(next, P.ev[i].t); break; }
+    if (next < Infinity) this.simT = next;
+  },
+  draw(P) {
+    const cv = P.cv, g = cv.getContext("2d"), d = P.dpr || 1, T = this.simT, C = this.colors;
+    if (!cv.width) return;
+    g.clearRect(0, 0, cv.width, cv.height);
+    if (!P.setup) { g.fillStyle = C["--muted"]; g.font = `${14 * d}px system-ui`; g.fillText("Venter på simulatoren …", 20 * d, 30 * d); return; }
+    if (P.static) g.drawImage(P.static, 0, 0);
+    const X = n => P.tx(P.nodes[n].x), Y = n => P.ty(P.nodes[n].y);
+    // afsendte beskeder: stiplet linje fra afsender til modtager
+    P.marks = P.marks.filter(m => m.t1 > T);
+    g.setLineDash([4 * d, 4 * d]); g.lineWidth = 1.2 * d; g.strokeStyle = C["--text"];
+    for (const m of P.marks) { if (m.t0 > T) continue; g.globalAlpha = 0.5 * (1 - (T - m.t0) / (m.t1 - m.t0)); g.beginPath(); g.moveTo(X(m.a), Y(m.a)); g.lineTo(X(m.b), Y(m.b)); g.stroke(); }
+    g.setLineDash([]);
+    // modtagne pakker: linjer fra sender til modtager
+    P.lines = P.lines.filter(l => l.t1 > T);
+    g.lineWidth = 2 * d;
+    for (const l of P.lines) { if (l.t0 > T) continue; g.globalAlpha = 0.85 * (1 - (T - l.t0) / (l.t1 - l.t0)); g.strokeStyle = this.ptColor(l.p); g.beginPath(); g.moveTo(X(l.a), Y(l.a)); g.lineTo(X(l.b), Y(l.b)); g.stroke(); }
+    // udsendelser: ekspanderende ringe
+    P.pulses = P.pulses.filter(p => p.t1 > T);
+    for (const p of P.pulses) { if (p.t0 > T) continue; const f = (T - p.t0) / (p.t1 - p.t0); g.globalAlpha = 0.9 * (1 - f); g.strokeStyle = this.ptColor(p.p); g.lineWidth = 2.5 * d; g.beginPath(); g.arc(X(p.n), Y(p.n), (6 + 34 * f) * d, 0, 7); g.stroke(); }
+    g.globalAlpha = 1;
+    const energy = $("#s-color").value === "energy", budget = Math.max(1, T * 1000 * 0.1);
+    const flash = Math.max(400, 700 * this.speed);
+    P.nodes.forEach((n, i) => {
+      const x = X(i), y = Y(i);
+      let col = n.r === "r" ? C["--accent"] : n.r === "car" ? C["--warn"] : C["--idle"];
+      if (energy) { const u = Math.min(1, n.air / budget); col = `hsl(${120 - 120 * u}, 70%, 48%)`; }
+      g.fillStyle = col; g.strokeStyle = C["--canvas"]; g.lineWidth = 1.5 * d;
+      if (n.r === "r") { const s = 5 * d; g.fillRect(x - s, y - s, 2 * s, 2 * s); g.strokeRect(x - s, y - s, 2 * s, 2 * s); }
+      else if (n.r === "car") { const s = 8 * d; g.beginPath(); g.moveTo(x, y - s); g.lineTo(x + s, y + s * .8); g.lineTo(x - s, y + s * .8); g.closePath(); g.fill(); g.stroke(); }
+      else { g.beginPath(); g.arc(x, y, 4 * d, 0, 7); g.fill(); g.stroke(); }
+      if (T - n.coll < flash) { g.strokeStyle = C["--fail"]; g.globalAlpha = 1 - (T - n.coll) / flash; g.lineWidth = 2.5 * d; const s = 7 * d; g.beginPath(); g.moveTo(x - s, y - s); g.lineTo(x + s, y + s); g.moveTo(x + s, y - s); g.lineTo(x - s, y + s); g.stroke(); g.globalAlpha = 1; }
+      if (T - n.deliv < flash * 2) { g.strokeStyle = C["--ok"]; g.globalAlpha = 1 - (T - n.deliv) / (flash * 2); g.lineWidth = 3 * d; g.beginPath(); g.arc(x, y, 11 * d, 0, 7); g.stroke(); g.globalAlpha = 1; }
+    });
+    // tællere og fremdrift
+    const s = P.st, dur = P.setup.dur;
+    $(".tt", P.el).textContent = fmtN(T / 1000, 0) + " s"; $(".td", P.el).textContent = "af " + fmtN(dur / 1000, 0) + " s";
+    $(".prog .bar > div", P.el).style.width = Math.min(100, T / dur * 100) + "%";
+    const lat = s.lat.slice().sort((a, b) => a - b), med = lat.length ? lat[lat.length >> 1] / 1000 : null;
+    const kv = [["Sendt", s.sent], ["Leveret", s.deliv + (s.sent ? ` (${fmtN(s.deliv / s.sent * 100, 0)} %)` : "")], ["Kvitteret", s.acked + (s.sent ? ` (${fmtN(s.acked / s.sent * 100, 0)} %)` : "")],
+      ["Median forsinkelse", med == null ? "–" : fmtN(med) + " s"], ["Udsendelser", s.tx], ["Sendetid", fmtN(s.air / 1e6) + " s"], ["Kollisioner", s.coll], ["Duty-udsættelser", s.duty], ["Udsat (kanal optaget)", s.busy]];
+    const html = kv.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+    const cel = $(".counters", P.el); if (cel._h !== html) { cel.innerHTML = html; cel._h = html; }
+    if (P.done && T >= dur) $(".dot", P.el).className = "dot ok";
+  },
+};
+window.sim = sim;
+$("#s-start").onclick = () => sim.start();
+$("#s-pause").onclick = () => {
+  if (!sim.playing && $("#s-pause").textContent === "Afspil igen") {
+    for (const P of Object.values(sim.panels)) { P.idx = 0; P.pulses = []; P.lines = []; P.marks = []; P.txs.clear(); P.msgs.clear(); P.st = { sent: 0, deliv: 0, acked: 0, tx: 0, air: 0, coll: 0, duty: 0, busy: 0, lat: [] }; P.nodes.forEach((n, i) => { n.air = 0; n.coll = n.deliv = n.send = -1e9; if (P.setup.nodes[i]) { n.x = P.setup.nodes[i][0]; n.y = P.setup.nodes[i][1]; } }); }
+    sim.simT = 0; sim.playing = true;
+  } else sim.playing = !sim.playing;
+  $("#s-pause").textContent = sim.playing ? "Pause" : "Fortsæt";
+};
+$("#s-step").onclick = () => sim.step();
+const setSpeed = () => { sim.speed = SPEEDS[+$("#s-speed").value]; $("#s-speedv").textContent = fmtN(sim.speed, 2) + "×"; };
+$("#s-speed").oninput = setSpeed; setSpeed();
+$("#s-scen").onchange = () => {
+  const v = $("#s-scen").value, set = (n, r, a, m, d) => { $("#s-nodes").value = n; $("#s-rep").value = r; $("#s-area").value = a; $("#s-msgs").value = m; $("#s-dur").value = d; };
+  if (v === "120") set(120, 30, 30, 60, 900); else if (v === "200") set(200, 40, 60, 60, 900); else if (v === "hw") set(120, 30, 100, 60, 900); else set(30, 8, 10, 20, 300);
+  for (const id of ["#s-nodes", "#s-rep", "#s-area"]) $(id).disabled = v === "hw";
+};
+$("#s-color").onchange = () => {};
+window.addEventListener("resize", () => sim.resize());
+sim.readColors();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => sim.redrawStatic());
+requestAnimationFrame(t => sim.frame(t));
+
+const tab0 = store.get("lab-tab"); if (tab0) showTab(tab0);
+connect();
+</script>
+</body>
+</html>

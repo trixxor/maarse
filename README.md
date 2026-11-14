@@ -164,6 +164,23 @@ Må:rse leverer mindst lige så mange beskeder som flood med cirka en tredjedel 
 
 Radiomodellen er grov (log-distance, ingen terræn). Tallene er til at sammenligne varianter.
 
+## Testlaboratorium (maarse-lab)
+
+Alle tests, fuzzing, simulatorscenarier og benchmarks kan køres og ses live i browseren:
+
+```sh
+cargo run --release -p maarse-lab                 # åbner http://127.0.0.1:8090
+cargo run --release -p maarse-lab -- --no-browser --addr 127.0.0.1:8095
+cargo run --release -p maarse-lab -- --port COM6 --port COM7   # også rigtige boards
+```
+
+- **Testoversigt:** hver suite med en kort beskrivelse af, hvad den tester: `cargo test` pr. crate (med alle testnavne), `maarse-fuzz`, `e2e_test.py`, `dht_test.py`, `radio_test.py` (kræver boards og `--port`), simulatorscenarierne (Må:rse og flood) og stempel-benchmarket. "Kør" pr. suite eller "Kør alt". Output streames live, og hver test bliver grøn eller rød med tid.
+- **Simulator live:** kører `maarse-sim --trace-json -` og animerer nettet på et kort: noder (farvet efter rolle eller brugt sendetid), radioforbindelser (tydeligere ved bedre SNR), udsendelser som ringe i pakketypens farve, kollisioner, leveringer og bilen på motorvejen. Hastighed 0,25×–50×, pause og trin, og Må:rse og flood side om side med samme frø.
+- **Hardware:** med `--port` vises boardenes RSSI/SNR, tx/rx, radiotrin, rolle og radioindstillinger live via companion-protokollen. Uden `--port` åbnes ingen porte. Pollingen holder pause, mens `radio_test.py` kører.
+- **Historik:** de seneste kørsler gemmes i `maarse-lab-data/history.json` og vises som udvikling over tid (fx leveret % pr. scenarie og forsøg/s for arbejdsbeviset).
+
+Simulatorens hændelsesspor (`--trace-json <fil|->`) er én JSON-linje pr. hændelse: `setup` (positioner og roller), `links` (hørbare par med SNR), `tx`, `rx` (modtagere og kollisioner), `defer` (duty cycle eller optaget kanal), `send`, `deliver`, `ack`, `move` og `end`. Formatet er beskrevet i `maarse-sim/src/trace.rs`.
+
 ## Firmware: status og hvad mangler
 
 - **Intet er afprøvet på hardware endnu.**

@@ -2,6 +2,7 @@
 //! webklienter.
 
 mod ext;
+mod pages;
 mod hist;
 mod identity;
 
@@ -171,6 +172,7 @@ pub struct Node {
     awaiting: HashMap<u64, Pending>,
     outbox: HashMap<u64, OutMsg>,
     uploads: HashMap<(ClientId, u16), Upload>,
+    pages: pages::Pages,
     out_files: HashMap<u64, OutFile>,
     in_files: HashMap<u64, InFile>,
     mailbox: HashMap<Address, HashMap<u64, Mail>>,
@@ -345,6 +347,7 @@ impl Node {
             awaiting: HashMap::new(),
             outbox: HashMap::new(),
             uploads: HashMap::new(),
+            pages: Default::default(),
             out_files: HashMap::new(),
             in_files: HashMap::new(),
             mailbox: HashMap::new(),
@@ -881,6 +884,7 @@ impl Node {
 
     fn on_content(&mut self, from: Address, plain: &[u8], hops: u8, format: Format) {
         match content::parse(plain) {
+            Some(Content::PageRequest(path)) => self.on_page_request(from, &path),
             Some(Content::Resync) => {
                 self.log(format!("{} startede en ny krypteringssession", short(&from)));
             }
@@ -929,69 +933,72 @@ impl Node {
                 &err_ev(req, error_code::NO_FILE, "Filen blev ikke overført helt"),
             );
         }
-        let chunks = up.data.len().div_ceil(CHUNK_DATA).max(1);
+        let (dest, size) = (up.dest, up.size);
+        let meta = crate::history::file_content(size, &up.mime, &up.name);
+        match self.send_file_bytes(dest, up.data, up.mime, up.name) {
+            Ok((file_id, chunks)) => {
+                self.hist_sent(id, crate::history::KIND_FILE, dest, 0, &meta);
+                self.send_client(id, &Event::FileStarted { req, file_id, chunks });
+            }
+            Err((code, e)) => self.send_client(id, &err_ev(req, code, e)),
+        }
+    }
+
+    /// Sender `data` som en fil til `dest` (tilbud og derefter bidder).
+    /// Returnerer (fil-ID, antal bidder).
+    pub(crate) fn send_file_bytes(
+        &mut self,
+        dest: Address,
+        data: Vec<u8>,
+        mime: content::Small,
+        name: content::Small,
+    ) -> Result<(u64, u16), (u8, &'static str)> {
+        let size = data.len() as u32;
+        let chunks = data.len().div_ceil(CHUNK_DATA).max(1);
         if chunks > u16::MAX as usize {
-            return self.send_client(
-                id,
-                &err_ev(req, error_code::FILE_TOO_LARGE, "Filen er for stor"),
-            );
+            return Err((error_code::FILE_TOO_LARGE, "Filen er for stor"));
         }
         let mut file_id_b = [0u8; 8];
         OsRng.fill_bytes(&mut file_id_b);
         let file_id = u64::from_le_bytes(file_id_b);
         let mut key = [0u8; 32];
         OsRng.fill_bytes(&mut key);
-        let digest = Sha256::digest(&up.data);
+        let digest = Sha256::digest(&data);
         let offer = FileOffer {
             file_id,
-            size: up.size,
+            size,
             chunks: chunks as u16,
             chunk_size: CHUNK_DATA as u8,
             key,
             hash: digest[..16].try_into().unwrap_or_default(),
-            mime: up.mime,
-            name: up.name,
+            mime,
+            name,
         };
         let plain = offer.encode();
-        let meta = crate::history::file_content(up.size, &offer.mime, &offer.name);
-        match self.send_sealed(up.dest, &plain, Pending::FileOffer(file_id)) {
-            Ok(_) => {
-                self.hist_sent(id, crate::history::KIND_FILE, up.dest, 0, &meta);
-                self.out_files.insert(
-                    file_id,
-                    OutFile {
-                        dest: up.dest,
-                        data: up.data,
-                        key,
-                        chunks: chunks as u16,
-                        offer: plain.to_vec(),
-                        offer_acked: false,
-                        offer_sent: Instant::now(),
-                        acked: vec![false; chunks],
-                        done: 0,
-                        in_flight: HashMap::new(),
-                        created: Instant::now(),
-                        size: up.size,
-                        sealed_offer: std::mem::take(&mut self.last_sealed),
-                        sealed_chunks: None,
-                        from_box: false,
-                    },
-                );
-                self.log(format!(
-                    "sender fil ({chunks} bidder) til {}",
-                    short(&up.dest)
-                ));
-                self.send_client(
-                    id,
-                    &Event::FileStarted {
-                        req,
-                        file_id,
-                        chunks: chunks as u16,
-                    },
-                );
-            }
-            Err(e) => self.send_client(id, &err_ev(req, error_code::UNKNOWN_DEST, e)),
-        }
+        self.send_sealed(dest, &plain, Pending::FileOffer(file_id))
+            .map_err(|e| (error_code::UNKNOWN_DEST, e))?;
+        self.out_files.insert(
+            file_id,
+            OutFile {
+                dest,
+                data,
+                key,
+                chunks: chunks as u16,
+                offer: plain.to_vec(),
+                offer_acked: false,
+                offer_sent: Instant::now(),
+                acked: vec![false; chunks],
+                done: 0,
+                in_flight: HashMap::new(),
+                created: Instant::now(),
+                size,
+                sealed_offer: std::mem::take(&mut self.last_sealed),
+                sealed_chunks: None,
+                from_box: false,
+            },
+        );
+        self.log(format!("sender fil ({chunks} bidder) til {}", short(&dest)));
+        Ok((file_id, chunks as u16))
     }
 
     /// Sender flere bidder, så længe vinduet tillader det.
@@ -1695,8 +1702,12 @@ impl Node {
 
     fn command(&mut self, id: ClientId, cmd: Command) {
         let Some(cmd) = self.ext_command(id, cmd) else { return };
+        let Some(cmd) = self.page_command(id, cmd) else { return };
         match cmd {
-            Command::GetInfo => self.send_client(id, &self.info()),
+            Command::GetInfo => {
+                self.send_client(id, &self.info());
+                self.send_known_names(id);
+            }
             Command::AnnounceNow => {
                 self.announce();
                 self.send_client(id, &Event::Log { text: text(b"Announce sendt") });
@@ -1885,7 +1896,10 @@ impl Node {
             Command::TraceRoute { .. }
             | Command::GetNeighbors
             | Command::SetSharing(_)
-            | Command::GetSharing => {}
+            | Command::GetSharing
+            | Command::SetName { .. }
+            | Command::GetName
+            | Command::RequestPage { .. } => {}
         }
     }
 }

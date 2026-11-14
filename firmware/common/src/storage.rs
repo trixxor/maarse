@@ -44,8 +44,11 @@ const REGION_OFF: usize = 0x200;
 const REGION_MAX: usize = 120;
 const SHARING_MAGIC: &[u8; 4] = b"SHR1";
 const SHARING_OFF: usize = 0x300;
+const NAME_MAGIC: &[u8; 4] = b"NAM1";
+const NAME_OFF: usize = 0x320;
 /// Brugt del af siden, rundet op til hele ord.
-const USED: usize = (SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN).div_ceil(4) * 4;
+const USED: usize = (NAME_OFF + 5 + maarse_core::appdata::MAX_NAME).div_ceil(4) * 4;
+const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
 
 const MAIL_MAGIC: u8 = 0xA5;
 /// Største besked i postkassen.
@@ -327,6 +330,24 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         } else {
             Default::default()
         }
+    }
+
+    fn save_name(&mut self, name: &[u8]) {
+        let mut buf = self.read_page();
+        let n = name.len().min(maarse_core::appdata::MAX_NAME);
+        buf[NAME_OFF..NAME_OFF + 4].copy_from_slice(NAME_MAGIC);
+        buf[NAME_OFF + 4] = n as u8;
+        buf[NAME_OFF + 5..NAME_OFF + 5 + n].copy_from_slice(&name[..n]);
+        self.write_page(&buf);
+    }
+
+    fn load_name(&mut self) -> maarse_core::appdata::Name {
+        let buf = self.read_page();
+        if &buf[NAME_OFF..NAME_OFF + 4] != NAME_MAGIC {
+            return Default::default();
+        }
+        let n = (buf[NAME_OFF + 4] as usize).min(maarse_core::appdata::MAX_NAME);
+        maarse_core::appdata::clean_name(&buf[NAME_OFF + 5..NAME_OFF + 5 + n]).unwrap_or_default()
     }
 
     fn save_admins(&mut self, admins: &[Address]) {

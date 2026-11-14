@@ -74,6 +74,12 @@ pub trait Settings {
     fn load_sharing(&mut self) -> maarse_core::companion::Sharing {
         Default::default()
     }
+    /// Gemmer visningsnavnet (tomt = intet). Standard: gemmes ikke.
+    fn save_name(&mut self, _name: &[u8]) {}
+    /// Gemt visningsnavn; standard er intet.
+    fn load_name(&mut self) -> maarse_core::appdata::Name {
+        Default::default()
+    }
 
     // ----- postkasse (valgfri; standard: ingen) -----
 
@@ -201,6 +207,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             last_control: 0,
         };
         n.ext.sharing = n.settings.load_sharing();
+        n.ext.name = n.settings.load_name();
         let (strict, names) = n.settings.load_regions();
         n.apply_regions(strict, names);
         n.admins = n.settings.load_admins();
@@ -418,6 +425,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         Some(Content::ControlReply(_, frame)) => {
                             emit(&Event::RemoteReply { from, frame: text(frame) })
                         }
+                        Some(Content::PageRequest(_)) => log("Sideanmodning: denne node har ingen sider"),
                         _ => {}
                     },
                     Err(CryptoError::UnknownSender(_)) => {
@@ -558,29 +566,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 req,
                 dest,
                 text: msg,
-            } => {
-                let Some(recipient) = self.known.get(&dest).copied() else {
-                    return err(
-                        req,
-                        error_code::UNKNOWN_DEST,
-                        "Modtageren er ikke hørt endnu",
-                    );
-                };
-                let plain = content::text(&msg);
-                let mut ct = [0u8; 255];
-                let Ok(n) = self.seal(&recipient, &plain, &mut ct) else {
-                    return err(req, error_code::TOO_LARGE, "Beskeden er for lang");
-                };
-                let mut token = [0u8; 16];
-                self.rng.fill_bytes(&mut token);
-                match self.router.send_direct(dest, &ct[..n], token, now_ms()) {
-                    Ok((msg_id, actions)) => {
-                        emit(&Event::Sent { req, msg_id });
-                        self.apply(actions);
-                    }
-                    Err(_) => err(req, error_code::QUEUE_FULL, "Køen er fuld"),
-                }
-            }
+            } => self.send_content(req, dest, &content::text(&msg)),
+            Command::RequestPage { req, dest, path } => match content::page_request(&path) {
+                Some(plain) => self.send_content(req, dest, &plain),
+                None => err(req, error_code::TOO_LARGE, "Ugyldig sti"),
+            },
             Command::SendChannel {
                 req,
                 channel,
@@ -659,7 +649,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::TraceRoute { .. }
             | Command::GetNeighbors
             | Command::SetSharing(_)
-            | Command::GetSharing => {}
+            | Command::GetSharing
+            | Command::SetName { .. }
+            | Command::GetName => {}
             Command::FileBegin { req, dest, size, mime, name } => {
                 self.file_begin(req, dest, size, &mime, &name)
             }
@@ -693,6 +685,26 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     /// Krypterer med forward secrecy, hvis modparten kan, ellers statisk.
+    /// Krypterer og sender en direkte besked (tekst eller sideanmodning).
+    fn send_content(&mut self, req: u16, dest: Address, plain: &[u8]) {
+        let Some(recipient) = self.known.get(&dest).copied() else {
+            return err(req, error_code::UNKNOWN_DEST, "Modtageren er ikke hørt endnu");
+        };
+        let mut ct = [0u8; 255];
+        let Ok(n) = self.seal(&recipient, plain, &mut ct) else {
+            return err(req, error_code::TOO_LARGE, "Beskeden er for lang");
+        };
+        let mut token = [0u8; 16];
+        self.rng.fill_bytes(&mut token);
+        match self.router.send_direct(dest, &ct[..n], token, now_ms()) {
+            Ok((msg_id, actions)) => {
+                emit(&Event::Sent { req, msg_id });
+                self.apply(actions);
+            }
+            Err(_) => err(req, error_code::QUEUE_FULL, "Køen er fuld"),
+        }
+    }
+
     fn seal(
         &mut self,
         recipient: &PublicIdentity,

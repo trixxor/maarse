@@ -398,6 +398,8 @@ pub struct Bridge {
     channels_ready: bool,
     /// Må:rse-kanaladresse -> navn (fra `ChannelJoined`).
     maarse_ch: HashMap<Address, String>,
+    /// Visningsnavne på Må:rse-noder (fra `NodeInfo`).
+    names: HashMap<Address, String>,
     /// Vores Må:rse-adresse (fra `Info`).
     my_addr: Option<Address>,
     /// MeshCore-nodens navn (sættes foran kanalbeskeder af firmwaren).
@@ -424,11 +426,26 @@ impl Bridge {
             channels_ready: false,
             maarse_ch: HashMap::new(),
             my_addr: None,
+            names: HashMap::new(),
             mc_name: String::new(),
             contacts: HashMap::new(),
             dm_route: HashMap::new(),
             seen: VecDeque::new(),
             syncing: false,
+        }
+    }
+
+    /// Sådan vises en Må:rse-afsender i MeshCore: visningsnavnet, hvis
+    /// noden har et (højst 24 bytes, ikke bevist), ellers 8 hex-tegn.
+    /// Klammer fjernes fra navnet, så det ikke kan ligne et andet præfiks.
+    fn label(&self, a: &Address) -> String {
+        match self.names.get(a) {
+            Some(n) => {
+                let n: String = n.chars().filter(|c| *c != '[' && *c != ']').collect();
+                let n = n.trim();
+                if n.is_empty() { short(a) } else { n.to_string() }
+            }
+            None => short(a),
         }
     }
 
@@ -669,6 +686,14 @@ impl Bridge {
         let mut out = Vec::new();
         match ev {
             Event::Info { addr, .. } => self.my_addr = Some(addr),
+            Event::NodeInfo { addr, name, .. } => match name {
+                Some(n) => {
+                    self.names.insert(addr, String::from_utf8_lossy(&n).into_owned());
+                }
+                None => {
+                    self.names.remove(&addr);
+                }
+            },
             Event::ChannelJoined { channel, name } => {
                 self.maarse_ch.insert(channel, String::from_utf8_lossy(&name).into_owned());
             }
@@ -689,7 +714,7 @@ impl Bridge {
                     }
                     // Firmwaren sætter "<nodenavn>: " foran (BaseChatMesh.cpp linje 523).
                     let room = MC_MAX_TEXT.saturating_sub(self.mc_name.len() + 2);
-                    let msg = format!("[Må {}] {body}", short(&from));
+                    let msg = format!("[Må {}] {body}", self.label(&from));
                     self.mc(&mut out, Pend::Cmd(CMD_SEND_CHANNEL_TXT_MSG), cmd_send_channel(idx, now, clip(&msg, room)));
                 }
             }
@@ -713,7 +738,7 @@ impl Bridge {
                 match hit {
                     Some((p, n)) => {
                         let body = rest[n.len()..].trim();
-                        let msg = format!("[Må {}] {body}", short(&from));
+                        let msg = format!("[Må {}] {body}", self.label(&from));
                         self.dm_route.insert(p, from);
                         self.mc(&mut out, Pend::Cmd(CMD_SEND_TXT_MSG), cmd_send_txt(&p, now, clip(&msg, MC_MAX_TEXT)));
                     }
@@ -1069,6 +1094,27 @@ mod tests {
         let out = b.on_node(ev(&long, addr(0x1a)), 1000);
         let s = &sent_texts(&out)[0];
         assert!(s.len() + "Gw: ".len() <= MC_MAX_TEXT);
+    }
+
+    #[test]
+    fn display_names() {
+        let (mut b, _) = ready_bridge();
+        let ev = |t: &str, from: Address| Event::ChannelReceived { channel: addr(1), from, hops: 1, text: text(t.as_bytes()) };
+        let named = |n: Option<&str>| Event::NodeInfo {
+            addr: addr(0x1a),
+            hops: 1,
+            position: None,
+            telemetry: None,
+            name: n.and_then(|n| maarse_core::appdata::clean_name(n.as_bytes())),
+        };
+        b.on_node(named(Some("Dennis")), 100);
+        assert_eq!(sent_texts(&b.on_node(ev("hej", addr(0x1a)), 110)), vec!["[Må Dennis] hej"]);
+        // Klammer i navnet fjernes, så det ikke kan efterligne et præfiks.
+        b.on_node(named(Some("[MC x]")), 120);
+        assert_eq!(sent_texts(&b.on_node(ev("to", addr(0x1a)), 130)), vec!["[Må MC x] to"]);
+        // Navnet fjernet: tilbage til adressen.
+        b.on_node(named(None), 140);
+        assert_eq!(sent_texts(&b.on_node(ev("tre", addr(0x1a)), 150)), vec!["[Må 1a1a1a1a] tre"]);
     }
 
     #[test]

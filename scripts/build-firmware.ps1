@@ -5,7 +5,8 @@
 #   .\scripts\build-firmware.ps1 xiao-esp32s3 [-Flash]
 param(
     [Parameter(Mandatory = $true)][ValidateSet("wismesh-tag", "xiao-nrf52840", "heltec-v4", "xiao-esp32s3")][string]$Board,
-    [switch]$Flash
+    [switch]$Flash,
+    [string]$Port
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -14,13 +15,28 @@ New-Item -ItemType Directory -Force dist | Out-Null
 
 if ($Board -in @("wismesh-tag", "xiao-nrf52840")) {
     rustup target add thumbv7em-none-eabihf
+    # Bluetooth-delen (nrf-sdc) bruger bindgen, som skal bruge libclang.
+    if (-not $env:LIBCLANG_PATH) {
+        $llvm = "C:\Program Files\LLVMin"
+        if (-not (Test-Path "$llvm\libclang.dll")) {
+            Write-Host "Installerer LLVM (libclang) med winget."
+            winget install --id LLVM.LLVM -e --silent --accept-package-agreements --accept-source-agreements
+        }
+        $env:LIBCLANG_PATH = $llvm
+    }
     Push-Location firmware\nrf
     cargo build --release --features "board-$Board"
     if ($LASTEXITCODE -ne 0) { Pop-Location; exit 1 }
     Pop-Location
     cargo run --release -q -p maarse-uf2 -- firmware\nrf\target\thumbv7em-none-eabihf\release\maarse-fw-nrf "dist\maarse-$Board.uf2"
     Write-Host "Faerdig: dist\maarse-$Board.uf2"
-    Write-Host "Dobbeltklik paa reset, og traek filen over paa USB-drevet, der dukker op."
+    if ($Flash) {
+        if (-not $Port) { Write-Host "Angiv porten med -Port, fx -Port COM7"; exit 1 }
+        python scriptslash-nrf.py $Port "dist\maarse-$Board.uf2"
+    } else {
+        Write-Host "Flash med:  .\scriptsuild-firmware.ps1 $Board -Flash -Port COMx"
+        Write-Host "(eller dobbeltklik paa reset og traek filen over paa USB-drevet)"
+    }
     exit 0
 }
 
@@ -41,7 +57,8 @@ $elf = "firmware\esp\target\xtensa-esp32s3-none-elf\release\maarse-fw-esp"
 espflash save-image --chip esp32s3 --merge --partition-table firmware\esp\partitions.csv $elf "dist\maarse-$Board.bin"
 Write-Host "Faerdig: dist\maarse-$Board.bin (samlet billede, flashes fra adresse 0x0)"
 if ($Flash) {
-    espflash flash --chip esp32s3 --partition-table firmware\esp\partitions.csv $elf
+    $portArg = @(); if ($Port) { $portArg = @("--port", $Port) }
+    espflash flash @portArg --chip esp32s3 --partition-table firmware\esp\partitions.csv $elf
 } else {
     Write-Host "Flash med:  .\scripts\build-firmware.ps1 $Board -Flash"
 }

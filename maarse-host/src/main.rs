@@ -119,6 +119,8 @@ pub struct Config {
     /// IP-tunnel: opret en TUN-adapter (`--tun`), evt. med sti til wintun.dll.
     pub tun: bool,
     pub wintun: Option<String>,
+    /// Tillad IP-tunnel over LoRa (`--tun-lora`); ellers kun over TCP.
+    pub tun_lora: bool,
 }
 
 /// Offentlige backbone-noder, som `--public` forbinder til. Tom indtil
@@ -201,6 +203,7 @@ fn parse_args() -> Result<Config, String> {
         history_days: Some(90),
         tun: false,
         wintun: None,
+        tun_lora: false,
     };
     let mut mqtt_prefix = "maarse".to_string();
     let (mut mqtt_user, mut mqtt_pass) = (None, None);
@@ -254,6 +257,7 @@ fn parse_args() -> Result<Config, String> {
                 })
             }
             "--tun" => c.tun = true,
+            "--tun-lora" => c.tun_lora = true,
             "--wintun" => {
                 c.tun = true;
                 c.wintun = Some(val("--wintun")?);
@@ -384,7 +388,11 @@ fn main() {
             Err(e) => eprintln!("  Webklient: kunne ikke starte på {addr}: {e}"),
         }
     }
-    println!("  IP:       {} (IP-tunnel, kun over TCP)", tunnel::ip_text(&node.my_ip()));
+    println!(
+        "  IP:       {} (IP-tunnel{})",
+        tunnel::ip_text(&node.my_ip()),
+        if cfg.tun_lora { ", også over LoRa" } else { ", kun over TCP" }
+    );
     if cfg.tun {
         #[cfg(feature = "tun")]
         match tunnel::spawn(node.my_ip(), cfg.wintun.clone(), tx.clone()) {

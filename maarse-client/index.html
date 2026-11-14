@@ -223,6 +223,7 @@ const Cmd = {
   getRadio: () => frame(0x0b),
   setRole: r => frame(0x10, [r]),
   joinPrivate: (key, name) => frame(0x13, key, enc.encode(name)),
+  getFileLimit: destHex => frame(0x14, unhex(destHex)),
   remote: (req, destHex, inner) => frame(0x0c, u16(req), unhex(destHex), inner.slice(2)),
   setAdmins: list => frame(0x0d, ...list.map(unhex)),
   getAdmins: () => frame(0x0e),
@@ -282,6 +283,7 @@ function decodeEvent(f) {
     case 0x95: return { type: "regions", strict: !!f[1], names: txt(2) };
     case 0x9a: return { type: "ota", req: f[1] | f[2] << 8, state: f[3], next: rd32(f, 4), size: rd32(f, 8),
                         version: rd32(f, 12), current: rd32(f, 16), text: txt(20) };
+    case 0x96: return { type: "fileLimit", dest: a(1), max: rd32(f, 17), viaLora: !!(f[21] & 1), mailbox: !!(f[21] & 2), air: rd32(f, 22) };
     case 0x91: {
       const items = [];
       for (let o = 1; o + 5 <= f.length; o += 5) items.push([f[o], rd32(f, o + 1) | 0]);
@@ -636,7 +638,7 @@ function onEvent(ev) {
       const m = state.files.get(ev.fileId);
       if (!m) break;
       m.progress = 1;
-      if (ev.outgoing) m.status = ev.ok ? "✓ leveret" : "fejl: " + ev.text;
+      if (ev.outgoing) m.status = !ev.ok ? "fejl: " + ev.text : ev.text === "lagt i postkasse" ? "✉ lagt i postkasse" : "✓ leveret";
       else if (ev.ok) {
         const buf = new Uint8Array(m.size);
         for (const [o, d] of m.parts) buf.set(d, o);
@@ -651,7 +653,9 @@ function onEvent(ev) {
     case "route":
       log(`Rute fundet til ${label(ev.dest)}: ${ev.hops} hop`);
       break;
+    case "fileLimit": limitAnswer(ev); break;
     case "error": {
+      if (ev.req === 0 && limitWaiters.length) limitAnswer(null); // firmware kender ikke 0x14
       const m = state.pending.get(ev.req);
       if (m) { m.status = "fejl: " + ev.text; state.pending.delete(ev.req); renderChat(); }
       log("Fejl: " + ev.text);
@@ -749,16 +753,51 @@ async function shrinkImage(file, limit) {
   return null;
 }
 
+// ---------- filgrænse efter rute (GetFileLimit 0x14 -> FileLimit 0x96) ----------
+// maarse-host svarer med grænsen for ruten til modtageren: over internettet
+// (TCP) op til 1 MB, over LoRa 8 KB, og til en modtager, der er offline,
+// lægges filen i hostens postkasse. Firmware-noder kender ikke kommandoen;
+// så bruges Info.max_file (fileLimit ovenfor).
+let limitWaiters = [];
+function limitAnswer(ev) {
+  const w = limitWaiters; limitWaiters = [];
+  for (const r of w) r(ev);
+}
+function queryFileLimit(dest) {
+  return new Promise(resolve => {
+    const done = ev => { clearTimeout(t); resolve(ev && ev.dest === dest ? ev : null); };
+    const t = setTimeout(() => { limitWaiters = limitWaiters.filter(r => r !== done); resolve(null); }, 1500);
+    limitWaiters.push(done);
+    transport.send(Cmd.getFileLimit(dest)).catch(() => done(null));
+  });
+}
+const kb = n => n >= 1024 * 1024 ? `${Math.round(n / 1024 / 1024)} MB` : `${Math.floor(n / 1024)} KB`;
+const minutes = s => s < 90 ? `ca. ${Math.max(1, Math.round(s))} sek.` : `ca. ${Math.round(s / 60)} min.`;
+function limitNotice(l, image) {
+  const what = image ? "Billedet" : "Filen";
+  if (l.mailbox) return `Modtageren er ikke online: ${what.toLowerCase()} lægges i postkassen på hosten (op til ${kb(l.max)}). Over 8 KB leveres den kun over internettet`;
+  if (l.viaLora) return `${what} sendes over LoRa` + (image ? ` og skaleres ned til ${kb(l.max)}` : ` (højst ${kb(l.max)})`) + ` (${minutes(l.air)} sendetid)`;
+  return `Sendes over internettet (op til ${kb(l.max)})`;
+}
+
 async function sendFile(file) {
   if (!transport || !state.active?.startsWith("dm:")) return;
-  const dest = state.active.slice(3), limit = fileLimit();
+  const dest = state.active.slice(3);
+  const image = file.type.startsWith("image/");
+  const l = await queryFileLimit(dest);
+  const limit = l ? Math.min(l.max, state.maxFile || l.max) : fileLimit();
+  if (l) log(limitNotice(l, image && file.size > l.max));
   let blob = file, name = file.name;
-  if (file.type.startsWith("image/") && file.size > limit) {
+  if (image && file.size > limit) {
     blob = await shrinkImage(file, limit);
     if (!blob) { log("Billedet kunne ikke gøres lille nok"); return; }
     name = name.replace(/\.[^.]+$/, "") + (blob.type === "image/webp" ? ".webp" : ".jpg");
   }
-  if (blob.size > limit) { log(`Filen er for stor: ${Math.ceil(blob.size / 1024)} KB (højst ${Math.floor(limit / 1024)} KB)`); return; }
+  if (blob.size > limit) {
+    const why = l?.viaLora && !l.mailbox ? " – modtageren nås kun over LoRa" : "";
+    log(`Filen er for stor: ${Math.ceil(blob.size / 1024)} KB (højst ${Math.floor(limit / 1024)} KB${why}). Kun billeder kan skaleres ned`);
+    return;
+  }
   const data = new Uint8Array(await blob.arrayBuffer());
   const req = state.nextReq++ & 0xffff;
   const m = { mine: true, name, mime: blob.type, url: URL.createObjectURL(blob), progress: 0,

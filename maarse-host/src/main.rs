@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod dht;
+mod filebox;
 #[cfg(test)]
 mod fuzz_tests;
 mod links;
@@ -90,6 +91,9 @@ pub struct Config {
     pub baud: u32,
     pub open_browser: bool,
     pub max_file: u32,
+    /// Filpostkassens kvote pr. modtager og i alt (bytes; 0 slår den fra).
+    pub filebox_per_recipient: u64,
+    pub filebox_total: u64,
     pub postbox: Option<maarse_core::Address>,
     /// Vores offentlige backbone-endpoint ("vært:port"). Gør hosten til en
     /// fuld DHT-deltager, der udgiver de adresser, den kan nå.
@@ -125,6 +129,11 @@ Brug: maarse-host [valg]
   --public              forbind også til de offentlige backbone-noder
   --max-file <KB>       største fil, der sendes og modtages (standard: 1024)
   --postkasse <adresse> brug denne node som min postkasse, når jeg er offline
+  --filpostkasse-mb <MB>
+                        plads til filer til modtagere, der er offline (standard:
+                        200, 0 slår filpostkassen fra). Filer udløber efter 7 dage
+  --filpostkasse-modtager-mb <MB>
+                        heraf højst pr. modtager (standard: 20)
   --public-addr <vært:port>
                         min offentlige backbone-adresse: gør mig til DHT-node, så
                         andre kan slå de adresser op, jeg kan nå
@@ -164,6 +173,8 @@ fn parse_args() -> Result<Config, String> {
         baud: 115_200,
         open_browser: true,
         max_file: 1024 * 1024,
+        filebox_per_recipient: 20 << 20,
+        filebox_total: 200 << 20,
         postbox: None,
         public_addr: None,
         dht_seeds: Vec::new(),
@@ -227,6 +238,18 @@ fn parse_args() -> Result<Config, String> {
                     .parse()
                     .map_err(|_| "--max-file: ugyldigt tal")?;
                 c.max_file = kb.saturating_mul(1024);
+            }
+            "--filpostkasse-mb" => {
+                let mb: u64 = val("--filpostkasse-mb")?
+                    .parse()
+                    .map_err(|_| "--filpostkasse-mb: ugyldigt tal")?;
+                c.filebox_total = mb << 20;
+            }
+            "--filpostkasse-modtager-mb" => {
+                let mb: u64 = val("--filpostkasse-modtager-mb")?
+                    .parse()
+                    .map_err(|_| "--filpostkasse-modtager-mb: ugyldigt tal")?;
+                c.filebox_per_recipient = mb << 20;
             }
             "--postkasse" => {
                 let v = val("--postkasse")?;

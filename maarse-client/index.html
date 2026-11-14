@@ -104,7 +104,7 @@
 
     <h2>Kanaler</h2>
     <div id="channels"></div>
-    <div class="row"><input id="join-name" placeholder="#kanalnavn"><button id="btn-join" disabled>Deltag</button></div>
+    <div class="row"><input id="join-name" placeholder="#kanalnavn eller #navn@region" title="Fx #tur@nordjylland: beskeder, du sender, holdes i regionen"><button id="btn-join" disabled>Deltag</button></div>
 
     <h2>Kontakter</h2>
     <div id="contacts"></div>
@@ -179,6 +179,8 @@ const Cmd = {
   remote: (req, destHex, inner) => frame(0x0c, u16(req), unhex(destHex), inner.slice(2)),
   setAdmins: list => frame(0x0d, ...list.map(unhex)),
   getAdmins: () => frame(0x0e),
+  setRegions: (strict, names) => frame(0x11, [strict ? 1 : 0], enc.encode(names)),
+  getRegions: () => frame(0x12),
   setTime: () => frame(0x0f, u32(Math.floor(Date.now() / 1000))),
 };
 
@@ -208,6 +210,7 @@ function decodeEvent(f) {
     case 0x90: return { type: "deposited", msgId: readU64(f, 1) };
     case 0x93: return { type: "remoteReply", from: a(1), inner: decodeEvent(f.slice(17)) };
     case 0x94: { const l = []; for (let o = 1; o + 16 <= f.length; o += 16) l.push(a(o)); return { type: "admins", list: l }; }
+    case 0x95: return { type: "regions", strict: !!f[1], names: txt(2) };
     case 0x91: {
       const items = [];
       for (let o = 1; o + 5 <= f.length; o += 5) items.push([f[o], rd32(f, o + 1) | 0]);
@@ -322,7 +325,7 @@ const state = {
   view: "chat",          // chat | status | radio
   stats: null, radio: null, statsTimer: null,
   target: null,          // null = denne node, ellers adressen på en fjern node
-  remoteStats: [], remoteRadio: null, admins: [],
+  remoteStats: [], remoteRadio: null, admins: [], regions: null,
   nextReq: 1,
 };
 
@@ -487,6 +490,7 @@ function onEvent(ev) {
     case "stats": state.stats = ev.items; if (state.view === "status" || state.view === "radio") renderChat(); break;
     case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
     case "admins": state.admins = ev.list; if (state.view === "radio") renderChat(); break;
+    case "regions": state.regions = ev; if (state.view === "radio") renderChat(); break;
     case "remoteReply": {
       const i = ev.inner;
       if (ev.from !== state.target) break;
@@ -737,7 +741,7 @@ const BWS = [7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500
 function renderRadio(box) {
   $("chat-title").textContent = "Radioindstillinger"; $("chat-sub").textContent = "";
   targetPicker(box);
-  if (!state.target) renderAdmins(box);
+  if (!state.target) { renderAdmins(box); renderRegions(box); }
   const c = state.target ? state.remoteRadio : state.radio;
   if (!c) { box.append(state.target ? "Venter på svar… (du skal være administrator for noden)"
                                     : "maarse-host har ingen egen radio. Forbind til en radio-node via USB."); return; }
@@ -808,6 +812,25 @@ function renderAdmins(box) {
   box.appendChild(w);
 }
 
+function renderRegions(box) {
+  const w = document.createElement("div"); w.className = "warn";
+  w.innerHTML = "<b>Regioner</b> (højst 8, kommasepareret), fx <code>dk, nordjylland</code>. Noden videresender kun kanalbeskeder " +
+    "med region, hvis regionen står her. Tom liste: alt videresendes. Beskeder til dig selv filtreres aldrig.";
+  const inp = document.createElement("input");
+  inp.style.width = "100%"; inp.style.marginTop = "8px"; inp.placeholder = "dk, nordjylland";
+  inp.value = state.regions ? state.regions.names.split(",").join(", ") : "";
+  const lbl = document.createElement("label"); lbl.style.display = "block"; lbl.style.marginTop = "6px";
+  const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!state.regions?.strict;
+  lbl.append(cb, " Streng: uden regioner videresendes kun beskeder uden region");
+  const b = document.createElement("button"); b.textContent = "Gem regioner"; b.style.marginTop = "6px";
+  b.onclick = () => {
+    const names = inp.value.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).slice(0, 8).join(",");
+    transport?.send(Cmd.setRegions(cb.checked, names));
+  };
+  w.append(inp, lbl, b);
+  box.appendChild(w);
+}
+
 function setView(v) {
   state.view = v;
   clearInterval(state.statsTimer);
@@ -820,7 +843,8 @@ function setView(v) {
       transport.send(Cmd.getStats());
       state.statsTimer = setInterval(() => transport?.send(Cmd.getStats()), 5000);
     }
-    if (v === "radio") { transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); transport.send(Cmd.getStats()); }
+    if (v === "radio") { transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); transport.send(Cmd.getRegions()); transport.send(Cmd.getStats()); }
+
   }
   renderChat();
 }

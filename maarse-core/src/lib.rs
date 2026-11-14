@@ -18,6 +18,7 @@ pub mod content;
 pub mod dedup;
 pub mod duty;
 pub mod packet;
+pub mod region;
 pub mod router;
 pub mod routes;
 pub mod stamp;

@@ -8,9 +8,11 @@
 //!   0x080: "RCF1" + radioindstillinger (16)
 //!   0x100: "ADM1" + antal (1) + administratorer (4 × 16)
 //!   0x180: "ROL1" + rolle (1: 0 = klient, 1 = repeater, 2 = relay)
+//!   0x200: "REG1" + strict (1) + længde (1) + regionsnavne (≤ 120, kommasepareret)
 //!   ```
-//!   Skrives kun første gang og når radio/administratorer/rolle ændres.
-//!   Ældre flash uden "ROL1" (slettet = 0xFF) giver repeater.
+//!   Skrives kun første gang og når radio/administratorer/rolle/regioner ændres.
+//!   Ældre flash uden "ROL1" (slettet = 0xFF) giver repeater; uden "REG1"
+//!   ingen regioner (videresend alt).
 //!
 //! * Postkassen (to sektorer, 8 KB): poster skrives efter hinanden — et
 //!   hovedord `[0xA5, status, længde lo, længde hi]`, modtager (16) og den
@@ -35,8 +37,11 @@ const ADMIN_MAGIC: &[u8; 4] = b"ADM1";
 const ADMIN_OFF: usize = 0x100;
 const ROLE_MAGIC: &[u8; 4] = b"ROL1";
 const ROLE_OFF: usize = 0x180;
+const REGION_MAGIC: &[u8; 4] = b"REG1";
+const REGION_OFF: usize = 0x200;
+const REGION_MAX: usize = 120;
 /// Brugt del af siden, rundet op til hele ord.
-const USED: usize = (ROLE_OFF + 4 + 1).div_ceil(4) * 4;
+const USED: usize = (REGION_OFF + 4 + 2 + REGION_MAX).div_ceil(4) * 4;
 
 const MAIL_MAGIC: u8 = 0xA5;
 /// Største besked i postkassen.
@@ -187,7 +192,29 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         Role::Repeater
     }
 
+    fn save_regions(&mut self, strict: bool, names: &[u8]) {
+        let mut buf = self.read_page();
+        let n = names.len().min(REGION_MAX);
+        buf[REGION_OFF..REGION_OFF + 4].copy_from_slice(REGION_MAGIC);
+        buf[REGION_OFF + 4] = strict as u8;
+        buf[REGION_OFF + 5] = n as u8;
+        buf[REGION_OFF + 6..REGION_OFF + 6 + n].copy_from_slice(&names[..n]);
+        self.write_page(&buf);
+    }
+
+    fn load_regions(&mut self) -> (bool, crate::node::RegionNames) {
+        let buf = self.read_page();
+        if &buf[REGION_OFF..REGION_OFF + 4] != REGION_MAGIC {
+            return (false, crate::node::RegionNames::new());
+        }
+        let n = (buf[REGION_OFF + 5] as usize).min(REGION_MAX);
+        let names = crate::node::RegionNames::from_slice(&buf[REGION_OFF + 6..REGION_OFF + 6 + n])
+            .unwrap_or_default();
+        (buf[REGION_OFF + 4] == 1, names)
+    }
+
     fn save_admins(&mut self, admins: &[Address]) {
+
         let mut buf = self.read_page();
         buf[ADMIN_OFF..ADMIN_OFF + 4].copy_from_slice(ADMIN_MAGIC);
         let n = admins.len().min(4);

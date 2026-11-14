@@ -10,11 +10,27 @@
 #   ./scripts/build-firmware.sh heltec-v4 [flash]
 #   ./scripts/build-firmware.sh xiao-esp32s3 [flash]
 #   Første gang installeres Espressifs værktøjskæde (espup) og espflash.
+#
+# Signeret pakke til opdatering over luften (dist/maarse-<board>-ota.bin +
+# .manifest), når MAARSE_SIGN_KEY peger på en nøgle fra `maarse-sign keygen`
+# (eller MAARSE_SIGN_KEY=dev for udviklingsnøglen). Versionen tages fra
+# MAARSE_FW_VERSION (skal også være sat under byggeriet, så firmwaren kender
+# sin egen version), og den offentlige nøgle fra MAARSE_RELEASE_PUBKEY.
 set -e
 cd "$(dirname "$0")/.."
 BOARD="$1"
 ACTION="$2"
 PORT="$3"
+
+# Signerer et image med maarse-sign, hvis MAARSE_SIGN_KEY er sat.
+sign() {
+  [ -n "$MAARSE_SIGN_KEY" ] || return 0
+  [ -n "$MAARSE_FW_VERSION" ] || { echo "Sæt MAARSE_FW_VERSION (fx 0.2.0) for at signere"; exit 1; }
+  if [ "$MAARSE_SIGN_KEY" = "dev" ]; then KEYARG="--dev-key"; else KEYARG="--key $MAARSE_SIGN_KEY"; fi
+  # shellcheck disable=SC2086
+  cargo run --release -q -p maarse-uf2 --bin maarse-sign -- sign --board "$BOARD" \
+    --version "$MAARSE_FW_VERSION" $KEYARG "$1" "dist/maarse-$BOARD-ota"
+}
 command -v cargo >/dev/null 2>&1 || { echo "Rust mangler: https://rustup.rs"; exit 1; }
 mkdir -p dist
 
@@ -27,6 +43,7 @@ case "$BOARD" in
     cargo run --release -q -p maarse-uf2 -- \
       firmware/nrf/target/thumbv7em-none-eabihf/release/maarse-fw-nrf "dist/maarse-$BOARD.uf2"
     echo "Færdig: dist/maarse-$BOARD.uf2"
+    sign "dist/maarse-$BOARD.uf2"
     if [ "$ACTION" = "flash" ]; then
       [ -n "$PORT" ] || { echo "Angiv porten, fx: $0 $BOARD flash /dev/ttyACM0"; exit 1; }
       python3 scripts/flash-nrf.py "$PORT" "dist/maarse-$BOARD.uf2"
@@ -48,8 +65,14 @@ case "$BOARD" in
     espflash save-image --chip esp32s3 --merge \
       --partition-table firmware/esp/partitions.csv "$ELF" "dist/maarse-$BOARD.bin"
     echo "Færdig: dist/maarse-$BOARD.bin (samlet billede, flashes fra adresse 0x0)"
+    # App-imaget alene (til opdatering over luften).
+    espflash save-image --chip esp32s3 "$ELF" "dist/maarse-$BOARD-app.bin"
+    sign "dist/maarse-$BOARD-app.bin"
     if [ "$ACTION" = "flash" ]; then
-      espflash flash ${PORT:+--port "$PORT"} --chip esp32s3 --partition-table firmware/esp/partitions.csv "$ELF"
+      # otadata slettes, så bootloaderen starter ota_0 (det, vi flasher),
+      # også selvom en opdatering over luften har valgt ota_1.
+      espflash flash ${PORT:+--port "$PORT"} --chip esp32s3 --partition-table firmware/esp/partitions.csv \
+        --erase-parts otadata "$ELF"
     else
       echo "Flash med:  ./scripts/build-firmware.sh $BOARD flash"
     fi

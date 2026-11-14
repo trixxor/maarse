@@ -82,6 +82,12 @@ pub trait Settings {
     fn mail_count(&mut self) -> (u32, u32) {
         (0, 0)
     }
+
+    /// Mellemlager og installation til firmwareopdatering (se
+    /// [`crate::ota`]). Standard: understøttes ikke.
+    fn ota(&mut self) -> Option<&mut dyn crate::ota::OtaPort> {
+        None
+    }
 }
 
 pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
@@ -115,6 +121,9 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     files: files::Files,
     /// Diagnose, batteri og deling (se node/ext.rs).
     ext: ext::Ext,
+    ota: crate::ota::OtaManager,
+    /// Sidste tæller i en udgående kontrolkommando (skal stige strengt).
+    last_control: u32,
 }
 
 fn now_ms() -> u64 {
@@ -182,6 +191,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             region_names: RegionNames::new(),
             files: files::Files::new(),
             ext: ext::Ext::new(),
+            ota: crate::ota::OtaManager::new(),
+            last_control: 0,
         };
         n.ext.sharing = n.settings.load_sharing();
         let (strict, names) = n.settings.load_regions();
@@ -252,6 +263,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         {
             d = t;
         }
+        if let Some(t) = self.ota.deadline() {
+            d = d.min(t);
+        }
         d
     }
 
@@ -265,6 +279,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 self.announce();
             }
             self.next_announce = Instant::now() + ANNOUNCE_EVERY;
+        }
+        if let Some(e) = self.ota.on_timer(self.settings.ota()) {
+            log(e);
         }
     }
 
@@ -585,13 +602,23 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::Remote { req, dest, frame } => {
                 if !matches!(
                     Command::decode(&frame),
-                    Ok(Command::GetStats | Command::GetRadio | Command::SetRadio(_) | Command::SetRole { .. })
+                    Ok(Command::GetStats
+                        | Command::GetRadio
+                        | Command::SetRadio(_)
+                        | Command::SetRole { .. }
+                        | Command::OtaBegin { .. }
+                        | Command::OtaChunk { .. }
+                        | Command::OtaEnd { .. }
+                        | Command::OtaStatus)
                 ) {
-                    return err(req, error_code::BAD_FRAME, "Kun status, radio og rolle kan fjernstyres");
+                    return err(req, error_code::BAD_FRAME, "Kun status, radio, rolle og firmware kan fjernstyres");
                 }
-                let Some(counter) = self.unix_now() else {
+                let Some(now) = self.unix_now() else {
                     return err(req, error_code::BAD_FRAME, "Klokken er ikke sat (forbind igen)");
                 };
+                // Skal stige strengt: firmware-bidder kan komme flere pr. sekund.
+                let counter = now.max(self.last_control.wrapping_add(1));
+                self.last_control = counter;
                 let plain = content::control(content::CONTROL, counter, &frame);
                 match self.send_plain(dest, &plain) {
                     Ok(msg_id) => emit(&Event::Sent { req, msg_id }),
@@ -614,6 +641,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::GetRegions => emit(&self.regions_event()),
             Command::SetTime { unix } => {
                 self.boot_unix = Some(unix.saturating_sub(self.started.elapsed().as_secs() as u32));
+            }
+            Command::OtaBegin { .. } | Command::OtaChunk { .. } | Command::OtaEnd { .. } | Command::OtaStatus => {
+                let ev = self.ota.handle(self.settings.ota(), &cmd, false);
+                emit(&ev);
             }
             // Håndteres i node/ext.rs.
             Command::TraceRoute { .. }
@@ -754,6 +785,15 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 }
                 Err(e) => reply(self, deny(e)),
             },
+            Ok(
+                c @ (Command::OtaBegin { .. }
+                | Command::OtaChunk { .. }
+                | Command::OtaEnd { .. }
+                | Command::OtaStatus),
+            ) => {
+                let ev = self.ota.handle(self.settings.ota(), &c, true);
+                reply(self, ev);
+            }
             _ => reply(self, deny("Kommandoen kan ikke fjernstyres")),
         }
     }

@@ -6,5 +6,6 @@
 pub mod bus;
 pub mod node;
 pub mod power;
+pub mod ota;
 pub mod radio;
 pub mod storage;

@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 pub mod files;
+pub mod ota;
 pub mod ratchet;
 pub mod seal;
 

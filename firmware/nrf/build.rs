@@ -4,6 +4,8 @@
 //! firmwaren ikke bruger, men skal ligge efter:
 //! * WisMesh Tag (RAK4630): S140 v6 -> appen starter ved 0x26000
 //! * XIAO nRF52840: S140 v7 -> appen starter ved 0x27000
+//! Appen må højst gå til 0x88000; 0x88000-0xE8FFF er mellemlager til
+//! firmwareopdatering og 0xE9000 dens metaside (se src/ota.rs).
 //! 0xEA000-0xEBFFF er postkasse, siden 0xEC000 nodens identitet.
 use std::{env, fs, path::PathBuf};
 
@@ -17,7 +19,7 @@ fn main() {
         );
     }
     let origin: u32 = if wismesh { 0x26000 } else { 0x27000 };
-    let end: u32 = 0xEA000;
+    let end: u32 = 0x88000;
     let memory = format!(
         "MEMORY\n{{\n  FLASH : ORIGIN = 0x{origin:X}, LENGTH = 0x{:X}\n  RAM : ORIGIN = 0x20000008, LENGTH = 0x3FFF8\n}}\n",
         end - origin
@@ -27,6 +29,13 @@ fn main() {
     fs::write(out.join("app-start.txt"), format!("0x{origin:X}")).unwrap();
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=MAARSE_RELEASE_PUBKEY");
+    println!("cargo:rerun-if-env-changed=MAARSE_FW_VERSION");
+    if env::var_os("MAARSE_RELEASE_PUBKEY").is_none() {
+        println!(
+            "cargo:warning=MAARSE_RELEASE_PUBKEY er ikke sat: firmwaren stoler på den OFFENTLIGE udviklingsnøgle til opdateringer. Kun til udvikling!"
+        );
+    }
     println!("cargo:rustc-link-arg=--nmagic");
     println!("cargo:rustc-link-arg=-Tlink.x");
 }

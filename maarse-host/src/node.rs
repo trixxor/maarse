@@ -169,6 +169,8 @@ pub struct Node {
     counters: Counters,
     /// Hvem må administrere denne node over radio/backbone.
     admins: Vec<Address>,
+    /// Sidste tæller i en udgående kontrolkommando (skal stige strengt).
+    last_control: u32,
     /// Seneste kontroltæller pr. administrator (mod genafspilning).
     control_seen: HashMap<Address, u32>,
     /// Seneste modtagne beskeder, så en klient, der forbinder senere, også
@@ -330,6 +332,7 @@ impl Node {
             start: Instant::now(),
             counters: Counters::default(),
             admins: Vec::new(),
+            last_control: 0,
             control_seen: HashMap::new(),
             inbox: std::collections::VecDeque::new(),
             tx: None,
@@ -1548,13 +1551,22 @@ impl Node {
             Command::Remote { req, dest, frame } => {
                 let ok = matches!(
                     Command::decode(&frame),
-                    Ok(Command::GetStats | Command::GetRadio | Command::SetRadio(_) | Command::SetRole { .. })
+                    Ok(Command::GetStats
+                        | Command::GetRadio
+                        | Command::SetRadio(_)
+                        | Command::SetRole { .. }
+                        | Command::OtaBegin { .. }
+                        | Command::OtaChunk { .. }
+                        | Command::OtaEnd { .. }
+                        | Command::OtaStatus)
                 );
                 if !ok {
-                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Kun status, radio og rolle kan fjernstyres"));
+                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Kun status, radio, rolle og firmware kan fjernstyres"));
                 }
-                // Tælleren følger uret, så den også stiger efter en genstart.
-                let counter = unix_now();
+                // Tælleren følger uret, så den også stiger efter en genstart,
+                // men stiger altid (firmware-bidder kan komme flere pr. sekund).
+                let counter = unix_now().max(self.last_control.wrapping_add(1));
+                self.last_control = counter;
                 let plain = content::control(content::CONTROL, counter, &frame);
                 match self.send_sealed(dest, &plain, Pending::Control) {
                     Ok(msg_id) => self.send_client(id, &Event::Sent { req, msg_id }),
@@ -1581,6 +1593,10 @@ impl Node {
                 self.send_client(id, &self.regions_event());
             }
             Command::GetRegions => self.send_client(id, &self.regions_event()),
+            Command::OtaBegin { req, .. } | Command::OtaChunk { req, .. } | Command::OtaEnd { req, .. } => {
+                self.send_client(id, &ota_unsupported(req))
+            }
+            Command::OtaStatus => self.send_client(id, &ota_unsupported(0)),
 
             Command::SetTime { .. } => {} // maarse-host har sit eget ur
             Command::GetRadio | Command::SetRadio(_) => self.send_client(
@@ -2016,5 +2032,19 @@ mod file_interop_tests {
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(done, Some(true));
         assert_eq!(got, data);
+    }
+}
+
+/// maarse-host kan ikke selv opdateres over luften (den opdateres som et
+/// almindeligt program), men videresender firmware til fjerne noder med `Remote`.
+fn ota_unsupported(req: u16) -> Event {
+    Event::OtaState {
+        req,
+        state: maarse_core::companion::ota_state::UNSUPPORTED,
+        next: 0,
+        size: 0,
+        version: 0,
+        current: 0,
+        text: maarse_core::companion::text("maarse-host opdateres ikke over luften; brug Remote til en node".as_bytes()),
     }
 }

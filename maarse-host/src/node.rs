@@ -1931,3 +1931,76 @@ impl Node {
         }
     }
 }
+
+#[cfg(test)]
+mod file_interop_tests {
+    //! Firmwarens filafsender (`maarse_crypto::files`) mod hostens modtager.
+    use super::*;
+    use maarse_crypto::files::{AckResult, Outgoing};
+
+    fn cfg(dir: PathBuf) -> Config {
+        Config {
+            data_dir: dir,
+            http: None,
+            listen: None,
+            peers: Vec::new(),
+            serial: None,
+            baud: 115_200,
+            open_browser: false,
+            max_file: 1024 * 1024,
+            postbox: None,
+            public_addr: None,
+            dht_seeds: Vec::new(),
+            regions: Vec::new(),
+            strict_region: false,
+            meshcore: None,
+            meshcore_baud: 115_200,
+            meshcore_bridge: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn firmware_sender_to_host_receiver() {
+        let dir = std::env::temp_dir().join(format!("maarse-fil-{}", std::process::id()));
+        let mut node = Node::new(&cfg(dir.clone())).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        node.clients.insert(1, tx);
+
+        let data: Vec<u8> = (0..8000u32).map(|i| (i * 7 % 256) as u8).collect();
+        let from = Address([4; 16]);
+        let (mut out, offer) =
+            Outgoing::new(77, [9; 32], node.addr, &data, b"image/webp", b"kort.webp", 0).unwrap();
+        // Tilbuddet ad samme vej som over radio: indkodet og fortolket.
+        let enc = offer.encode();
+        let Some(Content::FileOffer(parsed)) = content::parse(&enc) else { panic!() };
+        node.on_file_offer(from, parsed);
+        out.offer_sent(1, 0);
+        assert_eq!(out.on_ack(1, 0), Some(AckResult::OfferAcked));
+        let mut msg = 1;
+        while !out.finished() {
+            while let Some(i) = out.next_chunk() {
+                msg += 1;
+                let mut ct = [0u8; 255];
+                let n = out.seal_chunk(i, &data, &mut ct).unwrap();
+                out.chunk_sent(i, msg, 0);
+                node.on_chunk(&ct[..n]);
+                out.on_ack(msg, 0);
+            }
+        }
+        let mut got = Vec::new();
+        let mut done = None;
+        for f in rx.try_iter() {
+            match Event::decode(&f[2..]).unwrap() {
+                Event::FileChunk { file_id: 77, offset, data } => {
+                    assert_eq!(offset as usize, got.len());
+                    got.extend_from_slice(&data);
+                }
+                Event::FileDone { file_id: 77, ok, .. } => done = Some(ok),
+                _ => {}
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(done, Some(true));
+        assert_eq!(got, data);
+    }
+}

@@ -1113,6 +1113,7 @@ dependencies = [
  "maarse-core",
  "maarse-crypto",
  "rand_core 0.6.4",
+ "static_cell",
 ]
 
 [[package]]

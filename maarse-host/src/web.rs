@@ -2,7 +2,8 @@
 
 use crate::{In, next_id};
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 use std::thread;
 use std::time::Duration;
@@ -31,30 +32,39 @@ pub fn access_token(data_dir: &std::path::Path) -> String {
     t
 }
 
-pub fn spawn(addr: SocketAddr, token: String, tx: Sender<In>) -> std::io::Result<()> {
-    let listener = TcpListener::bind(addr)?;
+pub fn spawn(addr: SocketAddr, token: String, data_dir: PathBuf, tx: Sender<In>) -> std::io::Result<()> {
+    let listener = crate::settings::bind(addr)?;
     let token = std::sync::Arc::new(token);
+    let data_dir = std::sync::Arc::new(data_dir);
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let (tx, token) = (tx.clone(), token.clone());
-            thread::spawn(move || handle(stream, &token, tx));
+            let (tx, token, dd) = (tx.clone(), token.clone(), data_dir.clone());
+            thread::spawn(move || handle(stream, &token, &dd, tx));
         }
     });
     Ok(())
 }
 
-fn handle(stream: TcpStream, token: &str, tx: Sender<In>) {
+/// Kommer forbindelsen fra denne computer (loopback eller dens egen IP)?
+fn is_local(stream: &TcpStream) -> bool {
+    match (stream.peer_addr(), stream.local_addr()) {
+        (Ok(p), Ok(l)) => p.ip().is_loopback() || p.ip() == l.ip(),
+        _ => false,
+    }
+}
+
+fn handle(stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
     let mut peek = [0u8; 2048];
     let n = stream.peek(&mut peek).unwrap_or(0);
     let head = String::from_utf8_lossy(&peek[..n]).to_ascii_lowercase();
     if head.contains("upgrade: websocket") {
         websocket(stream, token, tx);
     } else {
-        http(stream);
+        http(stream, token, data_dir);
     }
 }
 
-fn http(mut stream: TcpStream) {
+fn http(mut stream: TcpStream, token: &str, data_dir: &Path) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let mut req = Vec::new();
     let mut buf = [0u8; 1024];
@@ -64,9 +74,14 @@ fn http(mut stream: TcpStream) {
             Ok(n) => req.extend_from_slice(&buf[..n]),
         }
     }
-    let line = String::from_utf8_lossy(&req);
-    let path = line.split_whitespace().nth(1).unwrap_or("/");
-    let path = path.split('?').next().unwrap_or("/");
+    let line = String::from_utf8_lossy(&req).into_owned();
+    let mut words = line.split_whitespace();
+    let method = words.next().unwrap_or("GET").to_string();
+    let target = words.next().unwrap_or("/");
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if path.starts_with("/api/") {
+        return api(stream, &method, path, query, &line, req, token, data_dir);
+    }
     let sw;
     let (status, ctype, body): (&str, &str, &[u8]) = match path {
         "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX_HTML.as_bytes()),
@@ -86,6 +101,70 @@ fn http(mut stream: TcpStream) {
     );
     let _ = stream.write_all(resp.as_bytes());
     let _ = stream.write_all(body);
+}
+
+// ---------- indstillinger (/api/…) ----------
+
+fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.split("\r\n").skip(1).find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        k.trim().eq_ignore_ascii_case(name).then(|| v.trim())
+    })
+}
+
+fn reply(stream: &mut TcpStream, status: &str, ctype: &str, body: &str) {
+    let resp = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(resp.as_bytes());
+    let _ = stream.flush();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str, mut req: Vec<u8>, token: &str, data_dir: &Path) {
+    let head_end = head.find("\r\n\r\n").unwrap_or(head.len());
+    let head = &head[..head_end];
+    let ok = allowed(query, header(head, "host"), header(head, "origin"), is_local(&stream), token);
+    if method == "OPTIONS" {
+        return reply(&mut stream, "204 No Content", "text/plain", "");
+    }
+    if !ok {
+        return reply(&mut stream, "403 Forbidden", "text/plain; charset=utf-8", "Adgangsnøgle mangler eller er forkert");
+    }
+    let restart_soon = |mut stream: TcpStream| {
+        reply(&mut stream, "200 OK", "text/plain; charset=utf-8", "ok");
+        drop(stream);
+        thread::sleep(Duration::from_millis(300));
+        crate::settings::restart();
+    };
+    match (method, path) {
+        ("GET", "/api/indstillinger") => {
+            let body = crate::settings::status_json(data_dir);
+            reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)
+        }
+        ("POST", "/api/indstillinger") => {
+            let len: usize = header(head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
+            if len > 64 * 1024 {
+                return reply(&mut stream, "413 Payload Too Large", "text/plain", "for stor");
+            }
+            let mut body = req.split_off((head_end + 4).min(req.len()));
+            let mut buf = [0u8; 4096];
+            while body.len() < len {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => body.extend_from_slice(&buf[..n]),
+                }
+            }
+            let text = String::from_utf8_lossy(&body[..len.min(body.len())]).into_owned();
+            match crate::settings::save(data_dir, &text) {
+                Ok(()) => restart_soon(stream),
+                Err(e) => reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", &e),
+            }
+        }
+        ("POST", "/api/genstart") => restart_soon(stream),
+        _ => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "Ikke fundet"),
+    }
 }
 
 // ---------- PWA: manifest, service worker og ikoner ----------
@@ -110,25 +189,21 @@ fn service_worker() -> String {
 
 /// Hvem må styre noden over WebSocket?
 ///
-/// * Fra denne computer (loopback) og fra en side med samme vært: ja, som
+/// * Fra denne computer (loopback eller dens egen IP) og fra en side med samme vært: ja, som
 ///   før. Origin-tjekket forhindrer, at en hjemmeside, du besøger, sender
 ///   beskeder i dit navn via localhost.
 /// * Alle andre (fx telefonen over VPN, eller appen, der har sin egen
 ///   origin) skal have adgangsnøglen med: `ws://vært/ws?token=<nøgle>`.
-fn allowed(req: &Request, loopback: bool, token: &str) -> bool {
-    let given = req
-        .uri()
-        .query()
-        .unwrap_or("")
+fn allowed(query: &str, host: Option<&str>, origin: Option<&str>, loopback: bool, token: &str) -> bool {
+    let given = query
         .split('&')
         .find_map(|kv| kv.strip_prefix("token="))
         .unwrap_or("");
     if !token.is_empty() && ct_eq(given.as_bytes(), token.as_bytes()) {
         return true;
     }
-    let h = req.headers();
-    let host = h.get("host").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let origin_ok = match h.get("origin").and_then(|v| v.to_str().ok()) {
+    let host = host.unwrap_or("");
+    let origin_ok = match origin {
         None => true,
         Some(o) => o == format!("http://{host}"),
     };
@@ -142,11 +217,15 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 
 fn websocket(stream: TcpStream, token: &str, tx: Sender<In>) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
-    let loopback = stream.peer_addr().map(|a| a.ip().is_loopback()).unwrap_or(false);
+    // Lokal: loopback, eller samme maskine via dens egen netværksadresse
+    // (fx en browser på PC'en, der åbner http://<pc-ens-ip>:8080/).
+    let loopback = is_local(&stream);
     #[allow(clippy::result_large_err)] // signaturen er givet af tungstenite
     let check = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
         let origin = req.headers().get("origin").and_then(|v| v.to_str().ok()).unwrap_or("-");
-        if allowed(req, loopback, token) {
+        let h = req.headers();
+        let get = |n: &str| h.get(n).and_then(|v| v.to_str().ok());
+        if allowed(req.uri().query().unwrap_or(""), get("host"), get("origin"), loopback, token) {
             if !loopback {
                 println!("[web] klient forbundet fra {peer} (origin {origin})");
             }

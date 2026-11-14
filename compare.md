@@ -141,7 +141,7 @@ javirkerdelvistmed begrænsningernejfindes ikke
 
 Sorteret efter vigtighed.
 
-HØJ**Mere test på hardware**Første test er bestået (Heltec V4.3 og XIAO nRF52840 + Wio-SX1262). Mangler: rækkevidde, strømforbrug, Bluetooth på ESP32-S3, filer og opdatering over luften i praksis, samt WisMesh Tag og XIAO ESP32-S3.
+HØJ**Mere test på hardware**Første test er bestået (Heltec V4.3 og XIAO nRF52840 + Wio-SX1262). Mangler: rækkevidde, strømforbrug, Bluetooth på ESP32-S3, filer og opdatering over Bluetooth i praksis (opdatering over LoRa er skrinlagt: for langsom), samt WisMesh Tag og XIAO ESP32-S3.
 
 HØJ**Gateway til Reticulum**Gatewayen til MeshCore er lavet og afprøvet på hardware. Reticulum mangler.
 

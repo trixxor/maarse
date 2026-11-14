@@ -291,6 +291,7 @@
       <button id="btn-diag" data-view="diag" disabled><svg class="i"><use href="#i-diag"/></svg>Diagnose</button>
       <button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg>Sider</button>
       <button id="btn-firmware" data-view="firmware" disabled><svg class="i"><use href="#i-chip"/></svg>Firmware</button>
+      <button id="btn-settings" data-view="settings" disabled title="VPN, backbone, MQTT, MeshCore m.m. på maarse-host"><svg class="i"><use href="#i-chip"/></svg>Indstillinger</button>
       <button id="btn-backup" data-view="backup" title="Gendannelsesfrase og krypteret sikkerhedskopi"><svg class="i"><use href="#i-key"/></svg>Sikkerhed</button>
     </nav>
     <div class="row"><button id="btn-notify" hidden>Slå notifikationer til</button><button id="btn-install" hidden>Installér app</button></div>
@@ -705,6 +706,7 @@ function renderChat() {
   if (state.view === "remote") return renderRemote(box);
   if (state.view === "firmware") return renderFirmware(box);
   if (state.view === "backup") return renderBackup(box);
+  if (state.view === "settings") return renderSettings(box);
   renderChatTools();
   if (renderSecurityView(box)) return;
   if (!key) { box.appendChild($("empty") || document.createElement("div")); return; }
@@ -757,6 +759,7 @@ function setConnected(on, name) {
   $("status").innerHTML = on ? `Forbundet via <b>${name}</b>` : "Ikke forbundet";
   for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-diag", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
+  $("btn-settings").disabled = !(on && transport instanceof WsTransport);
   $("btn-disconnect").hidden = !on;
   for (const id of ["btn-ws", "btn-serial", "btn-ble"]) $(id).disabled = on;
   updateComposer();
@@ -2699,6 +2702,173 @@ function renderBackup(box) {
   });
   wrap.append(file, paste, el("div", { className: "row" }, ip, imp));
 }
+
+// ---------- host-indstillinger (kun maarse-host over WebSocket) ----------
+// Gemmes som kommandolinje-valg i <data>/indstillinger.txt; hosten genstarter
+// sig selv, når de gemmes.
+const hs = { data: null, err: "", msg: "" };
+const HS_FIELDS = [
+  ["VPN / IP-tunnel", [
+    ["--tun", "bool", "TUN-adapter (VPN)", "Opretter netværkskortet \"maarse\" (fd00::/8). Hosten skal køre som administrator."],
+    ["--tun-lora", "bool", "Tunnel også over LoRa", "Ellers kun over TCP-backbone. Langsomt — brug til tekst, ikke web."],
+    ["--wintun", "text", "Sti til wintun.dll", "Tom = ved siden af programmet."],
+  ]],
+  ["Backbone (TCP)", [
+    ["--listen", "text", "Lyt på", "Standard 0.0.0.0:4242, off slår fra."],
+    ["--peer", "list", "Forbind til", "vært:port, én pr. linje."],
+    ["--public", "bool", "Offentlige backbone-noder", ""],
+    ["--public-addr", "text", "Min offentlige adresse", "vært:port — gør hosten til DHT-node."],
+    ["--dht", "list", "DHT-startpunkter", "vært:port, én pr. linje."],
+  ]],
+  ["LoRa-radio (seriel)", [
+    ["--serial", "port", "Port", "Node med modem-firmware."],
+    ["--baud", "text", "Baudrate", "Standard 115200."],
+  ]],
+  ["MeshCore-gateway", [
+    ["--meshcore", "port", "Port", "MeshCore-node med companion_radio_usb."],
+    ["--meshcore-baud", "text", "Baudrate", "Standard 115200."],
+    ["--meshcore-bridge", "list", "Kanalbroer", "maarse-kanal=meshcore-kanal, fx offentlig=public."],
+  ]],
+  ["MQTT / Home Assistant", [
+    ["--mqtt", "text", "Broker", "vært:port, tom = slået fra."],
+    ["--mqtt-prefix", "text", "Emne-præfiks", "Standard maarse."],
+    ["--mqtt-user", "text", "Brugernavn", ""],
+    ["--mqtt-pass", "password", "Adgangskode", "Gemmes ukrypteret i datamappen."],
+  ]],
+  ["Regioner", [
+    ["--region", "list", "Regioner", "Fx dk eller nordjylland, én pr. linje (højst 8)."],
+    ["--strict-region", "bool", "Kun beskeder uden region", "Når ingen regioner er valgt."],
+  ]],
+  ["Lager og postkasse", [
+    ["--history-days", "text", "Historik (dage)", "Standard 90."],
+    ["--no-history", "bool", "Gem ingen historik", ""],
+    ["--max-file", "text", "Største fil (KB)", "Standard 1024."],
+    ["--filpostkasse-mb", "text", "Filpostkasse (MB)", "Standard 200, 0 slår fra."],
+    ["--filpostkasse-modtager-mb", "text", "Heraf pr. modtager (MB)", "Standard 20."],
+    ["--postkasse", "text", "Min postkasse", "Adresse (32 hex-tegn) på en node, der gemmer til mig."],
+  ]],
+  ["Webklient", [
+    ["--http", "text", "Webadresse", "Standard 127.0.0.1:8080. 0.0.0.0:8080 giver fjernadgang (med adgangsnøgle)."],
+    ["--no-browser", "bool", "Åbn ikke browseren ved start", ""],
+  ]],
+];
+function hsBase() {
+  const r = remoteHost.get();
+  const tok = r?.addr ? (r.token || "") : store.get("hostToken", "");
+  return { base: r?.addr ? `http://${r.addr}` : "", q: tok ? `?token=${encodeURIComponent(tok)}` : "" };
+}
+async function hsLoad() {
+  const { base, q } = hsBase();
+  hs.err = "";
+  try {
+    const r = await fetch(`${base}/api/indstillinger${q}`, { cache: "no-store" });
+    if (!r.ok) throw new Error(await r.text());
+    hs.data = await r.json();
+  } catch (e) { hs.err = "Kunne ikke hente indstillinger: " + e.message; }
+  if (state.view === "settings") renderChat();
+}
+function hsParse(text) {
+  const vals = new Map(), other = [];
+  const known = new Set(HS_FIELDS.flatMap(([, fs]) => fs.map(f => f[0])));
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const i = line.search(/\s/);
+    const flag = i < 0 ? line : line.slice(0, i), v = i < 0 ? "" : line.slice(i + 1).trim();
+    if (!known.has(flag)) { other.push(line); continue; }
+    if (!vals.has(flag)) vals.set(flag, []);
+    vals.get(flag).push(v);
+  }
+  return { vals, other };
+}
+async function hsPost(path, body) {
+  const { base, q } = hsBase();
+  const r = await fetch(`${base}${path}${q}`, { method: "POST", headers: { "Content-Type": "text/plain" }, body });
+  const t = await r.text();
+  if (!r.ok) throw new Error(t);
+}
+function hsAfterRestart() {
+  hs.msg = "Gemt — hosten genstarter. Henter status igen om lidt …";
+  renderChat();
+  setTimeout(() => { hs.msg = ""; hsLoad(); }, 6000);
+}
+function renderSettings(box) {
+  $("chat-title").textContent = "Host-indstillinger";
+  $("chat-sub").textContent = "Gemmes i indstillinger.txt; hosten genstarter ved gem";
+  const wrap = el("div", { className: "secure" });
+  box.append(wrap);
+  if (hs.msg) wrap.append(el("p", { className: "warn", textContent: hs.msg }));
+  if (hs.err) wrap.append(el("p", { className: "warn", textContent: hs.err }));
+  const d = hs.data;
+  if (!d) { if (!hs.err) wrap.append(el("p", { className: "hint", textContent: "Henter …" })); return; }
+
+  wrap.append(el("h3", { textContent: "Status" }));
+  const st = el("div", { className: "warn" });
+  for (const s of d.startup) {
+    const bad = s.startsWith("!");
+    const line = el("div", { textContent: (bad ? "⚠ " : "✓ ") + s.replace(/^!/, "") });
+    if (bad) line.style.color = "#d33";
+    st.append(line);
+  }
+  st.append(el("div", { textContent: d.tun_up ? "✓ VPN (TUN) kører" : (d.tun_feature ? "– VPN (TUN) kører ikke" : "⚠ Bygget uden TUN-understøttelse") }));
+  wrap.append(st);
+  const cliFlags = new Set(d.cli.filter(a => a.startsWith("--")));
+  if (cliFlags.size) wrap.append(el("p", { className: "hint", textContent: "Valg på kommandolinjen (markeret *) vinder over dem her: " + d.cli.join(" ") }));
+
+  const { vals, other } = hsParse(d.settings);
+  const inputs = [];
+  for (const [title, fields] of HS_FIELDS) {
+    wrap.append(el("h3", { textContent: title }));
+    const f = el("div", { className: "form" });
+    for (const [flag, kind, label, hint] of fields) {
+      const cur = vals.get(flag) || [];
+      let inp;
+      if (kind === "bool") { inp = el("input", { type: "checkbox", checked: cur.length > 0 }); inp.style.width = "auto"; inp.style.justifySelf = "start"; }
+      else if (kind === "list") { inp = el("textarea", { rows: 2, value: cur.join("\n"), spellcheck: false }); inp.style.width = "100%"; }
+      else if (kind === "port") {
+        inp = el("select");
+        const opts = ["", ...d.ports];
+        if (cur[0] && !opts.includes(cur[0])) opts.push(cur[0]);
+        for (const p of opts) inp.append(el("option", { value: p, textContent: p || "(ingen)", selected: p === (cur[0] || "") }));
+      } else inp = el("input", { type: kind === "password" ? "password" : "text", value: cur[0] || "", autocomplete: "off", spellcheck: false });
+      inp.title = hint;
+      const lab = el("label", { textContent: label + (cliFlags.has(flag) ? " *" : ""), title: hint });
+      const def = hint.match(/Standard ([^ .,]+(?:\.[0-9]+)*(?::[0-9]+)?)/);
+      if (def && "placeholder" in inp) inp.placeholder = def[1];
+      f.append(lab, inp);
+      if (hint) { const h = el("div", { className: "hint", textContent: hint }); h.style.cssText = "grid-column:2;margin:-6px 0 4px"; f.append(h); }
+      inputs.push([flag, kind, inp]);
+    }
+    wrap.append(f);
+  }
+  wrap.append(el("h3", { textContent: "Andre valg" }));
+  const extra = el("textarea", { rows: 3, value: other.join("\n"), spellcheck: false, placeholder: "Ét kommandolinje-valg pr. linje" });
+  extra.style.width = "100%";
+  wrap.append(extra);
+
+  const save = el("button", { textContent: "Gem og genstart host" });
+  const restart = el("button", { textContent: "Genstart uden ændringer" });
+  const out = el("p", { className: "hint" });
+  save.onclick = async () => {
+    const lines = [];
+    for (const [flag, kind, inp] of inputs) {
+      if (kind === "bool") { if (inp.checked) lines.push(flag); }
+      else if (kind === "list") { for (const v of inp.value.split("\n").map(s => s.trim()).filter(Boolean)) lines.push(`${flag} ${v}`); }
+      else if (inp.value.trim()) lines.push(`${flag} ${inp.value.trim()}`);
+    }
+    lines.push(...extra.value.split("\n").map(s => s.trim()).filter(Boolean));
+    save.disabled = restart.disabled = true;
+    try { await hsPost("/api/indstillinger", lines.join("\n") + "\n"); hsAfterRestart(); }
+    catch (e) { out.textContent = "Ikke gemt: " + e.message; save.disabled = restart.disabled = false; }
+  };
+  restart.onclick = async () => {
+    restart.disabled = true;
+    try { await hsPost("/api/genstart", ""); hsAfterRestart(); }
+    catch (e) { out.textContent = e.message; restart.disabled = false; }
+  };
+  wrap.append(el("div", { className: "row" }, save, restart), out);
+}
+$("btn-settings").onclick = () => { hs.data = null; hs.msg = ""; setView("settings"); hsLoad(); };
 
 $("btn-myqr").onclick = () => setView("myqr");
 $("btn-backup").onclick = () => setView("backup");

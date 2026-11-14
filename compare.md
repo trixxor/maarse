@@ -28,7 +28,7 @@ MIT/Apache-2.0 · Rust
 
 ### Må:rse
 
-Vores prototype (v0.4). Reticulums identitet og globale rækkevidde, MeshCores repeater-routing, kørt direkte på mikrocontrolleren. Ikke afprøvet på hardware endnu.
+Vores prototype (v0.4). Reticulums identitet og globale rækkevidde, MeshCores repeater-routing, kørt direkte på mikrocontrolleren. Første hardwaretest er bestået (beskeder med kvittering mellem to boards); rækkevidde og strøm er ikke målt.
 
 ## Side om side
 
@@ -46,24 +46,24 @@ javirkerdelvistmed begrænsningernejfindes ikke
 | Duty cycle (EU) | ja | jatoken bucket fra v1.14.1 | japr. interface | jatoken bucket + lyt før send (CAD) |
 | Bevægelige noder | jaflood er ligeglad med topologi | delviststier skal læres igen | delviststier opdateres via announces | jamobil-flag og ruteopdatering; 100 % i motorvejs-simulering |
 | Rækkevidde ud over LoRa |  |  |  |  |
-| Internet / TCP | delvistMQTT-bro via server | nejkun via tredjeparts-broer | jaTCP, UDP, I2P, seriel m.m. i samme net | jaTCP-backbone med DHT til at finde gateways |
+| Internet / TCP | delvistMQTT-bro via server | nejkun via tredjeparts-broer | jaTCP, UDP, I2P, seriel m.m. i samme net | jaTCP-backbone med DHT, MQTT-bro og gateway til MeshCore (afprøvet på hardware) |
 | Finde nogen i et andet land | Via fælles MQTT-server | Nej | Announces over offentlige transportnoder | Opslag i DHT, derefter direkte forbindelse til modtagerens gateway |
 | Sikkerhed |  |  |  |  |
 | Identitet | Nodenummer + nøgle (PKC siden 2.5) | Ed25519-nøgle; kort præfiks som adresse | Nøglepar; adresse = 16-byte hash | Nøglepar; adresse = 16-byte hash; ingen afsender i klartekst |
-| Direkte beskeder | jaX25519 + AES | jakrypteret, kompakt | jaX25519 + AES-256, forward secrecy på links | jaX25519 + ChaCha20-Poly1305, ny nøgle pr. besked |
-| Signerede pakker | delvistkommer i 2.8 (alpha) | delvistadverts er signeret | jaannounces og beviser | delvistannounces er signeret |
-| Beskyttelse mod spam | delvistgrænser for trafik | delvistloft over flood-hop | ja"stamps" (arbejdsbevis) fra 1.6 | nejkun duty cycle og flood-dæmpning |
+| Direkte beskeder | jaX25519 + AES | jakrypteret, kompakt | jaX25519 + AES-256, forward secrecy på links | jaX25519 + ChaCha20-Poly1305, ny nøgle pr. besked; forward secrecy (udkast) |
+| Signerede pakker | delvistkommer i 2.8 (alpha) | delvistadverts er signeret | jaannounces og beviser | delvistannounces og firmware er signeret |
+| Beskyttelse mod spam | delvistgrænser for trafik | delvistloft over flood-hop | ja"stamps" (arbejdsbevis) fra 1.6 | jaarbejdsbevis på announces og ruteforespørgsler |
 | Funktioner |  |  |  |  |
-| Offentlige kanaler | ja | jaogså #hashtag og regioner | delvistgrupper via apps | jaoffentlig og #hashtag |
+| Offentlige kanaler | ja | jaogså #hashtag og regioner | delvistgrupper via apps | jaoffentlig, #hashtag, private kanaler og regioner |
 | Beskeder til offline | delvistStore & Forward-modul | jaroom servers | jaLXMF-propagation nodes | japostkasse på host og i flash på noder |
-| Filer og billeder | nej | nej | jaresources over links | delvistvia host (8 KB over LoRa), ikke på firmware endnu |
-| Sider / tjenester | nej | delvistroom servers, sensorer | jaNomadNet-sider | nejHTML-sider er kun specificeret |
+| Filer og billeder | nej | nej | jaresources over links | jaop til 8 KB over LoRa (også på firmware), 1 MB over internettet |
+| Sider / tjenester | nej | delvistroom servers, sensorer | jaNomadNet-sider | ja`maarse://`-sider fra maarse-host, op til 8 KB komprimeret over LoRa |
 | Tale | nej | nej | jaopkald i Sideband | nejkun specificeret |
 | Fjernadministration | jaadmin-nøgler | jalogin på repeatere | delvistrnstatus, fjern-styring | jastatus og radio på andre noder, kun for administratorer |
 | Hardware og modenhed |  |  |  |  |
 | Kører på mikrocontroller | jaESP32, nRF52, RP2040 m.fl. | jaESP32, nRF52, RP2040 m.fl. | nejRNode er kun modem; Rust-versioner er unge | janRF52840 og ESP32-S3 (4 boards) |
-| Apps | Android, iOS, web, CLI | Officiel app (lukket kode) + web, tredjeparts | Sideband, NomadNet, MeshChat | Én web-klient (USB, Bluetooth, WebSocket) |
-| Modenhed | Stor brugerbase, mange år | Hurtigt voksende, hyppige udgivelser | 1.0 i 2025, nu 1.6 | Prototype; 66 tests og simulator, ingen hardwaretest |
+| Apps | Android, iOS, web, CLI | Officiel app (lukket kode) + web, tredjeparts | Sideband, NomadNet, MeshChat | Én web-klient, installérbar som app (USB, Bluetooth, WebSocket) |
+| Modenhed | Stor brugerbase, mange år | Hurtigt voksende, hyppige udgivelser | 1.0 i 2025, nu 1.6 | Prototype; 180 tests, fuzzing, simulator og testlaboratorium; første hardwaretest bestået |
 | Licens | GPL-3.0 | MIT | MIT med tilføjede klausuler siden 2025; AGPL-fork findes | MIT eller Apache-2.0; spec under CC-BY |
 
 ## Fordele og ulemper
@@ -124,15 +124,14 @@ javirkerdelvistmed begrænsningernejfindes ikke
 - Repeater-routing med bedste sti, kvittering pr. hop og ruteopdatering. I simulering bruges ca. en tredjedel af floodets sendetid.
 - Global rækkevidde: TCP-backbone og DHT, uden central server.
 - Ingen afsender i klartekst, 16-byte adresser og moderne kryptering.
-- Postkasse, filer og fjernadministration allerede i prototypen.
+- Postkasse, filer, private kanaler, signerede opdateringer over luften og gateway til MeshCore allerede i prototypen.
 
 #### Ulemper
 
-- Ikke afprøvet på rigtig hardware.
-- Ingen brugere, kun én web-klient.
+- Kun en første test på hardware; rækkevidde, strøm og mange funktioner er ikke prøvet i luften.
+- Ingen brugere, kun én web-klient (som PWA).
 - Kryptografien er ikke gennemgået af andre.
-- Store, tynde net er stadig svage: kvitteringer går tabt.
-- Mange planlagte dele er kun beskrevet (sider, tale, IP-tunnel).
+- Nogle planlagte dele er kun beskrevet (tale, IP-tunnel, kort).
 
 ## Hvad Må:rse mangler, og hvad det bør have
 
@@ -142,19 +141,9 @@ javirkerdelvistmed begrænsningernejfindes ikke
 
 Sorteret efter vigtighed.
 
-HØJ**Test på hardware**Flash de fire boards, mål rækkevidde, strømforbrug og om Bluetooth og ESP32-buildet virker.
+HØJ**Mere test på hardware**Første test er bestået (Heltec V4.3 og XIAO nRF52840 + Wio-SX1262). Mangler: rækkevidde, strømforbrug, Bluetooth på ESP32-S3, filer og opdatering over luften i praksis, samt WisMesh Tag og XIAO ESP32-S3.
 
-HØJ**Gateways til MeshCore og Reticulum**Et af de oprindelige mål. Uden dem starter Må:rse fra nul brugere.
-
-HØJ**Batterimåling og energistyret routing på firmware**Lavet: firmwaren måler batteriet (alle boards undtagen XIAO ESP32-S3) og sætter routerens energistatus. Vigtigt for sol-repeatere.
-
-MIDDEL**Filer og billeder på firmware**Virker i dag kun via host.
-
-MIDDEL**Private kanaler**Kanal med egen nøgle, delt via QR-kode eller invitation.
-
-MIDDEL**Bluetooth på ESP32-S3**Så Heltec V4 og XIAO S3 kan bruges fra telefonen.
-
-MIDDEL**HTML-sider (`maarse://`)**Komprimerede, cachede sider på op til ca. 8 KB, som NomadNet.
+HØJ**Gateway til Reticulum**Gatewayen til MeshCore er lavet og afprøvet på hardware. Reticulum mangler.
 
 MIDDEL**Node- og dækningskort**Kort over noder og målt dækning, som MeshMapper.
 
@@ -164,55 +153,45 @@ LAV**IP-tunnel**TUN-interface med IPv6 udledt af adressen, så SSH og mosh kan k
 
 LAV**Stier over 12 hop og anker-repeatere**Segmenterede stier og faste ankre langs fx motorveje.
 
-### Bør tilføjes (nye forslag)
+### Bør tilføjes (åbne forslag)
 
-Hvert forslag nævner, hvor idéen kommer fra.
+HØJ**Ekstern sikkerhedsgennemgang**Fuzzing er gjort uden fund; kryptoen, især forward secrecy (`maarse-crypto/src/ratchet.rs`), skal ses efter af andre før v1.0.
 
-HØJ**Spam-beskyttelse**Lille arbejdsbevis på announces og ruteforespørgsler, så ingen kan oversvømme nettet billigt.fra Reticulum 1.6
+MIDDEL**Native telefon-apps**Webklienten kan installeres som PWA; rigtige Android- og iOS-apps mangler.
 
-HØJ**Forward secrecy for samtaler**I dag kan en stjålen nøgle åbne gamle beskeder. En kort nøgleudveksling (Double Ratchet-lignende) løser det.fra Reticulum-links
+LAV**Sensorer**Batteri, oppetid og energistatus sendes, og MQTT-broen har Home Assistant discovery. Temperatur og vejr mangler.
 
-HØJ**Bekræft nøgler**Sikkerhedsnummer eller QR-kode, så man ved, at en kontakt er den rigtige.fra Meshtastic 2.7
+LAV**Signerede host-builds**Firmware er signeret; host-builds er ikke.
 
-HØJ**Ekstern sikkerhedsgennemgang og fuzzing**Fuzz pakke- og rammedekodere og få kryptoen gennemgået før v1.0.
+### Lavet siden første version
 
-MIDDEL**Regioner for kanaler**Kanalbeskeder bliver i et område i stedet for at gå over hele landet.fra MeshCore
-
-MIDDEL**Opdatering af firmware over luften**Så sol-repeatere i marken kan opdateres uden at blive hentet ind.fra MeshCore
-
-MIDDEL**Diagnose-værktøjer**Lavet: trace route med SNR begge veje, naboliste med SNR/RSSI og anslået støjgulv.fra MeshCore
-
-MIDDEL**Position privat som standard**Lavet: position er slået fra som standard og afrundes til ca. 10 km eller 1 km, medmindre man vælger præcis.fra Meshtastic 2.8
-
-MIDDEL**Telefon-apps**Android og iOS ovenpå web-klienten (fx som PWA), så almindelige brugere kan være med.
-
-LAV**Telemetri og sensorer**Lavet (delvist): batteri, oppetid og energistatus i announces, plus MQTT-bro med Home Assistant discovery i maarse-host. Sensorer (temperatur, vejr) mangler.fra Meshtastic
-
-LAV**Signerede udgivelser**Signér firmware og host-builds, så brugere kan tjekke, at de er ægte.fra Reticulum
-
-## Opdatering 14. november 2026
-
-Bygget siden sammenligningen blev skrevet:
-
-- **Afprøvet på hardware:** Heltec V4.3 og XIAO nRF52840 + Wio-SX1262 sender beskeder med kvittering begge veje. Rækkevidde er ikke målt endnu.
+- **Hardware:** Heltec V4.3 og XIAO nRF52840 sender beskeder med kvittering begge veje; PA-chip på Heltec V4 findes automatisk.
 - **Spam-beskyttelse:** arbejdsbevis på announces (12 bit) og ruteforespørgsler (8 bit).
-- **Regioner for kanaler:** `navn@region`, regionsliste pr. node, streng tilstand og filter på backbone.
-- **Bekræft nøgler:** sikkerhedsnummer (60 cifre) og QR-kode i webklienten.
+- **Regioner for kanaler:** `navn@region`, regionsliste pr. node, filter på LoRa og backbone.
+- **Bekræft nøgler:** sikkerhedsnummer (60 cifre) og QR-kode.
 - **Private kanaler:** tilfældig nøgle, invitation som link og QR-kode.
-- **Fuzzing:** alle decodere, ingen fejl fundet.
-- **Forward secrecy (udkast):** sessioner med ratchet pr. kontakt (`maarse-crypto/src/ratchet.rs`), 5 bytes ekstra pr. besked, falder tilbage til det gamle format. Mangler ekstern gennemgang.
-- **Rolle kan vælges** (klient, repeater, relay) og gemmes i flash.
-
-- **Opdatering af firmware over luften (udkast):** signeret med Ed25519 (`maarse-sign`), anti-rollback og board-tjek, over USB, Bluetooth og via `Remote` til fjerne noder, genoptages efter afbrydelse. nRF52840 kopierer fra et mellemlager med en rutine i RAM; ESP32-S3 bruger to OTA-partitioner. Ikke afprøvet på hardware. Se README ("Firmwareopdatering").
-- **Signerede udgivelser (firmware):** manifest med SHA-256 og Ed25519-signatur; udgivelsesnøglen bygges ind i firmwaren. Host-builds er ikke signeret endnu.
-
-Stadig åbent: afprøvning af opdatering over luften på hardware, telefon-apps, filer på firmware, Bluetooth på ESP32, gateways til MeshCore og Reticulum, ekstern gennemgang af kryptografien.
+- **Fuzzing** af alle dekodere og `forbid(unsafe_code)`.
+- **Forward secrecy (udkast):** ratchet pr. kontakt, 5 bytes ekstra pr. besked.
+- **Færre tabte kvitteringer** i store, tynde net.
+- **Bluetooth på ESP32-S3** (Nordic UART Service).
+- **Batterimåling og energistyret routing** på firmware.
+- **Filer og billeder på firmware** (op til 8 KB) og filpostkasse på host.
+- **Diagnose:** trace route med SNR, naboliste og støjgulv.
+- **Position privat som standard**, afrundet til 10 km eller 1 km.
+- **MQTT-bro** med Home Assistant discovery.
+- **Gateway til MeshCore** i maarse-host, afprøvet på hardware (Heltec V4.3 med `companion_radio_usb`).
+- **Visningsnavne** i announces, også vist i MeshCore-broen som `[Må Dennis]`.
+- **`maarse://`-sider:** komprimeret markup fra `<data>/sider/`, browser med cache i webklienten. Ikke HTML, så fremmede sider ikke kan køre kode.
+- **Signerede firmwareopdateringer** over USB, Bluetooth og nettet, med anti-rollback.
+- **Webklient som PWA**, historik på flere skærme, gendannelsesfrase (24 ord) og krypteret sikkerhedskopi.
+- **maarse-lab:** testlaboratorium i browseren med live simulator.
+- **Rolle** (klient, repeater, relay) gemmes i flash.
 
 ## Hvor står Må:rse?
 
 På papiret har Må:rse den bedste kombination: Reticulums identitet og globale rækkevidde, MeshCores effektive routing, og alt kører på chippen. Men de tre andre har det, der tæller mest i praksis: brugere, apps og år med drift.
 
-Næste skridt er derfor ikke flere funktioner. Det er at få firmwaren til at virke på rigtig hardware, få en gateway til MeshCore, så man kan tale med eksisterende net, og få kryptoen set efter af andre.
+Siden første version er firmwaren kommet i luften, og gatewayen til MeshCore er bygget. Næste skridt er stadig ikke flere funktioner: mål rækkevidde og strøm, afprøv opdateringer og filer på rigtige boards, og få kryptoen set efter af andre.
 
 Kilder (hentet november 2026):
 

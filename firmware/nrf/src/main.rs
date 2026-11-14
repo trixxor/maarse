@@ -55,6 +55,17 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     mpsl.run().await
 }
 
+/// Chip-temperaturen hvert minut. TEMP-enheden ejes af MPSL, så den læses
+/// gennem den (enhed 0,25 °C).
+#[embassy_executor::task]
+async fn temp_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
+    loop {
+        let raw = mpsl.get_temperature().raw();
+        maarse_fw_common::power::TEMP_DC.store(raw * 10 / 4, core::sync::atomic::Ordering::Relaxed);
+        embassy_time::Timer::after_secs(60).await;
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // Urene styres af MPSL (Bluetooth); den eksterne krystal til USB bedes
@@ -183,6 +194,7 @@ async fn main(spawner: Spawner) {
     static MPSL: StaticCell<MultiprotocolServiceLayer> = StaticCell::new();
     let mpsl = MPSL.init(mpsl::MultiprotocolServiceLayer::new(mpsl_p, Irqs, lfclk).unwrap());
     spawner.spawn(mpsl_task(mpsl).unwrap());
+    spawner.spawn(temp_task(mpsl).unwrap());
     // USB kræver den eksterne krystal hele tiden.
     if let Ok(hf) = mpsl.request_hfclk().await {
         core::mem::forget(hf);

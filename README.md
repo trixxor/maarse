@@ -37,7 +37,7 @@ Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge
 | Krypterede direkte beskeder med "leveret" | ja | ja | ja |
 | Forward secrecy for samtaler (ratchet, udkast) | ja, sessioner gemt på disk | ja, 8 sessioner i RAM | ja, 8 sessioner i RAM |
 | Kanaler (offentlig, #hashtag) | ja | ja (højst 4) | ja (højst 4) |
-| Billeder og filer (krypteret, med kvittering pr. bid) | ja, op til 1 MB | ikke endnu | ikke endnu |
+| Billeder og filer (krypteret, med kvittering pr. bid) | ja, op til 1 MB | ja, op til 8 KB (ikke testet på hardware endnu) | ja, op til 8 KB (ikke testet på hardware endnu) |
 | Postkasse til modtagere, der er offline | ja (disk, 7 dage) | ja (8 KB flash) | ja (8 KB flash) |
 | Fjernadministration (status og radio på en anden node) | ja | ja | ja |
 | Status-side (radio, routing, postkasse, trafik, DHT) | ja | ja, med RSSI/SNR, duty cycle, CAD og fejl | ja, samme |
@@ -46,6 +46,8 @@ Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge
 | Display | – | – | Heltec V4: 3 sider, skift med PRG-knappen |
 
 Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), USB/seriel og Bluetooth (Nordic UART). Den skalerer billeder automatisk ned, så de passer under grænsen: 8 KB over LoRa og 1 MB over maarse-host.
+
+Filer på firmware-noder (`firmware/common/src/node/files.rs`, logikken i `maarse-crypto/src/files.rs`) bruger samme format som maarse-host, så de to kan sende filer til hinanden. Noden sender og modtager én fil ad gangen i hver retning (to statiske buffere på 8 KB). En modtaget fil sendes til klienten, når den er hel og tjekket; er ingen klient forbundet, bliver den liggende i RAM, til en klient forbinder (den overskrives af næste fil og forsvinder ved genstart). Filer lægges ikke i postkassen: én fil ville fylde de 8 KB flash helt.
 
 ## Webklienten som app (PWA)
 

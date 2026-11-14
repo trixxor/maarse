@@ -25,6 +25,8 @@ use maarse_crypto::{
     Identity, PublicIdentity, channel_address, hashtag_key, public_channel_key, verify_announce,
 };
 
+mod files;
+
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(900);
 /// Forsøg pr. bid, når et announce-stempel regnes ud. 256 SHA-256-blokke
 /// tager ca. 20 ms på en 64 MHz Cortex-M4; derefter får executoren fri.
@@ -101,6 +103,8 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     /// Announce, hvis arbejdsbevis er ved at blive regnet ud (se `run`).
     stamping: Option<(maarse_crypto::AnnounceBuf, StampSearch)>,
     region_names: RegionNames,
+    /// Billeder og filer (se [`files`]).
+    files: files::Files,
 }
 
 fn now_ms() -> u64 {
@@ -166,6 +170,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             mail_delivered: 0,
             stamping: None,
             region_names: RegionNames::new(),
+            files: files::Files::new(),
         };
         let (strict, names) = n.settings.load_regions();
         n.apply_regions(strict, names);
@@ -230,12 +235,18 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 d = t;
             }
         }
+        if let Some(t) = self.files.deadline()
+            && t < d
+        {
+            d = t;
+        }
         d
     }
 
     fn on_timer(&mut self) {
         let actions = self.router.tick(now_ms());
         self.apply(actions);
+        self.file_tick();
         if Instant::now() >= self.next_announce {
             if !self.modem {
                 self.announce();
@@ -289,7 +300,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     if let Some(id) = self.mail_inflight.remove(&msg_id) {
                         self.settings.mail_remove(id);
                         self.mail_delivered += 1;
-                    } else {
+                    } else if !self.file_on_ack(msg_id) {
                         emit(&Event::Acked { msg_id });
                     }
                 }
@@ -359,9 +370,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                                 text: text(t),
                             })
                         }
-                        Some(Content::FileOffer(_)) => {
-                            log("Filer understøttes endnu ikke af denne node")
-                        }
+                        Some(Content::FileOffer(offer)) => self.file_offer(from, offer),
                         Some(Content::Control(counter, frame)) => {
                             let mut f: heapless::Vec<u8, 256> = heapless::Vec::new();
                             let _ = f.extend_from_slice(frame);
@@ -382,6 +391,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     Err(_) => {}
                 }
             }
+            PacketType::Fragment => self.file_chunk(payload),
             PacketType::Deposit => {
                 // Vi er postkasse for en anden: gem beskeden til modtageren.
                 if let Some(recipient) = Address::from_slice(payload) {
@@ -471,7 +481,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     repeater: self.router.role.forwards(),
                     version: PROTOCOL_VERSION,
                     max_text: (MAX_FS_TEXT - 1) as u8,
-                    max_file: 0,
+                    max_file: maarse_crypto::files::MAX_FILE as u32,
                     identity: Some(self.identity.public().to_bytes()),
                 });
                 for (ch, _, name) in &self.channels {
@@ -486,6 +496,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 if !self.radio_ok {
                     log("Radioen svarer ikke - tjek board-valget");
                 }
+                self.file_client_connected();
             }
             Command::AnnounceNow => {
                 self.announce();
@@ -583,15 +594,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::SetTime { unix } => {
                 self.boot_unix = Some(unix.saturating_sub(self.started.elapsed().as_secs() as u32));
             }
-            Command::FileBegin { req, .. }
-            | Command::FileData { req, .. }
-            | Command::FileEnd { req } => {
-                err(
-                    req,
-                    error_code::FILE_TOO_LARGE,
-                    "Filer understøttes endnu ikke af denne node",
-                );
+            Command::FileBegin { req, dest, size, mime, name } => {
+                self.file_begin(req, dest, size, &mime, &name)
             }
+            Command::FileData { req, offset, data } => self.file_data(req, offset, &data),
+            Command::FileEnd { req } => self.file_end(req),
         }
     }
 

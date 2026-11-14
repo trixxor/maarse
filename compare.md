@@ -40,7 +40,7 @@ javirkerdelvistmed begrænsningernejfindes ikke
 | --- | --- | --- | --- | --- |
 | Routing |  |  |  |  |
 | Princip | Styret flood: alle gentager, med forsinkelse efter signalstyrke | Flood første gang, derefter kildestyret sti via repeatere | Announces spredes; hver transportnode husker næste hop | Flood med ruteforespørgsel, derefter kildestyret sti; bedste sti vælges ud fra SNR |
-| Max hop | 7 (standard 3) | 64 | 128 | 64 i alt, 12 i en sti |
+| Max hop | 7 (standard 3) | 64 | 128 | 64 i alt; over 12 med anker-repeatere |
 | Hvem videresender | Alle (roller som ROUTER, ROUTER_LATE, CLIENT) | Kun repeatere (klienter kan slå "repeat" til) | Noder med transport slået til | Repeatere; skov-tilstand lader klienter hjælpe i op til 4 hop |
 | Kvittering | jafor direkte beskeder | jaende til ende | jabevis for levering | japr. hop og ende til ende, med rutereparation |
 | Duty cycle (EU) | ja | jatoken bucket fra v1.14.1 | japr. interface | jatoken bucket + lyt før send (CAD) |
@@ -58,7 +58,7 @@ javirkerdelvistmed begrænsningernejfindes ikke
 | Beskeder til offline | delvistStore & Forward-modul | jaroom servers | jaLXMF-propagation nodes | japostkasse på host og i flash på noder |
 | Filer og billeder | nej | nej | jaresources over links | jaop til 8 KB over LoRa (også på firmware), 1 MB over internettet |
 | Sider / tjenester | nej | delvistroom servers, sensorer | jaNomadNet-sider | ja`maarse://`-sider fra maarse-host, op til 8 KB komprimeret over LoRa |
-| Tale | nej | nej | jaopkald i Sideband | delvisttalebeskeder med Codec2 (1200 bit/s); ingen opkald |
+| Tale | nej | nej | jaopkald i Sideband | jatalebeskeder (Codec2) og opkald (Opus over TCP) |
 | Fjernadministration | jaadmin-nøgler | jalogin på repeatere | delvistrnstatus, fjern-styring | jastatus og radio på andre noder, kun for administratorer |
 | Hardware og modenhed |  |  |  |  |
 | Kører på mikrocontroller | jaESP32, nRF52, RP2040 m.fl. | jaESP32, nRF52, RP2040 m.fl. | nejRNode er kun modem; Rust-versioner er unge | janRF52840 og ESP32-S3 (4 boards) |
@@ -147,11 +147,6 @@ HØJ**Gateway til Reticulum**Gatewayen til MeshCore er lavet og afprøvet på ha
 
 MIDDEL**Node- og dækningskort**Kort over noder og målt dækning, som MeshMapper.
 
-LAV**Opkald (Opus)**Talebeskeder er lavet; live-opkald kun over hurtige links mangler.
-
-LAV**IP-tunnel**TUN-interface med IPv6 udledt af adressen, så SSH og mosh kan køre.
-
-LAV**Stier over 12 hop og anker-repeatere**Segmenterede stier og faste ankre langs fx motorveje.
 
 ### Bør tilføjes (åbne forslag)
 
@@ -160,8 +155,6 @@ HØJ**Ekstern sikkerhedsgennemgang**Fuzzing er gjort uden fund; kryptoen, især 
 MIDDEL**Native telefon-apps**Webklienten kan installeres som PWA; rigtige Android- og iOS-apps mangler.
 
 LAV**Sensorer**Batteri, oppetid og energistatus sendes, og MQTT-broen har Home Assistant discovery. Temperatur og vejr mangler.
-
-LAV**Signerede host-builds**Firmware er signeret; host-builds er ikke.
 
 ### Lavet siden første version
 
@@ -185,6 +178,11 @@ LAV**Signerede host-builds**Firmware er signeret; host-builds er ikke.
 - **Signerede firmwareopdateringer** over USB, Bluetooth og nettet, med anti-rollback.
 - **Webklient som PWA**, historik på flere skærme, gendannelsesfrase (24 ord) og krypteret sikkerhedskopi.
 - **maarse-lab:** testlaboratorium i browseren med live simulator.
+- **Talebeskeder** (Codec2, 1200 bit/s) og **opkald** (Opus, kun over TCP).
+- **Anker-repeatere:** stier over 12 hop.
+- **IP-tunnel** (IPv6 over TCP, Wintun/TUN).
+- **Signerede udgivelser:** firmware, host og APK med udgivelsesnøgle og SHA256SUMS.sig.
+- **Nyt design af webklienten** og **Android-app** (Bluetooth til noden).
 - **Rolle** (klient, repeater, relay) gemmes i flash.
 
 ## Hvor står Må:rse?

@@ -28,7 +28,7 @@ board:    wismesh-tag | xiao-nrf52840 | heltec-v4 | xiao-esp32s3
 - **nRF52840** (WisMesh Tag, XIAO nRF52840): scriptet laver `dist/maarse-<board>.uf2`. Dobbeltklik på boardets reset-knap og træk filen over på USB-drevet, der dukker op.
 - **ESP32-S3** (Heltec V4, XIAO ESP32-S3): første gang installerer scriptet Espressifs værktøjskæde (`espup`) og `espflash`, hvilket tager et par minutter. Scriptet laver `dist/maarse-<board>.bin` og flasher boardet direkte, hvis du tilføjer `flash`.
 
-Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge) eller **Bluetooth** (kun nRF).
+Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge) eller **Bluetooth** (nRF og ESP32-S3).
 
 ## Hvad kan det
 
@@ -41,7 +41,7 @@ Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge
 | Fjernadministration (status og radio på en anden node) | ja | ja | ja |
 | Status-side (radio, routing, postkasse, trafik, DHT) | ja | ja, med RSSI/SNR, duty cycle, CAD og fejl | ja, samme |
 | Radioindstillinger (MHz, båndbredde, SF, CR, dBm, duty %) | – | ja, gemmes i flash | ja, gemmes i flash |
-| Forbindelse | TCP-backbone + DHT, WebSocket, seriel LoRa-modem | USB og Bluetooth | USB |
+| Forbindelse | TCP-backbone + DHT, WebSocket, seriel LoRa-modem | USB og Bluetooth | USB og Bluetooth (ja, ikke afprøvet på hardware) |
 | Display | – | – | Heltec V4: 3 sider, skift med PRG-knappen |
 
 Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), USB/seriel og Bluetooth (Nordic UART). Den skalerer billeder automatisk ned, så de passer under grænsen: 8 KB over LoRa og 1 MB over maarse-host.
@@ -171,11 +171,10 @@ Radiomodellen er grov (log-distance, ingen terræn). Tallene er til at sammenlig
   - WisMesh Tag: app ved 0x26000 (S140 v6).
   - XIAO: app ved 0x27000 (S140 v7).
   - Flash-placering: postkasse ved 0xEA000–0xEBFFF, indstillinger ved 0xEC000.
-- **ESP32-S3:** Xtensa-værktøjskæden kunne ikke hentes i mit miljø.
-  - Koden er type-tjekket og linket mod ESP32-C6 med samme esp-hal-version (`--features check-esp32c6`), så API-brugen er kontrolleret. Selve S3-bygget sker først hos dig.
+- **ESP32-S3:** bygget for begge boards med Espressifs Xtensa-værktøjskæde (ca. 550 KB app på Heltec V4, heraf ca. 220 KB til Bluetooth; app-partitionen er 2 MB). `--features check-esp32c6` type-tjekker stadig koden mod ESP32-C6.
   - Indstillinger og postkasse ligger i partitionen `maarse` ved 0x210000 (se `firmware/esp/partitions.csv`).
   - Heltec V4: standard-sendestyrken er 10 dBm, fordi PA'en lægger ca. 7–10 dB oveni. PA-styringen (GPIO7/2/46) følger Meshtastic for GC1109-udgaven. Har dit board KCT8103L (nyere V4), skal styringen måske justeres.
-  - Bluetooth er ikke med på ESP32 endnu.
+  - Bluetooth (Nordic UART) er med: esp-radios BLE-controller med TrouBLE som host, samme GATT-tjeneste, rammer og navn (`Maarse-xxxx`) som på nRF. Controlleren bruger en heap på 72 KB (esp-alloc). Ikke afprøvet på hardware, især ikke samspillet med LoRa og USB.
 - **Mangler:** filer over LoRa på firmware, batterimåling og segmenterede stier over 12 hop.
 - Ben-tildelingen er hentet fra Meshtastics board-filer.
 

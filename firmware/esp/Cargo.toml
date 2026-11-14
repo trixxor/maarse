@@ -15,8 +15,8 @@ board-heltec-v4 = ["esp32s3", "display"]
 board-xiao-esp32s3 = ["esp32s3"]
 # Kun til at tjekke koden med den almindelige Rust-værktøjskæde
 # (RISC-V, ESP32-C6); kører ikke på noget rigtigt board.
-check-esp32c6 = ["esp-hal/esp32c6", "esp-rtos/esp32c6", "esp-storage/esp32c6", "esp-bootloader-esp-idf/esp32c6"]
-esp32s3 = ["esp-hal/esp32s3", "esp-rtos/esp32s3", "esp-storage/esp32s3", "esp-bootloader-esp-idf/esp32s3"]
+check-esp32c6 = ["esp-hal/esp32c6", "esp-rtos/esp32c6", "esp-radio/esp32c6", "esp-storage/esp32c6", "esp-bootloader-esp-idf/esp32c6"]
+esp32s3 = ["esp-hal/esp32s3", "esp-rtos/esp32s3", "esp-radio/esp32s3", "esp-storage/esp32s3", "esp-bootloader-esp-idf/esp32s3"]
 display = ["dep:ssd1306", "dep:embedded-graphics"]
 
 [dependencies]
@@ -27,12 +27,18 @@ embassy-time = "0.5.1"
 embedded-graphics = { version = "0.8.2", optional = true }
 embedded-hal-bus = { version = "0.3.0", features = ["async"] }
 embedded-io-async = "0.7"
+esp-alloc = "=0.11.0"
 embedded-storage = "0.3.2"
 esp-bootloader-esp-idf = { version = "0.6.0" }
 esp-hal = { version = "1.2.2", features = ["unstable"] }
-esp-rtos = { version = "0.4.0", features = ["embassy"] }
+# Bluetooth: esp-radio (BLE-controller, HCI) + TrouBLE som host, som på nRF.
+esp-radio = { version = "=1.0.0-beta.1", features = ["ble", "unstable", "esp-alloc"] }
+esp-rtos = { version = "0.4.0", features = ["embassy", "esp-radio", "esp-alloc"] }
 esp-storage = { version = "0.10.0", features = ["embedded-storage"] }
 heapless = "0.8"
+heapless09 = { package = "heapless", version = "0.9" }
+bt-hci = "0.10"
+trouble-host = { version = "0.8", default-features = false, features = ["derive", "gatt", "peripheral", "default-packet-pool"] }
 lora-phy = "3.0.1"
 rand_chacha = { version = "0.3", default-features = false }
 rand_core = "0.6"

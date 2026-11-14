@@ -10,6 +10,7 @@
 //! Eksempel:
 //!   cargo run --release -p maarse-sim -- --nodes 120 --repeaters 30 --messages 60
 //!   cargo run --release -p maarse-sim -- --mode flood --hop-limit 7
+#![forbid(unsafe_code)]
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};

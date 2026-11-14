@@ -321,6 +321,7 @@ dependencies = [
  "ed25519-dalek",
  "heapless",
  "hkdf",
+ "hmac",
  "maarse-core",
  "rand_core",
  "sha2",

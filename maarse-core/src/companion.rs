@@ -114,7 +114,18 @@ pub enum Command {
     /// Svaret er `FileLimit`. Firmware-noder kender ikke kommandoen (de
     /// svarer med `Error`); klienten bruger så `Info.max_file`.
     GetFileLimit { dest: Address },
+    /// 0x34: udskift nodens identitet med `secret` (64 bytes: Ed25519-frø |
+    /// X25519-nøgle), typisk afledt af en gendannelsesfrase i klienten (se
+    /// `maarse_crypto::recovery`). Kun lokalt (USB/BLE) — afvises altid via
+    /// `Remote`. Kræver `confirm` (flag [`IDENTITY_CONFIRM`]), ellers afvises
+    /// den. Noden gemmer nøglen, glemmer ruter og forward secrecy-sessioner
+    /// og sender et nyt announce. Svaret er `IdentityChanged`.
+    /// 0x35-0x37 er holdt fri til tilknyttede enheder.
+    SetIdentity { confirm: bool, secret: [u8; 64] },
 }
+
+/// Flag i `Command::SetIdentity`: brugeren har bekræftet udskiftningen.
+pub const IDENTITY_CONFIRM: u8 = 1;
 
 /// Delingsindstillinger (10 bytes): præcision (u8, se
 /// [`crate::appdata::Precision`]) | bredde (i32, 1e-7°) | længde (i32)
@@ -352,6 +363,9 @@ pub enum Event {
         position: Option<crate::appdata::Position>,
         telemetry: Option<crate::appdata::Telemetry>,
     },
+    /// 0xb4: nodens identitet er udskiftet (svar på `SetIdentity`).
+    /// Format: ny adresse (16) | offentlig identitet (64).
+    IdentityChanged { addr: Address, identity: [u8; 64] },
 }
 
 /// LoRa-radioens indstillinger.
@@ -710,6 +724,10 @@ impl Command {
             Command::OtaEnd { req, apply } => W::new(0x1a).b(&req.to_le_bytes()).b(&[*apply as u8]).done(),
             Command::OtaStatus => W::new(0x1b).done(),
             Command::GetFileLimit { dest } => W::new(0x14).b(&dest.0).done(),
+            Command::SetIdentity { confirm, secret } => {
+                let flags = if *confirm { IDENTITY_CONFIRM } else { 0 };
+                W::new(0x34).b(&[flags]).b(secret).done()
+            }
         }
     }
 
@@ -773,6 +791,12 @@ impl Command {
             0x1a => Command::OtaEnd { req: r.u16()?, apply: r.u8()? != 0 },
             0x1b => Command::OtaStatus,
             0x14 => Command::GetFileLimit { dest: r.addr()? },
+            0x34 => {
+                let confirm = r.u8()? & IDENTITY_CONFIRM != 0;
+                let mut secret = [0u8; 64];
+                secret.copy_from_slice(r.take(64)?);
+                Command::SetIdentity { confirm, secret }
+            }
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -943,6 +967,7 @@ impl Event {
                 let data = crate::appdata::build(None, false, *position, telemetry.as_ref());
                 W::new(0xa3).b(&addr.0).b(&[*hops]).b(&data).done()
             }
+            Event::IdentityChanged { addr, identity } => W::new(0xb4).b(&addr.0).b(identity).done(),
         }
     }
 
@@ -1102,6 +1127,11 @@ impl Event {
                 let a = crate::appdata::parse(r.0);
                 Event::NodeInfo { addr, hops, position: a.position, telemetry: a.telemetry }
             }
+            0xb4 => {
+                let addr = r.addr()?;
+                let identity = r.identity().ok_or(FrameError::TooShort)?;
+                Event::IdentityChanged { addr, identity }
+            }
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -1222,6 +1252,11 @@ mod tests {
         roundtrip_cmd(Command::OtaChunk { req: 2, offset: 4096, data: text(&[1; 240]) });
         roundtrip_cmd(Command::OtaEnd { req: 3, apply: true });
         roundtrip_cmd(Command::OtaStatus);
+        roundtrip_cmd(Command::SetIdentity { confirm: true, secret: [7; 64] });
+        roundtrip_cmd(Command::SetIdentity { confirm: false, secret: [0; 64] });
+        roundtrip_ev(Event::IdentityChanged { addr: Address([5; 16]), identity: [9; 64] });
+        assert_eq!(Command::SetIdentity { confirm: true, secret: [1; 64] }.encode()[2], 0x34);
+        assert!(Command::decode(&[0x34, 1, 2, 3]).is_err());
         roundtrip_ev(Event::OtaState {
             req: 9,
             state: ota_state::RECEIVING,

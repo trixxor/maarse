@@ -47,6 +47,7 @@ Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge
 | Position (opt-in, afrundet) og telemetri i announces | ja | ja, gemmes i flash | ja, gemmes i flash |
 | MQTT-bro med Home Assistant discovery | ja (`--mqtt`) | – | – |
 | Visningsnavn i announces | ja (`navn.txt`) | ja, gemmes i flash (ikke afprøvet på hardware) | ja, gemmes i flash (ikke afprøvet på hardware) |
+| Talebeskeder (Codec2, 1200 bit/s) | ja, i webklienten | ja, som fil (kodes i webklienten) | ja, som fil (kodes i webklienten) |
 | `maarse://`-sider | serverer `<data>/sider/` og henter sider | henter sider (serverer ikke) | henter sider (serverer ikke) |
 | Forbindelse | TCP-backbone + DHT, WebSocket, seriel LoRa-modem | USB og Bluetooth | USB og Bluetooth (ja, ikke afprøvet på hardware) |
 | Display | – | – | Heltec V4: 3 sider, skift med PRG-knappen |
@@ -237,6 +238,14 @@ Andres navne kommer med i `NodeInfo` (`0xa3`) og vises i webklienten med `~` for
 
 **Et navn beviser ikke noget.** Alle kan kalde sig hvad som helst. Brug sikkerhedsnummeret, når det er vigtigt, hvem man skriver med.
 
+## Talebeskeder
+
+Tryk på 🎤 i en direkte samtale for at optage og igen for at sende (højst 20 sekunder). Webklienten nedsampler til 8 kHz og koder med **Codec2 ved 1200 bit/s**: 10 sekunder fylder ca. 1,5 KB og kan sendes over LoRa som en almindelig fil (MIME `audio/x-codec2`). Modtageren afkoder og viser en afspiller.
+
+Codec2 kommer fra `maarse-voice`, en ren Rust-implementering (`codec2`-crate'en) kompileret til WebAssembly og lagt ind i `index.html` (ca. 96 KB base64). Byg den igen med `python tools/build_voice.py`, hvis `maarse-voice` ændres. Format: `"C2" | tilstand (5 = 1200 bit/s) | antal rammer (u16) | rammer` (6 bytes pr. 40 ms ved 1200 bit/s).
+
+Host og firmware kender ikke formatet; de sender bare filen. Live-opkald (Opus over TCP) er ikke lavet.
+
 ## `maarse://`-sider
 
 En maarse-host kan dele små sider, ligesom NomadNet. Læg filer i `<data>/sider/`:
@@ -316,7 +325,7 @@ python tools/dht_test.py target/release/maarse-host
 node tools/safety_number_test.mjs        # sikkerhedsnummer i JS = Rust
 node tools/recovery_phrase_test.mjs      # gendannelsesfrase og sikkerhedskopi i JS = Rust
 node tools/client_syntax_test.mjs        # webklientens JavaScript kan parses
-node tools/client_browser_test.mjs target/release/maarse-host   # webklienten i Edge/Chrome: indlæsning, forbindelse, sider
+node tools/client_browser_test.mjs target/release/maarse-host   # webklienten i Edge/Chrome: indlæsning, forbindelse, sider, tale
 cargo run --release -p maarse-sim -- --help
 ```
 

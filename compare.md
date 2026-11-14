@@ -58,7 +58,7 @@ javirkerdelvistmed begrænsningernejfindes ikke
 | Beskeder til offline | delvistStore & Forward-modul | jaroom servers | jaLXMF-propagation nodes | japostkasse på host og i flash på noder |
 | Filer og billeder | nej | nej | jaresources over links | jaop til 8 KB over LoRa (også på firmware), 1 MB over internettet |
 | Sider / tjenester | nej | delvistroom servers, sensorer | jaNomadNet-sider | ja`maarse://`-sider fra maarse-host, op til 8 KB komprimeret over LoRa |
-| Tale | nej | nej | jaopkald i Sideband | nejkun specificeret |
+| Tale | nej | nej | jaopkald i Sideband | delvisttalebeskeder med Codec2 (1200 bit/s); ingen opkald |
 | Fjernadministration | jaadmin-nøgler | jalogin på repeatere | delvistrnstatus, fjern-styring | jastatus og radio på andre noder, kun for administratorer |
 | Hardware og modenhed |  |  |  |  |
 | Kører på mikrocontroller | jaESP32, nRF52, RP2040 m.fl. | jaESP32, nRF52, RP2040 m.fl. | nejRNode er kun modem; Rust-versioner er unge | janRF52840 og ESP32-S3 (4 boards) |
@@ -131,7 +131,7 @@ javirkerdelvistmed begrænsningernejfindes ikke
 - Kun en første test på hardware; rækkevidde, strøm og mange funktioner er ikke prøvet i luften.
 - Ingen brugere, kun én web-klient (som PWA).
 - Kryptografien er ikke gennemgået af andre.
-- Nogle planlagte dele er kun beskrevet (tale, IP-tunnel, kort).
+- Nogle planlagte dele er kun beskrevet (opkald, IP-tunnel, kort).
 
 ## Hvad Må:rse mangler, og hvad det bør have
 
@@ -147,7 +147,7 @@ HØJ**Gateway til Reticulum**Gatewayen til MeshCore er lavet og afprøvet på ha
 
 MIDDEL**Node- og dækningskort**Kort over noder og målt dækning, som MeshMapper.
 
-LAV**Talebeskeder (Codec2) og opkald (Opus)**Talebeskeder over LoRa, live-opkald kun over hurtige links.
+LAV**Opkald (Opus)**Talebeskeder er lavet; live-opkald kun over hurtige links mangler.
 
 LAV**IP-tunnel**TUN-interface med IPv6 udledt af adressen, så SSH og mosh kan køre.
 

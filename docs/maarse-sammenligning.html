@@ -73,6 +73,7 @@ code{font-family:var(--mono);font-size:.88em;background:var(--nabg);padding:1px 
  <div class="card"><h3>Nye fund i dag</h3><p>I et tæt net ved SF12 bliver kun ca. 30 % af beskederne kvitteret. Historikken på hosten ligger ukrypteret på disken. Hosten stopper, når vinduet eller sessionen, der startede den, lukker. Og brugerfladen forvirrer, når en radio sidder i USB.</p></div>
  <div class="card"><h3>Tests</h3><p><span class="big">191</span> tests består, og ingen fejler (<code>cargo test --workspace</code>). Hertil kommer 48 simuleringskørsler, 2 kørsler på 2 timer med 1 % duty cycle og en ny test af MeshCore-ping.</p></div>
 </div>
+<div class="note"><b>Status 14 Nov 2026 (evening):</b> since this report was written, the <b>edge bridge</b> is built into router, host and firmware; ESP32-S3 nodes have a <b>Wi-Fi backbone</b> (as a mesh node of their own, or as the host's LoRa modem over Wi-Fi, chosen in the Wi-Fi settings), with Bluetooth and Wi-Fi in one firmware and a long press on the button to switch; the display shows the active links and the IP; the host lists its devices (<code>/api/enheder</code>) and uses TCP keepalive; and a boot loop right after flashing (a lora-phy bug) is fixed. All tested on a Heltec V4.3; see the roadmap for what is left.</div>
 <p class="note"><b>Er Må:rse bedre?</b> <b>Ja</b> på arkitektur: routing, sikkerhedsmodel, rækkevidde ud over LoRa og funktioner pr. byte. <b>Nej, ikke endnu</b> i praksis, for "bedre" kræver brugere, målinger i felten og en ekstern gennemgang af kryptoen. Vejen til "bedre på alle punkter" handler mindre om nye funktioner og mere om at måle, hærde og gøre det nemt.</p>
 
 <h2 id="matrix">Funktioner side om side</h2>
@@ -92,6 +93,7 @@ code{font-family:var(--mono);font-size:.88em;background:var(--nabg);padding:1px 
 <tr><td>Flere frekvenser eller radioer pr. node</td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b y">ja</span></td><td><span class="b p">host: flere modemer</span></td></tr>
 <tr class="sec"><td colspan="5">Rækkevidde ud over LoRa</td></tr>
 <tr><td>Internet og TCP i samme net</td><td><span class="b p">MQTT-server</span></td><td><span class="b n">nej</span></td><td><span class="b y">ja</span></td><td><span class="b y">TCP + DHT</span></td></tr>
+<tr><td>Wi-Fi on the radio itself</td><td><span class="b y">MQTT, web UI</span></td><td><span class="b y">observer (MQTT)</span></td><td><span class="b u">–</span></td><td><span class="b y">backbone or LoRa modem for the host</span> (ESP32-S3)</td></tr>
 <tr><td>Uden central server</td><td><span class="b n">nej</span></td><td><span class="b u">–</span></td><td><span class="b y">ja</span></td><td><span class="b y">ja</span></td></tr>
 <tr><td>Bro til de andre net</td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b p">MeshCore ja, Reticulum nej</span></td></tr>
 <tr><td>IP over nettet</td><td><span class="b n">nej</span></td><td><span class="b n">nej</span></td><td><span class="b p">via værktøjer</span></td><td><span class="b y">IPv6-tunnel</span> (1,45 s ping over LoRa)</td></tr>
@@ -316,6 +318,14 @@ code{font-family:var(--mono);font-size:.88em;background:var(--nabg);padding:1px 
 <div id="votes"></div>
 
 <h2 id="roadmap">Roadmap</h2>
+<div class="phase"><h3>Done since the report (14 Nov 2026)</h3><ul>
+<li><b>Edge bridge</b> in router, host and firmware (role field in announces with a "hears a repeater" flag).</li>
+<li><b>Wi-Fi backbone</b> on ESP32-S3: mesh node or LoRa modem for the host; Bluetooth and Wi-Fi in one firmware, button switches (3 s); crash guard; display with links and IP.</li>
+<li><b>Host:</b> device list (<code>/api/enheder</code>, <i>Devices</i> in host settings), TCP keepalive on backbone links.</li>
+<li><b>Fixes:</b> stack overflow at boot (node in its own task, router in its own static), boot loop after flashing (lora-phy, <code>firmware/vendor/lora-phy</code>).</li>
+<li><b>Simulator:</b> forest, hill, highway with placed repeaters, anchors, suppression modes.</li>
+<li>Partly covers <i>automatic LoRa/TCP switching</i>: a node can reach the host over Wi-Fi, but it does not switch by itself, and there is no outbox that waits for coverage.</li>
+</ul></div>
 <div class="phase"><h3>Fase 1 · Nu (0–4 uger): mål og hærd</h3><ul>
 <li><b>Rækkeviddetest-tilstand</b> + første feltmåling (Heltec og XIAO, SF7–SF12, by og land) → tal ind i <code>compare.md</code>.</li>
 <li><b>Strømmåling</b> på begge boards (hvile, modtagelse, repeater).</li>
@@ -326,7 +336,7 @@ code{font-family:var(--mono);font-size:.88em;background:var(--nabg);padding:1px 
 <div class="phase p2"><h3>Fase 2 · Næste (1–3 måneder): luften og mobil brug</h3><ul>
 <li><b>Belastningsstyring</b>: kvote på ruteforespørgsler efter målt kanalbelastning, længere ventetid ved høj SF og en anbefaling af SF i klienten. Målet er over 70 % kvitteret ved SF12 i simulatoren.</li>
 <li><b>Automatisk skift mellem LoRa og TCP</b> for mobile noder (appen eller telefonen over mobildata til hjemme-hosten) + <b>udbakke, der venter på dækning</b> i stedet for at opgive efter 2 forsøg. Målet i E45-scenariet med 100 km-hul er over 99 % leveret.</li>
-<li><b>Bro-tilstand</b> (fase 1-kandidat: lille, målt effekt): rollefelt i announces, og en relay, der hører en repeater direkte, er undtaget fra flood-dæmpning. Bakketesten: 57 % → 100 %.</li>
+<li><s><b>Bro-tilstand</b></s> <span class="verdict go">Done</span> (fase 1-kandidat: lille, målt effekt): rollefelt i announces, og en relay, der hører en repeater direkte, er undtaget fra flood-dæmpning. Bakketesten: 57 % → 100 %.</li>
 <li><b>Skov og grupper</b> (simuleringen er lavet: <code>--forest</code>):<b>automatisk relay</b>, når der ikke høres repeatere, og <b>bær videre</b>: relays holder beskeder og afleverer dem ved næste møde. Målet er over 85 % leveret for 18 mand på 8 × 8 km (i dag ca. 60 %).</li>
 <li><b>Strømsparetilstand</b> på nRF52840 til klienter og trackere.</li>
 <li><b>GPS-driver</b> (WisMesh Tag) + simpelt <b>kort</b> i klienten med offline-fliser fra hosten. Positionen er stadig privat som standard.</li>

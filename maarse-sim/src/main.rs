@@ -259,6 +259,8 @@ struct Sim {
     resp_track: HashMap<u64, (u8, u8, u32)>,
     flood_pending: HashSet<(usize, u64)>,
     next_tick: Vec<u64>,
+    /// Diagnose af kildestyrede hop (se `trace_hop`).
+    hop_trace: std::collections::BTreeMap<String, u32>,
 }
 
 impl Sim {
@@ -338,6 +340,7 @@ impl Sim {
             resp_track: HashMap::new(),
             flood_pending: HashSet::new(),
             next_tick: vec![u64::MAX; n],
+            hop_trace: Default::default(),
         }
     }
 
@@ -673,7 +676,7 @@ impl Sim {
                 .by_type
                 .entry(format!("{:?}", p.header.ptype))
                 .or_default() += 1;
-            if p.header.ptype == PacketType::PathResponse {
+            if matches!(p.header.ptype, PacketType::PathResponse | PacketType::Ack) {
                 let id = packet_id(p.header.ptype, &p.header.dest, p.payload);
                 let len = p.header.path.as_ref().map_or(0, |x| x.len()) as u8;
                 let e = self.resp_track.entry(id).or_insert((0, len, 0));
@@ -711,6 +714,9 @@ impl Sim {
             .filter(|(i, o)| *i != tx && o.start < end && o.end > start && o.end + 20_000 > start)
             .map(|(_, o)| o.sender)
             .collect();
+        if std::env::var("DEBUG_ACK").is_ok() {
+            self.trace_hop(tx, &overlapping);
+        }
         for r in 0..self.nodes.len() {
             if r == sender || !self.audible(sender, r) {
                 continue;
@@ -737,6 +743,38 @@ impl Sim {
                 Mode::Flood => self.flood_receive(r, &packet, snr),
             }
         }
+    }
+
+    /// Diagnose (DEBUG_ACK): for et kildestyret hop, hørte næste repeater
+    /// på stien pakken, og hvis ikke, hvad overdøvede den? Opdelt efter
+    /// linkets SNR-margen over følsomhedsgrænsen.
+    fn trace_hop(&mut self, tx: usize, overlapping: &[usize]) {
+        let (sender, start, end) = (self.txs[tx].sender, self.txs[tx].start, self.txs[tx].end);
+        let Ok(p) = Packet::decode(&self.txs[tx].packet) else { return };
+        let Some(path) = p.header.path.as_ref() else { return };
+        let Some(&next) = path.get(p.header.hops as usize) else { return };
+        let Some(r) = self.nodes.iter().position(|n| n.router.id == next) else { return };
+        let p_rx = self.gain[sender][r];
+        let why = if !self.audible(sender, r) {
+            "uhørbar".to_string()
+        } else if overlapping.contains(&r) {
+            "half-duplex".into()
+        } else if let Some(o) = self.txs.iter().enumerate().find(|(i, o)| {
+            *i != tx
+                && o.start < end
+                && o.end > start
+                && o.sender != sender
+                && self.radio.snr(self.gain[o.sender][r]) >= self.radio.snr_min - 6.0
+                && self.gain[o.sender][r] > p_rx - 6.0
+        }) {
+            let t = Packet::decode(&o.1.packet).map(|q| format!("{:?}", q.header.ptype));
+            format!("kollision med {}", t.unwrap_or_default())
+        } else {
+            "ok".into()
+        };
+        let margin = ((self.radio.snr(p_rx) - self.radio.snr_min) / 5.0).floor() as i32 * 5;
+        let key = format!("{:?}, margen {margin:>2}-{} dB: {why}", p.header.ptype, margin + 5);
+        *self.hop_trace.entry(key).or_default() += 1;
     }
 
     // ---------- flood-tilstand (sammenligning, Meshtastic-lignende) ----------
@@ -892,7 +930,7 @@ impl Sim {
         if std::env::var("DEBUG_ACK").is_ok() {
             let mut hist: std::collections::BTreeMap<String, u32> = Default::default();
             for (maxh, len, tx) in self.resp_track.values() {
-                let k = if maxh == len { "naaede sidste hop".to_string() } else { format!("stoppede ved {maxh}/{len} efter {tx} udsendelser") };
+                let k = if maxh == len { "nåede sidste hop".to_string() } else if *tx > 6 { format!("stoppede ved {maxh}/{len} efter >6 udsendelser") } else { format!("stoppede ved {maxh}/{len} efter {tx} udsendelser") };
                 *hist.entry(k).or_default() += 1;
             }
             for (k, v) in hist.iter().take(12) {
@@ -904,6 +942,29 @@ impl Sim {
                 .iter()
                 .map(|n| n.router.stats.routes_learned)
                 .sum();
+            let reach = self.msgs.iter().filter(|m| {
+                let mut seen = vec![false; self.nodes.len()];
+                let mut st = vec![m.from];
+                seen[m.from] = true;
+                while let Some(x) = st.pop() {
+                    if x == m.to { return true; }
+                    if x != m.from && !self.nodes[x].repeater { continue; }
+                    for (y, sy) in seen.iter_mut().enumerate() {
+                        if !*sy && self.audible(x, y) && self.audible(y, x) {
+                            *sy = true;
+                            st.push(y);
+                        }
+                    }
+                }
+                false
+            }).count();
+            for (k, v) in &self.hop_trace {
+                println!("  [debug] hop {k}: {v}");
+            }
+            println!("  [debug] nåbare beskeder (graf): {reach}/{}", self.msgs.len());
+            let pr: u32 = self.nodes.iter().map(|n| n.router.stats.path_requests).sum();
+            let hr: u32 = self.nodes.iter().map(|n| n.router.stats.hop_retries).sum();
+            println!("  [debug] ruteforespørgsler startet: {pr}, hop gensendt: {hr}");
             println!("  [debug] Acked-handlinger i alt: {acked}, ruter lært: {rl}");
             for m in self
                 .msgs

@@ -190,6 +190,20 @@ LAV**Telemetri og sensorer**Batteri, temperatur og vejr fra noder, plus bro til 
 
 LAV**Signerede udgivelser**Signér firmware og host-builds, så brugere kan tjekke, at de er ægte.fra Reticulum
 
+## Opdatering 14. november 2026
+
+Bygget siden sammenligningen blev skrevet:
+
+- **Afprøvet på hardware:** Heltec V4.3 og XIAO nRF52840 + Wio-SX1262 sender beskeder med kvittering begge veje. Rækkevidde er ikke målt endnu.
+- **Spam-beskyttelse:** arbejdsbevis på announces (12 bit) og ruteforespørgsler (8 bit).
+- **Regioner for kanaler:** `navn@region`, regionsliste pr. node, streng tilstand og filter på backbone.
+- **Bekræft nøgler:** sikkerhedsnummer (60 cifre) og QR-kode i webklienten.
+- **Private kanaler:** tilfældig nøgle, invitation som link og QR-kode.
+- **Fuzzing:** alle decodere, ingen fejl fundet.
+- **Rolle kan vælges** (klient, repeater, relay) og gemmes i flash.
+
+Stadig åbent: forward secrecy, opdatering over luften, telefon-apps, filer på firmware, Bluetooth på ESP32, gateways til MeshCore og Reticulum, ekstern gennemgang af kryptografien.
+
 ## Hvor står Må:rse?
 
 På papiret har Må:rse den bedste kombination: Reticulums identitet og globale rækkevidde, MeshCores effektive routing, og alt kører på chippen. Men de tre andre har det, der tæller mest i praksis: brugere, apps og år med drift.

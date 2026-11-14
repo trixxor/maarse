@@ -42,8 +42,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             ext_power: power::EXT_POWER.load(Relaxed) == 1,
             energy: self.router.energy as u8,
             uptime_s: self.started.elapsed().as_secs() as u32,
-            // nRF52840's TEMP-enhed ejes af MPSL (Bluetooth); ingen temperatur.
-            temp_dc: None,
+            temp_dc: power::temperature_dc(),
         });
         let name = (!self.ext.name.is_empty()).then_some(&self.ext.name[..]);
         appdata::build(None, true, s.position(), tel.as_ref(), name)
@@ -145,6 +144,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
         put(stat::EXT_POWER, power::EXT_POWER.load(Relaxed));
         put(stat::ENERGY, self.router.energy as i32);
+        if let Some(t) = power::temperature_dc() {
+            put(stat::TEMPERATURE_DC, t as i32);
+        }
         if let Some(n) = power::noise_floor() {
             put(stat::NOISE_FLOOR_DBM, n);
         }

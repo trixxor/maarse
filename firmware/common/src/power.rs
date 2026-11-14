@@ -9,6 +9,18 @@ use maarse_core::battery::Average;
 pub static BATTERY_MV: AtomicU32 = AtomicU32::new(0);
 /// Ekstern strøm (USB): -1 = ukendt, 0 = nej, 1 = ja.
 pub static EXT_POWER: AtomicI32 = AtomicI32::new(-1);
+/// Chip-temperatur i 0,1 °C (`i32::MIN` = ukendt). Måles af board-koden
+/// (nRF52840: via MPSL, der ejer TEMP-enheden; esp-hal 1.2 har ingen
+/// driver til ESP32-S3's sensor). Chippen
+/// er typisk lidt varmere end omgivelserne.
+pub static TEMP_DC: AtomicI32 = AtomicI32::new(i32::MIN);
+
+/// Temperaturen i 0,1 °C, hvis den er målt.
+pub fn temperature_dc() -> Option<i16> {
+    let t = TEMP_DC.load(Relaxed);
+    (t != i32::MIN).then(|| t.clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+}
+
 /// Anslået støjgulv × 16 (dBm), glidende gennemsnit.
 pub static NOISE_X16: AtomicI32 = AtomicI32::new(0);
 static NOISE_SEEN: AtomicBool = AtomicBool::new(false);

@@ -81,6 +81,30 @@ pub fn dev_public_key() -> [u8; 32] {
 }
 
 /// SHA-256 af et image.
+/// Domæne for udgivelsessignaturer (SHA256SUMS), så en signatur over en
+/// udgivelse aldrig kan forveksles med et firmware-manifest.
+const RELEASE_DOMAIN: &[u8] = b"maarse-release-v1
+";
+
+/// Det, der signeres: domænet efterfulgt af SHA-256 af SHA256SUMS-filen.
+fn release_message(sums: &[u8]) -> [u8; 18 + 32] {
+    let mut m = [0u8; 18 + 32];
+    m[..18].copy_from_slice(RELEASE_DOMAIN);
+    m[18..].copy_from_slice(&sha256(sums));
+    m
+}
+
+/// Signerer en udgivelses SHA256SUMS-fil med udgivelsesnøglen.
+pub fn sign_release(key: &SigningKey, sums: &[u8]) -> [u8; 64] {
+    key.sign(&release_message(sums)).to_bytes()
+}
+
+/// Tjekker en udgivelsessignatur.
+pub fn verify_release(public_key: &[u8; 32], sums: &[u8], sig: &[u8; 64]) -> bool {
+    let Ok(pk) = VerifyingKey::from_bytes(public_key) else { return false };
+    pk.verify(&release_message(sums), &Signature::from_bytes(sig)).is_ok()
+}
+
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
@@ -639,5 +663,18 @@ pub mod tests {
         r.begin(&mut f, m, &policy(64 * 1024), false).unwrap();
         assert_eq!(send_all(&mut r, &mut f, &img, 0, 128), Err(OtaError::Flash));
         assert_eq!(r.next, 3 * 128);
+    }
+
+    #[test]
+    fn release_signature() {
+        let k = SigningKey::from_bytes(&[3; 32]);
+        let pk = k.verifying_key().to_bytes();
+        let sums = b"abc  maarse.apk
+";
+        let sig = sign_release(&k, sums);
+        assert!(verify_release(&pk, sums, &sig));
+        assert!(!verify_release(&pk, b"abd  maarse.apk
+", &sig), "ændret fil");
+        assert!(!verify_release(&SigningKey::from_bytes(&[4; 32]).verifying_key().to_bytes(), sums, &sig));
     }
 }

@@ -15,6 +15,18 @@
 //!    omvendte sti. Afsenderens adresse står aldrig i klartekst.
 //! 4. Afsenderen gemmer stien og sender beskeden som kildesti.
 //! 5. Modtageren kvitterer med en `Ack` til et token afledt af beskedens ID.
+//!
+//! ## Stier over 12 hop: anker-repeatere
+//! En kildesti kan højst bære [`MAX_PATH`] (12) hop. Når en ruteforespørgsel
+//! når en repeater med rollen [`Role::Anchor`], husker ankeret det første
+//! stykke (vejen tilbage til afsenderen) og sender
+//! forespørgslen videre med et tomt spor. Målet svarer ad det andet stykke
+//! til ankeret, som lærer ruten videre til målet og sender svaret tilbage ad
+//! det første stykke, med det første stykke som rute. Afsenderen sender så
+//! sine beskeder til ankeret; ankeret ser, at stien ender hos det, men at
+//! beskeden er til en anden, og sender den videre ad sin egen rute.
+//! Kvitteringer følger samme vej tilbage. Pakkeformatet er uændret, og flere
+//! ankre efter hinanden virker af sig selv (op til `MAX_HOPS` i alt).
 
 use crate::addr::{Address, PathId};
 use crate::dedup::{DedupCache, packet_id};
@@ -72,6 +84,11 @@ const MAX_AWAIT: usize = 32;
 const MAX_CHANNELS: usize = 8;
 const MAX_NEIGHBORS: usize = 32;
 const MAX_TRACES: usize = 4;
+/// Hvor mange stykker et anker husker ad gangen (forespørgsler og beskeder).
+const MAX_ANCHORED: usize = 16;
+/// Så længe huskes et stykke hos ankeret (ms): længe nok til svar og
+/// kvittering, også over mange hop.
+const ANCHOR_TTL_MS: u64 = 120_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -83,15 +100,20 @@ pub enum Role {
     /// repeatere er. Videresender som en repeater, men venter længere (så
     /// rigtige repeatere vinder) og kun inden for `relay_hops`.
     Relay,
+    /// Fast repeater, der også deler stier over [`MAX_PATH`] hop op i
+    /// stykker (se modulets dokumentation). Bruges fx langs motorveje.
+    Anchor,
 }
 
 impl Role {
-    /// Rollen som tal på wire/i flash (0 = klient, 1 = repeater, 2 = relay).
+    /// Rollen som tal på wire/i flash (0 = klient, 1 = repeater, 2 = relay,
+    /// 3 = anker).
     pub fn as_u8(self) -> u8 {
         match self {
             Role::Client => 0,
             Role::Repeater => 1,
             Role::Relay => 2,
+            Role::Anchor => 3,
         }
     }
 
@@ -100,6 +122,7 @@ impl Role {
             0 => Some(Role::Client),
             1 => Some(Role::Repeater),
             2 => Some(Role::Relay),
+            3 => Some(Role::Anchor),
             _ => None,
         }
     }
@@ -189,6 +212,16 @@ struct PendingReply {
     best: Path,
     best_snr: i8,
     reply_at_ms: u64,
+}
+
+/// Et stykke, et anker husker: svar til `key` (svar-token eller
+/// kvitterings-token) sendes tilbage ad `back`. `target` er målet for en
+/// ruteforespørgsel (ellers ubrugt).
+struct Anchored {
+    key: Address,
+    target: Address,
+    back: Path,
+    until_ms: u64,
 }
 
 struct AwaitAck {
@@ -314,6 +347,8 @@ pub struct Router<const R: usize, const D: usize> {
     pub rx_rssi: i16,
     /// Trace routes: (mål, token, sendt). Venter på en rute, til den er sendt.
     traces: heapless::Vec<(Address, Address, bool), MAX_TRACES>,
+    /// Stykker, vi som anker husker (se [`Role::Anchor`]).
+    anchored: heapless::Vec<Anchored, MAX_ANCHORED>,
 }
 
 impl<const R: usize, const D: usize> Router<R, D> {
@@ -366,6 +401,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             neighbors: crate::diag::NeighborTable::new(),
             rx_rssi: 0,
             traces: heapless::Vec::new(),
+            anchored: heapless::Vec::new(),
         }
     }
 
@@ -413,7 +449,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
     fn may_forward(&self, hops: u8) -> bool {
         match self.role {
             Role::Client => false,
-            Role::Repeater => self.energy != Energy::Critical,
+            Role::Repeater | Role::Anchor => self.energy != Energy::Critical,
             Role::Relay => self.energy != Energy::Critical && hops < self.relay_hops.min(7),
         }
     }
@@ -971,8 +1007,14 @@ impl<const R: usize, const D: usize> Router<R, D> {
             return;
         }
         let mut record = record;
-        if record.push(self.id).is_err() {
-            return; // Længere end en kildesti kan bære.
+        if self.role == Role::Anchor && !record.is_empty() {
+            // Et anker deler stien: det husker vejen tilbage og sender videre
+            // med tomt spor. Så er det nok med et anker mindst hvert 12. hop.
+            let Some(token) = Address::from_slice(pkt.payload) else { return };
+            self.remember_anchor(token, h.dest, reversed(&record), now_ms);
+            record = Path::new();
+        } else if record.push(self.id).is_err() {
+            return; // Længere end en kildesti kan bære, og vi er ikke anker.
         }
         let mut header = Header::new(PacketType::PathRequest, h.dest).with_path(record);
         header.hops = h.hops + 1;
@@ -1023,6 +1065,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     .iter()
                     .position(|p| p.token == h.dest || p.old_tokens.contains(&h.dest))
                 else {
+                    self.anchor_path_response(pkt, id, now_ms, out);
                     return;
                 };
                 if !self.dedup.insert(id) {
@@ -1044,6 +1087,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             }
             PacketType::Ack => {
                 let Some(i) = self.awaiting.iter().position(|a| a.token == h.dest) else {
+                    self.anchor_relay_back(pkt, id, now_ms, out);
                     return;
                 };
                 if !self.dedup.insert(id) {
@@ -1096,8 +1140,81 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     self.emit_routed(&header, &[], SOURCE_ROUTE_DELAY_MS, now_ms, out);
                 }
             }
+            PacketType::Data | PacketType::Fragment | PacketType::Deposit if self.role == Role::Anchor => {
+                self.anchor_forward(pkt, path, id, now_ms, out);
+            }
             _ => {}
         }
+    }
+
+    fn remember_anchor(&mut self, key: Address, target: Address, back: Path, now_ms: u64) {
+        self.anchored.retain(|a| a.until_ms > now_ms && a.key != key);
+        if self.anchored.is_full() {
+            self.anchored.remove(0);
+        }
+        let _ = self.anchored.push(Anchored { key, target, back, until_ms: now_ms + ANCHOR_TTL_MS });
+    }
+
+    /// Svar på en forespørgsel, vi delte: lær ruten videre til målet og send
+    /// svaret tilbage ad første stykke med det stykke som afsenderens rute.
+    fn anchor_path_response(&mut self, pkt: &Packet, id: u64, now_ms: u64, out: &mut Actions) {
+        let h = &pkt.header;
+        let Some(i) = self.anchored.iter().position(|a| a.key == h.dest && a.until_ms > now_ms) else {
+            return;
+        };
+        if !self.dedup.insert(id) {
+            return;
+        }
+        let Some(onward) = parse_path(pkt.payload) else { return };
+        let a = self.anchored.swap_remove(i);
+        self.routes.upsert(Route {
+            dest: a.target,
+            cost: onward.len() as u16,
+            path: onward,
+            last_seen_ms: now_ms,
+            learned_ms: now_ms,
+        });
+        let first = reversed(&a.back);
+        let mut payload = Buf::new();
+        let _ = payload.push(first.len() as u8);
+        for pid in &first {
+            let _ = payload.extend_from_slice(&pid.to_be_bytes());
+        }
+        let header = Header::new(PacketType::PathResponse, a.key).with_path(a.back);
+        self.stats.forwarded += 1;
+        self.emit_routed(&header, &payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
+    }
+
+    /// Kvittering til en besked, vi sendte videre som anker: send den tilbage.
+    fn anchor_relay_back(&mut self, pkt: &Packet, id: u64, now_ms: u64, out: &mut Actions) {
+        let h = &pkt.header;
+        let Some(i) = self.anchored.iter().position(|a| a.key == h.dest && a.until_ms > now_ms) else {
+            return;
+        };
+        if !self.dedup.insert(id) {
+            return;
+        }
+        let a = self.anchored.swap_remove(i);
+        let header = Header::new(h.ptype, a.key).with_path(a.back);
+        self.stats.forwarded += 1;
+        self.emit_routed(&header, pkt.payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
+    }
+
+    /// En besked, hvis sti ender hos os, men som er til en anden: send den
+    /// videre ad vores egen rute og husk vejen tilbage til kvitteringen.
+    fn anchor_forward(&mut self, pkt: &Packet, path: &Path, id: u64, now_ms: u64, out: &mut Actions) {
+        let h = &pkt.header;
+        if h.dest == self.addr || self.energy == Energy::Critical {
+            return;
+        }
+        let Some(route) = self.routes.get(&h.dest).map(|r| r.path.clone()) else { return };
+        if !self.dedup.insert(id) {
+            return;
+        }
+        self.remember_anchor(ack_token(id), h.dest, reversed(path), now_ms);
+        let header = Header::new(h.ptype, h.dest).with_path(route);
+        self.stats.forwarded += 1;
+        self.emit_routed(&header, pkt.payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
     }
 
     fn learn_route(&mut self, target: Address, path: Path, now_ms: u64, out: &mut Actions) {
@@ -1215,6 +1332,92 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Simulerer en kæde: hver node hører kun sine to naboer. Kører, til
+    /// der ikke sker mere, og returnerer alle hændelser (node, handling).
+    fn run_line(nodes: &mut [R], start: Vec<(usize, Buf)>, now: &mut u64) -> Vec<(usize, Action)> {
+        let mut queue: std::collections::VecDeque<(usize, Buf)> = start.into();
+        let mut events = Vec::new();
+        for _ in 0..20_000 {
+            if let Some((from, pkt)) = queue.pop_front() {
+                for j in [from.wrapping_sub(1), from + 1] {
+                    if j >= nodes.len() {
+                        continue;
+                    }
+                    for a in nodes[j].on_receive(&pkt, 5, *now) {
+                        match a {
+                            Action::Transmit { packet, .. } => queue.push_back((j, packet)),
+                            other => events.push((j, other)),
+                        }
+                    }
+                }
+                continue;
+            }
+            let Some(next) = nodes.iter().filter_map(|n| n.next_deadline()).min() else { break };
+            if next > *now + 300_000 {
+                break;
+            }
+            *now = next.max(*now);
+            for (i, n) in nodes.iter_mut().enumerate() {
+                for a in n.tick(*now) {
+                    match a {
+                        Action::Transmit { packet, .. } => queue.push_back((i, packet)),
+                        other => events.push((i, other)),
+                    }
+                }
+            }
+        }
+        events
+    }
+
+    fn line(len: u8, anchors: &[u8]) -> Vec<R> {
+        (0..=len)
+            .map(|n| {
+                let role = if n == 0 || n == len {
+                    Role::Client
+                } else if anchors.contains(&n) {
+                    Role::Anchor
+                } else {
+                    Role::Repeater
+                };
+                node(n + 1, role)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn anchors_carry_messages_beyond_twelve_hops() {
+        // A, 22 repeatere med ankre ved 8 og 16, B: 22 hop i alt.
+        let mut nodes = line(23, &[8, 16]);
+        let b = nodes[23].addr;
+        let mut now = 0;
+        let (first, out) = nodes[0].send_direct(b, "langt væk".as_bytes(), [7; 16], now).unwrap();
+        let ev = run_line(&mut nodes, transmits(&out).into_iter().map(|p| (0, p)).collect(), &mut now);
+        assert!(ev.iter().any(|(i, a)| *i == 23 && matches!(a,
+            Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == "langt væk".as_bytes())));
+        assert!(ev.contains(&(0, Action::Acked { msg_id: first })), "første besked kvitteret via svaret");
+        // Afsenderens rute ender ved det første anker.
+        let route = nodes[0].routes().get(&b).unwrap().path.clone();
+        assert_eq!(route.as_slice(), &(2..=8).collect::<Vec<u16>>()[..]);
+
+        // Næste besked går ad ruten gennem begge ankre og kvitteres hele vejen.
+        let (msg, out) = nodes[0].send_direct(b, b"igen", [8; 16], now).unwrap();
+        assert_eq!(Packet::decode(&transmits(&out)[0]).unwrap().header.ptype, PacketType::Data);
+        let ev = run_line(&mut nodes, transmits(&out).into_iter().map(|p| (0, p)).collect(), &mut now);
+        assert!(ev.iter().any(|(i, a)| *i == 23 && matches!(a,
+            Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == b"igen")));
+        assert!(ev.contains(&(0, Action::Acked { msg_id: msg })));
+    }
+
+    #[test]
+    fn without_anchors_twenty_two_hops_is_too_far() {
+        let mut nodes = line(23, &[]);
+        let b = nodes[23].addr;
+        let mut now = 0;
+        let (_, out) = nodes[0].send_direct(b, b"langt", [7; 16], now).unwrap();
+        let ev = run_line(&mut nodes, transmits(&out).into_iter().map(|p| (0, p)).collect(), &mut now);
+        assert!(!ev.iter().any(|(i, a)| *i == 23 && matches!(a, Action::Deliver { .. })));
     }
 
     #[test]

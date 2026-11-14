@@ -5,14 +5,15 @@
 //!
 //! Samme opførsel som nRF-firmwaren: companion-protokollen over USB
 //! (USB-Serial-JTAG), modem-tilstand for maarse-host, radioindstillinger og
-//! administratorer i flash, og en postkasse i flash. Bluetooth er endnu ikke
-//! med på ESP32 (brug USB eller en nRF-node).
+//! administratorer i flash, en postkasse i flash og Bluetooth (Nordic UART
+//! Service, samme GATT-tjeneste og navn som på nRF).
 //!
 //! Byg: scripts/build-firmware.sh heltec-v4 (kræver espup og espflash).
 
 #![no_std]
 #![no_main]
 
+mod ble;
 #[cfg(feature = "display")]
 mod display;
 mod radio;
@@ -58,6 +59,9 @@ async fn main(spawner: Spawner) {
     let p = esp_hal::init(esp_hal::Config::default());
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
+    // Heap til BLE-controlleren (esp-radio). Resten af firmwaren bruger
+    // ingen heap.
+    esp_alloc::heap_allocator!(size: 72 * 1024);
 
     // ----- board-specifikke ben -----
     // (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, rf_tx, led, standard-radio)
@@ -193,6 +197,25 @@ async fn main(spawner: Spawner) {
 
     // ----- USB (USB-Serial-JTAG) -----
     spawner.spawn(usb::usb_task(p.USB_DEVICE).unwrap());
+
+    // ----- Bluetooth (Nordic UART Service) -----
+    if let Ok(connector) = esp_radio::ble::controller::BleConnector::new(p.BT, Default::default()) {
+        let addr = identity.address();
+        let mut mac = [0u8; 6];
+        mac.copy_from_slice(&addr.0[..6]);
+        mac[5] |= 0xC0; // tilfældig statisk adresse
+        static NAME: StaticCell<heapless::String<16>> = StaticCell::new();
+        let name = NAME.init({
+            let mut n = heapless::String::new();
+            let _ = n.push_str("Maarse-");
+            for b in &addr.0[..2] {
+                let _ = core::fmt::write(&mut n, format_args!("{b:02x}"));
+            }
+            n
+        });
+        let controller: ble::Ble = bt_hci::controller::ExternalController::new(connector);
+        spawner.spawn(ble::ble_task(controller, mac, name.as_str()).unwrap());
+    }
 
     // ----- display (Heltec V4) -----
     #[cfg(feature = "board-heltec-v4")]

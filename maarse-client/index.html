@@ -411,9 +411,9 @@ const Cmd = {
   setName: (name) => frame(0x24, enc.encode(name)),
   getName: () => frame(0x25),
   // Wi-Fi backbone (ESP32 nodes): enabled | ssid (len-prefixed) | password (len-prefixed) | peer
-  setWifi: (enabled, ssid, password, peer) => {
+  setWifi: (enabled, ssid, password, peer, modem = false) => {
     const s = enc.encode(ssid).slice(0, 32), p = enc.encode(password).slice(0, 64);
-    return frame(0x28, new Uint8Array([enabled ? 1 : 0, s.length]), s, new Uint8Array([p.length]), p, enc.encode(peer).slice(0, 64));
+    return frame(0x28, new Uint8Array([(enabled ? 1 : 0) | (modem ? 2 : 0), s.length]), s, new Uint8Array([p.length]), p, enc.encode(peer).slice(0, 64));
   },
   getWifi: () => frame(0x29),
   requestPage: (req, destHex, path) => frame(0x26, u16(req), unhex(destHex), enc.encode(path)),
@@ -496,7 +496,7 @@ function decodeEvent(f) {
     case 0xa5: return { type: "call", from: a(1), data: f.slice(17) };
     case 0xa6: {
       const n = f[7];
-      return { type: "wifi", enabled: !!f[1], state: f[2], ip: Array.from(f.slice(3, 7)).join("."),
+      return { type: "wifi", enabled: !!(f[1] & 1), modem: !!(f[1] & 2), state: f[2], ip: Array.from(f.slice(3, 7)).join("."),
                ssid: dec.decode(f.slice(8, 8 + n)), peer: dec.decode(f.slice(8 + n)) };
     }
     case 0xa3: return { type: "nodeInfo", addr: a(1), hops: f[17], ...parseAppData(f.slice(18)) };
@@ -1272,6 +1272,10 @@ function renderWifi(box) {
   const f = document.createElement("div"); f.className = "form";
   const row = (label, el) => { const l = document.createElement("label"); l.textContent = label; f.append(l, el); return el; };
   const on = row("Enabled", document.createElement("input")); on.type = "checkbox"; on.checked = wf.enabled;
+  const mode = row("Mode", document.createElement("select"));
+  mode.append(new Option("Mesh node (works on its own, peers with the host)", "node"),
+              new Option("LoRa modem for the host (the host does the routing)", "modem"));
+  mode.value = wf.modem ? "modem" : "node";
   const ssid = row("Network (SSID)", document.createElement("input")); ssid.value = wf.ssid; ssid.maxLength = 32;
   const pw = row("Password", document.createElement("input")); pw.type = "password"; pw.maxLength = 64;
   pw.placeholder = wf.ssid ? "empty = keep the saved password" : "empty = open network";
@@ -1280,7 +1284,7 @@ function renderWifi(box) {
   const save = document.createElement("button"); save.textContent = "Save and restart";
   save.onclick = () => {
     if (on.checked && (!ssid.value.trim() || !peer.value.trim())) { log("Wi-Fi needs a network name and a host"); return; }
-    transport?.send(Cmd.setWifi(on.checked, ssid.value.trim(), pw.value, peer.value.trim()));
+    transport?.send(Cmd.setWifi(on.checked, ssid.value.trim(), pw.value, peer.value.trim(), mode.value === "modem"));
     log("Wi-Fi settings sent; the node restarts");
   };
   f.append(document.createElement("span"), save);
@@ -3198,8 +3202,35 @@ async function hsLoad() {
     const r = await fetch(`${base}/api/indstillinger${q}`, { cache: "no-store" });
     if (!r.ok) throw new Error(await r.text());
     hs.data = await r.json();
+    await hsLoadDevices();
   } catch (e) { hs.err = "Kunne ikke hente indstillinger: " + e.message; }
   if (state.view === "settings") renderChat();
+}
+// Links of the host right now: backbone peers, USB and Wi-Fi LoRa modems.
+async function hsLoadDevices() {
+  const { base, q } = hsBase();
+  try {
+    const r = await fetch(`${base}/api/enheder${q}`, { cache: "no-store" });
+    hs.devices = r.ok ? (await r.json()).devices : null;
+  } catch { hs.devices = null; }
+}
+const DEVICE_KINDS = { "backbone": "Backbone (TCP)", "usb-modem": "LoRa modem (USB)", "wifi-modem": "LoRa modem (Wi-Fi)" };
+function hsAgo(s) { return s == null ? "–" : s < 60 ? s + " s" : s < 3600 ? Math.floor(s / 60) + " min" : Math.floor(s / 3600) + " h"; }
+function renderDevices(wrap) {
+  wrap.append(el("h3", { textContent: "Devices" }));
+  const list = hs.devices;
+  if (!list) { wrap.append(el("p", { className: "hint", textContent: "This host does not report its devices (older version)." })); return; }
+  if (!list.length) wrap.append(el("p", { className: "hint", textContent: "No devices or peers connected." }));
+  for (const d of list) {
+    const radio = d.kind !== "backbone";
+    const extra = radio && d.snr != null ? ` · SNR ${d.snr} dB` : "";
+    wrap.append(el("div", { className: "row" },
+      el("b", { textContent: DEVICE_KINDS[d.kind] || d.kind }), " ",
+      el("span", { className: "hint", textContent: `${d.name} · up ${hsAgo(d.up_s)} · in ${d.rx} / out ${d.tx} · last heard ${hsAgo(d.last_rx_s)}${extra}` })));
+  }
+  const b = el("button", { textContent: "Refresh" });
+  b.onclick = async () => { await hsLoadDevices(); renderChat(); };
+  wrap.append(el("div", { className: "row" }, b));
 }
 function hsParse(text) {
   const vals = new Map(), other = [];
@@ -3235,6 +3266,7 @@ function renderSettings(box) {
   if (hs.err) wrap.append(el("p", { className: "warn", textContent: hs.err }));
   const d = hs.data;
   if (!d) { if (!hs.err) wrap.append(el("p", { className: "hint", textContent: "Henter …" })); return; }
+  renderDevices(wrap);
 
   wrap.append(el("h3", { textContent: "Status" }));
   const st = el("div", { className: "warn" });

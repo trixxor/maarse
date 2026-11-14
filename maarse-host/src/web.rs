@@ -168,6 +168,10 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
             }
         }
         ("POST", "/api/genstart") => restart_soon(stream),
+        ("GET", "/api/enheder") => {
+            let body = crate::links::devices_json();
+            reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)
+        }
         _ => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "Ikke fundet"),
     }
 }

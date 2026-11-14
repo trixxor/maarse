@@ -544,8 +544,9 @@ impl Node {
                 if self
                     .links
                     .get(&link)
-                    .is_some_and(|(n, _)| n.starts_with("seriel"))
+                    .is_some_and(|(n, _)| !n.starts_with("tcp"))
                 {
+                    // A LoRa modem (USB or Wi-Fi): the SNR is real.
                     self.counters.last_snr = Some(snr);
                 }
                 // Kun ruteforespørgsler med gyldigt arbejdsbevis udløser opslag.

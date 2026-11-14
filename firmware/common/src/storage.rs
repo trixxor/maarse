@@ -11,7 +11,7 @@
 //!   0x200: "REG1" + strict (1) + længde (1) + regionsnavne (≤ 120, kommasepareret)
 //!   0x300: "SHR1" + delingsindstillinger (10, se `companion::Sharing`)
 //!   0x320: "NAM1" + length (1) + display name (≤ 24)
-//!   0x340: "WIF1" + enabled (1) + SSID (1 + 32) + password (1 + 64) + peer (1 + 64)
+//!   0x340: "WIF1" + flags (1: bit 0 enabled, bit 1 modem) + SSID (1 + 32) + password (1 + 64) + peer (1 + 64)
 //!   ```
 //!   Uden "SHR1" deles hverken position eller telemetri (standard).
 //!   Skrives kun første gang og når radio/administratorer/rolle/regioner ændres.
@@ -352,7 +352,7 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         let b = &mut buf[WIFI_OFF..WIFI_OFF + WIFI_LEN];
         b.fill(0);
         b[..4].copy_from_slice(WIFI_MAGIC);
-        b[4] = w.enabled as u8;
+        b[4] = w.enabled as u8 | (w.modem as u8) << 1;
         let mut put = |at: usize, s: &[u8]| {
             b[at] = s.len() as u8;
             b[at + 1..at + 1 + s.len()].copy_from_slice(s);
@@ -373,7 +373,8 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
             heapless::Vec::from_slice(&b[at + 1..at + 1 + n]).unwrap_or_default()
         }
         maarse_core::companion::WifiSettings {
-            enabled: b[4] == 1,
+            enabled: b[4] & 1 != 0,
+            modem: b[4] & 2 != 0,
             ssid: get(b, 5),
             password: get(b, 5 + 33),
             peer: get(b, 5 + 33 + 65),

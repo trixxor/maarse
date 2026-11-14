@@ -125,6 +125,9 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     channels: heapless::Vec<(Address, [u8; 32], Name), 4>,
     rng: R,
     modem: bool,
+    /// LoRa modem for a host over Wi-Fi (fixed at boot; USB commands do not
+    /// end it, unlike `modem`).
+    wifi_modem: bool,
     radio_ok: bool,
     next_announce: Instant,
     settings: S,
@@ -201,6 +204,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             channels: heapless::Vec::new(),
             rng,
             modem: false,
+            wifi_modem: crate::bus::WIFI_MODEM.load(Relaxed),
             radio_ok,
             next_announce: Instant::now() + Duration::from_secs(5),
             settings,
@@ -304,7 +308,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         self.file_tick();
         self.power_tick();
         if Instant::now() >= self.next_announce {
-            if !self.modem {
+            if !self.modem && !self.wifi_modem {
                 self.announce();
             }
             self.next_announce = Instant::now() + ANNOUNCE_EVERY;
@@ -317,8 +321,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     fn transmit(&self, packet: Pkt, delay_ms: u32, id: u64) {
         // The backbone link gets every packet at once; flood delays and
         // cancellation only matter on the shared radio channel.
-        if crate::bus::WIFI_STATE.load(Relaxed) == maarse_core::companion::wifi_state::LINKED as u32 {
-            let _ = crate::bus::NET_TX.try_send(packet.clone());
+        if !self.wifi_modem
+            && crate::bus::WIFI_STATE.load(Relaxed) == maarse_core::companion::wifi_state::LINKED as u32
+        {
+            let _ = crate::bus::NET_TX.try_send((packet.clone(), 0));
         }
         let _ = RADIO_TX.try_send(TxReq {
             packet,
@@ -378,6 +384,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// A packet from the Wi-Fi backbone link. TCP is treated as a perfect
     /// link, as maarse-host does.
     fn on_net(&mut self, pkt: Pkt) {
+        if self.wifi_modem {
+            // From the host: send it over LoRa as it is.
+            let _ = RADIO_TX.try_send(TxReq { packet: pkt, delay_ms: 0, id: 0 });
+            return;
+        }
         if self.modem {
             return;
         }
@@ -413,6 +424,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let ip = crate::bus::WIFI_IP.load(Relaxed).to_be_bytes();
         Event::Wifi {
             enabled: w.enabled,
+            modem: w.modem,
             state: crate::bus::WIFI_STATE.load(Relaxed) as u8,
             ip,
             ssid: w.ssid,
@@ -421,6 +433,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     fn on_radio(&mut self, pkt: Pkt, snr: i8) {
+        if self.wifi_modem {
+            // To the host over Wi-Fi; dropped while the link is down.
+            if crate::bus::WIFI_STATE.load(Relaxed) == maarse_core::companion::wifi_state::LINKED as u32 {
+                let _ = crate::bus::NET_TX.try_send((pkt, snr));
+            }
+            return;
+        }
         if self.modem {
             let mut f = maarse_core::companion::FrameBuf::new();
             let len = (pkt.len() + 2) as u16;

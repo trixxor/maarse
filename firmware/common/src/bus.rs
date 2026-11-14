@@ -36,8 +36,11 @@ pub static BLE_OUT: Channel<M, FrameBuf, 16> = Channel::new();
 
 /// Packets received on the Wi-Fi backbone link (TCP), one Må:rse packet each.
 pub static NET_RX: Channel<M, Pkt, 4> = Channel::new();
-/// Packets to send on the Wi-Fi backbone link.
-pub static NET_TX: Channel<M, Pkt, 8> = Channel::new();
+/// Packets to send on the Wi-Fi link, with the SNR they were heard with (only
+/// used in modem mode, where the host needs it).
+pub static NET_TX: Channel<M, (Pkt, i8), 8> = Channel::new();
+/// The node is the host's LoRa modem over Wi-Fi (set at boot by board code).
+pub static WIFI_MODEM: AtomicBool = AtomicBool::new(false);
 /// Set by board code that has Wi-Fi (ESP32-S3).
 pub static WIFI_SUPPORTED: AtomicBool = AtomicBool::new(false);
 /// Wi-Fi state (`companion::wifi_state`), kept up to date by the Wi-Fi task.

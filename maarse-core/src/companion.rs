@@ -26,11 +26,18 @@ pub const PROTOCOL_VERSION: u8 = 2;
 pub type Text = heapless::Vec<u8, MAX_TEXT>;
 
 /// Wi-Fi backbone settings for nodes with Wi-Fi (ESP32-S3): the node joins
-/// the network `ssid` and keeps a TCP backbone link to `peer` (`host:port`,
-/// a maarse-host listening with `--listen`). Command `0x28`.
+/// the network `ssid` and keeps a TCP link to `peer` (`host:port`, a
+/// maarse-host listening with `--listen`). Command `0x28`.
+///
+/// `modem = false`: the node is a mesh node of its own and peers with the
+/// host over the backbone. `modem = true`: the node is the host's LoRa modem
+/// over Wi-Fi (like `--serial` over USB); the host does all routing.
+///
+/// On the wire the first byte holds flags: bit 0 enabled, bit 1 modem.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WifiSettings {
     pub enabled: bool,
+    pub modem: bool,
     pub ssid: heapless::Vec<u8, 32>,
     pub password: heapless::Vec<u8, 64>,
     pub peer: heapless::Vec<u8, 64>,
@@ -412,6 +419,8 @@ pub enum Event {
     /// until the node has an address.
     Wifi {
         enabled: bool,
+        /// The node is the host's LoRa modem over Wi-Fi (see [`WifiSettings`]).
+        modem: bool,
         state: u8,
         ip: [u8; 4],
         ssid: heapless::Vec<u8, 32>,
@@ -803,7 +812,7 @@ impl Command {
             Command::GetSharing => W::new(0x23).done(),
             Command::SetName { name } => W::new(0x24).b(name).done(),
             Command::SetWifi(w) => W::new(0x28)
-                .b(&[w.enabled as u8, w.ssid.len() as u8])
+                .b(&[w.enabled as u8 | (w.modem as u8) << 1, w.ssid.len() as u8])
                 .b(&w.ssid)
                 .b(&[w.password.len() as u8])
                 .b(&w.password)
@@ -886,11 +895,11 @@ impl Command {
             0x23 => Command::GetSharing,
             0x24 => Command::SetName { name: r.text()? },
             0x28 => {
-                let enabled = r.u8()? != 0;
+                let flags = r.u8()?;
                 let ssid = r.short()?;
                 let password = r.short()?;
                 let peer = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
-                Command::SetWifi(WifiSettings { enabled, ssid, password, peer })
+                Command::SetWifi(WifiSettings { enabled: flags & 1 != 0, modem: flags & 2 != 0, ssid, password, peer })
             }
             0x29 => Command::GetWifi,
             0x25 => Command::GetName,
@@ -1075,8 +1084,8 @@ impl Event {
             Event::Sharing(s) => W::new(0xa2).b(&s.to_bytes()).done(),
             Event::Name { name } => W::new(0xa4).b(name).done(),
             Event::Call { from, data } => W::new(0xa5).b(&from.0).b(data).done(),
-            Event::Wifi { enabled, state, ip, ssid, peer } => W::new(0xa6)
-                .b(&[*enabled as u8, *state])
+            Event::Wifi { enabled, modem, state, ip, ssid, peer } => W::new(0xa6)
+                .b(&[*enabled as u8 | (*modem as u8) << 1, *state])
                 .b(ip)
                 .b(&[ssid.len() as u8])
                 .b(ssid)
@@ -1249,13 +1258,14 @@ impl Event {
             0xa4 => Event::Name { name: r.text()? },
             0xa5 => Event::Call { from: r.addr()?, data: r.text()? },
             0xa6 => {
-                let enabled = r.u8()? != 0;
+                let flags = r.u8()?;
+                let (enabled, modem) = (flags & 1 != 0, flags & 2 != 0);
                 let state = r.u8()?;
                 let mut ip = [0u8; 4];
                 ip.copy_from_slice(r.take(4)?);
                 let ssid = r.short()?;
                 let peer = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
-                Event::Wifi { enabled, state, ip, ssid, peer }
+                Event::Wifi { enabled, modem, state, ip, ssid, peer }
             }
             0xb4 => {
                 let addr = r.addr()?;
@@ -1612,6 +1622,7 @@ mod tests {
         roundtrip_cmd(Command::SetName { name: text("Ida".as_bytes()) });
         roundtrip_cmd(Command::SetWifi(WifiSettings {
             enabled: true,
+            modem: true,
             ssid: heapless::Vec::from_slice(b"Telefon").unwrap(),
             password: heapless::Vec::from_slice(b"hemmelig kode").unwrap(),
             peer: heapless::Vec::from_slice(b"example.org:4242").unwrap(),
@@ -1620,6 +1631,7 @@ mod tests {
         roundtrip_cmd(Command::GetWifi);
         roundtrip_ev(Event::Wifi {
             enabled: true,
+            modem: false,
             state: wifi_state::LINKED,
             ip: [192, 168, 43, 17],
             ssid: heapless::Vec::from_slice(b"Telefon").unwrap(),

@@ -96,6 +96,15 @@ pub enum Command {
     SetSharing(Sharing),
     /// 0x23: vis delingsindstillingerne.
     GetSharing,
+    /// 0x24: sæt nodens visningsnavn (UTF-8, højst 24 bytes; tomt = intet).
+    /// Svar: `Name`. Navnet sendes i announces og er ikke bevist.
+    SetName { name: Text },
+    /// 0x25: hent visningsnavnet. Svar: `Name`.
+    GetName,
+    /// 0x26: bed `dest` om siden `path` (`maarse://<dest>/<path>`). Svar:
+    /// `Sent`; siden kommer som en fil med MIME
+    /// [`crate::content::PAGE_MIME`]. Ugyldig sti giver `Error`.
+    RequestPage { req: u16, dest: Address, path: Text },
     /// 0x18: start (eller genoptag) en firmwareopdatering. `manifest` er det
     /// signerede manifest (112 bytes, se `maarse_crypto::ota`). Flag bit 0:
     /// tillad ældre version (kun lokalt, ignoreres via `Remote`). Svaret er
@@ -354,6 +363,8 @@ pub enum Event {
     },
     /// 0xa2: delingsindstillinger (se [`Sharing`]).
     Sharing(Sharing),
+    /// 0xa4: nodens eget visningsnavn (tomt = intet).
+    Name { name: Text },
     /// 0xa3: position og/eller telemetri fra en anden nodes announce.
     /// Format: adresse (16) | hop | app-data-felter (0x03/0x04, se
     /// [`crate::appdata`]).
@@ -362,6 +373,7 @@ pub enum Event {
         hops: u8,
         position: Option<crate::appdata::Position>,
         telemetry: Option<crate::appdata::Telemetry>,
+        name: Option<crate::appdata::Name>,
     },
     /// 0xb4: nodens identitet er udskiftet (svar på `SetIdentity`).
     /// Format: ny adresse (16) | offentlig identitet (64).
@@ -715,6 +727,9 @@ impl Command {
             Command::GetNeighbors => W::new(0x21).done(),
             Command::SetSharing(s) => W::new(0x22).b(&s.to_bytes()).done(),
             Command::GetSharing => W::new(0x23).done(),
+            Command::SetName { name } => W::new(0x24).b(name).done(),
+            Command::GetName => W::new(0x25).done(),
+            Command::RequestPage { req, dest, path } => W::new(0x26).b(&req.to_le_bytes()).b(&dest.0).b(path).done(),
             Command::OtaBegin { req, flags, manifest } => {
                 W::new(0x18).b(&req.to_le_bytes()).b(&[*flags]).b(manifest).done()
             }
@@ -786,6 +801,9 @@ impl Command {
             0x21 => Command::GetNeighbors,
             0x22 => Command::SetSharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
             0x23 => Command::GetSharing,
+            0x24 => Command::SetName { name: r.text()? },
+            0x25 => Command::GetName,
+            0x26 => Command::RequestPage { req: r.u16()?, dest: r.addr()?, path: r.text()? },
             0x18 => Command::OtaBegin { req: r.u16()?, flags: r.u8()?, manifest: r.text()? },
             0x19 => Command::OtaChunk { req: r.u16()?, offset: r.u32()?, data: r.text()? },
             0x1a => Command::OtaEnd { req: r.u16()?, apply: r.u8()? != 0 },
@@ -963,8 +981,9 @@ impl Event {
                 w.done()
             }
             Event::Sharing(s) => W::new(0xa2).b(&s.to_bytes()).done(),
-            Event::NodeInfo { addr, hops, position, telemetry } => {
-                let data = crate::appdata::build(None, false, *position, telemetry.as_ref());
+            Event::Name { name } => W::new(0xa4).b(name).done(),
+            Event::NodeInfo { addr, hops, position, telemetry, name } => {
+                let data = crate::appdata::build(None, false, *position, telemetry.as_ref(), name.as_deref());
                 W::new(0xa3).b(&addr.0).b(&[*hops]).b(&data).done()
             }
             Event::IdentityChanged { addr, identity } => W::new(0xb4).b(&addr.0).b(identity).done(),
@@ -1125,8 +1144,9 @@ impl Event {
             0xa3 => {
                 let (addr, hops) = (r.addr()?, r.u8()?);
                 let a = crate::appdata::parse(r.0);
-                Event::NodeInfo { addr, hops, position: a.position, telemetry: a.telemetry }
+                Event::NodeInfo { addr, hops, position: a.position, telemetry: a.telemetry, name: a.name }
             }
+            0xa4 => Event::Name { name: r.text()? },
             0xb4 => {
                 let addr = r.addr()?;
                 let identity = r.identity().ok_or(FrameError::TooShort)?;
@@ -1474,8 +1494,13 @@ mod tests {
             hops: 2,
             position: sh.position(),
             telemetry: Some(crate::appdata::Telemetry { battery_mv: 3700, energy: 2, uptime_s: 5, ..Default::default() }),
+            name: crate::appdata::clean_name("Ida på bakken".as_bytes()),
         });
-        roundtrip_ev(Event::NodeInfo { addr: Address([1; 16]), hops: 0, position: None, telemetry: None });
+        roundtrip_ev(Event::NodeInfo { addr: Address([1; 16]), hops: 0, position: None, telemetry: None, name: None });
+        roundtrip_cmd(Command::GetName);
+        roundtrip_cmd(Command::RequestPage { req: 9, dest: Address([3; 16]), path: text(b"vejr") });
+        roundtrip_cmd(Command::SetName { name: text("Ida".as_bytes()) });
+        roundtrip_ev(Event::Name { name: text(b"Ida") });
     }
 
     #[test]

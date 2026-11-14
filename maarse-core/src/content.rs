@@ -7,6 +7,10 @@
 //! * `0x03` svar på en kontrolkommando: tæller (u32) + companion-hændelse
 //! * `0x04` resync: ingen data. Sendes som init i en ny FS-session, når vi
 //!   har fået en ratchet-besked, vi ikke kan læse (fx efter genstart).
+//! * `0x05` anmodning om en `maarse://`-side: sti (UTF-8, højst
+//!   [`MAX_PAGE_PATH`] bytes). Svaret er en almindelig fil med MIME
+//!   [`PAGE_MIME`] (deflate-komprimeret sidemarkup) og stien som navn.
+//!   Se [`page_path`].
 //!
 //! Kontrolkommandoer er krypterede direkte beskeder, så modtageren ved med
 //! sikkerhed, hvem afsenderen er. Noden udfører dem kun, hvis afsenderen
@@ -23,6 +27,14 @@ pub const FILE_OFFER: u8 = 0x01;
 pub const CONTROL: u8 = 0x02;
 pub const CONTROL_REPLY: u8 = 0x03;
 pub const RESYNC: u8 = 0x04;
+pub const PAGE_REQUEST: u8 = 0x05;
+
+/// MIME for en `maarse://`-side: Må:rse-markup (UTF-8), komprimeret med
+/// rå deflate (RFC 1951). Ikke HTML: klienten viser kun tekst, overskrifter
+/// og links, så en side fra en fremmed ikke kan køre kode.
+pub const PAGE_MIME: &[u8] = b"text/x-maarse-page;deflate";
+/// Længste sti i en sideanmodning.
+pub const MAX_PAGE_PATH: usize = 60;
 
 /// Fast del af et filtilbud.
 pub const OFFER_FIXED: usize = 1 + 8 + 4 + 2 + 1 + 32 + 16 + 1;
@@ -51,6 +63,8 @@ pub enum Content<'a> {
     ControlReply(u32, &'a [u8]),
     /// Afsenderen har startet en ny FS-session med os.
     Resync,
+    /// Anmodning om en side; stien er renset med [`page_path`].
+    PageRequest(Small),
     Unknown(u8),
 }
 
@@ -104,6 +118,10 @@ pub fn parse(plain: &[u8]) -> Option<Content<'_>> {
             })
         }
         RESYNC => Some(Content::Resync),
+        PAGE_REQUEST => Some(match page_path(&plain[1..]) {
+            Some(p) => Content::PageRequest(p),
+            None => Content::Unknown(PAGE_REQUEST),
+        }),
         t => Some(Content::Unknown(t)),
     }
 }
@@ -116,6 +134,41 @@ pub fn control(kind: u8, counter: u32, frame: &[u8]) -> heapless::Vec<u8, 256> {
     let _ = v.extend_from_slice(&counter.to_le_bytes());
     let _ = v.extend_from_slice(&frame[..frame.len().min(250)]);
     v
+}
+
+/// Renser en sidesti: små bogstaver, cifre, `-`, `_`, `.` og `/`; ingen
+/// `..`, ingen tomme led. Tom sti (eller `/`) bliver `index`. Ugyldig sti
+/// giver `None`, så den aldrig kan pege uden for sidemappen.
+pub fn page_path(raw: &[u8]) -> Option<Small> {
+    let raw = core::str::from_utf8(raw).ok()?;
+    let raw = raw.trim().trim_matches('/');
+    let raw = if raw.is_empty() { "index" } else { raw };
+    if raw.len() > MAX_PAGE_PATH {
+        return None;
+    }
+    let mut out = Small::new();
+    for seg in raw.split('/') {
+        let ok = !seg.is_empty()
+            && !seg.starts_with('.')
+            && seg.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"-_.".contains(&c));
+        if !ok {
+            return None;
+        }
+        if !out.is_empty() {
+            out.push(b'/').ok()?;
+        }
+        out.extend_from_slice(seg.as_bytes()).ok()?;
+    }
+    Some(out)
+}
+
+/// Bygger en sideanmodning. `None`, hvis stien er ugyldig.
+pub fn page_request(path: &[u8]) -> Option<heapless::Vec<u8, 64>> {
+    let p = page_path(path)?;
+    let mut v = heapless::Vec::new();
+    v.push(PAGE_REQUEST).ok()?;
+    v.extend_from_slice(&p).ok()?;
+    Some(v)
 }
 
 /// Bygger en tekstbesked.
@@ -162,5 +215,24 @@ mod tests {
         assert_eq!(parse(&[RESYNC]), Some(Content::Resync));
         assert_eq!(parse(&[]), None);
         assert_eq!(parse(&[FILE_OFFER, 1, 2]), None);
+    }
+
+    #[test]
+    fn page_paths() {
+        let p = |s: &str| page_path(s.as_bytes()).map(|v| std::string::String::from_utf8(v.to_vec()).unwrap());
+        assert_eq!(p(""), Some("index".into()));
+        assert_eq!(p("/"), Some("index".into()));
+        assert_eq!(p("/vejr/aarhus/"), Some("vejr/aarhus".into()));
+        assert_eq!(p("om.mu"), Some("om.mu".into()));
+        assert_eq!(p("../hemmelig"), None);
+        assert_eq!(p("a/../b"), None);
+        assert_eq!(p("a//b"), None);
+        assert_eq!(p(".skjult"), None);
+        assert_eq!(p("Store"), None);
+        assert_eq!(p(r"c:\windows"), None);
+        assert_eq!(p(&"a".repeat(61)), None);
+        let req = page_request(b"/vejr").unwrap();
+        assert_eq!(parse(&req), Some(Content::PageRequest(Small::from_slice(b"vejr").unwrap())));
+        assert_eq!(parse(&[PAGE_REQUEST, b'.', b'.']), Some(Content::Unknown(PAGE_REQUEST)));
     }
 }

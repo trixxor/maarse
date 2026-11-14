@@ -13,6 +13,7 @@
 
 mod battery;
 mod ble;
+mod ota;
 mod radio;
 mod storage;
 mod usb;
@@ -141,7 +142,8 @@ async fn main(spawner: Spawner) {
         storage::CFG_ADDR,
         storage::MAIL_START,
         MAIL_BUF.init([0xFF; maarse_fw_common::storage::MAIL_AREA]),
-    );
+    )
+    .with_ota(ota::config());
     let identity = flash.load_or_create_identity(&mut rng);
     let radio_cfg = flash.load_radio(maarse_core::companion::RadioConfig::EU_DEFAULT);
     let addr = identity.address();

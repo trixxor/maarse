@@ -373,6 +373,10 @@ dependencies = [
 [[package]]
 name = "maarse-uf2"
 version = "0.1.0"
+dependencies = [
+ "maarse-crypto",
+ "rand_core",
+]
 
 [[package]]
 name = "mach2"

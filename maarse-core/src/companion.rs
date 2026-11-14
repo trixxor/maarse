@@ -92,6 +92,20 @@ pub enum Command {
     SetSharing(Sharing),
     /// 0x23: vis delingsindstillingerne.
     GetSharing,
+    /// 0x18: start (eller genoptag) en firmwareopdatering. `manifest` er det
+    /// signerede manifest (112 bytes, se `maarse_crypto::ota`). Flag bit 0:
+    /// tillad ældre version (kun lokalt, ignoreres via `Remote`). Svaret er
+    /// `OtaState` med det offset, klienten skal sende fra. Kan sendes via
+    /// `Remote` (kun administratorer). 0x14-0x17 er holdt fri til andet arbejde.
+    OtaBegin { req: u16, flags: u8, manifest: Text },
+    /// 0x19: en bid af imaget. Offset og længde skal være delelige med 4
+    /// (undtagen sidste bid). Svaret er `OtaState` med næste offset.
+    OtaChunk { req: u16, offset: u32, data: Text },
+    /// 0x1a: afslut. Imaget skal være helt overført og verificeret; med
+    /// `apply` installeres det, og noden genstarter.
+    OtaEnd { req: u16, apply: bool },
+    /// 0x1b: hvor langt er en opdatering? Svaret er `OtaState`.
+    OtaStatus,
 }
 
 /// Delingsindstillinger (10 bytes): præcision (u8, se
@@ -192,6 +206,20 @@ pub fn neighbor_events<const N: usize>(
     out
 }
 
+/// Tilstande i `Event::OtaState`.
+pub mod ota_state {
+    pub const IDLE: u8 = 0;
+    pub const RECEIVING: u8 = 1;
+    pub const VERIFIED: u8 = 2;
+    pub const INSTALLING: u8 = 3;
+    pub const ERROR: u8 = 4;
+    /// Boardet understøtter ikke opdatering over luften.
+    pub const UNSUPPORTED: u8 = 5;
+}
+
+/// Flag i `Command::OtaBegin`.
+pub const OTA_ALLOW_DOWNGRADE: u8 = 1;
+
 /// Svar og hændelser fra node til klient.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -270,6 +298,10 @@ pub enum Event {
     Admins { admins: heapless::Vec<Address, 4> },
     /// 0x95: nodens regioner (kommasepareret) og `strict`.
     Regions { strict: bool, names: Text },
+    /// 0x9a: firmwareopdateringens tilstand (se [`ota_state`]). `next` er
+    /// næste forventede offset, `size` og `version` fra manifestet (0 uden),
+    /// `current` den kørende version. Tekst forklarer fejl.
+    OtaState { req: u16, state: u8, next: u32, size: u32, version: u32, current: u32, text: Text },
     /// 0x8f
     Error { req: u16, code: u8, text: Text },
     /// 0xa0: svar på `TraceRoute`. `path` er repeaternes sti-ID'er; `out` er
@@ -650,6 +682,14 @@ impl Command {
             Command::GetNeighbors => W::new(0x21).done(),
             Command::SetSharing(s) => W::new(0x22).b(&s.to_bytes()).done(),
             Command::GetSharing => W::new(0x23).done(),
+            Command::OtaBegin { req, flags, manifest } => {
+                W::new(0x18).b(&req.to_le_bytes()).b(&[*flags]).b(manifest).done()
+            }
+            Command::OtaChunk { req, offset, data } => {
+                W::new(0x19).b(&req.to_le_bytes()).b(&offset.to_le_bytes()).b(data).done()
+            }
+            Command::OtaEnd { req, apply } => W::new(0x1a).b(&req.to_le_bytes()).b(&[*apply as u8]).done(),
+            Command::OtaStatus => W::new(0x1b).done(),
         }
     }
 
@@ -708,6 +748,10 @@ impl Command {
             0x21 => Command::GetNeighbors,
             0x22 => Command::SetSharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
             0x23 => Command::GetSharing,
+            0x18 => Command::OtaBegin { req: r.u16()?, flags: r.u8()?, manifest: r.text()? },
+            0x19 => Command::OtaChunk { req: r.u16()?, offset: r.u32()?, data: r.text()? },
+            0x1a => Command::OtaEnd { req: r.u16()?, apply: r.u8()? != 0 },
+            0x1b => Command::OtaStatus,
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -822,6 +866,15 @@ impl Event {
             Event::Regions { strict, names } => {
                 W::new(0x95).b(&[*strict as u8]).b(names).done()
             }
+            Event::OtaState { req, state, next, size, version, current, text } => W::new(0x9a)
+                .b(&req.to_le_bytes())
+                .b(&[*state])
+                .b(&next.to_le_bytes())
+                .b(&size.to_le_bytes())
+                .b(&version.to_le_bytes())
+                .b(&current.to_le_bytes())
+                .b(text)
+                .done(),
             Event::Stats { items } => {
                 let mut w = W::new(0x91);
                 for (k, v) in items {
@@ -944,6 +997,15 @@ impl Event {
             0x93 => Event::RemoteReply { from: r.addr()?, frame: r.text()? },
             0x94 => Event::Admins { admins: r.addrs()? },
             0x95 => Event::Regions { strict: r.u8()? != 0, names: r.text()? },
+            0x9a => Event::OtaState {
+                req: r.u16()?,
+                state: r.u8()?,
+                next: r.u32()?,
+                size: r.u32()?,
+                version: r.u32()?,
+                current: r.u32()?,
+                text: r.text()?,
+            },
             0x92 => Event::Radio(
                 RadioConfig::from_bytes(r.take(RadioConfig::LEN)?).ok_or(FrameError::TooShort)?,
             ),
@@ -1117,6 +1179,25 @@ mod tests {
         roundtrip_cmd(Command::SetAdmins { admins: admins.clone() });
         roundtrip_cmd(Command::SetAdmins { admins: heapless::Vec::new() });
         roundtrip_cmd(Command::GetAdmins);
+        roundtrip_cmd(Command::OtaBegin { req: 1, flags: OTA_ALLOW_DOWNGRADE, manifest: text(&[7; 112]) });
+        roundtrip_cmd(Command::OtaChunk { req: 2, offset: 4096, data: text(&[1; 240]) });
+        roundtrip_cmd(Command::OtaEnd { req: 3, apply: true });
+        roundtrip_cmd(Command::OtaStatus);
+        roundtrip_ev(Event::OtaState {
+            req: 9,
+            state: ota_state::RECEIVING,
+            next: 128,
+            size: 300_000,
+            version: 0x000200,
+            current: 0x000100,
+            text: text(b"ok"),
+        });
+        // En OTA-bid over radio: kontrolhoved (5) + ramme uden længde skal
+        // passe i en forward secrecy-besked (MAX_FS_TEXT = 143).
+        let f = Command::OtaChunk { req: 2, offset: 0, data: text(&[0; 128]) }.encode();
+        assert!(5 + f.len() - 2 <= 143);
+        let f = Command::OtaBegin { req: 2, flags: 0, manifest: text(&[0; 112]) }.encode();
+        assert!(5 + f.len() - 2 <= 143);
         roundtrip_cmd(Command::SetRegions { strict: true, names: text(b"dk,nordjylland") });
         roundtrip_cmd(Command::SetRegions { strict: false, names: text(b"") });
         roundtrip_cmd(Command::GetRegions);

@@ -16,6 +16,7 @@ mod fuzz_tests;
 mod links;
 mod meshcore;
 mod node;
+mod sessions;
 mod web;
 
 use std::net::SocketAddr;

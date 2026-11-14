@@ -15,8 +15,8 @@
 //! * `ss` beviser, at beskeden kommer fra afsenderen. Ændres den skjulte
 //!   afsender, bliver `k2` forkert, og dekrypteringen fejler.
 //! * Den friske nøgle `e` betyder, at en lækket afsendernøgle ikke afslører
-//!   gamle beskeder. Fuld forward secrecy mod lækket modtagernøgle kræver
-//!   ratchets (næste udkast).
+//!   gamle beskeder. Fuld forward secrecy mod lækket modtagernøgle giver
+//!   sessionerne i [`crate::ratchet`]; dette format er deres fallback.
 //!
 //! ## Kanaler
 //!
@@ -47,6 +47,10 @@ pub enum CryptoError {
     UnknownSender(Address),
     /// Forkert nøgle, forfalsket eller ødelagt besked.
     Decrypt,
+    /// Ratchet-besked, men ingen session med afsenderen (se [`crate::ratchet`]).
+    NoSession(Address),
+    /// Sessionen med afsenderen passer ikke til beskeden.
+    Desync(Address),
 }
 
 fn mask_key(es: &[u8; 32], e_pub: &[u8; 32], recipient: &Address) -> [u8; 16] {

@@ -18,7 +18,8 @@ use maarse_core::packet::{Header, Packet, encode};
 use maarse_core::stamp;
 use maarse_core::router::MAX_DIRECT_PAYLOAD;
 use maarse_core::{Action, Address, PacketType, Role, Router};
-use maarse_crypto::seal::{self, CHUNK_DATA, CryptoError, MAX_DM_TEXT};
+use maarse_crypto::ratchet::{self, Format, MAX_FS_TEXT};
+use maarse_crypto::seal::{self, CHUNK_DATA, CryptoError};
 use maarse_crypto::{
     Identity, PublicIdentity, channel_address, hashtag_key, public_channel_key, verify_announce,
 };
@@ -48,6 +49,8 @@ const DHT_LOOKUP_EVERY: Duration = Duration::from_secs(30);
 const DHT_MAX_DYNAMIC: usize = 32;
 /// Announce-felt: postkassens adresse.
 const APP_POSTBOX: u8 = 0x01;
+/// En ny FS-session sendes højst så ofte til samme kontakt (resync).
+const RESYNC_EVERY: Duration = Duration::from_secs(60);
 
 enum Timer {
     Tx { packet: Vec<u8>, id: u64 },
@@ -129,6 +132,12 @@ pub struct Node {
     addr: Address,
     router: Router<1024, 4096>,
     known: HashMap<Address, PublicIdentity>,
+    /// Kontakter, der melder forward secrecy i deres announce.
+    fs_peers: HashSet<Address>,
+    /// Forward secrecy-sessioner (gemt i `sessioner.bin`).
+    sessions: crate::sessions::Sessions,
+    /// Hvornår vi sidst startede en ny session pga. en ulæselig besked.
+    resynced: HashMap<Address, Instant>,
     postboxes: HashMap<Address, Address>,
     my_postbox: Option<Address>,
     /// Kanaladresse -> (navn, nøgle)
@@ -196,6 +205,15 @@ fn unix_now() -> u32 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as u32)
         .unwrap_or(0)
+}
+
+/// Til log: hvilket krypteringsformat en direkte besked brugte.
+fn format_name(f: Format) -> &'static str {
+    match f {
+        Format::Static => "statisk, uden forward secrecy",
+        Format::Init => "forward secrecy: init",
+        Format::Ratchet => "forward secrecy",
+    }
 }
 
 fn short(a: &Address) -> String {
@@ -281,6 +299,9 @@ impl Node {
             addr,
             router,
             known: HashMap::new(),
+            fs_peers: HashSet::new(),
+            sessions: crate::sessions::Sessions::load(cfg.data_dir.join("sessioner.bin")),
+            resynced: HashMap::new(),
             postboxes: HashMap::new(),
             my_postbox: cfg.postbox,
             channels: HashMap::new(),
@@ -586,6 +607,7 @@ impl Node {
             app.push(APP_POSTBOX);
             app.extend_from_slice(&p.0);
         }
+        app.push(ratchet::APP_FS);
         let Some(payload) = self.identity.announce(unix_now(), &app) else {
             return;
         };
@@ -614,8 +636,14 @@ impl Node {
             .get(&dest)
             .ok_or("Modtageren er ikke hørt endnu (intet announce)")?;
         let mut ct = [0u8; 255];
-        let n = seal::seal_direct(&self.identity, &recipient, &mut OsRng, plain, &mut ct)
-            .map_err(|_| "Beskeden er for lang")?;
+        let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
+        let (n, format) =
+            ratchet::seal(&self.identity, &recipient, &mut self.sessions, fs_ok, &mut OsRng, plain, &mut ct)
+                .map_err(|_| "Beskeden er for lang")?;
+        self.sessions.save();
+        if matches!(kind, Pending::Message) {
+            self.log(format!("besked til {} ({})", short(&dest), format_name(format)));
+        }
         let now = self.now_ms();
         let (msg_id, actions) = self
             .router
@@ -704,6 +732,9 @@ impl Node {
                     && let Some(p) = Address::from_slice(&a.app_data[1..17]) {
                         self.postboxes.insert(dest, p);
                     }
+                if ratchet::announces_fs(a.app_data) {
+                    self.fs_peers.insert(dest);
+                }
                 if self.known.insert(dest, a.identity).is_none() {
                     self.log(format!("ny node hørt: {}", short(&dest)));
                     if let Ok(mut f) = fs::OpenOptions::new()
@@ -729,24 +760,41 @@ impl Node {
     fn open_direct(&mut self, payload: Vec<u8>, hops: u8, first_time: bool) {
         let mut out = [0u8; 256];
         let known = &self.known;
-        match seal::open_direct(
+        let res = ratchet::open(
             &self.identity,
             &payload,
+            &mut self.sessions,
             |a| known.get(a).copied(),
             &mut out,
-        ) {
-            Ok((from, n)) => self.on_content(from, &out[..n], hops),
+        );
+        self.sessions.save();
+        match res {
+            Ok(o) => {
+                if o.format != Format::Static {
+                    // Den kan forward secrecy, også selv om vi ikke har hørt det.
+                    self.fs_peers.insert(o.from);
+                }
+                self.on_content(o.from, &out[..o.len], hops, o.format)
+            }
             Err(CryptoError::UnknownSender(a)) => {
                 if first_time {
                     self.log(format!(
                         "besked fra ukendt {}: venter på announce",
                         short(&a)
                     ));
-                    if self.pending_rx.len() >= PENDING_MAX {
-                        self.pending_rx.remove(0);
-                    }
-                    self.pending_rx.push((payload, hops));
                 }
+                if self.pending_rx.len() >= PENDING_MAX {
+                    self.pending_rx.remove(0);
+                }
+                self.pending_rx.push((payload, hops));
+            }
+            Err(CryptoError::NoSession(a) | CryptoError::Desync(a)) => {
+                self.counters.errors += 1;
+                self.log(format!(
+                    "besked fra {} kunne ikke læses (sessionen er tabt eller ude af trit)",
+                    short(&a)
+                ));
+                self.resync(a);
             }
             Err(e) => {
                 self.counters.errors += 1;
@@ -755,10 +803,33 @@ impl Node {
         }
     }
 
-    fn on_content(&mut self, from: Address, plain: &[u8], hops: u8) {
+    /// Starter en ny FS-session med `peer` og sender en tom resync-besked,
+    /// så modparten skifter til den (højst hvert [`RESYNC_EVERY`]).
+    fn resync(&mut self, peer: Address) {
+        let Some(id) = self.known.get(&peer).copied() else {
+            return;
+        };
+        if self.resynced.get(&peer).is_some_and(|t| t.elapsed() < RESYNC_EVERY) {
+            return;
+        }
+        self.resynced.insert(peer, Instant::now());
+        if ratchet::reset(&self.identity, &id, &mut self.sessions, &mut OsRng).is_ok() {
+            self.fs_peers.insert(peer);
+            let _ = self.send_sealed(peer, &[content::RESYNC], Pending::Control);
+        }
+    }
+
+    fn on_content(&mut self, from: Address, plain: &[u8], hops: u8, format: Format) {
         match content::parse(plain) {
+            Some(Content::Resync) => {
+                self.log(format!("{} startede en ny krypteringssession", short(&from)));
+            }
             Some(Content::Text(t)) => {
-                self.log(format!("besked fra {} ({hops} hop)", short(&from)));
+                self.log(format!(
+                    "besked fra {} ({hops} hop, {})",
+                    short(&from),
+                    format_name(format)
+                ));
                 self.broadcast(&Event::DirectReceived {
                     from,
                     hops,
@@ -778,12 +849,8 @@ impl Node {
     fn retry_pending(&mut self) {
         let pending = std::mem::take(&mut self.pending_rx);
         for (p, hops) in pending {
-            let mut out = [0u8; 256];
-            let known = &self.known;
-            match seal::open_direct(&self.identity, &p, |a| known.get(a).copied(), &mut out) {
-                Err(CryptoError::UnknownSender(_)) => self.pending_rx.push((p, hops)),
-                _ => self.open_direct(p, hops, false),
-            }
+            // Er afsenderen stadig ukendt, lægges den tilbage i køen.
+            self.open_direct(p, hops, false);
         }
     }
 
@@ -1302,7 +1369,7 @@ impl Node {
             addr: self.addr,
             repeater: true,
             version: maarse_core::companion::PROTOCOL_VERSION,
-            max_text: (MAX_DM_TEXT - 1) as u8,
+            max_text: (MAX_FS_TEXT - 1) as u8,
             max_file: self.max_file,
             identity: Some(self.identity.public().to_bytes()),
         }
@@ -1405,7 +1472,7 @@ impl Node {
                 });
             }
             Command::SendDirect { req, dest, text: msg } => {
-                if msg.len() > MAX_DM_TEXT - 1 {
+                if msg.len() > MAX_FS_TEXT - 1 {
                     return self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "Beskeden er for lang"));
                 }
                 if !self.known.contains_key(&dest) && self.dht_can_lookup() {

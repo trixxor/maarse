@@ -256,6 +256,18 @@ Host og firmware kender ikke formatet; de sender bare filen.
 
 I en direkte samtale via maarse-host viser webklienten **Ring op**. Lyden kodes med WebCodecs (Opus, 16 kbit/s, 20 ms-rammer, tre pr. besked) og sendes krypteret som indholdstype `0x06` (kommando `0x27 SendCall`, hændelse `0xa5 Call`). Hosten sender kun opkald, når modtageren nås over TCP hele vejen; ellers svarer den `NOT_OVER_TCP` (fejlkode 9), og opkald over LoRa er derfor ikke muligt. Firmware-noder afviser kommandoen. Indholdet: type (1 ring op, 2 svar, 3 læg på, 4 lyd) | opkalds-ID (u32) | data; lyd er løbenummer (u16) og rammer med længde foran. Kræver Chrome eller Edge (WebCodecs).
 
+## IP-tunnel
+
+Hver node har en IPv6-adresse udledt af sin Må:rse-adresse (`fd` + de første 15 bytes); maarse-host skriver den ved opstart (`IP: fd…`). IP-pakker deles i stykker og sendes krypteret som indholdstype `0x07` (`maarse-host/src/tunnel.rs`). IPv6 kræver pakker på 1280 bytes (op til 8 beskeder), så tunneltrafik sendes kun til noder, der nås over TCP hele vejen.
+
+```text
+cargo build --release -p maarse-host --features tun
+maarse-host --tun                       # Linux (root); /dev/net/tun
+maarse-host --wintun C:\sti\wintun.dll   # Windows (administrator); wintun.dll fra wintun.net
+```
+
+Hosten opretter adapteren `maarse` med sin adresse og `fd00::/8`, så `ping`, `ssh` og `mosh` til en anden nodes `fd…`-adresse går gennem Må:rse. En host uden adapter svarer stadig selv på ping til sin adresse. Kun pakker fra afsenderens egen adresse til vores slippes igennem. Afprøvet på Windows med Wintun 0.14.1: `ping -6` til en anden host gennem tunnelen, også med 1200 bytes (deles i 7 stykker).
+
 ## `maarse://`-sider
 
 En maarse-host kan dele små sider, ligesom NomadNet. Læg filer i `<data>/sider/`:

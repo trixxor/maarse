@@ -46,6 +46,8 @@ Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge
 | Diagnose: trace route, naboliste, støjgulv | trace og naboer | ja | ja |
 | Position (opt-in, afrundet) og telemetri i announces | ja | ja, gemmes i flash | ja, gemmes i flash |
 | MQTT-bro med Home Assistant discovery | ja (`--mqtt`) | – | – |
+| Visningsnavn i announces | ja (`navn.txt`) | ja, gemmes i flash (ikke afprøvet på hardware) | ja, gemmes i flash (ikke afprøvet på hardware) |
+| `maarse://`-sider | serverer `<data>/sider/` og henter sider | henter sider (serverer ikke) | henter sider (serverer ikke) |
 | Forbindelse | TCP-backbone + DHT, WebSocket, seriel LoRa-modem | USB og Bluetooth | USB og Bluetooth (ja, ikke afprøvet på hardware) |
 | Display | – | – | Heltec V4: 3 sider, skift med PRG-knappen |
 
@@ -227,6 +229,49 @@ Hosten sender modtaget telemetri, positioner og kanalbeskeder som JSON (QoS 0, m
 
 Første gang en node sender telemetri, udgives Home Assistant discovery (`homeassistant/sensor/maarse_<kort adresse>/<sensor>/config`) for batterispænding, batteri %, energistatus, oppetid, temperatur og hop, samlet som én enhed pr. node.
 
+## Visningsnavn
+
+Under **Diagnose → Dit navn** i webklienten kan man vælge et navn på højst 24 bytes (kommando `0x24 SetName`, `0x25 GetName`, svar `0xa4 Name`). Navnet sendes i announcets app-data som felt `0x05 | længde | UTF-8` (`maarse-core/src/appdata.rs`), så ældre noder springer det over. maarse-host gemmer det i `<data>/navn.txt`, firmwaren i flash.
+
+Andres navne kommer med i `NodeInfo` (`0xa3`) og vises i webklienten med `~` foran, fx `~Dennis`. Et kaldenavn, man selv har givet kontakten, vinder. Styretegn fjernes, og navnet afkortes uden at skære et tegn over. MeshCore-broen viser navnet som `[Må Dennis]`, med klammer fjernet fra navnet.
+
+**Et navn beviser ikke noget.** Alle kan kalde sig hvad som helst. Brug sikkerhedsnummeret, når det er vigtigt, hvem man skriver med.
+
+## `maarse://`-sider
+
+En maarse-host kan dele små sider, ligesom NomadNet. Læg filer i `<data>/sider/`:
+
+```text
+sider/index.mu          maarse://<adresse>/
+sider/om.mu             maarse://<adresse>/om
+sider/vejr/index.mu     maarse://<adresse>/vejr
+```
+
+Webklienten har en **Sider**-knap med adresselinje, links, tilbage-knap og cache (de seneste 30 sider gemmes i browseren og kan læses uden forbindelse).
+
+Sådan virker det (`maarse-core/src/content.rs`, `maarse-host/src/node/pages.rs`):
+
+- Klienten sender `0x26 RequestPage {req, dest, path}`. Noden sender en krypteret direkte besked med indholdstype `0x05` og stien. Stier må kun indeholde `a-z 0-9 - _ . /`, højst 60 bytes, uden `..` og tomme led, så de ikke kan pege uden for mappen.
+- Hosten svarer med en almindelig fil: MIME `text/x-maarse-page;deflate`, stien som navn og markup komprimeret med rå deflate. Siden bruger derfor samme kvittering pr. bid og samme grænse som filer (8 KB komprimeret over LoRa, 1 MB over TCP). En side over grænsen erstattes af en kort fejlside.
+- Findes siden ikke, svares med en "Ikke fundet"-side. Samme node får højst 5 sider pr. 30 sekunder.
+- Klienten viser kun filer som sider, når den selv har bedt om netop den side fra netop den node. Andre filer med samme MIME vises som almindelige filer.
+- Firmware-noder kan hente sider (klienten er forbundet over USB eller Bluetooth), men serverer ikke selv.
+
+Markup (`.mu`, UTF-8) er bevidst ikke HTML, så en side fra en fremmed ikke kan køre kode i klienten:
+
+```text
+# Overskrift (også ## og ###)
+Almindelig tekst. **fed** og `kode`.
+- punkt
+> citat
+---
+[Link til en anden side her](/om)
+[Link til en anden node](maarse://0123456789abcdef0123456789abcdef/)
+[Link ud af nettet](https://example.org)   vises som tekst, åbnes ikke
+```
+
+Kodeblokke skrives mellem linjer med tre backticks.
+
 ## Gateway til MeshCore
 
 `maarse-host` kan bygge bro til et eksisterende [MeshCore](https://github.com/meshcore-dev/MeshCore)-net, så Må:rse- og MeshCore-brugere kan skrive sammen. Hosten genimplementerer ikke MeshCores kryptering. Den styrer i stedet en almindelig MeshCore-node over USB med samme companion-protokol, som MeshCore-apps bruger.
@@ -259,17 +304,19 @@ Begrænsninger:
 - Kun offentlige kanaler og hashtagkanaler. Private kanaler, filer, lokation og MeshCores rum-servere og repeater-administration understøttes ikke.
 - MeshCore-tekst er højst 160 bytes inklusive gateway-navnet, så lange Må:rse-beskeder afkortes.
 - Kvitteringer krydser ikke broen. En DM, der er nået frem til gatewayen, siger ikke noget om, om den er nået frem på den anden side.
-- Indtil videre er broen kun testet mod rammer, der er udledt af MeshCores kildekode, ikke mod rigtig hardware.
+- Afprøvet på hardware 14. november 2026: Heltec V4.3 med MeshCore `companion_radio_usb` (firmware 15. okt. 2026), kanalbeskeder begge veje mellem `offentlig` og `public`, også med visningsnavn. Direkte beskeder og hashtagkanaler er kun testet mod rammer udledt af MeshCores kildekode.
 
 ## Test
 
 ```sh
-cargo test --workspace                  # 73 tests
+cargo test --workspace                  # 180 tests
 cargo build --release -p maarse-host
 python tools/e2e_test.py target/release/maarse-host
 python tools/dht_test.py target/release/maarse-host
 node tools/safety_number_test.mjs        # sikkerhedsnummer i JS = Rust
 node tools/recovery_phrase_test.mjs      # gendannelsesfrase og sikkerhedskopi i JS = Rust
+node tools/client_syntax_test.mjs        # webklientens JavaScript kan parses
+node tools/client_browser_test.mjs target/release/maarse-host   # webklienten i Edge/Chrome: indlæsning, forbindelse, sider
 cargo run --release -p maarse-sim -- --help
 ```
 

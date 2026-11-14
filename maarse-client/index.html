@@ -82,6 +82,10 @@
   .form { max-width: 520px; display: grid; grid-template-columns: 180px 1fr; gap: 10px 12px; align-items: center; }
   .form label { font-size: 14px; color: var(--muted); }
   .form select, .form input { width: 100%; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+  .page { max-width: 720px; line-height: 1.55; }
+  .page h2, .page h3, .page h4 { margin: 18px 0 6px; }
+  .page pre { background: var(--mine); padding: 8px 10px; border-radius: 6px; overflow-x: auto; }
+  .page blockquote { border-left: 3px solid var(--mine); margin: 8px 0; padding-left: 10px; }
   .warn { background: var(--mine); border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.45; max-width: 520px; margin-bottom: 14px; }
   .hint { font-size: 12px; color: var(--muted); margin: 4px; line-height: 1.4; }
   /* sikkerhedsnumre og private kanaler */
@@ -146,7 +150,7 @@
     <div class="me" id="me">–</div>
     <div class="row"><button id="btn-copy" disabled>Kopiér adresse</button><button id="btn-announce" disabled>Send announce</button></div>
 
-    <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button><button id="btn-diag" disabled>Diagnose</button><button id="btn-firmware" disabled>Firmware</button></div>
+    <div class="row"><button id="btn-status" disabled>Status</button><button id="btn-radio" disabled>Radio</button><button id="btn-diag" disabled>Diagnose</button><button id="btn-pages" disabled>Sider</button><button id="btn-firmware" disabled>Firmware</button></div>
     <div class="row"><button id="btn-myqr" disabled>Min QR-kode</button><button id="btn-backup" title="Gendannelsesfrase og krypteret sikkerhedskopi">Sikkerhedskopi</button></div>
     <div class="row"><button id="btn-notify" hidden>Slå notifikationer til</button><button id="btn-install" hidden>Installér app</button></div>
 
@@ -237,6 +241,9 @@ const Cmd = {
   getNeighbors: () => frame(0x21),
   setSharing: (prec, latE7, lonE7, tel) => frame(0x22, [prec], u32(latE7), u32(lonE7), [tel ? 1 : 0]),
   getSharing: () => frame(0x23),
+  setName: (name) => frame(0x24, enc.encode(name)),
+  getName: () => frame(0x25),
+  requestPage: (req, destHex, path) => frame(0x26, u16(req), unhex(destHex), enc.encode(path)),
   otaBegin: (req, flags, manifest) => frame(0x18, u16(req), [flags], manifest),
   otaChunk: (req, offset, data) => frame(0x19, u16(req), u32(offset), data),
   otaEnd: (req, apply) => frame(0x1a, u16(req), [apply ? 1 : 0]),
@@ -253,6 +260,7 @@ function parseAppData(b) {
     if (t === 0x03 && n >= 9) r.position = { prec: d[0], lat: i32(d, 1) / 1e7, lon: i32(d, 5) / 1e7 };
     if (t === 0x04 && n >= 10) r.telemetry = { mv: d[0] | d[1] << 8, usb: !!(d[2] & 1), energy: d[3], uptime: rd32(d, 4),
       temp: d[2] & 2 ? s16(d, 8) / 10 : null };
+    if (t === 0x05 && n > 0) r.name = dec.decode(d).replace(/[\x00-\x1f\x7f]/g, "").trim();
     i += 2 + n;
   }
   return r;
@@ -311,6 +319,7 @@ function decodeEvent(f) {
     }
     case 0xa2: return { type: "sharing", prec: f[1], lat: i32(f, 2) / 1e7, lon: i32(f, 6) / 1e7, telemetry: !!f[10] };
     case 0xb4: return { type: "identityChanged", addr: a(1), identity: f.slice(17, 81) };
+    case 0xa4: return { type: "name", name: txt(1) };
     case 0xa3: return { type: "nodeInfo", addr: a(1), hops: f[17], ...parseAppData(f.slice(18)) };
     case 0x8e: return { type: "log", text: txt(1) };
     case 0x8f: return { type: "error", req: f[1] | f[2] << 8, code: f[3], text: txt(4) };
@@ -344,7 +353,7 @@ class WsTransport {
     const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
     this.ws = new WebSocket(url);
     this.ws.binaryType = "arraybuffer";
-    this.ready = new Promise((ok, fail) => { this.ws.onopen = ok; this.ws.onerror = () => fail(new Error("WebSocket fejlede")); });
+    this.ready = new Promise((ok, fail) => { this.ws.onopen = () => { this.up = true; ok(); }; this.ws.onerror = () => fail(new Error("WebSocket fejlede")); });
     this.ws.onmessage = e => onBytes(new Uint8Array(e.data));
     this.ws.onclose = onClose;
     this.name = "maarse-host";
@@ -440,7 +449,10 @@ function log(s) {
   el.scrollTop = el.scrollHeight;
 }
 
-function label(addr) { return nicknames[addr] || short(addr); }
+// Eget kaldenavn vinder. Ellers det navn, noden selv annoncerer: det er
+// selvvalgt og ikke bevist, så det vises med "~" foran.
+function announcedName(addr) { const n = state.nodeInfo.get(addr)?.name; return n ? "~" + n : null; }
+function label(addr) { return nicknames[addr] || announcedName(addr) || short(addr); }
 
 function conv(key) {
   if (!state.convs.has(key)) state.convs.set(key, []);
@@ -490,6 +502,7 @@ function renderChat() {
   if (state.view === "status") return renderStatus(box);
   if (state.view === "radio") return renderRadio(box);
   if (state.view === "diag") return renderDiag(box);
+  if (state.view === "pages") return renderPages(box);
   if (state.view === "firmware") return renderFirmware(box);
   if (state.view === "backup") return renderBackup(box);
   renderChatTools();
@@ -539,7 +552,7 @@ function updateComposer() {
 function setConnected(on, name) {
   $("dot").classList.toggle("on", on);
   $("status").innerHTML = on ? `Forbundet via <b>${name}</b>` : "Ikke forbundet";
-  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-diag", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
+  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-diag", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
   $("btn-disconnect").hidden = !on;
   for (const id of ["btn-ws", "btn-serial", "btn-ble"]) $(id).disabled = on;
@@ -574,6 +587,7 @@ function onEvent(ev) {
       }
       break;
     case "sent": {
+      if (pages.reqs.delete(ev.req)) { log("Sideanmodning sendt til noden"); break; }
       const m = state.pending.get(ev.req);
       if (m) {
         state.pending.delete(ev.req);
@@ -627,6 +641,7 @@ function onEvent(ev) {
       break;
     }
     case "fileIncoming": {
+      if (pageIncoming(ev)) break;
       state.contacts.set(ev.from, { heard: true });
       const m = { from: ev.from, name: ev.name, mime: ev.mime, size: ev.size, parts: [], progress: 0,
                   text: `${ev.name} (${Math.ceil(ev.size / 1024)} KB) – modtager…`, time: now() };
@@ -636,6 +651,7 @@ function onEvent(ev) {
     }
     case "fileProgress": {
       const m = state.files.get(ev.fileId);
+      if (m?.page) { m.progress = ev.done / ev.total; if (state.view === "pages") renderChat(); break; }
       if (m) {
         m.progress = ev.done / ev.total;
         if (ev.outgoing) m.status = `sender ${ev.done}/${ev.total}`;
@@ -652,6 +668,7 @@ function onEvent(ev) {
     case "fileDone": {
       const m = state.files.get(ev.fileId);
       if (!m) break;
+      if (m.page) { pageDone(ev, m); break; }
       m.progress = 1;
       if (ev.outgoing) m.status = !ev.ok ? "fejl: " + ev.text : ev.text === "lagt i postkasse" ? "✉ lagt i postkasse" : "✓ leveret";
       else if (ev.ok) {
@@ -673,6 +690,7 @@ function onEvent(ev) {
       if (ev.req === 0 && limitWaiters.length) limitAnswer(null); // firmware kender ikke 0x14
       const m = state.pending.get(ev.req);
       if (m) { m.status = "fejl: " + ev.text; state.pending.delete(ev.req); renderChat(); }
+      if (pages.reqs.has(ev.req)) { pages.reqs.delete(ev.req); pages.status = "Fejl: " + ev.text; if (state.view === "pages") renderChat(); }
       log("Fejl: " + ev.text);
       break;
     }
@@ -688,10 +706,13 @@ function onEvent(ev) {
       if (ev.last) { state.neighbors = state.neighborsNext; if (state.view === "diag") renderChat(); }
       break;
     case "sharing": state.sharing = ev; if (state.view === "diag") renderChat(); break;
+    case "name": state.myName = ev.name; if (state.view === "diag") renderChat(); break;
     case "nodeInfo": {
       const old = state.nodeInfo.get(ev.addr) || {};
-      state.nodeInfo.set(ev.addr, { ...old, ...ev, at: new Date() });
-      if (state.view === "diag") renderChat();
+      const nameChanged = old.name !== ev.name;
+      state.nodeInfo.set(ev.addr, { ...old, ...ev, name: ev.name, at: new Date() });
+      if (nameChanged) { renderSide(); renderChat(); }
+      else if (state.view === "diag") renderChat();
       break;
     }
     case "log": log(ev.text); break;
@@ -703,12 +724,25 @@ function onEvent(ev) {
 
 const decoder = new FrameDecoder();
 function onBytes(b) { for (const f of decoder.push(b)) onEvent(decodeEvent(f)); }
+// WebSocket til maarse-host: forbind selv igen, hvis hosten genstarter.
+let wsRetry = null;
 function onClose() {
   if (!transport) return;
+  const wasWs = transport instanceof WsTransport;
+  if (wasWs && !transport.up) return; // forsøget fejlede; connect() rydder op
   log("Forbindelsen blev afbrudt"); transport = null; setConnected(false);
+  if (wasWs) scheduleWsRetry();
+}
+function scheduleWsRetry() {
+  clearTimeout(wsRetry);
+  wsRetry = setTimeout(async () => {
+    if (transport) return;
+    await connect("ws", true);
+    if (!transport) scheduleWsRetry();
+  }, 3000);
 }
 
-async function connect(kind) {
+async function connect(kind, quiet = false) {
   try {
     if (kind === "ws") {
       transport = new WsTransport(onBytes, onClose); await transport.ready;
@@ -722,10 +756,11 @@ async function connect(kind) {
     setConnected(true, transport.name);
     log("Forbundet via " + transport.name);
     await transport.send(Cmd.getInfo());
+    transport.send(Cmd.getName());
     await transport.send(Cmd.setTime());
   } catch (e) {
     transport = null; setConnected(false);
-    log("Kunne ikke forbinde: " + e.message);
+    if (!quiet) log("Kunne ikke forbinde: " + e.message);
   }
 }
 
@@ -1082,6 +1117,19 @@ function renderDiag(box) {
     nodeName(n.prefix) || idName(n.id), snrText(n.snr), n.rssi ? n.rssi + " dBm" : "–",
     n.age < 60 ? `${n.age} s siden` : n.age < 3600 ? `${Math.floor(n.age / 60)} min siden` : `${Math.floor(n.age / 3600)} t siden`, n.count])));
 
+  // Visningsnavn
+  const nw2 = sec("Dit navn", "Sendes i dine announces, så andre ser fx \"~Dennis\" i stedet for adressen, og MeshCore-broen viser [Må Dennis]. " +
+    "Alle kan vælge et hvilket som helst navn, så det beviser ikke, hvem du er: brug sikkerhedsnummeret til det. Højst 24 bytes; tomt = intet navn.");
+  const nameIn = el("input", { placeholder: "Fx Dennis", value: state.myName || "", maxLength: 24 });
+  const nameSave = el("button", { textContent: "Gem navn", className: "primary" });
+  nameSave.onclick = () => {
+    const b = enc.encode(nameIn.value.trim());
+    if (b.length > 24) { log("Navnet er for langt (højst 24 bytes)"); return; }
+    transport?.send(Cmd.setName(nameIn.value.trim()));
+  };
+  const nr = el("div", { className: "row" }); nr.style.marginTop = "8px"; nr.append(nameIn, nameSave);
+  nw2.append(nr);
+
   // Deling
   const sw = sec("Deling i announces", "Positionen er slået fra som standard. Vælger du en præcision, afrundes den på noden til et gitter " +
     "(ca. 10 km eller 1 km), før den sendes – kun \"præcis\" sender den nøjagtige position. Telemetri: batteri, oppetid og energistatus.");
@@ -1293,7 +1341,7 @@ function setView(v) {
     if (v === "radio") { transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); transport.send(Cmd.getRegions()); transport.send(Cmd.getStats()); }
     if (v === "diag") {
       const poll = () => { transport?.send(Cmd.getNeighbors()); transport?.send(Cmd.getStats()); };
-      poll(); transport.send(Cmd.getSharing());
+      poll(); transport.send(Cmd.getSharing()); transport.send(Cmd.getName());
       state.statsTimer = setInterval(poll, 10000);
     }
 
@@ -1722,6 +1770,175 @@ function leavePrivateMemory(ch) {
 
 // ---------- sikkerhedsnumre og private kanaler: visninger ----------
 
+// ---------- maarse://-sider ----------
+// En side hentes ved at bede noden om stien (kommando 0x26). Svaret er en
+// fil med PAGE_MIME (rå deflate). Kun filer, vi selv har bedt om, vises som
+// sider; alt andet er almindelige filer. Markup vises kun som tekst,
+// overskrifter, lister og links: aldrig som HTML.
+const PAGE_MIME = "text/x-maarse-page;deflate";
+const pages = { url: "", status: "", waits: new Map(), cache: new Map(Object.entries(store.get("pageCache", {}))), history: [], reqs: new Set() };
+
+function parsePageUrl(s, base) {
+  s = (s || "").trim();
+  if (s.startsWith("/") && base) return { addr: base.addr, path: s.replace(/^\/+|\/+$/g, "") || "index" };
+  const m = s.replace(/^maarse:\/\//i, "").match(/^([0-9a-fA-F]{32})(\/.*)?$/);
+  if (!m) return null;
+  const path = (m[2] || "").replace(/^\/+|\/+$/g, "") || "index";
+  return { addr: m[1].toLowerCase(), path };
+}
+const pageUrl = (p) => `maarse://${p.addr}/${p.path === "index" ? "" : p.path}`;
+const pageKey = (addr, path) => addr + "/" + path;
+
+function savePageCache() {
+  const items = [...pages.cache.entries()].sort((a, b) => b[1].at - a[1].at).slice(0, 30);
+  pages.cache = new Map(items);
+  store.set("pageCache", Object.fromEntries(items));
+}
+
+function openPage(input, push = true) {
+  const cur = parsePageUrl(pages.url);
+  const p = parsePageUrl(input, cur);
+  if (!p) { pages.status = "Ugyldig adresse. Skriv maarse://<32 hex-tegn>/sti"; setView("pages"); return; }
+  if (push && pages.url && pages.url !== pageUrl(p)) pages.history.push(pages.url);
+  pages.url = pageUrl(p);
+  const key = pageKey(p.addr, p.path);
+  const cached = pages.cache.get(key);
+  if (transport) {
+    pages.status = cached ? `Fra cache (${new Date(cached.at).toLocaleString()}) – henter ny…` : "Henter…";
+    pages.waits.set(key, Date.now());
+    const req = state.nextReq++ & 0xffff;
+    pages.reqs.add(req);
+    transport.send(Cmd.requestPage(req, p.addr, p.path));
+    // Intet svar efter 60 s: sig det i stedet for at vise "Henter…" for evigt.
+    setTimeout(() => {
+      if (pages.waits.get(key) && pages.url === pageUrl(p) && ![...state.files.values()].some(f => f.page && f.key === key)) {
+        pages.status = (cached ? "Fra cache. " : "") + "Intet svar fra noden (er den online, og har den sider?)";
+        if (state.view === "pages") renderChat();
+      }
+    }, 60000);
+  } else pages.status = cached ? `Fra cache (${new Date(cached.at).toLocaleString()}), ikke forbundet` : "Ikke forbundet";
+  setView("pages");
+}
+
+function pageIncoming(ev) {
+  if (ev.mime !== PAGE_MIME) return false;
+  const key = pageKey(ev.from, ev.name);
+  if (!pages.waits.has(key)) return false; // ikke bedt om: vises som almindelig fil
+  pages.waits.delete(key);
+  state.files.set(ev.fileId, { page: true, key, from: ev.from, size: ev.size, parts: [], progress: 0 });
+  if (state.view === "pages") renderChat();
+  return true;
+}
+
+async function pageDone(ev, m) {
+  state.files.delete(ev.fileId);
+  if (!ev.ok) { pages.status = "Fejl: " + ev.text; if (state.view === "pages") renderChat(); return; }
+  try {
+    const buf = new Uint8Array(m.size);
+    for (const [o, d] of m.parts) buf.set(d, o);
+    const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    const markup = await new Response(stream).text();
+    if (markup.length > 200000) throw new Error("for stor udpakket");
+    pages.cache.set(m.key, { markup, at: Date.now(), size: m.size });
+    savePageCache();
+    const cur = parsePageUrl(pages.url);
+    if (cur && pageKey(cur.addr, cur.path) === m.key) pages.status = `Hentet ${new Date().toLocaleTimeString()} (${m.size} bytes komprimeret)`;
+  } catch (e) { pages.status = "Kunne ikke pakke siden ud: " + e.message; }
+  if (state.view === "pages") renderChat();
+}
+
+// Inline: **fed**, `kode`, [tekst](link). Alt bliver tekstnoder.
+function pageInline(text, base) {
+  const out = [];
+  const re = /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
+    if (m[1]) out.push(el("b", {}, m[1]));
+    else if (m[2]) out.push(el("code", {}, m[2]));
+    else {
+      const target = m[4];
+      const p = parsePageUrl(target, base);
+      if (p) {
+        const a = el("a", { href: "#", textContent: m[3], title: pageUrl(p) });
+        a.onclick = (e) => { e.preventDefault(); openPage(pageUrl(p)); };
+        out.push(a);
+      } else if (/^https?:\/\//i.test(target)) {
+        // Links ud af nettet åbnes ikke: vis adressen, så brugeren selv kan vælge.
+        out.push(document.createTextNode(`${m[3]} <${target}>`));
+      } else out.push(document.createTextNode(m[3]));
+    }
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(document.createTextNode(text.slice(last)));
+  return out;
+}
+
+function renderMarkup(markup, base) {
+  const root = el("div", { className: "page" });
+  const lines = markup.replace(/\r/g, "").split("\n");
+  let para = [], list = null, code = null;
+  const flush = () => {
+    if (para.length) { root.append(el("p", {}, ...pageInline(para.join(" "), base))); para = []; }
+    list = null;
+  };
+  for (const line of lines) {
+    if (code) { if (line.startsWith("```")) { root.append(el("pre", {}, code.join("\n"))); code = null; } else code.push(line); continue; }
+    if (line.startsWith("```")) { flush(); code = []; continue; }
+    const h = line.match(/^(#{1,3})\s+(.*)$/);
+    if (h) { flush(); root.append(el("h" + (h[1].length + 1), {}, ...pageInline(h[2], base))); continue; }
+    if (/^\s*$/.test(line)) { flush(); continue; }
+    if (/^---+\s*$/.test(line)) { flush(); root.append(el("hr")); continue; }
+    const li = line.match(/^\s*[-*]\s+(.*)$/);
+    if (li) {
+      if (para.length) { root.append(el("p", {}, ...pageInline(para.join(" "), base))); para = []; }
+      if (!list) { list = el("ul"); root.append(list); }
+      list.append(el("li", {}, ...pageInline(li[1], base)));
+      continue;
+    }
+    const q = line.match(/^>\s?(.*)$/);
+    if (q) { flush(); root.append(el("blockquote", {}, ...pageInline(q[1], base))); continue; }
+    list = null; para.push(line.trim());
+  }
+  if (code) root.append(el("pre", {}, code.join("\n")));
+  flush();
+  return root;
+}
+
+function renderPages(box) {
+  $("chat-title").textContent = "Sider"; $("chat-sub").textContent = "maarse://-sider fra andre noder";
+  const bar = el("div", { className: "row" }); bar.style.maxWidth = "760px";
+  const back = el("button", { textContent: "←", title: "Tilbage", disabled: !pages.history.length });
+  back.onclick = () => { const u = pages.history.pop(); if (u) openPage(u, false); };
+  const input = el("input", { value: pages.url, placeholder: "maarse://<adresse>/sti" }); input.style.flex = "1";
+  input.onkeydown = (e) => { if (e.key === "Enter") openPage(input.value); };
+  const go = el("button", { textContent: "Hent", className: "primary" });
+  go.onclick = () => openPage(input.value);
+  bar.append(back, input, go);
+  box.append(bar);
+  const cur = parsePageUrl(pages.url);
+  const busy = [...state.files.values()].find(f => f.page && cur && f.key === pageKey(cur.addr, cur.path));
+  const st = el("div", { className: "muted" }, busy ? `Modtager… ${Math.round(busy.progress * 100)} %` : pages.status);
+  st.style.margin = "6px 0 12px";
+  box.append(st);
+  if (!cur) {
+    const known = [...new Set([...state.contacts.keys(), ...state.nodeInfo.keys()])].filter(a => /^[0-9a-f]{32}$/.test(a));
+    const w = el("div", { className: "warn" }); w.style.maxWidth = "640px";
+    w.append(el("b", {}, "Sådan virker det"), el("div", { className: "muted" },
+      "En maarse-host deler sider fra mappen sider/ i sin datamappe (index.mu er forsiden). Skriv nodens adresse ovenfor, eller vælg en kendt node. " +
+      "Sider vises kun som tekst, overskrifter, lister og links – aldrig som HTML – og gemmes i en cache, så de kan læses uden forbindelse."));
+    for (const a of known.slice(0, 20)) {
+      const b = el("button", { textContent: label(a) }); b.style.margin = "6px 6px 0 0";
+      b.onclick = () => openPage("maarse://" + a + "/");
+      w.append(b);
+    }
+    box.append(w);
+    return;
+  }
+  const cached = pages.cache.get(pageKey(cur.addr, cur.path));
+  if (cached) box.append(renderMarkup(cached.markup, cur));
+}
+
 function el(tag, props = {}, ...kids) {
   const e = document.createElement(tag);
   Object.assign(e, props);
@@ -1996,6 +2213,7 @@ $("btn-send").onclick = send;
 $("btn-status").onclick = () => setView("status");
 $("btn-radio").onclick = () => setView("radio");
 $("btn-diag").onclick = () => { state.target = null; setView("diag"); };
+$("btn-pages").onclick = () => { state.target = null; setView("pages"); };
 $("btn-firmware").onclick = () => setView("firmware");
 $("btn-file").onclick = () => $("file").click();
 $("file").onchange = async () => {

@@ -6,7 +6,7 @@ use crate::ClientId;
 use crate::mqtt::Mqtt;
 use maarse_core::Address;
 use maarse_core::appdata::{self, Telemetry};
-use maarse_core::companion::{Command, Event, Sharing, error_code, neighbor_events, stat};
+use maarse_core::companion::{Command, Event, Sharing, error_code, neighbor_events, stat, text};
 use maarse_core::diag;
 use std::collections::HashMap;
 use std::fs;
@@ -17,6 +17,10 @@ pub(super) struct Ext {
     traces: HashMap<Address, (ClientId, u16)>,
     pub(super) sharing: Sharing,
     pub(super) mqtt: Option<Mqtt>,
+    /// Vores visningsnavn (tomt = intet), gemt i `navn.txt`.
+    pub(super) name: String,
+    /// Visningsnavne hørt i andres announces. Vises kun; ikke bevist.
+    pub(super) names: HashMap<Address, (appdata::Name, u8)>,
 }
 
 impl Ext {
@@ -32,7 +36,12 @@ impl Ext {
             },
             _ => Sharing::default(),
         };
-        Ext { traces: HashMap::new(), sharing, mqtt }
+        let name = fs::read_to_string(data_dir.join("navn.txt"))
+            .ok()
+            .and_then(|s| appdata::clean_name(s.as_bytes()))
+            .map(|n| String::from_utf8_lossy(&n).into_owned())
+            .unwrap_or_default();
+        Ext { traces: HashMap::new(), sharing, mqtt, name, names: HashMap::new() }
     }
 }
 
@@ -47,7 +56,8 @@ impl Node {
             uptime_s: self.start.elapsed().as_secs() as u32,
             temp_dc: None,
         });
-        appdata::build(self.my_postbox.as_ref(), true, s.position(), tel.as_ref()).to_vec()
+        let name = (!self.ext.name.is_empty()).then_some(self.ext.name.as_bytes());
+        appdata::build(self.my_postbox.as_ref(), true, s.position(), tel.as_ref(), name).to_vec()
     }
 
     /// Kommandoer til diagnose og deling. Returnerer kommandoen, hvis den
@@ -81,6 +91,16 @@ impl Node {
                 // Det nye vises i næste announce; send et nu.
                 self.announce();
             }
+            Command::GetName => self.send_client(id, &Event::Name { name: text(self.ext.name.as_bytes()) }),
+            Command::SetName { name } => {
+                self.ext.name = appdata::clean_name(&name)
+                    .map(|n| String::from_utf8_lossy(&n).into_owned())
+                    .unwrap_or_default();
+                let _ = fs::write(self.data_dir.join("navn.txt"), format!("{}
+", self.ext.name));
+                self.broadcast(&Event::Name { name: text(self.ext.name.as_bytes()) });
+                self.announce();
+            }
             other => return Some(other),
         }
         None
@@ -103,10 +123,24 @@ impl Node {
     /// Position og telemetri fra et verificeret announce.
     pub(super) fn on_app_data(&mut self, from: Address, hops: u8, app_data: &[u8]) {
         let a = appdata::parse(app_data);
-        if a.position.is_none() && a.telemetry.is_none() {
+        match &a.name {
+            Some(n) => {
+                self.ext.names.insert(from, (n.clone(), hops));
+            }
+            None => {
+                self.ext.names.remove(&from);
+            }
+        }
+        if a.position.is_none() && a.telemetry.is_none() && a.name.is_none() {
             return;
         }
-        self.broadcast(&Event::NodeInfo { addr: from, hops, position: a.position, telemetry: a.telemetry });
+        self.broadcast(&Event::NodeInfo {
+            addr: from,
+            hops,
+            position: a.position,
+            telemetry: a.telemetry,
+            name: a.name.clone(),
+        });
         if let Some(m) = self.ext.mqtt.as_mut() {
             if let Some(t) = &a.telemetry {
                 m.telemetry(&from, hops, t);
@@ -129,5 +163,13 @@ impl Node {
         items.push((stat::POSITION_PRECISION, self.ext.sharing.precision as i32));
         items.push((stat::ENERGY, self.router.energy as i32));
         items.push((stat::EXT_POWER, 1));
+    }
+
+    /// Kendte visningsnavne til en klient, der lige er forbundet.
+    pub(super) fn send_known_names(&self, id: ClientId) {
+        for (addr, (n, hops)) in &self.ext.names {
+            let ev = Event::NodeInfo { addr: *addr, hops: *hops, position: None, telemetry: None, name: Some(n.clone()) };
+            self.send_client(id, &ev);
+        }
     }
 }

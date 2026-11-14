@@ -7,7 +7,7 @@ use crate::power;
 use core::sync::atomic::Ordering::Relaxed;
 use embassy_time::{Duration, Instant};
 use maarse_core::appdata::{self, AppBuf, Telemetry};
-use maarse_core::companion::{Command, Event, Sharing, Stats, error_code, neighbor_events, stat};
+use maarse_core::companion::{Command, Event, Sharing, Stats, error_code, neighbor_events, stat, text};
 use maarse_core::{Address, Energy, battery, diag};
 use rand_core::{CryptoRng, RngCore};
 
@@ -16,6 +16,8 @@ const POWER_EVERY: Duration = Duration::from_secs(power::SAMPLE_EVERY_S);
 
 pub(super) struct Ext {
     pub(super) sharing: Sharing,
+    /// Vores visningsnavn (tomt = intet).
+    pub(super) name: appdata::Name,
     /// Igangværende trace routes: mål -> req.
     traces: heapless::Vec<(Address, u16), 4>,
     pub(super) next_power: Instant,
@@ -25,6 +27,7 @@ impl Ext {
     pub(super) fn new() -> Self {
         Ext {
             sharing: Sharing::default(),
+            name: appdata::Name::new(),
             traces: heapless::Vec::new(),
             next_power: Instant::now() + Duration::from_secs(5),
         }
@@ -42,7 +45,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             // nRF52840's TEMP-enhed ejes af MPSL (Bluetooth); ingen temperatur.
             temp_dc: None,
         });
-        appdata::build(None, true, s.position(), tel.as_ref())
+        let name = (!self.ext.name.is_empty()).then_some(&self.ext.name[..]);
+        appdata::build(None, true, s.position(), tel.as_ref(), name)
     }
 
     /// Opdaterer energistatus ud fra batteriet (kaldes fra `on_timer`).
@@ -98,6 +102,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 emit(&Event::Sharing(s));
                 log("Deling gemt; vises i næste announce");
             }
+            Command::GetName => emit(&Event::Name { name: text(&self.ext.name) }),
+            Command::SetName { name } => {
+                self.ext.name = appdata::clean_name(&name).unwrap_or_default();
+                self.settings.save_name(&self.ext.name);
+                emit(&Event::Name { name: text(&self.ext.name) });
+                log("Navn gemt; vises i næste announce");
+            }
             other => return Some(other),
         }
         None
@@ -118,8 +129,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     pub(super) fn on_app_data(&mut self, from: Address, hops: u8, app_data: &[u8]) {
         let a = appdata::parse(app_data);
-        if a.position.is_some() || a.telemetry.is_some() {
-            emit(&Event::NodeInfo { addr: from, hops, position: a.position, telemetry: a.telemetry });
+        if a.position.is_some() || a.telemetry.is_some() || a.name.is_some() {
+            emit(&Event::NodeInfo { addr: from, hops, position: a.position, telemetry: a.telemetry, name: a.name });
         }
     }
 

@@ -689,6 +689,12 @@ impl<const R: usize, const D: usize> Router<R, D> {
         });
     }
 
+    /// Next hops remembered as dead (see "Local repair"): (id, until ms).
+    /// For diagnostics (the simulator's node inspector).
+    pub fn dead_hops(&self) -> &[(PathId, u64)] {
+        &self.dead_hops
+    }
+
     /// Is the next hop of this (outgoing) header one we remember as dead?
     fn is_dead_hop(&self, header: &Header, now_ms: u64) -> bool {
         let Some(next) = header.path.as_ref().and_then(|p| p.get(header.hops as usize)) else {
@@ -1862,6 +1868,19 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let header = Header::new(h.ptype, h.dest).with_path(route);
         self.stats.forwarded += 1;
         self.emit_routed(&header, pkt.payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
+    }
+
+    /// Adds a route learned some other way than a path request, e.g. from a
+    /// location service that knows the fixed infrastructure (the simulator's
+    /// home routing model). It is used and repaired like any learned route.
+    pub fn add_route(&mut self, target: Address, path: Path, now_ms: u64) {
+        self.routes.upsert(Route {
+            dest: target,
+            cost: path.len() as u16,
+            path,
+            last_seen_ms: now_ms,
+            learned_ms: now_ms,
+        });
     }
 
     fn learn_route(&mut self, target: Address, path: Path, now_ms: u64, out: &mut Actions) {

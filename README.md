@@ -106,6 +106,15 @@ cargo build --release -p maarse-host
 
 The exe goes to `C:\Program Files\maarse-host`, data to `C:\ProgramData\maarse-host` (change with `-InstallDir` and `-DataDir`). Output of the running host is in `C:\ProgramData\maarse-host\logs\host.log.out` / `host.log.err`; `host.log` keeps start/exit times and the output of earlier runs. Run the script again to change options or update the exe. If you already have an identity in `maarse-data`, copy that folder's contents to the data folder before installing to keep your address.
 
+**Tray app (Windows).** `maarse-tray` puts an icon in the notification area: green when the host runs and the web client answers, yellow while it starts, red when stopped, grey when the task is not installed. Its menu shows the status (checked every 3 seconds), starts, stops and restarts the task (only these ask for administrator rights, via a UAC prompt; Stop ends the supervisor first so it cannot restart the host), and opens the web client (address from `--http` in `settings.txt`, with the access key), the Service page and the log folder. Install it together with the task so it starts at login:
+
+```powershell
+cargo build --release -p maarse-host -p maarse-tray
+.\packaging\windows\install-service.ps1 -HostArgs '--serial COM6' -Tray
+```
+
+It takes `--task`, `--data` and `--install-dir` if the defaults were changed (the Startup shortcut passes them). `-Uninstall` also removes the shortcut.
+
 ## Wi-Fi backbone on ESP32-S3 nodes
 
 A Heltec V4 or XIAO ESP32-S3 can join a Wi-Fi network (for example a phone hotspot on a hilltop) and keep a TCP backbone link to a maarse-host. Everyone who can reach the node over LoRa then reaches the rest of the network: the home host, the DHT and anyone behind it.

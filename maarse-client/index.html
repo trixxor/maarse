@@ -263,6 +263,7 @@
   <symbol id="i-status" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></symbol>
   <symbol id="i-radio" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
   <symbol id="i-diag" viewBox="0 0 24 24"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="17" cy="17" r="2"/><path d="M7.5 16.5l9-9M8 18h7"/></symbol>
+  <symbol id="i-range" viewBox="0 0 24 24"><circle cx="5" cy="19" r="2"/><path d="M5 13a6 6 0 0 1 6 6M5 8a11 11 0 0 1 11 11M5 3a16 16 0 0 1 16 16"/></symbol>
   <symbol id="i-pages" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></symbol>
   <symbol id="i-chip" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></symbol>
   <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/></symbol>
@@ -303,6 +304,7 @@
       <button id="btn-status" data-view="status" disabled><svg class="i"><use href="#i-status"/></svg>Status</button>
       <button id="btn-radio" data-view="radio" disabled><svg class="i"><use href="#i-radio"/></svg>Radio</button>
       <button id="btn-diag" data-view="diag" disabled><svg class="i"><use href="#i-diag"/></svg>Diagnostics</button>
+      <button id="btn-range" data-view="range" disabled title="Field measurement of range, loss and power use"><svg class="i"><use href="#i-range"/></svg>Range test</button>
       <button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg>Pages</button>
       <button id="btn-firmware" data-view="firmware" disabled><svg class="i"><use href="#i-chip"/></svg>Firmware</button>
       <button id="btn-settings" data-view="settings" disabled title="VPN, backbone, MQTT, MeshCore etc. on maarse-host"><svg class="i"><use href="#i-chip"/></svg>Settings</button>
@@ -509,6 +511,7 @@ function decodeEvent(f) {
     case 0xa3: return { type: "nodeInfo", addr: a(1), hops: f[17], ...parseAppData(f.slice(18)) };
     case 0x8e: return { type: "log", text: txt(1) };
     case 0x8f: return { type: "error", req: f[1] | f[2] << 8, code: f[3], text: txt(4) };
+    case 0xa8: case 0xa9: case 0xaa: case 0xab: return rtDecodeEvent(f);
     default: return histDecode(f, t) ?? { type: "unknown", kind: t };
   }
 }
@@ -735,6 +738,7 @@ function renderChat() {
   if (state.view === "status") return renderStatus(box);
   if (state.view === "radio") return renderRadio(box);
   if (state.view === "diag") return renderDiag(box);
+  if (state.view === "range") return renderRange(box);
   if (state.view === "pages") return renderPages(box);
   if (state.view === "remote") return renderRemote(box);
   if (state.view === "firmware") return renderFirmware(box);
@@ -796,7 +800,7 @@ function updateComposer() {
 function setConnected(on, name) {
   $("dot").classList.toggle("on", on);
   $("status").innerHTML = on ? `Connected via <b>${name}</b>` : "Not connected";
-  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-diag", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
+  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-diag", "btn-range", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
   $("btn-settings").disabled = !(on && transport instanceof WsTransport);
   $("btn-service").disabled = !(on && transport instanceof WsTransport);
@@ -973,6 +977,7 @@ function onEvent(ev) {
       break;
     }
     case "log": log(ev.text); break;
+    case "rangeState": case "rangeRx": case "rangeTx": case "power": rtOnEvent(ev); break;
     default: log("Unknown frame 0x" + ev.kind?.toString(16));
   }
 }
@@ -1650,9 +1655,380 @@ function setView(v) {
       poll(); transport.send(Cmd.getSharing()); transport.send(Cmd.getName());
       state.statsTimer = setInterval(poll, 10000);
     }
+    if (v === "range") { transport.send(Cmd.getRangeTest()); transport.send(Cmd.getRadio()); }
 
   }
   renderChat();
+}
+
+// ---------- range test (see maarse-core/src/rangetest.rs and docs/FIELD-TEST.md) ----------
+// One node is the beacon, the other the receiver. The receiver's packets are
+// logged here with the phone's GPS position (if the browser allows it), so
+// the distance to the beacon can be worked out afterwards.
+
+const RT_MODES = ["Off", "Beacon", "Receiver"];
+const RT_SF_COLORS = { 7: "#2f7ed8", 8: "#17a589", 9: "#8e5ad6", 10: "#d08a2c", 11: "#cc4f8f", 12: "#7a9a1e" };
+const rt = {
+  state: null, power: [], rows: [], tx: [],
+  form: Object.assign({ mode: 2, interval: 10, cycle: false, sfs: [7, 8, 9, 10, 11, 12], perStep: 5, pad: 0, persist: false, sendPos: false, lat: "", lon: "" },
+    store.get("rangeForm", {})),
+  ref: store.get("rangeRef", { lat: "", lon: "" }), // the beacon's position, if it does not send one
+  profile: store.get("rangeProfile", null),         // { base, rx, tx } in mA, measured by the user
+  capacity: store.get("rangeCapacity", ""),          // battery capacity in mAh
+  xAxis: "time", gps: null, gpsErr: "", watch: null, poll: null, raf: 0,
+};
+
+function rtConfigBytes(f, mode) {
+  const mask = f.cycle ? f.sfs.reduce((m, sf) => m | 1 << (sf - 7), 0) : 0;
+  const lat = Math.round((parseFloat(String(f.lat).replace(",", ".")) || 0) * 1e7);
+  const lon = Math.round((parseFloat(String(f.lon).replace(",", ".")) || 0) * 1e7);
+  const flags = (f.persist ? 1 : 0) | (f.sendPos && (lat || lon) ? 2 : 0);
+  return [mode, flags, ...u16(Math.max(2, Math.min(255, +f.interval || 10))), mask, Math.max(1, Math.min(50, +f.perStep || 5)),
+    Math.max(0, Math.min(200, +f.pad || 0)), ...u32(lat), ...u32(lon)];
+}
+Cmd.setRangeTest = (f, mode) => frame(0x2a, rtConfigBytes(f, mode));
+Cmd.getRangeTest = () => frame(0x2b);
+
+function rtDecodeConfig(f, o) {
+  return { mode: f[o], flags: f[o + 1], interval: f[o + 2] | f[o + 3] << 8, mask: f[o + 4], perStep: f[o + 5], pad: f[o + 6],
+           lat: i32(f, o + 7) / 1e7, lon: i32(f, o + 11) / 1e7 };
+}
+// Range test events (0xa8-0xab); null for other frames.
+function rtDecodeEvent(f) {
+  switch (f[0]) {
+    case 0xa8: {
+      const perSf = [];
+      for (let o = 30; o + 12 <= f.length; o += 12)
+        perSf.push({ sf: f[o], rx: f[o + 1] | f[o + 2] << 8, lost: f[o + 3] | f[o + 4] << 8, rssiAvg: s16(f, o + 5), rssiMin: s16(f, o + 7),
+                     snrAvg: s16(f, o + 9) / 4, snrMin: s8(f[o + 11]) });
+      return { type: "rangeState", cfg: rtDecodeConfig(f, 1), sf: f[16], synced: !!(f[17] & 1), count: rd32(f, 18), missed: rd32(f, 22), seq: rd32(f, 26), perSf };
+    }
+    case 0xa9: return { type: "rangeRx", uptimeMs: rd32(f, 1), sender: hex(f.slice(5, 9)), seq: rd32(f, 9), sf: f[13], rssi: s16(f, 14), snr: s8(f[16]),
+                        len: f[17], lost: f[18] | f[19] << 8, skipped: f[20] | f[21] << 8, txPower: s8(f[22]), beaconMv: f[23] | f[24] << 8,
+                        pos: f.length >= 33 ? { lat: i32(f, 25) / 1e7, lon: i32(f, 29) / 1e7 } : null };
+    case 0xaa: return { type: "rangeTx", uptimeMs: rd32(f, 1), seq: rd32(f, 5), sf: f[9], slot: f[10], interval: f[11] | f[12] << 8,
+                        airMs: f[13] | f[14] << 8, chargeMaMs: rd32(f, 15), skipped: f[19] | f[20] << 8 };
+    case 0xab: {
+      const phases = [];
+      for (let o = 20; o + 12 <= f.length && phases.length < 3; o += 12) phases.push({ secs: rd32(f, o), txMs: rd32(f, o + 4), chargeMas: rd32(f, o + 8) });
+      return { type: "power", uptime: rd32(f, 1), mv: f[5] | f[6] << 8, ext: s8(f[7]), mode: f[8], txPower: s8(f[9]),
+               base: (f[10] | f[11] << 8) / 10, rx: (f[12] | f[13] << 8) / 10, tx: (f[14] | f[15] << 8) / 10, txPackets: rd32(f, 16), phases };
+    }
+  }
+  return null;
+}
+
+// Great-circle distance in metres.
+function haversine(lat1, lon1, lat2, lon2) {
+  const r = Math.PI / 180, R = 6371008.8;
+  const a = Math.sin((lat2 - lat1) * r / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin((lon2 - lon1) * r / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+function rtRefPos(row) {
+  if (row?.bLat !== undefined && row.bLat !== "") return { lat: row.bLat, lon: row.bLon };
+  const lat = parseFloat(String(rt.ref.lat).replace(",", ".")), lon = parseFloat(String(rt.ref.lon).replace(",", "."));
+  return isFinite(lat) && isFinite(lon) && (lat || lon) ? { lat, lon } : null;
+}
+const rtFmtDist = m => m === "" || m === undefined ? "–" : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
+
+function rtGpsStart() {
+  if (rt.watch !== null) return;
+  if (!navigator.geolocation) { rt.gpsErr = "This browser has no location service"; return; }
+  rt.watch = navigator.geolocation.watchPosition(
+    p => { rt.gps = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, at: Date.now() }; rt.gpsErr = ""; rtRefresh(); },
+    e => { rt.gpsErr = e.message || "Position not available"; rtRefresh(); },
+    { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+}
+function rtGpsStop() {
+  if (rt.watch !== null) navigator.geolocation?.clearWatch(rt.watch);
+  rt.watch = null;
+}
+
+function rtOnEvent(ev) {
+  switch (ev.type) {
+    case "rangeState": rt.state = ev; break;
+    case "rangeRx": {
+      const g = rt.gps && Date.now() - rt.gps.at < 15000 ? rt.gps : null;
+      const row = { time: new Date(), uptimeMs: ev.uptimeMs, sender: ev.sender, seq: ev.seq, sf: ev.sf, rssi: ev.rssi, snr: ev.snr, len: ev.len,
+                    lost: ev.lost, skipped: ev.skipped, txPower: ev.txPower, beaconMv: ev.beaconMv,
+                    bLat: ev.pos ? ev.pos.lat : "", bLon: ev.pos ? ev.pos.lon : "",
+                    lat: g ? g.lat : "", lon: g ? g.lon : "", acc: g ? Math.round(g.acc) : "" };
+      const ref = rtRefPos(row);
+      row.dist = g && ref ? haversine(ref.lat, ref.lon, g.lat, g.lon) : "";
+      rt.rows.push(row);
+      break;
+    }
+    case "rangeTx": rt.tx.push({ time: new Date(), ...ev }); if (rt.tx.length > 5000) rt.tx.shift(); break;
+    case "power": rt.power.push({ time: new Date(), ...ev }); break;
+  }
+  rtRefresh();
+}
+
+// Re-draws the live part of the page (not the form, so typing is not lost).
+function rtRefresh() {
+  if (state.view !== "range" || rt.raf) return;
+  rt.raf = requestAnimationFrame(() => { rt.raf = 0; const box = $("rt-live"); if (box) rtRenderLive(box); });
+}
+
+function rtSection(box, title, help) {
+  const w = el("div", { className: "warn" }); w.style.maxWidth = "760px"; w.style.marginBottom = "12px"; w.style.minWidth = "0";
+  w.append(el("b", {}, title)); if (help) w.append(el("div", { className: "muted" }, help));
+  box.appendChild(w); return w;
+}
+function rtTable(head, rows) {
+  const t = el("table", { className: "stats" }); t.style.marginTop = "8px"; t.style.maxWidth = "760px";
+  const h = t.insertRow(); h.className = "group"; for (const x of head) h.insertCell().textContent = x;
+  for (const r of rows) { const tr = t.insertRow(); for (const x of r) tr.insertCell().textContent = x; }
+  // Wide tables scroll sideways on a phone instead of widening the page.
+  const w = el("div", {}, t); w.style.overflowX = "auto"; w.style.maxWidth = "100%";
+  return w;
+}
+
+function renderRange(box) {
+  $("chat-title").textContent = "Range test"; $("chat-sub").textContent = "Field measurement of range, loss and power use";
+  const f = rt.form;
+  const save = () => store.set("rangeForm", f);
+  const intro = rtSection(box, "How it works",
+    "Two nodes with the same radio settings: one is the beacon (left at a fixed spot), the other the receiver (with you, connected to this page). " +
+    "Every received beacon is logged with RSSI, SNR, SF and your GPS position. Lost beacons are counted from gaps in the sequence numbers. " +
+    "The beacon's packets are not mesh packets: no repeater forwards them, so only the direct link is measured. Step-by-step procedure: docs/FIELD-TEST.md.");
+  if (transport instanceof WsTransport) intro.append(el("div", {}, el("b", {}, "Connect directly to the node via USB or Bluetooth: maarse-host has no radio of its own.")));
+
+  // Settings
+  const sw = rtSection(box, "Settings",
+    "Interval: seconds between beacons; the beacon raises it per SF if the duty cycle needs it. With SF cycling the beacon steps through the chosen SFs, " +
+    "with the given number of beacons on each, and the receiver follows by itself. Without cycling both stay on the SF in the radio settings.");
+  const num = (key, label, min, max, title) => {
+    const i = el("input", { type: "number", min, max, value: f[key], title }); i.style.width = "80px";
+    i.onchange = () => { f[key] = +i.value; save(); };
+    const l = el("label", {}, label + " "); l.append(i); l.style.marginRight = "12px"; return l;
+  };
+  const r1 = el("div", { className: "row" }); r1.style.marginTop = "8px"; r1.style.flexWrap = "wrap";
+  r1.append(num("interval", "Interval (s)", 2, 255, "2-255 s"), num("perStep", "Beacons per SF", 1, 50, "With SF cycling"),
+    num("pad", "Extra bytes", 0, 200, "Makes each beacon longer, to test the airtime of real messages"));
+  sw.append(r1);
+  const r2 = el("div", { className: "row" }); r2.style.marginTop = "6px"; r2.style.flexWrap = "wrap";
+  const cyc = el("input", { type: "checkbox", checked: f.cycle }); cyc.onchange = () => { f.cycle = cyc.checked; save(); };
+  const cl = el("label", {}, cyc, " Cycle through SF:"); cl.style.marginRight = "8px"; r2.append(cl);
+  for (let sf = 7; sf <= 12; sf++) {
+    const c = el("input", { type: "checkbox", checked: f.sfs.includes(sf) });
+    c.onchange = () => { f.sfs = c.checked ? [...new Set([...f.sfs, sf])].sort((a, b) => a - b) : f.sfs.filter(x => x !== sf); save(); };
+    const l = el("label", {}, c, ` ${sf}`); l.style.marginRight = "8px"; l.style.color = RT_SF_COLORS[sf]; r2.append(l);
+  }
+  sw.append(r2);
+  const pers = el("input", { type: "checkbox", checked: f.persist }); pers.onchange = () => { f.persist = pers.checked; save(); };
+  const pl = el("label", {}, pers, " Keep after restart (stored in flash; for a beacon that is carried to its spot without a phone)");
+  pl.style.display = "block"; pl.style.marginTop = "6px"; sw.append(pl);
+
+  // Beacon position
+  const pw = rtSection(box, "Beacon position",
+    "Used for the distance to each received beacon. The beacon can send it in every packet (8 bytes more); otherwise enter it on the receiver's phone. " +
+    "Without either, the beacon sends its shared position if sharing is on.");
+  const lat = el("input", { placeholder: "Latitude, e.g. 56.1567", value: f.lat || rt.ref.lat });
+  const lon = el("input", { placeholder: "Longitude, e.g. 10.2107", value: f.lon || rt.ref.lon });
+  const keep = () => { f.lat = rt.ref.lat = lat.value.trim(); f.lon = rt.ref.lon = lon.value.trim(); save(); store.set("rangeRef", rt.ref); };
+  lat.onchange = keep; lon.onchange = keep;
+  const here = el("button", { textContent: "Use this phone's position" });
+  here.onclick = () => navigator.geolocation?.getCurrentPosition(p => { lat.value = p.coords.latitude.toFixed(6); lon.value = p.coords.longitude.toFixed(6); keep(); },
+    e => log("Position: " + e.message), { enableHighAccuracy: true, timeout: 20000 });
+  const sp = el("input", { type: "checkbox", checked: f.sendPos }); sp.onchange = () => { f.sendPos = sp.checked; save(); };
+  const r3 = el("div", { className: "row" }); r3.style.marginTop = "8px"; r3.style.flexWrap = "wrap";
+  for (const i of [lat, lon]) { i.style.flex = "1 1 140px"; i.style.minWidth = "0"; }
+  r3.append(lat, lon, here);
+  const spl = el("label", {}, sp, " The beacon sends this position in every packet"); spl.style.display = "block"; spl.style.marginTop = "6px";
+  pw.append(r3, spl);
+
+  // Start / stop
+  const cw = rtSection(box, "Start");
+  const r4 = el("div", { className: "row" }); r4.style.marginTop = "8px"; r4.style.flexWrap = "wrap";
+  const start = mode => () => {
+    if (!transport) return log("Not connected");
+    if (mode === 1 && f.cycle && !f.sfs.length) return log("Choose at least one SF to cycle through");
+    keep();
+    transport.send(Cmd.setRangeTest(f, mode));
+    if (mode === 2) { rtGpsStart(); clearInterval(rt.poll); rt.poll = setInterval(() => transport?.send(Cmd.getRangeTest()), 15000); }
+    else clearInterval(rt.poll);
+  };
+  const bb = el("button", { textContent: "Start beacon", className: "primary" }); bb.onclick = start(1);
+  const br = el("button", { textContent: "Start receiver", className: "primary" }); br.onclick = start(2);
+  const bs = el("button", { textContent: "Stop" }); bs.onclick = () => { transport?.send(Cmd.setRangeTest(f, 0)); clearInterval(rt.poll); };
+  const bg = el("button", { textContent: "Phone GPS on" }); bg.onclick = () => { rtGpsStart(); rtRefresh(); };
+  const bc = el("button", { textContent: "Clear log" });
+  bc.onclick = () => { if (rt.rows.length && !confirm("Clear the logged packets? Export them first if you need them.")) return; rt.rows = []; rt.tx = []; rt.power = []; rtRefresh(); };
+  r4.append(bb, br, bs, bg, bc);
+  cw.append(r4);
+  const r5 = el("div", { className: "row" }); r5.style.marginTop = "6px"; r5.style.flexWrap = "wrap";
+  for (const [label, fn] of [["Export received (CSV)", rtCsvRx], ["Export beacons sent (CSV)", rtCsvTx], ["Export power (CSV)", rtCsvPower]]) {
+    const b = el("button", { textContent: label }); b.onclick = () => rtExport(fn()); r5.append(b);
+  }
+  cw.append(r5);
+
+  const live = el("div", { id: "rt-live" });
+  box.appendChild(live);
+  rtRenderLive(live);
+}
+
+function rtRenderLive(box) {
+  box.replaceChildren();
+  const st = rt.state, rows = rt.rows;
+  // Status
+  const sw = rtSection(box, "Status");
+  const gps = rt.gps ? `${rt.gps.lat.toFixed(5)}, ${rt.gps.lon.toFixed(5)} (±${Math.round(rt.gps.acc)} m, ${Math.round((Date.now() - rt.gps.at) / 1000)} s old)`
+    : rt.watch !== null ? (rt.gpsErr || "Waiting for a position…") : (rt.gpsErr || "Off");
+  const last = rows[rows.length - 1];
+  const lines = [["Mode", st ? RT_MODES[st.cfg.mode] || "?" : "Unknown (old firmware?)"]];
+  if (st && st.cfg.mode === 1) {
+    lines.push(["Next beacon", `#${st.seq} on SF${st.sf}`], ["Beacons queued", st.count],
+      ["Not transmitted (duty cycle / busy channel)", st.missed]);
+    const t = rt.tx[rt.tx.length - 1];
+    if (t) lines.push(["Last beacon", `#${t.seq} SF${t.sf}, ${t.airMs} ms on air, every ${t.interval} s, ≈ ${(t.chargeMaMs / 3600).toFixed(1)} µAh (estimate)`]);
+  }
+  if (st && st.cfg.mode === 2) {
+    const tot = st.count + st.missed;
+    const how = st.synced ? " (following the beacon's SF schedule)" : st.cfg.mask ? " (waiting for the beacon on the first SF of the cycle)" : "";
+    lines.push(["Listening on", `SF${st.sf}${how}`],
+      ["Received / lost", `${st.count} / ${st.missed}${tot ? ` (${(100 * st.missed / tot).toFixed(1)} % loss)` : ""}`]);
+    if (last) {
+      const ago = Math.round((Date.now() - last.time) / 1000);
+      lines.push(["Last beacon", `#${last.seq} SF${last.sf}: ${last.rssi} dBm, SNR ${last.snr} dB, ${ago} s ago${last.dist !== "" ? ", " + rtFmtDist(last.dist) : ""}`]);
+      if (last.beaconMv) lines.push(["Beacon battery", `${(last.beaconMv / 1000).toFixed(2)} V`]);
+    }
+  }
+  lines.push(["Phone GPS", gps]);
+  sw.append(rtTable(["", ""], lines));
+
+  // Per-SF results from the node
+  if (st && st.perSf.length) {
+    const maxDist = sf => { const d = rows.filter(r => r.sf === sf && r.dist !== "").map(r => r.dist); return d.length ? rtFmtDist(Math.max(...d)) : "–"; };
+    const pw = rtSection(box, "Results per SF", "Counted on the receiver since it was started. Loss is from sequence gaps, minus beacons the beacon itself could not send.");
+    pw.append(rtTable(["SF", "Received", "Lost", "Loss", "RSSI avg / min", "SNR avg / min", "Farthest heard"], st.perSf.map(p => [
+      "SF" + p.sf, p.rx, p.lost, p.rx + p.lost ? (100 * p.lost / (p.rx + p.lost)).toFixed(1) + " %" : "–",
+      `${p.rssiAvg} / ${p.rssiMin} dBm`, `${p.snrAvg.toFixed(1)} / ${p.snrMin} dB`, maxDist(p.sf)])));
+  }
+
+  // Chart
+  if (rows.length) {
+    const cw = rtSection(box, "RSSI, SNR and loss");
+    const sel = el("select"); sel.append(new Option("Over time", "time"), new Option("Over distance", "dist")); sel.value = rt.xAxis;
+    sel.onchange = () => { rt.xAxis = sel.value; rtRefresh(); };
+    const r = el("div", { className: "row" }); r.style.marginTop = "6px"; r.append(sel); cw.append(r);
+    const c = el("div"); c.innerHTML = rtChart(rows, rt.xAxis); cw.append(c);
+    const lg = el("div", { className: "muted" });
+    for (const sf of [...new Set(rows.map(x => x.sf))].sort((a, b) => a - b)) {
+      const s = el("span", {}, `● SF${sf}  `); s.style.color = RT_SF_COLORS[sf] || "inherit"; lg.append(s);
+    }
+    const ls = el("span", {}, "▮ lost beacons"); ls.style.color = "var(--warn)"; lg.append(ls);
+    cw.append(lg);
+  }
+
+  // Power
+  rtRenderPower(box);
+
+  // Log table (newest first)
+  if (rows.length) {
+    const lw = rtSection(box, `Received beacons (${rows.length})`, rows.length > 200 ? "The newest 200 are shown; the export has all of them." : "");
+    lw.append(rtTable(["Time", "Seq", "SF", "RSSI", "SNR", "Lost", "Distance", "Position"], rows.slice(-200).reverse().map(x => [
+      x.time.toLocaleTimeString("en-GB"), x.seq, x.sf, x.rssi + " dBm", x.snr + " dB", x.lost || "", rtFmtDist(x.dist),
+      x.lat !== "" ? `${x.lat.toFixed(5)}, ${x.lon.toFixed(5)}` : "–"])));
+  }
+}
+
+// An SVG chart: RSSI on top, SNR below, lost beacons as red bars along the bottom.
+function rtChart(rows, axis) {
+  const W = 720, H = 300, L = 46, R = 10, T = 10, mid = 150, B = 30;
+  let pts = rows.map(r => ({ r, x: axis === "dist" ? r.dist : (r.time - rows[0].time) / 60000 }));
+  if (axis === "dist") pts = pts.filter(p => p.x !== "");
+  if (!pts.length) return `<div class="muted">No positions yet: turn on the phone's GPS and enter the beacon's position.</div>`;
+  const xs = pts.map(p => p.x), x0 = Math.min(...xs), x1 = Math.max(...xs, x0 + (axis === "dist" ? 10 : 1));
+  const rs = rows.map(r => r.rssi), ss = rows.map(r => r.snr);
+  const r0 = Math.min(-140, ...rs), r1 = Math.max(-40, ...rs), s0 = Math.min(-20, ...ss), s1 = Math.max(12, ...ss);
+  const X = x => L + (x - x0) / (x1 - x0) * (W - L - R);
+  const Yr = v => T + (r1 - v) / (r1 - r0) * (mid - T - 8);
+  const Ys = v => mid + 8 + (s1 - v) / (s1 - s0) * (H - B - mid - 8);
+  const txt = (x, y, s, anchor = "end") => `<text x="${x}" y="${y}" text-anchor="${anchor}" style="fill:var(--muted);font-size:11px">${s}</text>`;
+  const line = (x1_, y1, x2, y2, dash = "") => `<line x1="${x1_}" y1="${y1}" x2="${x2}" y2="${y2}" style="stroke:var(--line)" ${dash}/>`;
+  let s = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;display:block;margin-top:8px">`;
+  for (const v of [r1, Math.round((r0 + r1) / 2), r0]) s += line(L, Yr(v), W - R, Yr(v)) + txt(L - 4, Yr(v) + 4, v);
+  for (const v of [s1, 0, s0]) s += line(L, Ys(v), W - R, Ys(v), v === 0 ? 'stroke-dasharray="3 3"' : "") + txt(L - 4, Ys(v) + 4, v);
+  s += txt(L + 4, T + 10, "RSSI (dBm)", "start") + txt(L + 4, mid + 18, "SNR (dB)", "start");
+  const fx = v => axis === "dist" ? rtFmtDist(v) : `${v.toFixed(v < 10 ? 1 : 0)} min`;
+  [[x0, "start"], [(x0 + x1) / 2, "middle"], [x1, "end"]].forEach(([v, a]) => { s += txt(X(v), H - 10, fx(v), a); });
+  for (const p of pts) {
+    const c = RT_SF_COLORS[p.r.sf] || "gray", x = X(p.x).toFixed(1);
+    s += `<circle cx="${x}" cy="${Yr(p.r.rssi).toFixed(1)}" r="2.6" fill="${c}"/><circle cx="${x}" cy="${Ys(p.r.snr).toFixed(1)}" r="2.6" fill="${c}"/>`;
+    if (p.r.lost) s += `<rect x="${(X(p.x) - 1.5).toFixed(1)}" y="${H - B - Math.min(20, 4 + 2 * p.r.lost)}" width="3" height="${Math.min(20, 4 + 2 * p.r.lost)}" style="fill:var(--warn)"><title>${p.r.lost} lost before #${p.r.seq}</title></rect>`;
+  }
+  return s + "</svg>";
+}
+
+function rtRenderPower(box) {
+  const p = rt.power[rt.power.length - 1];
+  const pw = rtSection(box, "Power use (estimate)",
+    "The boards cannot measure current. The node counts time and TX on-time per mode and multiplies with typical currents for the board " +
+    "(base + receive + transmit). Replace them with values measured with a USB power meter (see docs/FIELD-TEST.md) for better numbers. " +
+    "The battery voltage over a long run is a real measurement.");
+  if (!p) { pw.append(el("div", { className: "muted" }, "No report yet (the node sends one every minute while a range test runs).")); return; }
+  const prof = rt.profile || { base: p.base, rx: p.rx, tx: p.tx };
+  const mk = (key, label) => {
+    const i = el("input", { type: "number", step: "0.1", value: prof[key] }); i.style.width = "80px";
+    i.onchange = () => { rt.profile = { ...prof, [key]: +i.value }; store.set("rangeProfile", rt.profile); rtRefresh(); };
+    const l = el("label", {}, label + " "); l.append(i); l.style.marginRight = "12px"; return l;
+  };
+  const r = el("div", { className: "row" }); r.style.marginTop = "8px"; r.style.flexWrap = "wrap";
+  const reset = el("button", { textContent: "Use the node's values" });
+  reset.onclick = () => { rt.profile = null; store.set("rangeProfile", null); rtRefresh(); };
+  const cap = el("input", { type: "number", placeholder: "mAh", value: rt.capacity }); cap.style.width = "90px";
+  cap.onchange = () => { rt.capacity = cap.value; store.set("rangeCapacity", cap.value); rtRefresh(); };
+  const capl = el("label", {}, "Battery "); capl.append(cap, " mAh");
+  r.append(mk("base", "Base mA"), mk("rx", "Receive mA"), mk("tx", `Transmit mA (at ${p.txPower} dBm)`), reset, capl);
+  pw.append(r);
+  const capMah = +rt.capacity || 0;
+  const rows = ["Off / normal", "Beacon", "Receiver"].map((name, i) => {
+    const ph = p.phases[i] || { secs: 0, txMs: 0, chargeMas: 0 };
+    if (!ph.secs) return [name, "–", "–", "–", "–", "–"];
+    const tx = ph.txMs / 1000, mas = prof.base * ph.secs + prof.rx * Math.max(0, ph.secs - tx) + prof.tx * tx;
+    const avg = mas / ph.secs, mah = mas / 3600;
+    const hrs = ph.secs / 3600;
+    return [name, hrs < 1 ? `${Math.round(ph.secs / 60)} min` : `${hrs.toFixed(1)} h`, `${tx.toFixed(1)} s (${(100 * tx / ph.secs).toFixed(2)} %)`,
+      `${mah.toFixed(2)} mAh`, `${avg.toFixed(1)} mA = ${avg.toFixed(1)} mAh/h`, capMah ? `${(capMah / avg).toFixed(0)} h` : "–"];
+  });
+  pw.append(rtTable(["Mode", "Time", "TX on-time", "Charge (est.)", "Average (est.)", "Battery life (est.)"], rows));
+  const withMv = rt.power.filter(x => x.mv > 0);
+  if (withMv.length >= 2) {
+    const a = withMv[0], b = withMv[withMv.length - 1], h = (b.time - a.time) / 3.6e6;
+    pw.append(el("div", { className: "muted" }, `Battery: ${(a.mv / 1000).toFixed(3)} V → ${(b.mv / 1000).toFixed(3)} V over ${(h * 60).toFixed(0)} min` +
+      (h > 0.2 ? ` (${((a.mv - b.mv) / h).toFixed(0)} mV/h)` : "") + `${b.ext === 1 ? " – on USB power, so this says nothing about drain" : ""}`));
+  } else if (p.mv) pw.append(el("div", { className: "muted" }, `Battery: ${(p.mv / 1000).toFixed(3)} V${p.ext === 1 ? " (USB power)" : ""}`));
+}
+
+// ----- CSV -----
+const rtCsvCell = v => { const s = v === undefined || v === null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const rtCsv = (head, rows) => [head, ...rows].map(r => r.map(rtCsvCell).join(",")).join("\n") + "\n";
+function rtCsvRx() {
+  return { name: "range-received", text: rtCsv(
+    ["time_iso", "node_uptime_ms", "beacon", "seq", "sf", "rssi_dbm", "snr_db", "length", "lost_before", "beacon_skipped", "beacon_tx_dbm", "beacon_battery_mv",
+     "beacon_lat", "beacon_lon", "phone_lat", "phone_lon", "phone_accuracy_m", "distance_m"],
+    rt.rows.map(r => [r.time.toISOString(), r.uptimeMs, r.sender, r.seq, r.sf, r.rssi, r.snr, r.len, r.lost, r.skipped, r.txPower, r.beaconMv || "",
+      r.bLat, r.bLon, r.lat, r.lon, r.acc, r.dist === "" ? "" : Math.round(r.dist)])) };
+}
+function rtCsvTx() {
+  return { name: "range-beacons-sent", text: rtCsv(
+    ["time_iso", "node_uptime_ms", "seq", "sf", "slot", "interval_s", "airtime_ms", "est_charge_uah", "skipped_so_far"],
+    rt.tx.map(t => [t.time.toISOString(), t.uptimeMs, t.seq, t.sf, t.slot, t.interval, t.airMs, (t.chargeMaMs / 3600).toFixed(2), t.skipped])) };
+}
+function rtCsvPower() {
+  const head = ["time_iso", "node_uptime_s", "battery_mv", "usb_power", "mode", "tx_dbm", "est_base_ma", "est_rx_ma", "est_tx_ma", "tx_packets"];
+  for (const m of ["off", "beacon", "receiver"]) head.push(`${m}_s`, `${m}_tx_ms`, `${m}_est_mah`);
+  return { name: "range-power", text: rtCsv(head, rt.power.map(p => [p.time.toISOString(), p.uptime, p.mv || "", p.ext, RT_MODES[p.mode] || p.mode, p.txPower,
+    p.base, p.rx, p.tx, p.txPackets, ...p.phases.flatMap(ph => [ph.secs, ph.txMs, (ph.chargeMas / 3600).toFixed(3)])])) };
+}
+function rtExport({ name, text }) {
+  const file = `${name}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.csv`;
+  if (window.MaarseAndroid?.shareText) { window.MaarseAndroid.shareText(file, text); return; }
+  const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "text/csv" })), download: file });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  log(`Saved ${file}`);
 }
 
 // ---------- safety numbers (same computation as maarse-crypto::safety_number) ----------
@@ -3504,6 +3880,7 @@ $("btn-send").onclick = send;
 $("btn-status").onclick = () => setView("status");
 $("btn-radio").onclick = () => setView("radio");
 $("btn-diag").onclick = () => { state.target = null; setView("diag"); };
+$("btn-range").onclick = () => { state.target = null; setView("range"); };
 $("btn-pages").onclick = () => { state.target = null; setView("pages"); };
 $("btn-firmware").onclick = () => setView("firmware");
 $("btn-file").onclick = () => $("file").click();

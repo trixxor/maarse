@@ -193,6 +193,7 @@ A maarse-host at home can work as one shared inbox that the phone, the laptop an
 | `scripts/` | starting the host and building firmware (Windows and Linux). |
 | `tools/e2e_test.py` | end-to-end test of three maarse-host nodes. |
 | `tools/dht_test.py` | test of the backbone DHT with five hosts. |
+| `tools/range_test.py` | range test with two radios over USB (bench test or a laptop as receiver), see [FIELD-TEST.md](FIELD-TEST.md). |
 
 ## Routing
 
@@ -287,6 +288,10 @@ The web client has a **Diagnostics** page (the button next to Status/Radio):
 - **Trace route** (command `0x20`, reply `0xA0`): a `Probe` packet follows the known route (or finds one first), and every repeater appends the SNR it heard the packet with. The target answers along the reverse way, and the repeaters again append their SNR. The result is the SNR for every hop both ways. The packet ID is computed over the fixed part only, so implicit per-hop acknowledgements work as for other packets. Older nodes forward the packet unchanged. Format in `maarse-core/src/diag.rs`.
 - **Neighbour list** (`0x21`, reply `0xA1`): nodes heard directly (announces without hops and the previous hop in source paths and path requests) with SNR, RSSI, time and packet count.
 - **Noise floor** (status key 80): lora-phy does not give the instantaneous RSSI, so the noise floor is estimated from received packets: N = RSSI − 10·log10(1 + 10^(SNR/10)), moving average.
+
+## Range test (field measurement)
+
+The firmware has a range test mode for measuring real range, loss and power use (all earlier comparisons come from the simulator). One node is a beacon that sends numbered packets, optionally stepping through SF7–SF12. The other is a receiver that follows the beacon's SF schedule and reports every beacon with RSSI and SNR. The web client's **Range test** page (connect to the node directly over USB or Bluetooth) adds the phone's GPS position and distance, draws RSSI/SNR/loss and exports CSV. `tools/range_test.py` does the same from a PC. Both nodes estimate the charge used per mode from TX on-time and typical board currents. The step-by-step procedure for a test drive, how to read the results and a results template are in **[FIELD-TEST.md](FIELD-TEST.md)**. Protocol: commands `0x2a`/`0x2b`, events `0xA8`–`0xAB` (`maarse-core/src/rangetest.rs`, `companion.rs`).
 
 ## Position and telemetry
 

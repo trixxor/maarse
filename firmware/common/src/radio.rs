@@ -129,17 +129,28 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             let q = queue.swap_remove(i);
             stage(1);
             let _ = lora.enter_standby().await;
+            // A job may ask for another spreading factor (range test beacons):
+            // listen-before-talk and transmission then use that SF.
+            let mut alt = match q.req.sf {
+                0 => None,
+                sf if sf == p.cfg.sf => None,
+                sf => params(lora, RadioConfig { sf, ..p.cfg }),
+            };
+            let (tx_cfg, mdltn, txp) = match alt.as_mut() {
+                Some(a) => (a.cfg, &a.mdltn, &mut a.tx),
+                None => (p.cfg, &p.mdltn, &mut p.tx),
+            };
             stage(2);
             // Listen-before-talk: if the channel is busy, try a little later.
-            let busy = match lora.prepare_for_cad(&p.mdltn).await {
+            let busy = match lora.prepare_for_cad(mdltn).await {
                 Ok(()) => {
                     stage(3);
-                    lora.cad(&p.mdltn).await.unwrap_or(false)
+                    lora.cad(mdltn).await.unwrap_or(false)
                 }
                 Err(_) => false,
             };
             let now_ms = Instant::now().as_millis();
-            let air = p.cfg.airtime().airtime_us(q.req.packet.len());
+            let air = tx_cfg.airtime().airtime_us(q.req.packet.len());
             if busy {
                 RSTATS.cad_busy.fetch_add(1, Relaxed);
                 let back = 100 + jitter.next(500);
@@ -159,9 +170,9 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                 stage(4);
                 let ok = lora
                     .prepare_for_tx(
-                        &p.mdltn,
-                        &mut p.tx,
-                        p.cfg.tx_power_dbm as i32,
+                        mdltn,
+                        txp,
+                        tx_cfg.tx_power_dbm as i32,
                         &q.req.packet,
                     )
                     .await
@@ -177,6 +188,9 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                         .bytes_tx
                         .fetch_add(q.req.packet.len() as u32, Relaxed);
                     RSTATS.airtime_ms.fetch_add(air.div_ceil(1000), Relaxed);
+                    if q.req.id & 0xFFFF_0000_0000_0000 == maarse_core::rangetest::TX_ID_TAG {
+                        crate::bus::BEACON_SENT.store((q.req.id as u32).wrapping_add(1), Relaxed);
+                    }
                 } else {
                     RSTATS.tx_err.fetch_add(1, Relaxed);
                 }
@@ -231,8 +245,13 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             Either4::Third(cfg) => {
                 let _ = lora.enter_standby().await;
                 if let Some(np) = params(lora, cfg) {
+                    // Keep the airtime already used unless the limit itself
+                    // changed: the range test receiver switches SF often, and
+                    // a fresh budget on every switch would defeat the limiter.
+                    if np.cfg.duty_permille != p.cfg.duty_permille {
+                        duty = DutyCycle::new(np.cfg.duty_permille as u32, Instant::now().as_millis());
+                    }
                     p = np;
-                    duty = DutyCycle::new(p.cfg.duty_permille as u32, Instant::now().as_millis());
                 }
             }
             Either4::Fourth(()) => {}

@@ -53,3 +53,29 @@ pub fn note_packet(rssi: i32, snr: i32) {
 pub fn noise_floor() -> Option<i32> {
     NOISE_SEEN.load(Relaxed).then(|| NOISE_X16.load(Relaxed) / 16)
 }
+
+// ----- current profile for power estimates (range test) -----
+//
+// The boards cannot measure current, so the range test estimates charge from
+// time and TX on-time with these typical currents, in 0.1 mA. The board code
+// sets them at boot (see `set_profile`); they are estimates, not measurements,
+// and the web client lets the user replace them with measured values.
+
+/// Everything except the LoRa radio: MCU, Bluetooth, display, regulators.
+pub static BASE_MA_X10: AtomicU32 = AtomicU32::new(50);
+/// LoRa receive (the radio is receiving whenever it is not transmitting).
+pub static RX_MA_X10: AtomicU32 = AtomicU32::new(53);
+/// Extra transmit current on top of the SX1262 itself (an external PA).
+pub static TX_EXTRA_MA_X10: AtomicU32 = AtomicU32::new(0);
+
+/// Sets the board's current profile (all in 0.1 mA).
+pub fn set_profile(base_ma_x10: u32, rx_ma_x10: u32, tx_extra_ma_x10: u32) {
+    BASE_MA_X10.store(base_ma_x10, Relaxed);
+    RX_MA_X10.store(rx_ma_x10, Relaxed);
+    TX_EXTRA_MA_X10.store(tx_extra_ma_x10, Relaxed);
+}
+
+/// Estimated transmit current at `dbm` (radio setting), in 0.1 mA.
+pub fn tx_ma_x10(dbm: i8) -> u32 {
+    maarse_core::rangetest::sx1262_tx_ma_x10(dbm) + TX_EXTRA_MA_X10.load(Relaxed)
+}

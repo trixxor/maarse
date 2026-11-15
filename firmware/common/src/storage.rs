@@ -12,6 +12,7 @@
 //!   0x300: "SHR1" + sharing settings (10, see `companion::Sharing`)
 //!   0x320: "NAM1" + length (1) + display name (≤ 24)
 //!   0x340: "WIF1" + flags (1: bit 0 enabled, bit 1 modem) + SSID (1 + 32) + password (1 + 64) + peer (1 + 64)
+//!   0x400: "RNG1" + range test setting (15, see `rangetest::Config`), only when it should persist
 //!   ```
 //!   Without "SHR1" neither position nor telemetry is shared (the default).
 //!   Only written the first time and when radio/administrators/role/regions change.
@@ -52,8 +53,12 @@ const WIFI_MAGIC: &[u8; 4] = b"WIF1";
 const WIFI_OFF: usize = 0x340;
 const WIFI_LEN: usize = 4 + 1 + 33 + 65 + 65;
 const _: () = assert!(NAME_OFF + 5 + maarse_core::appdata::MAX_NAME <= WIFI_OFF);
+const RANGE_MAGIC: &[u8; 4] = b"RNG1";
+const RANGE_OFF: usize = 0x400;
+const RANGE_LEN: usize = 4 + maarse_core::rangetest::Config::LEN;
+const _: () = assert!(WIFI_OFF + WIFI_LEN <= RANGE_OFF);
 /// Used part of the page, rounded up to whole words.
-const USED: usize = (WIFI_OFF + WIFI_LEN).div_ceil(4) * 4;
+const USED: usize = (RANGE_OFF + RANGE_LEN).div_ceil(4) * 4;
 const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
 
 const MAIL_MAGIC: u8 = 0xA5;
@@ -320,6 +325,23 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         let names = crate::node::RegionNames::from_slice(&buf[REGION_OFF + 6..REGION_OFF + 6 + n])
             .unwrap_or_default();
         (buf[REGION_OFF + 4] == 1, names)
+    }
+
+    fn save_range(&mut self, cfg: &maarse_core::rangetest::Config) {
+        let mut buf = self.read_page();
+        buf[RANGE_OFF..RANGE_OFF + 4].copy_from_slice(RANGE_MAGIC);
+        buf[RANGE_OFF + 4..RANGE_OFF + RANGE_LEN].copy_from_slice(&cfg.to_bytes());
+        self.write_page(&buf);
+    }
+
+    fn load_range(&mut self) -> maarse_core::rangetest::Config {
+        let buf = self.read_page();
+        if &buf[RANGE_OFF..RANGE_OFF + 4] != RANGE_MAGIC {
+            return Default::default();
+        }
+        maarse_core::rangetest::Config::from_bytes(&buf[RANGE_OFF + 4..RANGE_OFF + RANGE_LEN])
+            .and_then(|c| c.sanitized().ok())
+            .unwrap_or_default()
     }
 
     fn save_sharing(&mut self, s: &maarse_core::companion::Sharing) {

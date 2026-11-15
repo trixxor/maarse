@@ -17,7 +17,15 @@ pub struct TxReq {
     pub packet: Pkt,
     pub delay_ms: u32,
     pub id: u64,
+    /// Send with this spreading factor instead of the current one (0 = the
+    /// current). Used by range test beacons that step through SF7-SF12; the
+    /// radio returns to its own settings for receiving.
+    pub sf: u8,
 }
+
+/// Range test: `seq + 1` of the last beacon the radio transmitted (0 = none).
+/// Set by the radio loop for jobs tagged with `rangetest::TX_ID_TAG`.
+pub static BEACON_SENT: AtomicU32 = AtomicU32::new(0);
 
 /// Received over LoRa: packet and SNR.
 pub static RADIO_RX: Channel<M, (Pkt, i8), 4> = Channel::new();

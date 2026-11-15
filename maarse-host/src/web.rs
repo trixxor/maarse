@@ -168,6 +168,26 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
             }
         }
         ("POST", "/api/restart") => restart_soon(stream),
+        ("GET", "/api/service/status") => {
+            let body = crate::service::status_json(data_dir);
+            reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)
+        }
+        ("GET", "/api/service/log") => {
+            let since = query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("since="))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let body = crate::service::log_json(since);
+            reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)
+        }
+        ("POST", "/api/service/restart") => restart_soon(stream),
+        ("POST", "/api/service/stop") => {
+            reply(&mut stream, "200 OK", "text/plain; charset=utf-8", "ok");
+            drop(stream);
+            thread::sleep(Duration::from_millis(300));
+            crate::service::stop();
+        }
         ("GET", "/api/devices") => {
             let body = crate::links::devices_json();
             reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)

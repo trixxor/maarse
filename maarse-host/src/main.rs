@@ -10,6 +10,17 @@
 //! Help:   maarse-host --help
 #![forbid(unsafe_code)]
 
+// Every printed line is also kept in memory for the web client's Service page.
+// These shadow the std macros for the whole crate (textual macro scope).
+macro_rules! println {
+    () => {{ std::println!(); crate::service::push("", false); }};
+    ($($t:tt)*) => {{ let s = format!($($t)*); std::println!("{s}"); crate::service::push(&s, false); }};
+}
+macro_rules! eprintln {
+    () => {{ std::eprintln!(); crate::service::push("", true); }};
+    ($($t:tt)*) => {{ let s = format!($($t)*); std::eprintln!("{s}"); crate::service::push(&s, true); }};
+}
+
 mod dht;
 mod filebox;
 mod history;
@@ -20,6 +31,7 @@ mod meshcore;
 mod mqtt;
 mod node;
 mod sessions;
+mod service;
 mod settings;
 mod tunnel;
 mod web;
@@ -340,6 +352,7 @@ fn open_browser(url: &str) {
 }
 
 fn main() {
+    service::mark_start();
     // Settings from the web client (<data>/settings.txt) first, then the
     // command line, which therefore wins.
     let cli: Vec<String> = std::env::args().skip(1).collect();

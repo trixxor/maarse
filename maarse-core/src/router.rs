@@ -1,32 +1,32 @@
-//! Routing-motoren.
+//! The routing engine.
 //!
-//! `Router` har ingen I/O og ingen ur. Den får bytes og tidspunkter ind og
-//! returnerer [`Action`]s: pakker der skal sendes (med en forsinkelse),
-//! beskeder der skal leveres til appen, og hændelser som "rute fundet".
-//! Det gør den let at teste og at køre ens i firmware og simulator.
+//! `Router` has no I/O and no clock. It takes bytes and timestamps in and
+//! returns [`Action`]s: packets to send (with a delay), messages to deliver
+//! to the app, and events like "route found".
+//! That makes it easy to test and to run the same way in firmware and simulator.
 //!
-//! ## Sådan findes en rute
-//! 1. Afsenderen floodes en `PathRequest` med et tilfældigt svar-token.
-//! 2. Hver repeater tilføjer sit sti-ID og sender videre efter en
-//!    forsinkelse: jo bedre SNR, jo længere ventetid. Så vinder den
-//!    repeater, der er længst væk, og ruterne får færre hop. Repeatere med
-//!    lavt batteri venter ekstra og bliver derfor sjældnere valgt.
-//! 3. Destinationen svarer med en `PathResponse` til tokenet ad den
-//!    omvendte sti. Afsenderens adresse står aldrig i klartekst.
-//! 4. Afsenderen gemmer stien og sender beskeden som kildesti.
-//! 5. Modtageren kvitterer med en `Ack` til et token afledt af beskedens ID.
+//! ## How a route is found
+//! 1. The sender floods a `PathRequest` with a random reply token.
+//! 2. Every repeater appends its path ID and forwards after a
+//!    delay: the better the SNR, the longer the wait. So the repeater
+//!    furthest away wins, and routes get fewer hops. Repeaters with
+//!    low battery wait extra and are therefore chosen less often.
+//! 3. The destination answers with a `PathResponse` to the token along the
+//!    reverse path. The sender's address is never in clear text.
+//! 4. The sender stores the path and sends the message as a source path.
+//! 5. The recipient acknowledges with an `Ack` to a token derived from the message ID.
 //!
-//! ## Stier over 12 hop: anker-repeatere
-//! En kildesti kan højst bære [`MAX_PATH`] (12) hop. Når en ruteforespørgsel
-//! når en repeater med rollen [`Role::Anchor`], husker ankeret det første
-//! stykke (vejen tilbage til afsenderen) og sender
-//! forespørgslen videre med et tomt spor. Målet svarer ad det andet stykke
-//! til ankeret, som lærer ruten videre til målet og sender svaret tilbage ad
-//! det første stykke, med det første stykke som rute. Afsenderen sender så
-//! sine beskeder til ankeret; ankeret ser, at stien ender hos det, men at
-//! beskeden er til en anden, og sender den videre ad sin egen rute.
-//! Kvitteringer følger samme vej tilbage. Pakkeformatet er uændret, og flere
-//! ankre efter hinanden virker af sig selv (op til `MAX_HOPS` i alt).
+//! ## Paths over 12 hops: anchor repeaters
+//! A source path can carry at most [`MAX_PATH`] (12) hops. When a path request
+//! reaches a repeater with the role [`Role::Anchor`], the anchor remembers the first
+//! leg (the way back to the sender) and forwards
+//! the request with an empty trail. The target answers along the second leg
+//! to the anchor, which learns the onward route to the target and sends the reply back along
+//! the first leg, with the first leg as the route. The sender then sends
+//! its messages to the anchor; the anchor sees that the path ends at it, but that
+//! the message is for someone else, and forwards it along its own route.
+//! Acknowledgements follow the same way back. The packet format is unchanged, and several
+//! anchors in a row work by themselves (up to `MAX_HOPS` in total).
 
 //! ## Carry (store-carry-forward)
 //! With `carry_copies > 0`, a direct message the router gives up on (no
@@ -70,43 +70,43 @@ use crate::{LOCAL_SCOPE, MAX_HOPS, MAX_PACKET, MAX_PATH};
 pub type Buf = heapless::Vec<u8, MAX_PACKET>;
 pub type Actions = heapless::Vec<Action, 8>;
 
-/// Forsinkelse før en repeater sender en kildestyret pakke videre (ms).
+/// Delay before a repeater forwards a source-routed packet (ms).
 pub const SOURCE_ROUTE_DELAY_MS: u32 = 50;
-/// Største payload i en direkte besked (plads til en fuld sti på 12 hop).
+/// Largest payload in a direct message (room for a full path of 12 hops).
 pub const MAX_DIRECT_PAYLOAD: usize = MAX_PACKET - 18 - 1 - 2 * MAX_PATH;
 
-/// Standard-tidsslot for flood-ventetid (ms). Bør være omkring sendetiden
-/// for en kort pakke ved den valgte spreading factor.
+/// Default time slot for the flood wait (ms). Should be about the time on air
+/// of a short packet at the chosen spreading factor.
 pub const DEFAULT_SLOT_MS: u32 = 200;
-/// Hvor længe vi venter på at høre næste repeater sende videre (ms).
+/// How long we wait to hear the next repeater forward (ms).
 pub const DEFAULT_HOP_TIMEOUT_MS: u32 = 3000;
-/// Antal gange et hop gensendes, hvis næste repeater ikke høres.
+/// Number of times a hop is retransmitted if the next repeater is not heard.
 pub const HOP_RETRIES: u8 = 4;
 
-/// Standard hop-grænse for relays i gruppe-tilstand.
+/// Default hop limit for relays in group mode.
 pub const DEFAULT_RELAY_HOPS: u8 = 4;
 
 const MAX_PENDING: usize = 8;
-/// Destinationen venter så mange tidsslots, før den svarer på en
-/// ruteforespørgsel (floodet skal nå at dø ud omkring den).
+/// The destination waits this many time slots before it answers a
+/// path request (the flood must have time to die out around it).
 pub const RESPONSE_WAIT_SLOTS: u32 = 10;
-/// Uden kvittering inden for denne tid antages ruten at være brudt: den
-/// glemmes, og beskeden sendes igen med en ny ruteforespørgsel (ms).
+/// Without an acknowledgement within this time the route is assumed broken: it
+/// is forgotten, and the message is sent again with a new path request (ms).
 pub const DEFAULT_ACK_TIMEOUT_MS: u32 = 20_000;
-/// Antal gange en besked sendes igen fra afsenderen.
+/// Number of times the sender sends a message again.
 pub const E2E_RETRIES: u8 = 2;
-/// En mobil node stoler ikke på ruter ældre end dette (ms).
+/// A mobile node does not trust routes older than this (ms).
 pub const MOBILE_ROUTE_MS: u64 = 30_000;
-/// Ventetid før en ubesvaret ruteforespørgsel gentages (ms).
+/// Wait before an unanswered path request is repeated (ms).
 ///
-/// Svaret kan være længe undervejs: over mange hop, hvor hvert hop kan
-/// gensendes flere gange med `DEFAULT_HOP_TIMEOUT_MS` imellem. Gentages
-/// forespørgslen for tidligt, floodes nettet igen, mens svaret stadig er på
-/// vej, og det nye flood overdøver svaret. I simulatoren var det hovedårsagen
-/// til tabte kvitteringer i store, tynde net (15 s gav 50 % kvitteret, 45 s
-/// gav over 80 %).
+/// The reply can take a long time: over many hops, where every hop can
+/// be retransmitted several times with `DEFAULT_HOP_TIMEOUT_MS` in between. If the
+/// request is repeated too early, the net is flooded again while the reply is still on
+/// its way, and the new flood drowns the reply. In the simulator this was the main cause
+/// of lost acknowledgements in large, sparse nets (15 s gave 50 % acknowledged, 45 s
+/// gave over 80 %).
 pub const PATH_RETRY_MS: u64 = 45_000;
-/// Antal gentagelser af en ruteforespørgsel.
+/// Number of repetitions of a path request.
 pub const PATH_RETRIES: u8 = 2;
 const MAX_FORWARDS: usize = 32;
 const MAX_FLOOD_PENDING: usize = 16;
@@ -165,30 +165,30 @@ struct Carried {
 /// out of a coverage gap, a base station waiting for it).
 const CARRY_REROUTE_MS: u64 = 300_000;
 const MAX_TRACES: usize = 4;
-/// Hvor mange stykker et anker husker ad gangen (forespørgsler og beskeder).
+/// How many legs an anchor remembers at a time (requests and messages).
 const MAX_ANCHORED: usize = 16;
-/// Så længe huskes et stykke hos ankeret (ms): længe nok til svar og
-/// kvittering, også over mange hop.
+/// How long a leg is remembered by the anchor (ms): long enough for reply and
+/// acknowledgement, even over many hops.
 const ANCHOR_TTL_MS: u64 = 120_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
-    /// Mobil node eller node på batteri uden opladning. Videresender ikke.
+    /// Mobile node, or node on battery without charging. Does not forward.
     Client,
-    /// Står stille og har positivt energibudget (fast strøm eller sol).
+    /// Stationary with a positive energy budget (mains power or solar).
     Repeater,
-    /// Håndholdt node i gruppe-tilstand ("skov-tilstand"), når der ingen
-    /// repeatere er. Videresender som en repeater, men venter længere (så
-    /// rigtige repeatere vinder) og kun inden for `relay_hops`.
+    /// Handheld node in group mode ("forest mode") when there are no
+    /// repeaters. Forwards like a repeater, but waits longer (so
+    /// real repeaters win) and only within `relay_hops`.
     Relay,
-    /// Fast repeater, der også deler stier over [`MAX_PATH`] hop op i
-    /// stykker (se modulets dokumentation). Bruges fx langs motorveje.
+    /// Fixed repeater that also splits paths over [`MAX_PATH`] hops into
+    /// legs (see the module documentation). Used e.g. along motorways.
     Anchor,
 }
 
 impl Role {
-    /// Rollen som tal på wire/i flash (0 = klient, 1 = repeater, 2 = relay,
-    /// 3 = anker).
+    /// The role as a number on the wire/in flash (0 = client, 1 = repeater, 2 = relay,
+    /// 3 = anchor).
     pub fn as_u8(self) -> u8 {
         match self {
             Role::Client => 0,
@@ -208,25 +208,25 @@ impl Role {
         }
     }
 
-    /// Videresender noden for andre (repeater eller relay)?
+    /// Does the node forward for others (repeater or relay)?
     pub fn forwards(self) -> bool {
         self != Role::Client
     }
 }
 
-/// Energistatus, som meddeles i announces og påvirker routing.
+/// Energy status, announced in announces and affecting routing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Energy {
-    /// Videresender intet; noden sover, til den er ladet op.
+    /// Forwards nothing; the node sleeps until it is charged.
     Critical = 0,
-    /// Videresender kun direkte beskeder og ruteforespørgsler.
+    /// Only forwards direct messages and path requests.
     Low = 1,
     Ok = 2,
     Full = 3,
 }
 
 impl Energy {
-    /// Ekstra ventetid i flood, så ruter undgår repeatere med lavt batteri.
+    /// Extra wait in floods, so routes avoid repeaters with low battery.
     fn penalty_ms(self) -> u32 {
         match self {
             Energy::Full => 0,
@@ -239,22 +239,22 @@ impl Energy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// Send pakken efter `delay_ms`. Laget under står for duty cycle og CAD.
-    /// `id` er pakkens ID, så en senere `Cancel` kan finde den.
+    /// Send the packet after `delay_ms`. The layer below handles duty cycle and CAD.
+    /// `id` is the packet's ID, so a later `Cancel` can find it.
     Transmit { packet: Buf, delay_ms: u32, id: u64 },
-    /// Annullér en planlagt videresendelse af et flood, fordi naboerne
-    /// allerede har dækket området. Er den sendt, ignoreres dette.
+    /// Cancel a planned forward of a flood because the neighbours
+    /// have already covered the area. If it has been sent, this is ignored.
     Cancel { id: u64 },
-    /// En pakke til os eller til en kanal, vi lytter på.
+    /// A packet for us or for a channel we listen on.
     Deliver {
         ptype: PacketType,
         dest: Address,
         payload: Buf,
         hops: u8,
     },
-    /// Vi har fundet en rute.
+    /// We have found a route.
     RouteLearned { dest: Address, hops: u8 },
-    /// En direkte besked er kvitteret af modtageren.
+    /// A direct message has been acknowledged by the recipient.
     Acked { msg_id: u64 },
     /// A message we carried has reached its destination ("delivered
     /// (carried)"): the delivered notice came back to us. `msg_id` is the
@@ -265,7 +265,7 @@ pub enum Action {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendError {
     TooLarge,
-    /// Ingen kendt rute (send en direkte besked først).
+    /// No known route (send a direct message first).
     NoRoute,
     QueueFull,
     TooManyChannels,
@@ -273,13 +273,13 @@ pub enum SendError {
 
 struct PendingRequest {
     token: Address,
-    /// Tokens fra tidligere forsøg: et sent svar på dem gælder stadig.
+    /// Tokens from earlier attempts: a late reply to them still counts.
     old_tokens: heapless::Vec<Address, 2>,
     target: Address,
-    /// Besked, der blev sendt med i forespørgslen (som MeshCore: første
-    /// besked floodes, og svaret er både rute og kvittering).
+    /// Message that was sent along in the request (like MeshCore: the first
+    /// message is flooded, and the reply is both route and acknowledgement).
     carried: Option<u64>,
-    /// Hvornår forespørgslen gentages, hvis intet svar.
+    /// When the request is repeated if there is no reply.
     retry_at_ms: u64,
     tries: u8,
 }
@@ -290,8 +290,8 @@ struct Queued {
     payload: Buf,
 }
 
-/// Et svar på en ruteforespørgsel, som venter på, at flere kopier kan nå
-/// frem, så det bedste spor kan vælges.
+/// A reply to a path request that waits for more copies to
+/// arrive, so the best trail can be chosen.
 struct PendingReply {
     token: Address,
     best: Path,
@@ -299,9 +299,9 @@ struct PendingReply {
     reply_at_ms: u64,
 }
 
-/// Et stykke, et anker husker: svar til `key` (svar-token eller
-/// kvitterings-token) sendes tilbage ad `back`. `target` er målet for en
-/// ruteforespørgsel (ellers ubrugt).
+/// A leg an anchor remembers: replies to `key` (reply token or
+/// ack token) are sent back along `back`. `target` is the target of a
+/// path request (otherwise unused).
 struct Anchored {
     key: Address,
     target: Address,
@@ -319,8 +319,8 @@ struct AwaitAck {
     tries: u8,
 }
 
-/// En kildestyret pakke, vi har sendt, og hvor vi lytter efter, at næste
-/// repeater sender den videre (implicit kvittering pr. hop).
+/// A source-routed packet we have sent, where we listen for the next
+/// repeater to forward it (implicit per-hop acknowledgement).
 struct Forward {
     id: u64,
     hops: u8,
@@ -329,8 +329,8 @@ struct Forward {
     tries: u8,
 }
 
-/// Grænse for et svagt link ved en given spreading factor: modtagerens
-/// følsomhedsgrænse plus 5 dB margen.
+/// Limit for a weak link at a given spreading factor: the receiver's
+/// sensitivity limit plus a 5 dB margin.
 pub fn weak_snr_for_sf(sf: u8) -> i8 {
     let floor = match sf {
         5 | 6 => -5,
@@ -344,7 +344,7 @@ pub fn weak_snr_for_sf(sf: u8) -> i8 {
     floor + 5
 }
 
-/// Token, som modtageren sender kvitteringen til.
+/// The token the recipient sends the acknowledgement to.
 pub fn ack_token(msg_id: u64) -> Address {
     let mut b = [0u8; 16];
     b[..8].copy_from_slice(&msg_id.to_le_bytes());
@@ -360,40 +360,40 @@ fn reversed(path: &Path) -> Path {
     p
 }
 
-/// Tællere til status-siden.
+/// Counters for the status page.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RouterStats {
-    /// Gyldige pakker modtaget.
+    /// Valid packets received.
     pub rx_packets: u32,
-    /// Pakker, der ikke kunne afkodes.
+    /// Packets that could not be decoded.
     pub rx_invalid: u32,
-    /// Kopier af pakker, vi allerede havde set.
+    /// Copies of packets we had already seen.
     pub rx_duplicates: u32,
-    /// Pakker, vi har sendt videre for andre.
+    /// Packets we have forwarded for others.
     pub forwarded: u32,
-    /// Pakker, vi selv har startet.
+    /// Packets we have originated ourselves.
     pub originated: u32,
-    /// Pakker leveret til os (eller en kanal, vi lytter på).
+    /// Packets delivered to us (or a channel we listen on).
     pub delivered: u32,
-    /// Kvitteringer modtaget for vores beskeder.
+    /// Acknowledgements received for our messages.
     pub acked: u32,
     pub routes_learned: u32,
     pub path_requests: u32,
-    /// Hop gensendt, fordi næste repeater ikke blev hørt.
+    /// Hops retransmitted because the next repeater was not heard.
     pub hop_retries: u32,
     /// Carry packets sent and messages delivered to us by carrying.
     pub carry_handoffs: u32,
     pub carry_delivered: u32,
     /// Delivered notices sent (see "Delivered notice").
     pub carry_notices: u32,
-    /// Flood-udsendelser annulleret, fordi naboer havde dækket området.
+    /// Flood transmissions cancelled because neighbours had covered the area.
     pub floods_cancelled: u32,
-    /// Announces og ruteforespørgsler smidt væk, fordi arbejdsbeviset
-    /// (stemplet) manglede eller var forkert (se [`crate::stamp`]).
+    /// Announces and path requests dropped because the proof of work
+    /// (the stamp) was missing or wrong (see [`crate::stamp`]).
     pub bad_stamps: u32,
 }
 
-/// Routing-motor med `R` ruter og et dublet-filter på `D` pakker.
+/// Routing engine with `R` routes and a duplicate filter of `D` packets.
 pub struct Router<const R: usize, const D: usize> {
     pub addr: Address,
     pub id: PathId,
@@ -407,17 +407,17 @@ pub struct Router<const R: usize, const D: usize> {
     channels: heapless::Vec<Address, MAX_CHANNELS>,
     forwards: heapless::Vec<Forward, MAX_FORWARDS>,
     replies: heapless::Vec<PendingReply, 4>,
-    /// Floods vi har planlagt at sende videre, og hvor mange kopier vi har hørt.
+    /// Floods we have planned to forward, and how many copies we have heard.
     flood_pending: heapless::Vec<(u64, u8), MAX_FLOOD_PENDING>,
     /// Tidsslot for flood-ventetid (ms).
     pub slot_ms: u32,
-    /// Ventetid på implicit kvittering pr. hop (ms).
+    /// Wait for the implicit per-hop acknowledgement (ms).
     pub hop_timeout_ms: u32,
-    /// Annullér egen videresendelse af et flood efter så mange hørte kopier
-    /// med god SNR (se `on_duplicate_flood`).
+    /// Cancel our own forward of a flood after this many heard copies
+    /// with good SNR (see `on_duplicate_flood`).
     pub suppress_after: u8,
-    /// Ekstra ventetid før vi sender et flood videre (ms). Bruges af en bro,
-    /// så en repeaters kopi når frem først, hvis repeateren selv sender.
+    /// Extra wait before we forward a flood (ms). Used by a bridge,
+    /// so a repeater's copy arrives first if the repeater sends itself.
     pub extra_flood_delay_ms: u32,
     /// Copies per message for store-carry-forward; 0 = off (see "Carry").
     pub carry_copies: u8,
@@ -430,40 +430,40 @@ pub struct Router<const R: usize, const D: usize> {
     carry_near_repeater: bool,
     /// Carried messages known to be delivered.
     carry_done: heapless::Vec<CarryDone, CARRY_DONE_MAX>,
-    /// Største antal hop, en relay videresender (standard 4, højst 7).
+    /// Largest number of hops a relay forwards (default 4, at most 7).
     pub relay_hops: u8,
-    /// Ventetid på kvittering fra ende til ende, før ruten repareres (ms).
+    /// Wait for the end-to-end acknowledgement before the route is repaired (ms).
     pub ack_timeout_ms: u32,
-    /// Noden bevæger sig (fx i en bil): ruter forældes hurtigt.
+    /// The node moves (e.g. in a car): routes go stale quickly.
     pub mobile: bool,
-    /// Et sidste spring med SNR under dette regnes for svagt. Brug
-    /// [`weak_snr_for_sf`] til den valgte spreading factor.
+    /// A last hop with SNR below this counts as weak. Use
+    /// [`weak_snr_for_sf`] for the chosen spreading factor.
     pub weak_snr_db: i8,
-    /// Regioner, noden videresender floods for (se [`crate::region`]).
+    /// Regions the node forwards floods for (see [`crate::region`]).
     pub regions: crate::region::Regions,
-    /// Med tom regionsliste: videresend kun floods uden region.
+    /// With an empty region list: only forward floods without a region.
     pub strict_region: bool,
     pub stats: RouterStats,
-    /// Direkte naboer (se [`crate::diag`]).
+    /// Direct neighbours (see [`crate::diag`]).
     pub neighbors: crate::diag::NeighborTable<MAX_NEIGHBORS>,
-    /// RSSI (dBm) for den pakke, der behandles nu; sættes af radiolaget før
-    /// `on_receive` (0 = ukendt).
+    /// RSSI (dBm) of the packet being handled now; set by the radio layer before
+    /// `on_receive` (0 = unknown).
     pub rx_rssi: i16,
-    /// Trace routes: (mål, token, sendt). Venter på en rute, til den er sendt.
+    /// Trace routes: (target, token, sent). Waits for a route until it is sent.
     traces: heapless::Vec<(Address, Address, bool), MAX_TRACES>,
-    /// Stykker, vi som anker husker (se [`Role::Anchor`]).
+    /// Legs we remember as an anchor (see [`Role::Anchor`]).
     anchored: heapless::Vec<Anchored, MAX_ANCHORED>,
 }
 
 impl<const R: usize, const D: usize> Router<R, D> {
-    /// Skifter rolle under kørsel (fx efter `SetRole` fra appen).
+    /// Changes role at run time (e.g. after `SetRole` from the app).
     pub fn set_role(&mut self, role: Role) {
         self.role = role;
     }
 
-    /// Skifter nodens adresse (ny identitet, se `Command::SetIdentity`).
-    /// Ruter, ventende afsendelser og kvitteringer hørte til den gamle
-    /// adresse og glemmes; kanaler, regioner, rolle og naboer bevares.
+    /// Changes the node's address (new identity, see `Command::SetIdentity`).
+    /// Routes, pending sends and acknowledgements belonged to the old
+    /// address and are forgotten; channels, regions, role and neighbours are kept.
     pub fn set_address(&mut self, addr: Address) {
         self.addr = addr;
         self.id = addr.path_id();
@@ -529,18 +529,18 @@ impl<const R: usize, const D: usize> Router<R, D> {
             .map_err(|_| SendError::TooManyChannels)
     }
 
-    /// Glemmer en rute, fx efter flere mistede kvitteringer.
+    /// Forgets a route, e.g. after several lost acknowledgements.
     pub fn forget_route(&mut self, dest: &Address) {
         self.routes.remove(dest);
     }
 
-    /// Ventetid før en repeater sender et flood videre.
+    /// Wait before a repeater forwards a flood.
     ///
-    /// Høj SNR (tæt på) giver lang ventetid, så fjerne repeatere sender først.
+    /// High SNR (close by) gives a long wait, so distant repeaters send first.
     ///
-    /// SNR deles i 8 trin à 5 dB; hvert trin er ét tidsslot. Laget under bør
-    /// lægge en tilfældig ventetid på 0..slot oveni, så repeatere i samme
-    /// trin ikke sender samtidig.
+    /// SNR is split into 8 steps of 5 dB; each step is one time slot. The layer below should
+    /// add a random wait of 0..slot on top, so repeaters in the same
+    /// step do not send at the same time.
     pub fn flood_delay_ms(&self, snr_db: i8) -> u32 {
         let bucket = ((snr_db as i32).clamp(-20, 19) + 20) / 5; // 0..=7
         let relay = if self.role == Role::Relay {
@@ -551,12 +551,12 @@ impl<const R: usize, const D: usize> Router<R, D> {
         bucket as u32 * self.slot_ms + self.energy.penalty_ms() + relay + self.extra_flood_delay_ms
     }
 
-    /// Må vi videresende et flood i `region` (0 = ingen)?
+    /// May we forward a flood in `region` (0 = none)?
     pub fn forwards_region(&self, region: u16) -> bool {
         crate::region::forwards(&self.regions, self.strict_region, region)
     }
 
-    /// Må vi videresende en pakke, der har taget `hops` hop?
+    /// May we forward a packet that has taken `hops` hops?
     fn may_forward(&self, hops: u8) -> bool {
         match self.role {
             Role::Client => false,
@@ -570,7 +570,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             return;
         };
         let id = packet_id(header.ptype, &header.dest, payload);
-        // Vores egne pakker skal ikke behandles igen, når naboer gentager dem.
+        // Our own packets must not be handled again when neighbours repeat them.
         self.dedup.insert(id);
         let _ = out.push(Action::Transmit {
             packet,
@@ -579,8 +579,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
         });
     }
 
-    /// Sender en kildestyret pakke og husker den, så den kan gensendes, hvis
-    /// vi ikke hører næste repeater sende den videre.
+    /// Sends a source-routed packet and remembers it, so it can be retransmitted if
+    /// we do not hear the next repeater forward it.
     fn emit_routed(
         &mut self,
         header: &Header,
@@ -595,7 +595,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             .as_ref()
             .is_some_and(|p| (header.hops as usize) < p.len());
         if !next_exists {
-            return; // Sidste hop: dækkes af kvitteringen fra ende til ende.
+            return; // Last hop: covered by the end-to-end acknowledgement.
         }
         let Ok(packet) = encode(header, payload) else {
             return;
@@ -612,7 +612,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         });
     }
 
-    /// Videresender et flood senere og husker det, så vi kan annullere.
+    /// Forwards a flood later and remembers it, so we can cancel.
     fn emit_flood(&mut self, header: &Header, payload: &[u8], delay_ms: u32, out: &mut Actions) {
         self.emit(header, payload, delay_ms, out);
         let id = packet_id(header.ptype, &header.dest, payload);
@@ -622,15 +622,15 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let _ = self.flood_pending.push((id, 0));
     }
 
-    /// En kopi af et flood, vi allerede har set. Har vi selv planlagt at
-    /// sende det videre, og har naboer allerede gjort det, annulleres vores.
+    /// A copy of a flood we have already seen. If we planned to
+    /// forward it ourselves, and neighbours have already done so, ours is cancelled.
     ///
-    /// Kun kopier hørt med god SNR tæller: de kommer fra en nær nabo, hvis
-    /// udsendelse dækker stort set det samme område som vores. En svag kopi
-    /// kommer langvejsfra og dækker et andet område, så den er ikke grund
-    /// til at tie. Derfor er én stærk kopi nok (`suppress_after` = 1). Talt
-    /// med alle kopier ville floodet dø ud på lange kæder (motorvej), og
-    /// de fundne ruter ville kun bestå af svage led.
+    /// Only copies heard with good SNR count: they come from a nearby neighbour whose
+    /// transmission covers roughly the same area as ours. A weak copy
+    /// comes from far away and covers a different area, so it is no reason
+    /// to stay quiet. That is why one strong copy is enough (`suppress_after` = 1). Counting
+    /// all copies, the flood would die out on long chains (motorway), and
+    /// the routes found would consist only of weak links.
     fn on_duplicate_flood(&mut self, id: u64, snr_db: i8, prev: Option<PathId>, now_ms: u64, out: &mut Actions) {
         if snr_db < self.weak_snr_db {
             return;
@@ -707,12 +707,12 @@ impl<const R: usize, const D: usize> Router<R, D> {
         })
     }
 
-    /// Har vi allerede set denne pakke (samme ID)? Ændrer intet.
+    /// Have we already seen this packet (same ID)? Changes nothing.
     pub fn seen(&self, buf: &[u8]) -> bool {
         Packet::decode(buf).is_ok_and(|p| self.dedup.contains(packet_id(p.header.ptype, &p.header.dest, p.payload)))
     }
 
-    /// Tidspunkt for næste gensendelse, hvis nogen.
+    /// Time of the next retransmission, if any.
     pub fn next_deadline(&self) -> Option<u64> {
         let fwd = self.forwards.iter().map(|f| f.deadline_ms);
         let req = self.pending.iter().map(|p| p.retry_at_ms);
@@ -723,15 +723,15 @@ impl<const R: usize, const D: usize> Router<R, D> {
         fwd.chain(req).chain(ack).chain(rep).chain(carry).min()
     }
 
-    /// Kaldes, når `next_deadline` er nået: gensender hop, der ikke er
-    /// blevet sendt videre, og opgiver dem efter `HOP_RETRIES` forsøg.
+    /// Called when `next_deadline` is reached: retransmits hops that have not
+    /// been forwarded, and gives up on them after `HOP_RETRIES` attempts.
     pub fn tick(&mut self, now_ms: u64) -> Actions {
         let mut out = Actions::new();
         if (!self.carried.is_empty() || !self.carry_done.is_empty()) && now_ms >= self.next_carry_ms {
             self.next_carry_ms = now_ms + CARRY_EVERY_MS;
             self.carry_step(now_ms, &mut out);
         }
-        // Svar på ruteforespørgsler ad det bedste spor, vi har hørt.
+        // Answer path requests along the best trail we have heard.
         while let Some(i) = self.replies.iter().position(|r| r.reply_at_ms <= now_ms) {
             let r = self.replies.swap_remove(i);
             let mut payload = Buf::new();
@@ -742,8 +742,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
             let header = Header::new(PacketType::PathResponse, r.token).with_path(reversed(&r.best));
             self.emit_routed(&header, &payload, 0, now_ms, &mut out);
         }
-        // Beskeder uden kvittering: ruten er nok brudt (fx fordi modtageren
-        // har flyttet sig). Glem den og send igen med ny ruteforespørgsel.
+        // Messages without acknowledgement: the route is probably broken (e.g. because the recipient
+        // has moved). Forget it and send again with a new path request.
         let timeout = self.ack_timeout_ms as u64;
         let mut i = 0;
         while i < self.awaiting.len() {
@@ -775,8 +775,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
             }
             i += 1;
         }
-        // Ubesvarede ruteforespørgsler gentages med et nyt token, så
-        // repeaternes dublet-filter ikke stopper dem.
+        // Unanswered path requests are repeated with a new token, so
+        // the repeaters' duplicate filter does not stop them.
         let mut i = 0;
         while i < self.pending.len() {
             if self.pending[i].retry_at_ms > now_ms {
@@ -785,8 +785,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
             }
             let p = self.pending.swap_remove(i);
             if p.tries >= PATH_RETRIES {
-                // Opgiv: modtageren kan ikke findes nu. Beskeder i køen til den
-                // droppes, så køen ikke fyldes op (appen kan bruge postkassen).
+                // Give up: the recipient cannot be found now. Messages queued for it
+                // are dropped, so the queue does not fill up (the app can use the mailbox).
                 // With carrying on, direct messages are carried instead.
                 let mut carry: heapless::Vec<Buf, 4> = heapless::Vec::new();
                 for q in self.queue.iter().filter(|q| q.dest == p.target && q.ptype == PacketType::Data) {
@@ -821,8 +821,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
             let f = &mut self.forwards[i];
             f.tries += 1;
             self.stats.hop_retries += 1;
-            // Lidt forskellig ventetid for hver pakke og hvert forsøg, så to
-            // repeatere ikke bliver ved med at kollidere i samme takt.
+            // A slightly different wait for each packet and each attempt, so two
+            // repeaters do not keep colliding in the same rhythm.
             let jitter = (f.id.rotate_left(f.tries as u32 * 7) % 1000) * self.hop_timeout_ms as u64 / 1000;
             f.deadline_ms = now_ms + self.hop_timeout_ms as u64 + jitter;
             let _ = out.push(Action::Transmit {
@@ -835,12 +835,12 @@ impl<const R: usize, const D: usize> Router<R, D> {
         out
     }
 
-    // ---------- afsendelse ----------
+    // ---------- sending ----------
 
-    /// Sender en direkte besked. Kendes ingen rute, sættes beskeden i kø, og
-    /// der sendes en ruteforespørgsel med `req_token` (16 tilfældige bytes).
+    /// Sends a direct message. If no route is known, the message is queued and
+    /// a path request is sent with `req_token` (16 random bytes).
     ///
-    /// Returnerer beskedens ID, som senere kommer tilbage i `Action::Acked`.
+    /// Returns the message ID, which comes back later in `Action::Acked`.
     pub fn send_direct(
         &mut self,
         dest: Address,
@@ -851,9 +851,9 @@ impl<const R: usize, const D: usize> Router<R, D> {
         self.send_typed(PacketType::Data, dest, payload, req_token, now_ms)
     }
 
-    /// Som `send_direct`, men med valgfri pakketype (`Data`, `Fragment`,
-    /// `Deposit`). Kvitteres fra ende til ende. Kun `Data` kan rejse med i
-    /// ruteforespørgslen.
+    /// Like `send_direct`, but with an optional packet type (`Data`, `Fragment`,
+    /// `Deposit`). Acknowledged end to end. Only `Data` can travel along in
+    /// the path request.
     pub fn send_typed(
         &mut self,
         ptype: PacketType,
@@ -873,7 +873,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 .get(&dest)
                 .is_some_and(|r| r.learned_ms + MOBILE_ROUTE_MS < now_ms)
         {
-            // En mobil node har flyttet sig: find en frisk rute.
+            // A mobile node has moved: find a fresh route.
             self.routes.remove(&dest);
         }
         if let Some(route) = self.routes.get(&dest) {
@@ -902,8 +902,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
         Ok((msg_id, out))
     }
 
-    /// Sender et fragment (fx en bid af en fil) ad en kendt rute. Det
-    /// kvitteres fra ende til ende ligesom en direkte besked.
+    /// Sends a fragment (e.g. a chunk of a file) along a known route. It is
+    /// acknowledged end to end just like a direct message.
     pub fn send_fragment(
         &mut self,
         dest: Address,
@@ -921,9 +921,9 @@ impl<const R: usize, const D: usize> Router<R, D> {
         Ok((packet_id(PacketType::Fragment, &dest, payload), out))
     }
 
-    /// Sender en trace route til `dest` (se [`crate::diag`]). Kendes ingen
-    /// rute, findes den først. Svaret kommer som `Action::Deliver` med
-    /// `ptype = Probe`, `dest` = målet og payloaden som trace-svar.
+    /// Sends a trace route to `dest` (see [`crate::diag`]). If no route is known,
+    /// it is found first. The reply comes as `Action::Deliver` with
+    /// `ptype = Probe`, `dest` = the target and the payload as trace reply.
     pub fn send_trace(&mut self, dest: Address, token: [u8; 16], now_ms: u64) -> Actions {
         let mut out = Actions::new();
         let token = Address(token);
@@ -949,8 +949,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
         self.emit_routed(&header, &diag::trace_request(&token), 0, now_ms, out);
     }
 
-    /// Husker den nabo, der sendte pakken, hvis det kan ses: forrige hop i
-    /// en kildesti eller et spor, eller afsenderen af et announce uden hop.
+    /// Remembers the neighbour that sent the packet, if that can be seen: the previous hop in
+    /// a source path or a trail, or the sender of an announce with no hops.
     fn note_neighbor(&mut self, pkt: &Packet, snr_db: i8, now_ms: u64) {
         let h = &pkt.header;
         let from = match (&h.ptype, &h.path) {
@@ -1231,12 +1231,12 @@ impl<const R: usize, const D: usize> Router<R, D> {
         }
     }
 
-    /// Kender vi en rute til `dest`?
+    /// Do we know a route to `dest`?
     pub fn has_route(&self, dest: &Address) -> bool {
         self.routes.get(dest).is_some()
     }
 
-    /// Sender en ny ruteforespørgsel, fx hvis den første ikke blev besvaret.
+    /// Sends a new path request, e.g. if the first one was not answered.
     pub fn retry_path(&mut self, dest: Address, req_token: [u8; 16], now_ms: u64) -> Actions {
         let mut out = Actions::new();
         self.pending.retain(|p| p.target != dest);
@@ -1262,8 +1262,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
     ) {
         self.stats.path_requests += 1;
         self.stats.originated += 1;
-        // Den første besked i køen sendes med, hvis den kan være der, når
-        // stien er fuld (12 hop).
+        // The first message in the queue is sent along if it fits when
+        // the path is full (12 hops).
         let mut payload = Buf::new();
         let _ = payload.extend_from_slice(&token.0);
         let mut carried = None;
@@ -1284,7 +1284,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             retry_at_ms: now_ms + PATH_RETRY_MS,
             tries,
         });
-        // Arbejdsbevis bundet til målet og tokenet (ca. 256 forsøg i snit).
+        // Proof of work bound to the target and the token (about 256 attempts on average).
         stamp::append(PacketType::PathRequest, &dest, &mut payload);
         let header = Header::new(PacketType::PathRequest, dest).with_path(Path::new());
         self.emit(&header, &payload, 0, out);
@@ -1302,7 +1302,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         self.stats.originated += 1;
         let msg_id = packet_id(ptype, &dest, payload);
         if ptype == PacketType::Datagram {
-            // Ingen kvittering fra ende til ende: tunnelen klarer selv tab (NACK).
+            // No end-to-end acknowledgement: the tunnel handles loss itself (NACK).
         } else if let Some(a) = self.awaiting.iter_mut().find(|a| a.msg_id == msg_id) {
             a.sent_ms = now_ms;
         } else {
@@ -1323,12 +1323,12 @@ impl<const R: usize, const D: usize> Router<R, D> {
         self.emit_routed(&header, payload, 0, now_ms, out);
     }
 
-    /// Sender en besked til en kanal (floodes lokalt).
+    /// Sends a message to a channel (flooded locally).
     pub fn send_channel(&mut self, channel: Address, payload: &[u8]) -> Result<Actions, SendError> {
         self.send_channel_in(channel, 0, payload)
     }
 
-    /// Sender en kanalbesked mærket med en region (0 = ingen).
+    /// Sends a channel message tagged with a region (0 = none).
     pub fn send_channel_in(
         &mut self,
         channel: Address,
@@ -1345,17 +1345,17 @@ impl<const R: usize, const D: usize> Router<R, D> {
         Ok(out)
     }
 
-    // ---------- modtagelse ----------
+    // ---------- receiving ----------
 
-    /// Behandler en modtaget pakke.
+    /// Handles a received packet.
     pub fn on_receive(&mut self, buf: &[u8], snr_db: i8, now_ms: u64) -> Actions {
         let mut out = Actions::new();
         let Ok(pkt) = Packet::decode(buf) else {
             self.stats.rx_invalid += 1;
             return out;
         };
-        // Announces og ruteforespørgsler uden gyldigt arbejdsbevis behandles
-        // ikke og sendes ikke videre. Det koster én hash at tjekke.
+        // Announces and path requests without a valid proof of work are not handled
+        // and not forwarded. Checking costs one hash.
         if stamp::required(pkt.header.ptype)
             && stamp::verify(pkt.header.ptype, &pkt.header.dest, pkt.payload).is_err()
         {
@@ -1383,7 +1383,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 }
             }
             (_, Some(path)) => {
-                // Hører vi næste repeater sende vores pakke videre, er hoppet lykkedes.
+                // If we hear the next repeater forward our packet, the hop succeeded.
                 let hops = pkt.header.hops;
                 self.forwards.retain(|f| !(f.id == id && hops > f.hops));
                 let path = path.clone();
@@ -1410,11 +1410,11 @@ impl<const R: usize, const D: usize> Router<R, D> {
         out
     }
 
-    /// En kopi mere af en ruteforespørgsel til os. Er dens spor bedre end det
-    /// hidtil bedste, huskes det i stedet.
+    /// One more copy of a path request to us. If its trail is better than the
+    /// best so far, it is remembered instead.
     ///
-    /// Først undgås svage sidste spring (de vandt, fordi de kom længst, men
-    /// svaret tilbage går ofte tabt). Derefter færrest hop og bedst SNR.
+    /// First weak last hops are avoided (they won because they reached furthest, but
+    /// the reply back is often lost). Then fewest hops and best SNR.
     fn consider_reply(&mut self, pkt: &Packet, snr_db: i8) {
         let Some(token) = Address::from_slice(pkt.payload) else { return };
         let weak = self.weak_snr_db;
@@ -1431,13 +1431,13 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let h = &pkt.header;
         let record = h.path.clone().unwrap_or_default();
         if h.dest == self.addr {
-            // Vi er målet: svar til tokenet ad den omvendte sti, og send
-            // den fundne sti med i payloaden.
+            // We are the target: answer the token along the reverse path, and send
+            // the path found along in the payload.
             let Some(token) = Address::from_slice(pkt.payload) else {
                 return;
             };
-            // Indeholder forespørgslen en besked, leveres den nu. Svaret
-            // fungerer så også som kvittering.
+            // If the request contains a message, it is delivered now. The reply
+            // then also works as an acknowledgement.
             let data = &stamp::strip(PacketType::PathRequest, pkt.payload)[16..];
             if !data.is_empty()
                 && self
@@ -1451,8 +1451,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     hops: h.hops,
                 });
             }
-            // Svar ikke med det samme: vent på flere kopier ad andre veje og
-            // vælg den bedste (se `consider_reply`).
+            // Do not answer right away: wait for more copies along other routes and
+            // pick the best (see `consider_reply`).
             if self.replies.iter().any(|r| r.token == token) {
                 return;
             }
@@ -1472,13 +1472,13 @@ impl<const R: usize, const D: usize> Router<R, D> {
         }
         let mut record = record;
         if self.role == Role::Anchor && !record.is_empty() {
-            // Et anker deler stien: det husker vejen tilbage og sender videre
-            // med tomt spor. Så er det nok med et anker mindst hvert 12. hop.
+            // An anchor splits the path: it remembers the way back and forwards
+            // with an empty trail. Then an anchor at least every 12th hop is enough.
             let Some(token) = Address::from_slice(pkt.payload) else { return };
             self.remember_anchor(token, h.dest, reversed(&record), now_ms);
             record = Path::new();
         } else if record.push(self.id).is_err() {
-            return; // Længere end en kildesti kan bære, og vi er ikke anker.
+            return; // Longer than a source path can carry, and we are not an anchor.
         }
         let mut header = Header::new(PacketType::PathRequest, h.dest).with_path(record);
         header.hops = h.hops + 1;
@@ -1499,8 +1499,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let h = &pkt.header;
         let idx = h.hops as usize;
         if idx < path.len() {
-            // Er vi næste repeater på stien? En kopi, vi har set før, sendes
-            // også videre: forrige hop gensender kun, når det ikke hørte os.
+            // Are we the next repeater on the path? A copy we have seen before is
+            // forwarded too: the previous hop only retransmits when it did not hear us.
             if path[idx] != self.id || !self.may_forward(h.hops) {
                 return;
             }
@@ -1509,7 +1509,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             header.hops += 1;
             self.stats.forwarded += 1;
             if h.ptype == PacketType::Probe && diag::trace_fixed_len(pkt.payload).is_some() {
-                // Trace: læg den SNR, vi hørte pakken med, til.
+                // Trace: append the SNR we heard the packet with.
                 let mut p = diag::TraceBuf::from_slice(pkt.payload).unwrap_or_default();
                 diag::trace_append(&mut p, snr_db);
                 self.emit_routed(&header, &p, SOURCE_ROUTE_DELAY_MS, now_ms, out);
@@ -1521,7 +1521,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         if idx != path.len() {
             return;
         }
-        // Sidste stræk: er pakken til os?
+        // Last stretch: is the packet for us?
         match h.ptype {
             PacketType::PathResponse => {
                 let Some(i) = self
@@ -1541,7 +1541,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 let req = self.pending.swap_remove(i);
                 if let Some(msg_id) = req.carried {
                     self.awaiting.retain(|a| a.msg_id != msg_id);
-                    // Beskeden kom frem med forespørgslen: fjern den fra køen.
+                    // The message arrived with the request: remove it from the queue.
                     let target = req.target;
                     self.queue
                         .retain(|q| packet_id(q.ptype, &target, &q.payload) != msg_id);
@@ -1563,7 +1563,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 self.carry_delivered_notice(msg_id, false, now_ms, out);
             }
             PacketType::Probe if h.dest == self.addr => {
-                // Trace til os: svar ad den omvendte sti til tokenet.
+                // Trace to us: answer along the reverse path to the token.
                 let Some((token, snrs)) = diag::parse_request(pkt.payload) else { return };
                 if !self.dedup.insert(id) {
                     return;
@@ -1576,7 +1576,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 self.emit_routed(&header, &resp, SOURCE_ROUTE_DELAY_MS, now_ms, out);
             }
             PacketType::Probe => {
-                // Svar på vores egen trace?
+                // A reply to our own trace?
                 let Some(i) = self.traces.iter().position(|t| t.1 == h.dest) else { return };
                 if !self.dedup.insert(id) {
                     return;
@@ -1592,8 +1592,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 });
             }
             _ if h.dest == self.addr => {
-                // En gentaget besked leveres ikke igen, men kvitteres igen,
-                // for den første kvittering kan være gået tabt.
+                // A repeated message is not delivered again, but acknowledged again,
+                // because the first acknowledgement may have been lost.
                 if self.dedup.insert(id) {
                     deliver(pkt, out);
                 }
@@ -1623,8 +1623,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let _ = self.anchored.push(Anchored { key, target, back, until_ms: now_ms + ANCHOR_TTL_MS });
     }
 
-    /// Svar på en forespørgsel, vi delte: lær ruten videre til målet og send
-    /// svaret tilbage ad første stykke med det stykke som afsenderens rute.
+    /// Reply to a request we split: learn the onward route to the target and send
+    /// the reply back along the first leg with that leg as the sender's route.
     fn anchor_path_response(&mut self, pkt: &Packet, id: u64, now_ms: u64, out: &mut Actions) {
         let h = &pkt.header;
         let Some(i) = self.anchored.iter().position(|a| a.key == h.dest && a.until_ms > now_ms) else {
@@ -1653,7 +1653,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         self.emit_routed(&header, &payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
     }
 
-    /// Kvittering til en besked, vi sendte videre som anker: send den tilbage.
+    /// Acknowledgement for a message we forwarded as an anchor: send it back.
     fn anchor_relay_back(&mut self, pkt: &Packet, id: u64, now_ms: u64, out: &mut Actions) {
         let h = &pkt.header;
         let Some(i) = self.anchored.iter().position(|a| a.key == h.dest && a.until_ms > now_ms) else {
@@ -1668,8 +1668,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
         self.emit_routed(&header, pkt.payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
     }
 
-    /// En besked, hvis sti ender hos os, men som er til en anden: send den
-    /// videre ad vores egen rute og husk vejen tilbage til kvitteringen.
+    /// A message whose path ends at us, but which is for someone else: forward it
+    /// along our own route and remember the way back for the acknowledgement.
     fn anchor_forward(&mut self, pkt: &Packet, path: &Path, id: u64, now_ms: u64, out: &mut Actions) {
         let h = &pkt.header;
         if h.dest == self.addr || self.energy == Energy::Critical {
@@ -1695,7 +1695,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             learned_ms: now_ms,
         });
         let _ = out.push(Action::RouteLearned { dest: target, hops });
-        // Trace routes, der ventede på ruten.
+        // Trace routes that were waiting for the route.
         for i in 0..self.traces.len() {
             let (dest, token, sent) = self.traces[i];
             if dest == target && !sent {
@@ -1703,7 +1703,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 self.emit_trace(dest, token, path.clone(), now_ms, out);
             }
         }
-        // Send beskeder, der ventede på ruten.
+        // Send messages that were waiting for the route.
         let mut i = 0;
         while i < self.queue.len() {
             if self.queue[i].dest == target {
@@ -1717,7 +1717,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
 
     fn on_flood(&mut self, pkt: &Packet, snr_db: i8, out: &mut Actions) {
         let h = &pkt.header;
-        // Announces går altid til appen, så den kan verificere og huske nøglen.
+        // Announces always go to the app, so it can verify and remember the key.
         if h.dest == self.addr || self.channels.contains(&h.dest) || h.ptype == PacketType::Announce
         {
             deliver(pkt, out);
@@ -1729,7 +1729,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             h.ptype,
             PacketType::Channel | PacketType::Announce | PacketType::Probe
         );
-        // Ved lavt batteri videresendes kun det vigtigste.
+        // On low battery only the most important things are forwarded.
         let allowed = match self.energy {
             Energy::Full | Energy::Ok => true,
             Energy::Low => !local,
@@ -1747,8 +1747,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
     }
 }
 
-/// Leverer pakken til appen. Et stempel fjernes først, så appen ser samme
-/// payload, som afsenderen lavede (fx et signeret announce).
+/// Delivers the packet to the app. A stamp is removed first, so the app sees the same
+/// payload the sender made (e.g. a signed announce).
 fn deliver(pkt: &Packet, out: &mut Actions) {
     let payload = stamp::strip(pkt.header.ptype, pkt.payload);
     let _ = out.push(Action::Deliver {
@@ -1780,14 +1780,14 @@ mod tests {
     fn node(n: u8, role: Role) -> R {
         let mut a = [n; 16];
         a[0] = 0;
-        a[1] = n; // sti-ID = n
+        a[1] = n; // path ID = n
         R::new(Address(a), role)
     }
 
-    /// Lader `n` vente det tidsslot, hvor den samler kopier af en
-    /// ruteforespørgsel, og returnerer det, den så sender.
+    /// Lets `n` wait out the time slot in which it collects copies of a
+    /// path request, and returns what it then sends.
     fn reply(n: &mut R, now: u64) -> Vec<Buf> {
-        let d = n.next_deadline().expect("venter på at svare");
+        let d = n.next_deadline().expect("waiting to reply");
         assert!(d >= now);
         transmits(&n.tick(d))
     }
@@ -1802,8 +1802,8 @@ mod tests {
             .collect()
     }
 
-    /// Simulerer en kæde: hver node hører kun sine to naboer. Kører, til
-    /// der ikke sker mere, og returnerer alle hændelser (node, handling).
+    /// Simulates a chain: every node only hears its two neighbours. Runs until
+    /// nothing more happens, and returns all events (node, action).
     fn run_line(nodes: &mut [R], start: Vec<(usize, Buf)>, now: &mut u64) -> Vec<(usize, Action)> {
         let mut queue: std::collections::VecDeque<(usize, Buf)> = start.into();
         let mut events = Vec::new();
@@ -1856,25 +1856,25 @@ mod tests {
 
     #[test]
     fn anchors_carry_messages_beyond_twelve_hops() {
-        // A, 22 repeatere med ankre ved 8 og 16, B: 22 hop i alt.
+        // A, 22 repeaters with anchors at 8 and 16, B: 22 hops in total.
         let mut nodes = line(23, &[8, 16]);
         let b = nodes[23].addr;
         let mut now = 0;
-        let (first, out) = nodes[0].send_direct(b, "langt væk".as_bytes(), [7; 16], now).unwrap();
+        let (first, out) = nodes[0].send_direct(b, "far away".as_bytes(), [7; 16], now).unwrap();
         let ev = run_line(&mut nodes, transmits(&out).into_iter().map(|p| (0, p)).collect(), &mut now);
         assert!(ev.iter().any(|(i, a)| *i == 23 && matches!(a,
-            Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == "langt væk".as_bytes())));
-        assert!(ev.contains(&(0, Action::Acked { msg_id: first })), "første besked kvitteret via svaret");
-        // Afsenderens rute ender ved det første anker.
+            Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == "far away".as_bytes())));
+        assert!(ev.contains(&(0, Action::Acked { msg_id: first })), "first message acknowledged via the reply");
+        // The sender's route ends at the first anchor.
         let route = nodes[0].routes().get(&b).unwrap().path.clone();
         assert_eq!(route.as_slice(), &(2..=8).collect::<Vec<u16>>()[..]);
 
-        // Næste besked går ad ruten gennem begge ankre og kvitteres hele vejen.
-        let (msg, out) = nodes[0].send_direct(b, b"igen", [8; 16], now).unwrap();
+        // The next message goes along the route through both anchors and is acknowledged all the way.
+        let (msg, out) = nodes[0].send_direct(b, b"again", [8; 16], now).unwrap();
         assert_eq!(Packet::decode(&transmits(&out)[0]).unwrap().header.ptype, PacketType::Data);
         let ev = run_line(&mut nodes, transmits(&out).into_iter().map(|p| (0, p)).collect(), &mut now);
         assert!(ev.iter().any(|(i, a)| *i == 23 && matches!(a,
-            Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == b"igen")));
+            Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == b"again")));
         assert!(ev.contains(&(0, Action::Acked { msg_id: msg })));
     }
 
@@ -1883,7 +1883,7 @@ mod tests {
         let mut nodes = line(23, &[]);
         let b = nodes[23].addr;
         let mut now = 0;
-        let (_, out) = nodes[0].send_direct(b, b"langt", [7; 16], now).unwrap();
+        let (_, out) = nodes[0].send_direct(b, b"far", [7; 16], now).unwrap();
         let ev = run_line(&mut nodes, transmits(&out).into_iter().map(|p| (0, p)).collect(), &mut now);
         assert!(!ev.iter().any(|(i, a)| *i == 23 && matches!(a, Action::Deliver { .. })));
     }
@@ -1892,11 +1892,11 @@ mod tests {
     fn drops_packets_without_valid_stamp() {
         let mut r = node(2, Role::Repeater);
         let dest = Address([5; 16]);
-        // Ruteforespørgsel uden stempel.
+        // Path request without a stamp.
         let h = Header::new(PacketType::PathRequest, dest).with_path(Path::new());
         let out = r.on_receive(&encode(&h, &[9u8; 16]).unwrap(), 0, 0);
         assert!(out.is_empty());
-        // Announce med forkert stempel (rigtigt stempel, men andet tidsstempel).
+        // Announce with a wrong stamp (a real stamp, but a different timestamp).
         let mut body: Buf = Buf::from_slice(&[1u8; 69]).unwrap();
         assert!(stamp::append(PacketType::Announce, &dest, &mut body));
         body[67] ^= 0xff;
@@ -1926,7 +1926,7 @@ mod tests {
         assert_eq!(r.stats.bad_stamps, 0);
     }
 
-    /// Kæde: A (klient) - R1 - R2 - B (klient). Hver hører kun sine naboer.
+    /// Chain: A (client) - R1 - R2 - B (client). Each only hears its neighbours.
     #[test]
     fn finds_route_delivers_and_acks_over_two_repeaters() {
         let mut a = node(1, Role::Client);
@@ -1938,7 +1938,7 @@ mod tests {
         let req = transmits(&out);
         assert_eq!(req.len(), 1);
 
-        // Forespørgslen (med første besked) floodes A -> R1 -> R2 -> B.
+        // The request (with the first message) is flooded A -> R1 -> R2 -> B.
         let f1 = transmits(&r1.on_receive(&req[0], 5, 0));
         let f2 = transmits(&r2.on_receive(&f1[0], 5, 0));
         let at_b = b.on_receive(&f2[0], 5, 0);
@@ -1946,7 +1946,7 @@ mod tests {
             Action::Deliver { ptype: PacketType::Data, payload, hops: 2, .. } if payload.as_slice() == b"hej B")));
         let resp = reply(&mut b, 0);
 
-        // Svaret går B -> R2 -> R1 -> A som kildesti og er også kvittering.
+        // The reply goes B -> R2 -> R1 -> A as a source path and is also the acknowledgement.
         let s2 = transmits(&r2.on_receive(&resp[0], 5, 0));
         let s1 = transmits(&r1.on_receive(&s2[0], 5, 0));
         let got = a.on_receive(&s1[0], 5, 0);
@@ -1957,8 +1957,8 @@ mod tests {
         assert!(got.contains(&Action::Acked { msg_id: first_id }));
         assert_eq!(a.routes().get(&b.addr).unwrap().path.as_slice(), &[2, 3]);
 
-        // Næste besked bruger ruten: A -> R1 -> R2 -> B.
-        let (msg_id, out) = a.send_direct(b.addr, b"igen", [8; 16], 10).unwrap();
+        // The next message uses the route: A -> R1 -> R2 -> B.
+        let (msg_id, out) = a.send_direct(b.addr, b"again", [8; 16], 10).unwrap();
         let data = transmits(&out);
         assert_eq!(
             Packet::decode(&data[0]).unwrap().header.ptype,
@@ -1968,9 +1968,9 @@ mod tests {
         let d2 = transmits(&r2.on_receive(&d1[0], 5, 0));
         let at_b = b.on_receive(&d2[0], 5, 0);
         assert!(at_b.iter().any(|x| matches!(x,
-            Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == b"igen")));
+            Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == b"again")));
 
-        // Kvittering B -> R2 -> R1 -> A.
+        // Acknowledgement B -> R2 -> R1 -> A.
         let ack = transmits(&at_b);
         let k2 = transmits(&r2.on_receive(&ack[0], 5, 0));
         let k1 = transmits(&r1.on_receive(&k2[0], 5, 0));
@@ -1986,7 +1986,7 @@ mod tests {
         let mut r1 = node(2, Role::Repeater);
         let mut r2 = node(3, Role::Repeater);
         let mut b = node(4, Role::Client);
-        // Ingen rute endnu: traceen venter på ruteforespørgslen.
+        // No route yet: the trace waits for the path request.
         let req = transmits(&a.send_trace(b.addr, [9; 16], 0));
         assert_eq!(Packet::decode(&req[0]).unwrap().header.ptype, PacketType::PathRequest);
         let f1 = transmits(&r1.on_receive(&req[0], 5, 0));
@@ -1996,7 +1996,7 @@ mod tests {
         let s2 = transmits(&r2.on_receive(&resp[0], 5, 0));
         let s1 = transmits(&r1.on_receive(&s2[0], 5, 0));
         let got = a.on_receive(&s1[0], 5, 0);
-        // Ruten er lært, og traceen sendes nu: A -> R1 -> R2 -> B.
+        // The route is learned, and the trace is sent now: A -> R1 -> R2 -> B.
         let t = transmits(&got);
         assert_eq!(Packet::decode(&t[0]).unwrap().header.ptype, PacketType::Probe);
         let t1 = transmits(&r1.on_receive(&t[0], 7, 0));
@@ -2013,17 +2013,17 @@ mod tests {
                 }
                 _ => None,
             })
-            .expect("trace-svar");
+            .expect("trace reply");
         let r = diag::parse_response(&payload).unwrap();
         assert_eq!(&r.path[..], &[2, 3]);
         assert_eq!(&r.out[..], &[7, -3, 4]);
         assert_eq!(&r.back[..], &[6, 2, 8]);
-        // Hop-gensendelse virker stadig, selvom payloaden vokser: R1 har
-        // hørt R2 sende videre og glemmer sin kopi.
+        // Hop retransmission still works even though the payload grows: R1 has
+        // heard R2 forward and forgets its copy.
         assert!(!r1.forwards.is_empty());
         r1.on_receive(&t2[0], 5, 0);
         assert!(r1.forwards.is_empty());
-        // Naboer: R1 har hørt R2 (sti-ID 3) direkte, A har hørt R1.
+        // Neighbours: R1 has heard R2 (path ID 3) directly, A has heard R1.
         assert!(r1.neighbors.sorted().iter().any(|n| n.id == 3));
         assert!(a.neighbors.sorted().iter().any(|n| n.id == 2 && n.snr == 8));
         assert!(!a.neighbors.sorted().iter().any(|n| n.id == 3));
@@ -2034,15 +2034,15 @@ mod tests {
         let mut a = node(1, Role::Client);
         let mut r = node(2, Role::Repeater);
         let mut b = node(4, Role::Client);
-        let (msg_id, out) = a.send_direct(b.addr, b"med det samme", [7; 16], 0).unwrap();
+        let (msg_id, out) = a.send_direct(b.addr, b"right away", [7; 16], 0).unwrap();
         let req = transmits(&r.on_receive(&transmits(&out)[0], 0, 0));
         let at_b = b.on_receive(&req[0], 0, 0);
         assert!(at_b.iter().any(|x| matches!(x,
-            Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == b"med det samme")));
+            Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == b"right away")));
         let resp = transmits(&r.on_receive(&reply(&mut b, 0)[0], 0, 0));
         let got = a.on_receive(&resp[0], 0, 0);
         assert!(got.contains(&Action::Acked { msg_id }));
-        assert!(transmits(&got).is_empty(), "beskeden sendes ikke igen");
+        assert!(transmits(&got).is_empty(), "the message is not sent again");
     }
 
     #[test]
@@ -2055,8 +2055,8 @@ mod tests {
         assert!(transmits(&c.on_receive(&transmits(&out)[0], 0, 0)).is_empty());
     }
 
-    /// Routerens størrelse i firmwaren (nRF52840 har 256 KB RAM). Kør med
-    /// `--nocapture` for at se tallet.
+    /// The router's size in the firmware (the nRF52840 has 256 KB RAM). Run with
+    /// `--nocapture` to see the number.
     #[test]
     fn router_size_in_firmware() {
         let size = core::mem::size_of::<Router<256, 1024>>();
@@ -2071,9 +2071,9 @@ mod tests {
         let out = a.send_channel(Address([9; 16]), b"x").unwrap();
         let pkt = &transmits(&out)[0];
         assert_eq!(transmits(&r.on_receive(pkt, 0, 0)).len(), 1);
-        // En svag kopi behandles ikke igen (og annullerer intet).
+        // A weak copy is not handled again (and cancels nothing).
         assert!(r.on_receive(pkt, -15, 0).is_empty());
-        // En stærk kopi behandles heller ikke igen; den annullerer kun.
+        // A strong copy is not handled again either; it only cancels.
         assert!(transmits(&r.on_receive(pkt, 0, 0)).is_empty());
     }
 
@@ -2083,13 +2083,13 @@ mod tests {
         let mut a = node(1, Role::Client);
         let mut r = node(2, Role::Repeater);
         r.subscribe(ch).unwrap();
-        let out = a.send_channel(ch, b"hej kanal").unwrap();
+        let out = a.send_channel(ch, b"hi channel").unwrap();
         let mut pkt = transmits(&out)[0].clone();
         let got = r.on_receive(&pkt, 0, 0);
         assert!(got.iter().any(|x| matches!(x, Action::Deliver { .. })));
         assert_eq!(transmits(&got).len(), 1);
 
-        // Ved grænsen videresendes ikke.
+        // At the limit there is no forwarding.
         let mut r2 = node(3, Role::Repeater);
         pkt[1] = LOCAL_SCOPE;
         assert!(transmits(&r2.on_receive(&pkt, 0, 0)).is_empty());
@@ -2104,27 +2104,27 @@ mod tests {
         let pkt = transmits(&a.send_channel_in(ch, nj, b"hej").unwrap())[0].clone();
         assert_eq!(Packet::decode(&pkt).unwrap().header.region, nj);
 
-        // Aalborg: dk + nordjylland -> videresender, regionen bevares.
+        // Aalborg: dk + nordjylland -> forwards, the region is kept.
         let mut aalborg = node(2, Role::Repeater);
         aalborg.regions = crate::region::Regions::from_slice(&[dk, nj]).unwrap();
         let fwd = transmits(&aalborg.on_receive(&pkt, 0, 0));
         assert_eq!(fwd.len(), 1);
         assert_eq!(Packet::decode(&fwd[0]).unwrap().header.region, nj);
 
-        // Aarhus: kun dk -> videresender ikke, men leverer til egen bruger.
+        // Aarhus: only dk -> does not forward, but delivers to its own user.
         let mut aarhus = node(3, Role::Repeater);
         aarhus.regions = crate::region::Regions::from_slice(&[dk]).unwrap();
         aarhus.subscribe(ch).unwrap();
         let got = aarhus.on_receive(&pkt, 0, 0);
         assert!(transmits(&got).is_empty());
         assert!(got.iter().any(|x| matches!(x, Action::Deliver { .. })));
-        // ... men en dk-besked og en global besked videresendes.
+        // ... but a dk message and a global message are forwarded.
         let dkpkt = transmits(&a.send_channel_in(ch, dk, b"x").unwrap())[0].clone();
         assert_eq!(transmits(&aarhus.on_receive(&dkpkt, 0, 0)).len(), 1);
         let global = transmits(&a.send_channel(ch, b"y").unwrap())[0].clone();
         assert_eq!(transmits(&aarhus.on_receive(&global, 0, 0)).len(), 1);
 
-        // Tom liste: alt videresendes; strict: kun globalt.
+        // Empty list: everything is forwarded; strict: only global.
         let mut open = node(4, Role::Repeater);
         assert_eq!(transmits(&open.on_receive(&pkt, 0, 0)).len(), 1);
         let mut strict = node(5, Role::Repeater);
@@ -2165,7 +2165,7 @@ mod tests {
         let path = Path::from_slice(&[9, 2]).unwrap();
         let header = Header::new(PacketType::Data, Address([5; 16])).with_path(path);
         let pkt = encode(&header, b"x").unwrap();
-        assert!(r.on_receive(&pkt, 0, 0).is_empty(), "hop 0 er repeater 9");
+        assert!(r.on_receive(&pkt, 0, 0).is_empty(), "hop 0 is repeater 9");
         let mut h2 = header.clone();
         h2.hops = 1;
         let pkt = encode(&h2, b"x").unwrap();
@@ -2178,7 +2178,7 @@ mod tests {
         let mut b = node(4, Role::Client);
         let path = Path::from_slice(&[2, 3]).unwrap();
         let mut h = Header::new(PacketType::Data, b.addr).with_path(path);
-        h.hops = 1; // B hører den, mens den er på vej til R2
+        h.hops = 1; // B hears it while it is on its way to R2
         assert!(b.on_receive(&encode(&h, b"x").unwrap(), 0, 0).is_empty());
         h.hops = 2;
         let got = b.on_receive(&encode(&h, b"x").unwrap(), 0, 0);
@@ -2195,9 +2195,9 @@ mod tests {
             Action::Transmit { packet, id, .. } => (packet.clone(), *id),
             _ => panic!("forventede videresendelse"),
         };
-        // En svag kopi kommer langvejsfra: den dækker ikke vores område.
+        // A weak copy comes from far away: it does not cover our area.
         assert!(r.on_receive(&fwd, -15, 0).is_empty());
-        // En stærk kopi fra en nær nabo: området er dækket, annullér.
+        // A strong copy from a nearby neighbour: the area is covered, cancel.
         assert_eq!(
             r.on_receive(&fwd, 0, 0).as_slice(),
             &[Action::Cancel { id }]
@@ -2211,10 +2211,10 @@ mod tests {
             .with_path(Path::from_slice(&[2, 3]).unwrap());
         let pkt = encode(&header, b"x").unwrap();
         assert_eq!(transmits(&r.on_receive(&pkt, 0, 0)).len(), 1);
-        let d = r.next_deadline().expect("venter på næste hop");
+        let d = r.next_deadline().expect("waiting for the next hop");
         assert!(r.tick(d - 1).is_empty());
         assert_eq!(transmits(&r.tick(d)).len(), 1, "gensendes");
-        // Nu hører vi repeater 3 sende videre.
+        // Now we hear repeater 3 forward.
         let mut h2 = header.clone();
         h2.hops = 2;
         r.on_receive(&encode(&h2, b"x").unwrap(), 0, d + 10);
@@ -2253,7 +2253,7 @@ mod tests {
         let second = b.on_receive(&pkt, 0, 0);
         assert!(first.iter().any(|x| matches!(x, Action::Deliver { .. })));
         assert!(!second.iter().any(|x| matches!(x, Action::Deliver { .. })));
-        assert_eq!(transmits(&second).len(), 1, "ny kvittering");
+        assert_eq!(transmits(&second).len(), 1, "new acknowledgement");
     }
 
     #[test]
@@ -2268,7 +2268,7 @@ mod tests {
         let mut pkt = transmits(&a.send_channel(Address([9; 16]), b"x").unwrap())[0].clone();
         assert_eq!(transmits(&relay.on_receive(&pkt, 0, 0)).len(), 1);
         let mut relay2 = node(4, Role::Relay);
-        pkt[1] = DEFAULT_RELAY_HOPS; // allerede 4 hop
+        pkt[1] = DEFAULT_RELAY_HOPS; // already 4 hops
         assert!(transmits(&relay2.on_receive(&pkt, 0, 0)).is_empty());
     }
 
@@ -2280,8 +2280,8 @@ mod tests {
             a.send_fragment(b.addr, b"bid", 0).err(),
             Some(SendError::NoRoute)
         );
-        // Lær en direkte rute (naboer, tom sti).
-        let (_, out) = a.send_direct(b.addr, b"tilbud", [1; 16], 0).unwrap();
+        // Learn a direct route (neighbours, empty path).
+        let (_, out) = a.send_direct(b.addr, b"offer", [1; 16], 0).unwrap();
         b.on_receive(&transmits(&out)[0], 0, 0);
         let resp = reply(&mut b, 0);
         a.on_receive(&resp[0], 0, 0);
@@ -2311,16 +2311,16 @@ mod tests {
         assert_eq!(d, PATH_RETRY_MS);
         let again = transmits(&a.tick(d));
         assert_eq!(again.len(), 1);
-        assert_ne!(again[0], first, "nyt token");
+        assert_ne!(again[0], first, "new token");
         let d2 = a.next_deadline().unwrap();
         assert_eq!(transmits(&a.tick(d2)).len(), 1);
         let d3 = a.next_deadline().unwrap();
         assert!(transmits(&a.tick(d3)).is_empty());
         assert!(
             a.next_deadline().is_none(),
-            "opgiver efter {PATH_RETRIES} gentagelser"
+            "gives up after {PATH_RETRIES} repetitions"
         );
-        // Samme besked igen: ingen dublet i køen, men en ny forespørgsel.
+        // The same message again: no duplicate in the queue, but a new request.
         let (_, out) = a
             .send_direct(Address([5; 16]), b"x", [2; 16], 100_000)
             .unwrap();
@@ -2347,13 +2347,13 @@ mod tests {
     fn missing_ack_repairs_route_and_resends() {
         let mut a = node(1, Role::Client);
         let mut b = node(4, Role::Client);
-        // Lær en rute (direkte naboer) med første besked.
+        // Learn a route (direct neighbours) with the first message.
         let (_, out) = a.send_direct(b.addr, b"1", [1; 16], 0).unwrap();
         b.on_receive(&transmits(&out)[0], 0, 0);
         let resp = reply(&mut b, 0);
         a.on_receive(&resp[0], 0, 0);
         assert!(a.has_route(&b.addr));
-        // Næste besked sendes ad ruten, men B er flyttet og svarer ikke.
+        // The next message is sent along the route, but B has moved and does not answer.
         let (_, out) = a.send_direct(b.addr, b"2", [2; 16], 1000).unwrap();
         assert_eq!(
             Packet::decode(&transmits(&out)[0]).unwrap().header.ptype,
@@ -2361,12 +2361,12 @@ mod tests {
         );
         let t = 1000 + DEFAULT_ACK_TIMEOUT_MS as u64;
         let again = transmits(&a.tick(t));
-        assert!(!a.has_route(&b.addr), "ruten er glemt");
+        assert!(!a.has_route(&b.addr), "the route is forgotten");
         let req = again
             .iter()
             .find(|p| Packet::decode(p).unwrap().header.ptype == PacketType::PathRequest);
-        let req = req.expect("ny ruteforespørgsel med beskeden");
-        // B (nu et andet sted) modtager forespørgslen, får beskeden og svarer.
+        let req = req.expect("new path request with the message");
+        // B (now somewhere else) receives the request, gets the message and answers.
         let at_b = b.on_receive(req, 0, t);
         assert!(
             at_b.iter().any(
@@ -2375,7 +2375,7 @@ mod tests {
         );
         let got = a.on_receive(&reply(&mut b, t)[0], 0, t);
         assert!(got.iter().any(|x| matches!(x, Action::Acked { .. })));
-        assert!(a.next_deadline().is_none(), "intet mere at vente på");
+        assert!(a.next_deadline().is_none(), "nothing more to wait for");
     }
 
     #[test]
@@ -2413,9 +2413,9 @@ mod tests {
             assert!(stamp::append(PacketType::PathRequest, &dest, &mut p));
             encode(&h, &p).unwrap()
         };
-        // Første kopi: 1 hop, men næsten ved støjgrænsen.
+        // First copy: 1 hop, but almost at the noise limit.
         b.on_receive(&mk(&[7]), -11, 0);
-        // Anden kopi: 2 hop med et stærkt sidste spring.
+        // Second copy: 2 hops with a strong last hop.
         b.on_receive(&mk(&[5, 6]), 5, 10);
         let resp = reply(&mut b, 10);
         let p = Packet::decode(&resp[0]).unwrap();

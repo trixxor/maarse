@@ -1,28 +1,28 @@
-//! Billeder og filer på firmware-noder (op til [`MAX_FILE`] = 8 KB).
+//! Pictures and files on firmware nodes (up to [`MAX_FILE`] = 8 KB).
 //!
-//! Samme format som maarse-host (filtilbud som direkte besked, bidder som
-//! `Fragment`-pakker med kvittering pr. bid), så firmware og host kan sende
-//! filer til hinanden. Tilstandsmaskinerne ligger i
-//! [`maarse_crypto::files`] og testes på en PC; her er kun limen til
-//! radio, router og klient.
+//! The same format as maarse-host (file offer as a direct message, chunks as
+//! `Fragment` packets with an acknowledgement per chunk), so firmware and host can send
+//! files to each other. The state machines are in
+//! [`maarse_crypto::files`] and are tested on a PC; here is only the glue to
+//! radio, router and client.
 //!
-//! * **Afsendelse**: klienten overfører filen med `FileBegin`/`FileData`/
-//!   `FileEnd` til en statisk buffer (én fil ad gangen). Noden sender
-//!   tilbuddet, venter på kvittering og sender så bidderne med et vindue på
-//!   [`WINDOW`]. Bidder sendes kun, mens radioens sendekø er kort, så en
-//!   travl kanal eller duty cycle-grænsen bremser overførslen i stedet for at
-//!   fylde køen. Bidder uden kvittering sendes igen efter 30 s; uden
-//!   fremskridt i 5 minutter opgives filen.
-//! * **Modtagelse**: én fil ad gangen samles i en anden statisk buffer og
-//!   tjekkes (SHA-256). Derefter sendes den til klienten som `FileChunk`,
-//!   i det tempo USB/Bluetooth kan tage dem. Er der ingen klient (køerne
-//!   flyder over i 30 s), bliver filen liggende i RAM, og den sendes igen,
-//!   når en klient forbinder (`GetInfo`). Den overskrives af den næste fil,
-//!   der modtages, og forsvinder ved genstart.
-//! * **Postkassen** (8 KB flash) bruges ikke til filer: én fil ville fylde
-//!   den helt og skubbe almindelige beskeder ud, og flash slides af store
-//!   skrivninger. En fil til en modtager, der er offline, mislykkes derfor
-//!   hos afsenderen (som på maarse-host).
+//! * **Sending**: the client transfers the file with `FileBegin`/`FileData`/
+//!   `FileEnd` into a static buffer (one file at a time). The node sends
+//!   the offer, waits for the acknowledgement and then sends the chunks with a window of
+//!   [`WINDOW`]. Chunks are only sent while the radio's send queue is short, so a
+//!   busy channel or the duty cycle limit slows the transfer down instead of
+//!   filling the queue. Chunks without acknowledgement are sent again after 30 s; without
+//!   progress for 5 minutes the file is abandoned.
+//! * **Receiving**: one file at a time is collected in another static buffer and
+//!   checked (SHA-256). Then it is sent to the client as `FileChunk`,
+//!   at the pace USB/Bluetooth can take them. If there is no client (the queues
+//!   overflow for 30 s), the file stays in RAM and is sent again
+//!   when a client connects (`GetInfo`). It is overwritten by the next file
+//!   received, and disappears on restart.
+//! * **The mailbox** (8 KB flash) is not used for files: one file would fill
+//!   it completely and push ordinary messages out, and flash wears from large
+//!   writes. A file to a recipient who is offline therefore fails
+//!   at the sender (as on maarse-host).
 
 use super::{FwNode, Settings, emit, err, log, now_ms};
 use crate::bus::{BLE_OUT, RSTATS, USB_OUT};
@@ -42,20 +42,20 @@ use static_cell::ConstStaticCell;
 static OUT_BUF: ConstStaticCell<[u8; MAX_FILE]> = ConstStaticCell::new([0; MAX_FILE]);
 static IN_BUF: ConstStaticCell<[u8; MAX_FILE]> = ConstStaticCell::new([0; MAX_FILE]);
 
-/// Nye bidder sendes kun, mens radioens sendekø er kortere end dette.
+/// New chunks are only sent while the radio's send queue is shorter than this.
 const TX_QUEUE_LIMIT: u32 = 4;
-/// Ledig plads i en klientkø, før vi sender endnu en `FileChunk`.
+/// Free space in a client queue before we send another `FileChunk`.
 const CLIENT_ROOM: usize = 4;
-/// Uden plads i klientkøerne så længe antages det, at ingen klient lytter.
+/// Without room in the client queues for this long, it is assumed that no client is listening.
 const NO_CLIENT: Duration = Duration::from_secs(30);
 
-/// En modtaget fil, der sendes (eller venter på at blive sendt) til klienten.
+/// A received file that is being sent (or waiting to be sent) to the client.
 struct Stream {
     from: Address,
     offer: FileOffer,
     pos: u32,
     last_push: Instant,
-    /// Ingen klient lyttede; sendes igen ved næste `GetInfo`.
+    /// No client was listening; sent again on the next `GetInfo`.
     waiting: bool,
 }
 
@@ -64,14 +64,14 @@ pub(super) struct Files {
     in_buf: &'static mut [u8; MAX_FILE],
     upload: Option<Upload>,
     out: Option<Outgoing>,
-    /// Det indkodede tilbud, hvis det skal sendes igen.
+    /// The encoded offer, if it must be sent again.
     offer: heapless::Vec<u8, 160>,
     incoming: Option<Incoming>,
     stream: Option<Stream>,
 }
 
 impl Files {
-    /// Må kun kaldes én gang (bufferne er statiske).
+    /// May only be called once (the buffers are static).
     pub(super) fn new() -> Self {
         Files {
             out_buf: OUT_BUF.take(),
@@ -84,7 +84,7 @@ impl Files {
         }
     }
 
-    /// Hvornår filerne skal have opmærksomhed igen.
+    /// When the files need attention again.
     pub(super) fn deadline(&self) -> Option<Instant> {
         if self.stream.as_ref().is_some_and(|s| !s.waiting) {
             Some(Instant::now() + Duration::from_millis(20))
@@ -96,7 +96,7 @@ impl Files {
     }
 }
 
-/// Afkorter UTF-8 til højst `n` bytes uden at skære et tegn over.
+/// Truncates UTF-8 to at most `n` bytes without cutting a character in half.
 fn clip(b: &[u8], mut n: usize) -> &[u8] {
     if b.len() <= n {
         return b;
@@ -108,16 +108,16 @@ fn clip(b: &[u8], mut n: usize) -> &[u8] {
 }
 
 impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
-    // ---------- fra klienten ----------
+    // ---------- from the client ----------
 
     pub(super) fn file_begin(&mut self, req: u16, dest: Address, size: u32, mime: &[u8], name: &[u8]) {
         if self.files.out.is_some() {
-            return err(req, error_code::QUEUE_FULL, "Der sendes allerede en fil; vent til den er færdig");
+            return err(req, error_code::QUEUE_FULL, "A file is already being sent; wait until it is done");
         }
         if !self.known.contains_key(&dest) {
-            return err(req, error_code::UNKNOWN_DEST, "Modtageren er ikke hørt endnu");
+            return err(req, error_code::UNKNOWN_DEST, "The recipient has not been heard yet");
         }
-        // Tilbuddet skal kunne være i én krypteret besked.
+        // The offer must fit in one encrypted message.
         let room = MAX_FS_TEXT.min(MAX_DM_TEXT) - OFFER_FIXED;
         let mime = clip(mime, 40.min(room));
         let name = clip(name, room - mime.len());
@@ -138,10 +138,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     pub(super) fn file_end(&mut self, req: u16) {
         let Some(up) = self.files.upload.take_if(|u| u.req == req) else {
-            return err(req, error_code::NO_FILE, "Ingen fil under upload");
+            return err(req, error_code::NO_FILE, "No file being uploaded");
         };
         if !up.complete() {
-            return err(req, error_code::NO_FILE, "Filen blev ikke overført helt");
+            return err(req, error_code::NO_FILE, "The file was not fully transferred");
         }
         let mut id = [0u8; 8];
         self.rng.fill_bytes(&mut id);
@@ -158,7 +158,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Ok(msg_id) => {
                 out.offer_sent(msg_id, now_ms());
                 emit(&Event::FileStarted { req, file_id: out.file_id, chunks: out.chunks });
-                log("Sender fil");
+                log("Sending file");
                 self.files.offer = enc;
                 self.files.out = Some(out);
             }
@@ -166,9 +166,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
-    // ---------- afsendelse ----------
+    // ---------- sending ----------
 
-    /// Er kvitteringen til en fil? Så håndteres den her.
+    /// Is the acknowledgement for a file? Then it is handled here.
     pub(super) fn file_on_ack(&mut self, msg_id: u64) -> bool {
         let Some(out) = self.files.out.as_mut() else {
             return false;
@@ -181,8 +181,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 emit(&Event::FileProgress { file_id, done, total, outgoing: true });
                 if out.finished() {
                     self.files.out = None;
-                    log("Fil leveret");
-                    emit(&Event::FileDone { file_id, ok: true, outgoing: true, text: text(b"leveret") });
+                log("File delivered");
+                emit(&Event::FileDone { file_id, ok: true, outgoing: true, text: text(b"delivered") });
                     return true;
                 }
             }
@@ -191,7 +191,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         true
     }
 
-    /// Sender bidder, så længe vinduet og radioens kø tillader det.
+    /// Sends chunks as long as the window and the radio's queue allow it.
     fn file_pump(&mut self) {
         for _ in 0..WINDOW {
             if RSTATS.tx_queue.load(Relaxed) >= TX_QUEUE_LIMIT {
@@ -209,7 +209,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             };
             let dest = out.dest;
             let Ok((msg_id, actions)) = self.router.send_fragment(dest, &ct[..n], now_ms()) else {
-                return; // Ingen rute lige nu; prøves igen ved næste tick.
+                return; // No route right now; tried again on the next tick.
             };
             if let Some(out) = self.files.out.as_mut() {
                 out.chunk_sent(idx, msg_id, now_ms());
@@ -218,15 +218,15 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
-    // ---------- modtagelse ----------
+    // ---------- receiving ----------
 
     pub(super) fn file_offer(&mut self, from: Address, offer: FileOffer) {
         if let Some(inc) = &self.files.incoming {
             if inc.file_id() == offer.file_id {
-                return; // Tilbuddet igen (kvitteringen gik tabt).
+                return; // The offer again (the acknowledgement was lost).
             }
             if !inc.stalled(now_ms()) {
-                return log("Fil afvist: noden modtager allerede en fil");
+                return log("File rejected: the node is already receiving a file");
             }
         }
         let file_id = offer.file_id;
@@ -234,14 +234,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         match Incoming::accept(from, offer, MAX_FILE, now_ms()) {
             Ok(inc) => {
                 if self.files.stream.take().is_some() {
-                    log("En ældre fil, som ikke nåede klienten, er overskrevet");
+                    log("An older file that did not reach the client has been overwritten");
                 }
                 self.files.incoming = Some(inc);
                 emit(&Event::FileIncoming { file_id, from, size, mime, name });
-                log("Fil på vej");
+                log("File on its way");
             }
-            Err(_) if size as usize > MAX_FILE => log("Fil afvist: større end 8 KB"),
-            Err(_) => log("Fil afvist: ugyldigt tilbud"),
+            Err(_) if size as usize > MAX_FILE => log("File rejected: larger than 8 KB"),
+            Err(_) => log("File rejected: invalid offer"),
         }
     }
 
@@ -268,17 +268,17 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         waiting: false,
                     });
                 }
-                log("Fil modtaget");
+                log("File received");
                 self.file_stream();
             }
             ChunkResult::BadHash => {
                 f.incoming = None;
-                emit(&Event::FileDone { file_id, ok: false, outgoing: false, text: text(b"kontrolsum passer ikke") });
+                emit(&Event::FileDone { file_id, ok: false, outgoing: false, text: text(b"checksum does not match") });
             }
         }
     }
 
-    /// Sender den modtagne fil til klienten i det tempo, køerne tillader.
+    /// Sends the received file to the client at the pace the queues allow.
     fn file_stream(&mut self) {
         let f = &mut self.files;
         let Some(s) = f.stream.as_mut() else {
@@ -293,7 +293,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             if USB_OUT.free_capacity() < CLIENT_ROOM && BLE_OUT.free_capacity() < CLIENT_ROOM {
                 if s.last_push.elapsed() > NO_CLIENT {
                     s.waiting = true;
-                    log("Ingen klient: filen gemmes i RAM, til en klient forbinder");
+                    log("No client: the file is kept in RAM until a client connects");
                 }
                 return;
             }
@@ -306,7 +306,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         f.stream = None;
     }
 
-    /// En klient har forbundet (`GetInfo`): send en ventende fil igen.
+    /// A client has connected (`GetInfo`): send a waiting file again.
     pub(super) fn file_client_connected(&mut self) {
         if let Some(s) = self.files.stream.as_mut()
             && s.waiting
@@ -343,12 +343,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 }
                 TickResult::Failed => {
                     self.files.out = None;
-                    log("Filen blev ikke leveret");
+                    log("The file was not delivered");
                     emit(&Event::FileDone {
                         file_id,
                         ok: false,
                         outgoing: true,
-                        text: text(b"modtageren svarede ikke"),
+                        text: text(b"the recipient did not answer"),
                     });
                 }
             }
@@ -358,7 +358,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 file_id: inc.file_id(),
                 ok: false,
                 outgoing: false,
-                text: text(b"overforsel afbrudt"),
+                        text: text(b"transfer aborted"),
             });
         }
         self.file_stream();

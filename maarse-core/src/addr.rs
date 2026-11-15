@@ -1,11 +1,11 @@
-//! Adresser og sti-ID'er.
+//! Addresses and path IDs.
 
 use core::fmt;
 
-/// En Må:rse-adresse: de første 16 bytes af et SHA-256-hash.
+/// A Må:rse address: the first 16 bytes of a SHA-256 hash.
 ///
-/// For en node er det hashet af dens offentlige nøgler. For en kanal er det
-/// hashet af kanalens nøgle. Adressen er den samme på LoRa, TCP og backbone.
+/// For a node it is the hash of its public keys. For a channel it is the
+/// hash of the channel key. The address is the same on LoRa, TCP and backbone.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct Address(pub [u8; 16]);
 
@@ -21,10 +21,10 @@ impl Address {
         &self.0
     }
 
-    /// Sti-ID afledt af adressen: de første 2 bytes.
+    /// Path ID derived from the address: the first 2 bytes.
     ///
-    /// Bruges som standard for repeatere. ID'et skal kun være unikt blandt
-    /// en repeaters naboer, ikke globalt.
+    /// Used by default for repeaters. The ID only has to be unique among
+    /// a repeater's neighbours, not globally.
     pub fn path_id(&self) -> PathId {
         u16::from_be_bytes([self.0[0], self.0[1]])
     }
@@ -41,7 +41,7 @@ impl fmt::Display for Address {
 
 impl fmt::Debug for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Kort form i debug-output: de første 4 bytes.
+        // Short form in debug output: the first 4 bytes.
         write!(
             f,
             "Address({:02x}{:02x}{:02x}{:02x}…)",
@@ -50,7 +50,7 @@ impl fmt::Debug for Address {
     }
 }
 
-/// 2-byte ID for en repeater i en kildesti.
+/// 2-byte ID for a repeater in a source path.
 pub type PathId = u16;
 
 #[cfg(test)]

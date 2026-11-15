@@ -1,13 +1,13 @@
-//! maarse-sim: simulator for Må:rse-netværk.
+//! maarse-sim: simulator for Må:rse networks.
 //!
-//! Placerer repeatere og klienter i et område, simulerer LoRa-radio med
-//! rækkevidde, kollisioner, half-duplex, listen-before-talk og duty cycle,
-//! og kører `maarse_core::Router` uændret i hver node.
+//! Places repeaters and clients in an area, simulates LoRa radio with
+//! range, collisions, half-duplex, listen-before-talk and duty cycle,
+//! and runs `maarse_core::Router` unchanged in every node.
 //!
-//! Til sammenligning kan den også køre "flood"-tilstand, hvor alle noder
-//! (også klienter) gentager alt med en hop-grænse, ligesom Meshtastic.
+//! For comparison it can also run "flood" mode, where all nodes
+//! (clients too) repeat everything with a hop limit, like Meshtastic.
 //!
-//! Eksempel:
+//! Example:
 //!   cargo run --release -p maarse-sim -- --nodes 120 --repeaters 30 --messages 60
 //!   cargo run --release -p maarse-sim -- --mode flood --hop-limit 7
 #![forbid(unsafe_code)]
@@ -27,7 +27,7 @@ use maarse_core::{Action, Address, PacketType, Role, Router};
 
 type Node = Router<256, 1024>;
 
-// ---------- konfiguration ----------
+// ---------- configuration ----------
 
 #[derive(Clone, Debug)]
 struct Config {
@@ -44,32 +44,32 @@ struct Config {
     tx_dbm: f64,
     repeater_gain_db: f64,
     duration_s: u64,
-    /// Motorvej: repeatere på en linje, en bil kører forbi.
+    /// Motorway: repeaters on a line, a car drives past.
     highway: bool,
     road_km: f64,
     car_kmh: f64,
-    /// Repeaternes positioner langs vejen (km); tom = jævnt fordelt.
+    /// The repeaters' positions along the road (km); empty = evenly spread.
     repeater_km: Vec<f64>,
-    /// Basen står i vejens start (bilen kører væk fra den).
+    /// The base stands at the start of the road (the car drives away from it).
     base_start: bool,
-    /// Hver N'te repeater får rollen anker (0 = ingen).
+    /// Every Nth repeater gets the anchor role (0 = none).
     anchor_every: usize,
-    /// Skov: alle ikke-repeatere går rundt, og skoven dæmper ekstra.
+    /// Forest: all non-repeaters walk around, and the forest attenuates extra.
     forest: bool,
-    /// Ekstra dæmpning i skov (dB pr. km).
+    /// Extra attenuation in forest (dB per km).
     forest_db_km: f64,
     walk_kmh: f64,
-    /// Rolle for alle deltagere (ikke-repeatere) i skov-tilstand.
+    /// Role for all participants (non-repeaters) in forest mode.
     group_role: Role,
     relay_hops: Option<u8>,
-    /// Skov med bakke: repeater 12 km væk, base ved repeateren og én mand
-    /// på en bakke midt i skoven (`None` = han går rundt som de andre).
+    /// Forest with a hill: repeater 12 km away, base by the repeater and one man
+    /// on a hill in the middle of the forest (`None` = he walks around like the others).
     hill: bool,
     hill_role: Option<Role>,
-    /// Ekstra antennegevinst for manden på bakken (højde, sigtelinje).
+    /// Extra antenna gain for the man on the hill (height, line of sight).
     hill_gain_db: f64,
-    /// Flood-dæmpning for relays: 0 = normal, 1 = bro (relays, der hører en
-    /// repeater direkte, tier ikke), 2 = ingen dæmpning for relays.
+    /// Flood suppression for relays: 0 = normal, 1 = bridge (relays that hear a
+    /// repeater directly do not stay quiet), 2 = no suppression for relays.
     suppress: u8,
     /// Carry (store-carry-forward) in the router: copies per message that
     /// could not be delivered; 0 = off (see `Router` "Carry").
@@ -215,41 +215,41 @@ fn parse_args() -> Config {
             "--help" | "-h" => {
                 println!(
                     "maarse-sim [--nodes N] [--repeaters R] [--area-km A] [--messages M]\n\
-                     \x20        [--channel-messages K] [--seed S] [--sf 7-12] [--duty promille]\n\
-                     \x20        [--mode maarse|flood] [--hop-limit H] [--duration sekunder]\n\
+                     \x20        [--channel-messages K] [--seed S] [--sf 7-12] [--duty permille]\n\
+                     \x20        [--mode maarse|flood] [--hop-limit H] [--duration seconds]\n\
                      \x20        [--highway [--road-km 100] [--car-kmh 110] [--base-start]]\n\
                      \x20        [--repeater-km 0,30,...] [--repeater-gain dB] [--anchor-every N]\n\
                      \x20        [--forest [--forest-db-km 10] [--walk-kmh 5] [--role client|relay|repeater] [--relay-hops H]]\n\
                      \x20        [--hill [--hill-role relay|client|repeater|none] [--hill-gain 10]]\n\
-                     \x20        [--carry copies] [--suppress normal|legacy|bridge|bridge-relay|bridge-weak|bridge-weak-relay|none]   (flood-dæmpning for relays i skov)\n\
-                     \x20        [--trace-json fil|-]   (hændelsesspor til maarse-lab)"
+                     \x20        [--carry copies] [--suppress normal|legacy|bridge|bridge-relay|bridge-weak|bridge-weak-relay|none]   (flood suppression for relays in the forest)\n\
+                     \x20        [--trace-json file|-]   (event trace for maarse-lab)"
                 );
                 std::process::exit(0);
             }
-            other => panic!("ukendt argument: {other}"),
+            other => panic!("unknown argument: {other}"),
         }
         i += 2;
     }
-    assert!(c.repeaters <= c.nodes, "flere repeatere end noder");
+    assert!(c.repeaters <= c.nodes, "more repeaters than nodes");
     c
 }
 
 // ---------- radio ----------
 
-/// Grov radiomodel: log-distance path loss (n = 3) ved 868 MHz.
+/// Rough radio model: log-distance path loss (n = 3) at 868 MHz.
 struct Radio {
     lora: LoraParams,
     tx_dbm: f64,
     noise_dbm: f64,
-    /// Mindste SNR, der kan modtages ved denne spreading factor.
+    /// Lowest SNR that can be received at this spreading factor.
     snr_min: f64,
-    /// Ekstra dæmpning (dB pr. meter), fx skov.
+    /// Extra attenuation (dB per metre), e.g. forest.
     extra_db_m: f64,
 }
 
 impl Radio {
     fn new(sf: u8, tx_dbm: f64) -> Self {
-        // Termisk støj ved 125 kHz + 6 dB støjtal.
+        // Thermal noise at 125 kHz + 6 dB noise figure.
         let noise_dbm = -174.0 + 10.0 * 125_000f64.log10() + 6.0;
         let snr_min = match sf {
             7 => -7.5,
@@ -300,7 +300,7 @@ struct Tx {
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 enum Event {
-    /// Forsøg at sende (CAD + duty cycle). `tries` tæller backoffs.
+    /// Try to send (CAD + duty cycle). `tries` counts backoffs.
     TryTx {
         node: usize,
         packet: Buf,
@@ -324,7 +324,7 @@ enum Event {
         msg: usize,
         attempt: u8,
     },
-    /// Flyt bilen (motorvej).
+    /// Move the car (motorway).
     Move,
 }
 
@@ -366,16 +366,16 @@ struct Sim {
     msgs: Vec<Msg>,
     stats: Stats,
     public_channel: Address,
-    /// Skov: hver deltagers næste mål.
+    /// Forest: each participant's next target.
     waypoints: Vec<(f64, f64)>,
-    /// Broer i `--suppress bridge-relay`: ser bort fra dubletter fra relays.
+    /// Bridges in `--suppress bridge-relay`: ignore duplicates from relays.
     bridges: Vec<bool>,
     cancelled: HashSet<(usize, u64)>,
-    /// Svar-ID -> (højeste hop nået, stiens længde, antal udsendelser)
+    /// Reply ID -> (highest hop reached, path length, number of transmissions)
     resp_track: HashMap<u64, (u8, u8, u32)>,
     flood_pending: HashSet<(usize, u64)>,
     next_tick: Vec<u64>,
-    /// Diagnose af kildestyrede hop (se `trace_hop`).
+    /// Diagnostics of source-routed hops (see `trace_hop`).
     hop_trace: std::collections::BTreeMap<String, u32>,
 }
 
@@ -383,7 +383,7 @@ impl Sim {
     fn new(cfg: Config) -> Self {
         let mut rng = SmallRng::seed_from_u64(cfg.seed);
         let mut radio = Radio::new(cfg.sf, cfg.tx_dbm);
-        let _ = &mut radio; // skovens dæmpning regnes i Sim::link_rx
+        let _ = &mut radio; // the forest's attenuation is computed in Sim::link_rx
         let side = cfg.area_km * 1000.0;
         let public_channel = Address([0xc0; 16]);
         let mut nodes = Vec::new();
@@ -403,7 +403,7 @@ impl Sim {
             let mut router = Node::new(Address(addr), role);
             let _ = router.subscribe(public_channel);
             if cfg.highway && i == cfg.nodes - 1 {
-                router.mobile = true; // bilen
+                router.mobile = true; // the car
             }
             router.carry_copies = cfg.carry_copies;
             if cfg.forest && !repeater {
@@ -418,15 +418,15 @@ impl Sim {
                 pos: if cfg.highway {
                     let road = cfg.road_km * 1000.0;
                     if repeater {
-                        // Jævnt fordelt langs vejen, lidt fra kørebanen.
+                        // Evenly spread along the road, a little off the carriageway.
                         match cfg.repeater_km.get(i) {
                             Some(km) => (km * 1000.0, 300.0),
                             None => (i as f64 * road / (cfg.repeaters.max(2) - 1) as f64, 300.0),
                         }
                     } else if i == cfg.nodes - 1 {
-                        (0.0, 0.0) // bilen starter ved vejens begyndelse
+                        (0.0, 0.0) // the car starts at the beginning of the road
                     } else if i == cfg.repeaters {
-                        // fast node i vejens ende (eller start med --base-start)
+                        // fixed node at the end of the road (or the start with --base-start)
                         (if cfg.base_start { 0.0 } else { road }, 1500.0)
                     } else {
                         (rng.gen_range(0.0..road), rng.gen_range(-3000.0..3000.0))
@@ -439,7 +439,7 @@ impl Sim {
                 airtime_us: 0,
             });
         }
-        // Linkbudget mellem alle par (repeatere står højt og har bedre antenner).
+        // Link budget between all pairs (repeaters stand high and have better antennas).
         let n = nodes.len();
         let mut gain = vec![vec![f64::NEG_INFINITY; n]; n];
         for a in 0..n {
@@ -500,11 +500,11 @@ impl Sim {
         }
         let clients: Vec<usize> = (self.cfg.repeaters..self.cfg.nodes).collect();
         let hill = self.hill_nodes();
-        assert!(clients.len() >= 2, "der skal være mindst to klienter");
+        assert!(clients.len() >= 2, "there must be at least two clients");
         let span = self.cfg.duration_s * 1000 * 2 / 3;
         for m in 0..self.cfg.messages {
             let (from, to) = if let Some((base, h)) = hill {
-                // Base <-> en tilfældig mand i skoven (ikke ham på bakken).
+                // Base <-> a random man in the forest (not the one on the hill).
                 let mut w = base;
                 while w == base || (w == h && self.cfg.hill_role.is_some()) {
                     w = clients[self.rng.gen_range(0..clients.len())];
@@ -518,7 +518,7 @@ impl Sim {
                 }
                 (from, to)
             };
-            let mut payload = format!("besked {m} fra {from} til {to}: ").into_bytes();
+            let mut payload = format!("message {m} from {from} to {to}: ").into_bytes();
             payload.resize(60, b'.');
             let id = packet_id(PacketType::Data, &self.nodes[to].router.addr, &payload);
             self.msgs.push(Msg {
@@ -543,17 +543,17 @@ impl Sim {
         }
     }
 
-    /// Indeks for basen og manden på bakken (kun med `--hill`).
+    /// Index of the base and the man on the hill (only with `--hill`).
     fn hill_nodes(&self) -> Option<(usize, usize)> {
         self.cfg.hill.then(|| (self.cfg.repeaters, self.cfg.nodes - 1))
     }
 
-    /// Står manden på bakken (og ikke bare går rundt)?
+    /// Is the man on the hill standing still (and not just walking around)?
     fn on_hill(&self, i: usize) -> bool {
         self.cfg.hill_role.is_some() && self.hill_nodes().is_some_and(|(_, h)| h == i)
     }
 
-    /// Går noden rundt i skoven?
+    /// Does the node walk around in the forest?
     fn walker(&self, i: usize) -> bool {
         if self.nodes[i].repeater || self.on_hill(i) {
             return false;
@@ -561,8 +561,8 @@ impl Sim {
         self.hill_nodes().is_none_or(|(base, _)| i != base)
     }
 
-    /// Modtaget effekt fra a til b. Skoven dæmper kun, når mindst én af dem
-    /// står i skoven; fra bakken ned i skoven dæmper den det halve.
+    /// Received power from a to b. The forest only attenuates when at least one of them
+    /// stands in the forest; from the hill down into the forest it attenuates half as much.
     fn link_rx(&self, a: usize, b: usize) -> f64 {
         let (pa, pb) = (self.nodes[a].pos, self.nodes[b].pos);
         let d = ((pa.0 - pb.0).powi(2) + (pa.1 - pb.1).powi(2)).sqrt();
@@ -581,7 +581,7 @@ impl Sim {
         self.radio.rx_dbm(d, g) - self.cfg.forest_db_km / 1000.0 * d * forest
     }
 
-    /// Bakke-scenariet: placér repeater, base og manden på bakken.
+    /// The hill scenario: place repeater, base and the man on the hill.
     fn setup_hill(&mut self) {
         let side = self.cfg.area_km * 1000.0;
         let (base, hill) = self.hill_nodes().unwrap();
@@ -609,9 +609,9 @@ impl Sim {
         self.apply_suppress();
     }
 
-    /// Bro-tilstand (forslag): en relay, der hører en repeater direkte, er
-    /// undtaget fra flood-dæmpning. Simulatoren bruger linkbudgettet som
-    /// "hørt"; på hardware ville det være et announce med rollefelt.
+    /// Bridge mode (proposal): a relay that hears a repeater directly is
+    /// exempt from flood suppression. The simulator uses the link budget as
+    /// "heard"; on hardware it would be an announce with a role field.
     fn apply_suppress(&mut self) {
         let n = self.nodes.len();
         // Real behaviour: nodes learn their repeater neighbours from 0-hop
@@ -644,14 +644,14 @@ impl Sim {
                 continue;
             }
             let hears_rep = (0..n).any(|r| r != i && self.nodes[r].repeater && self.audible(r, i) && self.audible(i, r));
-            // Bedste SNR til en repeater; "svag" = under routerens grænse for
-            // svage kopier (kanten af dækningen).
+            // Best SNR to a repeater; "weak" = below the router's limit for
+            // weak copies (the edge of coverage).
             let best = (0..n)
                 .filter(|&r| r != i && self.nodes[r].repeater && self.audible(r, i) && self.audible(i, r))
                 .map(|r| self.radio.snr(self.gain[r][i]))
                 .fold(f64::NEG_INFINITY, f64::max);
-            // Kant: vi hører en repeater, og mindst én af vores naboer (ikke
-            // repeater) hører ingen repeater. Så er vi nødvendige som bro.
+            // Edge: we hear a repeater, and at least one of our neighbours (not a
+            // repeater) hears no repeater. Then we are needed as a bridge.
             let edge = hears_rep
                 && (0..n).any(|j| {
                     j != i
@@ -682,8 +682,8 @@ impl Sim {
         }
     }
 
-    /// Skov: hver deltager går mod et tilfældigt mål og vælger et nyt ved
-    /// ankomst. Links til og fra deltagerne regnes om hvert 5. sekund.
+    /// Forest: each participant walks towards a random target and picks a new one on
+    /// arrival. Links to and from the participants are recomputed every 5 seconds.
     fn move_walkers(&mut self) {
         let side = self.cfg.area_km * 1000.0;
         let n = self.nodes.len();
@@ -713,16 +713,16 @@ impl Sim {
         self.schedule(self.now + 5000, Event::Move);
     }
 
-    /// Motorvej: den faste node i vejens ende og bilen skriver skiftevis.
+    /// Motorway: the fixed node at the end of the road and the car write in turn.
     fn setup_highway(&mut self) {
         let car = self.cfg.nodes - 1;
         let base = self.cfg.repeaters;
-        assert!(car > base, "motorvej kræver mindst to klienter");
+        assert!(car > base, "the motorway needs at least two clients");
         let span = self.cfg.duration_s * 1000 * 9 / 10;
         let n = self.cfg.messages.max(1) as u64;
         for m in 0..self.cfg.messages {
             let (from, to) = if m % 2 == 0 { (base, car) } else { (car, base) };
-            let mut payload = format!("besked {m} fra {from} til {to}: ").into_bytes();
+            let mut payload = format!("message {m} from {from} to {to}: ").into_bytes();
             payload.resize(60, b'.');
             let id = packet_id(PacketType::Data, &self.nodes[to].router.addr, &payload);
             self.msgs.push(Msg {
@@ -793,12 +793,12 @@ impl Sim {
             Event::Move => self.move_car(),
             Event::CheckAck { msg, attempt } => {
                 let m = &self.msgs[msg];
-                // I Må:rse-tilstand står routeren selv for gensendelse og
-                // reparation af ruten; simulatoren blander sig ikke.
+                // In Må:rse mode the router itself handles retransmission and
+                // route repair; the simulator does not interfere.
                 if m.acked || attempt >= 2 || self.cfg.mode == Mode::Maarse {
                     return;
                 }
-                // Ingen kvittering: glem ruten og prøv igen (ruten repareres).
+                // No acknowledgement: forget the route and try again (the route is repaired).
                 let (from, to) = (m.from, m.to);
                 let dest = self.nodes[to].router.addr;
                 if self.cfg.mode == Mode::Maarse {
@@ -807,7 +807,7 @@ impl Sim {
                 self.send_direct(msg, attempt + 1);
             }
             Event::SendChannel { from, n } => {
-                let mut payload = format!("kanalbesked {n} fra {from}").into_bytes();
+                let mut payload = format!("channel message {n} from {from}").into_bytes();
                 payload.resize(40, b'.');
                 self.stats.channel_sent += 1;
                 let ch = self.public_channel;
@@ -856,8 +856,8 @@ impl Sim {
                         Err(_) => Vec::new(),
                     }
                 } else {
-                    // Beskeden ligger stadig i køen, hvis ruten aldrig blev fundet;
-                    // ellers sendes den på ny.
+                    // The message is still in the queue if the route was never found;
+                    // otherwise it is sent anew.
                     let mut a: Vec<Action> = self.nodes[from]
                         .router
                         .retry_path(dest, token, self.now)
@@ -879,7 +879,7 @@ impl Sim {
         self.schedule(self.now + 60_000, Event::CheckAck { msg, attempt });
     }
 
-    /// Udfører en routers handlinger.
+    /// Carries out a router's actions.
     fn apply(&mut self, node: usize, actions: Vec<Action>) {
         for a in actions {
             match a {
@@ -925,7 +925,7 @@ impl Sim {
                 }
             }
         }
-        // Planlæg gensendelse af hop, der ikke blev hørt sendt videre.
+        // Schedule retransmission of hops that were not heard being forwarded.
         if let Some(d) = self.nodes[node].router.next_deadline()
             && d < self.next_tick[node]
         {
@@ -1032,7 +1032,7 @@ impl Sim {
             if p.header.ptype == PacketType::PathResponse
                 && p.header.path.as_ref().is_some_and(|x| x.len() == p.header.hops as usize)
             {
-                *self.stats.by_type.entry("PathResponse-sidste-hop".into()).or_default() += 1;
+                *self.stats.by_type.entry("PathResponse-last-hop".into()).or_default() += 1;
             }
         }
         let end = self.now + (airtime as u64).div_ceil(1000);
@@ -1053,7 +1053,7 @@ impl Sim {
     fn tx_end(&mut self, tx: usize) {
         let (sender, start, end) = (self.txs[tx].sender, self.txs[tx].start, self.txs[tx].end);
         let packet = self.txs[tx].packet.clone();
-        // Andre sendinger, der overlapper i tid.
+        // Other transmissions that overlap in time.
         let overlapping: Vec<usize> = self
             .txs
             .iter()
@@ -1070,8 +1070,8 @@ impl Sim {
                 continue;
             }
             let p = self.gain[sender][r];
-            // Half-duplex: modtageren sendte selv. Kollision: en anden sending
-            // er hørbar og ikke mindst 6 dB svagere (capture effect).
+            // Half-duplex: the receiver was sending itself. Collision: another transmission
+            // is audible and not at least 6 dB weaker (capture effect).
             let lost = overlapping.iter().any(|&o| {
                 o == r
                     || (o != sender
@@ -1085,8 +1085,8 @@ impl Sim {
             }
             rx.ok(r);
             let mut snr = self.radio.snr(p).clamp(-30.0, 30.0) as i8;
-            // Bro-regel (forslag): en dublet fra en relay tæller ikke med i
-            // broens flood-dæmpning; en dublet fra en repeater gør.
+            // Bridge rule (proposal): a duplicate from a relay does not count in
+            // the bridge's flood suppression; a duplicate from a repeater does.
             if self.bridges.get(r).copied().unwrap_or(false)
                 && self.nodes[sender].router.role == Role::Relay
                 && self.nodes[r].router.seen(&packet)
@@ -1104,7 +1104,7 @@ impl Sim {
         rx.emit(self.now, tx);
     }
 
-    /// Startbillede til hændelsessporet: positioner og hørbare links.
+    /// Initial picture for the event trace: positions and audible links.
     fn trace_setup(&self) {
         if !trace::on() {
             return;
@@ -1135,9 +1135,9 @@ impl Sim {
         trace::setup(mode, c.highway, size, c.duration_s * 1000, &nodes, &links);
     }
 
-    /// Diagnose (DEBUG_ACK): for et kildestyret hop, hørte næste repeater
-    /// på stien pakken, og hvis ikke, hvad overdøvede den? Opdelt efter
-    /// linkets SNR-margen over følsomhedsgrænsen.
+    /// Diagnostics (DEBUG_ACK): for a source-routed hop, did the next repeater
+    /// on the path hear the packet, and if not, what drowned it? Split by
+    /// the link's SNR margin above the sensitivity limit.
     fn trace_hop(&mut self, tx: usize, overlapping: &[usize]) {
         let (sender, start, end) = (self.txs[tx].sender, self.txs[tx].start, self.txs[tx].end);
         let Ok(p) = Packet::decode(&self.txs[tx].packet) else { return };
@@ -1146,7 +1146,7 @@ impl Sim {
         let Some(r) = self.nodes.iter().position(|n| n.router.id == next) else { return };
         let p_rx = self.gain[sender][r];
         let why = if !self.audible(sender, r) {
-            "uhørbar".to_string()
+            "inaudible".to_string()
         } else if overlapping.contains(&r) {
             "half-duplex".into()
         } else if let Some(o) = self.txs.iter().enumerate().find(|(i, o)| {
@@ -1158,16 +1158,16 @@ impl Sim {
                 && self.gain[o.sender][r] > p_rx - 6.0
         }) {
             let t = Packet::decode(&o.1.packet).map(|q| format!("{:?}", q.header.ptype));
-            format!("kollision med {}", t.unwrap_or_default())
+            format!("collision with {}", t.unwrap_or_default())
         } else {
             "ok".into()
         };
         let margin = ((self.radio.snr(p_rx) - self.radio.snr_min) / 5.0).floor() as i32 * 5;
-        let key = format!("{:?}, margen {margin:>2}-{} dB: {why}", p.header.ptype, margin + 5);
+        let key = format!("{:?}, margin {margin:>2}-{} dB: {why}", p.header.ptype, margin + 5);
         *self.hop_trace.entry(key).or_default() += 1;
     }
 
-    // ---------- flood-tilstand (sammenligning, Meshtastic-lignende) ----------
+    // ---------- flood mode (comparison, Meshtastic-like) ----------
 
     fn flood_originate(&mut self, from: usize, ptype: PacketType, dest: Address, payload: &[u8]) {
         let header = Header::new(ptype, dest);
@@ -1191,7 +1191,7 @@ impl Sim {
         let h = &pkt.header;
         let id = packet_id(h.ptype, &h.dest, pkt.payload);
         if !self.nodes[r].flood_seen.insert(id) {
-            // Som Meshtastic: hører vi en anden sende det videre, dropper vi vores.
+            // Like Meshtastic: if we hear someone else forward it, we drop ours.
             if self.flood_pending.remove(&(r, id)) {
                 self.cancelled.insert((r, id));
             }
@@ -1200,7 +1200,7 @@ impl Sim {
         let me = self.nodes[r].router.addr;
         if h.ptype == PacketType::Data && h.dest == me {
             self.on_deliver(r, PacketType::Data, h.dest, pkt.payload);
-            // Kvittering floodes tilbage.
+            // The acknowledgement is flooded back.
             let ack = ack_token(id);
             self.flood_originate(r, PacketType::Ack, ack, &[]);
             return;
@@ -1243,7 +1243,7 @@ impl Sim {
         }
     }
 
-    // ---------- rapport ----------
+    // ---------- report ----------
 
     fn report(&self) {
         let c = &self.cfg;
@@ -1274,9 +1274,9 @@ impl Sim {
             / self.nodes.len() as f64;
         let receivers = (c.nodes - 1) as u64 * self.stats.channel_sent.max(1);
 
-        println!("Må:rse-simulator — tilstand: {:?}", c.mode);
+        println!("Må:rse simulator — mode: {:?}", c.mode);
         println!(
-            "  {} noder ({} repeatere) på {:.0}×{:.0} km, SF{}, duty cycle {:.1} %, {} s, frø {}",
+            "  {} nodes ({} repeaters) on {:.0}×{:.0} km, SF{}, duty cycle {:.1} %, {} s, seed {}",
             c.nodes,
             c.repeaters,
             c.area_km,
@@ -1286,9 +1286,9 @@ impl Sim {
             c.duration_s,
             c.seed
         );
-        println!("  Gennemsnitligt antal naboer pr. node: {neighbours:.1}");
+        println!("  Average number of neighbours per node: {neighbours:.1}");
         println!();
-        println!("Direkte beskeder ({}):", self.msgs.len());
+        println!("Direct messages ({}):", self.msgs.len());
         if c.highway {
             let car = c.nodes - 1;
             let to_car = self.msgs.iter().filter(|m| m.to == car);
@@ -1299,20 +1299,20 @@ impl Sim {
             let (n2, d2) = from_car.fold((0, 0), |(n, d), m| {
                 (n + 1, d + m.delivered_ms.is_some() as usize)
             });
-            println!("  Til bilen: {d1}/{n1} leveret, fra bilen: {d2}/{n2} leveret");
+            println!("  To the car: {d1}/{n1} delivered, from the car: {d2}/{n2} delivered");
         }
         println!(
-            "  Leveret:        {:>5.1} %",
+            "  Delivered:      {:>5.1} %",
             delivered.len() as f64 / n * 100.0
         );
-        println!("  Kvitteret:      {:>5.1} %", acked as f64 / n * 100.0);
+        println!("  Acknowledged:   {:>5.1} %", acked as f64 / n * 100.0);
         println!(
-            "  Forsinkelse:    median {:.1} s, 90 % under {:.1} s",
+            "  Latency:        median {:.1} s, 90 % below {:.1} s",
             median as f64 / 1000.0,
             p90 as f64 / 1000.0
         );
         if c.mode == Mode::Maarse {
-            println!("  Ruter fundet:   {}", self.stats.routes_learned);
+            println!("  Routes found:   {}", self.stats.routes_learned);
         }
         if c.carry_copies > 0 {
             println!(
@@ -1324,20 +1324,20 @@ impl Sim {
             );
         }
         println!();
-        println!("Kanalbeskeder ({}):", self.stats.channel_sent);
+        println!("Channel messages ({}):", self.stats.channel_sent);
         println!(
-            "  Nåede i snit    {:>5.1} % af de andre noder",
+            "  Reached on avg  {:>5.1} % of the other nodes",
             self.stats.channel_deliveries as f64 / receivers as f64 * 100.0
         );
         println!();
         if std::env::var("DEBUG_ACK").is_ok() {
             let mut hist: std::collections::BTreeMap<String, u32> = Default::default();
             for (maxh, len, tx) in self.resp_track.values() {
-                let k = if maxh == len { "nåede sidste hop".to_string() } else if *tx > 6 { format!("stoppede ved {maxh}/{len} efter >6 udsendelser") } else { format!("stoppede ved {maxh}/{len} efter {tx} udsendelser") };
+                let k = if maxh == len { "reached the last hop".to_string() } else if *tx > 6 { format!("stopped at {maxh}/{len} after >6 transmissions") } else { format!("stopped at {maxh}/{len} after {tx} transmissions") };
                 *hist.entry(k).or_default() += 1;
             }
             for (k, v) in hist.iter().take(12) {
-                println!("  [debug] svar {k}: {v}");
+                println!("  [debug] reply {k}: {v}");
             }
             let acked: u32 = self.nodes.iter().map(|n| n.router.stats.acked).sum();
             let rl: u32 = self
@@ -1364,11 +1364,11 @@ impl Sim {
             for (k, v) in &self.hop_trace {
                 println!("  [debug] hop {k}: {v}");
             }
-            println!("  [debug] nåbare beskeder (graf): {reach}/{}", self.msgs.len());
+            println!("  [debug] reachable messages (graph): {reach}/{}", self.msgs.len());
             let pr: u32 = self.nodes.iter().map(|n| n.router.stats.path_requests).sum();
             let hr: u32 = self.nodes.iter().map(|n| n.router.stats.hop_retries).sum();
-            println!("  [debug] ruteforespørgsler startet: {pr}, hop gensendt: {hr}");
-            println!("  [debug] Acked-handlinger i alt: {acked}, ruter lært: {rl}");
+            println!("  [debug] path requests started: {pr}, hops retransmitted: {hr}");
+            println!("  [debug] Acked actions in total: {acked}, routes learned: {rl}");
             for m in self
                 .msgs
                 .iter()
@@ -1376,7 +1376,7 @@ impl Sim {
                 .take(5)
             {
                 println!(
-                    "  [debug] uden kvittering: {} -> {} sendt {} leveret {:?}",
+                    "  [debug] without acknowledgement: {} -> {} sent {} delivered {:?}",
                     m.from, m.to, m.sent_ms, m.delivered_ms
                 );
             }
@@ -1397,27 +1397,27 @@ impl Sim {
             }
         }
         println!("Radio:");
-        println!("  Udsendelser:    {}", self.stats.tx_count);
-        println!("  Sendetid i alt: {:.1} s", total_air as f64 / 1e6);
+        println!("  Transmissions:  {}", self.stats.tx_count);
+        println!("  Total airtime:  {:.1} s", total_air as f64 / 1e6);
         println!(
-            "  Travleste node: {:.1} s = {:.0} % af sit budget",
+            "  Busiest node:   {:.1} s = {:.0} % of its budget",
             busiest as f64 / 1e6,
             busiest as f64 / budget_us.max(1) as f64 * 100.0
         );
         println!(
-            "  Tabt i kollision (pr. modtager): {}",
+            "  Lost to collisions (per receiver): {}",
             self.stats.collisions
         );
         println!(
-            "  Droppet pga. duty cycle: {}, pga. optaget kanal: {}",
+            "  Dropped due to duty cycle: {}, due to busy channel: {}",
             self.stats.duty_drops, self.stats.channel_busy_drops
         );
         println!(
-            "  Videresendelser annulleret (området dækket): {}",
+            "  Forwards cancelled (area covered): {}",
             self.stats.suppressed
         );
         if c.mode == Mode::Maarse {
-            println!("  Gensendte hop: {}", self.stats.hop_retries);
+            println!("  Retransmitted hops: {}", self.stats.hop_retries);
         }
         let types: Vec<String> = self
             .stats
@@ -1425,7 +1425,7 @@ impl Sim {
             .iter()
             .map(|(k, v)| format!("{k} {v}"))
             .collect();
-        println!("  Udsendelser pr. type: {}", types.join(", "));
+        println!("  Transmissions per type: {}", types.join(", "));
     }
 }
 

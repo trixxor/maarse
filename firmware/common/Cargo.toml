@@ -3,7 +3,7 @@ name = "maarse-fw-common"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "Fælles firmware-logik for Må:rse: node, radio-løkke og kanaler mellem opgaver"
+description = "Shared firmware logic for Må:rse: node, radio loop and channels between tasks"
 
 [dependencies]
 maarse-core = { path = "../../maarse-core" }

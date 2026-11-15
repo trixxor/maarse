@@ -1,14 +1,14 @@
-//! Lille, afhængighedsfri fuzz-motor: deterministisk PRNG, mutator og en
-//! løkke, der kører en målfunktion mod tilfældige og muterede input.
+//! Small, dependency-free fuzz engine: a deterministic PRNG, a mutator and a
+//! loop that runs a target function against random and mutated inputs.
 //!
-//! Antal iterationer pr. mål styres af `MAARSE_FUZZ_ITERS` (standard
-//! 100 000 i release, 5 000 i debug) og frøet af `MAARSE_FUZZ_SEED`. Ved panik skrives frø,
-//! iteration og input i hex, så fejlen kan genskabes.
+//! The number of iterations per target is set by `MAARSE_FUZZ_ITERS` (default
+//! 100 000 in release, 5 000 in debug) and the seed by `MAARSE_FUZZ_SEED`. On a panic the seed,
+//! iteration and input are written in hex, so the failure can be reproduced.
 #![forbid(unsafe_code)]
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-/// xorshift64* – hurtig og deterministisk; ikke kryptografisk.
+/// xorshift64* – fast and deterministic; not cryptographic.
 pub struct Rng(u64);
 
 impl Rng {
@@ -34,10 +34,10 @@ impl Rng {
     }
 }
 
-/// Interessante værdier til længde- og tællerfelter.
+/// Interesting values for length and counter fields.
 const MAGIC: [u8; 10] = [0x00, 0x01, 0x02, 0x7f, 0x80, 0xfe, 0xff, 0x0c, 0x0d, 0x40];
 
-/// Muterer `v` med 1-4 tilfældige operationer.
+/// Mutates `v` with 1-4 random operations.
 pub fn mutate(rng: &mut Rng, v: &mut Vec<u8>, max_len: usize) {
     for _ in 0..1 + rng.below(4) {
         match rng.below(8) {
@@ -66,7 +66,7 @@ pub fn mutate(rng: &mut Rng, v: &mut Vec<u8>, max_len: usize) {
                 v.truncate(n);
             }
             6 if !v.is_empty() => {
-                // Gentag et stykke (giver lange/indlejrede strukturer).
+                // Repeat a piece (gives long/nested structures).
                 let a = rng.below(v.len());
                 let b = a + rng.below(v.len() - a) + 1;
                 let piece = v[a..b].to_vec();
@@ -86,8 +86,8 @@ fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }
 
-/// Antal iterationer pr. mål (`MAARSE_FUZZ_ITERS`). Standard er 100 000 i
-/// `--release` og 5 000 i debug, så `cargo test --workspace` forbliver hurtig.
+/// Number of iterations per target (`MAARSE_FUZZ_ITERS`). The default is 100 000 in
+/// `--release` and 5 000 in debug, so `cargo test --workspace` stays fast.
 pub fn iterations() -> u64 {
     env_u64("MAARSE_FUZZ_ITERS", if cfg!(debug_assertions) { 5_000 } else { 100_000 })
 }
@@ -96,8 +96,8 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// Kører `target` mod `iterations()` input: halvdelen helt tilfældige
-/// (længde 0..=`max_len`), halvdelen mutationer af korpus-elementer.
+/// Runs `target` against `iterations()` inputs: half completely random
+/// (length 0..=`max_len`), half mutations of corpus elements.
 pub fn run(name: &str, corpus: &[Vec<u8>], max_len: usize, mut target: impl FnMut(&[u8])) {
     let seed = env_u64("MAARSE_FUZZ_SEED", 0x6d61_6172_7365);
     let mut rng = Rng::new(seed ^ name.bytes().fold(0u64, |h, b| h.rotate_left(5) ^ b as u64));
@@ -116,8 +116,8 @@ pub fn run(name: &str, corpus: &[Vec<u8>], max_len: usize, mut target: impl FnMu
             v
         };
         if catch_unwind(AssertUnwindSafe(|| target(&input))).is_err() {
-            panic!("fuzz-mål {name}: panik ved frø {seed:#x}, iteration {i}, input {}", hex(&input));
+            panic!("fuzz target {name}: panic at seed {seed:#x}, iteration {i}, input {}", hex(&input));
         }
     }
-    eprintln!("fuzz {name}: {n} iterationer på {:.1?}", start.elapsed());
+    eprintln!("fuzz {name}: {n} iterations in {:.1?}", start.elapsed());
 }

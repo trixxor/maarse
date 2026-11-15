@@ -1,9 +1,9 @@
-//! maarse-lab: testlaboratorium i browseren.
+//! maarse-lab: test lab in the browser.
 //!
-//! Starter en lokal webserver (standard http://127.0.0.1:8090) med en side,
-//! der viser alle testsuiter, fuzzing, simulatorscenarier og benchmarks.
-//! Kørsler er underprocesser; deres output streames live over WebSocket.
-//! Simulatoren kan også vises live på et kort (via `maarse-sim --trace-json -`).
+//! Starts a local web server (default http://127.0.0.1:8090) with a page
+//! that shows all test suites, fuzzing, simulator scenarios and benchmarks.
+//! Runs are subprocesses; their output is streamed live over WebSocket.
+//! The simulator can also be shown live on a map (via `maarse-sim --trace-json -`).
 #![forbid(unsafe_code)]
 
 mod hw;
@@ -35,7 +35,7 @@ pub fn cfg() -> &'static Cfg {
 
 static CLIENTS: Mutex<Vec<Sender<String>>> = Mutex::new(Vec::new());
 
-/// Send en besked til alle åbne sider.
+/// Send a message to all open pages.
 pub fn broadcast(v: &Value) {
     broadcast_raw(v.to_string());
 }
@@ -50,10 +50,10 @@ pub fn broadcast_raw(s: String) {
 fn usage() -> ! {
     println!(
         "maarse-lab [--addr 127.0.0.1:8090] [--no-browser] [--root <repo>] [--port COM6 --port COM7]\n\n\
-         Testlaboratorium for Må:rse. Åbner en side i browseren, hvor alle tests,\n\
-         fuzzing, simulatorscenarier og benchmarks kan køres og ses live.\n\
-         --port åbner rigtige boards (companion-protokollen) og viser deres status live;\n\
-         uden --port røres ingen serielle porte."
+         Test lab for Må:rse. Opens a page in the browser where all tests,\n\
+         fuzzing, simulator scenarios and benchmarks can be run and watched live.\n\
+         --port opens real boards (the companion protocol) and shows their status live;\n\
+         without --port no serial ports are touched."
     );
     std::process::exit(0)
 }
@@ -102,7 +102,7 @@ fn main() {
             "--no-browser" => browser = false,
             "--help" | "-h" => usage(),
             o => {
-                eprintln!("ukendt argument: {o}");
+                eprintln!("unknown argument: {o}");
                 usage()
             }
         }
@@ -117,11 +117,11 @@ fn main() {
     hw::spawn_all();
 
     let listener = TcpListener::bind(addr).unwrap_or_else(|e| {
-        eprintln!("kan ikke lytte på {addr}: {e}");
+        eprintln!("cannot listen on {addr}: {e}");
         std::process::exit(1)
     });
     let url = format!("http://{addr}/");
-    println!("Må:rse testlaboratorium: {url}");
+    println!("Må:rse test lab: {url}");
     println!("Repo: {}", cfg().root.display());
     if browser {
         open_browser(&url);
@@ -140,7 +140,7 @@ fn open_browser(url: &str) {
         std::process::Command::new("xdg-open").arg(url).spawn()
     };
     if r.is_err() {
-        println!("Åbn {url} i din browser.");
+        println!("Open {url} in your browser.");
     }
 }
 
@@ -169,7 +169,7 @@ fn http(mut stream: TcpStream) {
     let path = line.split_whitespace().nth(1).unwrap_or("/");
     let (status, ctype, body) = match path {
         "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX_HTML),
-        _ => ("404 Not Found", "text/plain; charset=utf-8", "Ikke fundet"),
+        _ => ("404 Not Found", "text/plain; charset=utf-8", "Not found"),
     };
     let resp = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -179,7 +179,7 @@ fn http(mut stream: TcpStream) {
     let _ = stream.write_all(body.as_bytes());
 }
 
-/// Kun sider fra samme vært må styre laboratoriet (det starter processer).
+/// Only pages from the same host may control the lab (it starts processes).
 #[allow(clippy::result_large_err)]
 fn same_origin(req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
     let h = req.headers();
@@ -188,7 +188,7 @@ fn same_origin(req: &Request, resp: Response) -> Result<Response, ErrorResponse>
         None => Ok(resp),
         Some(o) if o == format!("http://{host}") => Ok(resp),
         Some(_) => {
-            let mut r = ErrorResponse::new(Some("Forkert origin".into()));
+            let mut r = ErrorResponse::new(Some("Wrong origin".into()));
             *r.status_mut() = tungstenite::http::StatusCode::FORBIDDEN;
             Err(r)
         }
@@ -201,7 +201,7 @@ fn websocket(stream: TcpStream) {
     };
     let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(20)));
     let (tx, rx): (Sender<String>, Receiver<String>) = channel();
-    // Første besked: katalog, testliste, historik og hardwarestatus.
+    // First message: catalogue, test list, history and hardware status.
     let _ = tx.send(jobs::hello().to_string());
     for v in hw::snapshot() {
         let _ = tx.send(v.to_string());
@@ -256,6 +256,6 @@ fn command(v: &Value) {
         }
         "simstop" => jobs::sim_stop(),
         "clearhist" => jobs::clear_history(),
-        _ => broadcast(&json!({"type":"error","text":"ukendt kommando"})),
+        _ => broadcast(&json!({"type":"error","text":"unknown command"})),
     }
 }

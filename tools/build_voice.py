@@ -1,6 +1,6 @@
-"""Bygger maarse-voice (Codec2) som WebAssembly og lægger den ind i
-webklienten (maarse-client/index.html), komprimeret med rå deflate og
-base64-kodet i <script id="voice-wasm">.
+"""Builds maarse-voice (Codec2) as WebAssembly and embeds it in
+the web client (maarse-client/index.html), compressed with raw deflate and
+base64 encoded in <script id="voice-wasm">.
 
     python tools/build_voice.py
 """
@@ -24,6 +24,6 @@ html = open(p, encoding="utf-8").read()
 new, n = re.subn(r'(<script type="application/octet-stream" id="voice-wasm">\n)(.*?)(</script>)',
                  lambda m: m.group(1) + lines + "\n" + m.group(3), html, flags=re.S)
 if n != 1:
-    sys.exit("fandt ikke <script id=\"voice-wasm\"> i index.html")
+    sys.exit("did not find <script id=\"voice-wasm\"> in index.html")
 open(p, "w", encoding="utf-8", newline="\n").write(new)
-print(f"maarse-voice: {len(wasm)} bytes wasm, {len(packed)} komprimeret, {len(b64)} base64 -> index.html")
+print(f"maarse-voice: {len(wasm)} bytes wasm, {len(packed)} compressed, {len(b64)} base64 -> index.html")

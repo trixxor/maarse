@@ -1,59 +1,59 @@
-//! Gendannelsesfrase (24 ord, BIP39) og afledning af master-identiteten.
+//! Recovery phrase (24 words, BIP39) and derivation of the master identity.
 //!
 //! ```text
-//! entropi (32 bytes, tilfældig)
-//!   -> 24 ord fra BIP39's engelske ordliste (256 bit + 8 bit tjeksum)
-//!   -> seed = PBKDF2-HMAC-SHA512(frase, "mnemonic" + adgangsord, 2048)  (64 bytes, som BIP39)
+//! entropy (32 bytes, random)
+//!   -> 24 words from BIP39's English word list (256 bits + 8 bits checksum)
+//!   -> seed = PBKDF2-HMAC-SHA512(phrase, "mnemonic" + passphrase, 2048)  (64 bytes, as BIP39)
 //!   -> master = HKDF-SHA256(salt = "maarse/master/v1", ikm = seed, info = "")  (64 bytes)
-//!   -> Identity::from_secret_bytes(master)  (Ed25519-frø | X25519-nøgle)
+//!   -> Identity::from_secret_bytes(master)  (Ed25519 seed | X25519 key)
 //! ```
 //!
-//! **Overgangsregel:** indtil videre ER nodens identitet master-identiteten,
-//! så frasen genskaber samme adresse og sikkerhedsnummer. Senere (tilknyttede
-//! enheder) bliver master kun brugt til at underskrive hver enheds egen nøgle;
-//! samme afledning bevares, så nutidens fraser stadig gælder.
+//! **Transition rule:** for now the node's identity IS the master identity,
+//! so the phrase restores the same address and safety number. Later (linked
+//! devices) the master will only be used to sign each device's own key;
+//! the same derivation is kept, so today's phrases remain valid.
 //!
-//! Frasen skal være i BIP39's kanoniske form: små bogstaver, ét mellemrum
-//! mellem ordene. Adgangsordet (valgfrit) skal være NFKD-normaliseret, som
-//! BIP39 kræver; ren ASCII er altid i orden. Webklienten normaliserer selv.
+//! The phrase must be in BIP39's canonical form: lowercase, one space
+//! between the words. The passphrase (optional) must be NFKD-normalised, as
+//! BIP39 requires; plain ASCII is always fine. The web client normalises itself.
 
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha512};
 
 use crate::Identity;
 
-/// BIP39's officielle engelske ordliste (2048 ord, ét pr. linje).
+/// BIP39's official English word list (2048 words, one per line).
 /// SHA-256: 2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda.
 pub const WORDLIST: &str = include_str!("bip39_english.txt");
 pub const WORDS: usize = 24;
 pub const ENTROPY_LEN: usize = 32;
-/// Salt til HKDF fra BIP39-seed til master-hemmeligheden.
+/// Salt for HKDF from the BIP39 seed to the master secret.
 pub const MASTER_SALT: &[u8] = b"maarse/master/v1";
-/// Plads til en kanonisk frase (højst 8 bogstaver pr. ord).
+/// Room for a canonical phrase (at most 8 letters per word).
 pub type Phrase = heapless::String<{ WORDS * 9 }>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PhraseError {
-    /// Ikke præcis 24 ord.
+    /// Not exactly 24 words.
     WordCount,
-    /// Ord nummer `n` (fra 0) findes ikke i ordlisten.
+    /// Word number `n` (from 0) is not in the word list.
     UnknownWord(usize),
-    /// Tjeksummen passer ikke (skrivefejl eller ombyttede ord).
+    /// The checksum does not match (typo or swapped words).
     Checksum,
 }
 
-/// Ord nummer `i` (0..2048).
+/// Word number `i` (0..2048).
 pub fn word(i: u16) -> &'static str {
     WORDLIST.lines().nth(i as usize).unwrap_or("")
 }
 
-/// Ordets nummer. Ordlisten er sorteret, men vi søger lineært — 2048
-/// sammenligninger er ingenting, og det virker uden ekstra tabel i flash.
+/// The word's number. The word list is sorted, but we search linearly — 2048
+/// comparisons are nothing, and it works without an extra table in flash.
 pub fn word_index(w: &str) -> Option<u16> {
     WORDLIST.lines().position(|x| x == w).map(|i| i as u16)
 }
 
-/// 24 ordnumre for 32 bytes entropi (sidste ord bærer 8 bit tjeksum).
+/// 24 word numbers for 32 bytes of entropy (the last word carries 8 bits of checksum).
 pub fn entropy_to_indices(entropy: &[u8; ENTROPY_LEN]) -> [u16; WORDS] {
     let mut bits = [0u8; ENTROPY_LEN + 1];
     bits[..ENTROPY_LEN].copy_from_slice(entropy);
@@ -71,7 +71,7 @@ pub fn entropy_to_indices(entropy: &[u8; ENTROPY_LEN]) -> [u16; WORDS] {
     out
 }
 
-/// Den kanoniske frase for 32 bytes entropi.
+/// The canonical phrase for 32 bytes of entropy.
 pub fn entropy_to_phrase(entropy: &[u8; ENTROPY_LEN]) -> Phrase {
     let mut s = Phrase::new();
     for (i, idx) in entropy_to_indices(entropy).iter().enumerate() {
@@ -83,8 +83,8 @@ pub fn entropy_to_phrase(entropy: &[u8; ENTROPY_LEN]) -> Phrase {
     s
 }
 
-/// Tjekker en frase (ord adskilt af mellemrum/linjeskift; store bogstaver
-/// tilladt) og returnerer entropien.
+/// Checks a phrase (words separated by spaces/newlines; uppercase
+/// allowed) and returns the entropy.
 pub fn phrase_to_entropy(phrase: &str) -> Result<[u8; ENTROPY_LEN], PhraseError> {
     let mut bits = [0u8; ENTROPY_LEN + 1];
     let mut n = 0usize;
@@ -118,11 +118,11 @@ pub fn phrase_to_entropy(phrase: &str) -> Result<[u8; ENTROPY_LEN], PhraseError>
     Ok(e)
 }
 
-/// BIP39-seed: PBKDF2-HMAC-SHA512(frase, "mnemonic" + adgangsord, 2048).
-/// `phrase` skal være kanonisk (se modulets dokumentation).
+/// BIP39 seed: PBKDF2-HMAC-SHA512(phrase, "mnemonic" + passphrase, 2048).
+/// `phrase` must be canonical (see the module documentation).
 pub fn phrase_to_seed(phrase: &str, passphrase: &str) -> [u8; 64] {
-    let mac = Hmac::<Sha512>::new_from_slice(phrase.as_bytes()).expect("HMAC tager alle nøglelængder");
-    // Første (og eneste) blok: U1 = HMAC(P, salt || 00 00 00 01).
+    let mac = Hmac::<Sha512>::new_from_slice(phrase.as_bytes()).expect("HMAC takes any key length");
+    // The first (and only) block: U1 = HMAC(P, salt || 00 00 00 01).
     let mut m = mac.clone();
     m.update(b"mnemonic");
     m.update(passphrase.as_bytes());
@@ -140,16 +140,16 @@ pub fn phrase_to_seed(phrase: &str, passphrase: &str) -> [u8; 64] {
     t
 }
 
-/// Master-hemmeligheden (64 bytes til [`Identity::from_secret_bytes`]).
+/// The master secret (64 bytes for [`Identity::from_secret_bytes`]).
 pub fn seed_to_master_secret(seed: &[u8; 64]) -> [u8; 64] {
     let hk = hkdf::Hkdf::<Sha256>::new(Some(MASTER_SALT), seed);
     let mut out = [0u8; 64];
-    hk.expand(b"", &mut out).expect("64 bytes er inden for HKDF's grænse");
+    hk.expand(b"", &mut out).expect("64 bytes is within HKDF's limit");
     out
 }
 
-/// Hele vejen fra frase (+ valgfrit adgangsord) til identitet. Frasen
-/// tjekkes og gøres kanonisk først.
+/// All the way from phrase (+ optional passphrase) to identity. The phrase
+/// is checked and made canonical first.
 pub fn identity_from_phrase(phrase: &str, passphrase: &str) -> Result<Identity, PhraseError> {
     let canon = entropy_to_phrase(&phrase_to_entropy(phrase)?);
     let seed = phrase_to_seed(&canon, passphrase);
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(word_index("zoo"), Some(2047));
     }
 
-    /// De officielle BIP39-testvektorer (24 ord, adgangsord "TREZOR").
+    /// The official BIP39 test vectors (24 words, passphrase "TREZOR").
     const TREZOR: &[(&str, &str, &str)] = &[
         (
             "0000000000000000000000000000000000000000000000000000000000000000",
@@ -223,8 +223,8 @@ mod tests {
         }
     }
 
-    /// Vores egen vektor: "abandon … art" uden adgangsord. Samme tal står i
-    /// tools/recovery_phrase_test.mjs (webklienten).
+    /// Our own vector: "abandon … art" without a passphrase. The same number is in
+    /// tools/recovery_phrase_test.mjs (the web client).
     #[test]
     fn maarse_vector() {
         let phrase = TREZOR[0].1;
@@ -242,10 +242,10 @@ mod tests {
         assert_eq!(id.to_secret_bytes(), master);
         assert_eq!(hex(&id.public().to_bytes()), MAARSE_PUBLIC);
         assert_eq!(hex(&id.address().0), MAARSE_ADDRESS);
-        // Store bogstaver og ekstra mellemrum er ligegyldige.
+        // Uppercase and extra spaces do not matter.
         let messy = phrase.to_uppercase().replace(' ', "  \n");
         assert_eq!(identity_from_phrase(&messy, "").unwrap().address(), id.address());
-        // Adgangsordet giver en anden identitet.
+        // The passphrase gives a different identity.
         assert_ne!(identity_from_phrase(phrase, "x").unwrap().address(), id.address());
     }
 
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(phrase_to_entropy("abandon"), Err(PhraseError::WordCount));
         assert_eq!(phrase_to_entropy(&format!("{ok} zoo")), Err(PhraseError::WordCount));
         assert_eq!(phrase_to_entropy(&ok.replace("thank", "thnk")), Err(PhraseError::UnknownWord(2)));
-        // Sidste ord byttet: tjeksummen fejler.
+        // Last word swapped: the checksum fails.
         assert_eq!(phrase_to_entropy(&ok.replace("title", "zoo")), Err(PhraseError::Checksum));
         assert_eq!(phrase_to_entropy(&TREZOR[0].1.replace("art", "abandon")), Err(PhraseError::Checksum));
     }

@@ -1,35 +1,35 @@
-//! Filoverførsel uden heap: tilstandsmaskiner for afsender og modtager.
+//! File transfer without heap: state machines for sender and receiver.
 //!
-//! Samme format som maarse-host: et krypteret filtilbud
-//! ([`maarse_core::content::FileOffer`]) som direkte besked og derefter
-//! bidder ([`crate::seal::seal_chunk`]) som `Fragment`-pakker. Hver bid
-//! kvitteres fra ende til ende af routeren.
+//! The same format as maarse-host: an encrypted file offer
+//! ([`maarse_core::content::FileOffer`]) as a direct message and then
+//! chunks ([`crate::seal::seal_chunk`]) as `Fragment` packets. Every chunk
+//! is acknowledged end to end by the router.
 //!
-//! Selve fildata ligger i en buffer, som kalderen ejer (på firmware en
-//! statisk buffer på [`MAX_FILE`] bytes). Tilstanden her er lille og kan
-//! testes på en PC. Tider er millisekunder fra et vilkårligt nulpunkt.
+//! The file data itself is in a buffer owned by the caller (on firmware a
+//! static buffer of [`MAX_FILE`] bytes). The state here is small and can be
+//! tested on a PC. Times are milliseconds from an arbitrary zero point.
 
 use crate::seal::{self, CHUNK_DATA};
 use maarse_core::Address;
 use maarse_core::content::{FileOffer, Small};
 use sha2::{Digest, Sha256};
 
-/// Største fil over LoRa (det samme, som klienten skalerer billeder til).
+/// Largest file over LoRa (the same size the client scales pictures to).
 pub const MAX_FILE: usize = 8 * 1024;
-/// Højst så mange bidder i én fil (én bit pr. bid i en `u64`).
+/// At most this many chunks in one file (one bit per chunk in a `u64`).
 pub const MAX_CHUNKS: usize = 64;
 const _: () = assert!(MAX_FILE.div_ceil(CHUNK_DATA) <= MAX_CHUNKS);
 
-/// Bidder, der må være undervejs uden kvittering.
+/// Chunks that may be in flight without acknowledgement.
 pub const WINDOW: usize = 4;
-/// En bid (eller tilbuddet) uden kvittering sendes igen efter denne tid.
+/// A chunk (or the offer) without acknowledgement is sent again after this time.
 pub const CHUNK_TIMEOUT_MS: u64 = 30_000;
-/// Overførslen opgives, hvis der ikke er sket fremskridt i denne tid.
-/// Måles fra seneste kvittering, så en langsom kanal (duty cycle) ikke
-/// afbryder en overførsel, der går fremad.
+/// The transfer is abandoned if there has been no progress in this time.
+/// Measured from the latest acknowledgement, so a slow channel (duty cycle) does not
+/// abort a transfer that is making progress.
 pub const STALL_TIMEOUT_MS: u64 = 300_000;
 
-/// Antal bidder i en fil på `size` bytes.
+/// Number of chunks in a file of `size` bytes.
 pub fn chunks_for(size: usize) -> u16 {
     size.div_ceil(CHUNK_DATA).max(1) as u16
 }
@@ -46,10 +46,10 @@ fn hash16(data: &[u8]) -> [u8; 16] {
 }
 
 // ---------------------------------------------------------------------------
-// Upload fra klienten
+// Upload from the client
 // ---------------------------------------------------------------------------
 
-/// En fil, som klienten er ved at overføre til noden (`FileBegin`/`FileData`).
+/// A file the client is transferring to the node (`FileBegin`/`FileData`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Upload {
     pub req: u16,
@@ -57,14 +57,14 @@ pub struct Upload {
     pub size: u32,
     pub mime: Small,
     pub name: Small,
-    /// Bytes modtaget indtil videre.
+    /// Bytes received so far.
     pub len: u32,
 }
 
 impl Upload {
     pub fn new(req: u16, dest: Address, size: u32, mime: &[u8], name: &[u8]) -> Result<Self, &'static str> {
         if size as usize > MAX_FILE {
-            return Err("Filen er for stor (højst 8 KB over LoRa)");
+            return Err("The file is too large (at most 8 KB over LoRa)");
         }
         Ok(Upload {
             req,
@@ -76,7 +76,7 @@ impl Upload {
         })
     }
 
-    /// Lægger en bid i `buf`. Kun i rækkefølge; andet ignoreres.
+    /// Puts a chunk into `buf`. In order only; anything else is ignored.
     pub fn push(&mut self, offset: u32, data: &[u8], buf: &mut [u8]) -> bool {
         let end = self.len as usize + data.len();
         if offset != self.len || end > self.size as usize || end > buf.len() {
@@ -93,36 +93,36 @@ impl Upload {
 }
 
 // ---------------------------------------------------------------------------
-// Afsender
+// Sender
 // ---------------------------------------------------------------------------
 
-/// Hvad en sendt pakke var.
+/// What a sent packet was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Slot {
     Offer,
     Chunk(u16),
 }
 
-/// Svar fra [`Outgoing::on_ack`].
+/// Reply from [`Outgoing::on_ack`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AckResult {
-    /// Tilbuddet er kvitteret; bidderne kan sendes.
+    /// The offer is acknowledged; the chunks can be sent.
     OfferAcked,
-    /// En bid er kvitteret. `done == total` betyder, at filen er leveret.
+    /// A chunk is acknowledged. `done == total` means the file is delivered.
     Progress { done: u16, total: u16 },
 }
 
-/// Svar fra [`Outgoing::tick`].
+/// Reply from [`Outgoing::tick`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TickResult {
     Idle,
-    /// Tilbuddet er ikke kvitteret; send det igen.
+    /// The offer is not acknowledged; send it again.
     ResendOffer,
-    /// Intet fremskridt i [`STALL_TIMEOUT_MS`]; opgiv.
+    /// No progress in [`STALL_TIMEOUT_MS`]; give up.
     Failed,
 }
 
-/// En fil, der sendes. Data ligger i kalderens buffer.
+/// A file being sent. The data is in the caller's buffer.
 #[derive(Clone, Debug)]
 pub struct Outgoing {
     pub file_id: u64,
@@ -135,13 +135,13 @@ pub struct Outgoing {
     offer_acked: bool,
     offer_sent: u64,
     last_progress: u64,
-    /// (msg_id, hvad, afsendt)
+    /// (msg_id, what, sent at)
     in_flight: heapless::Vec<(u64, Slot, u64), { WINDOW + 1 }>,
 }
 
 impl Outgoing {
-    /// Starter en overførsel af `data` og returnerer tilbuddet (der skal
-    /// krypteres og sendes som direkte besked, se [`Outgoing::offer_sent`]).
+    /// Starts a transfer of `data` and returns the offer (which must be
+    /// encrypted and sent as a direct message, see [`Outgoing::offer_sent`]).
     pub fn new(
         file_id: u64,
         key: [u8; 32],
@@ -152,7 +152,7 @@ impl Outgoing {
         now: u64,
     ) -> Result<(Self, FileOffer), &'static str> {
         if data.len() > MAX_FILE {
-            return Err("Filen er for stor (højst 8 KB over LoRa)");
+            return Err("The file is too large (at most 8 KB over LoRa)");
         }
         let chunks = chunks_for(data.len());
         let offer = FileOffer {
@@ -181,7 +181,7 @@ impl Outgoing {
         Ok((o, offer))
     }
 
-    /// Tilbuddet er sendt (eller sendt igen) med `msg_id`.
+    /// The offer has been sent (or sent again) with `msg_id`.
     pub fn offer_sent(&mut self, msg_id: u64, now: u64) {
         self.in_flight.retain(|(_, s, _)| *s != Slot::Offer);
         let _ = self.in_flight.push((msg_id, Slot::Offer, now));
@@ -192,7 +192,7 @@ impl Outgoing {
         self.in_flight.iter().filter(|(_, s, _)| matches!(s, Slot::Chunk(_))).count()
     }
 
-    /// Næste bid, der bør sendes nu (hvis vinduet tillader det).
+    /// The next chunk that should be sent now (if the window allows it).
     pub fn next_chunk(&self) -> Option<u16> {
         if !self.offer_acked || self.chunks_in_flight() >= WINDOW {
             return None;
@@ -203,7 +203,7 @@ impl Outgoing {
         })
     }
 
-    /// Krypterer bid nr. `idx` fra `data` til `out`. Returnerer længden.
+    /// Encrypts chunk no. `idx` from `data` into `out`. Returns the length.
     pub fn seal_chunk(&self, idx: u16, data: &[u8], out: &mut [u8]) -> Option<usize> {
         let start = idx as usize * CHUNK_DATA;
         let end = (start + CHUNK_DATA).min(self.size as usize).min(data.len());
@@ -213,12 +213,12 @@ impl Outgoing {
         seal::seal_chunk(&self.key, self.file_id, idx, &data[start..end], out).ok()
     }
 
-    /// Bid `idx` er sendt med `msg_id`.
+    /// Chunk `idx` has been sent with `msg_id`.
     pub fn chunk_sent(&mut self, idx: u16, msg_id: u64, now: u64) {
         let _ = self.in_flight.push((msg_id, Slot::Chunk(idx), now));
     }
 
-    /// Hører kvitteringen `msg_id` til denne fil?
+    /// Does the acknowledgement `msg_id` belong to this file?
     pub fn on_ack(&mut self, msg_id: u64, now: u64) -> Option<AckResult> {
         let pos = self.in_flight.iter().position(|(m, _, _)| *m == msg_id)?;
         let (_, slot, _) = self.in_flight.swap_remove(pos);
@@ -242,8 +242,8 @@ impl Outgoing {
         self.acked == all_bits(self.chunks)
     }
 
-    /// Glemmer bidder uden kvittering efter [`CHUNK_TIMEOUT_MS`], så de
-    /// sendes igen. Tilbuddet sendes igen, indtil det er kvitteret.
+    /// Forgets chunks without acknowledgement after [`CHUNK_TIMEOUT_MS`], so they
+    /// are sent again. The offer is sent again until it is acknowledged.
     pub fn tick(&mut self, now: u64) -> TickResult {
         if now.saturating_sub(self.last_progress) > STALL_TIMEOUT_MS {
             return TickResult::Failed;
@@ -259,22 +259,22 @@ impl Outgoing {
 }
 
 // ---------------------------------------------------------------------------
-// Modtager
+// Receiver
 // ---------------------------------------------------------------------------
 
-/// Svar fra [`Incoming::on_chunk`].
+/// Reply from [`Incoming::on_chunk`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChunkResult {
-    /// Ikke vores, dublet eller ugyldig.
+    /// Not ours, a duplicate or invalid.
     Ignored,
     Progress { got: u16, total: u16 },
-    /// Alle bidder er her, og kontrolsummen passer.
+    /// All chunks are here, and the checksum matches.
     Complete,
-    /// Alle bidder er her, men kontrolsummen passer ikke.
+    /// All chunks are here, but the checksum does not match.
     BadHash,
 }
 
-/// En fil, der modtages. Data samles i kalderens buffer.
+/// A file being received. The data is collected in the caller's buffer.
 #[derive(Clone, Debug)]
 pub struct Incoming {
     pub from: Address,
@@ -285,7 +285,7 @@ pub struct Incoming {
 }
 
 impl Incoming {
-    /// Tjekker et filtilbud. `max` er den største fil, vi tager imod.
+    /// Checks a file offer. `max` is the largest file we accept.
     pub fn accept(from: Address, offer: FileOffer, max: usize, now: u64) -> Result<Self, &'static str> {
         let cs = offer.chunk_size as usize;
         if offer.size as usize > max {
@@ -296,7 +296,7 @@ impl Incoming {
             || offer.chunks as usize > MAX_CHUNKS
             || offer.chunks != (offer.size as usize).div_ceil(cs).max(1) as u16
         {
-            return Err("ugyldigt tilbud");
+            return Err("invalid offer");
         }
         Ok(Incoming { from, offer, got_bits: 0, got: 0, last_progress: now })
     }
@@ -305,13 +305,13 @@ impl Incoming {
         self.offer.file_id
     }
 
-    /// Hvor mange bytes bid `idx` skal indeholde.
+    /// How many bytes chunk `idx` must contain.
     fn chunk_len(&self, idx: u16) -> usize {
         let cs = self.offer.chunk_size as usize;
         (self.offer.size as usize).saturating_sub(idx as usize * cs).min(cs)
     }
 
-    /// En `Fragment`-payload. Dekrypteres direkte ind i `buf`.
+    /// A `Fragment` payload. Decrypted directly into `buf`.
     pub fn on_chunk(&mut self, payload: &[u8], buf: &mut [u8], now: u64) -> ChunkResult {
         let Some((id, idx)) = seal::chunk_header(payload) else {
             return ChunkResult::Ignored;
@@ -354,13 +354,13 @@ mod tests {
         (0..n).map(|i| (i * 31 % 251) as u8).collect()
     }
 
-    /// Sender en hel fil fra `Outgoing` til `Incoming`; `drop` vælger
-    /// bidder, der går tabt første gang.
+    /// Sends a whole file from `Outgoing` to `Incoming`; `drop` selects
+    /// chunks that are lost the first time.
     fn transfer(n: usize, drop: impl Fn(u16) -> bool) -> (ChunkResult, u16) {
         let src = data(n);
         let (mut out, offer) =
             Outgoing::new(9, [3; 32], Address([1; 16]), &src, b"image/webp", b"a.webp", 0).unwrap();
-        // Tilbuddet går gennem samme indkodning som over radio.
+        // The offer goes through the same encoding as over radio.
         let enc = offer.encode();
         let Some(Content::FileOffer(parsed)) = content::parse(&enc) else { panic!() };
         let mut inc = Incoming::accept(Address([2; 16]), parsed, MAX_FILE, 0).unwrap();
@@ -368,7 +368,7 @@ mod tests {
         let mut now = 0;
         let mut msg = 100;
         out.offer_sent(msg, now);
-        assert_eq!(out.next_chunk(), None, "ingen bidder før tilbuddet er kvitteret");
+        assert_eq!(out.next_chunk(), None, "no chunks before the offer is acknowledged");
         assert_eq!(out.on_ack(msg, now), Some(AckResult::OfferAcked));
         let mut lost = 0u64;
         let mut last = ChunkResult::Ignored;
@@ -386,7 +386,7 @@ mod tests {
                     continue;
                 }
                 last = inc.on_chunk(&ct[..len], &mut buf, now);
-                // Dubletter ignoreres.
+                // Duplicates are ignored.
                 assert_eq!(inc.on_chunk(&ct[..len], &mut buf, now), ChunkResult::Ignored);
                 assert!(matches!(out.on_ack(msg, now), Some(AckResult::Progress { .. })));
             }
@@ -412,15 +412,15 @@ mod tests {
         out.offer_sent(1, 0);
         assert_eq!(out.tick(CHUNK_TIMEOUT_MS), TickResult::ResendOffer);
         out.offer_sent(2, CHUNK_TIMEOUT_MS);
-        assert_eq!(out.on_ack(1, 0), None, "gammelt tilbud er glemt");
+        assert_eq!(out.on_ack(1, 0), None, "old offer is forgotten");
         assert_eq!(out.on_ack(2, CHUNK_TIMEOUT_MS), Some(AckResult::OfferAcked));
         for m in 0..WINDOW as u64 {
             let i = out.next_chunk().unwrap();
             out.chunk_sent(i, 10 + m, CHUNK_TIMEOUT_MS);
         }
-        assert_eq!(out.next_chunk(), None, "vinduet er fuldt");
+        assert_eq!(out.next_chunk(), None, "the window is full");
         assert_eq!(out.tick(2 * CHUNK_TIMEOUT_MS), TickResult::Idle);
-        assert_eq!(out.next_chunk(), Some(0), "bid 0 sendes igen");
+        assert_eq!(out.next_chunk(), Some(0), "chunk 0 is sent again");
         assert_eq!(out.tick(CHUNK_TIMEOUT_MS + STALL_TIMEOUT_MS + 1), TickResult::Failed);
     }
 

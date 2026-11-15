@@ -1,29 +1,29 @@
-//! Signerede firmwareopdateringer: manifest, signatur og modtagelse.
+//! Signed firmware updates: manifest, signature and reception.
 //!
-//! En udgivelse består af et firmware-image (rå binær: på nRF52840 appen
-//! fra dens startadresse, på ESP32-S3 et ESP-IDF app-image) og et manifest
-//! på [`MANIFEST_LEN`] bytes:
+//! A release consists of a firmware image (raw binary: on the nRF52840 the app
+//! from its start address, on the ESP32-S3 an ESP-IDF app image) and a manifest
+//! of [`MANIFEST_LEN`] bytes:
 //!
 //! ```text
 //! 0   "MOTA"
 //! 4   format (1)
-//! 5   flag (0, reserveret)
-//! 6   board-ID (u16, se [`board`])
+//! 5   flags (0, reserved)
+//! 6   board ID (u16, see [`board`])
 //! 8   version (u32: major << 16 | minor << 8 | patch)
-//! 12  størrelse (u32, bytes)
-//! 16  SHA-256 af imaget (32)
-//! 48  Ed25519-signatur (64) over "maarse/firmware/v1" | byte 0..48
+//! 12  size (u32, bytes)
+//! 16  SHA-256 of the image (32)
+//! 48  Ed25519 signature (64) over "maarse/firmware/v1" | bytes 0..48
 //! ```
 //!
-//! Noden installerer kun, hvis signaturen passer med udgivelsesnøglen, der er
-//! bygget ind i firmwaren, board-ID passer, og versionen er nyere end den
-//! kørende (anti-rollback). Kun lokalt (USB/Bluetooth) kan en ældre version
-//! tillades med et eksplicit flag.
+//! The node only installs if the signature matches the release key built
+//! into the firmware, the board ID matches, and the version is newer than the
+//! running one (anti-rollback). Only locally (USB/Bluetooth) can an older version
+//! be allowed with an explicit flag.
 //!
-//! [`Receiver`] tager imod imaget i bidder og skriver det til et
-//! mellemlager ([`Staging`]). Fremskridtet gemmes som en bitmap pr.
-//! 4 KB-blok på en metaside, så en afbrudt overførsel kan genoptages - også
-//! efter genstart - fra første ufærdige blok.
+//! [`Receiver`] receives the image in chunks and writes it to a
+//! staging area ([`Staging`]). Progress is stored as a bitmap per
+//! 4 KB block on a meta page, so an interrupted transfer can be resumed - even
+//! after a restart - from the first unfinished block.
 
 use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
 pub use ed25519_dalek::SigningKey;
@@ -34,16 +34,16 @@ const MAGIC: &[u8; 4] = b"MOTA";
 const FORMAT: u8 = 1;
 const SIGNED_LEN: usize = 48;
 const CONTEXT: &[u8] = b"maarse/firmware/v1";
-/// Blokstørrelse i mellemlageret (slettesektor på begge platforme).
+/// Block size in the staging area (erase sector on both platforms).
 pub const BLOCK: u32 = 4096;
-/// Metasiden: "OTM1" + manifest, derefter ét ord pr. blok (0xFFFFFFFF =
-/// ikke skrevet, 0 = færdig; hvert ord skrives højst én gang).
+/// The meta page: "OTM1" + manifest, then one word per block (0xFFFFFFFF =
+/// not written, 0 = done; each word is written at most once).
 const META_MAGIC: &[u8; 4] = b"OTM1";
 const META_BITMAP: u32 = 128;
-/// Største antal blokke, metasiden kan holde styr på (ca. 3,9 MB).
+/// Largest number of blocks the meta page can keep track of (about 3.9 MB).
 pub const MAX_BLOCKS: u32 = (BLOCK - META_BITMAP) / 4;
 
-/// Board-ID'er. Et image til ét board installeres aldrig på et andet.
+/// Board IDs. An image for one board is never installed on another.
 pub mod board {
     pub const XIAO_NRF52840: u16 = 1;
     pub const WISMESH_TAG: u16 = 2;
@@ -56,7 +56,7 @@ pub mod board {
             WISMESH_TAG => "wismesh-tag",
             HELTEC_V4 => "heltec-v4",
             XIAO_ESP32S3 => "xiao-esp32s3",
-            _ => "ukendt",
+        _ => "unknown",
         }
     }
 
@@ -67,10 +67,10 @@ pub mod board {
     }
 }
 
-/// Udviklingsnøglens frø: SHA-256 af denne tekst. Den er OFFENTLIG - alle
-/// kan signere med den. Firmware bygget uden `MAARSE_RELEASE_PUBKEY` stoler
-/// på den og advarer om det.
-pub const DEV_SEED_TEXT: &[u8] = b"maarse/dev-release-key/IKKE-TIL-UDGIVELSER";
+/// The development key's seed: SHA-256 of this text. It is PUBLIC - anyone
+/// can sign with it. Firmware built without `MAARSE_RELEASE_PUBKEY` trusts
+/// it and warns about it.
+pub const DEV_SEED_TEXT: &[u8] = b"maarse/dev-release-key/NOT-FOR-RELEASES";
 
 pub fn dev_signing_key() -> SigningKey {
     SigningKey::from_bytes(&Sha256::digest(DEV_SEED_TEXT).into())
@@ -80,13 +80,13 @@ pub fn dev_public_key() -> [u8; 32] {
     dev_signing_key().verifying_key().to_bytes()
 }
 
-/// SHA-256 af et image.
-/// Domæne for udgivelsessignaturer (SHA256SUMS), så en signatur over en
-/// udgivelse aldrig kan forveksles med et firmware-manifest.
+/// SHA-256 of an image.
+/// Domain for release signatures (SHA256SUMS), so a signature over a
+/// release can never be confused with a firmware manifest.
 const RELEASE_DOMAIN: &[u8] = b"maarse-release-v1
 ";
 
-/// Det, der signeres: domænet efterfulgt af SHA-256 af SHA256SUMS-filen.
+/// What is signed: the domain followed by SHA-256 of the SHA256SUMS file.
 fn release_message(sums: &[u8]) -> [u8; 18 + 32] {
     let mut m = [0u8; 18 + 32];
     m[..18].copy_from_slice(RELEASE_DOMAIN);
@@ -94,12 +94,12 @@ fn release_message(sums: &[u8]) -> [u8; 18 + 32] {
     m
 }
 
-/// Signerer en udgivelses SHA256SUMS-fil med udgivelsesnøglen.
+/// Signs a release's SHA256SUMS file with the release key.
 pub fn sign_release(key: &SigningKey, sums: &[u8]) -> [u8; 64] {
     key.sign(&release_message(sums)).to_bytes()
 }
 
-/// Tjekker en udgivelsessignatur.
+/// Checks a release signature.
 pub fn verify_release(public_key: &[u8; 32], sums: &[u8], sig: &[u8; 64]) -> bool {
     let Ok(pk) = VerifyingKey::from_bytes(public_key) else { return false };
     pk.verify(&release_message(sums), &Signature::from_bytes(sig)).is_ok()
@@ -109,7 +109,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
 
-/// "1.2.3" -> 0x010203. Hver del højst 255 (major højst 65535).
+/// "1.2.3" -> 0x010203. Each part at most 255 (major at most 65535).
 pub fn parse_version(s: &str) -> Option<u32> {
     let mut it = s.trim().split('.');
     let major: u32 = it.next()?.parse().ok()?;
@@ -126,7 +126,7 @@ pub fn version_parts(v: u32) -> (u32, u32, u32) {
     (v >> 16, (v >> 8) & 0xFF, v & 0xFF)
 }
 
-/// 64 hextegn -> 32 bytes.
+/// 64 hex characters -> 32 bytes.
 pub fn parse_hex32(s: &str) -> Option<[u8; 32]> {
     let s = s.trim().as_bytes();
     if s.len() != 64 {
@@ -155,10 +155,10 @@ pub enum OtaError {
     BadManifest,
     BadSignature,
     WrongBoard,
-    /// Versionen er ikke nyere end den kørende.
+    /// The version is not newer than the running one.
     NotNewer,
     TooLarge,
-    /// Bidden passer ikke med det forventede offset (svaret fortæller hvor).
+    /// The chunk does not match the expected offset (the reply says where).
     WrongOffset,
     BadChunk,
     NotStarted,
@@ -170,17 +170,17 @@ pub enum OtaError {
 impl OtaError {
     pub fn text(self) -> &'static str {
         match self {
-            OtaError::BadManifest => "Ugyldigt manifest",
-            OtaError::BadSignature => "Signaturen passer ikke med udgivelsesnøglen",
-            OtaError::WrongBoard => "Firmwaren er til et andet board",
-            OtaError::NotNewer => "Versionen er ikke nyere end den kørende (rollback afvist)",
-            OtaError::TooLarge => "Firmwaren er for stor til mellemlageret",
-            OtaError::WrongOffset => "Forkert offset; fortsæt fra det angivne",
-            OtaError::BadChunk => "Ugyldig bid (offset/længde skal være delelig med 4)",
-            OtaError::NotStarted => "Ingen opdatering i gang",
-            OtaError::Incomplete => "Firmwaren er ikke overført helt",
-            OtaError::HashMismatch => "SHA-256 passer ikke - overfør igen",
-            OtaError::Flash => "Flash-fejl",
+            OtaError::BadManifest => "Invalid manifest",
+            OtaError::BadSignature => "The signature does not match the release key",
+            OtaError::WrongBoard => "The firmware is for a different board",
+            OtaError::NotNewer => "The version is not newer than the running one (rollback rejected)",
+            OtaError::TooLarge => "The firmware is too large for the staging area",
+            OtaError::WrongOffset => "Wrong offset; continue from the given one",
+            OtaError::BadChunk => "Invalid chunk (offset/length must be a multiple of 4)",
+            OtaError::NotStarted => "No update in progress",
+            OtaError::Incomplete => "The firmware has not been fully transferred",
+            OtaError::HashMismatch => "SHA-256 does not match - transfer again",
+            OtaError::Flash => "Flash error",
         }
     }
 }
@@ -233,7 +233,7 @@ impl Manifest {
         b
     }
 
-    /// Laver et signeret manifest for `image` (bruges af `maarse-sign`).
+    /// Makes a signed manifest for `image` (used by `maarse-sign`).
     pub fn sign(key: &SigningKey, board: u16, version: u32, image: &[u8]) -> Self {
         let mut m = Manifest {
             board,
@@ -252,7 +252,7 @@ impl Manifest {
             .map_err(|_| OtaError::BadSignature)
     }
 
-    /// Alle kontroller før overførslen: signatur, board, version, størrelse.
+    /// All checks before the transfer: signature, board, version, size.
     pub fn check(&self, policy: &Policy, allow_downgrade: bool) -> Result<(), OtaError> {
         self.verify_signature(&policy.public_key)?;
         if self.board != policy.board {
@@ -268,18 +268,18 @@ impl Manifest {
     }
 }
 
-/// Hvad noden accepterer.
+/// What the node accepts.
 #[derive(Clone, Copy, Debug)]
 pub struct Policy {
     pub public_key: [u8; 32],
     pub board: u16,
     pub current_version: u32,
-    /// Mellemlagerets størrelse i bytes.
+    /// The size of the staging area in bytes.
     pub capacity: u32,
 }
 
-/// Mellemlageret og dets metaside. Offsets er relative til mellemlageret;
-/// metasiden (én blok) adresseres for sig. Skrivninger er ord-justerede.
+/// The staging area and its meta page. Offsets are relative to the staging area;
+/// the meta page (one block) is addressed separately. Writes are word aligned.
 pub trait Staging {
     fn erase_block(&mut self, offset: u32) -> Result<(), ()>;
     fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), ()>;
@@ -293,19 +293,19 @@ pub trait Staging {
 pub enum State {
     Idle,
     Receiving,
-    /// Hele imaget er modtaget og SHA-256 passer.
+    /// The whole image has been received and SHA-256 matches.
     Verified,
 }
 
 #[derive(Clone)]
-/// Modtager et image i rækkefølge (stop-and-wait: klienten sender næste
-/// bid, når forrige er kvitteret med næste offset).
+/// Receives an image in order (stop-and-wait: the client sends the next
+/// chunk when the previous one is acknowledged with the next offset).
 pub struct Receiver {
     pub manifest: Option<Manifest>,
     pub state: State,
-    /// Næste forventede offset.
+    /// The next expected offset.
     pub next: u32,
-    /// Blokke under `erased` er slettet i denne omgang og må skrives.
+    /// Blocks below `erased` have been erased in this round and may be written.
     erased: u32,
 }
 
@@ -320,9 +320,9 @@ impl Receiver {
         Receiver { manifest: None, state: State::Idle, next: 0, erased: 0 }
     }
 
-    /// Starter (eller genoptager) en overførsel. Er det samme manifest
-    /// allerede gemt på metasiden, fortsættes fra første ufærdige blok.
-    /// Returnerer det offset, klienten skal sende fra.
+    /// Starts (or resumes) a transfer. If the same manifest is
+    /// already stored on the meta page, it continues from the first unfinished block.
+    /// Returns the offset the client should send from.
     pub fn begin(
         &mut self,
         st: &mut (impl Staging + ?Sized),
@@ -361,9 +361,9 @@ impl Receiver {
         Ok(self.next)
     }
 
-    /// Skriver en bid. `offset` skal være lig `next` (ellers `WrongOffset`,
-    /// og klienten fortsætter fra `next`). Længden skal være delelig med 4,
-    /// undtagen sidste bid. Returnerer næste offset.
+    /// Writes a chunk. `offset` must equal `next` (otherwise `WrongOffset`,
+    /// and the client continues from `next`). The length must be a multiple of 4,
+    /// except for the last chunk. Returns the next offset.
     pub fn chunk(&mut self, st: &mut (impl Staging + ?Sized), offset: u32, data: &[u8]) -> Result<u32, OtaError> {
         let m = self.manifest.ok_or(OtaError::NotStarted)?;
         if self.state == State::Verified && offset >= m.size {
@@ -379,7 +379,7 @@ impl Receiver {
         if data.is_empty() || offset % 4 != 0 || end > m.size || (data.len() % 4 != 0 && end != m.size) {
             return Err(OtaError::BadChunk);
         }
-        // Slet nye blokke, før der skrives i dem.
+        // Erase new blocks before writing to them.
         while self.erased * BLOCK < end {
             st.erase_block(self.erased * BLOCK).map_err(|_| OtaError::Flash)?;
             self.erased += 1;
@@ -393,7 +393,7 @@ impl Receiver {
             last[..data.len() - whole].copy_from_slice(&data[whole..]);
             st.write(offset + whole as u32, &last).map_err(|_| OtaError::Flash)?;
         }
-        // Markér blokke, der nu er hele, som færdige.
+        // Mark blocks that are now complete as done.
         let first_open = offset / BLOCK;
         let complete = if end == m.size { end.div_ceil(BLOCK) } else { end / BLOCK };
         for b in first_open..complete {
@@ -419,7 +419,7 @@ impl Receiver {
             o += n as u32;
         }
         if <[u8; 32]>::from(h.finalize()) != m.sha256 {
-            // Start forfra: glem fremskridtet.
+        // Start over: forget the progress.
             let _ = st.erase_meta();
             self.state = State::Idle;
             self.manifest = None;
@@ -430,7 +430,7 @@ impl Receiver {
         Ok(())
     }
 
-    /// Klar til installation? (hele imaget er modtaget og verificeret)
+    /// Ready to install? (the whole image is received and verified)
     pub fn end(&self) -> Result<Manifest, OtaError> {
         match (self.state, self.manifest) {
             (State::Verified, Some(m)) => Ok(m),
@@ -439,7 +439,7 @@ impl Receiver {
         }
     }
 
-    /// Læser mellemlageret igen og tjekker SHA-256 lige før installation.
+    /// Reads the staging area again and checks SHA-256 right before installation.
     pub fn recheck(&mut self, st: &mut (impl Staging + ?Sized)) -> Result<Manifest, OtaError> {
         self.end()?;
         self.finish(st)?;
@@ -459,8 +459,8 @@ pub mod tests {
     use std::vec;
     use std::vec::Vec;
 
-    /// Flash i RAM, der opfører sig som NOR: kun 1 -> 0 uden sletning, og
-    /// hvert ord på metasiden må højst skrives én gang efter sletning.
+    /// Flash in RAM that behaves like NOR: only 1 -> 0 without erasing, and
+    /// each word on the meta page may be written at most once after an erase.
     pub struct MockFlash {
         pub data: Vec<u8>,
         pub meta: Vec<u8>,
@@ -554,7 +554,7 @@ pub mod tests {
         let p = Manifest::parse(&b).unwrap();
         assert_eq!(p, m);
         assert!(p.verify_signature(&dev_public_key()).is_ok());
-        // Enhver ændret byte i den signerede del eller signaturen afvises.
+        // Any changed byte in the signed part or the signature is rejected.
         for i in 0..MANIFEST_LEN {
             let mut bad = b;
             bad[i] ^= 1;
@@ -599,13 +599,13 @@ pub mod tests {
         let mut r = Receiver::new();
         assert_eq!(r.begin(&mut f, m, &policy(64 * 1024), false), Ok(0));
         assert_eq!(r.end(), Err(OtaError::Incomplete));
-        // Forkert offset afvises uden at ødelægge noget.
+        // A wrong offset is rejected without breaking anything.
         assert_eq!(r.chunk(&mut f, 128, &img[128..256]), Err(OtaError::WrongOffset));
         assert_eq!(r.chunk(&mut f, 0, &img[0..3]), Err(OtaError::BadChunk));
         assert_eq!(send_all(&mut r, &mut f, &img, 0, 128), Ok(10_001));
         assert_eq!(r.end(), Ok(m));
         assert_eq!(&f.data[..img.len()], &img[..]);
-        // En gentaget sidste bid (tabt kvittering) er ufarlig.
+        // A repeated last chunk (lost acknowledgement) is harmless.
         assert_eq!(r.chunk(&mut f, 10_001, &[]), Ok(10_001));
     }
 
@@ -617,7 +617,7 @@ pub mod tests {
         let mut f = MockFlash::new(64 * 1024);
         let mut r = Receiver::new();
         r.begin(&mut f, m, &pol, false).unwrap();
-        // Afbrudt midt i blok 2 (strømsvigt: RAM-tilstanden er væk).
+        // Interrupted in the middle of block 2 (power loss: the RAM state is gone).
         let mut o = 0;
         while o < 2 * 4096 + 1000 {
             o = r.chunk(&mut f, o, &img[o as usize..o as usize + 200]).unwrap();
@@ -627,11 +627,11 @@ pub mod tests {
         assert_eq!(send_all(&mut r, &mut f, &img, 2 * 4096, 240), Ok(img.len() as u32));
         assert!(r.end().is_ok());
         assert_eq!(&f.data[..img.len()], &img[..]);
-        // Begin igen efter færdig overførsel: allerede verificeret.
+        // Begin again after a finished transfer: already verified.
         let mut r = Receiver::new();
         assert_eq!(r.begin(&mut f, m, &pol, false), Ok(img.len() as u32));
         assert!(r.end().is_ok());
-        // Et nyt manifest starter forfra.
+        // A new manifest starts over.
         let img2 = image(5000);
         let m2 = Manifest::sign(&dev_signing_key(), board::XIAO_NRF52840, 0x000300, &img2);
         assert_eq!(r.begin(&mut f, m2, &pol, false), Ok(0));
@@ -648,7 +648,7 @@ pub mod tests {
         bad[4000] ^= 0x10;
         assert_eq!(send_all(&mut r, &mut f, &bad, 0, 240), Err(OtaError::HashMismatch));
         assert_eq!(r.end(), Err(OtaError::NotStarted));
-        // Forfra med korrekte data.
+        // Over again with correct data.
         assert_eq!(r.begin(&mut f, m, &policy(64 * 1024), false), Ok(0));
         assert!(send_all(&mut r, &mut f, &img, 0, 240).is_ok());
     }
@@ -674,7 +674,7 @@ pub mod tests {
         let sig = sign_release(&k, sums);
         assert!(verify_release(&pk, sums, &sig));
         assert!(!verify_release(&pk, b"abd  maarse.apk
-", &sig), "ændret fil");
+", &sig), "changed file");
         assert!(!verify_release(&SigningKey::from_bytes(&[4; 32]).verifying_key().to_bytes(), sums, &sig));
     }
 }

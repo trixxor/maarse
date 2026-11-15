@@ -1,11 +1,11 @@
-//! Flash-placering på nRF52840. Selve formatet ligger i
+//! Flash placement on the nRF52840. The format itself is in
 //! `maarse_fw_common::storage`.
 //!
-//! * 0xEA000–0xEBFFF: postkasse (8 KB)
-//! * 0xEC000: identitet, radio og administratorer (4 KB)
+//! * 0xEA000–0xEBFFF: mailbox (8 KB)
+//! * 0xEC000: identity, radio and administrators (4 KB)
 //!
-//! Appen slutter senest ved 0x88000 (se build.rs); derefter mellemlager og
-//! metaside til firmwareopdatering (se ota.rs). Bootloaderen ligger fra 0xF4000.
+//! The app ends at 0x88000 at the latest (see build.rs); after that the staging area and
+//! meta page for firmware updates (see ota.rs). The bootloader starts at 0xF4000.
 
 use embassy_nrf::nvmc::Nvmc;
 use maarse_fw_common::storage::FlashSettings;

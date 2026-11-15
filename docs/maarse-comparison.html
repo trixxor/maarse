@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Må:rse vs the rest</title>
+<style>
+:root{--bg:#f7f6f2;--card:#fff;--fg:#1d1d1b;--muted:#6b6a64;--line:#e3e1d9;--acc:#1f6f5c;--acc2:#b4532a;
+--yes:#1f7a4d;--yesbg:#e3f3ea;--part:#8a6a00;--partbg:#fbf1d0;--no:#a33a2b;--nobg:#f8e2de;--na:#6b6a64;--nabg:#eeede8;
+--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161714;--card:#1f201c;--fg:#ecebe5;--muted:#a3a29a;--line:#34352f;--acc:#5cc2a4;--acc2:#e58a5f;
+--yes:#7fd6a5;--yesbg:#1d3a2b;--part:#e8c45a;--partbg:#3a321a;--no:#f0907f;--nobg:#432420;--na:#a3a29a;--nabg:#2a2b26}}
+:root[data-theme="dark"]{--bg:#161714;--card:#1f201c;--fg:#ecebe5;--muted:#a3a29a;--line:#34352f;--acc:#5cc2a4;--acc2:#e58a5f;
+--yes:#7fd6a5;--yesbg:#1d3a2b;--part:#e8c45a;--partbg:#3a321a;--no:#f0907f;--nobg:#432420;--na:#a3a29a;--nabg:#2a2b26}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1080px;margin:0 auto;padding:32px 16px 80px}
+h1{font-size:2.1rem;line-height:1.15;margin:.2em 0 .3em}
+h2{font-size:1.45rem;margin:2.4em 0 .6em;padding-top:.6em;border-top:1px solid var(--line)}
+h3{font-size:1.1rem;margin:1.6em 0 .4em}
+p{margin:.5em 0}
+.kicker{color:var(--acc);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:.8rem}
+.lead{font-size:1.1rem;color:var(--muted);max-width:760px}
+nav{display:flex;flex-wrap:wrap;gap:6px 14px;margin:18px 0 0;font-size:.92rem}
+nav a{color:var(--acc);text-decoration:none}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.card h3{margin-top:0}
+.big{font-size:1.9rem;font-weight:700;font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+.small{font-size:.88rem}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+th,td{padding:8px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-weight:600;background:var(--nabg);position:sticky;top:0}
+tr.sec td{background:var(--bg);font-weight:700;color:var(--acc)}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.b{display:inline-block;border-radius:5px;padding:1px 7px;font-size:.78rem;font-weight:600;margin-right:4px;white-space:nowrap}
+.y{background:var(--yesbg);color:var(--yes)}.p{background:var(--partbg);color:var(--part)}.n{background:var(--nobg);color:var(--no)}.u{background:var(--nabg);color:var(--na)}
+.win{font-weight:700;color:var(--yes)}
+.lose{font-weight:700;color:var(--no)}
+ul{padding-left:1.2em}li{margin:.25em 0}
+.pc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pc div{border-radius:8px;padding:8px 12px}
+.pro{background:var(--yesbg)}.con{background:var(--nobg)}
+.pro b{color:var(--yes)}.con b{color:var(--no)}
+.vote{font-family:var(--mono);font-size:.85rem}
+.verdict{display:inline-block;font-weight:700;border-radius:6px;padding:2px 9px}
+.go{background:var(--yesbg);color:var(--yes)}.maybe{background:var(--partbg);color:var(--part)}.stop{background:var(--nobg);color:var(--no)}
+.phase{border-left:4px solid var(--acc);padding:4px 0 4px 16px;margin:18px 0}
+.phase h3{margin:0 0 6px}
+.phase.p2{border-color:var(--acc2)}.phase.p3{border-color:var(--part)}.phase.p4{border-color:var(--muted)}
+code{font-family:var(--mono);font-size:.88em;background:var(--nabg);padding:1px 5px;border-radius:4px}
+.note{background:var(--partbg);border-radius:8px;padding:10px 14px;margin:12px 0}
+@media (max-width:640px){h1{font-size:1.6rem}.pc{grid-template-columns:1fr}th,td{padding:6px 7px}}
+</style>
+</head>
+<body>
+<main>
+<div class="kicker">Review · 14 November 2026 · Må:rse v0.5</div>
+<h1>Må:rse vs Meshtastic, MeshCore and Reticulum</h1>
+<p class="lead">The report goes through all Må:rse features, tests them with fresh runs and sets them against the three other systems. It explains what we have overlooked and what an internal panel voted for, both for fixed setups and for mobile use. Last comes a roadmap.</p>
+<nav>
+<a href="#summary">In short</a><a href="#matrix">Features side by side</a><a href="#test">Tests and simulation</a>
+<a href="#overlooked">What we overlooked</a><a href="#static-mobile">Static and mobile</a><a href="#e45">Brønderslev → Fredericia</a><a href="#forest">Forest, 18 people</a><a href="#vote">Proposals and vote</a>
+<a href="#roadmap">Roadmap</a><a href="#method">Method and caveats</a>
+</nav>
+
+<h2 id="summary">In short</h2>
+<div class="grid">
+ <div class="card"><h3>Where Må:rse is best</h3><p>Routing, global reach and encryption. In simulation Må:rse delivers more messages than flood with <b>1/5 of the airtime</b>. It is the only one of the four systems that both runs on the chip and reaches out over the internet without a central server.</p></div>
+ <div class="card"><h3>Where we lose</h3><p>Users, apps (no iOS app), maps and GPS, a power-saving mode for trackers and field testing. Range and power consumption have <b>not been measured</b>. Meshtastic and MeshCore have years of operation. We do not.</p></div>
+ <div class="card"><h3>New findings today</h3><p>In a dense net at SF12 only about 30 % of the messages are acknowledged. The history on the host is stored unencrypted on disk. The host stops when the window or session that started it closes. And the user interface confuses when a radio is plugged into USB.</p></div>
+ <div class="card"><h3>Tests</h3><p><span class="big">191</span> tests pass, and none fail (<code>cargo test --workspace</code>). On top of that come 48 simulation runs, 2 runs of 2 hours with 1 % duty cycle and a new test of MeshCore ping.</p></div>
+</div>
+<div class="note"><b>Status 14 Nov 2026 (evening):</b> since this report was written, the <b>edge bridge</b> is built into router, host and firmware; ESP32-S3 nodes have a <b>Wi-Fi backbone</b> (as a mesh node of their own, or as the host's LoRa modem over Wi-Fi, chosen in the Wi-Fi settings), with Bluetooth and Wi-Fi in one firmware and a long press on the button to switch; the display shows the active links and the IP; the host lists its devices (<code>/api/devices</code>) and uses TCP keepalive; and a boot loop right after flashing (a lora-phy bug) is fixed. All tested on a Heltec V4.3; see the roadmap for what is left.</div>
+<p class="note"><b>Is Må:rse better?</b> <b>Yes</b> on architecture: routing, security model, reach beyond LoRa and features per byte. <b>No, not yet</b> in practice, because "better" needs users, field measurements and an external review of the crypto. The road to "better on every point" is less about new features and more about measuring, hardening and making it easy.</p>
+
+<h2 id="matrix">Features side by side</h2>
+<p class="muted small">Må:rse is judged on what is built and tested. "partly" means built, but with limitations or not tried on hardware. The information about the other systems is from November 2026 (the sources are in <code>compare.md</code>).</p>
+<div class="scroll"><table>
+<thead><tr><th style="min-width:180px">Feature</th><th>Meshtastic</th><th>MeshCore</th><th>Reticulum</th><th>Må:rse</th></tr></thead>
+<tbody>
+<tr class="sec"><td colspan="5">Routing and radio</td></tr>
+<tr><td>Principle</td><td>Managed flood</td><td>Flood, then a learned path</td><td>Announces, next hop</td><td>Path request, then a source path chosen by SNR</td></tr>
+<tr><td>Max hops</td><td><span class="b p">7</span></td><td><span class="b y">64</span></td><td><span class="b y">128</span></td><td><span class="b y">64</span> (over 12 with anchors)</td></tr>
+<tr><td>Per-hop and end-to-end acknowledgement</td><td><span class="b p">DM only</span></td><td><span class="b y">yes</span></td><td><span class="b y">proof</span></td><td><span class="b y">yes</span> + route repair</td></tr>
+<tr><td>Duty cycle and listen before talk</td><td><span class="b y">yes</span></td><td><span class="b y">yes</span></td><td><span class="b y">per interface</span></td><td><span class="b y">token bucket + CAD</span></td></tr>
+<tr><td>Load control on a busy channel</td><td><span class="b p">partly</span></td><td><span class="b p">partly</span></td><td><span class="b y">announce quotas</span></td><td><span class="b n">no</span>: the SF12 test shows the gap</td></tr>
+<tr><td>Energy-driven forwarding</td><td><span class="b p">roles</span></td><td><span class="b n">no</span></td><td><span class="b n">no</span></td><td><span class="b y">yes</span>, by battery level</td></tr>
+<tr><td>Spam protection</td><td><span class="b p">limits</span></td><td><span class="b p">hop cap</span></td><td><span class="b y">stamps</span></td><td><span class="b y">proof of work</span></td></tr>
+<tr><td>Regions</td><td><span class="b n">no</span></td><td><span class="b y">yes</span></td><td><span class="b n">no</span></td><td><span class="b y">yes</span>, also on the backbone</td></tr>
+<tr><td>Several frequencies or radios per node</td><td><span class="b n">no</span></td><td><span class="b n">no</span></td><td><span class="b y">yes</span></td><td><span class="b p">host: several modems</span></td></tr>
+<tr class="sec"><td colspan="5">Reach beyond LoRa</td></tr>
+<tr><td>Internet and TCP in the same net</td><td><span class="b p">MQTT server</span></td><td><span class="b n">no</span></td><td><span class="b y">yes</span></td><td><span class="b y">TCP + DHT</span></td></tr>
+<tr><td>Wi-Fi on the radio itself</td><td><span class="b y">MQTT, web UI</span></td><td><span class="b y">observer (MQTT)</span></td><td><span class="b u">–</span></td><td><span class="b y">backbone or LoRa modem for the host</span> (ESP32-S3)</td></tr>
+<tr><td>Without a central server</td><td><span class="b n">no</span></td><td><span class="b u">–</span></td><td><span class="b y">yes</span></td><td><span class="b y">yes</span></td></tr>
+<tr><td>Bridge to the other nets</td><td><span class="b n">no</span></td><td><span class="b n">no</span></td><td><span class="b n">no</span></td><td><span class="b p">MeshCore yes, Reticulum no</span></td></tr>
+<tr><td>IP over the net</td><td><span class="b n">no</span></td><td><span class="b n">no</span></td><td><span class="b p">via tools</span></td><td><span class="b y">IPv6 tunnel</span> (1.45 s ping over LoRa)</td></tr>
+<tr><td>Other media (I2P, AX.25, KISS)</td><td><span class="b n">no</span></td><td><span class="b p">KISS modem</span></td><td><span class="b y">many</span></td><td><span class="b n">no</span></td></tr>
+<tr class="sec"><td colspan="5">Security and privacy</td></tr>
+<tr><td>Sender hidden on the air</td><td><span class="b n">no</span></td><td><span class="b p">prefix</span></td><td><span class="b y">yes</span></td><td><span class="b y">yes</span></td></tr>
+<tr><td>Forward secrecy</td><td><span class="b n">no</span></td><td><span class="b n">no</span></td><td><span class="b y">links + ratchets</span></td><td><span class="b p">draft (ratchet)</span></td></tr>
+<tr><td>Signed packets</td><td><span class="b p">2.8 alpha</span></td><td><span class="b p">adverts</span></td><td><span class="b y">yes</span></td><td><span class="b p">announces + firmware</span></td></tr>
+<tr><td>Key verification (safety number, QR)</td><td><span class="b y">2.7</span></td><td><span class="b p">partly</span></td><td><span class="b p">partly</span></td><td><span class="b y">60 digits + QR</span></td></tr>
+<tr><td>Closed net with a network key</td><td><span class="b p">channel PSK</span></td><td><span class="b n">no</span></td><td><span class="b y">IFAC</span></td><td><span class="b n">no</span></td></tr>
+<tr><td>Data on disk encrypted</td><td><span class="b u">app</span></td><td><span class="b u">app</span></td><td><span class="b p">partly</span></td><td><span class="b n">the history is clear text</span></td></tr>
+<tr><td>External security review</td><td><span class="b p">partly</span></td><td><span class="b n">no</span></td><td><span class="b p">partly</span></td><td><span class="b n">no</span></td></tr>
+<tr class="sec"><td colspan="5">Services</td></tr>
+<tr><td>Channels (public, #hashtag, private)</td><td><span class="b y">yes</span></td><td><span class="b y">yes</span></td><td><span class="b p">via apps</span></td><td><span class="b y">yes</span></td></tr>
+<tr><td>Messages for offline recipients</td><td><span class="b p">S&amp;F</span></td><td><span class="b y">rooms</span></td><td><span class="b y">LXMF prop.</span></td><td><span class="b y">mailbox (host + flash)</span></td></tr>
+<tr><td>Shared board (BBS, rooms)</td><td><span class="b n">no</span></td><td><span class="b y">room servers</span></td><td><span class="b y">NomadNet</span></td><td><span class="b p">pages only, no board</span></td></tr>
+<tr><td>Files and pictures</td><td><span class="b n">no</span></td><td><span class="b n">no</span></td><td><span class="b y">yes</span></td><td><span class="b y">8 KB over LoRa / 1 MB over TCP</span></td></tr>
+<tr><td>Voice</td><td><span class="b n">no</span></td><td><span class="b n">no</span></td><td><span class="b y">Sideband</span></td><td><span class="b y">Codec2 + Opus calls</span></td></tr>
+<tr><td>Ping and trace</td><td><span class="b y">traceroute</span></td><td><span class="b y">trace path</span></td><td><span class="b y">rnpath/rnprobe</span></td><td><span class="b y">trace + MC ping (new today)</span></td></tr>
+<tr><td>Range test mode</td><td><span class="b y">range test module</span></td><td><span class="b p">partly</span></td><td><span class="b n">no</span></td><td><span class="b n">no</span></td></tr>
+<tr><td>Map of nodes and coverage</td><td><span class="b y">app + MQTT map</span></td><td><span class="b y">app + map</span></td><td><span class="b y">Sideband</span></td><td><span class="b n">list only</span></td></tr>
+<tr><td>GPS module and tracking</td><td><span class="b y">yes</span></td><td><span class="b y">yes</span></td><td><span class="b p">via phone</span></td><td><span class="b p">position from the phone, no GPS driver</span></td></tr>
+<tr><td>Sensors and Home Assistant</td><td><span class="b y">many</span></td><td><span class="b p">sensor nodes</span></td><td><span class="b p">Sideband</span></td><td><span class="b p">battery, temp. + HA via MQTT</span></td></tr>
+<tr><td>SOS and emergency message</td><td><span class="b p">canned/alert</span></td><td><span class="b n">no</span></td><td><span class="b n">no</span></td><td><span class="b n">no</span></td></tr>
+<tr class="sec"><td colspan="5">Devices and operation</td></tr>
+<tr><td>Runs on a microcontroller</td><td><span class="b y">yes</span></td><td><span class="b y">yes</span></td><td><span class="b n">modem only</span></td><td><span class="b y">nRF52840 + ESP32-S3</span></td></tr>
+<tr><td>Power-saving mode (tracker/sleep)</td><td><span class="b y">yes</span></td><td><span class="b y">yes</span></td><td><span class="b u">–</span></td><td><span class="b n">no</span></td></tr>
+<tr><td>Use without a phone (screen/button)</td><td><span class="b y">T-Deck, canned</span></td><td><span class="b y">T-Deck and more</span></td><td><span class="b n">no</span></td><td><span class="b p">Heltec screen read-only</span></td></tr>
+<tr><td>Android / iOS</td><td><span class="b y">both</span></td><td><span class="b y">both (closed)</span></td><td><span class="b p">Android</span></td><td><span class="b p">Android + PWA; iOS only via host</span></td></tr>
+<tr><td>Remote administration</td><td><span class="b y">admin keys</span></td><td><span class="b y">login</span></td><td><span class="b p">partly</span></td><td><span class="b y">administrators only</span></td></tr>
+<tr><td>Over-the-air updates</td><td><span class="b y">BLE/WiFi</span></td><td><span class="b y">BLE</span></td><td><span class="b u">–</span></td><td><span class="b p">signed, USB/BLE (LoRa shelved)</span></td></tr>
+<tr><td>Host as a service (auto restart)</td><td><span class="b u">–</span></td><td><span class="b u">–</span></td><td><span class="b y">rnsd</span></td><td><span class="b n">no</span>: stops with its terminal</td></tr>
+<tr><td>Users and maturity</td><td><span class="b y">largest</span></td><td><span class="b y">growing</span></td><td><span class="b p">niche</span></td><td><span class="b n">prototype</span></td></tr>
+</tbody></table></div>
+
+<h2 id="test">Tests and simulation</h2>
+<p>Run today on <code>maarse-sim</code> (seeds 1–3, average). "Flood" is the simulator's Meshtastic-like mode: everyone repeats, at most 7 hops. It is a model and not Meshtastic's code. MeshCore and Reticulum are not simulated.</p>
+<div class="scroll"><table>
+<thead><tr><th>Scenario</th><th>Method</th><th class="num">Delivered</th><th class="num">Acknowledged</th><th class="num">Median</th><th class="num">Channel reached</th><th class="num">Airtime</th></tr></thead>
+<tbody>
+<tr class="sec"><td colspan="7">Static</td></tr>
+<tr><td rowspan="2">Small town: 30 nodes, 3 repeaters, 15 km</td><td>Må:rse</td><td class="num">99 %</td><td class="num win">99 %</td><td class="num">1.0 s</td><td class="num">95 %</td><td class="num win">106 s</td></tr>
+<tr><td>flood</td><td class="num">97 %</td><td class="num">91 %</td><td class="num">1.8 s</td><td class="num">84 %</td><td class="num">560 s</td></tr>
+<tr><td rowspan="2">Region: 120 nodes, 30 km</td><td>Må:rse</td><td class="num">100 %</td><td class="num win">99 %</td><td class="num">2.4 s</td><td class="num">99 %</td><td class="num win">351 s</td></tr>
+<tr><td>flood</td><td class="num">97 %</td><td class="num">79 %</td><td class="num">5.9 s</td><td class="num">81 %</td><td class="num">1,760 s</td></tr>
+<tr><td rowspan="2">Large sparse net: 200 nodes, 40 repeaters, 60 km</td><td>Må:rse</td><td class="num win">93 %</td><td class="num">84 %</td><td class="num">7.1 s</td><td class="num">81 %</td><td class="num win">932 s</td></tr>
+<tr><td>flood</td><td class="num">76 %</td><td class="num">63 %</td><td class="num">5.9 s</td><td class="num">69 %</td><td class="num">3,052 s</td></tr>
+<tr><td rowspan="2">SF12 (long range), 120 nodes</td><td>Må:rse</td><td class="num">68 %</td><td class="num lose">30 %</td><td class="num">25 s</td><td class="num lose">25 %</td><td class="num">843 s</td></tr>
+<tr><td>flood</td><td class="num">54 %</td><td class="num">34 %</td><td class="num">63 s</td><td class="num">23 %</td><td class="num">1,620 s</td></tr>
+<tr><td rowspan="2">1 % duty cycle, 2 hours, 240 messages</td><td>Må:rse</td><td class="num">100 %</td><td class="num win">~100 %</td><td class="num">1.7 s</td><td class="num">95 %</td><td class="num win">1,190 s</td></tr>
+<tr><td>flood</td><td class="num">98 %</td><td class="num">94 %</td><td class="num">2.5 s</td><td class="num">100 %</td><td class="num">7,200 s, 300 packets dropped</td></tr>
+<tr class="sec"><td colspan="7">Mobile (one car through a fixed net)</td></tr>
+<tr><td rowspan="2">Town driving 50 km/h</td><td>Må:rse</td><td class="num win">100 %</td><td class="num win">100 %</td><td class="num">3.9 s</td><td class="num">–</td><td class="num">316 s</td></tr>
+<tr><td>flood</td><td class="num">86 %</td><td class="num lose">42 %</td><td class="num">5.6 s</td><td class="num">–</td><td class="num">1,576 s</td></tr>
+<tr><td rowspan="2">Motorway 110 km/h</td><td>Må:rse</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">3.8 s</td><td class="num">–</td><td class="num">315 s</td></tr>
+<tr><td>flood</td><td class="num">91 %</td><td class="num">58 %</td><td class="num">5.1 s</td><td class="num">–</td><td class="num">1,608 s</td></tr>
+<tr><td rowspan="2">Fast train 200 km/h</td><td>Må:rse</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">3.7 s</td><td class="num">–</td><td class="num">312 s</td></tr>
+<tr><td>flood</td><td class="num">95 %</td><td class="num">71 %</td><td class="num">4.7 s</td><td class="num">–</td><td class="num">1,650 s</td></tr>
+</tbody></table></div>
+<h3>What the tests show</h3>
+<ul>
+<li><b>Må:rse wins everywhere there are repeaters.</b> It delivers more messages and uses 1/3 to 1/6 of the airtime. At 1 % duty cycle flood runs out of budget and drops about 300 packets in 2 hours. Må:rse drops one.</li>
+<li><b>SF12 in a dense net is a weakness.</b> Only 30 % of the messages are acknowledged, and channel messages reach 25 % of the nodes. With <code>DEBUG_ACK=1</code> you can see that the replies to path requests die in collisions with <i>other path requests</i>, mostly at a margin of 0–5 dB, and that 1,715 transmissions were given up because the channel was busy. Flood is just as bad, but that is no excuse. We lack load control.</li>
+<li><b>The mobile test is too narrow.</b> One car through a fixed net is the easiest case for Må:rse. The hard case is a group moving without repeaters (hiking, rescue teams, sailing). Here Meshtastic's flood is strong, and Må:rse only has forest mode with at most 4 hops. The simulator cannot show that case yet.</li>
+<li><b>No field measurements.</b> All numbers are from the simulator, which uses log-distance without terrain. The only measurement from hardware is IP ping over LoRa at 1.45 s at SF9.</li>
+</ul>
+<h3>Lessons from today's work</h3>
+<ul>
+<li>The PC crashed with <code>0x3B SYSTEM_SERVICE_EXCEPTION</code> while debugging with USB radios. That suggests the USB serial stack or the power supply to the boards is fragile. For fixed setups it is an argument for a Raspberry Pi or a powered USB hub.</li>
+<li>The host stopped several times when the process that started it closed. For fixed setups the host must be able to run as a Windows service or a systemd unit.</li>
+<li>"maarse-host has no radio of its own" confused, even though the radio was plugged into USB. The client should see connected radios and offer to connect to them or attach them.</li>
+<li>A repeater was shown as "?", because MeshCore only sends the key in its first advert. That was fixed today. The lesson is that gateway logic must be tested against real frames and not only frames derived from the source code.</li>
+</ul>
+
+<h2 id="overlooked">What we overlooked</h2>
+<div class="grid">
+<div class="card"><h3>From Meshtastic</h3><ul class="small">
+<li><b>Range test mode:</b> automatic ping with a log of SNR and position. The cheapest tool for getting field data.</li>
+<li><b>Power-saving mode</b> for trackers and sensors (sleeps, wakes up to send).</li>
+<li><b>GPS driver</b> on boards with GPS (T-Beam; the WisMesh Tag has GPS!).</li>
+<li><b>Canned messages and an SOS button</b>, so the device can be used without a phone.</li>
+<li><b>Maps</b> in the app and on a shared map.</li>
+</ul></div>
+<div class="card"><h3>From MeshCore</h3><ul class="small">
+<li><b>Room servers (BBS):</b> a shared board where you can read what was written while you were away. Our mailbox is only for one recipient at a time.</li>
+<li><b>Sharing contacts</b> as a link or QR (advert URL).</li>
+<li><b>Automatic announce interval</b> per role, which can be set from the app.</li>
+<li><b>Configurable hash size for paths</b> (1–3 bytes) against collisions in large nets.</li>
+</ul></div>
+<div class="card"><h3>From Reticulum</h3><ul class="small">
+<li><b>Network key (IFAC):</b> a closed net where foreign packets are discarded before routing. Important for emergency services and companies.</li>
+<li><b>Announce quotas</b> per interface, so a busy channel does not drown.</li>
+<li><b>More media:</b> KISS/TNC, so RNode hardware and AX.25 can be used.</li>
+<li><b>Daemon and service</b> (rnsd) that runs without a user interface.</li>
+</ul></div>
+<div class="card"><h3>Our own gaps</h3><ul class="small">
+<li>The history is <b>unencrypted</b> on disk (<code>history/log.txt</code>).</li>
+<li>No <b>load control</b>: see the SF12 test.</li>
+<li>No simulation of a <b>mobile group without repeaters</b>.</li>
+<li>The host cannot run as a <b>service</b>.</li>
+<li>Acknowledgements <b>do not cross</b> the MeshCore bridge.</li>
+<li>Only one identity per device, and <b>linked devices</b> are not built.</li>
+</ul></div>
+</div>
+
+<h2 id="static-mobile">Static and mobile: what each use needs</h2>
+<div class="scroll"><table>
+<thead><tr><th>Need</th><th>Static (repeater, gateway, home)</th><th>Mobile (phone, hiking, car)</th></tr></thead>
+<tbody>
+<tr><td>Routing</td><td><span class="b y">strong</span> Source paths, anchors, regions</td><td><span class="b p">partly</span> Good through fixed nets, weak in groups without repeaters (at most 4 hops)</td></tr>
+<tr><td>Power</td><td><span class="b p">partly</span> Energy-driven forwarding, but no solar and battery plan, and power has not been measured</td><td><span class="b n">missing</span> No power-saving mode. A tracker does not last for days</td></tr>
+<tr><td>Operation</td><td><span class="b p">partly</span> Remote administration exists, but the host does not run as a service, and there is no monitoring</td><td><span class="b p">partly</span> The app is fine, but there is no iOS app and no use without a phone</td></tr>
+<tr><td>Reach</td><td><span class="b y">strong</span> TCP backbone and DHT, gateways</td><td><span class="b y">strong</span> The phone can use the home host over VPN</td></tr>
+<tr><td>Position and map</td><td><span class="b p">partly</span> A fixed position can be set</td><td><span class="b n">missing</span> No GPS driver and no map</td></tr>
+<tr><td>Security</td><td><span class="b p">partly</span> No network key, and the history is unencrypted</td><td><span class="b y">strong</span> No sender in clear text, position private by default</td></tr>
+</tbody></table></div>
+<p><b>Conclusion:</b> For fixed setups Må:rse is already best on paper, but it lacks operational maturity. For mobile use it is only best when there is infrastructure to lean on. For groups without repeaters and for long trips we lose to Meshtastic today.</p>
+
+<h2 id="e45">Scenario: Brønderslev → Fredericia by car</h2>
+<p>The base stands in Brønderslev, and the car drives 210 km along the E45 at 110 km/h (about 1 h 55 min). The base and the car write 70 messages in turn during the trip. The repeaters stand along the road. Run with the new flags <code>--repeater-km</code>, <code>--repeater-gain</code>, <code>--base-start</code> and <code>--anchor-every</code> in <code>maarse-sim</code> (seeds 1–2).</p>
+<p class="muted small">The range in the model matters. With "low" antennas (+6 dB per repeater) two repeaters reach each other at about 21 km at SF9, and the car reaches a repeater at about 14 km. With masts (+15 dB) it becomes about 87 km between repeaters and 40 km from the car at SF11. Reality depends on height and terrain, and only a field measurement can settle that.</p>
+<div class="scroll"><table>
+<thead><tr><th>Setup</th><th>Antennas</th><th>SF</th><th class="num">Delivered</th><th class="num">Acknowledged</th><th class="num">Median</th><th class="num">Airtime</th></tr></thead>
+<tbody>
+<tr><td rowspan="4">Repeater every 30 km (8 of them)</td><td>low</td><td>9</td><td class="num lose">9 %</td><td class="num lose">7 %</td><td class="num">–</td><td class="num">221 s</td></tr>
+<tr><td>low</td><td>11</td><td class="num">96 %</td><td class="num">94 %</td><td class="num">12.5 s</td><td class="num">3,550 s</td></tr>
+<tr><td>masts</td><td>9</td><td class="num win">100 %</td><td class="num win">100 %</td><td class="num">3.2 s</td><td class="num win">277 s</td></tr>
+<tr><td>masts</td><td>11</td><td class="num">96 %</td><td class="num">95 %</td><td class="num">6.6 s</td><td class="num">1,230 s</td></tr>
+<tr><td rowspan="4">30 km, but a 100 km gap (km 90–190)</td><td>low</td><td>9</td><td class="num lose">9 %</td><td class="num lose">7 %</td><td class="num">–</td><td class="num">207 s</td></tr>
+<tr><td>low</td><td>11</td><td class="num">59 %</td><td class="num">56 %</td><td class="num">8.9 s</td><td class="num">1,880 s</td></tr>
+<tr><td>masts</td><td>9</td><td class="num">61 %</td><td class="num">61 %</td><td class="num">2.6 s</td><td class="num">245 s</td></tr>
+<tr><td>masts</td><td>11</td><td class="num">84 %</td><td class="num">84 %</td><td class="num">7.4 s</td><td class="num">1,205 s</td></tr>
+<tr><td rowspan="2">Every 15 km, low antennas (about 14 hops)</td><td>without anchors</td><td>9</td><td class="num">83 %</td><td class="num">81 %</td><td class="num">8.2 s</td><td class="num">788 s</td></tr>
+<tr><td>every 4th is an anchor</td><td>9</td><td class="num">86 %</td><td class="num">86 %</td><td class="num">10.7 s</td><td class="num">799 s</td></tr>
+<tr><td rowspan="2">Every 10 km, low antennas</td><td>without anchors</td><td>9</td><td class="num win">100 %</td><td class="num win">100 %</td><td class="num">5.4 s</td><td class="num">586 s</td></tr>
+<tr><td>every 4th is an anchor</td><td>9</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">8.7 s</td><td class="num">669 s</td></tr>
+</tbody></table></div>
+<h3>How do the anchors work here?</h3>
+<p>Anchors are only needed when a route becomes <b>longer than 12 hops</b>. With 30 km between the repeaters the trip is only about 7 hops, so the anchors do nothing. With 15 km between low repeaters it becomes about 14 hops. Here anchors give <b>+3 percentage points</b> delivered, but cost about 2.5 s extra latency. So the anchors are not what decides the trip. <b>Coverage is.</b></p>
+<h3>How do we ensure a connection all the way?</h3>
+<ol>
+<li><b>Height beats numbers.</b> Eight repeaters on masts every 30 km gave 100 % at SF9 with the lowest airtime. Low repeaters every 30 km gave 9 %: they do not hear each other. Put repeaters on masts, silos or wind turbines, or keep low repeaters less than about 20 km apart.</li>
+<li><b>LoRa cannot cover a 100 km gap.</b> Even with masts and SF11 about 16 % is lost in the middle of the gap. The solution is not more hops but <b>another way</b>: the phone in the car has mobile data, and the app can already reach the home host over VPN (TCP). What is missing is doing it <b>automatically</b>. When there is no LoRa route, the node or the app must switch to TCP and switch back when a repeater is heard again.</li>
+<li><b>An outbox that waits for coverage.</b> Today the car gives up on a message after 2 attempts (about 1 minute). The message should instead stay and be sent as soon as the car hears a repeater's announce. The base in Brønderslev already has the mailbox for the opposite direction.</li>
+<li><b>Choose SF by coverage.</b> SF11 closes gaps in a net with low repeaters (96 %), but uses 10 times as much airtime. That is fine for a single car and bad in a busy net (see the SF12 test). A "travel preset" or adaptive SF per link would be better than one fixed SF for the whole net.</li>
+<li><b>Plan with the map.</b> With GPS and a range test mode we can make a coverage map along the E45 and see the gaps before we set up repeaters.</li>
+</ol>
+
+<h2 id="forest">Scenario: forest with 18 people spread out</h2>
+<p>18 people with handheld nodes walk around in the forest at 5 km/h, each towards their own random targets. There are no repeaters. The forest attenuates 10 dB/km extra, so two handhelds reach each other at about 2 km. Each run is 30 minutes with 60 direct messages and 10 channel messages, average of 3 seeds. Run with the new <code>--forest</code> mode in <code>maarse-sim</code>.</p>
+<div class="scroll"><table>
+<thead><tr><th>Area</th><th>Role for everyone</th><th class="num">Neighbours</th><th class="num">Delivered</th><th class="num">Acknowledged</th><th class="num">Median</th><th class="num">Channel reached</th><th class="num">Airtime</th></tr></thead>
+<tbody>
+<tr><td rowspan="5">3 × 3 km</td><td>client (does not forward)</td><td class="num">15</td><td class="num lose">86 %</td><td class="num">85 %</td><td class="num">0.7 s</td><td class="num">85 %</td><td class="num">57 s</td></tr>
+<tr><td>relay, 4 hops (forest mode)</td><td class="num">14</td><td class="num win">100 %</td><td class="num">99 %</td><td class="num">0.7 s</td><td class="num">100 %</td><td class="num win">203 s</td></tr>
+<tr><td>relay, 7 hops</td><td class="num">14</td><td class="num">100 %</td><td class="num">99 %</td><td class="num">0.7 s</td><td class="num">100 %</td><td class="num">203 s</td></tr>
+<tr><td>repeater</td><td class="num">15</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">0.7 s</td><td class="num">100 %</td><td class="num">196 s</td></tr>
+<tr><td>flood, 7 hops</td><td class="num">15</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">0.5 s</td><td class="num">97 %</td><td class="num">355 s</td></tr>
+<tr><td rowspan="5">5 × 5 km</td><td>client</td><td class="num">9</td><td class="num lose">49 %</td><td class="num">48 %</td><td class="num">0.7 s</td><td class="num">42 %</td><td class="num">79 s</td></tr>
+<tr><td>relay, 4 hops</td><td class="num">8</td><td class="num win">99 %</td><td class="num win">99 %</td><td class="num">2.1 s</td><td class="num">96 %</td><td class="num win">350 s</td></tr>
+<tr><td>relay, 7 hops</td><td class="num">9</td><td class="num">100 %</td><td class="num">99 %</td><td class="num">2.1 s</td><td class="num">97 %</td><td class="num">361 s</td></tr>
+<tr><td>repeater</td><td class="num">9</td><td class="num">100 %</td><td class="num">100 %</td><td class="num">1.7 s</td><td class="num">97 %</td><td class="num">348 s</td></tr>
+<tr><td>flood, 7 hops</td><td class="num">9</td><td class="num">98 %</td><td class="num">91 %</td><td class="num">1.4 s</td><td class="num">97 %</td><td class="num">472 s</td></tr>
+<tr><td rowspan="5">8 × 8 km</td><td>client</td><td class="num">4</td><td class="num lose">19 %</td><td class="num">19 %</td><td class="num">0.6 s</td><td class="num">16 %</td><td class="num">92 s</td></tr>
+<tr><td>relay, 4 hops</td><td class="num">4</td><td class="num">59 %</td><td class="num">57 %</td><td class="num">3.7 s</td><td class="num">38 %</td><td class="num">368 s</td></tr>
+<tr><td>relay, 7 hops</td><td class="num">4</td><td class="num">62 %</td><td class="num">61 %</td><td class="num">4.3 s</td><td class="num">40 %</td><td class="num">394 s</td></tr>
+<tr><td>repeater</td><td class="num">4</td><td class="num">61 %</td><td class="num">59 %</td><td class="num">3.1 s</td><td class="num">45 %</td><td class="num">405 s</td></tr>
+<tr><td>flood, 7 hops</td><td class="num">4</td><td class="num">56 %</td><td class="num">50 %</td><td class="num">2.5 s</td><td class="num">46 %</td><td class="num">305 s</td></tr>
+</tbody></table></div>
+<p class="small muted">Extra runs at 8 × 8 km: 20 people gave 57 % delivered. 18 people + 2 randomly placed low repeaters gave 70 %, and + 4 gave 62 %. SF11 gave 62 % (Må:rse) and 69 % (flood), but flood only acknowledged 51 %, and both used 4 times as much airtime.</p>
+<h3>What the forest test shows</h3>
+<ul>
+<li><b>Forest mode works.</b> At 3–5 km relay delivers 99–100 %, on par with flood or better, with 25–45 % less airtime. Flood acknowledges worse at 5 km (91 %).</li>
+<li><b>The client role is a trap in the forest.</b> Without forwarding only 49 % arrives at 5 km. The client should <b>automatically suggest relay</b> when it hears no repeaters.</li>
+<li><b>4 hops are enough</b> up to 5 km. At 8 km 7 hops gave only 3 percentage points more, so the limit is not the problem.</li>
+<li><b>At 8 km the group is split into islands</b> with about 4 neighbours each. All methods end up at 56–62 %, so it is not the routing that fails. There is no way through at the moment.</li>
+<li><b>What can lift the 8 km case is "carry"</b> (delay-tolerant delivery). Today the sender gives up after 2 attempts. But people move, and an island group often meets another within a few minutes. If relays hold the message and hand it over when they meet the recipient or someone closer, the movement itself can close the gaps. None of the other three systems can do that today.</li>
+<li><b>One high repeater beats many low ones.</b> Random low repeaters in the forest helped only a little (+3 to +11 percentage points). A repeater on a hill, in a car with a mast or on a drone would cover the whole area. That matches the finding from the E45 scenario.</li>
+</ul>
+
+<h3 id="hill">"The one on the top": one person on a hill can reach a repeater</h3>
+<p>There are 20 people in the forest and one on a hill in the middle of the area (+10 dB for height and line of sight, half forest attenuation down towards the others). A repeater stands 12 km away with a base next to it. All 60 messages go between the base and a random person in the forest. Run with <code>maarse-sim --hill</code>, average of 3 seeds.</p>
+<div class="scroll"><table>
+<thead><tr><th>The person on the hill</th><th>The others in the forest</th><th class="num">3 km delivered</th><th class="num">5 km delivered</th><th class="num">Airtime (5 km)</th></tr></thead>
+<tbody>
+<tr><td>walks around like the others</td><td>relay</td><td class="num lose">0 %</td><td class="num lose">0 %</td><td class="num">419 s</td></tr>
+<tr><td>stands on the hill as client</td><td>relay</td><td class="num lose">0 %</td><td class="num lose">0 %</td><td class="num">413 s</td></tr>
+<tr><td>stands on the hill as relay</td><td>relay</td><td class="num">57 %</td><td class="num">56 %</td><td class="num">448 s</td></tr>
+<tr><td>stands on the hill as repeater</td><td>relay</td><td class="num">62 %</td><td class="num">66 %</td><td class="num">413 s</td></tr>
+<tr><td>relay on the hill</td><td>client</td><td class="num win">100 %</td><td class="num win">100 %</td><td class="num">117 s</td></tr>
+<tr><td>relay on the hill, <b>without flood suppression</b></td><td>relay</td><td class="num win">100 %</td><td class="num win">100 %</td><td class="num win">268 s</td></tr>
+</tbody></table></div>
+<p><b>The finding:</b> The person on the hill <i>already forwards</i> for the others if he is a relay, but flood suppression shuts him down. He hears the other relays send the same path request with good SNR, concludes that "the area is covered" (<code>on_duplicate_flood</code> in <code>maarse-core/src/router.rs</code>) and stays quiet. But he is the <b>only</b> one who reaches the repeater, so half of the routes are lost. The 4-hop limit and more antenna gain change nothing. If suppression is turned off for him alone, 100 % arrives, and even less airtime is used.</p>
+<p><b>Proposal: bridge mode.</b> A relay that directly (0 hops) hears a repeater or an anchor is a bridge and ignores flood suppression for 15 minutes. To know that the neighbour is a repeater, announces get a new role field (TLV, like position and name). It is backward compatible, because older nodes skip the field. The client shows "You are a bridge to the net", so the person on the top knows he should stay put. In addition, a client that hears no repeaters should suggest relay (see above), otherwise the one on the top becomes a dead end.</p>
+
+<h3 id="bridge-test">Large test of the bridge rule (1,000+ runs)</h3>
+<p>Six rules were tried in 17 scenarios with 10 seeds each. The scenarios are: hill at 3, 5 and 8 km with 10, 20 and 40 people, forest attenuation of 6 and 15 dB/km, hill gain of 0 and 20 dB, repeaters <i>inside</i> the forest (2–6 of them, up to 40 people) and a control without repeaters. Run with <code>maarse-sim --suppress …</code>.</p>
+<div class="scroll"><table>
+<thead><tr><th>Rule</th><th>Hill (9 scenarios)</th><th>Repeaters in the forest</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td><b>normal</b> (today)</td><td class="lose">55–82 % delivered</td><td>best: 98–100 %, lowest airtime</td><td>Fails for bridges</td></tr>
+<tr><td><b>no suppression</b> for relays</td><td>44–100 %. With 40 people it ends in a <b>flood storm</b> (44 %, 2.3 times as much airtime)</td><td>expensive</td><td><span class="verdict stop">No</span></td></tr>
+<tr><td><b>bridge</b>: hears a repeater, so no suppression</td><td class="win">97–100 %, less airtime</td><td class="lose">acknowledged 98.8 → 58.8 % (40 people), airtime × 2–4</td><td><span class="verdict stop">Too coarse</span></td></tr>
+<tr><td><b>bridge, only duplicates from relays ignored</b></td><td class="win">97–100 %</td><td>better, but still 78.8 % acknowledged at 40 people</td><td><span class="verdict maybe">Partly</span></td></tr>
+<tr><td><b>weak link</b> to the repeater (SNR limit)</td><td>depends on the limit: 0/5 dB fails at a +20 dB hill</td><td>ok at a low limit</td><td><span class="verdict stop">Fragile</span></td></tr>
+<tr><td><b>delayed bridge</b> (waits 4–12 time slots)</td><td class="lose">70–80 %</td><td>almost normal</td><td><span class="verdict stop">Breaks the hill</span></td></tr>
+<tr><td><b>edge of coverage</b>: bridge only if a neighbour does <i>not</i> hear any repeater, and only relay duplicates are ignored</td><td class="win">97–100 %, 15–35 % less airtime</td><td>dense coverage: <b>identical to normal</b>. Partial coverage: −3 points acknowledged, +27–32 % airtime</td><td><span class="verdict go">Winner</span></td></tr>
+</tbody></table></div>
+<ul>
+<li><b>The gain is robust.</b> With the edge rule the hill is at 97–100 % (worst seed 88 %) in all 9 combinations of area and group size and at both forest attenuations, against 55–82 % today.</li>
+<li><b>Physics still applies.</b> Without height gain (+0 dB) the person on the hill does not reach the repeater at all, and all rules give 0 %. Bridge mode only helps when he can actually hear the repeater.</li>
+<li><b>The naive solution is dangerous.</b> "Bridge = turn off suppression when you hear a repeater" breaks dense nets with repeaters: acknowledgements drop to 59 %, and airtime quadruples. The rule <b>must</b> be limited to the edge of coverage.</li>
+<li><b>The price with partial coverage:</b> +27–32 % airtime and 1–3 points fewer acknowledgements. That is acceptable, but worth polishing, e.g. with a short wait only for edge bridges.</li>
+<li><b>On hardware</b> a node cannot "see" the link budget like the simulator. It must learn that it is at the edge: it hears a repeater (role field in announces), and it has neighbours whose floods it never hears a repeater repeat. That can be computed from the neighbour list, which already exists.</li>
+</ul>
+<div class="note"><b>Implemented (update):</b> the edge rule is now built into the router, host and firmware (nRF52840 and ESP32-S3), with no oracle. Each node announces its role and a flag saying whether it hears a repeater directly (app-data field <code>0x06</code>). A relay is an edge bridge when it hears a repeater and has a neighbor that does not. As a bridge it ignores duplicate floods from non-repeaters, but a repeater's copy still silences it. Results with the real logic (10 seeds): hill scenarios 55–82 % → <b>96–100 %</b> delivered with less airtime; dense repeater coverage nearly unchanged (98.0 vs 98.8 % acked); partial coverage costs up to ~30 % airtime and 1–3 points of acks, as the oracle did. <code>maarse-sim --suppress normal</code> is now the real rule and <code>--suppress legacy</code> the old behaviour.</div>
+<p class="small muted">The control without repeaters gives bit for bit the same result with all rules, and all 191 tests pass. The router has gained <code>seen()</code> (read only) and <code>extra_flood_delay_ms</code> (default 0). The simulator's knobs: <code>--suppress normal|bridge|bridge-relay|bridge-weak|bridge-weak-relay|bridge-relay-late|bridge-edge|bridge-edge-relay|none</code>, <code>BRIDGE_SNR</code>, <code>BRIDGE_LATE_SLOTS</code>.</p>
+
+<h2 id="vote">Proposals, for and against, and internal vote</h2>
+<p class="muted">Five roles voted on each proposal: <b>O</b> operators (repeaters and gateways), <b>M</b> mobile user (hiker, emergency services), <b>S</b> security, <b>N</b> newcomer and <b>D</b> developer (maintenance and risk). The scale goes from +2 (must have) to −2 (do not). Above +5 the proposal is built, from +2 to +5 it is a maybe, and below +2 it is not built now.</p>
+
+<div id="votes"></div>
+
+<h2 id="roadmap">Roadmap</h2>
+<div class="phase"><h3>Done since the report (14 Nov 2026)</h3><ul>
+<li><b>Edge bridge</b> in router, host and firmware (role field in announces with a "hears a repeater" flag).</li>
+<li><b>Wi-Fi backbone</b> on ESP32-S3: mesh node or LoRa modem for the host; Bluetooth and Wi-Fi in one firmware, button switches (3 s); crash guard; display with links and IP.</li>
+<li><b>Host:</b> device list (<code>/api/devices</code>, <i>Devices</i> in host settings), TCP keepalive on backbone links.</li>
+<li><b>Fixes:</b> stack overflow at boot (node in its own task, router in its own static), boot loop after flashing (lora-phy, <code>firmware/vendor/lora-phy</code>).</li>
+<li><b>Simulator:</b> forest, hill, highway with placed repeaters, anchors, suppression modes.</li>
+<li>Partly covers <i>automatic LoRa/TCP switching</i>: a node can reach the host over Wi-Fi, but it does not switch by itself, and there is no outbox that waits for coverage.</li>
+</ul></div>
+<div class="phase"><h3>Phase 1 · Now (0–4 weeks): measure and harden</h3><ul>
+<li><b>Range test mode</b> + first field measurement (Heltec and XIAO, SF7–SF12, town and country) → numbers into <code>compare.md</code>.</li>
+<li><b>Power measurement</b> on both boards (idle, receiving, repeater).</li>
+<li><b>Encrypted history</b> on disk (key from the access key or the OS keyring).</li>
+<li><b>Host as a service</b>: <code>--service install</code> on Windows and a systemd unit, with automatic restart and reconnection to serial.</li>
+<li><b>Better radio choice in the client</b>: see USB radios, suggest "connect directly" or "attach to the host (<code>--serial</code>)".</li>
+</ul></div>
+<div class="phase p2"><h3>Phase 2 · Next (1–3 months): the air and mobile use</h3><ul>
+<li><b>Load control</b>: a quota on path requests by measured channel load, longer waits at high SF and an SF recommendation in the client. The goal is over 70 % acknowledged at SF12 in the simulator.</li>
+<li><b>Automatic switching between LoRa and TCP</b> for mobile nodes (the app or the phone over mobile data to the home host) + an <b>outbox that waits for coverage</b> instead of giving up after 2 attempts. The goal in the E45 scenario with a 100 km gap is over 99 % delivered.</li>
+<li><s><b>Bridge mode</b></s> <span class="verdict go">Done</span> (phase 1 candidate: small, measured effect): role field in announces, and a relay that hears a repeater directly is exempt from flood suppression. The hill test: 57 % → 100 %.</li>
+<li><b>Forest and groups</b> (the simulation is done: <code>--forest</code>): <b>automatic relay</b> when no repeaters are heard, and <b>carry</b>: relays hold messages and hand them over at the next encounter. The goal is over 85 % delivered for 18 people on 8 × 8 km (today about 60 %).</li>
+<li><b>Power-saving mode</b> on the nRF52840 for clients and trackers.</li>
+<li><b>GPS driver</b> (WisMesh Tag) + a simple <b>map</b> in the client with offline tiles from the host. The position is still private by default.</li>
+<li><b>Network key</b> (optional, à la IFAC) for closed nets.</li>
+</ul></div>
+<div class="phase p3"><h3>Phase 3 · Later (3–6 months): services and ecosystem</h3><ul>
+<li><b>Boards</b> (rooms as in MeshCore) on the host and later on repeaters with flash.</li>
+<li><b>The phone as its own node</b> (maarse-host in the Android app, see the parked project).</li>
+<li><b>Gateway to Reticulum</b> (LXMF ↔ Må:rse DM).</li>
+<li><b>External crypto review</b> of the ratchet and the protocol, before v1.0.</li>
+<li><b>Canned messages and SOS</b> on devices with a screen and a button.</li>
+</ul></div>
+<div class="phase p4"><h3>Maybe or not now</h3><ul>
+<li>Updates over LoRa (shelved: too slow).</li>
+<li>A native iOS app (iOS can use the host via the PWA, and an app costs a lot to maintain).</li>
+<li>KISS/TNC and AX.25 (small audience, a lot of work).</li>
+<li>Acknowledgements over the MeshCore bridge (needs changes on MeshCore's side).</li>
+</ul></div>
+
+<h2 id="method">Method and caveats</h2>
+<ul class="small">
+<li>The simulator uses log-distance without terrain. The numbers are for comparing variants and are not absolute.</li>
+<li>"Flood" is a model that resembles Meshtastic: everyone repeats, 7 hops. Meshtastic's real ROUTER_LATE logic and MeshCore's paths are not modelled, so the comparison with MeshCore is qualitative.</li>
+<li>Information about the other systems is from <code>compare.md</code> v0.5 (sources fetched November 2026) and may be older than their latest releases.</li>
+<li>The vote is a structured assessment from five viewpoints and not a user survey.</li>
+<li>Repeat: <code>cargo test --workspace --release</code>, <code>maarse-sim --seed N [--mode flood] [--sf 12] [--highway --car-kmh 50] [--duty 10 --duration 7200 --messages 240]</code>.</li>
+</ul>
+</main>
+<script>
+const P = [
+ ["Range test mode + field measurements","Automatic ping with a log of SNR, RSSI and position. Measurement on both boards.",
+  ["The first real numbers on range","Cheap: builds on trace and ping","Also used by installers"],["Needs time out in the field","Without a GPS driver the position must come from the phone"],[2,2,1,1,2]],
+ ["Encrypted history on disk","The history in the host is encrypted at rest.",
+  ["Closes a concrete privacy gap","Small change"],["A forgotten key means lost history","Search becomes a little harder"],[1,1,2,1,1]],
+ ["Host as a service with automatic restart","Windows service and systemd, reconnects serial and MeshCore.",
+  ["Needed for fixed gateways","Solves today's problem of the host stopping"],["Different on every OS","More things to test"],[2,1,0,2,1]],
+ ["Load control for path requests","A quota by channel load and waits by SF.",
+  ["Fixes the SF12 weakness (30 % acknowledged)","Makes the net robust as it grows"],["Can make route lookups slower in quiet nets","Must be tuned in the simulator first"],[2,1,1,0,1]],
+ ["Automatic switching between LoRa and TCP + an outbox that waits","Mobile nodes switch to mobile data and the home host when there is no LoRa route. Messages wait for coverage.",
+  ["Closes 100 km gaps as on the E45","Builds on remote access and the mailbox, which exist","Unique: none of the other three does it automatically"],["Needs mobile data and a VPN to the host","Risk of double delivery if both ways send (IDs already deduplicate)"],[1,2,0,2,1]],
+ ["Bridge mode: no flood suppression for the one who reaches a repeater","Role field in announces. A relay at the edge of coverage (hears a repeater and has neighbours that do not) ignores duplicates from relays.",
+  ["Large test: 55–82 % → 97–100 % in all hill scenarios, with less airtime","Unchanged where repeaters cover densely","Backward compatible (new TLV field)","Exactly the situations where emergency services and hunters need it"],["A change in the router's core, must also go into firmware","Several bridges close together mean a little more airtime"],[2,2,0,1,1]],
+ ["Carry (delay tolerant) in relay mode","Relays hold messages and hand them over when they meet the recipient or a closer node.",
+  ["The forest test: groups split into islands end at ~60 % with every method today","Uses movement instead of fighting it","Unique among the four systems"],["RAM and flash on nodes are small","Messages can arrive minutes late, so the user must see \"in transit\""],[1,2,0,1,0]],
+ ["Automatic suggestion of relay when no repeaters are heard","The client switches to or suggests forest mode.",
+  ["The client role gave 49 % at 5 km against 99 % with relay","Cheap to build"],["More forwarders use more airtime in dense groups"],[1,2,0,2,1]],
+ ["Power-saving mode (nRF52840)","Clients and trackers sleep between transmissions.",
+  ["Needed for trackers and mobile use","The nRF is good at it"],["Sleeping nodes cannot forward","Hard to test"],[1,2,0,1,0]],
+ ["GPS driver + map in the client","WisMesh Tag GPS and a map with offline tiles.",
+  ["The most requested thing in Meshtastic","A coverage map helps when placing repeaters"],["Tiles take space and have licence terms","Privacy risk with a precise position"],[1,2,-1,2,0]],
+ ["Network key (closed net)","Optional key, so foreign packets are discarded before routing.",
+  ["A requirement from emergency services and companies","Shields against spam and mapping"],["Splits the net","A key can leak, and then everyone must change"],[1,1,2,-1,0]],
+ ["Boards (rooms)","A shared board on host and repeaters.",
+  ["Makes the local net social (like MeshCore rooms)","Builds on the mailbox"],["Needs storage and moderation","Flash on nodes is small"],[1,1,0,1,0]],
+ ["The phone as its own node","maarse-host in the Android app with its own identity.",
+  ["No PC needed","Mobile use over the internet"],["NDK and battery use","Doubles the code to maintain"],[0,2,0,1,-1]],
+ ["Gateway to Reticulum","Bridge between LXMF and Må:rse.",
+  ["Reaches the third ecosystem too","Reticulum users are technical early adopters"],["Small audience","Reticulum's licence and future are unclear"],[1,0,0,0,-1]],
+ ["External crypto review","Review of the ratchet, announces and stamps.",
+  ["Needed before v1.0","Gives credibility"],["Costs money or contacts","May require protocol changes"],[1,1,2,0,1]],
+ ["Native iOS app","Swift app with BLE.",
+  ["Many have an iPhone"],["Expensive to maintain","The PWA via the host already works"],[0,1,0,1,-2]],
+ ["Updates over LoRa","Resume OTA over the air.",
+  ["Practical for repeaters on masts"],["Measured as too slow","Uses much of the duty cycle budget"],[1,-1,0,0,-1]],
+];
+const roles = ["O","M","S","N","D"];
+const box = document.getElementById("votes");
+P.map(p => ({p, sum: p[4].reduce((a, b) => a + b, 0)})).sort((a, b) => b.sum - a.sum).forEach(({p, sum}) => {
+  const v = sum > 5 ? ["go", "Build"] : sum >= 2 ? ["maybe", "Maybe"] : ["stop", "Not now"];
+  const c = document.createElement("div"); c.className = "card"; c.style.margin = "12px 0";
+  const h = document.createElement("h3"); h.textContent = p[0] + " ";
+  const s = document.createElement("span"); s.className = "verdict " + v[0]; s.textContent = `${v[1]} · ${sum > 0 ? "+" : ""}${sum}`; h.append(s);
+  const d = document.createElement("p"); d.className = "muted small"; d.textContent = p[1];
+  const pc = document.createElement("div"); pc.className = "pc";
+  const mk = (cls, title, items) => { const x = document.createElement("div"); x.className = cls; const b = document.createElement("b"); b.textContent = title; x.append(b);
+    const u = document.createElement("ul"); u.className = "small"; items.forEach(t => { const li = document.createElement("li"); li.textContent = t; u.append(li); }); x.append(u); return x; };
+  pc.append(mk("pro", "For", p[2]), mk("con", "Against", p[3]));
+  const vo = document.createElement("p"); vo.className = "vote"; vo.textContent = p[4].map((x, i) => `${roles[i]} ${x > 0 ? "+" : ""}${x}`).join("   ");
+  c.append(h, d, pc, vo); box.append(c);
+});
+</script>
+</body>
+</html>

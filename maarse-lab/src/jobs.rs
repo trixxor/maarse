@@ -1,5 +1,5 @@
-//! Testsuiter: katalog, kø, kørsel som underprocesser, fortolkning af output
-//! og historik.
+//! Test suites: catalogue, queue, running as subprocesses, parsing of output
+//! and history.
 
 use crate::{broadcast, broadcast_raw, cfg};
 use serde_json::{Map, Value, json};
@@ -37,7 +37,7 @@ struct Suite {
     group: &'static str,
     title: String,
     desc: String,
-    /// Statisk liste over, hvad suiten afprøver (vises før kørsel).
+    /// Static list of what the suite tests (shown before running).
     items: Vec<String>,
     steps: Vec<Step>,
     hardware: bool,
@@ -81,13 +81,13 @@ fn members() -> Vec<String> {
 
 fn crate_desc(c: &str) -> &'static str {
     match c {
-        "maarse-core" => "Protokolkernen: pakkeformat, router (ruter, hop-gensendelse, kvitteringer), dublet-filter, duty cycle, sendetid, arbejdsbevis (stempler), regioner, companion-protokollen og indholdsformater.",
-        "maarse-crypto" => "Kryptografi: identiteter (Ed25519/X25519), signerede announces, krypterede direkte beskeder, kanaler og fil-stykker, sikkerhedsnumre.",
-        "maarse-host" => "Værtsprogrammet: postkasse, filoverførsel, backbone-links, DHT, fjernadministration, webserver og fuzzing af værtens dekodere.",
-        "maarse-sim" => "Simulatoren (kun kompileringstjek; scenarierne har deres egne suiter nedenfor).",
-        "maarse-uf2" => "UF2-værktøjet, der pakker firmware til træk-og-slip-flashing.",
-        "maarse-lab" => "Dette testlaboratorium.",
-        _ => "Crate i arbejdsområdet.",
+        "maarse-core" => "The protocol core: packet format, router (routes, hop retransmission, acknowledgements), duplicate filter, duty cycle, time on air, proof of work (stamps), regions, the companion protocol and content formats.",
+        "maarse-crypto" => "Cryptography: identities (Ed25519/X25519), signed announces, encrypted direct messages, channels and file chunks, safety numbers.",
+        "maarse-host" => "The host program: mailbox, file transfer, backbone links, DHT, remote administration, web server and fuzzing of the host's decoders.",
+        "maarse-sim" => "The simulator (compile check only; the scenarios have their own suites below).",
+        "maarse-uf2" => "The UF2 tool that packs firmware for drag-and-drop flashing.",
+        "maarse-lab" => "This test lab.",
+        _ => "Crate in the workspace.",
     }
 }
 
@@ -95,20 +95,20 @@ fn sim_scenarios() -> Vec<(&'static str, &'static str, &'static str, Vec<&'stati
     vec![
         (
             "sim-120",
-            "120 noder, 30×30 km",
-            "Standardscenariet: 30 repeatere og 90 klienter tilfældigt placeret, 60 direkte beskeder og 10 kanalbeskeder over 15 minutter.",
+            "120 nodes, 30×30 km",
+            "The default scenario: 30 repeaters and 90 clients placed at random, 60 direct messages and 10 channel messages over 15 minutes.",
             vec!["--nodes", "120", "--repeaters", "30", "--area-km", "30"],
         ),
         (
             "sim-200",
-            "200 noder, 60×60 km",
-            "Stort, tyndt net: mange noder er kun dårligt dækket. Viser svagheden ved lange, skrøbelige ruter.",
+            "200 nodes, 60×60 km",
+            "Large, sparse net: many nodes are only poorly covered. Shows the weakness of long, fragile routes.",
             vec!["--nodes", "200", "--repeaters", "40", "--area-km", "60"],
         ),
         (
             "sim-highway",
-            "Motorvej 100 km, bil i 110 km/t",
-            "Repeatere på en linje langs en motorvej; en bil kører forbi og skriver skiftevis med en fast node i vejens ende. Afprøver ruter til en node, der flytter sig.",
+            "Motorway 100 km, car at 110 km/h",
+            "Repeaters on a line along a motorway; a car drives past and writes in turn with a fixed node at the end of the road. Tests routes to a node that moves.",
             vec!["--highway"],
         ),
     ]
@@ -122,7 +122,7 @@ fn catalog() -> Vec<Suite> {
         }
         v.push(Suite {
             id: format!("cargo:{c}"),
-            group: "Enhedstests (cargo test)",
+            group: "Unit tests (cargo test)",
             title: format!("cargo test -p {c}"),
             desc: crate_desc(&c).into(),
             items: vec![],
@@ -134,12 +134,12 @@ fn catalog() -> Vec<Suite> {
     v.push(Suite {
         id: "fuzz".into(),
         group: "Fuzzing",
-        title: "maarse-fuzz (release, 100 000 input pr. mål)".into(),
-        desc: "Alle dekodere, der læser bytes udefra, fodres med halvt tilfældige input og halvt mutationer af gyldige rammer. Programmet må aldrig gå ned, og dekodet input skal kunne kodes og dekodes uændret.".into(),
+        title: "maarse-fuzz (release, 100 000 inputs per target)".into(),
+        desc: "All decoders that read bytes from outside are fed half random inputs and half mutations of valid frames. The program must never crash, and decoded input must re-encode and decode unchanged.".into(),
         items: vec![
             "Packet::decode".into(),
             "companion Command::decode / Event::decode".into(),
-            "FrameDecoder (strøm klippet i tilfældige stykker)".into(),
+            "FrameDecoder (stream cut into random pieces)".into(),
             "content::parse".into(),
             "Router::on_receive".into(),
             "RadioConfig".into(),
@@ -155,26 +155,26 @@ fn catalog() -> Vec<Suite> {
         runnable: true,
     });
     let build_host = step(
-        "byg maarse-host",
+        "build maarse-host",
         "cargo",
         &["build", "--release", "-p", "maarse-host"],
         Parser::Build,
     );
     v.push(Suite {
         id: "e2e".into(),
-        group: "Ende-til-ende",
+        group: "End to end",
         title: "tools/e2e_test.py".into(),
-        desc: "Starter tre rigtige maarse-host-processer (A, B og postkassen P), forbundet over backbone-links, og styrer dem over WebSocket som webklienten gør.".into(),
+        desc: "Starts three real maarse-host processes (A, B and the mailbox P), connected over backbone links, and drives them over WebSocket like the web client does.".into(),
         items: [
-            "beskeder begge veje",
-            "kanalbesked",
-            "privat kanal (tilfældig nøgle), som B husker efter genstart",
-            "fil på 20 KB overført og verificeret",
-            "for stor fil afvist",
-            "B offline: beskeden lægges i postkassen og hentes, når B kommer igen",
-            "fjernadministration: administrator får adgang, andre afvises",
-            "fremmed hjemmeside kan ikke forbinde",
-            "regioner (#tur@nordjylland)",
+            "messages both ways",
+            "channel message",
+            "private channel (random key) that B remembers after a restart",
+            "20 KB file transferred and verified",
+            "too large file rejected",
+            "B offline: the message goes to the mailbox and is fetched when B comes back",
+            "remote administration: the administrator gets access, others are rejected",
+            "a foreign web site cannot connect",
+            "regions (#trip@nordjylland)",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -193,13 +193,13 @@ fn catalog() -> Vec<Suite> {
     });
     v.push(Suite {
         id: "dht".into(),
-        group: "Ende-til-ende",
+        group: "End to end",
         title: "tools/dht_test.py".into(),
-        desc: "Tre backbone-hosts uden pakkeforbindelse til hinanden, kun med B1 som DHT-startpunkt. A skriver til C, som A aldrig har hørt; adressen findes via DHT'en.".into(),
+        desc: "Three backbone hosts without packet connection to each other, only with B1 as DHT bootstrap. A writes to C, which A has never heard; the address is found via the DHT.".into(),
         items: vec![
-            "A -> C fundet via DHT og leveret".into(),
-            "kvittering tilbage".into(),
-            "svar C -> A".into(),
+            "A -> C found via DHT and delivered".into(),
+            "acknowledgement back".into(),
+            "reply C -> A".into(),
         ],
         steps: vec![
             build_host,
@@ -221,18 +221,18 @@ fn catalog() -> Vec<Suite> {
         group: "Hardware",
         title: "tools/radio_test.py".into(),
         desc: format!(
-            "Kræver boards. To rigtige radioer over USB/seriel: info, announce over LoRa, direkte besked begge veje med kvittering, status. {}",
+            "Needs boards. Two real radios over USB/serial: info, announce over LoRa, direct message both ways with acknowledgement, status. {}",
             if ports.len() >= 2 {
-                format!("Porte: {} og {}.", ports[0], ports[1])
+                format!("Ports: {} and {}.", ports[0], ports[1])
             } else {
-                "Start maarse-lab med --port COM6 --port COM7 for at kunne køre den.".into()
+                "Start maarse-lab with --port COM6 --port COM7 to be able to run it.".into()
             }
         ),
         items: vec![
-            "Info og radio fra begge noder".into(),
+            "Info and radio from both nodes".into(),
             "Announce over LoRa".into(),
-            "Direkte besked A -> B (modtaget + kvitteret)".into(),
-            "Direkte besked B -> A (modtaget + kvitteret)".into(),
+            "Direct message A -> B (received + acknowledged)".into(),
+            "Direct message B -> A (received + acknowledged)".into(),
         ],
         steps: vec![Step {
             label: "radio_test.py".into(),
@@ -244,14 +244,14 @@ fn catalog() -> Vec<Suite> {
         runnable: ports.len() >= 2,
     });
     let build_sim = step(
-        "byg maarse-sim",
+        "build maarse-sim",
         "cargo",
         &["build", "--release", "-p", "maarse-sim"],
         Parser::Build,
     );
     for (id, title, desc, args) in sim_scenarios() {
         let mut steps = vec![build_sim.clone()];
-        for (mode, extra) in [("Må:rse", vec![]), ("flood, 7 hop", vec!["--mode", "flood", "--hop-limit", "7"])] {
+        for (mode, extra) in [("Må:rse", vec![]), ("flood, 7 hops", vec!["--mode", "flood", "--hop-limit", "7"])] {
             let mut a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
             a.extend(extra.iter().map(|s| s.to_string()));
             steps.push(Step {
@@ -265,8 +265,8 @@ fn catalog() -> Vec<Suite> {
             id: id.into(),
             group: "Simulator",
             title: title.into(),
-            desc: format!("{desc} Kører både Må:rse og flood (Meshtastic-lignende) til sammenligning."),
-            items: vec!["Må:rse".into(), "flood, 7 hop".into()],
+            desc: format!("{desc} Runs both Må:rse and flood (Meshtastic-like) for comparison."),
+            items: vec!["Må:rse".into(), "flood, 7 hops".into()],
             steps,
             hardware: false,
             runnable: true,
@@ -274,10 +274,10 @@ fn catalog() -> Vec<Suite> {
     }
     v.push(Suite {
         id: "pow".into(),
-        group: "Ydelse",
-        title: "Arbejdsbevis (stempel-benchmark)".into(),
-        desc: "Måler hvor mange SHA-256-forsøg pr. sekund stempelsøgningen klarer (release), og hvad det betyder for tiden til at stemple en announce og en ruteforespørgsel på denne maskine.".into(),
-        items: vec!["forsøg/s, announce-tid, ruteforespørgsel-tid".into()],
+        group: "Performance",
+        title: "Proof of work (stamp benchmark)".into(),
+        desc: "Measures how many SHA-256 attempts per second the stamp search manages (release), and what that means for the time to stamp an announce and a path request on this machine.".into(),
+        items: vec!["attempts/s, announce time, path request time".into()],
         steps: vec![step(
             "stamp_benchmark",
             "cargo",
@@ -290,7 +290,7 @@ fn catalog() -> Vec<Suite> {
     v
 }
 
-// ---------- tilstand ----------
+// ---------- state ----------
 
 struct State {
     suites: Vec<Suite>,
@@ -450,7 +450,7 @@ fn worker() {
     }
 }
 
-/// Tilstand for én suites kørsel; fyldes af output-fortolkerne.
+/// State of one suite's run; filled in by the output parsers.
 #[derive(Default)]
 struct Run {
     passed: u32,
@@ -494,12 +494,12 @@ fn run_suite(suite: &Suite) {
             Parser::Sim => {
                 let mut m = std::mem::take(&mut run.sim);
                 let name = format!(
-                    "{}: leveret {} %, kvitteret {} %, median {} s, sendetid {} s",
+                    "{}: delivered {} %, acked {} %, median {} s, airtime {} s",
                     st.label,
-                    m.get("leveret").map_or("?".into(), |v| v.to_string()),
-                    m.get("kvitteret").map_or("?".into(), |v| v.to_string()),
+                    m.get("delivered").map_or("?".into(), |v| v.to_string()),
+                    m.get("acked").map_or("?".into(), |v| v.to_string()),
                     m.get("median_s").map_or("?".into(), |v| v.to_string()),
-                    m.get("sendetid_s").map_or("?".into(), |v| v.to_string()),
+                    m.get("airtime_s").map_or("?".into(), |v| v.to_string()),
                 );
                 let ms = run.step_start.unwrap().elapsed().as_millis();
                 row(&suite.id, &mut run, &name, if step_ok { "ok" } else { "fail" }, ms);
@@ -508,8 +508,8 @@ fn run_suite(suite: &Suite) {
             }
             _ if !step_ok => {
                 let why = match code {
-                    None => "afbrudt".to_string(),
-                    Some(c) => format!("fejlkode {c}"),
+                    None => "aborted".to_string(),
+                    Some(c) => format!("exit code {c}"),
                 };
                 let ms = run.step_start.unwrap().elapsed().as_millis();
                 let txt = if run.last_err.is_empty() {
@@ -542,7 +542,7 @@ fn run_suite(suite: &Suite) {
     });
 }
 
-/// Kør ét trin og stream output. Returnerer exit-koden (None = afbrudt).
+/// Run one step and stream the output. Returns the exit code (None = aborted).
 fn run_step(suite: &str, st: &Step, run: &mut Run) -> Option<i32> {
     let mut cmd = Command::new(&st.prog);
     cmd.args(&st.args)
@@ -556,7 +556,7 @@ fn run_step(suite: &str, st: &Step, run: &mut Run) -> Option<i32> {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            run.last_err = format!("kunne ikke starte {}: {e}", st.prog);
+            run.last_err = format!("could not start {}: {e}", st.prog);
             broadcast(&json!({"type":"line","suite":suite,"stream":"err","text":run.last_err}));
             return Some(-1);
         }
@@ -648,16 +648,16 @@ fn parse(suite: &str, p: Parser, l: &str, run: &mut Run) {
                 let ms = run.step_start.map_or(0, |t| t.elapsed().as_millis());
                 row(suite, run, name, status, ms);
             }
-            if p == Parser::Pow && t.contains("forsøg/s") {
-                // "123 forsøg/s; announce (18 bit) ≈ 2.10 ms, ruteforespørgsel (12 bit) ≈ 0.033 ms"
+            if p == Parser::Pow && t.contains("attempts/s") {
+                // "123 attempts/s; announce (18 bits) ≈ 2.10 ms, path request (12 bits) ≈ 0.033 ms"
                 let rate = num(t).unwrap_or(0.0);
-                run.metrics.insert("forsøg_pr_s".into(), json!(rate));
+                run.metrics.insert("attempts_per_s".into(), json!(rate));
                 let mut parts = t.split('≈').skip(1);
                 if let Some(a) = parts.next().and_then(num) {
                     run.metrics.insert("announce_ms".into(), json!(a));
                 }
                 if let Some(b) = parts.next().and_then(num) {
-                    run.metrics.insert("ruteforespørgsel_ms".into(), json!(b));
+                    run.metrics.insert("path_request_ms".into(), json!(b));
                 }
                 run.group = "benchmark".into();
                 let ms = since(run);
@@ -669,7 +669,7 @@ fn parse(suite: &str, p: Parser, l: &str, run: &mut Run) {
             if let Some(m) = t.strip_prefix("OK ") {
                 let ms = since(run);
                 row(suite, run, m.trim(), "ok", ms);
-            } else if t.starts_with("FEJL") || t.contains("AssertionError") {
+            } else if t.starts_with("FAIL") || t.contains("AssertionError") {
                 let ms = since(run);
                 row(suite, run, t, "fail", ms);
             }
@@ -678,15 +678,15 @@ fn parse(suite: &str, p: Parser, l: &str, run: &mut Run) {
             let t = l.trim();
             if let Some(g) = t.strip_prefix("== ") {
                 run.group = g.trim_end_matches(" ==").to_string();
-            } else if let Some(r) = after(t, "-> modtaget:") {
-                let ok = r.matches("JA").count() == 2;
+            } else if let Some(r) = after(t, "-> received:") {
+                let ok = r.matches("YES").count() == 2;
                 let ms = since(run);
-                row(suite, run, &format!("modtaget:{r}"), if ok { "ok" } else { "fail" }, ms);
-            } else if let Some(r) = t.strip_prefix("RESULTAT:") {
+                row(suite, run, &format!("received:{r}"), if ok { "ok" } else { "fail" }, ms);
+            } else if let Some(r) = t.strip_prefix("RESULT:") {
                 let ms = since(run);
                 let ok = r.trim() == "OK";
-                row(suite, run, &format!("resultat {}", r.trim()), if ok { "ok" } else { "fail" }, ms);
-            } else if t.starts_with("FEJL") {
+                row(suite, run, &format!("result {}", r.trim()), if ok { "ok" } else { "fail" }, ms);
+            } else if t.starts_with("FAIL") {
                 let ms = since(run);
                 row(suite, run, t, "fail", ms);
             }
@@ -695,7 +695,7 @@ fn parse(suite: &str, p: Parser, l: &str, run: &mut Run) {
     }
 }
 
-/// Læs nøgletal fra simulatorens rapport.
+/// Read key figures from the simulator's report.
 fn sim_metrics(l: &str, m: &mut Map<String, Value>) {
     let t = l.trim();
     let mut put = |k: &str, v: Option<f64>| {
@@ -703,31 +703,31 @@ fn sim_metrics(l: &str, m: &mut Map<String, Value>) {
             m.insert(k.into(), json!(v));
         }
     };
-    if let Some(r) = t.strip_prefix("Leveret:") {
-        put("leveret", num(r));
-    } else if let Some(r) = t.strip_prefix("Kvitteret:") {
-        put("kvitteret", num(r));
-    } else if let Some(r) = after(t, "Forsinkelse:") {
+    if let Some(r) = t.strip_prefix("Delivered:") {
+        put("delivered", num(r));
+    } else if let Some(r) = t.strip_prefix("Acknowledged:") {
+        put("acked", num(r));
+    } else if let Some(r) = after(t, "Latency:") {
         put("median_s", after(r, "median").and_then(num));
-        put("p90_s", after(r, "90 % under").and_then(num));
-    } else if let Some(r) = t.strip_prefix("Sendetid i alt:") {
-        put("sendetid_s", num(r));
-    } else if let Some(r) = t.strip_prefix("Udsendelser:") {
-        put("udsendelser", num(r));
-    } else if let Some(r) = after(t, "Tabt i kollision (pr. modtager):") {
-        put("kollisioner", num(r));
-    } else if let Some(r) = after(t, "Nåede i snit") {
-        put("kanal_pct", num(r));
-    } else if let Some(r) = after(t, "Droppet pga. duty cycle:") {
+        put("p90_s", after(r, "90 % below").and_then(num));
+    } else if let Some(r) = t.strip_prefix("Total airtime:") {
+        put("airtime_s", num(r));
+    } else if let Some(r) = t.strip_prefix("Transmissions:") {
+        put("transmissions", num(r));
+    } else if let Some(r) = after(t, "Lost to collisions (per receiver):") {
+        put("collisions", num(r));
+    } else if let Some(r) = after(t, "Reached on avg") {
+        put("channel_pct", num(r));
+    } else if let Some(r) = after(t, "Dropped due to duty cycle:") {
         put("duty_drop", num(r));
     }
 }
 
-// ---------- testliste ----------
+// ---------- test list ----------
 
 static DISCOVERING: AtomicBool = AtomicBool::new(false);
 
-/// `cargo test --workspace -- --list`, grupperet pr. crate og testmål.
+/// `cargo test --workspace -- --list`, grouped per crate and test target.
 pub fn discover() {
     if DISCOVERING.swap(true, Ordering::SeqCst) {
         return;
@@ -745,9 +745,9 @@ pub fn discover() {
             broadcast(&json!({"type":"discovering","on":false}));
             return;
         };
-        // stderr og stdout er adskilt; kombinér via rækkefølgen af "Running".
-        // Med --format terse kommer navnene på stdout i samme rækkefølge
-        // som "Running"-linjerne på stderr; vi bruger tomme linjer som skel.
+        // stderr and stdout are separate; combine via the order of "Running".
+        // With --format terse the names come on stdout in the same order
+        // as the "Running" lines on stderr; we use empty lines as separators.
         let err = String::from_utf8_lossy(&out.stderr);
         let mut prev = String::new();
         let targets: Vec<(String, String)> = err
@@ -759,7 +759,7 @@ pub fn discover() {
                     let src = src.trim_start_matches("unittests ").replace('\\', "/");
                     let bin = rest.rsplit(['/', '\\']).next().unwrap_or("");
                     let mut krate = bin.rsplit_once('-').map_or(bin, |x| x.0).replace('_', "-");
-                    // Integrationstests (tests/*.rs) hører til den foregående crate.
+                    // Integration tests (tests/*.rs) belong to the preceding crate.
                     if src.starts_with("tests/") && !prev.is_empty() {
                         krate = prev.clone();
                     }
@@ -772,7 +772,7 @@ pub fn discover() {
             })
             .collect();
         let so = String::from_utf8_lossy(&out.stdout);
-        // Hver testbinær skriver sine navne efterfulgt af "N tests, M benchmarks".
+        // Every test binary writes its names followed by "N tests, M benchmarks".
         let mut blocks: Vec<Vec<String>> = vec![vec![]];
         for l in so.lines() {
             if let Some(n) = l.strip_suffix(": test") {
@@ -797,7 +797,7 @@ pub fn discover() {
     });
 }
 
-// ---------- live-simulator ----------
+// ---------- live simulator ----------
 
 static SIMS: Mutex<Vec<Arc<Mutex<Child>>>> = Mutex::new(Vec::new());
 
@@ -812,10 +812,10 @@ pub fn sim_stop() {
     }
 }
 
-/// Start simulatoren med hændelsesspor og send hændelserne videre.
+/// Start the simulator with an event trace and pass the events on.
 pub fn sim_live(tag: &str, args: Vec<String>) {
     let tag: String = tag.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect();
-    // Kun kendte flag (siden kan ikke starte andet end simulatoren).
+    // Only known flags (the page cannot start anything but the simulator).
     let mut clean = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -836,14 +836,14 @@ pub fn sim_live(tag: &str, args: Vec<String>) {
         let bin = exe("maarse-sim");
         let send_text = |t: &str| broadcast(&json!({"type":"simtext","tag":tag,"text":t}));
         if !std::path::Path::new(&bin).exists() || stale_sim(&bin) {
-            send_text("Bygger maarse-sim (release) …");
+            send_text("Building maarse-sim (release) …");
             let st = Command::new("cargo")
                 .args(["build", "--release", "-p", "maarse-sim"])
                 .current_dir(&cfg().root)
                 .stdin(Stdio::null())
                 .status();
             if !st.map(|s| s.success()).unwrap_or(false) {
-                send_text("Bygning af maarse-sim fejlede.");
+                send_text("Building maarse-sim failed.");
                 return;
             }
         }
@@ -858,7 +858,7 @@ pub fn sim_live(tag: &str, args: Vec<String>) {
             .stderr(Stdio::null())
             .spawn();
         let Ok(mut child) = child else {
-            send_text("Kunne ikke starte maarse-sim.");
+            send_text("Could not start maarse-sim.");
             return;
         };
         let out = child.stdout.take().unwrap();
@@ -896,7 +896,7 @@ pub fn sim_live(tag: &str, args: Vec<String>) {
     });
 }
 
-/// Er binæren ældre end kildekoden? (så tracen passer til koden)
+/// Is the binary older than the source code? (so the trace matches the code)
 fn stale_sim(bin: &str) -> bool {
     let m = |p: PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     let Some(b) = m(PathBuf::from(bin)) else {

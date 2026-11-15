@@ -1,22 +1,22 @@
-# Må:rse – udkast 4 (v0.4)
+# Må:rse – draft 4 (v0.4)
 
-Må:rse er et krypteret mesh-netværk til LoRa, der kan række ud i verden via TCP og internet.
+Må:rse is an encrypted mesh network for LoRa that can reach out into the world via TCP and the internet.
 
-## Kom i gang (Windows og Linux)
+## Getting started (Windows and Linux)
 
-1. Installér Rust fra <https://rustup.rs>.
-2. Start en node med webklient:
-   - Windows: dobbeltklik på `scripts\start-host.bat`
+1. Install Rust from <https://rustup.rs>.
+2. Start a node with the web client:
+   - Windows: double-click `scripts\start-host.bat`
    - Linux: `./scripts/start-host.sh`
-3. Browseren åbner `http://127.0.0.1:8080` og forbinder automatisk.
+3. The browser opens `http://127.0.0.1:8080` and connects automatically.
 
-Første gang tager opstarten et par minutter, fordi programmet bygges. Derefter starter det med det samme.
+The first start takes a few minutes, because the program is built. After that it starts right away.
 
-**To computere:** start den ene som ovenfor. Start den anden med `--peer <første computers IP>:4242`.
+**Two computers:** start one as above. Start the other with `--peer <first computer's IP>:4242`.
 
-**Backbone med DHT:** en host med offentlig adresse startes med `--public-addr <vært:port>` (og `--dht <en anden backbone-host>`). Den udgiver de adresser, den kan nå, i DHT'en. Andre hosts slår ukendte adresser op og forbinder direkte til den rigtige gateway. DHT'en findes kun over TCP, aldrig over LoRa.
+**Backbone with DHT:** a host with a public address is started with `--public-addr <host:port>` (and `--dht <another backbone host>`). It publishes the addresses it can reach in the DHT. Other hosts look up unknown addresses and connect directly to the right gateway. The DHT only exists over TCP, never over LoRa.
 
-**Firmware til en radio:**
+**Firmware for a radio:**
 
 ```text
 Windows:  .\scripts\build-firmware.ps1 <board>  [-Flash]
@@ -25,57 +25,57 @@ Linux:    ./scripts/build-firmware.sh <board>  [flash]
 board:    wismesh-tag | xiao-nrf52840 | heltec-v4 | xiao-esp32s3
 ```
 
-- **nRF52840** (WisMesh Tag, XIAO nRF52840): scriptet laver `dist/maarse-<board>.uf2`. Dobbeltklik på boardets reset-knap og træk filen over på USB-drevet, der dukker op.
-- **ESP32-S3** (Heltec V4, XIAO ESP32-S3): første gang installerer scriptet Espressifs værktøjskæde (`espup`) og `espflash`, hvilket tager et par minutter. Scriptet laver `dist/maarse-<board>.bin` og flasher boardet direkte, hvis du tilføjer `flash`.
+- **nRF52840** (WisMesh Tag, XIAO nRF52840): the script makes `dist/maarse-<board>.uf2`. Double-click the board's reset button and drag the file onto the USB drive that shows up.
+- **ESP32-S3** (Heltec V4, XIAO ESP32-S3): the first time, the script installs Espressif's toolchain (`espup`) and `espflash`, which takes a few minutes. The script makes `dist/maarse-<board>.bin` and flashes the board directly if you add `flash`.
 
-Forbind derefter med webklienten via **USB / seriel** (kræver Chrome eller Edge) eller **Bluetooth** (nRF og ESP32-S3).
+Then connect with the web client via **USB / serial** (needs Chrome or Edge) or **Bluetooth** (nRF and ESP32-S3).
 
-## Hvad kan det
+## What it can do
 
-| Funktion | maarse-host (PC) | nRF52840 | ESP32-S3 |
+| Feature | maarse-host (PC) | nRF52840 | ESP32-S3 |
 | --- | --- | --- | --- |
-| Krypterede direkte beskeder med "leveret" | ja | ja | ja |
-| Forward secrecy for samtaler (ratchet, udkast) | ja, sessioner gemt på disk | ja, 8 sessioner i RAM | ja, 8 sessioner i RAM |
-| Kanaler (offentlig, #hashtag) | ja | ja (højst 4) | ja (højst 4) |
-| Billeder og filer (krypteret, med kvittering pr. bid) | ja, op til 1 MB over internettet, 8 KB over LoRa | ja, op til 8 KB (ikke testet på hardware endnu) | ja, op til 8 KB (ikke testet på hardware endnu) |
-| Postkasse til modtagere, der er offline | ja (disk, 7 dage; også filer op til 1 MB) | ja (8 KB flash) | ja (8 KB flash) |
-| Fjernadministration (status og radio på en anden node) | ja | ja | ja |
-| Status-side (radio, routing, postkasse, trafik, DHT) | ja | ja, med RSSI/SNR, duty cycle, CAD og fejl | ja, samme |
-| Radioindstillinger (MHz, båndbredde, SF, CR, dBm, duty %) | – | ja, gemmes i flash | ja, gemmes i flash |
-| Batterimåling og energistyret routing | – (altid fuld) | ja, begge boards, + USB-strøm | Heltec V4 ja; XIAO ESP32-S3: ukendt (ingen deler) |
-| Diagnose: trace route, naboliste, støjgulv | trace og naboer | ja | ja |
-| Position (opt-in, afrundet) og telemetri i announces | ja | ja, gemmes i flash | ja, gemmes i flash |
-| MQTT-bro med Home Assistant discovery | ja (`--mqtt`) | – | – |
-| Visningsnavn i announces | ja (`navn.txt`) | ja, gemmes i flash (ikke afprøvet på hardware) | ja, gemmes i flash (ikke afprøvet på hardware) |
-| Talebeskeder (Codec2, 1200 bit/s) | ja, i webklienten | ja, som fil (kodes i webklienten) | ja, som fil (kodes i webklienten) |
-| `maarse://`-sider | serverer `<data>/sider/` og henter sider | henter sider (serverer ikke) | henter sider (serverer ikke) |
-| Forbindelse | TCP-backbone + DHT, WebSocket, seriel LoRa-modem | USB og Bluetooth | USB og Bluetooth (ja, ikke afprøvet på hardware) |
-| Display | – | – | Heltec V4: 3 sider, skift med PRG-knappen |
+| Encrypted direct messages with "delivered" | yes | yes | yes |
+| Forward secrecy for conversations (ratchet, draft) | yes, sessions stored on disk | yes, 8 sessions in RAM | yes, 8 sessions in RAM |
+| Channels (public, #hashtag) | yes | yes (at most 4) | yes (at most 4) |
+| Pictures and files (encrypted, with an acknowledgement per chunk) | yes, up to 1 MB over the internet, 8 KB over LoRa | yes, up to 8 KB (not tested on hardware yet) | yes, up to 8 KB (not tested on hardware yet) |
+| Mailbox for recipients who are offline | yes (disk, 7 days; also files up to 1 MB) | yes (8 KB flash) | yes (8 KB flash) |
+| Remote administration (status and radio on another node) | yes | yes | yes |
+| Status page (radio, routing, mailbox, traffic, DHT) | yes | yes, with RSSI/SNR, duty cycle, CAD and errors | yes, the same |
+| Radio settings (MHz, bandwidth, SF, CR, dBm, duty %) | – | yes, stored in flash | yes, stored in flash |
+| Battery measurement and energy-driven routing | – (always full) | yes, both boards, + USB power | Heltec V4 yes; XIAO ESP32-S3: unknown (no divider) |
+| Diagnostics: trace route, neighbour list, noise floor | trace and neighbours | yes | yes |
+| Position (opt-in, rounded) and telemetry in announces | yes | yes, stored in flash | yes, stored in flash |
+| MQTT bridge with Home Assistant discovery | yes (`--mqtt`) | – | – |
+| Display name in announces | yes (`name.txt`) | yes, stored in flash (not tried on hardware) | yes, stored in flash (not tried on hardware) |
+| Voice messages (Codec2, 1200 bit/s) | yes, in the web client | yes, as a file (encoded in the web client) | yes, as a file (encoded in the web client) |
+| `maarse://` pages | serves `<data>/pages/` and fetches pages | fetches pages (does not serve) | fetches pages (does not serve) |
+| Connection | TCP backbone + DHT, WebSocket, serial LoRa modem | USB and Bluetooth | USB and Bluetooth (yes, not tried on hardware) |
+| Display | – | – | Heltec V4: 3 pages, switch with the PRG button |
 
-Webklienten (`maarse-client/index.html`) virker over WebSocket (maarse-host), USB/seriel og Bluetooth (Nordic UART). Den skalerer billeder automatisk ned, så de passer under grænsen: 8 KB over LoRa og 1 MB over internettet.
+The web client (`maarse-client/index.html`) works over WebSocket (maarse-host), USB/serial and Bluetooth (Nordic UART). It scales pictures down automatically so they fit under the limit: 8 KB over LoRa and 1 MB over the internet.
 
-**Filgrænse efter rute.** Før en fil sendes, spørger klienten maarse-host om grænsen for den valgte kontakt (kommando `0x14 GetFileLimit {dest}`, svar `0x96 FileLimit {dest, max_bytes (u32), flag (u8: bit 0 = LoRa/ukendt, bit 1 = postkasse), est_airtime_s (u32)}`) og viser fx *"Billedet sendes over LoRa og skaleres ned til 8 KB (ca. 2 min. sendetid)"* eller *"Sendes over internettet (op til 1 MB)"*. Billeder skaleres ned til grænsen; andre filer over grænsen afvises med en forklaring. Firmware-noder kender ikke kommandoen, og så bruges `Info.max_file`. Hosten håndhæver også grænsen på `FileBegin`. Reglerne (`maarse-host/src/filebox.rs`):
+**File limit by route.** Before a file is sent, the client asks maarse-host for the limit for the chosen contact (command `0x14 GetFileLimit {dest}`, reply `0x96 FileLimit {dest, max_bytes (u32), flags (u8: bit 0 = LoRa/unknown, bit 1 = mailbox), est_airtime_s (u32)}`) and shows e.g. *"The picture is sent over LoRa and scaled down to 8 KB (about 2 min. airtime)"* or *"Sent over the internet (up to 1 MB)"*. Pictures are scaled down to the limit; other files over the limit are rejected with an explanation. Firmware nodes do not know the command, and then `Info.max_file` is used. The host also enforces the limit on `FileBegin`. The rules (`maarse-host/src/filebox.rs`):
 
-- **TCP hele vejen** (modtageren er hørt over et TCP-link, og den og alle led på ruten er kendte backbone-hosts: direkte TCP-naboer eller DHT-kontakter; en webklient hos en host har hostens adresse): op til `--max-file` (1 MB).
-- **LoRa** (hørt over et serielt modem, eller gennem et led, hosten ikke ved er en host, fx en radionode bag en anden hosts modem): 8 KB, samme som firmwaren. Sendetiden anslås ud fra EU-standardindstillingerne (SF9, 125 kHz, 10 % duty cycle), da hosten ikke kender modemets radio.
-- **Ukendt** (aldrig hørt, eller linket er gået ned): modtageren regnes som offline, og filen må være op til 1 MB, fordi den lægges i filpostkassen. Uden filpostkasse gælder 8 KB.
-- Er hosten i tvivl, er svaret aldrig TCP. Filer over 8 KB sendes aldrig ad en rute, der ikke er TCP: bidderne holdes tilbage, og filen ender i filpostkassen. Bidder til en modtager over TCP sendes ikke ud på et LoRa-modem.
+- **TCP all the way** (the recipient is heard over a TCP link, and it and every hop on the route are known backbone hosts: direct TCP neighbours or DHT contacts; a web client at a host has the host's address): up to `--max-file` (1 MB).
+- **LoRa** (heard over a serial modem, or through a hop the host does not know is a host, e.g. a radio node behind another host's modem): 8 KB, the same as the firmware. The airtime is estimated from the EU default settings (SF9, 125 kHz, 10 % duty cycle), since the host does not know the modem's radio.
+- **Unknown** (never heard, or the link has gone down): the recipient counts as offline, and the file may be up to 1 MB, because it goes into the file mailbox. Without a file mailbox 8 KB applies.
+- If the host is in doubt, the answer is never TCP. Files over 8 KB are never sent along a route that is not TCP: the chunks are held back, and the file ends up in the file mailbox. Chunks for a recipient over TCP are not sent out on a LoRa modem.
 
-**Filpostkasse (kun maarse-host).** Svarer modtageren ikke (som for beskeder efter 45 s, eller når overførslen går i stå), gemmer afsenderens host filen på disken i `filpostkasse/`: det forseglede tilbud og de forseglede bidder, så hosten ikke kan læse den. Afsenderen får `FileDone` med teksten *"lagt i postkasse"*. Når modtageren dukker op igen (announce eller ny rute, samme mekanisme som postkassen for beskeder), leveres filen, og afsenderen får *"leveret fra postkasse"*. Højst 1 MB pr. fil, 20 MB pr. modtager og 200 MB i alt (`--filpostkasse-modtager-mb`, `--filpostkasse-mb`; 0 slår den fra). Filer udløber efter 7 dage. Filer lægges aldrig i radionoders flash-postkasse, og en fil over 8 KB leveres kun, når modtageren nås over TCP; nås den kun over LoRa, venter filen (eller udløber). Filpostkassen ligger hos afsenderens host, så den skal være online, når modtageren kommer tilbage.
+**File mailbox (maarse-host only).** If the recipient does not answer (as for messages after 45 s, or when the transfer stalls), the sender's host stores the file on disk in `file-mailbox/`: the sealed offer and the sealed chunks, so the host cannot read it. The sender gets `FileDone` with the text *"in mailbox"*. When the recipient shows up again (announce or new route, the same mechanism as the mailbox for messages), the file is delivered, and the sender gets *"delivered from mailbox"*. At most 1 MB per file, 20 MB per recipient and 200 MB in total (`--file-mailbox-recipient-mb`, `--file-mailbox-mb`; 0 turns it off). Files expire after 7 days. Files are never put in radio nodes' flash mailbox, and a file over 8 KB is only delivered when the recipient is reached over TCP; if it is only reached over LoRa, the file waits (or expires). The file mailbox lives at the sender's host, so that host must be online when the recipient comes back.
 
-Filer på firmware-noder (`firmware/common/src/node/files.rs`, logikken i `maarse-crypto/src/files.rs`) bruger samme format som maarse-host, så de to kan sende filer til hinanden. Noden sender og modtager én fil ad gangen i hver retning (to statiske buffere på 8 KB). En modtaget fil sendes til klienten, når den er hel og tjekket; er ingen klient forbundet, bliver den liggende i RAM, til en klient forbinder (den overskrives af næste fil og forsvinder ved genstart). Filer lægges ikke i postkassen: én fil ville fylde de 8 KB flash helt.
+Files on firmware nodes (`firmware/common/src/node/files.rs`, the logic in `maarse-crypto/src/files.rs`) use the same format as maarse-host, so the two can send files to each other. The node sends and receives one file at a time in each direction (two static buffers of 8 KB). A received file is sent to the client when it is complete and checked; if no client is connected, it stays in RAM until a client connects (it is overwritten by the next file and disappears on restart). Files are not put in the mailbox: one file would fill the 8 KB of flash completely.
 
-## Fjernadgang (fx telefonen over VPN)
+## Remote access (e.g. the phone over VPN)
 
-maarse-host kan nås fra andre maskiner, fx telefonen over en VPN hjem, når den lytter på en anden adresse end `127.0.0.1`:
+maarse-host can be reached from other machines, e.g. the phone over a VPN home, when it listens on an address other than `127.0.0.1`:
 
 ```text
 maarse-host --http 0.0.0.0:8080 --serial COM6 --meshcore COM9
 ```
 
-Ved opstart skriver hosten en **adgangsnøgle** (gemt i `<data>/adgangsnoegle.txt`) og en færdig adresse til browseren (`http://<pc>:8080/#token=…`). Forbindelser fra PC'en selv virker uden nøgle som før; alle andre skal have nøglen med (`ws://…/ws?token=…`), ellers afvises de (HTTP 403). I Android-appen: tryk **maarse-host**, skriv adressen (fx PC'ens VPN-adresse `10.8.0.2:8080`) og nøglen; appen husker dem og forbinder selv igen. Telefonen bruger så PC'ens node: MeshCore-gateway, LoRa via modemet, TCP-backbone og historik.
+At start-up the host prints an **access key** (stored in `<data>/access-key.txt`) and a ready-made address for the browser (`http://<pc>:8080/#token=…`). Connections from the PC itself work without a key as before; all others must bring the key (`ws://…/ws?token=…`), otherwise they are rejected (HTTP 403). In the Android app: tap **maarse-host**, enter the address (e.g. the PC's VPN address `10.8.0.2:8080`) and the key; the app remembers them and reconnects by itself. The phone then uses the PC's node: MeshCore gateway, LoRa via the modem, TCP backbone and history.
 
-Lad kun hosten lytte på et netværk, du stoler på (VPN eller hjemmenet). Nøglen beskytter adgangen, men forbindelsen selv er ikke krypteret uden VPN.
+Only let the host listen on a network you trust (VPN or home network). The key protects access, but the connection itself is not encrypted without a VPN.
 
 ## Running the host as a service
 
@@ -116,7 +116,7 @@ A Heltec V4 or XIAO ESP32-S3 can join a Wi-Fi network (for example a phone hotsp
 - **Edge bridge:** the host's announce carries the role *repeater*, so the node hears a repeater over the link. A node with the role *relay* then becomes an edge bridge for its LoRa group automatically (see "Edge bridge").
 - **Protocol:** command `0x28 SetWifi` (`enabled | ssid_len ssid | pass_len pass | peer`, local only: it is refused through `Remote`, as it carries the password), `0x29 GetWifi`, and event `0xa6 Wifi` (`enabled | state | ip (4) | ssid_len ssid | peer`; state 0 off, 1 joining, 2 online, 3 linked). The password is never sent back. Flash: `WIF1` at offset `0x340` of the settings page. nRF52840 boards and maarse-host answer `SetWifi` with an error.
 - **Two modes** (*Mode* in the Wi-Fi form; bit 1 of the flags byte in `SetWifi`): *mesh node* (default) is a node of its own that peers with the host over the backbone and keeps working if the host goes away. *LoRa modem for the host* makes the node the host's antenna over Wi-Fi, like `--serial` over USB: it sends `MM`, then forwards raw LoRa packets with their SNR to the host and sends what the host asks for; it does not route or announce. The host names the link `wifi-modem <address>` and treats it as LoRa (8 KB file limit, no calls). The display shows `<ip> modem`. In both modes the node greets the host at once, so it shows up before it has anything to send.
-- **Devices in the host:** `GET /api/enheder` (and *Devices* under host settings in the web client) lists every link: backbone peers, USB modems and Wi-Fi modems, with uptime, packets in and out, last heard and the last SNR from a modem.
+- **Devices in the host:** `GET /api/devices` (and *Devices* under host settings in the web client) lists every link: backbone peers, USB modems and Wi-Fi modems, with uptime, packets in and out, last heard and the last SNR from a modem.
 - **One radio at a time:** the firmware contains both Bluetooth and Wi-Fi, but runs only one. With Wi-Fi enabled, Bluetooth is not started (the phone app then reaches the node through the host instead). **Hold the PRG button for 3 s** to switch between them (the node saves the choice and restarts), or use `SetWifi` over USB. The heap then only holds one driver (Bluetooth about 34 KB, Wi-Fi about 37 KB), so `coex` is not needed. `--no-default-features --features board-heltec-v4,ble` (or `,wifi`) builds a firmware with just one of them.
 - **Display (Heltec V4):** a line with the links in use (`USB`, `BT` connected or `(BT)` advertising, `WiFi`), the IP address in Wi-Fi mode (or `WiFi joining...`, `no host`), and a short note after a long press.
 - **RAM (no PSRAM on the Heltec V4):** the node runs in its own task and the router (about 53 KB) has its own static. Before, the main task's future held the whole node (67 KB), and the stack frame that builds it stayed reserved for the whole run; with both radio drivers built in, the stack overflowed 0.2 s after boot. Boot now uses about 45 KB of stack and leaves about 52 KB unused.
@@ -124,64 +124,64 @@ A Heltec V4 or XIAO ESP32-S3 can join a Wi-Fi network (for example a phone hotsp
 - **Tested on hardware** (Heltec V4.3, 14 Nov 2026): joins a WPA2 network, gets an address by DHCP, answers ping (6–20 ms), keeps the link to a maarse-host (`LINKED`) and joins again after the access point restarts; switching between Bluetooth and Wi-Fi with the button works both ways. Not yet tested: messages from LoRa through the Wi-Fi link, DNS names as host, and the XIAO ESP32-S3.
 - **Host:** backbone links use TCP keepalive (30 s idle, then every 10 s), so a node that drops off its hotspot without closing the link is noticed and the link is closed.
 
-## Android-app (APK)
+## Android app (APK)
 
-`python tools/build_apk.py` bygger `dist/maarse.apk` direkte med Android SDK'ens værktøjer (aapt2, javac, d8, zipalign, apksigner), uden Gradle. Kræver Android SDK (build-tools 34+, platform 35+) og en JDK; APK'en signeres med debug-nøglen.
+`python tools/build_apk.py` builds `dist/maarse.apk` directly with the Android SDK's tools (aapt2, javac, d8, zipalign, apksigner), without Gradle. Needs the Android SDK (build-tools 34+, platform 35+) and a JDK; the APK is signed with the debug key.
 
-Appen (`android/`) er webklienten i en WebView plus en Bluetooth-bro i Java til nodens Nordic UART-tjeneste, fordi WebView ikke har Web Bluetooth. Webklienten ser broen (`window.MaarseAndroid`) og viser så kun Bluetooth. Appen beder om Bluetooth- og mikrofontilladelse, når de skal bruges. Installér med `adb install dist/maarse.apk` eller ved at åbne filen på telefonen (tillad ukendte kilder).
+The app (`android/`) is the web client in a WebView plus a Bluetooth bridge in Java to the node's Nordic UART service, because WebView has no Web Bluetooth. The web client sees the bridge (`window.MaarseAndroid`) and then only shows Bluetooth. The app asks for Bluetooth and microphone permission when they are needed. Install with `adb install dist/maarse.apk` or by opening the file on the phone (allow unknown sources).
 
-## Webklienten som app (PWA)
+## The web client as an app (PWA)
 
-Webklienten kan installeres som en app, så du kan bruge en radio via Bluetooth eller USB direkte fra telefonen eller computeren, uden en PC med maarse-host. Den virker også uden net, når den først er åbnet én gang.
+The web client can be installed as an app, so you can use a radio via Bluetooth or USB directly from the phone or computer, without a PC running maarse-host. It also works offline once it has been opened.
 
-- **Android (Chrome):** åbn klienten over https (fx fra GitHub Pages eller en anden statisk vært) eller fra maarse-host. Tryk på menuen ⋮ → **Installér app** (eller "Føj til startskærm"), eller tryk på **Installér app** i klienten. Forbind derefter med **Bluetooth** (nRF-noder) eller **USB** (kræver USB-OTG-kabel).
-- **Windows, Linux og macOS (Chrome eller Edge):** klik på installér-ikonet i adresselinjen eller på **Installér app** i klienten.
-- **iPhone/iPad:** Safari har hverken Web Bluetooth eller Web Serial. Der virker kun forbindelsen via WebSocket til en maarse-host (fx på en PC eller Raspberry Pi på samme net).
-- **Notifikationer:** tryk på **Slå notifikationer til** i sidepanelet. Så viser klienten en notifikation, når der kommer en direkte besked eller en kanalbesked, mens den ligger i baggrunden. Antallet af ulæste står i fanens titel.
-- **Opdatering:** når der findes en ny version, viser klienten "Ny version – genindlæs".
+- **Android (Chrome):** open the client over https (e.g. from GitHub Pages or another static host) or from maarse-host. Tap the menu ⋮ → **Install app** (or "Add to home screen"), or tap **Install app** in the client. Then connect with **Bluetooth** (nRF nodes) or **USB** (needs a USB OTG cable).
+- **Windows, Linux and macOS (Chrome or Edge):** click the install icon in the address bar or **Install app** in the client.
+- **iPhone/iPad:** Safari has neither Web Bluetooth nor Web Serial. Only the connection via WebSocket to a maarse-host works (e.g. on a PC or Raspberry Pi on the same network).
+- **Notifications:** tap **Turn on notifications** in the side panel. The client then shows a notification when a direct message or a channel message arrives while it is in the background. The number of unread messages is in the tab title.
+- **Updates:** when a new version exists, the client shows "New version – reload".
 
-Offline-cache, installation og notifikationer kræver, at siden hentes over http(s) (localhost tæller som sikker). Åbnet direkte som fil (`file://`) virker klienten som før, bare uden de ting.
+Offline cache, installation and notifications need the page to be loaded over http(s) (localhost counts as secure). Opened directly as a file (`file://`) the client works as before, just without those things.
 
-**Selv hoste klienten:** læg filerne i `maarse-client/` (`index.html`, `manifest.webmanifest`, `sw.js`, `icon.svg`, `icon-192.png`, `icon-512.png`) på en vilkårlig statisk https-vært, fx GitHub Pages. Hæv `VERSION` i `sw.js`, når filerne ændres, så brugerne får besked om den nye version (maarse-host gør det selv ud fra indholdet). Ikonerne laves med `python tools/make_icons.py`.
+**Hosting the client yourself:** put the files in `maarse-client/` (`index.html`, `manifest.webmanifest`, `sw.js`, `icon.svg`, `icon-192.png`, `icon-512.png`) on any static https host, e.g. GitHub Pages. Bump `VERSION` in `sw.js` when the files change, so users are told about the new version (maarse-host does it by itself from the content). The icons are made with `python tools/make_icons.py`.
 
-## Én indbakke på flere skærme (historik på maarse-host)
+## One inbox on several screens (history on maarse-host)
 
-En maarse-host derhjemme kan fungere som én fælles indbakke, som telefonen, den bærbare og den stationære følger samtidig. Hosten gemmer beskedhistorikken, og hver skærm, der forbinder, henter den:
+A maarse-host at home can work as one shared inbox that the phone, the laptop and the desktop follow at the same time. The host stores the message history, and every screen that connects fetches it:
 
-- Gemmes: modtagne direkte beskeder og kanalbeskeder, egne sendte beskeder (fra alle skærme), leveringstilstand (sendt, kvitteret, i postkasse) og filers metadata (navn, type, størrelse). **Filernes indhold gemmes ikke** – en fil vises kun på de skærme, der var forbundet, da den kom.
-- Sender du fra én skærm, vises beskeden med det samme på de andre. Læser du en samtale på én skærm, forsvinder ulæst-tælleren også på de andre.
-- Klienten henter de seneste 200 beskeder ved forbindelse og ældre, når du scroller op i en samtale.
-- `--history-days N` (standard 90) bestemmer, hvor længe beskeder gemmes; ældre slettes ved opstart og hver time. `--no-history` slår historikken helt fra.
-- Firmware-noder (Bluetooth/USB) har ingen historik; klienten virker der som før.
+- Stored: received direct messages and channel messages, your own sent messages (from all screens), delivery state (sent, acknowledged, in mailbox) and file metadata (name, type, size). **The content of files is not stored** – a file is only shown on the screens that were connected when it arrived.
+- If you send from one screen, the message shows up right away on the others. If you read a conversation on one screen, the unread counter disappears on the others too.
+- The client fetches the latest 200 messages on connect, and older ones when you scroll up in a conversation.
+- `--history-days N` (default 90) decides how long messages are kept; older ones are deleted at start-up and every hour. `--no-history` turns the history off completely.
+- Firmware nodes (Bluetooth/USB) have no history; the client works there as before.
 
-**Privatliv:** beskederne er ende-til-ende-krypteret på radio og backbone, men hosten dekrypterer dem, og historikken ligger **ukrypteret** i `<data>/historik/log.txt`. Alle med adgang til hostens disk kan læse den. Brug `--no-history` på en delt maskine, og slet mappen for at fjerne historikken. Formatet og protokollen (kommandoer 0x30–0x32, hændelser 0xB0–0xB3) er beskrevet i `maarse-host/src/history.rs`.
+**Privacy:** the messages are end-to-end encrypted on radio and backbone, but the host decrypts them, and the history is stored **unencrypted** in `<data>/history/log.txt`. Anyone with access to the host's disk can read it. Use `--no-history` on a shared machine, and delete the folder to remove the history. The format and the protocol (commands 0x30–0x32, events 0xB0–0xB3) are described in `maarse-host/src/history.rs`.
 
-## Indhold
+## Contents
 
-| Del | Hvad |
+| Part | What |
 | --- | --- |
-| `maarse-core` | pakkeformat, routing-motor, rutetabel, duty cycle, companion-protokol og indholdstyper. `no_std`, uden heap. |
-| `maarse-crypto` | identiteter, announces, kryptering af direkte beskeder (med forward secrecy-sessioner, se `ratchet.rs`), kanaler og fil-bidder. `no_std`. |
-| `maarse-host` | gateway og testnode: én fil, ingen installation. |
-| `maarse-client` | webklient i én HTML-fil. |
-| `maarse-sim` | simulator med radiomodel, kollisioner, duty cycle, motorvejsscenarie og flood-tilstand til sammenligning. |
-| `maarse-uf2` | laver UF2-filer af firmwaren (ingen eksterne værktøjer). |
-| `maarse-fuzz` | portabel fuzzing af alle dekodere, der læser bytes udefra. |
-| `firmware/common` | fælles firmware-logik: node, radio-løkke, statistik og flash-lager (indstillinger og postkasse). |
-| `firmware/nrf` | nRF52840-firmware: WisMesh Tag og XIAO nRF52840 + Wio-SX1262, med Bluetooth. |
-| `firmware/esp` | ESP32-S3-firmware: Heltec V4 (med OLED) og XIAO ESP32-S3 + Wio-SX1262. |
-| `scripts/` | start af host og bygning af firmware (Windows og Linux). |
-| `tools/e2e_test.py` | ende-til-ende-test af tre maarse-host-noder. |
-| `tools/dht_test.py` | test af backbone-DHT'en med fem hosts. |
+| `maarse-core` | packet format, routing engine, route table, duty cycle, companion protocol and content types. `no_std`, without heap. |
+| `maarse-crypto` | identities, announces, encryption of direct messages (with forward secrecy sessions, see `ratchet.rs`), channels and file chunks. `no_std`. |
+| `maarse-host` | gateway and test node: one file, no installation. |
+| `maarse-client` | web client in one HTML file. |
+| `maarse-sim` | simulator with a radio model, collisions, duty cycle, a motorway scenario and flood mode for comparison. |
+| `maarse-uf2` | makes UF2 files from the firmware (no external tools). |
+| `maarse-fuzz` | portable fuzzing of all decoders that read bytes from outside. |
+| `firmware/common` | shared firmware logic: node, radio loop, statistics and flash storage (settings and mailbox). |
+| `firmware/nrf` | nRF52840 firmware: WisMesh Tag and XIAO nRF52840 + Wio-SX1262, with Bluetooth. |
+| `firmware/esp` | ESP32-S3 firmware: Heltec V4 (with OLED) and XIAO ESP32-S3 + Wio-SX1262. |
+| `scripts/` | starting the host and building firmware (Windows and Linux). |
+| `tools/e2e_test.py` | end-to-end test of three maarse-host nodes. |
+| `tools/dht_test.py` | test of the backbone DHT with five hosts. |
 
 ## Routing
 
-- Ruter findes med et flood gennem repeatere. Første besked rejser med i forespørgslen og bliver kvitteret med svaret.
-- Repeatere med dårligere SNR sender først, og repeatere med lavt batteri venter længere.
-- Flood-dæmpning (en repeater tier, når en nær nabo med god SNR har sendt det samme), kvittering pr. hop med gensendelse, og kvittering fra ende til ende.
-- **Reparation af ruter:** uden kvittering inden for 20 s glemmes ruten, og beskeden sendes igen med en ny ruteforespørgsel (op til 2 gange). Ubesvarede ruteforespørgsler gentages efter 45 s (svaret kan være længe undervejs i et stort net), og et sent svar på en ældre forespørgsel gælder stadig.
-- **Mobile noder** (`mobile = true`) stoler ikke på ruter, der er ældre end 30 s.
-- Roller: `Client`, `Repeater` og `Relay` (skov-tilstand, højst 4 hop).
+- Routes are found with a flood through repeaters. The first message travels along in the request and is acknowledged with the reply.
+- Repeaters with worse SNR send first, and repeaters with low battery wait longer.
+- Flood suppression (a repeater stays quiet when a nearby neighbour with good SNR has sent the same thing), per-hop acknowledgement with retransmission, and end-to-end acknowledgement.
+- **Route repair:** without an acknowledgement within 20 s the route is forgotten, and the message is sent again with a new path request (up to 2 times). Unanswered path requests are repeated after 45 s (the reply can take a long time in a large net), and a late reply to an older request still counts.
+- **Mobile nodes** (`mobile = true`) do not trust routes older than 30 s.
+- Roles: `Client`, `Repeater` and `Relay` (forest mode, at most 4 hops).
 
 ### Edge bridge (relays at the edge of repeater coverage)
 
@@ -202,418 +202,418 @@ With `carry_copies > 0` (off by default; not enabled in host or firmware yet, `m
 - **Sender:** the router reports `Action::CarryAcked { msg_id }`; the host and firmware send companion event `0xa7 CarryAcked` (`msg_id` u64 LE), and the web client shows "delivered (carried)" (history state 4). A sender that gets an ordinary acknowledgement for a message it still carries (the outbox retried it near a repeater) also stops and tells its carriers.
 - **Simulation** (10 seeds, 18 people in relay mode, 60 direct messages in 30 min): forest 8 km, delivered 60 → 76 % (4 copies) / 78 % (8 copies) at +9 % / +13 % airtime (+24 % / +29 % without the notice), and acks now follow delivery (74 / 77 % instead of 58 %). Forest 10 km: 30 → 44 / 45 % at +11 % / +15 %. E45, low repeaters every 15 km: 85 → 94 % at +27 % airtime (+150 % without the notice). E45 with a 100 km gap: no gain, +19–36 % airtime.
 
-## Spam-beskyttelse (arbejdsbevis)
+## Spam protection (proof of work)
 
-Announces og ruteforespørgsler bærer et lille arbejdsbevis (et "stempel", inspireret af Reticulum 1.6), så ingen kan oversvømme nettet billigt. Stemplet er en nonce, så `SHA-256("maarse/stamp" | version | type | destination | binding | nonce)` har nok foranstillede nul-bits. At tjekke koster én hash.
+Announces and path requests carry a small proof of work (a "stamp", inspired by Reticulum 1.6), so nobody can flood the net cheaply. The stamp is a nonce such that `SHA-256("maarse/stamp" | version | type | destination | binding | nonce)` has enough leading zero bits. Checking costs one hash.
 
-| Pakke | Binding | Sværhedsgrad (v1) | nRF52840 (skøn) | PC (målt) |
+| Packet | Binding | Difficulty (v1) | nRF52840 (estimate) | PC (measured) |
 | --- | --- | --- | --- | --- |
-| Announce | identitet (destination) + tidsstempel | 12 bit, 4.096 forsøg i snit | ca. 0,3 s | ca. 0,2 ms |
-| Ruteforespørgsel | mål + svar-token | 8 bit, 256 forsøg i snit | ca. 20 ms | ca. 0,01 ms |
+| Announce | identity (destination) + timestamp | 12 bits, 4,096 attempts on average | about 0.3 s | about 0.2 ms |
+| Path request | target + reply token | 8 bits, 256 attempts on average | about 20 ms | about 0.01 ms |
 
-- Repeatere og klienter smider pakker uden gyldigt stempel væk: de behandles ikke og sendes ikke videre. De tælles i statistikken som "Uden arbejdsbevis" (nøgle 77).
-- Firmwaren regner announce-stemplet ud i bidder på 256 forsøg (ca. 20 ms) og giver executoren fri imellem. Ruteforespørgslens stempel er så billigt, at routeren regner det ud med det samme.
-- Sværhedsgraden ligger fast pr. pakketype og stempel-version, så den kan hæves med en ny version. Detaljer i `maarse-core/src/stamp.rs`.
+- Repeaters and clients drop packets without a valid stamp: they are not handled and not forwarded. They are counted in the statistics as "Without proof of work" (key 77).
+- The firmware computes the announce stamp in slices of 256 attempts (about 20 ms) and yields to the executor in between. The path request's stamp is so cheap that the router computes it right away.
+- The difficulty is fixed per packet type and stamp version, so it can be raised with a new version. Details in `maarse-core/src/stamp.rs`.
 
-**Ændring af pakkeformatet (v0.4):** announces og ruteforespørgsler har nu 5 bytes ekstra sidst i payloaden: stempel-version (1) og nonce (4, big-endian). Største app-data i et announce er derfor 5 bytes mindre (99 bytes). Ældre noder uden stempel bliver ikke hørt af nye noder, og nye announces afvises af gamle noder (længden passer ikke). Companion-rammerne er uændrede; appen ser announces uden stempel.
+**Change to the packet format (v0.4):** announces and path requests now have 5 extra bytes at the end of the payload: stamp version (1) and nonce (4, big-endian). The largest app data in an announce is therefore 5 bytes smaller (99 bytes). Older nodes without a stamp are not heard by new nodes, and new announces are rejected by old nodes (the length does not fit). The companion frames are unchanged; the app sees announces without the stamp.
 
-## Regioner
+## Regions
 
-Kanalbeskeder kan holdes inden for et område. En region er et navn med små bogstaver, fx `dk` eller `nordjylland`.
+Channel messages can be kept within an area. A region is a lowercase name, e.g. `dk` or `nordjylland`.
 
-- **Kanal med region:** deltag i `navn@region`, fx `offentlig@dk` eller `#tur@nordjylland`. Det, du sender til kanalen, mærkes med regionen. `#tur` uden `@` er global som før. Kanalens nøgle afhænger kun af navnet, så `#tur` og `#tur@nordjylland` er samme samtale.
-- **Noder med regioner:** hver node har en liste med op til 8 regioner, den videresender for. Hierarki klares med konfiguration: en repeater i Aalborg har `dk, nordjylland`, en i Aarhus har `dk, østjylland`. En besked i `#tur@nordjylland` når så hele Nordjylland, men stopper ved Aarhus-repeateren; en besked i `offentlig@dk` går gennem dem begge.
-- **Uden regioner** videresender en node alt, så nettet virker, før nogen har sat regioner op. Med **streng** (`strict`) videresender en node uden regioner kun beskeder uden region.
-- Det er kun **videresendelse**, der filtreres. Beskeder til din egen node leveres altid, og direkte beskeder (der følger ruter) er ikke berørt.
-- **Opsætning:** i webklienten under *Radio* (kommasepareret liste + "Streng"), eller for maarse-host med `--region dk --region nordjylland` og `--strict-region`. Firmware gemmer listen i flash, maarse-host i `regions.txt`.
-- **Backbone:** gateways udveksler deres regioner, når en TCP-forbindelse kommer op, og sender kun beskeder med region til peers, der betjener regionen. En Nordjylland-gateway og en anden Nordjylland-gateway deler altså `#tur@nordjylland` over internettet, mens en gateway i København kun får `dk`-beskeder.
-- **På luften:** bit 0 i flag-byten betyder "region følger", og regionen er 2 bytes (16-bit hash af navnet) efter stien. Pakker uden region er uændrede; ældre firmware videresender ikke pakker med region.
+- **Channel with a region:** join `name@region`, e.g. `public@dk` or `#trip@nordjylland`. What you send to the channel is tagged with the region. `#trip` without `@` is global as before. The channel's key depends only on the name, so `#trip` and `#trip@nordjylland` are the same conversation.
+- **Nodes with regions:** every node has a list of up to 8 regions it forwards for. Hierarchy is handled by configuration: a repeater in Aalborg has `dk, nordjylland`, one in Aarhus has `dk, østjylland`. A message in `#trip@nordjylland` then reaches all of North Jutland, but stops at the Aarhus repeater; a message in `public@dk` goes through both.
+- **Without regions** a node forwards everything, so the net works before anyone has set up regions. With **strict** (`strict`) a node without regions only forwards messages without a region.
+- Only **forwarding** is filtered. Messages to your own node are always delivered, and direct messages (which follow routes) are not affected.
+- **Setup:** in the web client under *Radio* (comma separated list + "Strict"), or for maarse-host with `--region dk --region nordjylland` and `--strict-region`. Firmware stores the list in flash, maarse-host in `regions.txt`.
+- **Backbone:** gateways exchange their regions when a TCP connection comes up, and only send messages with a region to peers that serve the region. A North Jutland gateway and another North Jutland gateway therefore share `#trip@nordjylland` over the internet, while a gateway in Copenhagen only gets `dk` messages.
+- **On the air:** bit 0 in the flags byte means "region follows", and the region is 2 bytes (a 16-bit hash of the name) after the path. Packets without a region are unchanged; older firmware does not forward packets with a region.
 
-## Backbone-DHT
+## Backbone DHT
 
-- Kademlia-agtig, med XOR-afstand på 16-byte-adresser, K = 8 og 3 forespørgsler pr. runde.
-- En post siger: "adresse X kan nås via gateway G på vært:port". Posten indeholder X's signerede announce, så ingen kan opfinde adresser.
-- Gateways udgiver hver 30. minut, og posterne udløber efter 2 timer. Kender DHT'en flere gateways til samme adresse, vinder den med færrest hop.
-- Når en host ser en ruteforespørgsel til en ukendt adresse, slår den adressen op. Det sker også, når en klient skriver til en ukendt adresse; så venter beskeden på svaret.
-- Når adressen er fundet, forbinder hosten direkte til gatewayen, og den almindelige routing klarer resten.
-- DHT-trafikken bruger samme TCP-port som backbone. Den kendes på de første to bytes (`D7 D7`).
+- Kademlia-like, with XOR distance on 16-byte addresses, K = 8 and 3 queries per round.
+- An entry says: "address X can be reached via gateway G at host:port". The entry contains X's signed announce, so nobody can invent addresses.
+- Gateways publish every 30 minutes, and entries expire after 2 hours. If the DHT knows several gateways for the same address, the one with the fewest hops wins.
+- When a host sees a path request to an unknown address, it looks the address up. That also happens when a client writes to an unknown address; the message then waits for the answer.
+- When the address is found, the host connects directly to the gateway, and ordinary routing takes care of the rest.
+- DHT traffic uses the same TCP port as the backbone. It is recognised by the first two bytes (`D7 D7`).
 
-## Batteri og energistyret routing
+## Battery and energy-driven routing
 
-Firmwaren måler batteriet hvert 60. sekund (8 målinger i gennemsnit) og sætter routerens energistatus ud fra spændingen (`maarse-core/src/battery.rs`):
+The firmware measures the battery every 60 seconds (average of 8 measurements) and sets the router's energy status from the voltage (`maarse-core/src/battery.rs`):
 
-| Spænding | Status | Videresender |
+| Voltage | Status | Forwards |
 | --- | --- | --- |
-| ≥ 3,90 V eller USB-strøm | fuld | alt |
-| 3,60–3,90 V | ok | alt, lidt senere i floods |
-| 3,40–3,60 V | lav | kun direkte beskeder og ruteforespørgsler |
-| < 3,40 V | kritisk | intet |
+| ≥ 3.90 V or USB power | full | everything |
+| 3.60–3.90 V | ok | everything, a little later in floods |
+| 3.40–3.60 V | low | only direct messages and path requests |
+| < 3.40 V | critical | nothing |
 
-Tærsklerne følger Li-ion-kurven (RAK's OCV-tabel i Meshtastic): 3,9 V ≈ 75 %, 3,6 V er "knæet" (≈ 10–15 %), under 3,4 V er cellen næsten tom. For at gå et trin op skal spændingen være 50 mV over tærsklen (hysterese). Spænding, procent, USB-strøm og energistatus står på status-siden (nøgle 49, 85, 82, 81).
+The thresholds follow the Li-ion curve (RAK's OCV table in Meshtastic): 3.9 V ≈ 75 %, 3.6 V is the "knee" (≈ 10–15 %), below 3.4 V the cell is almost empty. To go one step up the voltage must be 50 mV above the threshold (hysteresis). Voltage, percent, USB power and energy status are on the status page (keys 49, 85, 82, 81).
 
-| Board | Måling | Kilde |
+| Board | Measurement | Source |
 | --- | --- | --- |
-| XIAO nRF52840 | P0.31 (AIN7), deler 1 MΩ/510 kΩ (× 2,961), tændt med P0.14 lav; 3,0 V reference, 12 bit | Meshtastic `seeed_xiao_nrf52840_kit`, MeshCore `XiaoNrf52Board` |
-| WisMesh Tag (RAK4630) | P0.05 (AIN3), deler 1 MΩ/1,5 MΩ (× 1,73); 3,0 V reference, 12 bit | Meshtastic `rak_wismeshtag` |
-| Heltec V4 | GPIO1 (ADC1), deler tændt med GPIO37 høj, × 5,12 (4,9 × 1,045), 2,5 dB dæmpning | Meshtastic `heltec_v4` |
-| XIAO ESP32-S3 + Wio | ingen batterideler: "ukendt" | – |
+| XIAO nRF52840 | P0.31 (AIN7), divider 1 MΩ/510 kΩ (× 2.961), switched on with P0.14 low; 3.0 V reference, 12 bits | Meshtastic `seeed_xiao_nrf52840_kit`, MeshCore `XiaoNrf52Board` |
+| WisMesh Tag (RAK4630) | P0.05 (AIN3), divider 1 MΩ/1.5 MΩ (× 1.73); 3.0 V reference, 12 bits | Meshtastic `rak_wismeshtag` |
+| Heltec V4 | GPIO1 (ADC1), divider switched on with GPIO37 high, × 5.12 (4.9 × 1.045), 2.5 dB attenuation | Meshtastic `heltec_v4` |
+| XIAO ESP32-S3 + Wio | no battery divider: "unknown" | – |
 
-USB-strøm ses på nRF52840 i POWER-registeret (VBUSDETECT); ESP32-boardene rapporterer "ukendt".
+USB power is seen on the nRF52840 in the POWER register (VBUSDETECT); the ESP32 boards report "unknown".
 
-## Diagnose
+## Diagnostics
 
-Webklienten har en **Diagnose**-side (knappen ved Status/Radio):
+The web client has a **Diagnostics** page (the button next to Status/Radio):
 
-- **Trace route** (kommando `0x20`, svar `0xA0`): en `Probe`-pakke følger den kendte rute (eller finder en først), og hver repeater lægger den SNR, den hørte pakken med, til. Målet svarer ad den omvendte vej, og repeaterne lægger igen deres SNR til. Resultatet er SNR for hvert spring begge veje. Pakke-ID'et regnes kun over den faste del, så implicitte kvitteringer pr. hop virker som for andre pakker. Ældre noder sender pakken uændret videre. Format i `maarse-core/src/diag.rs`.
-- **Naboliste** (`0x21`, svar `0xA1`): noder hørt direkte (announces uden hop og forrige hop i kildestier og ruteforespørgsler) med SNR, RSSI, tid og antal pakker.
-- **Støjgulv** (status-nøgle 80): lora-phy giver ikke den øjeblikkelige RSSI, så støjgulvet anslås ud fra modtagne pakker: N = RSSI − 10·log10(1 + 10^(SNR/10)), glidende gennemsnit.
+- **Trace route** (command `0x20`, reply `0xA0`): a `Probe` packet follows the known route (or finds one first), and every repeater appends the SNR it heard the packet with. The target answers along the reverse way, and the repeaters again append their SNR. The result is the SNR for every hop both ways. The packet ID is computed over the fixed part only, so implicit per-hop acknowledgements work as for other packets. Older nodes forward the packet unchanged. Format in `maarse-core/src/diag.rs`.
+- **Neighbour list** (`0x21`, reply `0xA1`): nodes heard directly (announces without hops and the previous hop in source paths and path requests) with SNR, RSSI, time and packet count.
+- **Noise floor** (status key 80): lora-phy does not give the instantaneous RSSI, so the noise floor is estimated from received packets: N = RSSI − 10·log10(1 + 10^(SNR/10)), moving average.
 
-## Position og telemetri
+## Position and telemetry
 
-Position deles **ikke** som standard. Under Diagnose kan man vælge præcision (slukket / ca. 10 km / ca. 1 km / præcis) og telemetri (batteri, oppetid, energistatus); kommando `0x22`/`0x23`, svar `0xA2`. Noden gemmer positionen, men sender den afrundet til midten af en gittercelle (0,1° eller 0,01°); kun "præcis" sender den nøjagtige position (klienten spørger først). Felterne ligger i announcets app-data efter FS-feltet (`0x03` position, `0x04` telemetri, type | længde | data, i alt højst 41 af 99 bytes), så ældre noder ignorerer dem. Modtagne positioner og telemetri vises som en liste (hændelse `0xA3`), uden kort udefra. Temperatur er med i formatet, men nRF52840's TEMP-enhed ejes af Bluetooth (MPSL), så den sendes ikke endnu.
+Position is **not** shared by default. Under Diagnostics you can choose the precision (off / about 10 km / about 1 km / precise) and telemetry (battery, uptime, energy status); command `0x22`/`0x23`, reply `0xA2`. The node stores the position, but sends it rounded to the centre of a grid cell (0.1° or 0.01°); only "precise" sends the exact position (the client asks first). The fields are in the announce's app data after the FS field (`0x03` position, `0x04` telemetry, type | length | data, at most 41 of 99 bytes in total), so older nodes ignore them. Received positions and telemetry are shown as a list (event `0xA3`), without maps from outside. Temperature is part of the format, but the nRF52840's TEMP peripheral is owned by Bluetooth (MPSL), so it is not sent yet.
 
-## Sikkerhedskopi og gendannelsesfrase
+## Backup and recovery phrase
 
-Under **Sikkerhedskopi** i webklienten kan man lave en ny identitet ud fra en **gendannelsesfrase på 24 ord** eller gendanne en identitet fra en frase. Frasen laves og vises kun i browseren (aldrig i localStorage), og brugeren skal bekræfte tre tilfældige ord, før den installeres på noden.
+Under **Backup** in the web client you can make a new identity from a **24-word recovery phrase** or restore an identity from a phrase. The phrase is made and shown only in the browser (never in localStorage), and the user must confirm three random words before it is installed on the node.
 
-**Der er ingen bagdør: den, der har frasen, ER dig.** Mister du den, kan ingen gendanne identiteten.
+**There is no back door: whoever has the phrase IS you.** If you lose it, nobody can restore the identity.
 
-Afledning (`maarse-crypto/src/recovery.rs`, samme i webklienten):
+Derivation (`maarse-crypto/src/recovery.rs`, the same in the web client):
 
 ```text
-32 bytes tilfældig entropi -> 24 ord (BIP39's engelske ordliste, 8 bit tjeksum)
-seed   = PBKDF2-HMAC-SHA512(frase, "mnemonic" + adgangsord, 2048)   # præcis BIP39; adgangsord valgfrit
+32 bytes of random entropy -> 24 words (BIP39's English word list, 8-bit checksum)
+seed   = PBKDF2-HMAC-SHA512(phrase, "mnemonic" + passphrase, 2048)   # exactly BIP39; passphrase optional
 master = HKDF-SHA256(salt "maarse/master/v1", seed, info "") -> 64 bytes
-identitet = Identity::from_secret_bytes(master)   # Ed25519-frø | X25519-nøgle
+identity = Identity::from_secret_bytes(master)   # Ed25519 seed | X25519 key
 ```
 
-Testvektor: "abandon × 23 art" uden adgangsord giver adressen `6ef182b74279e05122977ced600ae3e6`.
+Test vector: "abandon × 23 art" without a passphrase gives the address `6ef182b74279e05122977ced600ae3e6`.
 
-Klienten installerer identiteten med `SetIdentity` (`0x34`: flag (1 = bekræftet) | hemmelighed (64)), svar `IdentityChanged` (`0xB4`: adresse | offentlig identitet). Kommandoen virker kun lokalt (USB, Bluetooth, maarse-hosts WebSocket på 127.0.0.1) og afvises via `Remote`. Noden gemmer nøglen (firmware: identitetsfeltet i flash; maarse-host: `identity.key` skrives atomisk, den gamle gemmes som `identity.old`), glemmer ruter og forward secrecy-sessioner og sender et nyt announce. `0x35`–`0x37` og `0xB5`–`0xB7` er holdt fri til tilknyttede enheder.
+The client installs the identity with `SetIdentity` (`0x34`: flags (1 = confirmed) | secret (64)), reply `IdentityChanged` (`0xB4`: address | public identity). The command only works locally (USB, Bluetooth, maarse-host's WebSocket on 127.0.0.1) and is rejected via `Remote`. The node stores the key (firmware: the identity field in flash; maarse-host: `identity.key` is written atomically, the old one is kept as `identity.old`), forgets routes and forward secrecy sessions and sends a new announce. `0x35`–`0x37` and `0xB5`–`0xB7` are kept free for linked devices.
 
-Noden kan **ikke** udlevere sin hemmelige nøgle (ingen `GetIdentitySecret`): en identitet, der er oprettet tilfældigt (før frasen fandtes), kan derfor ikke sikkerhedskopieres. Vejen videre er at oprette en ny identitet med frase. Adressen skifter, og kontakter skal tilføje dig og bekræfte sikkerhedsnummeret igen.
+The node can **not** hand out its secret key (no `GetIdentitySecret`): an identity that was created at random (before the phrase existed) therefore cannot be backed up. The way forward is to create a new identity with a phrase. The address changes, and contacts must add you and confirm the safety number again.
 
-**Overgangsregel:** i dag ER nodens identitet frasens identitet, så samme frase giver samme adresse og sikkerhedsnummer. Senere, med *tilknyttede enheder*, bliver frasen din master-identitet, og hver enhed får sin egen nøgle, som master underskriver (samme afledning, så nutidens fraser stadig gælder). Indtil da: **brug kun identiteten på én enhed ad gangen.** To noder med samme identitet forstyrrer ruter og forward secrecy-sessioner, så beskeder kan gå tabt.
+**Transition rule:** today the node's identity IS the phrase's identity, so the same phrase gives the same address and safety number. Later, with *linked devices*, the phrase becomes your master identity, and every device gets its own key, which the master signs (the same derivation, so today's phrases remain valid). Until then: **only use the identity on one device at a time.** Two nodes with the same identity disturb routes and forward secrecy sessions, so messages can be lost.
 
-**Krypteret eksport (`.maarse-backup`)** indeholder klientens tilstand: kaldenavne, kontakternes nøgler og bekræftelser, private kanaler (med nøgler), regioner, rolle og deling. Identiteten er ikke med (den gendannes med frasen). Filen er JSON: `{format: "maarse-backup", v: 1, kdf: "PBKDF2-SHA256", iter: 600000, salt, cipher: "AES-256-GCM", iv, ct}` (base64). Hovedet er AAD, så parametrene ikke kan ændres ubemærket. Adgangskoden skal have mindst 12 tegn. Vi bruger PBKDF2 (600.000 runder, OWASP's anbefaling for PBKDF2-HMAC-SHA256) i WebCrypto i stedet for Argon2id, fordi Argon2id kræver WASM eller en langsom JS-implementering på flere hundrede linjer. Er filen lille nok, vises den også som QR-kode. Ved import flettes tilstanden ind, og private kanaler, regioner, deling og rolle sendes til noden igen.
+**Encrypted export (`.maarse-backup`)** contains the client's state: nicknames, the contacts' keys and confirmations, private channels (with keys), regions, role and sharing. The identity is not included (it is restored with the phrase). The file is JSON: `{format: "maarse-backup", v: 1, kdf: "PBKDF2-SHA256", iter: 600000, salt, cipher: "AES-256-GCM", iv, ct}` (base64). The header is AAD, so the parameters cannot be changed unnoticed. The password must have at least 12 characters. We use PBKDF2 (600,000 rounds, OWASP's recommendation for PBKDF2-HMAC-SHA256) in WebCrypto instead of Argon2id, because Argon2id needs WASM or a slow JS implementation of several hundred lines. If the file is small enough, it is also shown as a QR code. On import the state is merged in, and private channels, regions, sharing and role are sent to the node again.
 
-## MQTT og Home Assistant
+## MQTT and Home Assistant
 
 ```
-maarse-host --mqtt 127.0.0.1:1883 [--mqtt-prefix maarse] [--mqtt-user navn --mqtt-pass kode]
+maarse-host --mqtt 127.0.0.1:1883 [--mqtt-prefix maarse] [--mqtt-user name --mqtt-pass password]
 ```
 
-Hosten sender modtaget telemetri, positioner og kanalbeskeder som JSON (QoS 0, med en lille indbygget MQTT 3.1.1-klient uden ekstra afhængigheder):
+The host publishes received telemetry, positions and channel messages as JSON (QoS 0, with a small built-in MQTT 3.1.1 client without extra dependencies):
 
-| Emne | Indhold |
+| Topic | Content |
 | --- | --- |
-| `maarse/status` | `online`/`offline` (will, bevares) |
-| `maarse/node/<adresse>/telemetry` | `{"battery_mv":3870,"battery_v":3.870,"battery_percent":70,"ext_power":false,"energy":2,"uptime_s":61,...}` |
-| `maarse/node/<adresse>/position` | `{"lat":56.155,"lon":10.215,"precision":"1km",...}` |
-| `maarse/channel/<kanal>` | `{"channel":"#aarhus","from":"…","hops":1,"text":"…"}` |
+| `maarse/status` | `online`/`offline` (will, retained) |
+| `maarse/node/<address>/telemetry` | `{"battery_mv":3870,"battery_v":3.870,"battery_percent":70,"ext_power":false,"energy":2,"uptime_s":61,...}` |
+| `maarse/node/<address>/position` | `{"lat":56.155,"lon":10.215,"precision":"1km",...}` |
+| `maarse/channel/<channel>` | `{"channel":"#aarhus","from":"…","hops":1,"text":"…"}` |
 
-Første gang en node sender telemetri, udgives Home Assistant discovery (`homeassistant/sensor/maarse_<kort adresse>/<sensor>/config`) for batterispænding, batteri %, energistatus, oppetid, temperatur og hop, samlet som én enhed pr. node.
+The first time a node sends telemetry, Home Assistant discovery is published (`homeassistant/sensor/maarse_<short address>/<sensor>/config`) for battery voltage, battery %, energy status, uptime, temperature and hops, grouped as one device per node.
 
-## Visningsnavn
+## Display name
 
-Under **Diagnose → Dit navn** i webklienten kan man vælge et navn på højst 24 bytes (kommando `0x24 SetName`, `0x25 GetName`, svar `0xa4 Name`). Navnet sendes i announcets app-data som felt `0x05 | længde | UTF-8` (`maarse-core/src/appdata.rs`), så ældre noder springer det over. maarse-host gemmer det i `<data>/navn.txt`, firmwaren i flash.
+Under **Diagnostics → Your name** in the web client you can choose a name of at most 24 bytes (command `0x24 SetName`, `0x25 GetName`, reply `0xa4 Name`). The name is sent in the announce's app data as field `0x05 | length | UTF-8` (`maarse-core/src/appdata.rs`), so older nodes skip it. maarse-host stores it in `<data>/name.txt`, the firmware in flash.
 
-Andres navne kommer med i `NodeInfo` (`0xa3`) og vises i webklienten med `~` foran, fx `~Dennis`. Et kaldenavn, man selv har givet kontakten, vinder. Styretegn fjernes, og navnet afkortes uden at skære et tegn over. MeshCore-broen viser navnet som `[Må Dennis]`, med klammer fjernet fra navnet.
+Other people's names come with `NodeInfo` (`0xa3`) and are shown in the web client with `~` in front, e.g. `~Dennis`. A nickname you have given the contact yourself wins. Control characters are removed, and the name is truncated without cutting a character in half. The MeshCore bridge shows the name as `[Må Dennis]`, with brackets removed from the name.
 
-**Et navn beviser ikke noget.** Alle kan kalde sig hvad som helst. Brug sikkerhedsnummeret, når det er vigtigt, hvem man skriver med.
+**A name proves nothing.** Anyone can call themselves anything. Use the safety number when it matters who you are writing with.
 
-## Talebeskeder
+## Voice messages
 
-Tryk på 🎤 i en direkte samtale for at optage og igen for at sende (højst 20 sekunder). Webklienten nedsampler til 8 kHz og koder med **Codec2 ved 1200 bit/s**: 10 sekunder fylder ca. 1,5 KB og kan sendes over LoRa som en almindelig fil (MIME `audio/x-codec2`). Modtageren afkoder og viser en afspiller.
+Tap 🎤 in a direct conversation to record and again to send (at most 20 seconds). The web client downsamples to 8 kHz and encodes with **Codec2 at 1200 bit/s**: 10 seconds take about 1.5 KB and can be sent over LoRa as an ordinary file (MIME `audio/x-codec2`). The recipient decodes and shows a player.
 
-Codec2 kommer fra `maarse-voice`, en ren Rust-implementering (`codec2`-crate'en) kompileret til WebAssembly og lagt ind i `index.html` (ca. 96 KB base64). Byg den igen med `python tools/build_voice.py`, hvis `maarse-voice` ændres. Format: `"C2" | tilstand (5 = 1200 bit/s) | antal rammer (u16) | rammer` (6 bytes pr. 40 ms ved 1200 bit/s).
+Codec2 comes from `maarse-voice`, a pure Rust implementation (the `codec2` crate) compiled to WebAssembly and embedded in `index.html` (about 96 KB base64). Build it again with `python tools/build_voice.py` if `maarse-voice` changes. Format: `"C2" | mode (5 = 1200 bit/s) | frame count (u16) | frames` (6 bytes per 40 ms at 1200 bit/s).
 
-Host og firmware kender ikke formatet; de sender bare filen.
+Host and firmware do not know the format; they just send the file.
 
-## Opkald (Opus over TCP)
+## Calls (Opus over TCP)
 
-I en direkte samtale via maarse-host viser webklienten **Ring op**. Lyden kodes med WebCodecs (Opus, 16 kbit/s, 20 ms-rammer, tre pr. besked) og sendes krypteret som indholdstype `0x06` (kommando `0x27 SendCall`, hændelse `0xa5 Call`). Hosten sender kun opkald, når modtageren nås over TCP hele vejen; ellers svarer den `NOT_OVER_TCP` (fejlkode 9), og opkald over LoRa er derfor ikke muligt. Firmware-noder afviser kommandoen. Indholdet: type (1 ring op, 2 svar, 3 læg på, 4 lyd) | opkalds-ID (u32) | data; lyd er løbenummer (u16) og rammer med længde foran. Kræver Chrome eller Edge (WebCodecs).
+In a direct conversation via maarse-host the web client shows **Call**. The audio is encoded with WebCodecs (Opus, 16 kbit/s, 20 ms frames, three per message) and sent encrypted as content type `0x06` (command `0x27 SendCall`, event `0xa5 Call`). The host only sends calls when the recipient is reached over TCP all the way; otherwise it answers `NOT_OVER_TCP` (error code 9), so calls over LoRa are not possible. Firmware nodes reject the command. The content: type (1 call, 2 answer, 3 hang up, 4 audio) | call ID (u32) | data; audio is a sequence number (u16) and frames with a length in front. Needs Chrome or Edge (WebCodecs).
 
-## IP-tunnel
+## IP tunnel
 
-Hver node har en IPv6-adresse udledt af sin Må:rse-adresse (`fd` + de første 15 bytes); maarse-host skriver den ved opstart (`IP: fd…`). Detaljer i `maarse-host/src/tunnel.rs`.
+Every node has an IPv6 address derived from its Må:rse address (`fd` + the first 15 bytes); maarse-host prints it at start-up (`IP: fd…`). Details in `maarse-host/src/tunnel.rs`.
 
 ```text
 cargo build --release -p maarse-host --features tun
 maarse-host --tun                         # Linux (root); /dev/net/tun
-maarse-host --wintun C:\sti\wintun.dll     # Windows (administrator); wintun.dll fra wintun.net
-maarse-host ... --tun-lora                # tillad også tunnel over LoRa (ellers kun TCP)
+maarse-host --wintun C:\path\wintun.dll    # Windows (administrator); wintun.dll from wintun.net
+maarse-host ... --tun-lora                # also allow the tunnel over LoRa (otherwise TCP only)
 ```
 
-Optimeret til LoRa:
+Optimised for LoRa:
 
-- **Session:** en tilfældig nøgle sendes én gang krypteret (indholdstype `0x07`); derefter går IP-trafikken som `Datagram`-pakker (pakketype 10) med 28 bytes overhead og uden kvittering fra ende til ende. Nøglen skiftes hvert 5. minut, og gentagne pakker afvises.
-- **Header-komprimering:** IPv6-headeren (40 bytes) bliver 2-7 bytes, UDP-headeren 6.
-- **MSS-clamping:** TCP-SYN får MSS 142, så et segment passer i én LoRa-pakke.
-- **Opdeling og NACK:** større pakker deles i stykker; mangler der stykker efter 2 s, beder modtageren om netop dem.
+- **Session:** a random key is sent once encrypted (content type `0x07`); after that the IP traffic goes as `Datagram` packets (packet type 10) with 28 bytes of overhead and without end-to-end acknowledgement. The key changes every 5 minutes, and repeated packets are rejected.
+- **Header compression:** the IPv6 header (40 bytes) becomes 2-7 bytes, the UDP header 6.
+- **MSS clamping:** TCP SYN gets MSS 142, so a segment fits in one LoRa packet.
+- **Fragmentation and NACK:** larger packets are split into pieces; if pieces are missing after 2 s, the receiver asks for exactly those.
 
-En host uden adapter svarer selv på ping til sin adresse. Kun pakker fra afsenderens egen adresse til vores slippes igennem.
+A host without an adapter answers ping to its own address itself. Only packets from the sender's own address to ours are let through.
 
-Målt 14. november 2026 (Windows, Wintun; Heltec V4 ↔ XIAO nRF52840 på samme bord, SF9/125 kHz): `ping -6` over LoRa ca. **1,45 s** tur-retur (første 4,2 s inkl. rute og nøgle), 300 bytes (2 stykker hver vej) ca. 5,5 s. Over TCP: 3 ms. Ved SF7/250 kHz hørte Heltec'en ikke XIAO'en (kun den anden vej), så den hurtige indstilling er ikke målt endnu. Brug mosh frem for SSH over LoRa; web og filoverførsel er ikke realistisk.
+Measured 14 November 2026 (Windows, Wintun; Heltec V4 ↔ XIAO nRF52840 on the same table, SF9/125 kHz): `ping -6` over LoRa about **1.45 s** round trip (the first 4.2 s incl. route and key), 300 bytes (2 pieces each way) about 5.5 s. Over TCP: 3 ms. At SF7/250 kHz the Heltec did not hear the XIAO (only the other way), so the fast setting has not been measured yet. Use mosh rather than SSH over LoRa; web and file transfer are not realistic.
 
-## `maarse://`-sider
+## `maarse://` pages
 
-En maarse-host kan dele små sider, ligesom NomadNet. Læg filer i `<data>/sider/`:
+A maarse-host can share small pages, like NomadNet. Put files in `<data>/pages/`:
 
 ```text
-sider/index.mu          maarse://<adresse>/
-sider/om.mu             maarse://<adresse>/om
-sider/vejr/index.mu     maarse://<adresse>/vejr
+pages/index.mu          maarse://<address>/
+pages/about.mu          maarse://<address>/about
+pages/weather/index.mu  maarse://<address>/weather
 ```
 
-Webklienten har en **Sider**-knap med adresselinje, links, tilbage-knap og cache (de seneste 30 sider gemmes i browseren og kan læses uden forbindelse).
+The web client has a **Pages** button with an address bar, links, a back button and a cache (the latest 30 pages are kept in the browser and can be read without a connection).
 
-Sådan virker det (`maarse-core/src/content.rs`, `maarse-host/src/node/pages.rs`):
+How it works (`maarse-core/src/content.rs`, `maarse-host/src/node/pages.rs`):
 
-- Klienten sender `0x26 RequestPage {req, dest, path}`. Noden sender en krypteret direkte besked med indholdstype `0x05` og stien. Stier må kun indeholde `a-z 0-9 - _ . /`, højst 60 bytes, uden `..` og tomme led, så de ikke kan pege uden for mappen.
-- Hosten svarer med en almindelig fil: MIME `text/x-maarse-page;deflate`, stien som navn og markup komprimeret med rå deflate. Siden bruger derfor samme kvittering pr. bid og samme grænse som filer (8 KB komprimeret over LoRa, 1 MB over TCP). En side over grænsen erstattes af en kort fejlside.
-- Findes siden ikke, svares med en "Ikke fundet"-side. Samme node får højst 5 sider pr. 30 sekunder.
-- Klienten viser kun filer som sider, når den selv har bedt om netop den side fra netop den node. Andre filer med samme MIME vises som almindelige filer.
-- Firmware-noder kan hente sider (klienten er forbundet over USB eller Bluetooth), men serverer ikke selv.
+- The client sends `0x26 RequestPage {req, dest, path}`. The node sends an encrypted direct message with content type `0x05` and the path. Paths may only contain `a-z 0-9 - _ . /`, at most 60 bytes, without `..` and empty segments, so they cannot point outside the folder.
+- The host answers with an ordinary file: MIME `text/x-maarse-page;deflate`, the path as name and the markup compressed with raw deflate. The page therefore uses the same per-chunk acknowledgement and the same limit as files (8 KB compressed over LoRa, 1 MB over TCP). A page over the limit is replaced by a short error page.
+- If the page does not exist, the answer is a "Not found" page. The same node gets at most 5 pages per 30 seconds.
+- The client only shows files as pages when it has itself asked for exactly that page from exactly that node. Other files with the same MIME are shown as ordinary files.
+- Firmware nodes can fetch pages (the client is connected over USB or Bluetooth), but do not serve any themselves.
 
-Markup (`.mu`, UTF-8) er bevidst ikke HTML, så en side fra en fremmed ikke kan køre kode i klienten:
+Markup (`.mu`, UTF-8) is deliberately not HTML, so a page from a stranger cannot run code in the client:
 
 ```text
-# Overskrift (også ## og ###)
-Almindelig tekst. **fed** og `kode`.
-- punkt
-> citat
+# Heading (also ## and ###)
+Ordinary text. **bold** and `code`.
+- item
+> quote
 ---
-[Link til en anden side her](/om)
-[Link til en anden node](maarse://0123456789abcdef0123456789abcdef/)
-[Link ud af nettet](https://example.org)   vises som tekst, åbnes ikke
+[Link to another page here](/about)
+[Link to another node](maarse://0123456789abcdef0123456789abcdef/)
+[Link out of the net](https://example.org)   shown as text, not opened
 ```
 
-Kodeblokke skrives mellem linjer med tre backticks.
+Code blocks are written between lines with three backticks.
 
-## Gateway til MeshCore
+## Gateway to MeshCore
 
-`maarse-host` kan bygge bro til et eksisterende [MeshCore](https://github.com/meshcore-dev/MeshCore)-net, så Må:rse- og MeshCore-brugere kan skrive sammen. Hosten genimplementerer ikke MeshCores kryptering. Den styrer i stedet en almindelig MeshCore-node over USB med samme companion-protokol, som MeshCore-apps bruger.
+`maarse-host` can bridge to an existing [MeshCore](https://github.com/meshcore-dev/MeshCore) net, so Må:rse and MeshCore users can write to each other. The host does not reimplement MeshCore's encryption. Instead it drives an ordinary MeshCore node over USB with the same companion protocol MeshCore apps use.
 
-Opsætning:
+Setup:
 
-1. Flash en MeshCore-node (fx XIAO nRF52840, Heltec V3 eller RAK4631) med den officielle **Companion Radio (USB)**-firmware (`companion_radio_usb`) fra MeshCores web-flasher. BLE-varianten virker ikke, for hosten taler over seriel.
-2. Sæt radioindstillingerne (frekvens, SF, BW) som det lokale MeshCore-net, fx med MeshCore-appen, og giv noden et navn som `Må:rse-gateway`. Luk så appen, for kun én kan bruge porten ad gangen.
-3. Start hosten:
+1. Flash a MeshCore node (e.g. XIAO nRF52840, Heltec V3 or RAK4631) with the official **Companion Radio (USB)** firmware (`companion_radio_usb`) from MeshCore's web flasher. The BLE variant does not work, because the host talks over serial.
+2. Set the radio settings (frequency, SF, BW) like the local MeshCore net, e.g. with the MeshCore app, and give the node a name like `Må:rse-gateway`. Then close the app, because only one can use the port at a time.
+3. Start the host:
 
 ```
 maarse-host --meshcore COM5
-maarse-host --meshcore /dev/ttyACM0 --meshcore-bridge offentlig=public --meshcore-bridge #aarhus=#aarhus
+maarse-host --meshcore /dev/ttyACM0 --meshcore-bridge public=public --meshcore-bridge #aarhus=#aarhus
 ```
 
-- `--meshcore <port>`: porten med MeshCore-noden.
-- `--meshcore-baud <hastighed>`: standard 115200.
-- `--meshcore-bridge <maarse-kanal>=<meshcore-kanal>`: kobler to kanaler sammen (kan gentages). `public` er MeshCores offentlige kanal, `#navn` en hashtagkanal. Uden `=` bruges samme navn på begge sider. Står valget der ikke, kobles `offentlig=public`.
+- `--meshcore <port>`: the port with the MeshCore node.
+- `--meshcore-baud <speed>`: default 115200.
+- `--meshcore-bridge <maarse-channel>=<meshcore-channel>`: links two channels (can be repeated). `public` is MeshCore's public channel, `#name` a hashtag channel. Without `=` the same name is used on both sides. If the option is not given, `public=public` is linked.
 
-Sådan virker broen:
+How the bridge works:
 
-- Beskeder får afsenderen foran: `[MC Alice] hej` på Må:rse og `[Må 1a2b3c4d] hej` i MeshCore (Må:rse-afsenderen vises med de første 8 hex-tegn af adressen). I MeshCore står gateway-nodens navn også foran, fordi MeshCore altid sætter afsenderens navn på kanalbeskeder.
-- Mangler en hashtagkanal på MeshCore-noden, oprettes den på en ledig kanalplads med nøglen SHA-256("#navn")[0..16], som MeshCore-apps bruger. Optagne pladser røres ikke.
-- Løkker undgås: tekst, der allerede er brobygget (`[MC …`/`[Må …`), sendes ikke videre, og samme tekst i samme kanal brobygges højst én gang på 5 minutter. Så kan to gateways på samme net ikke sende en besked i ring.
-- Direkte beskeder: send en Må:rse-DM til gatewayens adresse med `@Navn tekst`, så går den til MeshCore-kontakten `Navn`. Kontakten skal være kendt af MeshCore-noden, dvs. den har hørt dens advert. Svar går tilbage til den seneste Må:rse-afsender. En MeshCore-bruger kan også skrive `@<Må:rse-adresse> tekst` til gateway-noden.
+- Messages get the sender in front: `[MC Alice] hi` on Må:rse and `[Må 1a2b3c4d] hi` in MeshCore (the Må:rse sender is shown with the first 8 hex characters of the address). In MeshCore the gateway node's name is also in front, because MeshCore always puts the sender's name on channel messages.
+- If a hashtag channel is missing on the MeshCore node, it is created in a free channel slot with the key SHA-256("#name")[0..16], which MeshCore apps use. Occupied slots are not touched.
+- Loops are avoided: text that has already been bridged (`[MC …`/`[Må …`) is not passed on, and the same text in the same channel is bridged at most once in 5 minutes. So two gateways on the same net cannot send a message round in a circle.
+- Direct messages: send a Må:rse DM to the gateway's address with `@Name text`, and it goes to the MeshCore contact `Name`. The contact must be known to the MeshCore node, i.e. it has heard its advert. Replies go back to the latest Må:rse sender. A MeshCore user can also write `@<Må:rse address> text` to the gateway node.
 
-Begrænsninger:
+Limitations:
 
-- Beskeder, der skrives i webklienten på selve gateway-hosten, brobygges ikke, fordi noden ikke sender ens egne kanalbeskeder tilbage til klienter. Skriv fra en anden Må:rse-node.
-- Kun offentlige kanaler og hashtagkanaler. Private kanaler, filer, lokation og MeshCores rum-servere og repeater-administration understøttes ikke.
-- MeshCore-tekst er højst 160 bytes inklusive gateway-navnet, så lange Må:rse-beskeder afkortes.
-- Kvitteringer krydser ikke broen. En DM, der er nået frem til gatewayen, siger ikke noget om, om den er nået frem på den anden side.
-- Afprøvet på hardware 14. november 2026: Heltec V4.3 med MeshCore `companion_radio_usb` (firmware 15. okt. 2026), kanalbeskeder begge veje mellem `offentlig` og `public`, også med visningsnavn. Direkte beskeder og hashtagkanaler er kun testet mod rammer udledt af MeshCores kildekode.
+- Messages written in the web client on the gateway host itself are not bridged, because the node does not send your own channel messages back to clients. Write from another Må:rse node.
+- Only public channels and hashtag channels. Private channels, files, location and MeshCore's room servers and repeater administration are not supported.
+- MeshCore text is at most 160 bytes including the gateway name, so long Må:rse messages are truncated.
+- Acknowledgements do not cross the bridge. A DM that has reached the gateway says nothing about whether it has arrived on the other side.
+- Tried on hardware 14 November 2026: Heltec V4.3 with MeshCore `companion_radio_usb` (firmware 15 Oct 2026), channel messages both ways between `public` (Må:rse) and `public` (MeshCore), also with a display name. Direct messages and hashtag channels are only tested against frames derived from MeshCore's source code.
 
-## Test
+## Tests
 
 ```sh
 cargo test --workspace                  # 180 tests
 cargo build --release -p maarse-host
 python tools/e2e_test.py target/release/maarse-host
 python tools/dht_test.py target/release/maarse-host
-node tools/safety_number_test.mjs        # sikkerhedsnummer i JS = Rust
-node tools/recovery_phrase_test.mjs      # gendannelsesfrase og sikkerhedskopi i JS = Rust
-node tools/client_syntax_test.mjs        # webklientens JavaScript kan parses
-node tools/client_browser_test.mjs target/release/maarse-host   # webklienten i Edge/Chrome: indlæsning, forbindelse, sider, tale
+node tools/safety_number_test.mjs        # safety number in JS = Rust
+node tools/recovery_phrase_test.mjs      # recovery phrase and backup in JS = Rust
+node tools/client_syntax_test.mjs        # the web client's JavaScript parses
+node tools/client_browser_test.mjs target/release/maarse-host   # the web client in Edge/Chrome: loading, connection, pages, voice
 cargo run --release -p maarse-sim -- --help
 ```
 
-Ende-til-ende-testen starter tre noder (A, B og en postkasse P) og afprøver:
-- beskeder begge veje,
-- en kanalbesked,
-- en besked i en privat kanal (tilfældig nøgle), som B stadig kender efter genstart,
-- en fil på 20 KB, der bliver verificeret,
-- en for stor fil, der bliver afvist,
-- at B går offline, beskeden lægges i postkassen, og B henter den, når den kommer online igen,
-- at en fil på 20 KB til B, mens B er offline, lægges i A's filpostkasse og leveres og verificeres, når B kommer tilbage (og at grænsen så er 1 MB over TCP),
-- at en fil på 20 KB afvises, når ruten må regnes som LoRa (8 KB),
-- fjernadministration: en administrator får adgang, og en anden node bliver afvist,
-- at en fremmed hjemmeside ikke kan forbinde.
-- historik med flere skærme på samme host: en besked sendt fra skærm 1 vises live på skærm 2, en ny skærm 3 henter historikken (i sider, med kvittering), og "læst" sendes til alle skærme.
+The end-to-end test starts three nodes (A, B and a mailbox P) and tests:
+- messages both ways,
+- a channel message,
+- a message in a private channel (random key) that B still knows after a restart,
+- a 20 KB file that is verified,
+- a too large file that is rejected,
+- that B goes offline, the message goes into the mailbox, and B fetches it when it comes online again,
+- that a 20 KB file for B while B is offline goes into A's file mailbox and is delivered and verified when B comes back (and that the limit is then 1 MB over TCP),
+- that a 20 KB file is rejected when the route must be counted as LoRa (8 KB),
+- remote administration: an administrator gets access, and another node is rejected,
+- that a foreign web site cannot connect.
+- history with several screens on the same host: a message sent from screen 1 shows up live on screen 2, a new screen 3 fetches the history (in pages, with acknowledgement), and "read" is sent to all screens.
 
-DHT-testen starter tre backbone-hosts (B1, B2 og B3) uden pakkeforbindelse til hinanden, kun med B1 som DHT-startpunkt, samt A på B2 og C på B3. A skriver til C, som A aldrig har hørt, og beskeden kommer frem med kvittering. Svaret kommer også tilbage.
+The DHT test starts three backbone hosts (B1, B2 and B3) without packet connection to each other, only with B1 as DHT bootstrap, plus A on B2 and C on B3. A writes to C, which A has never heard, and the message arrives with an acknowledgement. The reply comes back too.
 
-Webklienten er også testet i en headless Chrome: tekst, billede og kanal mellem to noder, status- og radiosiden, og mobillayout. Sikkerhedsnumre (ens på begge sider, markér som bekræftet) og private kanaler (opret, del invitation, deltag, send) er testet i en headless Edge.
+The web client has also been tested in a headless Chrome: text, picture and channel between two nodes, the status and radio pages, and the mobile layout. Safety numbers (the same on both sides, mark as confirmed) and private channels (create, share invitation, join, send) have been tested in a headless Edge.
 
 ### Fuzzing
 
-Alle dekodere, der læser bytes udefra, fuzzes med en lille, portabel motor i `maarse-fuzz` (deterministisk PRNG og mutator, ingen eksterne værktøjer; virker også på Windows/MSVC, hvor cargo-fuzz/libFuzzer ikke er pålidelig). Hvert mål kører halvt helt tilfældige input og halvt mutationer af gyldige rammer, og hvor det giver mening tjekkes det også, at dekodet input kan kodes og dekodes igen uændret.
+All decoders that read bytes from outside are fuzzed with a small, portable engine in `maarse-fuzz` (deterministic PRNG and mutator, no external tools; also works on Windows/MSVC, where cargo-fuzz/libFuzzer is not reliable). Every target runs half completely random inputs and half mutations of valid frames, and where it makes sense it is also checked that decoded input can be encoded and decoded again unchanged.
 
-Mål: `Packet::decode`, companion `Command::decode`/`Event::decode`, `FrameDecoder` (strøm klippet i tilfældige stykker), `content::parse`, `verify_announce`, `open_direct`, `open_channel`, `open_chunk`, og DHT'ens `decode_req`/`decode_resp` (inkl. validering og lagring af STORE).
+Targets: `Packet::decode`, companion `Command::decode`/`Event::decode`, `FrameDecoder` (stream cut into random pieces), `content::parse`, `verify_announce`, `open_direct`, `open_channel`, `open_chunk`, and the DHT's `decode_req`/`decode_resp` (incl. validation and storing of STORE).
 
 ```sh
-cargo test -p maarse-fuzz --release                     # 100 000 input pr. mål
+cargo test -p maarse-fuzz --release                     # 100 000 inputs per target
 cargo test -p maarse-host --release fuzz_
-MAARSE_FUZZ_ITERS=20000000 cargo test -p maarse-fuzz --release -- --nocapture   # længere kørsel
-MAARSE_FUZZ_SEED=42 cargo test -p maarse-fuzz --release                         # andet frø
+MAARSE_FUZZ_ITERS=20000000 cargo test -p maarse-fuzz --release -- --nocapture   # longer run
+MAARSE_FUZZ_SEED=42 cargo test -p maarse-fuzz --release                         # another seed
 ```
 
-Ved en fejl skrives frø, iteration og input i hex, så den kan genskabes og lægges ind som regressionstest.
+On a failure the seed, iteration and input are written in hex, so it can be reproduced and added as a regression test.
 
 ## Simulator
 
-| Scenarie | Tilstand | Leveret | Kvitteret | Median | Sendetid |
+| Scenario | Mode | Delivered | Acknowledged | Median | Airtime |
 | --- | --- | --- | --- | --- | --- |
-| 120 noder, 30×30 km (3 frø) | Må:rse | 100 % | 98–100 % | 2,3–2,6 s | 341–363 s |
-| | flood, 7 hop | 92–100 % | 73–83 % | 5,0–6,5 s | 1.703–1.789 s |
-| 200 noder (40 repeatere), 60×60 km (3 frø) | Må:rse | 92–95 % | 73–93 % | 5,2–9,2 s | 889–995 s |
-| | flood, 7 hop | 65–83 % | 57–70 % | 5,2–7,0 s | 2.887–3.170 s |
-| Motorvej 100 km, bil i 110 km/t (3 frø) | Må:rse | 100 % | 100 % | 3,8–3,9 s | 313–318 s |
-| | flood, 7 hop | 88–95 % | 52–63 % | 4,7–5,4 s | 1.573–1.643 s |
+| 120 nodes, 30×30 km (3 seeds) | Må:rse | 100 % | 98–100 % | 2.3–2.6 s | 341–363 s |
+| | flood, 7 hops | 92–100 % | 73–83 % | 5.0–6.5 s | 1,703–1,789 s |
+| 200 nodes (40 repeaters), 60×60 km (3 seeds) | Må:rse | 92–95 % | 73–93 % | 5.2–9.2 s | 889–995 s |
+| | flood, 7 hops | 65–83 % | 57–70 % | 5.2–7.0 s | 2,887–3,170 s |
+| Motorway 100 km, car at 110 km/h (3 seeds) | Må:rse | 100 % | 100 % | 3.8–3.9 s | 313–318 s |
+| | flood, 7 hops | 88–95 % | 52–63 % | 4.7–5.4 s | 1,573–1,643 s |
 
 ```sh
-cargo run --release -p maarse-sim -- --seed 1                                    # 120 noder
+cargo run --release -p maarse-sim -- --seed 1                                    # 120 nodes
 cargo run --release -p maarse-sim -- --nodes 200 --repeaters 40 --area-km 60 --seed 1
 cargo run --release -p maarse-sim -- --highway --seed 1
-# tilføj --mode flood for sammenligningen; DEBUG_ACK=1 viser, hvor svar går tabt
+# add --mode flood for the comparison; DEBUG_ACK=1 shows where replies are lost
 ```
 
-Må:rse leverer flere beskeder end flood med en tredjedel til en femtedel af sendetiden, og håndterer bilen på motorvejen.
+Må:rse delivers more messages than flood with a third to a fifth of the airtime, and handles the car on the motorway.
 
-**Store, tynde net (v0.5).** Før leverede 200-node-nettet 78–92 % og kvitterede kun 35–53 % (snit over 24 frø: 83 % / 50 %, 1.453 s sendetid). Diagnosen (`DEBUG_ACK=1`): næsten alle beskeder rejser med ruteforespørgslen, så kvitteringen er ruteforespørgslens svar. Svaret gik tabt allerede på første hop tilbage, i 60 % af forsøgene i kollision med *andre ruteforespørgsler*. Afsenderen gentog nemlig sin forespørgsel efter 15 s, mens svaret stadig var på vej over mange hop med gensendelser; hvert nyt flood overdøvede svaret og gav anledning til endnu en gentagelse. To ændringer, begge uden ændring af pakkeformatet eller af routerens RAM-forbrug:
+**Large, sparse nets (v0.5).** Before, the 200-node net delivered 78–92 % and acknowledged only 35–53 % (average over 24 seeds: 83 % / 50 %, 1,453 s airtime). The diagnosis (`DEBUG_ACK=1`): almost all messages travel with the path request, so the acknowledgement is the path request's reply. The reply was lost already on the first hop back, in 60 % of the attempts in a collision with *other path requests*. The sender repeated its request after 15 s while the reply was still on its way over many hops with retransmissions; every new flood drowned the reply and caused yet another repeat. Two changes, both without changing the packet format or the router's RAM use:
 
-1. **Ruteforespørgsler gentages efter 45 s i stedet for 15 s.** Snit over 24 frø: 92 % leveret, 82 % kvitteret.
-2. **Flood-dæmpning tæller kun stærke kopier.** En repeater tier nu, så snart den har hørt én kopi med god SNR (over `weak_snr_db`) fra en nabo; svage kopier kommer langvejsfra og tæller ikke. Før tav den efter to kopier uanset SNR. Det halverer floods i tætte net og dæmper dem i tynde, og kanalbeskeder når længere ud (snit over 6 frø: 65 → 74 % af noderne i det tynde net, 84 → 98 % i det tætte). At tie efter én vilkårlig kopi fik derimod floodet til at dø ud på motorvejen.
+1. **Path requests are repeated after 45 s instead of 15 s.** Average over 24 seeds: 92 % delivered, 82 % acknowledged.
+2. **Flood suppression only counts strong copies.** A repeater now stays quiet as soon as it has heard one copy with good SNR (above `weak_snr_db`) from a neighbour; weak copies come from far away and do not count. Before, it stayed quiet after two copies regardless of SNR. That halves floods in dense nets and dampens them in sparse ones, and channel messages reach further (average over 6 seeds: 65 → 74 % of the nodes in the sparse net, 84 → 98 % in the dense one). Staying quiet after any single copy, on the other hand, made the flood die out on the motorway.
 
-Samlet, snit over 24 frø for det tynde net: 94 % leveret, 89 % kvitteret, 901 s sendetid. Resten af tabet er hop over svage led (under 5 dB margen går 40–70 % af dem tabt i kollision). At udskyde forespørgsler over svage led, så stærke led vælges, gav ikke flere kvitteringer, gav længere ruter og ødelagde motorvejen, så det er ikke med. Det samme gælder længere ventetid før svaret, voksende pause mellem hop-gensendelser og flere hop-gensendelser (6 i stedet for 4): ingen målbar forskel.
+Together, average over 24 seeds for the sparse net: 94 % delivered, 89 % acknowledged, 901 s airtime. The rest of the loss is hops over weak links (below a 5 dB margin, 40–70 % of them are lost to collisions). Delaying requests over weak links, so strong links are chosen, gave no more acknowledgements, gave longer routes and broke the motorway, so it is not included. The same goes for a longer wait before the reply, a growing pause between hop retransmissions and more hop retransmissions (6 instead of 4): no measurable difference.
 
-Radiomodellen er grov (log-distance, ingen terræn). Tallene er til at sammenligne varianter.
+The radio model is rough (log-distance, no terrain). The numbers are for comparing variants.
 
-## Testlaboratorium (maarse-lab)
+## Test lab (maarse-lab)
 
-Alle tests, fuzzing, simulatorscenarier og benchmarks kan køres og ses live i browseren:
+All tests, fuzzing, simulator scenarios and benchmarks can be run and watched live in the browser:
 
 ```sh
-cargo run --release -p maarse-lab                 # åbner http://127.0.0.1:8090
+cargo run --release -p maarse-lab                 # opens http://127.0.0.1:8090
 cargo run --release -p maarse-lab -- --no-browser --addr 127.0.0.1:8095
-cargo run --release -p maarse-lab -- --port COM6 --port COM7   # også rigtige boards
+cargo run --release -p maarse-lab -- --port COM6 --port COM7   # real boards too
 ```
 
-- **Testoversigt:** hver suite med en kort beskrivelse af, hvad den tester: `cargo test` pr. crate (med alle testnavne), `maarse-fuzz`, `e2e_test.py`, `dht_test.py`, `radio_test.py` (kræver boards og `--port`), simulatorscenarierne (Må:rse og flood) og stempel-benchmarket. "Kør" pr. suite eller "Kør alt". Output streames live, og hver test bliver grøn eller rød med tid.
-- **Simulator live:** kører `maarse-sim --trace-json -` og animerer nettet på et kort: noder (farvet efter rolle eller brugt sendetid), radioforbindelser (tydeligere ved bedre SNR), udsendelser som ringe i pakketypens farve, kollisioner, leveringer og bilen på motorvejen. Hastighed 0,25×–50×, pause og trin, og Må:rse og flood side om side med samme frø.
-- **Hardware:** med `--port` vises boardenes RSSI/SNR, tx/rx, radiotrin, rolle og radioindstillinger live via companion-protokollen. Uden `--port` åbnes ingen porte. Pollingen holder pause, mens `radio_test.py` kører.
-- **Historik:** de seneste kørsler gemmes i `maarse-lab-data/history.json` og vises som udvikling over tid (fx leveret % pr. scenarie og forsøg/s for arbejdsbeviset).
+- **Test overview:** every suite with a short description of what it tests: `cargo test` per crate (with all test names), `maarse-fuzz`, `e2e_test.py`, `dht_test.py`, `radio_test.py` (needs boards and `--port`), the simulator scenarios (Må:rse and flood) and the stamp benchmark. "Run" per suite or "Run all". Output is streamed live, and every test turns green or red with its time.
+- **Simulator live:** runs `maarse-sim --trace-json -` and animates the net on a map: nodes (coloured by role or by airtime used), radio links (stronger for better SNR), transmissions as rings in the packet type's colour, collisions, deliveries and the car on the motorway. Speed 0.25×–50×, pause and step, and Må:rse and flood side by side with the same seed.
+- **Hardware:** with `--port` the boards' RSSI/SNR, tx/rx, radio step, role and radio settings are shown live via the companion protocol. Without `--port` no ports are opened. Polling pauses while `radio_test.py` runs.
+- **History:** the latest runs are stored in `maarse-lab-data/history.json` and shown as a trend over time (e.g. delivered % per scenario and attempts/s for the proof of work).
 
-Simulatorens hændelsesspor (`--trace-json <fil|->`) er én JSON-linje pr. hændelse: `setup` (positioner og roller), `links` (hørbare par med SNR), `tx`, `rx` (modtagere og kollisioner), `defer` (duty cycle eller optaget kanal), `send`, `deliver`, `ack`, `move` og `end`. Formatet er beskrevet i `maarse-sim/src/trace.rs`.
+The simulator's event trace (`--trace-json <file|->`) is one JSON line per event: `setup` (positions and roles), `links` (audible pairs with SNR), `tx`, `rx` (receivers and collisions), `defer` (duty cycle or busy channel), `send`, `deliver`, `ack`, `move` and `end`. The format is described in `maarse-sim/src/trace.rs`.
 
-## Firmware: status og hvad mangler
+## Firmware: status and what is missing
 
-- **Intet er afprøvet på hardware endnu.**
-- **nRF52840:** kompileret for begge boards (ca. 270 KB flash, 95 KB RAM). Bluetooth (Nordic UART) er med.
-  - WisMesh Tag: app ved 0x26000 (S140 v6).
-  - XIAO: app ved 0x27000 (S140 v7).
-  - Flash-placering: app højst til 0x88000, mellemlager til opdatering 0x88000–0xE8FFF, OTA-metaside 0xE9000, postkasse ved 0xEA000–0xEBFFF, indstillinger ved 0xEC000 (se "Firmwareopdatering").
-- **ESP32-S3:** bygget for begge boards med Espressifs Xtensa-værktøjskæde (ca. 550 KB app på Heltec V4, heraf ca. 220 KB til Bluetooth; app-partitionen er 2 MB). `--features check-esp32c6` type-tjekker stadig koden mod ESP32-C6.
-  - Indstillinger og postkasse ligger i partitionen `maarse` ved 0x210000 (se `firmware/esp/partitions.csv`). Appen ligger i `ota_0`/`ota_1` (se "Firmwareopdatering").
-  - Heltec V4: standard-sendestyrken er 10 dBm, fordi PA'en lægger ca. 7–10 dB oveni. PA-styringen (GPIO7/2/46) følger Meshtastic for GC1109-udgaven. Har dit board KCT8103L (nyere V4), skal styringen måske justeres.
-  - Bluetooth (Nordic UART) er med: esp-radios BLE-controller med TrouBLE som host, samme GATT-tjeneste, rammer og navn (`Maarse-xxxx`) som på nRF. Controlleren bruger en heap på 72 KB (esp-alloc). Ikke afprøvet på hardware, især ikke samspillet med LoRa og USB.
-- **Mangler:** filer over LoRa på firmware og segmenterede stier over 12 hop.
-- **Afprøv på hardware (batteri og diagnose):** sammenlign batterispændingen på status-siden med et multimeter på hvert board (justér faktoren i `firmware/*/src/battery.rs` ved afvigelse over ca. 50 mV); træk USB ud og se USB-strøm skifte (nRF); se energistatus falde under 3,6/3,4 V (fx med et laboratorieaggregat); trace route over 2–3 repeatere og tjek, at SNR-værdierne svarer til status-sidens; naboliste efter et announce; støjgulv i et stille og et støjende miljø; position med 1 km-præcision vist afrundet hos en anden node.
-- Ben-tildelingen er hentet fra Meshtastics board-filer.
+- **Nothing has been tried on hardware yet.**
+- **nRF52840:** compiled for both boards (about 270 KB flash, 95 KB RAM). Bluetooth (Nordic UART) is included.
+  - WisMesh Tag: app at 0x26000 (S140 v6).
+  - XIAO: app at 0x27000 (S140 v7).
+  - Flash placement: app at most up to 0x88000, staging area for updates 0x88000–0xE8FFF, OTA meta page 0xE9000, mailbox at 0xEA000–0xEBFFF, settings at 0xEC000 (see "Firmware updates").
+- **ESP32-S3:** built for both boards with Espressif's Xtensa toolchain (about 550 KB app on the Heltec V4, of which about 220 KB for Bluetooth; the app partition is 2 MB). `--features check-esp32c6` still type-checks the code against the ESP32-C6.
+  - Settings and mailbox are in the partition `maarse` at 0x210000 (see `firmware/esp/partitions.csv`). The app is in `ota_0`/`ota_1` (see "Firmware updates").
+  - Heltec V4: the default transmit power is 10 dBm, because the PA adds about 7–10 dB on top. The PA control (GPIO7/2/46) follows Meshtastic for the GC1109 version. If your board has the KCT8103L (newer V4), the control may need adjusting.
+  - Bluetooth (Nordic UART) is included: esp-radio's BLE controller with TrouBLE as host, the same GATT service, frames and name (`Maarse-xxxx`) as on nRF. The controller uses a 72 KB heap (esp-alloc). Not tried on hardware, especially not the interplay with LoRa and USB.
+- **Missing:** files over LoRa on firmware and segmented paths over 12 hops.
+- **Try on hardware (battery and diagnostics):** compare the battery voltage on the status page with a multimeter on each board (adjust the factor in `firmware/*/src/battery.rs` if it is off by more than about 50 mV); unplug USB and watch USB power change (nRF); watch the energy status drop below 3.6/3.4 V (e.g. with a bench supply); trace route over 2–3 repeaters and check that the SNR values match the status page's; neighbour list after an announce; noise floor in a quiet and a noisy environment; position with 1 km precision shown rounded at another node.
+- The pin assignments are taken from Meshtastic's board files.
 
-## Firmwareopdatering (signeret, over USB, Bluetooth og nettet)
+## Firmware updates (signed, over USB, Bluetooth and the net)
 
-Så sol-repeatere i marken kan opdateres uden at blive hentet ind. **Ikke afprøvet på hardware endnu** (se tjeklisten nedenfor).
+So solar repeaters in the field can be updated without being brought in. **Not tried on hardware yet** (see the checklist below).
 
-**Signering.** En udgivelse er et image og et manifest på 112 bytes: board-ID, version, størrelse, SHA-256 og en Ed25519-signatur (formatet står i `maarse-crypto/src/ota.rs`). Noden installerer kun, når signaturen passer med udgivelsesnøglen i firmwaren, board-ID passer, og versionen er nyere end den kørende (anti-rollback). Kun lokalt (USB/Bluetooth) kan en ældre version tillades med et flag; via nettet ignoreres flaget.
+**Signing.** A release is an image and a 112-byte manifest: board ID, version, size, SHA-256 and an Ed25519 signature (the format is in `maarse-crypto/src/ota.rs`). The node only installs when the signature matches the release key in the firmware, the board ID matches, and the version is newer than the running one (anti-rollback). Only locally (USB/Bluetooth) can an older version be allowed with a flag; via the net the flag is ignored.
 
 ```sh
-cargo run -p maarse-uf2 --bin maarse-sign -- keygen release.key       # én gang; skriver den offentlige nøgle
-export MAARSE_RELEASE_PUBKEY=<hex>  MAARSE_FW_VERSION=0.2.0           # bygges ind i firmwaren
+cargo run -p maarse-uf2 --bin maarse-sign -- keygen release.key       # once; prints the public key
+export MAARSE_RELEASE_PUBKEY=<hex>  MAARSE_FW_VERSION=0.2.0           # built into the firmware
 MAARSE_SIGN_KEY=release.key ./scripts/build-firmware.sh xiao-nrf52840  # -> dist/maarse-xiao-nrf52840-ota.bin + .manifest
 ```
 
-- Uden `MAARSE_RELEASE_PUBKEY` stoler firmwaren på en **offentlig udviklingsnøgle** (`maarse-sign --dev-key`, `MAARSE_SIGN_KEY=dev`). Byggeriet advarer, og noden skriver en advarsel ved `OtaBegin`. Byg aldrig udgivelser sådan.
-- `maarse-sign sign` tager en ELF, `.uf2` eller `.bin`. På nRF52840 er imaget appen fra dens startadresse (0x27000 XIAO / 0x26000 WisMesh; forkert board afvises); på ESP32-S3 et ESP-IDF app-image fra `espflash save-image` (bygge-scriptet laver `dist/maarse-<board>-app.bin`).
-- Versionen er `major.minor.patch` (u32: major << 16 | minor << 8 | patch). Uden `MAARSE_FW_VERSION` bruges crate-versionen.
+- Without `MAARSE_RELEASE_PUBKEY` the firmware trusts a **public development key** (`maarse-sign --dev-key`, `MAARSE_SIGN_KEY=dev`). The build warns, and the node writes a warning on `OtaBegin`. Never build releases like that.
+- `maarse-sign sign` takes an ELF, `.uf2` or `.bin`. On the nRF52840 the image is the app from its start address (0x27000 XIAO / 0x26000 WisMesh; a wrong board is rejected); on the ESP32-S3 an ESP-IDF app image from `espflash save-image` (the build script makes `dist/maarse-<board>-app.bin`).
+- The version is `major.minor.patch` (u32: major << 16 | minor << 8 | patch). Without `MAARSE_FW_VERSION` the crate version is used.
 
-**Companion-kommandoer** (0x14–0x17 holdt fri til parallelt arbejde):
+**Companion commands** (0x14–0x17 kept free for parallel work):
 
-| Kode | Navn | Indhold |
+| Code | Name | Content |
 |---|---|---|
-| 0x18 | `OtaBegin` | req (u16), flag (bit 0: tillad ældre, kun lokalt), manifest (112) |
-| 0x19 | `OtaChunk` | req, offset (u32), data (≤ 240 lokalt, 128 over radio; offset og længde delelige med 4 undtagen sidste bid) |
-| 0x1a | `OtaEnd` | req, apply (u8): installér og genstart |
+| 0x18 | `OtaBegin` | req (u16), flags (bit 0: allow older, local only), manifest (112) |
+| 0x19 | `OtaChunk` | req, offset (u32), data (≤ 240 locally, 128 over radio; offset and length multiples of 4 except the last chunk) |
+| 0x1a | `OtaEnd` | req, apply (u8): install and restart |
 | 0x1b | `OtaStatus` | – |
-| 0x9a | `OtaState` | req, tilstand (0 klar, 1 modtager, 2 verificeret, 3 installerer, 4 fejl, 5 ikke understøttet), næste offset, størrelse, version, kørende version, tekst |
+| 0x9a | `OtaState` | req, state (0 ready, 1 receiving, 2 verified, 3 installing, 4 error, 5 unsupported), next offset, size, version, running version, text |
 
-Alle fire kan sendes via `Remote` (0x0c) til en node, man er administrator for; svaret kommer som `RemoteReply`. Overførslen er stop-and-wait: klienten sender næste bid, når svaret med næste offset er kommet, så duty cycle og tab klares af sig selv. Fremskridtet gemmes pr. 4 KB-blok på en metaside i flash, så en afbrudt overførsel genoptages fra første ufærdige blok – også efter genstart. SHA-256 tjekkes, når sidste bid er skrevet, og igen lige før installation. Kontroltælleren i `Remote` stiger nu altid (også flere gange pr. sekund).
+All four can be sent via `Remote` (0x0c) to a node you are an administrator of; the reply comes as `RemoteReply`. The transfer is stop-and-wait: the client sends the next chunk when the reply with the next offset has arrived, so duty cycle and loss are handled by themselves. Progress is stored per 4 KB block on a meta page in flash, so an interrupted transfer resumes from the first unfinished block – even after a restart. SHA-256 is checked when the last chunk has been written, and again right before installation. The control counter in `Remote` now always increases (also several times per second).
 
-**Webklienten:** knappen *Firmware* – vælg `.bin`/`.uf2` + `.manifest`, denne node eller en fjern node, fremskridt med anslået tid, *Stop*, *Genoptag* og *Hent status*. Klienten tjekker størrelse og SHA-256 mod manifestet, før den sender. En `.uf2` omsættes til samme image som `maarse-sign` (alle 256-byte-sider fra laveste til højeste, huller = 0xFF). Uden svar i 5 s (lokalt) / 60 s (radio) spørges der om status, og overførslen fortsætter derfra. maarse-host opdateres ikke selv, men videresender til radio-noder.
+**The web client:** the *Firmware* button – choose `.bin`/`.uf2` + `.manifest`, this node or a remote node, progress with estimated time, *Stop*, *Resume* and *Get status*. The client checks size and SHA-256 against the manifest before it sends. A `.uf2` is turned into the same image as `maarse-sign` makes (all 256-byte pages from the lowest to the highest, gaps = 0xFF). Without a reply within 5 s (local) / 60 s (radio) the client asks for the status, and the transfer continues from there. maarse-host is not updated itself, but forwards to radio nodes.
 
-**nRF52840 (Adafruit UF2-bootloader).** Bootloaderens dual bank-DFU styres af dens egne indstillinger under en BLE/seriel DFU-session og kan ikke bruges til et image, appen selv har skrevet. Derfor:
+**nRF52840 (Adafruit UF2 bootloader).** The bootloader's dual bank DFU is controlled by its own settings during a BLE/serial DFU session and cannot be used for an image the app has written itself. Therefore:
 
 ```text
-0x00000  MBR            0x26000/0x27000  app (højst til 0x87FFF)   0xE9000  OTA-metaside
-0x01000  S140           0x88000          mellemlager (388 KB)       0xEA000  postkasse
-                                                                    0xEC000  indstillinger
-                                                                    0xF4000  bootloader (røres aldrig)
+0x00000  MBR            0x26000/0x27000  app (at most to 0x87FFF)  0xE9000  OTA meta page
+0x01000  S140           0x88000          staging (388 KB)           0xEA000  mailbox
+                                                                    0xEC000  settings
+                                                                    0xF4000  bootloader (never touched)
 ```
 
-Den nye app (ca. 300 KB i dag) skrives til mellemlageret. Ved installation tjekkes vektortabellen, interrupts slås fra, og en lille rutine i RAM (`firmware/nrf/src/ota.rs`, kalder intet i flash) sletter appens sider, kopierer imaget side for side med kontrollæsning og genstarter. Det tager ca. 10 sekunder. Bootloader, SoftDevice, identitet og indstillinger røres ikke. **Risiko:** strømsvigt i de 10 sekunder efterlader en halv app; bootloaderen er intakt, så noden reddes altid med dobbelttryk på reset og en `.uf2` – men det kræver fysisk adgang. Appen er nu begrænset til 388 KB (WisMesh 392 KB).
+The new app (about 300 KB today) is written to the staging area. On installation the vector table is checked, interrupts are disabled, and a small routine in RAM (`firmware/nrf/src/ota.rs`, calls nothing in flash) erases the app's pages, copies the image page by page with a verify read and restarts. It takes about 10 seconds. Bootloader, SoftDevice, identity and settings are not touched. **Risk:** a power loss during those 10 seconds leaves half an app; the bootloader is intact, so the node can always be rescued with a double press on reset and a `.uf2` – but that needs physical access. The app is now limited to 388 KB (WisMesh 392 KB).
 
-**ESP32-S3** (`esp-bootloader-esp-idf` 0.6 har `OtaUpdater`): ny partitionstabel med `otadata` (0xD000, 8 KB; `nvs` krympet til 16 KB), `ota_0` ved 0x10000 (hvor `factory` lå), `maarse` uændret ved 0x210000 (OTA-metaside ved 0x213000) og `ota_1` ved 0x220000 – i alt 4,1 MB, så boardet skal have mindst 8 MB flash. Den nye app skrives til den partition, der ikke kører; `otadata` peger på den, og noden genstarter. Er den nye app ugyldig, starter bootloaderen den gamle. Ved opstart markeres den kørende app som gyldig. **Overgang:** noder med den gamle tabel (`factory`) skal flashes én gang over USB med den nye tabel (`build-firmware.sh <board> flash`, som også sletter `otadata`); identitet og indstillinger bevares, fordi `maarse` ikke flytter. Med den gamle tabel svarer noden "ikke understøttet".
+**ESP32-S3** (`esp-bootloader-esp-idf` 0.6 has `OtaUpdater`): a new partition table with `otadata` (0xD000, 8 KB; `nvs` shrunk to 16 KB), `ota_0` at 0x10000 (where `factory` was), `maarse` unchanged at 0x210000 (OTA meta page at 0x213000) and `ota_1` at 0x220000 – 4.1 MB in total, so the board must have at least 8 MB flash. The new app is written to the partition that is not running; `otadata` points to it, and the node restarts. If the new app is invalid, the bootloader starts the old one. At start-up the running app is marked as valid. **Transition:** nodes with the old table (`factory`) must be flashed once over USB with the new table (`build-firmware.sh <board> flash`, which also erases `otadata`); identity and settings are kept, because `maarse` does not move. With the old table the node answers "unsupported".
 
-**Sendetid over LoRa** for et image på 300 KB (2.378 bidder à 128 bytes; pr. bid en pakke på ca. 230 bytes, et svar på ca. 113 bytes og to kvitteringer; ét hop):
+**Airtime over LoRa** for a 300 KB image (2,378 chunks of 128 bytes; per chunk a packet of about 230 bytes, a reply of about 113 bytes and two acknowledgements; one hop):
 
-| Radio | Bid | Svar | Sendetid i alt | Afsenderens del | Mindst ved 10 % duty | ved 1 % |
+| Radio | Chunk | Reply | Total airtime | Sender's share | At least at 10 % duty | at 1 % |
 |---|---|---|---|---|---|---|
-| SF9, 125 kHz (standard) | 1,18 s | 0,65 s | 1,6 t | 0,95 t | ca. 10 t | ca. 95 t |
-| SF7, 125 kHz | 0,37 s | 0,20 s | 0,5 t | 0,3 t | ca. 3 t | ca. 30 t |
-| SF7, 250 kHz | 0,19 s | 0,10 s | 0,24 t | 0,15 t | ca. 1,5 t | ca. 15 t |
-| SF11, 125 kHz | 4,7 s | 2,6 s | 6,2 t | 3,8 t | ca. 38 t | – |
+| SF9, 125 kHz (default) | 1.18 s | 0.65 s | 1.6 h | 0.95 h | about 10 h | about 95 h |
+| SF7, 125 kHz | 0.37 s | 0.20 s | 0.5 h | 0.3 h | about 3 h | about 30 h |
+| SF7, 250 kHz | 0.19 s | 0.10 s | 0.24 h | 0.15 h | about 1.5 h | about 15 h |
+| SF11, 125 kHz | 4.7 s | 2.6 s | 6.2 h | 3.8 h | about 38 h | – |
 
-**Skrinlagt (november 2026):** opdatering over LoRa tager for lang tid (ca. 1,6 t for nRF52840 og 3 t for Heltec V4 på SF7/250 kHz, mange timer på SF9) og bruges ikke. Opdatér over USB eller Bluetooth. Koden er bevaret.
+**Shelved (November 2026):** updating over LoRa takes too long (about 1.6 h for the nRF52840 and 3 h for the Heltec V4 at SF7/250 kHz, many hours at SF9) and is not used. Update over USB or Bluetooth. The code is kept.
 
-Hvert ekstra hop gentager det hele. **Oprindelig anbefaling:** opdatér naboer direkte (ét hop) på 869,4–869,65 MHz (10 %), skift både repeater og afsender midlertidigt til "Hurtig (SF7, 250 kHz)" under opdateringen, og skift tilbage bagefter. Overførslen kan stoppes og genoptages, fx over flere nætter.
+Every extra hop repeats all of it. **Original recommendation:** update neighbours directly (one hop) on 869.4–869.65 MHz (10 %), temporarily switch both the repeater and the sender to "Fast (SF7, 250 kHz)" during the update, and switch back afterwards. The transfer can be stopped and resumed, e.g. over several nights.
 
-**Skal testes på hardware før brug i marken:**
+**Must be tested on hardware before use in the field:**
 
-1. nRF52840 (XIAO og WisMesh): USB-opdatering af en nyere version; noden genstarter i ny version med samme identitet, indstillinger og postkasse.
-2. Bootloaderen starter appen efter kopien (tjek, at Adafruit-bootloaderen ikke kræver en CRC i sine indstillinger for en app, der ikke er skrevet af den selv – ellers bliver den i DFU-tilstand; reddes med en `.uf2`).
-3. Afbrudt overførsel (træk USB, genstart noden) genoptages fra første ufærdige blok.
-4. Afvisning: forkert board, samme/ældre version, forkert nøgle, ødelagt image (SHA-256).
-5. Bluetooth-opdatering (Nordic UART, 240-byte bidder).
-6. ~~Fjernopdatering over LoRa~~ (skrinlagt).
-7. ESP32-S3: første USB-flash med ny partitionstabel bevarer identitet; OTA til `ota_1`, derefter `ota_0`; ugyldigt image i den anden partition får bootloaderen til at starte den gamle.
-8. Bluetooth/LoRa kører videre under flash-skrivning (mellemlageret skrives, mens radioen er aktiv).
+1. nRF52840 (XIAO and WisMesh): USB update to a newer version; the node restarts in the new version with the same identity, settings and mailbox.
+2. The bootloader starts the app after the copy (check that the Adafruit bootloader does not require a CRC in its settings for an app it has not written itself – otherwise it stays in DFU mode; rescued with a `.uf2`).
+3. An interrupted transfer (unplug USB, restart the node) resumes from the first unfinished block.
+4. Rejection: wrong board, same/older version, wrong key, corrupt image (SHA-256).
+5. Bluetooth update (Nordic UART, 240-byte chunks).
+6. ~~Remote update over LoRa~~ (shelved).
+7. ESP32-S3: the first USB flash with the new partition table keeps the identity; OTA to `ota_1`, then `ota_0`; an invalid image in the other partition makes the bootloader start the old one.
+8. Bluetooth/LoRa keep running during flash writes (the staging area is written while the radio is active).
 
-**Redning, hvis noget går galt:** nRF52840: dobbelttryk på reset → USB-drevet kommer frem → træk `dist/maarse-<board>.uf2` over (bootloaderen røres aldrig). ESP32-S3: hold BOOT nede, tryk RESET, og flash med `espflash flash --erase-parts otadata --partition-table firmware/esp/partitions.csv <elf>` (eller `esptool.py write_flash 0x0 dist/maarse-<board>.bin`).
+**Rescue if something goes wrong:** nRF52840: double press on reset → the USB drive appears → drag `dist/maarse-<board>.uf2` over (the bootloader is never touched). ESP32-S3: hold BOOT down, press RESET, and flash with `espflash flash --erase-parts otadata --partition-table firmware/esp/partitions.csv <elf>` (or `esptool.py write_flash 0x0 dist/maarse-<board>.bin`).
 
-## Udgivelser (signerede)
+## Releases (signed)
 
 ```text
-python tools/release.py 0.5.0                    # bygger og signerer dist/release-0.5.0/
+python tools/release.py 0.5.0                    # builds and signs dist/release-0.5.0/
 python tools/release.py --verify dist/release-0.5.0
-maarse-sign verify-release --pubkey <hex> <mappe>  # tjek en udgivelse uden scriptet
+maarse-sign verify-release --pubkey <hex> <dir>    # check a release without the script
 ```
 
-Første gang laves nøglerne i `~/.maarse/release/` (aldrig i git): `release.key` (Ed25519) og `release.pub`, samt `android.keystore` med adgangskode i `android.pass`. **Tag backup af mappen.** Uden `release.key` kan noder i marken ikke opdateres over luften med nye udgivelser, og uden Android-nøglen kan appen ikke opdateres over en installeret version.
+The first time, the keys are made in `~/.maarse/release/` (never in git): `release.key` (Ed25519) and `release.pub`, plus `android.keystore` with its password in `android.pass`. **Back up the folder.** Without `release.key` nodes in the field cannot be updated over the air with new releases, and without the Android key the app cannot be updated over an installed version.
 
-En udgivelse indeholder firmware til alle fire boards bygget med udgivelsesnøglen (`MAARSE_RELEASE_PUBKEY`), så de kun tager imod opdateringer signeret med den, samt de signerede OTA-pakker (`-ota.bin` + `.manifest`), `maarse-host-<v>.exe` (med IP-tunnel), `maarse-<v>.apk` signeret med Android-nøglen og `SHA256SUMS` med `SHA256SUMS.sig`. Signaturen er Ed25519 over `"maarse-release-v1
-"` og SHA-256 af `SHA256SUMS` (`maarse-crypto/src/ota.rs`).
+A release contains firmware for all four boards built with the release key (`MAARSE_RELEASE_PUBKEY`), so they only accept updates signed with it, plus the signed OTA packages (`-ota.bin` + `.manifest`), `maarse-host-<v>.exe` (with IP tunnel), `maarse-<v>.apk` signed with the Android key and `SHA256SUMS` with `SHA256SUMS.sig`. The signature is Ed25519 over `"maarse-release-v1
+"` and SHA-256 of `SHA256SUMS` (`maarse-crypto/src/ota.rs`).
 
-## Licens
+## License
 
-Koden er udgivet under enten MIT eller Apache-2.0, efter eget valg. Specifikationen er udgivet under CC-BY 4.0.
+The code is released under either MIT or Apache-2.0, at your option. The specification is released under CC-BY 4.0.

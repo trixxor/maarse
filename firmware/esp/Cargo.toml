@@ -3,14 +3,14 @@ name = "maarse-fw-esp"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "Må:rse-firmware til ESP32-S3 + SX1262 (Heltec V4, XIAO ESP32-S3 + Wio-SX1262)"
+description = "Må:rse firmware for ESP32-S3 + SX1262 (Heltec V4, XIAO ESP32-S3 + Wio-SX1262)"
 
-# Egen workspace: bygges med Espressifs Xtensa-værktøjskæde (espup).
+# Own workspace: built with Espressif's Xtensa toolchain (espup).
 [workspace]
 
 [features]
 default = ["ble", "wifi"]
-# Vælg præcis ét board.
+# Choose exactly one board.
 board-heltec-v4 = ["esp32s3", "display"]
 board-xiao-esp32s3 = ["esp32s3"]
 # Bluetooth (Nordic UART) to the phone app. On by default.
@@ -21,8 +21,8 @@ ble = ["esp-radio/ble", "dep:bt-hci", "dep:trouble-host"]
 # `--no-default-features --features board-heltec-v4,ble` (or `,wifi`) builds
 # a firmware with just one of them and more free RAM.
 wifi = ["esp-radio/wifi", "dep:embassy-net", "dep:smoltcp"]
-# Kun til at tjekke koden med den almindelige Rust-værktøjskæde
-# (RISC-V, ESP32-C6); kører ikke på noget rigtigt board.
+# Only for checking the code with the ordinary Rust toolchain
+# (RISC-V, ESP32-C6); does not run on any real board.
 check-esp32c6 = ["esp-hal/esp32c6", "esp-rtos/esp32c6", "esp-radio/esp32c6", "esp-storage/esp32c6", "esp-bootloader-esp-idf/esp32c6", "esp-println/esp32c6"]
 esp32s3 = ["esp-hal/esp32s3", "esp-rtos/esp32s3", "esp-radio/esp32s3", "esp-storage/esp32s3", "esp-bootloader-esp-idf/esp32s3", "esp-println/esp32s3"]
 display = ["dep:ssd1306", "dep:embedded-graphics"]
@@ -39,7 +39,7 @@ esp-alloc = "=0.11.0"
 embedded-storage = "0.3.2"
 esp-bootloader-esp-idf = { version = "0.6.0" }
 esp-hal = { version = "1.2.2", features = ["unstable"] }
-# Bluetooth: esp-radio (BLE-controller, HCI) + TrouBLE som host, som på nRF.
+# Bluetooth: esp-radio (BLE controller, HCI) + TrouBLE as host, as on nRF.
 # Wi-Fi backbone: esp-radio's Wi-Fi driver with embassy-net (TCP, DHCP, DNS).
 # Wi-Fi and Bluetooth are never on at the same time (Bluetooth is not started
 # when Wi-Fi is enabled), so no `coex`: it would cost RAM the board lacks.

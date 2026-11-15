@@ -1,6 +1,6 @@
-//! LoRa-løkken (fælles for alle boards): modtager hele tiden og sender planlagte pakker med
-//! listen-before-talk (CAD) og duty cycle-budget. Indstillingerne kan
-//! ændres, mens den kører (`RADIO_CFG`).
+//! The LoRa loop (shared by all boards): receives all the time and sends planned packets with
+//! listen-before-talk (CAD) and a duty cycle budget. The settings can be
+//! changed while it runs (`RADIO_CFG`).
 
 use crate::bus::{Pkt, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_TX, RSTATS, TxReq};
 use core::sync::atomic::Ordering::Relaxed;
@@ -21,7 +21,7 @@ struct Planned {
     req: TxReq,
 }
 
-/// Lille xorshift til backoff (behøver ikke være kryptografisk).
+/// Small xorshift for backoff (does not need to be cryptographic).
 struct Jitter(u64);
 impl Jitter {
     fn next(&mut self, max: u64) -> u64 {
@@ -94,8 +94,8 @@ fn params<RK: RadioKind, D: DelayNs>(lora: &mut LoRa<RK, D>, cfg: RadioConfig) -
     Some(Params { cfg, mdltn, tx, rx })
 }
 
-/// Radioens hovedløkke. Kaldes fra en board-specifik opgave.
-/// `led` tændes under udsendelse.
+/// The radio's main loop. Called from a board-specific task.
+/// `led` is lit during transmission.
 pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
     lora: &mut LoRa<RK, D>,
     mut led: impl FnMut(bool),
@@ -123,14 +123,14 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             .duty_used_permille
             .store(duty.used_permille(Instant::now().as_millis()), Relaxed);
 
-        // Er der noget, der skal sendes nu?
+        // Is there anything to send now?
         let now = Instant::now();
         if let Some(i) = queue.iter().position(|q| q.due <= now) {
             let q = queue.swap_remove(i);
             stage(1);
             let _ = lora.enter_standby().await;
             stage(2);
-            // Listen-before-talk: er kanalen optaget, prøv lidt senere.
+            // Listen-before-talk: if the channel is busy, try a little later.
             let busy = match lora.prepare_for_cad(&p.mdltn).await {
                 Ok(()) => {
                     stage(3);
@@ -184,8 +184,8 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             continue;
         }
 
-        // Lyt, indtil der kommer en pakke, en ny opgave, nye indstillinger
-        // eller næste planlagte tid.
+        // Listen until a packet arrives, a new job, new settings
+        // or the next planned time.
         let next = queue
             .iter()
             .map(|q| q.due)
@@ -240,8 +240,8 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
     }
 }
 
-/// Fejlsøgning: 1 standby, 2 CAD-forberedelse, 3 CAD, 4 TX-forberedelse,
-/// 5 TX, 6 RX-forberedelse, 7 lytter.
+/// Debugging: 1 standby, 2 CAD preparation, 3 CAD, 4 TX preparation,
+/// 5 TX, 6 RX preparation, 7 listening.
 fn stage(n: u32) {
     RSTATS.stage.store(n, Relaxed);
 }
@@ -249,7 +249,7 @@ fn stage(n: u32) {
 fn plan(queue: &mut heapless::Vec<Planned, QUEUE>, req: TxReq) {
     let due = Instant::now() + Duration::from_millis(req.delay_ms as u64);
     if queue.is_full() {
-        // Fuld kø: drop den, der skal sendes senest.
+        // Full queue: drop the one that is to be sent last.
         RSTATS.dropped.fetch_add(1, Relaxed);
         if let Some(i) = queue
             .iter()

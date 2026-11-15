@@ -1,34 +1,34 @@
-//! Pakkeformat.
+//! Packet format.
 //!
 //! ```text
 //! +-------+------+----------------+--------------------------+---------+
-//! | flag  | hop  | destination    | sti (valgfri)            | payload |
-//! | 1 B   | 1 B  | 16 B           | 1 B antal + 2 B pr. hop  | resten  |
+//! | flags | hop  | destination    | path (optional)          | payload |
+//! | 1 B   | 1 B  | 16 B           | 1 B count + 2 B per hop  | rest    |
 //! +-------+------+----------------+--------------------------+---------+
 //! ```
 //!
-//! Flag-byten: bit 7-6 version, bit 5-2 pakketype, bit 1 sti til stede,
-//! bit 0 region til stede (tidligere reserveret til "kompakt tilstand").
+//! The flags byte: bits 7-6 version, bits 5-2 packet type, bit 1 path present,
+//! bit 0 region present (previously reserved for "compact mode").
 //!
-//! Er bit 0 sat, følger 2 bytes region (big endian) lige efter stien (eller
-//! efter destinationen, hvis der ikke er nogen sti). Se [`crate::region`].
-//! Regionen bruges kun på floods (kanaler); en pakke uden region er bit for
-//! bit som før. Ældre noder afviser pakker med bit 0 sat og videresender
-//! derfor ikke regionsbeskeder – floods uden region virker som altid.
+//! If bit 0 is set, 2 bytes of region (big endian) follow right after the path (or
+//! after the destination if there is no path). See [`crate::region`].
+//! The region is only used on floods (channels); a packet without a region is bit for
+//! bit as before. Older nodes reject packets with bit 0 set and therefore
+//! do not forward region messages – floods without a region work as always.
 //!
-//! Afsenderen står aldrig i headeren. AEAD-tagget er en del af payloaden
-//! og håndteres af kryptolaget.
+//! The sender is never in the header. The AEAD tag is part of the payload
+//! and is handled by the crypto layer.
 //!
-//! Sti-feltets betydning afhænger af pakketypen:
-//! * `PathRequest`: den sti, forespørgslen har taget indtil nu (record route).
-//! * alle andre: en kildesti, som pakken skal følge. `hop` er indekset for
-//!   næste repeater i stien.
+//! The meaning of the path field depends on the packet type:
+//! * `PathRequest`: the path the request has taken so far (record route).
+//! * all others: a source path the packet must follow. `hop` is the index of the
+//!   next repeater in the path.
 
 use crate::addr::{Address, PathId};
 use crate::{MAX_HOPS, MAX_PACKET, MAX_PATH};
 
 pub const VERSION: u8 = 0;
-/// Fast del af headeren: flag + hop + destination.
+/// Fixed part of the header: flags + hop + destination.
 pub const FIXED_HEADER: usize = 18;
 
 const FLAG_HAS_PATH: u8 = 0b10;
@@ -39,28 +39,28 @@ pub type Path = heapless::Vec<PathId, MAX_PATH>;
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PacketType {
-    /// Direkte besked til en node.
+    /// Direct message to a node.
     Data = 0,
-    /// Kvittering for en direkte besked.
+    /// Acknowledgement of a direct message.
     Ack = 1,
-    /// Signeret meddelelse om en identitet.
+    /// Signed announcement of an identity.
     Announce = 2,
-    /// Flood for at finde en rute.
+    /// Flood to find a route.
     PathRequest = 3,
-    /// Svar med den fundne rute.
+    /// Reply with the route found.
     PathResponse = 4,
-    /// Fjernstyring af repeatere.
+    /// Remote control of repeaters.
     Control = 5,
-    /// Fragment af en større besked eller ressource.
+    /// Fragment of a larger message or resource.
     Fragment = 6,
-    /// Dækningsmåling til kortet.
+    /// Coverage measurement for the map.
     Probe = 7,
-    /// Kanalbesked (floodes lokalt).
+    /// Channel message (flooded locally).
     Channel = 8,
-    /// Besked til en postkasse: modtagerens adresse (16) + krypteret besked.
+    /// Message for a mailbox: the recipient's address (16) + encrypted message.
     Deposit = 9,
-    /// Datagram: direkte pakke uden kvittering fra ende til ende (bruges af
-    /// IP-tunnelen). Kvittering og gensending pr. hop gælder stadig.
+    /// Datagram: direct packet without end-to-end acknowledgement (used by
+    /// the IP tunnel). Per-hop acknowledgement and retransmission still apply.
     Datagram = 10,
     /// Store-carry-forward: a direct message handed to one neighbour to carry
     /// (or to its destination), see `Router` "Carry". Addressed with a
@@ -101,9 +101,9 @@ pub enum DecodeError {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EncodeError {
-    /// Header + payload er større end en LoRa-pakke.
+    /// Header + payload is larger than a LoRa packet.
     TooLarge { needed: usize },
-    /// Bufferen er for lille.
+    /// The buffer is too small.
     BufferTooSmall,
 }
 
@@ -113,7 +113,7 @@ pub struct Header {
     pub hops: u8,
     pub dest: Address,
     pub path: Option<Path>,
-    /// Region (0 = ingen). Se [`crate::region`].
+    /// Region (0 = none). See [`crate::region`].
     pub region: u16,
 }
 
@@ -144,7 +144,7 @@ impl Header {
             + if self.region != 0 { 2 } else { 0 }
     }
 
-    /// Hvor mange bytes der er plads til i payloaden med denne header.
+    /// How many bytes there is room for in the payload with this header.
     pub fn max_payload(&self) -> usize {
         MAX_PACKET - self.encoded_len()
     }
@@ -176,7 +176,7 @@ impl Header {
         Ok(len)
     }
 
-    /// Afkoder en header og returnerer den sammen med antal brugte bytes.
+    /// Decodes a header and returns it together with the number of bytes used.
     pub fn decode(buf: &[u8]) -> Result<(Header, usize), DecodeError> {
         if buf.len() < FIXED_HEADER {
             return Err(DecodeError::TooShort);
@@ -204,7 +204,7 @@ impl Header {
             }
             let mut p = Path::new();
             for chunk in buf[19..end].chunks_exact(2) {
-                // Kan ikke fejle: n <= MAX_PATH er tjekket ovenfor.
+                // Cannot fail: n <= MAX_PATH is checked above.
                 let _ = p.push(u16::from_be_bytes([chunk[0], chunk[1]]));
             }
             used = end;
@@ -231,7 +231,7 @@ impl Header {
     }
 }
 
-/// En afkodet pakke, der låner payloaden fra modtagebufferen.
+/// A decoded packet that borrows the payload from the receive buffer.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Packet<'a> {
     pub header: Header,
@@ -251,7 +251,7 @@ impl<'a> Packet<'a> {
     }
 }
 
-/// Koder header + payload til en buffer, der kan sendes.
+/// Encodes header + payload into a buffer that can be sent.
 pub fn encode(
     header: &Header,
     payload: &[u8],
@@ -263,7 +263,7 @@ pub fn encode(
     let mut buf = [0u8; MAX_PACKET];
     let n = header.encode(&mut buf)?;
     buf[n..n + payload.len()].copy_from_slice(payload);
-    // Kan ikke fejle: needed <= MAX_PACKET.
+    // Cannot fail: needed <= MAX_PACKET.
     Ok(heapless::Vec::from_slice(&buf[..needed]).unwrap_or_default())
 }
 
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(Packet::decode(&[0; 10]), Err(DecodeError::TooShort));
 
         let h = Header::new(PacketType::Data, Address::default());
-        // Regionsflag uden plads til regionen.
+        // Region flag without room for the region.
         let mut buf = encode(&h, b"x").unwrap();
         buf[0] |= 0b01;
         assert_eq!(Packet::decode(&buf), Err(DecodeError::TooShort));
@@ -343,7 +343,7 @@ mod tests {
         let mut buf = encode(&h, b"").unwrap();
         buf[18] = 13;
         assert_eq!(Packet::decode(&buf), Err(DecodeError::PathTooLong(13)));
-        buf[18] = 5; // længere end bufferen
+        buf[18] = 5; // longer than the buffer
         assert_eq!(Packet::decode(&buf), Err(DecodeError::TooShort));
     }
 
@@ -358,13 +358,13 @@ mod tests {
         assert_eq!(p.header, h);
         assert_eq!(p.payload, b"hej");
 
-        // Sammen med sti: regionen står efter stien.
+        // Together with a path: the region comes after the path.
         let h = h.with_path(path(&[7, 8]));
         let buf = encode(&h, b"x").unwrap();
         assert_eq!(&buf[23..25], &[0xbe, 0xef]);
         assert_eq!(Packet::decode(&buf).unwrap().header, h);
 
-        // Uden region er formatet uændret.
+        // Without a region the format is unchanged.
         let h = Header::new(PacketType::Channel, Address([3; 16]));
         assert_eq!(encode(&h, b"x").unwrap()[0] & 1, 0);
     }

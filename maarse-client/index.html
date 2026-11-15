@@ -541,10 +541,12 @@ const remoteHost = {
   set: (v) => store.set("remoteHost", v),
 };
 {
+  // Runs before `store` is defined (const, so it is not usable yet): write the same format directly.
+  const save = (k, v) => { try { localStorage.setItem("maarse:" + k, JSON.stringify(v)); } catch {} };
   const m = location.hash.match(/token=([0-9a-fA-F]{16,})/) || location.search.match(/token=([0-9a-fA-F]{16,})/);
   // "#service" (used by maarse-tray) opens the Service page once connected.
-  if (/(^#|&)service/.test(location.hash)) store.set("openServiceOnConnect", true);
-  if (m) store.set("hostToken", m[1]);
+  if (/(^#|&)service/.test(location.hash)) save("openServiceOnConnect", true);
+  if (m) save("hostToken", m[1]);
   if (m || location.hash) history.replaceState(null, "", location.pathname);
 }
 function wsUrl() {

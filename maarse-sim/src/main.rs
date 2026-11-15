@@ -18,7 +18,6 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use maarse_core::airtime::LoraParams;
 use maarse_core::dedup::packet_id;
 use maarse_core::duty::DutyCycle;
 use maarse_core::packet::{Header, Packet, encode};
@@ -262,48 +261,9 @@ fn parse_args() -> Config {
 
 // ---------- radio ----------
 
-/// Rough radio model: log-distance path loss (n = 3) at 868 MHz.
-struct Radio {
-    lora: LoraParams,
-    tx_dbm: f64,
-    noise_dbm: f64,
-    /// Lowest SNR that can be received at this spreading factor.
-    snr_min: f64,
-    /// Extra attenuation (dB per metre), e.g. forest.
-    extra_db_m: f64,
-}
-
-impl Radio {
-    fn new(sf: u8, tx_dbm: f64) -> Self {
-        // Thermal noise at 125 kHz + 6 dB noise figure.
-        let noise_dbm = -174.0 + 10.0 * 125_000f64.log10() + 6.0;
-        let snr_min = match sf {
-            7 => -7.5,
-            8 => -10.0,
-            9 => -12.5,
-            10 => -15.0,
-            11 => -17.5,
-            _ => -20.0,
-        };
-        Radio {
-            lora: LoraParams::new(sf),
-            tx_dbm,
-            noise_dbm,
-            snr_min,
-            extra_db_m: 0.0,
-        }
-    }
-
-    fn rx_dbm(&self, dist_m: f64, gain_db: f64) -> f64 {
-        let d = dist_m.max(1.0);
-        let path_loss = 31.2 + 30.0 * d.log10();
-        self.tx_dbm + gain_db - path_loss - self.extra_db_m * d
-    }
-
-    fn snr(&self, rx_dbm: f64) -> f64 {
-        rx_dbm - self.noise_dbm
-    }
-}
+// The radio model lives in the library (`maarse_sim::radio`) so the Denmark
+// simulator (maarse-sim-wasm) uses exactly the same numbers.
+use maarse_sim::radio::Radio;
 
 // ---------- simulator ----------
 

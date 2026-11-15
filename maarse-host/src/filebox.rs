@@ -1,46 +1,46 @@
-//! Filer og ruter på hosten: hvor stor en fil må være ad den aktuelle rute,
-//! og en filpostkasse til modtagere, der er offline.
+//! Files and routes on the host: how large a file may be along the current route,
+//! and a file mailbox for recipients who are offline.
 //!
-//! # Rutens type
+//! # Route type
 //!
-//! Hosten sender pakker ud på alle sine links (TCP-backbone og et evt.
-//! serielt LoRa-modem). Hvilken vej en modtager nås, ved vi derfor kun ud
-//! fra, hvor vi sidst hørte den: linket, dens announce kom ind på, og hvor
-//! mange hop den var væk. [`classify`] siger:
+//! The host sends packets out on all its links (TCP backbone and an optional
+//! serial LoRa modem). Which way a recipient is reached, we therefore only know
+//! from where we last heard it: the link its announce came in on, and how
+//! many hops away it was. [`classify`] says:
 //!
-//! - [`PathKind::Tcp`]: modtageren er hørt over et TCP-link, og både den og
-//!   alle mellemled på den kendte rute er hosts, vi ved er på backbone
-//!   (direkte TCP-naboer, hørt med 0 hop, eller kontakter i DHT'en). En
-//!   webklient hos en host har hostens adresse og tæller derfor med.
-//! - [`PathKind::Lora`]: modtageren er hørt over seriel/LoRa, eller den er
-//!   hørt over TCP, men gennem et led, vi ikke ved er en host (fx en
-//!   radionode bag en anden hosts modem).
-//! - [`PathKind::Unknown`]: ingen viden (aldrig hørt, eller linket, den blev
-//!   hørt på, er gået ned).
+//! - [`PathKind::Tcp`]: the recipient was heard over a TCP link, and both it and
+//!   all intermediate hops on the known route are hosts we know are on the backbone
+//!   (direct TCP neighbours, heard with 0 hops, or contacts in the DHT). A
+//!   web client at a host has the host's address and therefore counts too.
+//! - [`PathKind::Lora`]: the recipient was heard over serial/LoRa, or it was
+//!   heard over TCP, but through a hop we do not know is a host (e.g. a
+//!   radio node behind another host's modem).
+//! - [`PathKind::Unknown`]: no knowledge (never heard, or the link it was
+//!   heard on has gone down).
 //!
-//! Antagelse: to hosts, der begge er på backbone, er forbundet over TCP.
-//! Er man i tvivl, er svaret aldrig `Tcp`, og så gælder 8 KB-grænsen.
+//! Assumption: two hosts that are both on the backbone are connected over TCP.
+//! When in doubt, the answer is never `Tcp`, and then the 8 KB limit applies.
 //!
-//! # Politik
+//! # Policy
 //!
-//! - `Tcp`: op til `--max-file` (standard 1 MB).
-//! - `Lora`: højst [`LORA_MAX_FILE`] (8 KB, samme som firmwaren).
-//! - `Unknown`: modtageren er ikke at nå nu. Med filpostkassen slået til må
-//!   filen være op til 1 MB: den lægges i postkassen og leveres, når
-//!   modtageren dukker op igen. Filer over 8 KB sendes aldrig over en rute,
-//!   der ikke er `Tcp` (bidderne holdes tilbage), så de venter i postkassen
-//!   på en TCP-rute eller udløber efter 7 dage.
+//! - `Tcp`: up to `--max-file` (default 1 MB).
+//! - `Lora`: at most [`LORA_MAX_FILE`] (8 KB, same as the firmware).
+//! - `Unknown`: the recipient cannot be reached now. With the file mailbox enabled the
+//!   file may be up to 1 MB: it is put in the mailbox and delivered when the
+//!   recipient shows up again. Files over 8 KB are never sent over a route
+//!   that is not `Tcp` (the chunks are held back), so they wait in the mailbox
+//!   for a TCP route or expire after 7 days.
 //!
-//! # Filpostkassen
+//! # The file mailbox
 //!
-//! Kun på hosten, aldrig i radionoders flash. Filen gemmes krypteret ende
-//! til ende: det forseglede tilbud (som det blev sendt til modtageren, med
-//! filnøglen inden i) og de forseglede bidder. Hosten kan ikke læse den.
-//! Én fil pr. post i `filpostkasse/<modtager>-<fil-id>.fil`:
+//! Only on the host, never in radio nodes' flash. The file is stored encrypted end
+//! to end: the sealed offer (as it was sent to the recipient, with the
+//! file key inside) and the sealed chunks. The host cannot read it.
+//! One file per entry in `file-mailbox/<recipient>-<file-id>.file`:
 //!
 //! ```text
-//! "MFB1" | modtager (16) | fil-id (u64) | gemt (u64, Unix-sek.) | størrelse (u32)
-//! | tilbud-længde (u16) | tilbud | antal bidder (u16) | (længde (u8) | bid)*
+//! "MFB1" | recipient (16) | file id (u64) | stored (u64, Unix sec.) | size (u32)
+//! | offer length (u16) | offer | chunk count (u16) | (length (u8) | chunk)*
 //! ```
 
 use maarse_core::Address;
@@ -52,9 +52,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Største fil over LoRa (samme som firmwarens filbuffer).
+/// Largest file over LoRa (same as the firmware's file buffer).
 pub const LORA_MAX_FILE: u32 = maarse_crypto::files::MAX_FILE as u32;
-/// Filer i postkassen udløber efter samme tid som beskeder.
+/// Files in the mailbox expire after the same time as messages.
 pub const FILEBOX_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,16 +64,16 @@ pub enum PathKind {
     Unknown,
 }
 
-/// Hvad hosten ved om vejen til en modtager.
+/// What the host knows about the way to a recipient.
 pub struct PathFacts<'a> {
-    /// Linket, modtagerens announce sidst kom ind på: `Some(true)` for TCP,
-    /// `Some(false)` for seriel/LoRa, `None` hvis ukendt.
+    /// The link the recipient's announce last came in on: `Some(true)` for TCP,
+    /// `Some(false)` for serial/LoRa, `None` if unknown.
     pub heard_tcp: Option<bool>,
-    /// Mellemled (path-id'er) på den kendte rute, hvis routeren har en.
+    /// Intermediate hops (path ids) on the known route, if the router has one.
     pub route: Option<&'a [u16]>,
-    /// Er modtageren selv en kendt backbone-host?
+    /// Is the recipient itself a known backbone host?
     pub dest_is_host: bool,
-    /// Path-id'er for kendte backbone-hosts.
+    /// Path ids of known backbone hosts.
     pub host_ids: &'a HashSet<u16>,
 }
 
@@ -92,7 +92,7 @@ pub fn classify(f: &PathFacts) -> PathKind {
     }
 }
 
-/// Grænse for en fil ad en rute af typen `kind`.
+/// Limit for a file along a route of type `kind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limit {
     pub max_bytes: u32,
@@ -119,12 +119,12 @@ pub fn limit(kind: PathKind, max_file: u32, filebox_on: bool, radio: &RadioConfi
     }
 }
 
-/// Anslået tid for at sende `size` bytes som filbidder over LoRa med
-/// radioindstillingerne `radio`. Hver bid regnes som en fuld pakke på 255
-/// bytes (plus én til tilbuddet), og hver bid kvitteres med en kort pakke
-/// (ca. 40 bytes), som også optager kanalen. Duty cycle måles over en time
-/// (se `maarse_core::duty`): kan afsenderens sendetid være inden for timens
-/// budget, er det sendetiden; ellers er det sendetid / duty cycle.
+/// Estimated time to send `size` bytes as file chunks over LoRa with
+/// the radio settings `radio`. Each chunk counts as a full packet of 255
+/// bytes (plus one for the offer), and each chunk is acknowledged with a short packet
+/// (about 40 bytes), which also occupies the channel. Duty cycle is measured over an hour
+/// (see `maarse_core::duty`): if the sender's airtime fits within the hour's
+/// budget, it is the airtime; otherwise it is airtime / duty cycle.
 pub fn est_airtime_s(size: u32, radio: &RadioConfig) -> u32 {
     let p = LoraParams {
         sf: radio.sf,
@@ -141,7 +141,7 @@ pub fn est_airtime_s(size: u32, radio: &RadioConfig) -> u32 {
     ms.div_ceil(1000) as u32
 }
 
-/// En fil i postkassen (alt er krypteret ende til ende).
+/// A file in the mailbox (everything is encrypted end to end).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Boxed {
     pub recipient: Address,
@@ -209,13 +209,13 @@ pub enum DepositError {
 }
 
 impl DepositError {
-    pub fn danish(self) -> &'static str {
+    pub fn message(self) -> &'static str {
         match self {
-            DepositError::Disabled => "filpostkassen er slået fra",
-            DepositError::TooLarge => "filen er for stor til postkassen",
-            DepositError::RecipientFull => "modtagerens filpostkasse er fuld",
-            DepositError::Full => "filpostkassen er fuld",
-            DepositError::Io => "kunne ikke gemme filen på disken",
+            DepositError::Disabled => "the file mailbox is disabled",
+            DepositError::TooLarge => "the file is too large for the mailbox",
+            DepositError::RecipientFull => "the recipient's file mailbox is full",
+            DepositError::Full => "the file mailbox is full",
+            DepositError::Io => "could not save the file to disk",
         }
     }
 }
@@ -226,13 +226,13 @@ struct Meta {
     bytes: u64,
 }
 
-/// Filpostkassen på disken. I hukommelsen holdes kun et indeks; selve
-/// filerne læses, når de skal leveres.
+/// The file mailbox on disk. Only an index is kept in memory; the
+/// files themselves are read when they are to be delivered.
 pub struct FileBox {
     dir: PathBuf,
-    /// Største fil (bytes klartekst).
+    /// Largest file (plaintext bytes).
     pub max_file: u32,
-    /// Kvote pr. modtager og i alt (bytes på disken). 0 = slået fra.
+    /// Quota per recipient and in total (bytes on disk). 0 = disabled.
     pub per_recipient: u64,
     pub total: u64,
     index: HashMap<u64, Meta>,
@@ -263,7 +263,7 @@ impl FileBox {
     }
 
     fn path(&self, recipient: &Address, file_id: u64) -> PathBuf {
-        self.dir.join(format!("{recipient}-{file_id:016x}.fil"))
+        self.dir.join(format!("{recipient}-{file_id:016x}.file"))
     }
 
     pub fn used(&self) -> u64 {
@@ -301,7 +301,7 @@ impl FileBox {
         Ok(())
     }
 
-    /// Fil-id'er, der venter på `r`.
+    /// File ids waiting for `r`.
     pub fn waiting_for(&self, r: &Address) -> Vec<u64> {
         let mut v: Vec<(u64, u64)> =
             self.index.iter().filter(|(_, m)| m.recipient == *r).map(|(id, m)| (m.stored, *id)).collect();
@@ -324,7 +324,7 @@ impl FileBox {
         }
     }
 
-    /// Sletter filer ældre end [`FILEBOX_TTL`]. Returnerer de slettede.
+    /// Deletes files older than [`FILEBOX_TTL`]. Returns the deleted ones.
     pub fn expire(&mut self, now: SystemTime) -> Vec<(Address, u64)> {
         let now = unix_secs(now);
         let old: Vec<(Address, u64)> = self
@@ -354,19 +354,19 @@ mod tests {
         let f = |heard_tcp, route: Option<&'static [u16]>, dest_is_host| {
             classify(&PathFacts { heard_tcp, route, dest_is_host, host_ids: &hosts })
         };
-        // Direkte TCP-nabo (eller en webklient hos den).
+        // Direct TCP neighbour (or a web client at it).
         assert_eq!(f(Some(true), None, true), PathKind::Tcp);
         assert_eq!(f(Some(true), Some(&[]), true), PathKind::Tcp);
-        // Via kendte hosts på backbone.
+        // Via known hosts on the backbone.
         assert_eq!(f(Some(true), Some(&[0x1111, 0x2222]), true), PathKind::Tcp);
-        // Et ukendt mellemled (fx en LoRa-repeater bag en host).
+        // An unknown intermediate hop (e.g. a LoRa repeater behind a host).
         assert_eq!(f(Some(true), Some(&[0x1111, 0x3333]), true), PathKind::Lora);
-        // Radionode bag en anden hosts modem.
+        // Radio node behind another host's modem.
         assert_eq!(f(Some(true), None, false), PathKind::Lora);
-        // Hørt over det serielle modem.
+        // Heard over the serial modem.
         assert_eq!(f(Some(false), None, true), PathKind::Lora);
         assert_eq!(f(Some(false), Some(&[]), false), PathKind::Lora);
-        // Ingen viden.
+        // No knowledge.
         assert_eq!(f(None, None, true), PathKind::Unknown);
         assert_eq!(f(None, Some(&[]), true), PathKind::Unknown);
     }
@@ -384,7 +384,7 @@ mod tests {
         assert_eq!((u.max_bytes, u.via_lora, u.mailbox), (mb, true, true));
         let u = limit(PathKind::Unknown, mb, false, &r);
         assert_eq!((u.max_bytes, u.mailbox), (8192, false));
-        // En lille --max-file vinder over 8 KB.
+        // A small --max-file beats 8 KB.
         assert_eq!(limit(PathKind::Lora, 4096, true, &r).max_bytes, 4096);
     }
 
@@ -394,7 +394,7 @@ mod tests {
         assert!(est_airtime_s(8192, &r) > est_airtime_s(1000, &r));
         let sf12 = RadioConfig { sf: 12, ..r };
         assert!(est_airtime_s(8192, &sf12) > est_airtime_s(8192, &r));
-        // 1 MB over LoRa tager timer.
+        // 1 MB over LoRa takes hours.
         assert!(est_airtime_s(1 << 20, &r) > 3600 * 3);
     }
 
@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(fb.waiting_for(&Address([1; 16])), vec![42]);
         assert!(fb.waiting_for(&Address([2; 16])).is_empty());
         assert_eq!(fb.load(42), Some(b.clone()));
-        // Overlever genstart.
+        // Survives a restart.
         let mut fb = FileBox::open(d.clone(), 1 << 20, 20 << 20, 200 << 20);
         assert_eq!(fb.load(42), Some(b));
         assert!(fb.remove(42));

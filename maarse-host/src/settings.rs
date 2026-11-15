@@ -1,11 +1,11 @@
-//! Indstillinger, der kan ændres fra webklienten.
+//! Settings that can be changed from the web client.
 //!
-//! De gemmes i `<data>/indstillinger.txt` som de samme valg, kommandolinjen
-//! tager – ét pr. linje, fx `--tun` eller `--peer 10.0.0.2:4242`. Ved opstart
-//! læses filen først og kommandolinjen bagefter, så den vinder.
+//! They are stored in `<data>/settings.txt` as the same options the command line
+//! takes – one per line, e.g. `--tun` or `--peer 10.0.0.2:4242`. At startup
+//! the file is read first and the command line afterwards, so the latter wins.
 //!
-//! Når webklienten gemmer, genstarter hosten sig selv (samme program, samme
-//! kommandolinje, samme rettigheder – fx administrator til TUN-adapteren).
+//! When the web client saves, the host restarts itself (same program, same
+//! command line, same privileges – e.g. administrator for the TUN adapter).
 
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
@@ -14,13 +14,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub fn file(data_dir: &Path) -> PathBuf {
-    data_dir.join("indstillinger.txt")
+    data_dir.join("settings.txt")
 }
 
-/// Valg, der ikke må stå i filen.
+/// Options that must not appear in the file.
 const FORBIDDEN: &[&str] = &["--data", "--help", "-h"];
 
-/// Laver tekst (ét valg pr. linje) om til argumenter.
+/// Turns text (one option per line) into arguments.
 pub fn to_args(text: &str) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -33,7 +33,7 @@ pub fn to_args(text: &str) -> Result<Vec<String>, String> {
             None => (line, None),
         };
         if !flag.starts_with("--") || FORBIDDEN.contains(&flag) {
-            return Err(format!("ugyldigt valg i indstillinger: {flag}"));
+            return Err(format!("invalid option in settings: {flag}"));
         }
         out.push(flag.to_string());
         if let Some(v) = val.filter(|v| !v.is_empty()) {
@@ -47,15 +47,15 @@ pub fn load(data_dir: &Path) -> String {
     std::fs::read_to_string(file(data_dir)).unwrap_or_default()
 }
 
-/// Gemmer ny tekst, hvis den kan læses som valg.
+/// Saves new text if it can be parsed as options.
 pub fn save(data_dir: &Path, text: &str) -> Result<(), String> {
     let args = to_args(text)?;
     crate::parse_from(args)?;
     let body: String = text.lines().map(|l| format!("{}\n", l.trim_end())).collect();
-    std::fs::write(file(data_dir), body).map_err(|e| format!("kunne ikke gemme: {e}"))
+    std::fs::write(file(data_dir), body).map_err(|e| format!("could not save: {e}"))
 }
 
-/// Startes vi af en genstart? Så venter vi på, at den gamle proces slipper portene.
+/// Were we started by a restart? Then we wait for the old process to release the ports.
 pub fn restarted() -> bool {
     std::env::var_os("MAARSE_RESTART").is_some()
 }
@@ -80,7 +80,7 @@ pub static SERVICE: AtomicBool = AtomicBool::new(false);
 /// Exit code used to ask the service manager for a restart (EX_TEMPFAIL).
 pub const RESTART_EXIT_CODE: i32 = 75;
 
-/// Starter en ny proces med samme kommandolinje og afslutter denne.
+/// Starts a new process with the same command line and exits this one.
 pub fn restart() -> ! {
     if SERVICE.load(std::sync::atomic::Ordering::Relaxed) {
         // A detached child would be killed with our cgroup (systemd) or be
@@ -90,7 +90,7 @@ pub fn restart() -> ! {
 ");
         std::process::exit(RESTART_EXIT_CODE);
     }
-    println!("\n[indstillinger] genstarter med nye indstillinger …\n");
+    println!("\n[settings] restarting with new settings …\n");
     let exe = std::env::current_exe().expect("current_exe");
     match std::process::Command::new(exe)
         .args(std::env::args().skip(1))
@@ -99,18 +99,18 @@ pub fn restart() -> ! {
     {
         Ok(_) => std::process::exit(0),
         Err(e) => {
-            eprintln!("[indstillinger] genstart fejlede: {e}");
+            eprintln!("[settings] restart failed: {e}");
             std::process::exit(1);
         }
     }
 }
 
-// ---------- status til webklienten ----------
+// ---------- status for the web client ----------
 
 pub static TUN_UP: AtomicBool = AtomicBool::new(false);
 static STARTUP: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Skriver en opstartslinje og husker den, så webklienten kan vise den.
+/// Prints a startup line and remembers it so the web client can show it.
 pub fn report(line: impl Into<String>, error: bool) {
     let line = line.into();
     if error {
@@ -142,7 +142,7 @@ fn json_list<'a>(it: impl Iterator<Item = &'a str>) -> String {
     format!("[{}]", v.join(","))
 }
 
-/// JSON med indstillinger, seriel-porte og opstartsstatus.
+/// JSON with settings, serial ports and startup status.
 pub fn status_json(data_dir: &Path) -> String {
     let ports: Vec<String> = serialport::available_ports()
         .map(|v| v.into_iter().map(|p| p.port_name).collect())

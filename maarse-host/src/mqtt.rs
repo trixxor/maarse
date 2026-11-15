@@ -1,19 +1,19 @@
-//! MQTT-bro: sender modtaget telemetri, positioner og kanalbeskeder som JSON
-//! til en MQTT-broker, med Home Assistant MQTT discovery for nodernes
-//! sensorer.
+//! MQTT bridge: publishes received telemetry, positions and channel messages as JSON
+//! to an MQTT broker, with Home Assistant MQTT discovery for the nodes'
+//! sensors.
 //!
-//! En lille MQTT 3.1.1-klient (kun CONNECT, PUBLISH med QoS 0 og PINGREQ)
-//! skrevet i hånden, så hosten ikke trækker en async-runtime med ind.
-//! Klienten kører i sin egen tråd og genforbinder af sig selv.
+//! A small MQTT 3.1.1 client (only CONNECT, PUBLISH with QoS 0 and PINGREQ)
+//! written by hand, so the host does not pull in an async runtime.
+//! The client runs in its own thread and reconnects by itself.
 //!
-//! Emner (`<prefix>` er standard `maarse`):
+//! Topics (`<prefix>` defaults to `maarse`):
 //!
 //! ```text
-//! <prefix>/status                       "online" / "offline" (will, bevares)
-//! <prefix>/node/<adresse>/telemetry     {"battery_mv":3870, ...} (bevares)
-//! <prefix>/node/<adresse>/position      {"lat":56.155, "lon":10.215, ...} (bevares)
-//! <prefix>/channel/<kanal>              {"from":"…", "text":"…", ...}
-//! homeassistant/sensor/maarse_<kort>/<nøgle>/config   discovery (bevares)
+//! <prefix>/status                       "online" / "offline" (will, retained)
+//! <prefix>/node/<address>/telemetry     {"battery_mv":3870, ...} (retained)
+//! <prefix>/node/<address>/position      {"lat":56.155, "lon":10.215, ...} (retained)
+//! <prefix>/channel/<channel>            {"from":"…", "text":"…", ...}
+//! homeassistant/sensor/maarse_<short>/<key>/config   discovery (retained)
 //! ```
 
 use maarse_core::Address;
@@ -27,7 +27,7 @@ const KEEPALIVE_S: u16 = 60;
 
 #[derive(Clone, Debug)]
 pub struct MqttConfig {
-    /// "vært:port"
+    /// "host:port"
     pub addr: String,
     pub prefix: String,
     pub user: Option<String>,
@@ -40,11 +40,11 @@ pub struct Msg {
     pub retain: bool,
 }
 
-/// Håndtag til MQTT-tråden.
+/// Handle to the MQTT thread.
 pub struct Mqtt {
     tx: Sender<Msg>,
     pub prefix: String,
-    /// Noder, vi har sendt discovery for.
+    /// Nodes we have sent discovery for.
     discovered: std::collections::HashSet<Address>,
 }
 
@@ -60,7 +60,7 @@ impl Mqtt {
         let _ = self.tx.send(Msg { topic, payload, retain });
     }
 
-    /// Telemetri fra en node (og discovery første gang).
+    /// Telemetry from a node (and discovery the first time).
     pub fn telemetry(&mut self, addr: &Address, hops: u8, t: &Telemetry) {
         if self.discovered.insert(*addr) {
             for (topic, payload) in discovery(&self.prefix, addr) {
@@ -96,7 +96,7 @@ fn node_topic(prefix: &str, a: &Address, what: &str) -> String {
     format!("{prefix}/node/{}/{what}", hex(a))
 }
 
-/// JSON-streng med anførselstegn og escaping.
+/// JSON string with quotes and escaping.
 pub fn json_str(s: &str) -> String {
     let mut o = String::with_capacity(s.len() + 2);
     o.push('"');
@@ -137,8 +137,8 @@ pub fn position_json(addr: &Address, hops: u8, p: &Position) -> String {
     let prec = match p.precision {
         Precision::Km10 => "10km",
         Precision::Km1 => "1km",
-        Precision::Precise => "præcis",
-        Precision::Off => "slukket",
+        Precision::Precise => "precise",
+        Precision::Off => "off",
     };
     format!(
         "{{\"node\":{},\"hops\":{hops},\"lat\":{:.5},\"lon\":{:.5},\"precision\":{}}}",
@@ -158,19 +158,19 @@ pub fn channel_json(channel: &str, from: &Address, hops: u8, text: &str) -> Stri
     )
 }
 
-/// Home Assistant discovery: én sensor pr. værdi i telemetrien.
+/// Home Assistant discovery: one sensor per value in the telemetry.
 pub fn discovery(prefix: &str, addr: &Address) -> Vec<(String, String)> {
     let full = hex(addr);
     let short = &full[..8];
     let state = node_topic(prefix, addr, "telemetry");
-    // (nøgle, navn, enhed, device_class, skabelon)
+    // (key, name, unit, device_class, template)
     let sensors: [(&str, &str, &str, &str, &str); 6] = [
-        ("battery_v", "Batterispænding", "V", "voltage", "{{ value_json.battery_v }}"),
-        ("battery", "Batteri", "%", "battery", "{{ value_json.battery_percent }}"),
-        ("energy", "Energistatus", "", "", "{{ value_json.energy }}"),
-        ("uptime", "Oppetid", "s", "duration", "{{ value_json.uptime_s }}"),
-        ("temperature", "Temperatur", "°C", "temperature", "{{ value_json.temperature_c }}"),
-        ("hops", "Hop", "", "", "{{ value_json.hops }}"),
+        ("battery_v", "Battery voltage", "V", "voltage", "{{ value_json.battery_v }}"),
+        ("battery", "Battery", "%", "battery", "{{ value_json.battery_percent }}"),
+        ("energy", "Energy status", "", "", "{{ value_json.energy }}"),
+        ("uptime", "Uptime", "s", "duration", "{{ value_json.uptime_s }}"),
+        ("temperature", "Temperature", "°C", "temperature", "{{ value_json.temperature_c }}"),
+        ("hops", "Hops", "", "", "{{ value_json.hops }}"),
     ];
     sensors
         .iter()
@@ -222,12 +222,12 @@ fn mqtt_str(s: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(s);
 }
 
-/// CONNECT med clean session, will `<prefix>/status` = "offline" (bevares)
-/// og valgfrit brugernavn/adgangskode.
+/// CONNECT with clean session, will `<prefix>/status` = "offline" (retained)
+/// and optional user name/password.
 pub fn connect_packet(client_id: &str, cfg: &MqttConfig) -> Vec<u8> {
     let mut v = Vec::new();
     mqtt_str(b"MQTT", &mut v);
-    v.push(4); // protokolniveau 3.1.1
+    v.push(4); // protocol level 3.1.1
     let mut flags = 0x02 | 0x04 | 0x20; // clean session, will, will retain
     if cfg.user.is_some() {
         flags |= 0x80;
@@ -262,7 +262,7 @@ pub fn publish_packet(topic: &str, payload: &[u8], retain: bool) -> Vec<u8> {
     out
 }
 
-/// Afkoder en PUBLISH-pakke (til test og mock-broker): (emne, data, retain).
+/// Decodes a PUBLISH packet (for tests and the mock broker): (topic, data, retain).
 #[cfg(test)]
 pub fn parse_publish(b: &[u8]) -> Option<(String, Vec<u8>, bool, usize)> {
     if b.first()? & 0xF0 != 0x30 {
@@ -295,12 +295,12 @@ fn session(cfg: &MqttConfig, client_id: &str, rx: &Receiver<Msg>) -> std::io::Re
     let mut ack = [0u8; 4];
     s.read_exact(&mut ack)?;
     if ack[0] != 0x20 || ack[3] != 0 {
-        eprintln!("MQTT: brokeren afviste forbindelsen (kode {})", ack[3]);
+        eprintln!("MQTT: the broker rejected the connection (code {})", ack[3]);
         return Ok(false);
     }
-    println!("  MQTT:     forbundet til {}", cfg.addr);
+    println!("  MQTT:     connected to {}", cfg.addr);
     s.write_all(&publish_packet(&format!("{}/status", cfg.prefix), b"online", true))?;
-    // Svar fra brokeren (PINGRESP) læses og smides væk i en tråd.
+    // Replies from the broker (PINGRESP) are read and discarded in a thread.
     let mut r = s.try_clone()?;
     r.set_read_timeout(None)?;
     std::thread::spawn(move || {
@@ -329,10 +329,10 @@ fn run(cfg: MqttConfig, client_id: String, rx: Receiver<Msg>) {
         match session(&cfg, &client_id, &rx) {
             Ok(true) => return,
             Ok(false) => {}
-            Err(e) => eprintln!("MQTT: {}: {e} (prøver igen om 10 s)", cfg.addr),
+            Err(e) => eprintln!("MQTT: {}: {e} (retrying in 10 s)", cfg.addr),
         }
         std::thread::sleep(Duration::from_secs(10));
-        // Beskeder, der kom, mens vi var nede, smides væk (QoS 0).
+        // Messages that arrived while we were down are discarded (QoS 0).
         while rx.try_recv().is_ok() {}
     }
 }
@@ -348,9 +348,9 @@ mod tests {
 
     #[test]
     fn packets() {
-        let p = publish_packet("a/b", b"hej", true);
-        assert_eq!(p, [0x31, 8, 0, 3, b'a', b'/', b'b', b'h', b'e', b'j']);
-        assert_eq!(parse_publish(&p), Some(("a/b".into(), b"hej".to_vec(), true, p.len())));
+        let p = publish_packet("a/b", b"hi!", true);
+        assert_eq!(p, [0x31, 8, 0, 3, b'a', b'/', b'b', b'h', b'i', b'!']);
+        assert_eq!(parse_publish(&p), Some(("a/b".into(), b"hi!".to_vec(), true, p.len())));
         let big = publish_packet("t", &[0u8; 200], false);
         assert_eq!(&big[..3], &[0x30, 203 & 0x7f | 0x80, 1]);
         assert_eq!(parse_publish(&big).unwrap().1.len(), 200);
@@ -377,8 +377,8 @@ mod tests {
         assert!(!j.contains("battery"));
         let p = Position { precision: Precision::Km1, lat_e7: 561_550_000, lon_e7: 102_150_000 };
         assert!(position_json(&a, 2, &p).contains("\"lat\":56.15500,\"lon\":10.21500,\"precision\":\"1km\""));
-        let c = channel_json("#aarhus", &a, 3, "hej \"verden\"\n");
-        assert!(c.ends_with("\"text\":\"hej \\\"verden\\\"\\n\"}"));
+        let c = channel_json("#aarhus", &a, 3, "hi \"world\"\n");
+        assert!(c.ends_with("\"text\":\"hi \\\"world\\\"\\n\"}"));
         assert_eq!(json_str("\u{1}"), "\"\\u0001\"");
     }
 
@@ -394,15 +394,15 @@ mod tests {
         assert!(p.contains("\"device_class\":\"voltage\""));
         assert!(p.contains("\"availability_topic\":\"maarse/status\""));
         assert!(p.contains(&format!("\"identifiers\":[\"maarse_{}\"]", "12".repeat(16))));
-        assert!(!d[2].1.contains("unit_of_measurement"), "energistatus har ingen enhed");
+        assert!(!d[2].1.contains("unit_of_measurement"), "energy status has no unit");
         for (_, p) in &d {
             assert!(p.starts_with('{') && p.ends_with("}}"), "{p}");
             assert_eq!(p.matches('{').count(), p.matches('}').count(), "{p}");
         }
     }
 
-    /// En lille mock-broker: accepterer CONNECT, svarer CONNACK og samler
-    /// PUBLISH-pakker.
+    /// A small mock broker: accepts CONNECT, answers CONNACK and collects
+    /// PUBLISH packets.
     #[test]
     fn publishes_to_broker() {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -441,7 +441,7 @@ mod tests {
         assert!(connect.windows(7).any(|w| w == b"offline"));
         assert_eq!(got[0], ("maarse/status".into(), "online".into(), true));
         assert!(got[1].0.starts_with("homeassistant/sensor/maarse_07070707/"));
-        assert!(got.iter().all(|g| g.2), "alt bevares");
+        assert!(got.iter().all(|g| g.2), "everything is retained");
         drop(m);
     }
 }

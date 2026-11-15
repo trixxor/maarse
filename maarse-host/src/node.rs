@@ -1,5 +1,5 @@
-//! Nodens hovedløkke: routing, kryptering, announces, filer, postkasser og
-//! webklienter.
+//! The node's main loop: routing, encryption, announces, files, mailboxes and
+//! web clients.
 
 mod ext;
 mod pages;
@@ -31,32 +31,32 @@ use maarse_crypto::{
     Identity, PublicIdentity, channel_address, hashtag_key, public_channel_key, verify_announce,
 };
 
-/// Hvor ofte vi sender et announce.
+/// How often we send an announce.
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(600);
-/// Beskeder fra ukendte afsendere gemmes, mens vi venter på et announce.
+/// Messages from unknown senders are kept while we wait for an announce.
 const PENDING_MAX: usize = 32;
-/// Hvor ofte filer og postkasser tjekkes.
+/// How often files and mailboxes are checked.
 const HOUSEKEEPING_EVERY: Duration = Duration::from_secs(2);
-/// Bidder af en fil, der må være undervejs på én gang.
+/// Chunks of a file that may be in flight at once.
 const FILE_WINDOW: usize = 8;
-/// En bid gensendes, hvis den ikke er kvitteret inden for denne tid.
+/// A chunk is resent if it is not acknowledged within this time.
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(20);
-/// En fil opgives efter denne tid.
+/// A file is abandoned after this time.
 const FILE_TIMEOUT: Duration = Duration::from_secs(600);
-/// Uden kvittering inden for denne tid lægges en besked i modtagerens postkasse.
+/// Without an acknowledgement within this time a message is put in the recipient's mailbox.
 const DEPOSIT_AFTER: Duration = Duration::from_secs(45);
-/// Postkassen gemmer højst så mange beskeder pr. modtager, så længe.
+/// The mailbox keeps at most this many messages per recipient, for this long.
 const MAILBOX_PER_RECIPIENT: usize = 100;
 const MAILBOX_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
-/// Hvor ofte DHT'en vedligeholdes (bootstrap, udgivelser, udløb).
+/// How often the DHT is maintained (bootstrap, publications, expiry).
 const DHT_EVERY: Duration = Duration::from_secs(5);
-/// Samme adresse slås højst op så ofte.
+/// The same address is looked up at most this often.
 const DHT_LOOKUP_EVERY: Duration = Duration::from_secs(30);
-/// Højst så mange gateways forbindes der til via DHT-opslag.
+/// At most this many gateways are connected to via DHT lookups.
 const DHT_MAX_DYNAMIC: usize = 32;
-/// Announce-felt: postkassens adresse.
+/// Announce field: the mailbox's address.
 const APP_POSTBOX: u8 = 0x01;
-/// En ny FS-session sendes højst så ofte til samme kontakt (resync).
+/// A new FS session is sent at most this often to the same contact (resync).
 const RESYNC_EVERY: Duration = Duration::from_secs(60);
 
 enum Timer {
@@ -67,7 +67,7 @@ enum Timer {
     Dht,
 }
 
-/// En fil, som en klient er ved at overføre til noden.
+/// A file that a client is transferring to the node.
 struct Upload {
     dest: Address,
     size: u32,
@@ -88,13 +88,13 @@ struct OutFile {
     done: u16,
     in_flight: HashMap<u16, Instant>,
     created: Instant,
-    /// Filens størrelse i bytes (klartekst).
+    /// The file's size in bytes (plaintext).
     size: u32,
-    /// Det forseglede tilbud, som det blev sendt (til filpostkassen).
+    /// The sealed offer as it was sent (for the file mailbox).
     sealed_offer: Vec<u8>,
-    /// Forseglede bidder fra filpostkassen (ellers forsegles de undervejs).
+    /// Sealed chunks from the file mailbox (otherwise they are sealed on the way).
     sealed_chunks: Option<Vec<Vec<u8>>>,
-    /// Leveres fra filpostkassen.
+    /// Delivered from the file mailbox.
     from_box: bool,
 }
 
@@ -106,18 +106,18 @@ struct InFile {
     created: Instant,
 }
 
-/// Hvad en kvittering hører til.
+/// What an acknowledgement belongs to.
 enum Pending {
     Message,
     FileOffer(u64),
     FileChunk(u64, u16),
     Deposit(u64),
     MailDelivery(Address),
-    /// Kontrolkommando til en fjern node (lægges aldrig i postkasse).
+    /// Control command to a remote node (never put in a mailbox).
     Control,
 }
 
-/// En sendt direkte besked, der måske skal i postkassen.
+/// A sent direct message that may need to go to the mailbox.
 struct OutMsg {
     dest: Address,
     sealed: Vec<u8>,
@@ -147,21 +147,21 @@ pub struct Node {
     addr: Address,
     router: Router<1024, 4096>,
     known: HashMap<Address, PublicIdentity>,
-    /// Kontakter, der melder forward secrecy i deres announce.
+    /// Contacts that advertise forward secrecy in their announce.
     fs_peers: HashSet<Address>,
-    /// Forward secrecy-sessioner (gemt i `sessioner.bin`).
+    /// Forward secrecy sessions (stored in `sessions.bin`).
     sessions: crate::sessions::Sessions,
-    /// Hvornår vi sidst startede en ny session pga. en ulæselig besked.
+    /// When we last started a new session because of an unreadable message.
     resynced: HashMap<Address, Instant>,
     postboxes: HashMap<Address, Address>,
     my_postbox: Option<Address>,
-    /// Kanaladresse -> (navn, nøgle)
+    /// Channel address -> (name, key)
     channels: HashMap<Address, (String, [u8; 32])>,
     links: HashMap<LinkId, (String, Sender<Vec<u8>>)>,
-    /// Regioner, som backbone-peers har meldt (strict, id'er). Links uden
-    /// hilsen (ældre hosts, seriel) står ikke her og får alt.
+    /// Regions that backbone peers have reported (strict, ids). Links without
+    /// a hello (older hosts, serial) are not here and get everything.
     link_regions: HashMap<LinkId, (bool, Vec<u16>)>,
-    /// Vores regionsnavne (små bogstaver).
+    /// Our region names (lower case).
     region_names: Vec<String>,
     clients: HashMap<ClientId, Sender<Vec<u8>>>,
     timers: BinaryHeap<Reverse<(Instant, u64)>>,
@@ -174,62 +174,62 @@ pub struct Node {
     outbox: HashMap<u64, OutMsg>,
     uploads: HashMap<(ClientId, u16), Upload>,
     pages: pages::Pages,
-    /// IP-tunnel: adapter (hvis `--tun`), samling af stykker og løbenummer.
+    /// IP tunnel: adapter (if `--tun`), reassembly of pieces and sequence number.
     tun_tx: Option<Sender<Vec<u8>>>,
     tunnel: crate::tunnel::Tunnel,
-    /// Tillad tunneltrafik over LoRa (`--tun-lora`).
+    /// Allow tunnel traffic over LoRa (`--tun-lora`).
     tun_lora: bool,
     out_files: HashMap<u64, OutFile>,
     in_files: HashMap<u64, InFile>,
     mailbox: HashMap<Address, HashMap<u64, Mail>>,
     max_file: u32,
-    // ---------- filgrænser og filpostkasse (se filebox.rs) ----------
-    /// Linket, den pakke vi er ved at behandle, kom ind på.
+    // ---------- file limits and file mailbox (see filebox.rs) ----------
+    /// The link the packet we are processing came in on.
     rx_link: Option<LinkId>,
-    /// Hvor hver adresse sidst blev hørt: link, TCP?, hop.
+    /// Where each address was last heard: link, TCP?, hops.
     heard_via: HashMap<Address, (LinkId, bool, u8)>,
     filebox: FileBox,
-    /// Den seneste forseglede besked fra `send_sealed`.
+    /// The latest sealed message from `send_sealed`.
     last_sealed: Vec<u8>,
     data_dir: PathBuf,
     start: Instant,
     counters: Counters,
-    /// Hvem må administrere denne node over radio/backbone.
+    /// Who may administer this node over radio/backbone.
     admins: Vec<Address>,
-    /// Sidste tæller i en udgående kontrolkommando (skal stige strengt).
+    /// Last counter in an outgoing control command (must increase strictly).
     last_control: u32,
-    /// Seneste kontroltæller pr. administrator (mod genafspilning).
+    /// Latest control counter per administrator (against replay).
     control_seen: HashMap<Address, u32>,
-    /// Seneste modtagne beskeder, så en klient, der forbinder senere, også
-    /// får dem (fx beskeder hentet fra postkassen lige efter opstart).
+    /// Latest received messages, so a client that connects later also
+    /// gets them (e.g. messages fetched from the mailbox right after startup).
     inbox: std::collections::VecDeque<Event>,
-    /// Til tråde (DHT-opslag) og nye forbindelser.
+    /// For threads (DHT lookups) and new connections.
     tx: Option<Sender<In>>,
     dht: Dht,
-    /// Diagnose, deling og MQTT (se node/ext.rs).
+    /// Diagnostics, sharing and MQTT (see node/ext.rs).
     ext: ext::Ext,
-    /// Beskedhistorik til flere skærme (se history.rs og node/hist.rs).
+    /// Message history for several screens (see history.rs and node/hist.rs).
     hist: hist::Hist,
 }
 
-/// Backbone-DHT'ens tilstand (se dht.rs).
+/// The backbone DHT's state (see dht.rs).
 struct Dht {
     table: dht::Table,
     store: dht::Store,
-    /// Vores offentlige endpoint; uden det udgiver vi intet.
+    /// Our public endpoint; without it we publish nothing.
     public_ep: Option<String>,
-    /// Startpunkter (kendes kun ved endpoint).
+    /// Seeds (known only by endpoint).
     seeds: Vec<String>,
-    /// Endpoints, vi allerede har en pakkeforbindelse til (eller er ved at få).
+    /// Endpoints we already have a packet connection to (or are getting one).
     peers: HashSet<String>,
-    /// Gateways, vi har forbundet til på grund af et opslag.
+    /// Gateways we connected to because of a lookup.
     dynamic: HashSet<String>,
-    /// Adresser, vi kan nå: seneste announce, hop og hvornår vi udgav det.
+    /// Addresses we can reach: latest announce, hops and when we published it.
     heard: HashMap<Address, (Vec<u8>, u8, Option<Instant>)>,
-    /// Hvornår vi sidst slog en adresse op (mod gentagne opslag).
+    /// When we last looked up an address (against repeated lookups).
     looked_up: HashMap<Address, Instant>,
     last_bootstrap: Option<Instant>,
-    /// Beskeder til ukendte modtagere, der venter på et opslag.
+    /// Messages to unknown recipients waiting for a lookup.
     waiting: HashMap<Address, Vec<(ClientId, u16, Vec<u8>)>>,
     lookups: u32,
     found: u32,
@@ -242,10 +242,10 @@ fn unix_now() -> u32 {
         .unwrap_or(0)
 }
 
-/// Til log: hvilket krypteringsformat en direkte besked brugte.
+/// For the log: which encryption format a direct message used.
 fn format_name(f: Format) -> &'static str {
     match f {
-        Format::Static => "statisk, uden forward secrecy",
+        Format::Static => "static, without forward secrecy",
         Format::Init => "forward secrecy: init",
         Format::Ratchet => "forward secrecy",
     }
@@ -261,7 +261,7 @@ fn token() -> [u8; 16] {
     t
 }
 
-/// Læser en privat kanal fra `channels.txt`: `!<64 hex-tegn> <navn>`.
+/// Reads a private channel from `channels.txt`: `!<64 hex chars> <name>`.
 fn parse_private_line(line: &str) -> Option<(String, [u8; 32])> {
     let rest = line.strip_prefix('!')?;
     let (hex, name) = rest.split_once(' ').unwrap_or((rest, ""));
@@ -275,14 +275,14 @@ fn parse_private_line(line: &str) -> Option<(String, [u8; 32])> {
     Some((name.to_string(), key))
 }
 
-/// `offentlig` / `public` -> den offentlige kanal, alt andet -> `#navn`.
+/// `public` -> the public channel, everything else -> `#name`.
 fn normalize_channel(name: &str) -> (String, [u8; 32]) {
     let n = name.trim().to_lowercase();
     if matches!(
         n.as_str(),
-        "offentlig" | "#offentlig" | "public" | "#public" | ""
+        "public" | "#public" | ""
     ) {
-        ("offentlig".into(), public_channel_key())
+        ("public".into(), public_channel_key())
     } else {
         let n = if n.starts_with('#') {
             n
@@ -294,14 +294,14 @@ fn normalize_channel(name: &str) -> (String, [u8; 32]) {
     }
 }
 
-/// Filnavn uden stier og mærkelige tegn.
+/// File name without paths and odd characters.
 fn safe_name(name: &[u8]) -> String {
     let s: String = String::from_utf8_lossy(name)
         .chars()
         .filter(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' '))
         .collect();
     let s = s.trim().trim_start_matches('.').to_string();
-    if s.is_empty() { "fil".into() } else { s }
+    if s.is_empty() { "file".into() } else { s }
 }
 
 fn small(b: &[u8]) -> Small {
@@ -326,7 +326,7 @@ impl Node {
         };
         let addr = identity.address();
         let mut router = Router::new(addr, Role::Repeater);
-        // Kun hurtige links her: korte tidsslots, ellers venter hvert hop unødigt.
+        // Only fast links here: short time slots, otherwise every hop waits needlessly.
         router.slot_ms = 5;
 
         let mut node = Node {
@@ -335,7 +335,7 @@ impl Node {
             router,
             known: HashMap::new(),
             fs_peers: HashSet::new(),
-            sessions: crate::sessions::Sessions::load(cfg.data_dir.join("sessioner.bin")),
+            sessions: crate::sessions::Sessions::load(cfg.data_dir.join("sessions.bin")),
             resynced: HashMap::new(),
             postboxes: HashMap::new(),
             my_postbox: cfg.postbox,
@@ -364,7 +364,7 @@ impl Node {
             rx_link: None,
             heard_via: HashMap::new(),
             filebox: FileBox::open(
-                cfg.data_dir.join("filpostkasse"),
+                cfg.data_dir.join("file-mailbox"),
                 cfg.max_file,
                 cfg.filebox_per_recipient,
                 cfg.filebox_total,
@@ -413,7 +413,7 @@ impl Node {
             }
         }
         let saved = fs::read_to_string(node.data_dir.join("channels.txt")).unwrap_or_default();
-        node.join_channel("offentlig", false);
+        node.join_channel("public", false);
         for line in saved.lines().filter(|l| !l.trim().is_empty()) {
             if let Some((name, key)) = parse_private_line(line) {
                 node.join_private_channel(&name, key, false);
@@ -422,8 +422,8 @@ impl Node {
             }
         }
         node.load_mailbox();
-        // Regioner: kommandolinjen vinder over de gemte (regions.txt: ét navn
-        // pr. linje, og evt. linjen "!strict").
+        // Regions: the command line wins over the saved ones (regions.txt: one name
+        // per line, and optionally the line "!strict").
         if cfg.regions.is_empty() && !cfg.strict_region {
             let saved = fs::read_to_string(node.data_dir.join("regions.txt")).unwrap_or_default();
             let strict = saved.lines().any(|l| l.trim() == "!strict");
@@ -454,7 +454,7 @@ impl Node {
         println!("[node] {}", msg.as_ref());
     }
 
-    // ---------- hovedløkke ----------
+    // ---------- main loop ----------
 
     pub fn run(mut self, rx: Receiver<In>, tx: Sender<In>) {
         self.tx = Some(tx);
@@ -516,17 +516,17 @@ impl Node {
     fn handle(&mut self, msg: In) {
         match msg {
             In::LinkUp { id, name, tx } => {
-                self.log(format!("link oppe: {name}"));
+                self.log(format!("link up: {name}"));
                 if name.starts_with("tcp") {
                     let _ = tx.send(self.region_hello());
                 }
                 self.links.insert(id, (name, tx));
                 self.announce();
-                self.broadcast_log(format!("Link oppe ({} i alt)", self.links.len()));
+                self.broadcast_log(format!("Link up ({} in total)", self.links.len()));
             }
             In::LinkRegions { id, strict, regions } => {
                 if let Some((name, _)) = self.links.get(&id) {
-                    self.log(format!("{name}: regioner {regions:04x?}{}", if strict { " (strict)" } else { "" }));
+                    self.log(format!("{name}: regions {regions:04x?}{}", if strict { " (strict)" } else { "" }));
                 }
                 self.link_regions.insert(id, (strict, regions));
             }
@@ -534,8 +534,8 @@ impl Node {
                 self.link_regions.remove(&id);
                 self.heard_via.retain(|_, v| v.0 != id);
                 if let Some((name, _)) = self.links.remove(&id) {
-                    self.log(format!("link nede: {name}"));
-                    self.broadcast_log(format!("Link nede ({} tilbage)", self.links.len()));
+                    self.log(format!("link down: {name}"));
+                    self.broadcast_log(format!("Link down ({} left)", self.links.len()));
                 }
             }
             In::Packet { data, snr, link } => {
@@ -549,7 +549,7 @@ impl Node {
                     // A LoRa modem (USB or Wi-Fi): the SNR is real.
                     self.counters.last_snr = Some(snr);
                 }
-                // Kun ruteforespørgsler med gyldigt arbejdsbevis udløser opslag.
+                // Only route requests with a valid proof of work trigger lookups.
                 if let Ok(p) = Packet::decode(&data)
                     && p.header.ptype == PacketType::PathRequest
                     && stamp::verify(p.header.ptype, &p.header.dest, p.payload).is_ok()
@@ -590,20 +590,20 @@ impl Node {
                     &Event::Error {
                         req: 0,
                         code: error_code::BAD_FRAME,
-                        text: text(b"ugyldig ramme"),
+                        text: text(b"invalid frame"),
                     },
                 ),
             },
         }
     }
 
-    // ---------- udsendelse ----------
+    // ---------- transmission ----------
 
     fn send_links(&mut self, packet: &[u8]) {
         let header = Header::decode(packet).ok().map(|(h, _)| h);
         let region = header.as_ref().map_or(0, |h| h.region);
-        // Filbidder til en modtager, der nås over TCP, sendes ikke ud over
-        // et LoRa-modem (de ville kun optage kanalen).
+        // File chunks to a recipient reached over TCP are not sent out over
+        // a LoRa modem (they would only occupy the channel).
         let tcp_only = header
             .as_ref()
             .is_some_and(|h| h.ptype == PacketType::Fragment && self.path_kind(&h.dest) == PathKind::Tcp);
@@ -611,7 +611,7 @@ impl Node {
             if tcp_only && !name.starts_with("tcp") {
                 continue;
             }
-            // Floods med region kun til peers, der betjener regionen.
+            // Floods with a region only to peers that serve the region.
             if region != 0
                 && let Some((strict, regions)) = self.link_regions.get(id)
                 && !maarse_core::region::forwards(regions, *strict, region)
@@ -678,7 +678,7 @@ impl Node {
         let Some(payload) = self.identity.announce(unix_now(), &app) else {
             return;
         };
-        // Arbejdsbevis (ca. 4.096 forsøg, under 1 ms på en PC).
+        // Proof of work (about 4,096 attempts, under 1 ms on a PC).
         let mut stamped = payload.clone();
         if !stamp::append(PacketType::Announce, &self.addr, &mut stamped) {
             return;
@@ -687,11 +687,11 @@ impl Node {
         if let Ok(pkt) = encode(&header, &stamped) {
             self.send_links(&pkt);
         }
-        // Vores egen adresse kan altid nås her.
+        // Our own address can always be reached here.
         self.dht.heard.insert(self.addr, (payload.to_vec(), 0, None));
     }
 
-    /// Krypterer og sender en direkte besked. Returnerer beskedens ID.
+    /// Encrypts and sends a direct message. Returns the message's ID.
     fn send_sealed(
         &mut self,
         dest: Address,
@@ -701,22 +701,22 @@ impl Node {
         let recipient = *self
             .known
             .get(&dest)
-            .ok_or("Modtageren er ikke hørt endnu (intet announce)")?;
+            .ok_or("The recipient has not been heard yet (no announce)")?;
         let mut ct = [0u8; 255];
         let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
         let (n, format) =
             ratchet::seal(&self.identity, &recipient, &mut self.sessions, fs_ok, &mut OsRng, plain, &mut ct)
-                .map_err(|_| "Beskeden er for lang")?;
+                .map_err(|_| "The message is too long")?;
         self.sessions.save();
         self.last_sealed = ct[..n].to_vec();
         if matches!(kind, Pending::Message) {
-            self.log(format!("besked til {} ({})", short(&dest), format_name(format)));
+            self.log(format!("message to {} ({})", short(&dest), format_name(format)));
         }
         let now = self.now_ms();
         let (msg_id, actions) = self
             .router
             .send_direct(dest, &ct[..n], token(), now)
-            .map_err(|_| "Køen er fuld, prøv igen om lidt")?;
+            .map_err(|_| "The queue is full, try again shortly")?;
         if matches!(kind, Pending::Message) {
             self.outbox.insert(
                 msg_id,
@@ -762,7 +762,7 @@ impl Node {
             Some(Pending::FileChunk(file_id, idx)) => self.chunk_acked(file_id, idx),
             Some(Pending::Deposit(orig)) => {
                 self.counters.deposits += 1;
-                self.log("besked lagt i postkasse");
+                self.log("message put in mailbox");
                 self.broadcast(&Event::Deposited { msg_id: orig });
             }
             Some(Pending::MailDelivery(recipient)) => {
@@ -770,13 +770,13 @@ impl Node {
                     m.remove(&msg_id);
                 }
                 self.counters.mail_delivered += 1;
-                self.log(format!("postkasse: leveret til {}", short(&recipient)));
+                self.log(format!("mailbox: delivered to {}", short(&recipient)));
                 self.save_mailbox();
             }
         }
     }
 
-    // ---------- modtagelse ----------
+    // ---------- reception ----------
 
     fn on_deliver(&mut self, ptype: PacketType, dest: Address, payload: &[u8], hops: u8) {
         match ptype {
@@ -802,7 +802,7 @@ impl Node {
                         });
                     }
                     Ok(_) => {}
-                    Err(e) => self.log(format!("kanalbesked kunne ikke åbnes: {e:?}")),
+                    Err(e) => self.log(format!("channel message could not be opened: {e:?}")),
                 }
             }
             _ => {}
@@ -821,7 +821,7 @@ impl Node {
                 }
                 self.on_app_data(dest, hops, a.app_data);
                 if self.known.insert(dest, a.identity).is_none() {
-                    self.log(format!("ny node hørt: {}", short(&dest)));
+                    self.log(format!("new node heard: {}", short(&dest)));
                     if let Ok(mut f) = fs::OpenOptions::new()
                         .create(true)
                         .append(true)
@@ -842,7 +842,7 @@ impl Node {
                 self.retry_pending();
                 self.flush_mailbox(dest);
             }
-            Err(e) => self.log(format!("afvist announce fra {}: {e:?}", short(&dest))),
+            Err(e) => self.log(format!("rejected announce from {}: {e:?}", short(&dest))),
         }
     }
 
@@ -860,7 +860,7 @@ impl Node {
         match res {
             Ok(o) => {
                 if o.format != Format::Static {
-                    // Den kan forward secrecy, også selv om vi ikke har hørt det.
+                    // It supports forward secrecy, even if we have not heard so.
                     self.fs_peers.insert(o.from);
                 }
                 self.on_content(o.from, &out[..o.len], hops, o.format)
@@ -868,7 +868,7 @@ impl Node {
             Err(CryptoError::UnknownSender(a)) => {
                 if first_time {
                     self.log(format!(
-                        "besked fra ukendt {}: venter på announce",
+                        "message from unknown {}: waiting for announce",
                         short(&a)
                     ));
                 }
@@ -880,20 +880,20 @@ impl Node {
             Err(CryptoError::NoSession(a) | CryptoError::Desync(a)) => {
                 self.counters.errors += 1;
                 self.log(format!(
-                    "besked fra {} kunne ikke læses (sessionen er tabt eller ude af trit)",
+                    "message from {} could not be read (the session is lost or out of step)",
                     short(&a)
                 ));
                 self.resync(a);
             }
             Err(e) => {
                 self.counters.errors += 1;
-                self.log(format!("besked kunne ikke åbnes: {e:?}"));
+                self.log(format!("message could not be opened: {e:?}"));
             }
         }
     }
 
-    /// Starter en ny FS-session med `peer` og sender en tom resync-besked,
-    /// så modparten skifter til den (højst hvert [`RESYNC_EVERY`]).
+    /// Starts a new FS session with `peer` and sends an empty resync message,
+    /// so the peer switches to it (at most every [`RESYNC_EVERY`]).
     fn resync(&mut self, peer: Address) {
         let Some(id) = self.known.get(&peer).copied() else {
             return;
@@ -914,11 +914,11 @@ impl Node {
             Some(Content::Call(data)) => self.on_call(from, data),
             Some(Content::Ip(data)) => self.on_tun_control(from, data),
             Some(Content::Resync) => {
-                self.log(format!("{} startede en ny krypteringssession", short(&from)));
+                self.log(format!("{} started a new encryption session", short(&from)));
             }
             Some(Content::Text(t)) => {
                 self.log(format!(
-                    "besked fra {} ({hops} hop, {})",
+                    "message from {} ({hops} hops, {})",
                     short(&from),
                     format_name(format)
                 ));
@@ -933,7 +933,7 @@ impl Node {
             Some(Content::ControlReply(_, frame)) => {
                 self.broadcast(&Event::RemoteReply { from, frame: text(frame) });
             }
-            Some(Content::Unknown(t)) => self.log(format!("ukendt indholdstype {t}")),
+            Some(Content::Unknown(t)) => self.log(format!("unknown content type {t}")),
             None => {}
         }
     }
@@ -941,24 +941,24 @@ impl Node {
     fn retry_pending(&mut self) {
         let pending = std::mem::take(&mut self.pending_rx);
         for (p, hops) in pending {
-            // Er afsenderen stadig ukendt, lægges den tilbage i køen.
+            // If the sender is still unknown, it is put back in the queue.
             self.open_direct(p, hops, false);
         }
     }
 
-    // ---------- filer ----------
+    // ---------- files ----------
 
     fn start_file(&mut self, id: ClientId, req: u16) {
         let Some(up) = self.uploads.remove(&(id, req)) else {
             return self.send_client(
                 id,
-                &err_ev(req, error_code::NO_FILE, "Ingen fil under upload"),
+                &err_ev(req, error_code::NO_FILE, "No file being uploaded"),
             );
         };
         if up.data.len() != up.size as usize {
             return self.send_client(
                 id,
-                &err_ev(req, error_code::NO_FILE, "Filen blev ikke overført helt"),
+                &err_ev(req, error_code::NO_FILE, "The file was not transferred completely"),
             );
         }
         let (dest, size) = (up.dest, up.size);
@@ -972,8 +972,8 @@ impl Node {
         }
     }
 
-    /// Sender `data` som en fil til `dest` (tilbud og derefter bidder).
-    /// Returnerer (fil-ID, antal bidder).
+    /// Sends `data` as a file to `dest` (offer and then chunks).
+    /// Returns (file ID, number of chunks).
     pub(crate) fn send_file_bytes(
         &mut self,
         dest: Address,
@@ -984,7 +984,7 @@ impl Node {
         let size = data.len() as u32;
         let chunks = data.len().div_ceil(CHUNK_DATA).max(1);
         if chunks > u16::MAX as usize {
-            return Err((error_code::FILE_TOO_LARGE, "Filen er for stor"));
+            return Err((error_code::FILE_TOO_LARGE, "The file is too large"));
         }
         let mut file_id_b = [0u8; 8];
         OsRng.fill_bytes(&mut file_id_b);
@@ -1025,11 +1025,11 @@ impl Node {
                 from_box: false,
             },
         );
-        self.log(format!("sender fil ({chunks} bidder) til {}", short(&dest)));
+        self.log(format!("sending file ({chunks} chunks) to {}", short(&dest)));
         Ok((file_id, chunks as u16))
     }
 
-    /// Sender flere bidder, så længe vinduet tillader det.
+    /// Sends more chunks as long as the window allows.
     fn pump_file(&mut self, file_id: u64) {
         loop {
             let Some(f) = self.out_files.get(&file_id) else {
@@ -1038,7 +1038,7 @@ impl Node {
             if !f.offer_acked || f.in_flight.len() >= FILE_WINDOW {
                 return;
             }
-            // Over 8 KB kun ad en rute, vi ved er TCP hele vejen.
+            // Over 8 KB only along a route we know is TCP all the way.
             if f.size > LORA_MAX_FILE && self.path_kind(&f.dest) != PathKind::Tcp {
                 return;
             }
@@ -1071,7 +1071,7 @@ impl Node {
                     }
                     self.apply(actions.into_iter().collect());
                 }
-                Err(_) => return, // Ingen rute lige nu; prøves igen senere.
+                Err(_) => return, // No route right now; retried later.
             }
         }
     }
@@ -1097,12 +1097,12 @@ impl Node {
             if boxed {
                 self.filebox.remove(file_id);
             }
-            self.log(if boxed { "fil leveret fra filpostkassen" } else { "fil leveret" });
+            self.log(if boxed { "file delivered from the file mailbox" } else { "file delivered" });
             self.broadcast(&Event::FileDone {
                 file_id,
                 ok: true,
                 outgoing: true,
-                text: text(if boxed { b"leveret fra postkasse" } else { b"leveret" }),
+                text: text(if boxed { b"delivered from mailbox" } else { b"delivered" }),
             });
         } else {
             self.pump_file(file_id);
@@ -1115,7 +1115,7 @@ impl Node {
             || offer.chunk_size == 0
         {
             self.log(format!(
-                "fil fra {} afvist (for stor eller ugyldig)",
+                "file from {} rejected (too large or invalid)",
                 short(&from)
             ));
             return;
@@ -1131,7 +1131,7 @@ impl Node {
             name: text(&offer.name),
         });
         self.log(format!(
-            "fil på vej fra {}: {} bytes",
+            "file on its way from {}: {} bytes",
             short(&from),
             offer.size
         ));
@@ -1187,15 +1187,15 @@ impl Node {
                 file_id,
                 ok: false,
                 outgoing: false,
-                text: text(b"kontrolsum passer ikke"),
+                text: text(b"checksum mismatch"),
             });
             return;
         }
-        let dir = self.data_dir.join("filer");
+        let dir = self.data_dir.join("files");
         let _ = fs::create_dir_all(&dir);
         let name = format!("{}-{}", short(&f.from), safe_name(&f.offer.name));
         let _ = fs::write(dir.join(&name), &data);
-        self.log(format!("fil modtaget: {name} ({} bytes)", data.len()));
+        self.log(format!("file received: {name} ({} bytes)", data.len()));
         for (i, part) in data.chunks(MAX_TEXT).enumerate() {
             self.broadcast(&Event::FileChunk {
                 file_id,
@@ -1211,16 +1211,16 @@ impl Node {
         });
     }
 
-    // ---------- filgrænser og filpostkasse (se filebox.rs) ----------
+    // ---------- file limits and file mailbox (see filebox.rs) ----------
 
-    /// Rutens type til `dest` ud fra, hvor den sidst blev hørt.
+    /// The route type to `dest` based on where it was last heard.
     fn path_kind(&self, dest: &Address) -> PathKind {
         let heard = self.heard_via.get(dest);
         if heard.is_none() {
             return PathKind::Unknown;
         }
         let in_dht = |a: &Address| self.dht.table.closest(a, 1).first().is_some_and(|c| c.id == *a);
-        // Kendte backbone-hosts: direkte TCP-naboer (0 hop) og DHT-kontakter.
+        // Known backbone hosts: direct TCP neighbours (0 hops) and DHT contacts.
         let host_ids: HashSet<u16> = self
             .heard_via
             .iter()
@@ -1238,13 +1238,13 @@ impl Node {
     }
 
     fn file_limit(&self, dest: &Address) -> filebox::Limit {
-        // Hosten kender ikke modemets radioindstillinger; EU-standarden
-        // (SF9, 125 kHz, 10 % duty cycle) bruges til at anslå sendetiden.
+        // The host does not know the modem's radio settings; the EU default
+        // (SF9, 125 kHz, 10 % duty cycle) is used to estimate the airtime.
         let radio = maarse_core::companion::RadioConfig::EU_DEFAULT;
         filebox::limit(self.path_kind(dest), self.max_file, self.filebox.enabled(), &radio)
     }
 
-    /// Lægger en udgående fil i filpostkassen (forseglet tilbud og bidder).
+    /// Puts an outgoing file in the file mailbox (sealed offer and chunks).
     fn deposit_file(&mut self, file_id: u64) -> bool {
         let Some(f) = self.out_files.get(&file_id) else {
             return false;
@@ -1272,7 +1272,7 @@ impl Node {
                 self.out_files.remove(&file_id);
                 self.counters.deposits += 1;
                 self.log(format!(
-                    "modtager svarer ikke; fil ({} bytes) lagt i filpostkassen til {}",
+                    "recipient not answering; file ({} bytes) put in the file mailbox for {}",
                     b.size,
                     short(&b.recipient)
                 ));
@@ -1280,19 +1280,19 @@ impl Node {
                     file_id,
                     ok: true,
                     outgoing: true,
-                    text: text("lagt i postkasse".as_bytes()),
+                    text: text("put in mailbox".as_bytes()),
                 });
                 true
             }
             Err(e) => {
-                self.log(format!("fil kunne ikke lægges i filpostkassen: {}", e.danish()));
+                self.log(format!("file could not be put in the file mailbox: {}", e.message()));
                 false
             }
         }
     }
 
-    /// Prøver at levere ventende filer til `recipient`. Filer over 8 KB
-    /// venter, til modtageren nås over TCP.
+    /// Tries to deliver waiting files to `recipient`. Files over 8 KB
+    /// wait until the recipient is reached over TCP.
     fn flush_filebox(&mut self, recipient: Address) {
         let waiting = self.filebox.waiting_for(&recipient);
         if waiting.is_empty() || !self.known.contains_key(&recipient) {
@@ -1308,7 +1308,7 @@ impl Node {
             };
             if b.size > LORA_MAX_FILE && kind != PathKind::Tcp {
                 self.log(format!(
-                    "filpostkasse: fil til {} ({} bytes) venter på en TCP-rute",
+                    "file mailbox: file for {} ({} bytes) waiting for a TCP route",
                     short(&recipient),
                     b.size
                 ));
@@ -1318,7 +1318,7 @@ impl Node {
             let Ok((msg_id, actions)) = self.router.send_direct(recipient, &b.offer, token(), now) else {
                 continue;
             };
-            self.log(format!("filpostkasse: leverer fil ({} bytes) til {}", b.size, short(&recipient)));
+            self.log(format!("file mailbox: delivering file ({} bytes) to {}", b.size, short(&recipient)));
             let n = b.chunks.len();
             self.out_files.insert(
                 file_id,
@@ -1345,7 +1345,7 @@ impl Node {
         }
     }
 
-    // ---------- postkasse ----------
+    // ---------- mailbox ----------
 
     fn on_deposit(&mut self, payload: &[u8]) {
         let Some(recipient) = Address::from_slice(payload) else {
@@ -1355,7 +1355,7 @@ impl Node {
         let id = maarse_core::dedup::packet_id(PacketType::Data, &recipient, &sealed);
         let box_ = self.mailbox.entry(recipient).or_default();
         if box_.len() >= MAILBOX_PER_RECIPIENT {
-            self.log(format!("postkasse fuld for {}", short(&recipient)));
+            self.log(format!("mailbox full for {}", short(&recipient)));
             return;
         }
         box_.insert(
@@ -1367,15 +1367,15 @@ impl Node {
         );
         let count = box_.len();
         self.log(format!(
-            "postkasse: gemt besked til {} ({count} i alt)",
+            "mailbox: stored message for {} ({count} in total)",
             short(&recipient)
         ));
         self.save_mailbox();
-        // Måske er modtageren her allerede.
+        // Maybe the recipient is already here.
         self.flush_mailbox(recipient);
     }
 
-    /// Prøver at levere ventende post til `recipient`.
+    /// Tries to deliver waiting mail to `recipient`.
     fn flush_mailbox(&mut self, recipient: Address) {
         self.flush_filebox(recipient);
         let Some(mails) = self.mailbox.get(&recipient) else {
@@ -1388,7 +1388,7 @@ impl Node {
         }
         let items: Vec<Vec<u8>> = mails.values().map(|m| m.sealed.clone()).collect();
         self.log(format!(
-            "postkasse: prøver at levere {} besked(er) til {}",
+            "mailbox: trying to deliver {} message(s) to {}",
             items.len(),
             short(&recipient)
         ));
@@ -1425,7 +1425,7 @@ impl Node {
                 .send_typed(PacketType::Deposit, postbox, &payload, token(), now)
         {
             self.log(format!(
-                "modtager svarer ikke; lægger besked i postkasse {}",
+                "recipient not answering; putting message in mailbox {}",
                 short(&postbox)
             ));
             self.awaiting.insert(dep_id, Pending::Deposit(msg_id));
@@ -1434,7 +1434,7 @@ impl Node {
     }
 
     fn save_mailbox(&self) {
-        // Format: modtager (16) | gemt (u64 sek.) | længde (u16) | besked
+        // Format: recipient (16) | stored (u64 sec.) | length (u16) | message
         let mut b = Vec::new();
         for (r, mails) in &self.mailbox {
             for m in mails.values() {
@@ -1449,11 +1449,11 @@ impl Node {
                 b.extend_from_slice(&m.sealed);
             }
         }
-        let _ = fs::write(self.data_dir.join("postkasse.bin"), b);
+        let _ = fs::write(self.data_dir.join("mailbox.bin"), b);
     }
 
     fn load_mailbox(&mut self) {
-        let Ok(b) = fs::read(self.data_dir.join("postkasse.bin")) else {
+        let Ok(b) = fs::read(self.data_dir.join("mailbox.bin")) else {
             return;
         };
         let mut i = 0;
@@ -1476,14 +1476,14 @@ impl Node {
         }
     }
 
-    // ---------- vedligehold ----------
+    // ---------- maintenance ----------
 
     fn housekeeping(&mut self) {
         self.tun_tick();
         self.hist_maintain();
         let now = Instant::now();
-        // Beskeder uden kvittering: læg dem i modtagerens postkasse.
-        // MAARSE_DEPOSIT_AFTER_S gør det muligt at teste postkassen hurtigt.
+        // Messages without an acknowledgement: put them in the recipient's mailbox.
+        // MAARSE_DEPOSIT_AFTER_S makes it possible to test the mailbox quickly.
         let after = std::env::var("MAARSE_DEPOSIT_AFTER_S")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -1501,8 +1501,8 @@ impl Node {
         self.outbox
             .retain(|_, m| now.duration_since(m.sent) < Duration::from_secs(3600));
 
-        // Filer: gensend bidder uden kvittering. Svarer modtageren ikke,
-        // lægges filen i filpostkassen (hvis den er slået til), ellers opgives den.
+        // Files: resend chunks without an acknowledgement. If the recipient does not answer,
+        // the file is put in the file mailbox (if enabled), otherwise it is abandoned.
         let ids: Vec<u64> = self.out_files.keys().copied().collect();
         for file_id in ids {
             let Some(f) = self.out_files.get(&file_id) else {
@@ -1514,8 +1514,8 @@ impl Node {
                 continue;
             }
             if age > FILE_TIMEOUT {
-                // Fra filpostkassen: filen bliver liggende og prøves igen,
-                // næste gang modtageren dukker op.
+                // From the file mailbox: the file stays and is tried again
+                // the next time the recipient shows up.
                 if self.out_files.remove(&file_id).is_some_and(|f| f.from_box) {
                     continue;
                 }
@@ -1523,7 +1523,7 @@ impl Node {
                     file_id,
                     ok: false,
                     outgoing: true,
-                    text: text(b"modtageren svarede ikke"),
+                    text: text(b"the recipient did not answer"),
                 });
                 continue;
             }
@@ -1556,11 +1556,11 @@ impl Node {
             }
             self.pump_file(file_id);
         }
-        // Gamle filer i filpostkassen.
+        // Old files in the file mailbox.
         for (r, id) in self.filebox.expire(SystemTime::now()) {
-            self.log(format!("filpostkasse: fil {id:016x} til {} udløb efter 7 dage", short(&r)));
+            self.log(format!("file mailbox: file {id:016x} for {} expired after 7 days", short(&r)));
         }
-        // Halvfærdige indgående filer.
+        // Half-finished incoming files.
         let stale: Vec<u64> = self
             .in_files
             .iter()
@@ -1573,10 +1573,10 @@ impl Node {
                 file_id,
                 ok: false,
                 outgoing: false,
-                text: text(b"overforsel afbrudt"),
+                text: text(b"transfer aborted"),
             });
         }
-        // Gammel post.
+        // Old mail.
         let before = self.mailbox.values().map(|m| m.len()).sum::<usize>();
         for mails in self.mailbox.values_mut() {
             mails.retain(|_, m| m.stored.elapsed().map(|e| e < MAILBOX_TTL).unwrap_or(true));
@@ -1587,7 +1587,7 @@ impl Node {
         }
     }
 
-    // ---------- webklienter ----------
+    // ---------- web clients ----------
 
     fn send_client(&self, id: ClientId, ev: &Event) {
         if let Some(tx) = self.clients.get(&id) {
@@ -1634,7 +1634,7 @@ impl Node {
             self.send_client(id, ev);
         }
         let msg = format!(
-            "Forbundet til maarse-host. {} link(s) oppe.",
+            "Connected to maarse-host. {} link(s) up.",
             self.links.len()
         );
         self.send_client(
@@ -1660,7 +1660,7 @@ impl Node {
         crate::links::region_hello(self.router.strict_region, &self.router.regions)
     }
 
-    /// Sætter regioner (kommasepareret) og fortæller backbone-peers det.
+    /// Sets regions (comma-separated) and tells backbone peers.
     fn set_regions(&mut self, names: &str, strict: bool) {
         self.region_names = maarse_core::region::names(names)
             .map(str::to_lowercase)
@@ -1685,7 +1685,7 @@ impl Node {
     }
 
     fn join_channel(&mut self, name: &str, save: bool) -> (Address, String) {
-        // `navn@region`: regionen mærker beskeder, vi sender til kanalen.
+        // `name@region`: the region tags messages we send to the channel.
         let (base, region) = maarse_core::region::split_channel(name);
         let (mut name, key) = normalize_channel(base);
         if !region.is_empty() {
@@ -1694,11 +1694,11 @@ impl Node {
         self.join_key(name, key, save)
     }
 
-    /// Privat kanal med en tilfældig nøgle fra en invitation.
+    /// Private channel with a random key from an invitation.
     fn join_private_channel(&mut self, name: &str, key: [u8; 32], save: bool) -> (Address, String) {
         let mut name: String = name.trim().chars().filter(|c| !c.is_control()).collect();
         if name.is_empty() {
-            name = "privat".into();
+            name = "private".into();
         }
         self.join_key(name, key, save)
     }
@@ -1709,8 +1709,8 @@ impl Node {
         let old = self.channels.insert(ch, (name.clone(), key));
         let new = old.is_none_or(|(n, _)| n != name);
         if save && new {
-            // Én linje pr. kanal: navnet for offentlige/hashtag-kanaler,
-            // `!<nøgle i hex> <navn>` for private.
+            // One line per channel: the name for public/hashtag channels,
+            // `!<key in hex> <name>` for private ones.
             let lines: Vec<String> = self
                 .channels
                 .values()
@@ -1739,7 +1739,7 @@ impl Node {
             }
             Command::AnnounceNow => {
                 self.announce();
-                self.send_client(id, &Event::Log { text: text(b"Announce sendt") });
+                self.send_client(id, &Event::Log { text: text(b"Announce sent") });
             }
             Command::JoinChannel { name } => {
                 let name = String::from_utf8_lossy(&name).to_string();
@@ -1759,14 +1759,14 @@ impl Node {
             }
             Command::SendDirect { req, dest, text: msg } => {
                 if msg.len() > MAX_FS_TEXT - 1 {
-                    return self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "Beskeden er for lang"));
+                    return self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "The message is too long"));
                 }
                 if !self.known.contains_key(&dest) && self.dht_can_lookup() {
-                    // Ukendt modtager: slå op i backbone-DHT'en og send bagefter.
+                    // Unknown recipient: look it up in the backbone DHT and send afterwards.
                     self.dht.waiting.entry(dest).or_default().push((id, req, msg.to_vec()));
                     self.dht.looked_up.remove(&dest);
                     self.dht_maybe_lookup(dest);
-                    let t = format!("Slår {} op i DHT …", short(&dest));
+                    let t = format!("Looking up {} in the DHT …", short(&dest));
                     return self.send_client(id, &Event::Log { text: text(t.as_bytes()) });
                 }
                 match self.send_sealed(dest, &content::text(&msg), Pending::Message) {
@@ -1779,7 +1779,7 @@ impl Node {
             }
             Command::SendChannel { req, channel, text: msg } => {
                 let Some((chname, key)) = self.channels.get(&channel).cloned() else {
-                    return self.send_client(id, &err_ev(req, error_code::NOT_IN_CHANNEL, "Ikke med i kanalen"));
+                    return self.send_client(id, &err_ev(req, error_code::NOT_IN_CHANNEL, "Not a member of the channel"));
                 };
                 let region = maarse_core::region::region_id(maarse_core::region::split_channel(&chname).1);
                 let mut nonce = [0u8; 8];
@@ -1794,7 +1794,7 @@ impl Node {
                         self.hist_sent(id, crate::history::KIND_CHANNEL, channel, 0, &msg);
                         self.apply(actions.into_iter().collect());
                     }
-                    None => self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "Beskeden er for lang")),
+                    None => self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "The message is too long")),
                 }
             }
             Command::GetFileLimit { dest } => {
@@ -1815,18 +1815,18 @@ impl Node {
                 if size > l.max_bytes {
                     let m = if l.via_lora && !l.mailbox {
                         format!(
-                            "Filen er for stor: modtageren nås kun over LoRa, hvor grænsen er {} KB",
+                            "The file is too large: the recipient is only reached over LoRa, where the limit is {} KB",
                             l.max_bytes / 1024
                         )
                     } else {
-                        format!("Filen er for stor (højst {} KB)", l.max_bytes / 1024)
+                        format!("The file is too large (at most {} KB)", l.max_bytes / 1024)
                     };
                     return self.send_client(id, &err_ev(req, error_code::FILE_TOO_LARGE, &m));
                 }
                 if !self.known.contains_key(&dest) {
                     return self.send_client(
                         id,
-                        &err_ev(req, error_code::UNKNOWN_DEST, "Modtageren er ikke hørt endnu (intet announce)"),
+                        &err_ev(req, error_code::UNKNOWN_DEST, "The recipient has not been heard yet (no announce)"),
                     );
                 }
                 self.uploads.insert(
@@ -1862,10 +1862,10 @@ impl Node {
                         | Command::OtaStatus)
                 );
                 if !ok {
-                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Kun status, radio, rolle og firmware kan fjernstyres"));
+                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Only status, radio, role and firmware can be controlled remotely"));
                 }
-                // Tælleren følger uret, så den også stiger efter en genstart,
-                // men stiger altid (firmware-bidder kan komme flere pr. sekund).
+                // The counter follows the clock, so it also increases after a restart,
+                // but always increases (firmware chunks can come several per second).
                 let counter = unix_now().max(self.last_control.wrapping_add(1));
                 self.last_control = counter;
                 let plain = content::control(content::CONTROL, counter, &frame);
@@ -1878,7 +1878,7 @@ impl Node {
                 self.admins = admins.to_vec();
                 let lines: Vec<String> = self.admins.iter().map(|a| a.to_string()).collect();
                 let _ = fs::write(self.data_dir.join("admins.txt"), lines.join("\n"));
-                self.log(format!("{} administrator(er) gemt", self.admins.len()));
+                self.log(format!("{} administrator(s) saved", self.admins.len()));
                 self.send_client(id, &self.admins_event());
             }
             Command::GetAdmins => self.send_client(id, &self.admins_event()),
@@ -1890,7 +1890,7 @@ impl Node {
                     lines.push("!strict".into());
                 }
                 let _ = fs::write(self.data_dir.join("regions.txt"), lines.join("\n"));
-                self.log(format!("regioner: {:?}{}", self.region_names, if strict { " (strict)" } else { "" }));
+                self.log(format!("regions: {:?}{}", self.region_names, if strict { " (strict)" } else { "" }));
                 self.send_client(id, &self.regions_event());
             }
             Command::GetRegions => self.send_client(id, &self.regions_event()),
@@ -1900,7 +1900,7 @@ impl Node {
             Command::OtaStatus => self.send_client(id, &ota_unsupported(0)),
             Command::SetIdentity { confirm, secret } => self.set_identity(id, confirm, secret),
 
-            Command::SetTime { .. } => {} // maarse-host har sit eget ur
+            Command::SetTime { .. } => {} // maarse-host has its own clock
             Command::SetWifi(_) | Command::GetWifi => self.send_client(
                 id,
                 &err_ev(0, error_code::BAD_FRAME, "maarse-host uses the computer's network; Wi-Fi settings are for ESP32 nodes."),
@@ -1910,7 +1910,7 @@ impl Node {
                 &err_ev(
                     0,
                     error_code::BAD_FRAME,
-                    "maarse-host har ingen egen radio. Forbind til noden via USB for at ændre radioindstillinger.",
+                    "maarse-host has no radio of its own. Connect to the node via USB to change radio settings.",
                 ),
             ),
             Command::SetRole { .. } => self.send_client(
@@ -1918,14 +1918,14 @@ impl Node {
                 &err_ev(
                     0,
                     error_code::BAD_FRAME,
-                    "maarse-host er en gateway og har altid rollen repeater. Forbind til noden via USB for at vælge rolle.",
+                    "maarse-host is a gateway and always has the repeater role. Connect to the node via USB to choose a role.",
                 ),
             ),
             Command::GetStats => {
                 let ev = Event::Stats { items: self.stats() };
                 self.send_client(id, &ev);
             }
-            // Håndteres i node/ext.rs.
+            // Handled in node/ext.rs.
             Command::TraceRoute { .. }
             | Command::GetNeighbors
             | Command::SetSharing(_)
@@ -1952,8 +1952,8 @@ impl Node {
         Event::Admins { admins: self.admins.iter().copied().take(4).collect() }
     }
 
-    /// En kontrolkommando fra en anden node. Afsenderen er bevist af
-    /// krypteringen; den skal stå på listen over administratorer.
+    /// A control command from another node. The sender is proven by
+    /// the encryption; it must be on the list of administrators.
     fn on_control(&mut self, from: Address, counter: u32, frame: &[u8]) {
         let reply = |node: &mut Node, ev: Event| {
             let f = ev.encode();
@@ -1961,14 +1961,14 @@ impl Node {
             let _ = node.send_sealed(from, &plain, Pending::Control);
         };
         if !self.admins.contains(&from) {
-            self.log(format!("kontrolkommando fra {} afvist: ikke administrator", short(&from)));
-            return reply(self, err_ev(0, error_code::BAD_FRAME, "Du er ikke administrator for denne node"));
+            self.log(format!("control command from {} rejected: not an administrator", short(&from)));
+            return reply(self, err_ev(0, error_code::BAD_FRAME, "You are not an administrator of this node"));
         }
         let now = unix_now();
         let last = self.control_seen.get(&from).copied().unwrap_or(0);
-        // Tælleren er afsenderens ur: den skal stige og må højst være 10 min gammel.
+        // The counter is the sender's clock: it must increase and be at most 10 min old.
         if counter <= last || counter.abs_diff(now) > 600 {
-            self.log(format!("kontrolkommando fra {} afvist: gammel eller genafspillet", short(&from)));
+            self.log(format!("control command from {} rejected: old or replayed", short(&from)));
             return;
         }
         self.control_seen.insert(from, counter);
@@ -1980,12 +1980,12 @@ impl Node {
                 }
             }
             Ok(Command::GetRadio | Command::SetRadio(_)) => {
-                reply(self, err_ev(0, error_code::BAD_FRAME, "maarse-host har ingen egen radio"));
+                reply(self, err_ev(0, error_code::BAD_FRAME, "maarse-host has no radio of its own"));
             }
             Ok(Command::SetRole { .. }) => {
-                reply(self, err_ev(0, error_code::BAD_FRAME, "maarse-host har altid rollen repeater"));
+                reply(self, err_ev(0, error_code::BAD_FRAME, "maarse-host always has the repeater role"));
             }
-            _ => reply(self, err_ev(0, error_code::BAD_FRAME, "Kommandoen kan ikke fjernstyres")),
+            _ => reply(self, err_ev(0, error_code::BAD_FRAME, "The command cannot be controlled remotely")),
         }
     }
 
@@ -2050,10 +2050,10 @@ fn err_ev(req: u16, code: u8, msg: &str) -> Event {
     }
 }
 
-// ---------- backbone-DHT ----------
+// ---------- backbone DHT ----------
 
 impl Node {
-    /// Besvarer en DHT-forespørgsel fra en anden host.
+    /// Answers a DHT request from another host.
     fn dht_serve(&mut self, data: &[u8]) -> Vec<u8> {
         let me = self.addr;
         let Some((from, from_ep, req)) = dht::decode_req(data) else {
@@ -2077,7 +2077,7 @@ impl Node {
         dht::encode_resp(&me, &resp)
     }
 
-    /// De nærmeste kontakter, inklusive os selv, hvis vi er offentlige.
+    /// The closest contacts, including ourselves if we are public.
     fn dht_closest(&self, t: &Address) -> Vec<Contact> {
         let mut v = self.dht.table.closest(t, dht::K);
         if let Some(ep) = &self.dht.public_ep {
@@ -2091,7 +2091,7 @@ impl Node {
         v
     }
 
-    /// Startliste til et opslag: nærmeste kendte + startpunkter.
+    /// Start list for a lookup: closest known + seeds.
     fn dht_start(&self, target: &Address) -> Vec<Contact> {
         let mut v = self.dht.table.closest(target, dht::K);
         if v.len() < dht::K {
@@ -2107,7 +2107,7 @@ impl Node {
         v
     }
 
-    /// Kører et opslag i en tråd. `publish`: gem posten hos de nærmeste bagefter.
+    /// Runs a lookup in a thread. `publish`: store the record at the closest nodes afterwards.
     fn dht_spawn(&mut self, target: Address, want_value: bool, publish: Option<Record>) {
         let Some(tx) = self.tx.clone() else {
             return;
@@ -2149,12 +2149,12 @@ impl Node {
         if let Some(rec) = result.record {
             self.dht.found += 1;
             self.log(format!(
-                "DHT: {} kan nås via {} ({})",
+                "DHT: {} can be reached via {} ({})",
                 short(&target),
                 short(&rec.gw),
                 rec.ep
             ));
-            // Announcet er ægte (tjekket i lookup): vi kender nu nøglerne.
+            // The announce is genuine (checked in lookup): we now know the keys.
             self.on_announce(rec.dest, &rec.announce, rec.hops.saturating_add(1));
             self.dht_connect(&rec);
         }
@@ -2166,7 +2166,7 @@ impl Node {
                 }
                 Err(_) => self.send_client(
                     id,
-                    &err_ev(req, error_code::UNKNOWN_DEST, "Adressen blev ikke fundet i DHT'en"),
+                    &err_ev(req, error_code::UNKNOWN_DEST, "The address was not found in the DHT"),
                 ),
             }
         }
@@ -2176,7 +2176,7 @@ impl Node {
         self.tx.is_some() && (!self.dht.seeds.is_empty() || self.dht.table.len() > 0)
     }
 
-    /// Forbinder direkte til gatewayen fra en DHT-post.
+    /// Connects directly to the gateway from a DHT record.
     fn dht_connect(&mut self, rec: &Record) {
         if rec.gw == self.addr
             || self.dht.public_ep.as_ref() == Some(&rec.ep)
@@ -2190,11 +2190,11 @@ impl Node {
         };
         self.dht.peers.insert(rec.ep.clone());
         self.dht.dynamic.insert(rec.ep.clone());
-        self.broadcast_log(format!("Forbinder til gateway {} (fundet i DHT)", rec.ep));
+        self.broadcast_log(format!("Connecting to gateway {} (found in the DHT)", rec.ep));
         crate::links::spawn_tcp_peer(rec.ep.clone(), tx);
     }
 
-    /// Slår en ukendt adresse op, hvis vi ikke allerede kender en rute.
+    /// Looks up an unknown address if we do not already know a route.
     fn dht_maybe_lookup(&mut self, dest: Address) {
         if dest == self.addr
             || self.router.has_route(&dest)
@@ -2214,7 +2214,7 @@ impl Node {
         self.dht.looked_up.insert(dest, Instant::now());
         self.dht.lookups += 1;
         if let Some(rec) = self.dht.store.get(&dest) {
-            // Vi gemmer selv posten.
+            // We store the record ourselves.
             let result = dht::Lookup {
                 record: Some(rec),
                 ..Default::default()
@@ -2227,13 +2227,13 @@ impl Node {
         self.dht_spawn(dest, true, None);
     }
 
-    /// Bootstrap, udgivelser og oprydning.
+    /// Bootstrap, publications and cleanup.
     fn dht_maintain(&mut self) {
         self.dht.store.expire();
         self.dht
             .looked_up
             .retain(|_, t| t.elapsed() < DHT_LOOKUP_EVERY * 4);
-        // Bootstrap: slå os selv op, så vi lærer vores naboer i ID-rummet.
+        // Bootstrap: look ourselves up so we learn our neighbours in the ID space.
         let want = self.dht.table.len() < dht::K;
         let due = self
             .dht
@@ -2243,7 +2243,7 @@ impl Node {
             self.dht.last_bootstrap = Some(Instant::now());
             self.dht_spawn(self.addr, false, None);
         }
-        // Udgiv de adresser, vi kan nå (kun som offentlig host).
+        // Publish the addresses we can reach (only as a public host).
         let Some(ep) = self.dht.public_ep.clone() else {
             return;
         };
@@ -2276,7 +2276,7 @@ impl Node {
 
 #[cfg(test)]
 pub(super) mod file_interop_tests {
-    //! Firmwarens filafsender (`maarse_crypto::files`) mod hostens modtager.
+    //! The firmware's file sender (`maarse_crypto::files`) against the host's receiver.
     use super::*;
     use maarse_crypto::files::{AckResult, Outgoing};
 
@@ -2311,7 +2311,7 @@ pub(super) mod file_interop_tests {
 
     #[test]
     fn firmware_sender_to_host_receiver() {
-        let dir = std::env::temp_dir().join(format!("maarse-fil-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("maarse-file-{}", std::process::id()));
         let mut node = Node::new(&cfg(dir.clone())).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         node.clients.insert(1, tx);
@@ -2319,8 +2319,8 @@ pub(super) mod file_interop_tests {
         let data: Vec<u8> = (0..8000u32).map(|i| (i * 7 % 256) as u8).collect();
         let from = Address([4; 16]);
         let (mut out, offer) =
-            Outgoing::new(77, [9; 32], node.addr, &data, b"image/webp", b"kort.webp", 0).unwrap();
-        // Tilbuddet ad samme vej som over radio: indkodet og fortolket.
+            Outgoing::new(77, [9; 32], node.addr, &data, b"image/webp", b"map.webp", 0).unwrap();
+        // The offer goes the same way as over radio: encoded and parsed.
         let enc = offer.encode();
         let Some(Content::FileOffer(parsed)) = content::parse(&enc) else { panic!() };
         node.on_file_offer(from, parsed);
@@ -2355,8 +2355,8 @@ pub(super) mod file_interop_tests {
     }
 }
 
-/// maarse-host kan ikke selv opdateres over luften (den opdateres som et
-/// almindeligt program), men videresender firmware til fjerne noder med `Remote`.
+/// maarse-host cannot itself be updated over the air (it is updated as an
+/// ordinary program), but forwards firmware to remote nodes with `Remote`.
 fn ota_unsupported(req: u16) -> Event {
     Event::OtaState {
         req,
@@ -2365,13 +2365,13 @@ fn ota_unsupported(req: u16) -> Event {
         size: 0,
         version: 0,
         current: 0,
-        text: maarse_core::companion::text("maarse-host opdateres ikke over luften; brug Remote til en node".as_bytes()),
+        text: maarse_core::companion::text("maarse-host is not updated over the air; use Remote for a node".as_bytes()),
     }
 }
 
 #[cfg(test)]
 mod filebox_node_tests {
-    //! Filgrænser efter rute og filpostkassen (se filebox.rs).
+    //! File limits by route and the file mailbox (see filebox.rs).
     use super::*;
     use std::sync::mpsc::{Receiver, channel};
 
@@ -2394,7 +2394,7 @@ mod filebox_node_tests {
         a.known.insert(b.addr, b.identity.public());
     }
 
-    /// `peer` er hørt med `hops` hop over et link med navnet `link`.
+    /// `peer` is heard with `hops` hops over a link named `link`.
     fn heard(n: &mut Node, peer: Address, link: &str, hops: u8) {
         let (tx, _rx) = channel();
         let id = n.links.len() as LinkId + 1;
@@ -2419,14 +2419,14 @@ mod filebox_node_tests {
         let (mut n, _rx, dir) = node("kinds");
         let (tcp, lora, radio_behind_host, none) =
             (Address([1; 16]), Address([2; 16]), Address([3; 16]), Address([4; 16]));
-        heard(&mut n, tcp, "tcp ud 127.0.0.1:4242", 0);
-        heard(&mut n, lora, "seriel COM3", 0);
-        heard(&mut n, radio_behind_host, "tcp ind 10.0.0.2:5000", 1);
+        heard(&mut n, tcp, "tcp out 127.0.0.1:4242", 0);
+        heard(&mut n, lora, "serial COM3", 0);
+        heard(&mut n, radio_behind_host, "tcp in 10.0.0.2:5000", 1);
         assert_eq!(n.path_kind(&tcp), PathKind::Tcp);
         assert_eq!(n.path_kind(&lora), PathKind::Lora);
         assert_eq!(n.path_kind(&radio_behind_host), PathKind::Lora);
         assert_eq!(n.path_kind(&none), PathKind::Unknown);
-        // Linket går ned: så ved vi ikke længere, hvor modtageren er.
+        // The link goes down: then we no longer know where the recipient is.
         let id = n.heard_via[&tcp].0;
         n.handle(In::LinkDown { id });
         assert_eq!(n.path_kind(&tcp), PathKind::Unknown);
@@ -2438,7 +2438,7 @@ mod filebox_node_tests {
         let (mut a, rx, dir) = node("limit");
         let (b, _rxb, dir_b) = node("limit-b");
         know(&mut a, &b);
-        heard(&mut a, b.addr, "seriel COM3", 1);
+        heard(&mut a, b.addr, "serial COM3", 1);
         a.command(1, Command::GetFileLimit { dest: b.addr });
         let ev = events(&rx);
         let Some(Event::FileLimit { max_bytes, via_lora, mailbox, est_airtime_s, .. }) =
@@ -2448,21 +2448,21 @@ mod filebox_node_tests {
         };
         assert_eq!((max_bytes, via_lora, mailbox), (8192, true, false));
         assert!(est_airtime_s > 0);
-        // For stor til LoRa: afvist med forklaring.
+        // Too large for LoRa: rejected with an explanation.
         begin(&mut a, 7, b.addr, 20_000);
         let ev = events(&rx);
         let err = ev.iter().find_map(|e| match e {
             Event::Error { req: 7, code, text } => Some((*code, String::from_utf8_lossy(text).to_string())),
             _ => None,
         });
-        let (code, msg) = err.expect("ingen fejl");
+        let (code, msg) = err.expect("no error");
         assert_eq!(code, error_code::FILE_TOO_LARGE);
         assert!(msg.contains("LoRa") && msg.contains("8 KB"), "{msg}");
-        // 8 KB går fint.
+        // 8 KB is fine.
         begin(&mut a, 8, b.addr, 8192);
         assert!(!events(&rx).iter().any(|e| matches!(e, Event::Error { .. })));
-        // Over TCP: op til 1 MB.
-        heard(&mut a, b.addr, "tcp ud 127.0.0.1:4242", 0);
+        // Over TCP: up to 1 MB.
+        heard(&mut a, b.addr, "tcp out 127.0.0.1:4242", 0);
         begin(&mut a, 9, b.addr, 1024 * 1024);
         assert!(!events(&rx).iter().any(|e| matches!(e, Event::Error { .. })));
         begin(&mut a, 10, b.addr, 1024 * 1024 + 1);
@@ -2476,7 +2476,7 @@ mod filebox_node_tests {
         let (mut a, rx, dir) = node("gate");
         let (b, _rxb, dir_b) = node("gate-b");
         know(&mut a, &b);
-        heard(&mut a, b.addr, "tcp ud 127.0.0.1:4242", 0);
+        heard(&mut a, b.addr, "tcp out 127.0.0.1:4242", 0);
         upload(&mut a, 1, b.addr, &vec![5u8; 20_000]);
         let file_id = events(&rx)
             .iter()
@@ -2485,11 +2485,11 @@ mod filebox_node_tests {
                 _ => None,
             })
             .unwrap();
-        // Ruten skifter til LoRa, før tilbuddet er kvitteret.
-        heard(&mut a, b.addr, "seriel COM3", 0);
+        // The route switches to LoRa before the offer is acknowledged.
+        heard(&mut a, b.addr, "serial COM3", 0);
         a.out_files.get_mut(&file_id).unwrap().offer_acked = true;
         a.pump_file(file_id);
-        assert!(a.out_files[&file_id].in_flight.is_empty(), "bidder sendt over LoRa");
+        assert!(a.out_files[&file_id].in_flight.is_empty(), "chunks sent over LoRa");
         let _ = fs::remove_dir_all(dir);
         let _ = fs::remove_dir_all(dir_b);
     }
@@ -2500,7 +2500,7 @@ mod filebox_node_tests {
         let (mut b, rxb, dir_b) = node("dep-b");
         know(&mut a, &b);
         know(&mut b, &a);
-        // B er offline (ingen viden om ruten): 1 MB via postkassen.
+        // B is offline (no knowledge of the route): 1 MB via the mailbox.
         a.command(1, Command::GetFileLimit { dest: b.addr });
         assert!(events(&rx).iter().any(|e| matches!(
             e,
@@ -2518,19 +2518,19 @@ mod filebox_node_tests {
         assert!(a.deposit_file(file_id));
         assert!(events(&rx).iter().any(|e| matches!(
             e,
-            Event::FileDone { ok: true, outgoing: true, text, .. } if &text[..] == "lagt i postkasse".as_bytes()
+            Event::FileDone { ok: true, outgoing: true, text, .. } if &text[..] == "put in mailbox".as_bytes()
         )));
         assert_eq!(a.filebox.waiting_for(&b.addr), vec![file_id]);
-        // B kommer tilbage, men kun over LoRa: filen (20 KB) bliver liggende.
-        heard(&mut a, b.addr, "seriel COM3", 0);
+        // B comes back, but only over LoRa: the file (20 KB) stays.
+        heard(&mut a, b.addr, "serial COM3", 0);
         a.flush_filebox(b.addr);
         assert!(!a.out_files.contains_key(&file_id));
-        // B er der igen over TCP: tilbuddet og bidderne sendes fra postkassen.
-        heard(&mut a, b.addr, "tcp ud 127.0.0.1:4242", 0);
+        // B is back over TCP: the offer and chunks are sent from the mailbox.
+        heard(&mut a, b.addr, "tcp out 127.0.0.1:4242", 0);
         a.flush_filebox(b.addr);
         assert!(a.out_files[&file_id].from_box);
         let boxed = a.filebox.load(file_id).unwrap();
-        // B kan åbne tilbud og bidder (krypteret ende til ende fra A).
+        // B can open the offer and chunks (encrypted end to end from A).
         b.open_direct(boxed.offer.clone(), 1, true);
         for c in &boxed.chunks {
             b.on_chunk(c);
@@ -2546,7 +2546,7 @@ mod filebox_node_tests {
         }
         assert_eq!(ok, Some(true));
         assert_eq!(got, data);
-        // Kvitteringerne når A: filen slettes fra postkassen.
+        // The acknowledgements reach A: the file is deleted from the mailbox.
         let offer_ids: Vec<u64> = a
             .awaiting
             .iter()
@@ -2556,7 +2556,7 @@ mod filebox_node_tests {
         for id in offer_ids {
             a.on_acked(id);
         }
-        // (Uden rute i testen sendes bidderne ikke; kvitteringerne gives direkte.)
+        // (Without a route in the test the chunks are not sent; the acknowledgements are given directly.)
         for idx in 0..boxed.chunks.len() as u16 {
             a.chunk_acked(file_id, idx);
         }
@@ -2564,7 +2564,7 @@ mod filebox_node_tests {
         assert!(a.filebox.waiting_for(&b.addr).is_empty());
         assert!(events(&rx).iter().any(|e| matches!(
             e,
-            Event::FileDone { ok: true, text, .. } if &text[..] == b"leveret fra postkasse"
+            Event::FileDone { ok: true, text, .. } if &text[..] == b"delivered from mailbox"
         )));
         let _ = fs::remove_dir_all(dir);
         let _ = fs::remove_dir_all(dir_b);

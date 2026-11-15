@@ -1,5 +1,5 @@
-//! Diagnose (trace route, naboer), deling af position/telemetri og
-//! MQTT-broen. Holdt ude af node.rs, så hovedfilen kun har få kroge.
+//! Diagnostics (trace route, neighbours), sharing of position/telemetry and
+//! the MQTT bridge. Kept out of node.rs so the main file only has a few hooks.
 
 use super::{Node, token};
 use crate::ClientId;
@@ -13,19 +13,19 @@ use std::fs;
 
 #[derive(Default)]
 pub(super) struct Ext {
-    /// Igangværende trace routes: mål -> (klient, req).
+    /// Trace routes in progress: target -> (client, req).
     traces: HashMap<Address, (ClientId, u16)>,
     pub(super) sharing: Sharing,
     pub(super) mqtt: Option<Mqtt>,
-    /// Vores visningsnavn (tomt = intet), gemt i `navn.txt`.
+    /// Our display name (empty = none), stored in `name.txt`.
     pub(super) name: String,
-    /// Visningsnavne hørt i andres announces. Vises kun; ikke bevist.
+    /// Display names heard in others' announces. Shown only; not proven.
     pub(super) names: HashMap<Address, (appdata::Name, u8)>,
 }
 
 impl Ext {
     pub(super) fn load(data_dir: &std::path::Path, mqtt: Option<Mqtt>) -> Self {
-        let s = fs::read_to_string(data_dir.join("deling.txt")).unwrap_or_default();
+        let s = fs::read_to_string(data_dir.join("sharing.txt")).unwrap_or_default();
         let v: Vec<i64> = s.split_whitespace().filter_map(|x| x.parse().ok()).collect();
         let sharing = match v[..] {
             [p, lat, lon, t] => Sharing {
@@ -36,7 +36,7 @@ impl Ext {
             },
             _ => Sharing::default(),
         };
-        let name = fs::read_to_string(data_dir.join("navn.txt"))
+        let name = fs::read_to_string(data_dir.join("name.txt"))
             .ok()
             .and_then(|s| appdata::clean_name(s.as_bytes()))
             .map(|n| String::from_utf8_lossy(&n).into_owned())
@@ -46,7 +46,7 @@ impl Ext {
 }
 
 impl Node {
-    /// App-data til vores announce (postkasse, FS, evt. position og telemetri).
+    /// App data for our announce (mailbox, FS, optionally position and telemetry).
     pub(super) fn app_data(&self) -> Vec<u8> {
         let s = &self.ext.sharing;
         let tel = s.telemetry.then(|| Telemetry {
@@ -63,13 +63,13 @@ impl Node {
         v.to_vec()
     }
 
-    /// Kommandoer til diagnose og deling. Returnerer kommandoen, hvis den
-    /// ikke hører til her.
+    /// Commands for diagnostics and sharing. Returns the command if it
+    /// does not belong here.
     pub(super) fn ext_command(&mut self, id: ClientId, cmd: Command) -> Option<Command> {
         match cmd {
             Command::TraceRoute { req, dest } => {
                 if dest == self.addr {
-                    self.send_client(id, &super::err_ev(req, error_code::UNKNOWN_DEST, "Det er os selv"));
+                    self.send_client(id, &super::err_ev(req, error_code::UNKNOWN_DEST, "That is ourselves"));
                     return None;
                 }
                 self.ext.traces.insert(dest, (id, req));
@@ -87,11 +87,11 @@ impl Node {
             Command::SetSharing(s) => {
                 self.ext.sharing = s;
                 let _ = fs::write(
-                    self.data_dir.join("deling.txt"),
+                    self.data_dir.join("sharing.txt"),
                     format!("{} {} {} {}\n", s.precision, s.lat_e7, s.lon_e7, s.telemetry as u8),
                 );
                 self.broadcast(&Event::Sharing(s));
-                // Det nye vises i næste announce; send et nu.
+                // The change shows in the next announce; send one now.
                 self.announce();
             }
             Command::GetName => self.send_client(id, &Event::Name { name: text(self.ext.name.as_bytes()) }),
@@ -99,7 +99,7 @@ impl Node {
                 self.ext.name = appdata::clean_name(&name)
                     .map(|n| String::from_utf8_lossy(&n).into_owned())
                     .unwrap_or_default();
-                let _ = fs::write(self.data_dir.join("navn.txt"), format!("{}
+                let _ = fs::write(self.data_dir.join("name.txt"), format!("{}
 ", self.ext.name));
                 self.broadcast(&Event::Name { name: text(self.ext.name.as_bytes()) });
                 self.announce();
@@ -109,7 +109,7 @@ impl Node {
         None
     }
 
-    /// Svar på en trace route.
+    /// Reply to a trace route.
     pub(super) fn on_trace(&mut self, dest: Address, payload: &[u8]) {
         let Some(r) = diag::parse_response(payload) else { return };
         let Some((client, req)) = self.ext.traces.remove(&dest) else { return };
@@ -123,7 +123,7 @@ impl Node {
         self.send_client(client, &ev);
     }
 
-    /// Position og telemetri fra et verificeret announce.
+    /// Position and telemetry from a verified announce.
     pub(super) fn on_app_data(&mut self, from: Address, hops: u8, app_data: &[u8]) {
         let a = appdata::parse(app_data);
         if hops == 0
@@ -175,7 +175,7 @@ impl Node {
         items.push((stat::EXT_POWER, 1));
     }
 
-    /// Kendte visningsnavne til en klient, der lige er forbundet.
+    /// Known display names for a client that has just connected.
     pub(super) fn send_known_names(&self, id: ClientId) {
         for (addr, (n, hops)) in &self.ext.names {
             let ev = Event::NodeInfo { addr: *addr, hops: *hops, position: None, telemetry: None, name: Some(n.clone()) };

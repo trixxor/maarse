@@ -1,4 +1,4 @@
-//! Webklient over HTTP og companion-protokollen over WebSocket (samme port).
+//! Web client over HTTP and the companion protocol over WebSocket (same port).
 
 use crate::{In, next_id};
 use std::io::{Read, Write};
@@ -11,13 +11,13 @@ use maarse_core::companion::FrameDecoder;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::{Error as WsError, Message};
 
-/// Webklienten er bygget ind i programmet, så der kun er én fil at køre.
+/// The web client is built into the program, so there is only one file to run.
 const INDEX_HTML: &str = include_str!("../../maarse-client/index.html");
 
-/// Adgangsnøglen til fjernadgang: læses fra `<data>/adgangsnoegle.txt`
-/// eller laves (32 hextegn) første gang.
+/// The access key for remote access: read from `<data>/access-key.txt`
+/// or created (32 hex characters) the first time.
 pub fn access_token(data_dir: &std::path::Path) -> String {
-    let p = data_dir.join("adgangsnoegle.txt");
+    let p = data_dir.join("access-key.txt");
     if let Ok(t) = std::fs::read_to_string(&p) {
         let t = t.trim().to_string();
         if t.len() >= 16 {
@@ -45,7 +45,7 @@ pub fn spawn(addr: SocketAddr, token: String, data_dir: PathBuf, tx: Sender<In>)
     Ok(())
 }
 
-/// Kommer forbindelsen fra denne computer (loopback eller dens egen IP)?
+/// Does the connection come from this computer (loopback or its own IP)?
 fn is_local(stream: &TcpStream) -> bool {
     match (stream.peer_addr(), stream.local_addr()) {
         (Ok(p), Ok(l)) => p.ip().is_loopback() || p.ip() == l.ip(),
@@ -98,7 +98,7 @@ fn http(mut stream: TcpStream, token: &str, data_dir: &Path) {
         "/icon.svg" => ("200 OK", "image/svg+xml", ICON_SVG.as_bytes()),
         "/icon-192.png" => ("200 OK", "image/png", ICON_192),
         "/icon-512.png" => ("200 OK", "image/png", ICON_512),
-        _ => ("404 Not Found", "text/plain; charset=utf-8", "Ikke fundet".as_bytes()),
+        _ => ("404 Not Found", "text/plain; charset=utf-8", "Not found".as_bytes()),
     };
     let resp = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -108,7 +108,7 @@ fn http(mut stream: TcpStream, token: &str, data_dir: &Path) {
     let _ = stream.write_all(body);
 }
 
-// ---------- indstillinger (/api/…) ----------
+// ---------- settings (/api/…) ----------
 
 fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
     head.split("\r\n").skip(1).find_map(|l| {
@@ -135,7 +135,7 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
         return reply(&mut stream, "204 No Content", "text/plain", "");
     }
     if !ok {
-        return reply(&mut stream, "403 Forbidden", "text/plain; charset=utf-8", "Adgangsnøgle mangler eller er forkert");
+        return reply(&mut stream, "403 Forbidden", "text/plain; charset=utf-8", "Access key missing or wrong");
     }
     let restart_soon = |mut stream: TcpStream| {
         reply(&mut stream, "200 OK", "text/plain; charset=utf-8", "ok");
@@ -144,14 +144,14 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
         crate::settings::restart();
     };
     match (method, path) {
-        ("GET", "/api/indstillinger") => {
+        ("GET", "/api/settings") => {
             let body = crate::settings::status_json(data_dir);
             reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)
         }
-        ("POST", "/api/indstillinger") => {
+        ("POST", "/api/settings") => {
             let len: usize = header(head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
             if len > 64 * 1024 {
-                return reply(&mut stream, "413 Payload Too Large", "text/plain", "for stor");
+                return reply(&mut stream, "413 Payload Too Large", "text/plain", "too large");
             }
             let mut body = req.split_off((head_end + 4).min(req.len()));
             let mut buf = [0u8; 4096];
@@ -167,16 +167,16 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
                 Err(e) => reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", &e),
             }
         }
-        ("POST", "/api/genstart") => restart_soon(stream),
-        ("GET", "/api/enheder") => {
+        ("POST", "/api/restart") => restart_soon(stream),
+        ("GET", "/api/devices") => {
             let body = crate::links::devices_json();
             reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)
         }
-        _ => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "Ikke fundet"),
+        _ => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "Not found"),
     }
 }
 
-// ---------- PWA: manifest, service worker og ikoner ----------
+// ---------- PWA: manifest, service worker and icons ----------
 
 const MANIFEST: &str = include_str!("../../maarse-client/manifest.webmanifest");
 const SW_JS: &str = include_str!("../../maarse-client/sw.js");
@@ -184,8 +184,8 @@ const ICON_SVG: &str = include_str!("../../maarse-client/icon.svg");
 const ICON_192: &[u8] = include_bytes!("../../maarse-client/icon-192.png");
 const ICON_512: &[u8] = include_bytes!("../../maarse-client/icon-512.png");
 
-/// Service workeren får en cache-version ud fra indholdet af de indbyggede filer.
-/// Så opdager browseren en ny klient af sig selv, når maarse-host er opdateret.
+/// The service worker gets a cache version derived from the contents of the built-in files.
+/// That way the browser discovers a new client by itself when maarse-host is updated.
 fn service_worker() -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a
     for part in [INDEX_HTML.as_bytes(), MANIFEST.as_bytes(), SW_JS.as_bytes(), ICON_SVG.as_bytes(), ICON_192, ICON_512] {
@@ -196,13 +196,13 @@ fn service_worker() -> String {
     SW_JS.replacen("\"maarse-v1\"", &format!("\"maarse-{h:016x}\""), 1)
 }
 
-/// Hvem må styre noden over WebSocket?
+/// Who may control the node over WebSocket?
 ///
-/// * Fra denne computer (loopback eller dens egen IP) og fra en side med samme vært: ja, som
-///   før. Origin-tjekket forhindrer, at en hjemmeside, du besøger, sender
-///   beskeder i dit navn via localhost.
-/// * Alle andre (fx telefonen over VPN, eller appen, der har sin egen
-///   origin) skal have adgangsnøglen med: `ws://vært/ws?token=<nøgle>`.
+/// * From this computer (loopback or its own IP) and from a page with the same host: yes, as
+///   before. The Origin check prevents a web site you visit from sending
+///   messages in your name via localhost.
+/// * Everyone else (e.g. the phone over VPN, or the app, which has its own
+///   origin) must bring the access key: `ws://host/ws?token=<key>`.
 fn allowed(query: &str, host: Option<&str>, origin: Option<&str>, loopback: bool, token: &str) -> bool {
     let given = query
         .split('&')
@@ -219,33 +219,33 @@ fn allowed(query: &str, host: Option<&str>, origin: Option<&str>, loopback: bool
     loopback && origin_ok
 }
 
-/// Sammenligning i konstant tid (nøglen må ikke kunne gættes tegn for tegn).
+/// Constant-time comparison (the key must not be guessable character by character).
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 type Ws = tungstenite::WebSocket<TcpStream>;
 
-/// WebSocket-håndtryk med adgangstjek (se [`allowed`]).
+/// WebSocket handshake with access check (see [`allowed`]).
 fn accept(stream: TcpStream, token: &str) -> Option<Ws> {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
-    // Lokal: loopback, eller samme maskine via dens egen netværksadresse
-    // (fx en browser på PC'en, der åbner http://<pc-ens-ip>:8080/).
+    // Local: loopback, or the same machine via its own network address
+    // (e.g. a browser on the PC opening http://<the-pc's-ip>:8080/).
     let loopback = is_local(&stream);
-    #[allow(clippy::result_large_err)] // signaturen er givet af tungstenite
+    #[allow(clippy::result_large_err)] // the signature is given by tungstenite
     let check = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
         let origin = req.headers().get("origin").and_then(|v| v.to_str().ok()).unwrap_or("-");
         let h = req.headers();
         let get = |n: &str| h.get(n).and_then(|v| v.to_str().ok());
         if allowed(req.uri().query().unwrap_or(""), get("host"), get("origin"), loopback, token) {
             if !loopback {
-                println!("[web] klient forbundet fra {peer} (origin {origin}, {})", req.uri().path());
+                println!("[web] client connected from {peer} (origin {origin}, {})", req.uri().path());
             }
             Ok(resp)
         } else {
             let has = req.uri().query().is_some_and(|q| q.contains("token="));
-            println!("[web] afvist {peer} (origin {origin}, {})", if has { "forkert nøgle" } else { "ingen nøgle" });
-            let mut r = ErrorResponse::new(Some("Adgangsnøgle mangler eller er forkert".into()));
+            println!("[web] rejected {peer} (origin {origin}, {})", if has { "wrong key" } else { "no key" });
+            let mut r = ErrorResponse::new(Some("Access key missing or wrong".into()));
             *r.status_mut() = tungstenite::http::StatusCode::FORBIDDEN;
             Err(r)
         }
@@ -255,7 +255,7 @@ fn accept(stream: TcpStream, token: &str) -> Option<Ws> {
     Some(ws)
 }
 
-/// `/mc`: MeshCore-styring med JSON-tekstbeskeder (se meshcore.rs).
+/// `/mc`: MeshCore control with JSON text messages (see meshcore.rs).
 fn mc_socket(stream: TcpStream, token: &str) {
     let Some(mut ws) = accept(stream, token) else { return };
     let rx = crate::meshcore::subscribe();
@@ -274,7 +274,7 @@ fn mc_socket(stream: TcpStream, token: &str) {
                     let reply = if op == "state" {
                         crate::meshcore::disabled_state()
                     } else {
-                        serde_json::json!({"ev":"err","op":op,"msg":"MeshCore er ikke slået til"}).to_string()
+                        serde_json::json!({"ev":"err","op":op,"msg":"MeshCore is not enabled"}).to_string()
                     };
                     if ws.send(Message::Text(reply)).is_err() {
                         break;

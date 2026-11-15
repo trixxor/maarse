@@ -1,8 +1,8 @@
-# Test af backbone-DHT'en: A og C hænger på hver sin backbone-host (B2, B3),
-# som IKKE har pakkeforbindelse til hinanden — kun DHT-startpunktet B1.
-# A skal alligevel kunne skrive til C: opslag i DHT'en -> direkte forbindelse
-# til C's gateway -> almindelig routing.
-#   python tools/dht_test.py <sti til maarse-host>
+# Test of the backbone DHT: A and C each hang off their own backbone host (B2, B3),
+# which do NOT have a packet connection to each other — only the DHT seed B1.
+# A must still be able to write to C: lookup in the DHT -> direct connection
+# to C's gateway -> ordinary routing.
+#   python tools/dht_test.py <path to maarse-host>
 import os, struct, subprocess, sys, tempfile, time
 import websocket
 
@@ -40,7 +40,7 @@ class Client:
             for f in self.events:
                 if pred(f): return f
             self.pump(0.3)
-        raise AssertionError("ventede forgæves")
+        raise AssertionError("waited in vain")
     def info(self): return self.wait(lambda f: f[0] == 0x81)[1:17]
     def stats(self):
         self.events.clear(); self.send(frame(0x09))
@@ -56,22 +56,22 @@ try:
     start("c", 8194, ["--listen", "off", "--peer", "127.0.0.1:4392"])
     a, c = Client(8193), Client(8194)
     addr_a, addr_c = a.info(), c.info()
-    time.sleep(8)  # B3 udgiver C's adresse, B2 udgiver A's
+    time.sleep(8)  # B3 publishes C's address, B2 publishes A's
     b1 = Client(8190)
     st = b1.stats()
-    print(f"  B1: {st.get(72)} kontakter, {st.get(73)} poster")
-    assert st.get(73, 0) >= 2, "posterne er ikke udgivet"
-    assert not any(f[0] == 0x87 and f[1:17] == addr_c for f in a.events), "A må ikke have hørt C direkte"
+    print(f"  B1: {st.get(72)} contacts, {st.get(73)} records")
+    assert st.get(73, 0) >= 2, "the records have not been published"
+    assert not any(f[0] == 0x87 and f[1:17] == addr_c for f in a.events), "A must not have heard C directly"
 
-    a.send(frame(0x02, struct.pack("<H", 7), addr_c, b"Hej C via DHT"))
-    c.wait(lambda f: f[0] == 0x83 and f[18:] == b"Hej C via DHT", secs=40)
-    print("  OK  A -> C fundet via DHT og leveret")
+    a.send(frame(0x02, struct.pack("<H", 7), addr_c, b"Hi C via DHT"))
+    c.wait(lambda f: f[0] == 0x83 and f[18:] == b"Hi C via DHT", secs=40)
+    print("  OK  A -> C found via DHT and delivered")
     a.wait(lambda f: f[0] == 0x85, secs=20)
-    print("  OK  kvittering tilbage")
-    c.send(frame(0x02, struct.pack("<H", 8), addr_a, b"Hej A"))
-    a.wait(lambda f: f[0] == 0x83 and f[18:] == b"Hej A", secs=40)
+    print("  OK  acknowledgement back")
+    c.send(frame(0x02, struct.pack("<H", 8), addr_a, b"Hi A"))
+    a.wait(lambda f: f[0] == 0x83 and f[18:] == b"Hi A", secs=40)
     print("  OK  C -> A")
-    print("DHT-test bestået")
+    print("DHT test passed")
 finally:
     for p in procs.values(): p.terminate()
     for p in procs.values(): p.wait()

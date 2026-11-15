@@ -1,8 +1,8 @@
 {
   "name": "Må:rse",
   "short_name": "Må:rse",
-  "description": "Krypterede beskeder over LoRa-mesh – via Bluetooth, USB eller maarse-host.",
-  "lang": "da",
+  "description": "Encrypted messages over LoRa mesh – via Bluetooth, USB or maarse-host.",
+  "lang": "en",
   "id": "./",
   "start_url": "./",
   "scope": "./",

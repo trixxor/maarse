@@ -1,12 +1,12 @@
-//! `maarse://`-sider: hosten svarer på sideanmodninger (indholdstype
-//! `0x05`) med filer fra `<data>/sider/`, og klienter kan bede andre noder
-//! om sider (`RequestPage`).
+//! `maarse://` pages: the host answers page requests (content type
+//! `0x05`) with files from `<data>/pages/`, and clients can ask other nodes
+//! for pages (`RequestPage`).
 //!
-//! En side er Må:rse-markup i en `.mu`-fil (UTF-8). Stien `vejr/aarhus`
-//! slås op som `sider/vejr/aarhus.mu` og derefter
-//! `sider/vejr/aarhus/index.mu`. Siden sendes komprimeret (rå deflate) som
-//! en almindelig fil med MIME [`content::PAGE_MIME`] og stien som navn, så
-//! den bruger den samme kvittering pr. bid og grænse over LoRa som filer.
+//! A page is Må:rse markup in a `.mu` file (UTF-8). The path `weather/aarhus`
+//! is looked up as `pages/weather/aarhus.mu` and then
+//! `pages/weather/aarhus/index.mu`. The page is sent compressed (raw deflate) as
+//! an ordinary file with MIME [`content::PAGE_MIME`] and the path as its name, so
+//! it uses the same per-chunk acknowledgement and limit over LoRa as files.
 
 use super::{Node, err_ev, short};
 use crate::ClientId;
@@ -18,9 +18,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// Højst så mange sider til samme node inden for [`WINDOW`], så ingen kan
-/// bede os fylde luften med sider, men man stadig kan klikke et par links
-/// hurtigt efter hinanden.
+/// At most this many pages to the same node within [`WINDOW`], so nobody can
+/// make us fill the air with pages, while one can still click a couple of links
+/// in quick succession.
 const BURST: usize = 5;
 const WINDOW: Duration = Duration::from_secs(30);
 
@@ -29,8 +29,8 @@ pub(super) struct Pages {
     served: HashMap<Address, Vec<Instant>>,
 }
 
-/// Finder sidens fil i `root`. Stien er allerede renset med
-/// [`content::page_path`], så den kan ikke pege uden for mappen.
+/// Finds the page's file in `root`. The path has already been cleaned with
+/// [`content::page_path`], so it cannot point outside the folder.
 pub(crate) fn find_page(root: &Path, path: &str) -> Option<PathBuf> {
     let base = root.join(path);
     let file = base.with_file_name(format!("{}.mu", base.file_name()?.to_string_lossy()));
@@ -41,25 +41,25 @@ pub(crate) fn find_page(root: &Path, path: &str) -> Option<PathBuf> {
     idx.is_file().then_some(idx)
 }
 
-/// Komprimerer en side (rå deflate, som `DecompressionStream("deflate-raw")`).
+/// Compresses a page (raw deflate, like `DecompressionStream("deflate-raw")`).
 pub(crate) fn compress(markup: &[u8]) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec(markup, 9)
 }
 
 impl Node {
     fn pages_dir(&self) -> PathBuf {
-        self.data_dir.join("sider")
+        self.data_dir.join("pages")
     }
 
-    /// Markup til svaret på `path`.
+    /// Markup for the answer to `path`.
     fn page_markup(&self, path: &str) -> String {
         let root = self.pages_dir();
         if !root.is_dir() {
-            return "# Ingen sider\n\nDenne node har ingen sider.\n".into();
+            return "# No pages\n\nThis node has no pages.\n".into();
         }
         match find_page(&root, path).and_then(|f| fs::read_to_string(f).ok()) {
             Some(m) => m,
-            None => format!("# Ikke fundet\n\nSiden `{path}` findes ikke her.\n\n[Forsiden](/)\n"),
+            None => format!("# Not found\n\nThe page `{path}` does not exist here.\n\n[Front page](/)\n"),
         }
     }
 
@@ -72,7 +72,7 @@ impl Node {
         });
         let times = served.entry(from).or_default();
         if times.len() >= BURST {
-            self.log(format!("sideanmodning fra {} afvist (for mange)", short(&from)));
+            self.log(format!("page request from {} rejected (too many)", short(&from)));
             return;
         }
         times.push(now);
@@ -81,19 +81,19 @@ impl Node {
         let mut data = compress(self.page_markup(&path_s).as_bytes());
         let max = self.file_limit(&from).max_bytes as usize;
         if data.len() > max {
-            let msg = format!("# For stor\n\nSiden `{path_s}` er {} KB komprimeret; grænsen hertil er {} KB.\n",
+            let msg = format!("# Too large\n\nThe page `{path_s}` is {} KB compressed; the limit here is {} KB.\n",
                 data.len().div_ceil(1024), max / 1024);
             data = compress(msg.as_bytes());
         }
         let mime = Small::from_slice(content::PAGE_MIME).unwrap_or_default();
-        self.log(format!("side '{path_s}' til {} ({} bytes)", short(&from), data.len()));
+        self.log(format!("page '{path_s}' to {} ({} bytes)", short(&from), data.len()));
         if let Err((_, e)) = self.send_file_bytes(from, data, mime, path.clone()) {
-            self.log(format!("side til {}: {e}", short(&from)));
+            self.log(format!("page to {}: {e}", short(&from)));
         }
     }
 
-    /// `RequestPage` og `SendCall`. Returnerer kommandoen, hvis den ikke
-    /// hører til her.
+    /// `RequestPage` and `SendCall`. Returns the command if it does not
+    /// belong here.
     pub(super) fn page_command(&mut self, id: ClientId, cmd: Command) -> Option<Command> {
         if let Command::SendCall { dest, data } = cmd {
             self.send_call(id, dest, &data);
@@ -101,10 +101,10 @@ impl Node {
         }
         let Command::RequestPage { req, dest, path } = cmd else { return Some(cmd) };
         let Some(plain) = content::page_request(&path) else {
-            self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "Ugyldig sti"));
+            self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "Invalid path"));
             return None;
         };
-        self.log(format!("beder {} om siden '{}'", short(&dest), String::from_utf8_lossy(&plain[1..])));
+        self.log(format!("asking {} for the page '{}'", short(&dest), String::from_utf8_lossy(&plain[1..])));
         match self.send_sealed(dest, &plain, super::Pending::Control) {
             Ok(msg_id) => self.send_client(id, &Event::Sent { req, msg_id }),
             Err(e) => self.send_client(id, &err_ev(req, error_code::UNKNOWN_DEST, e)),
@@ -114,10 +114,10 @@ impl Node {
 }
 
 impl Node {
-    /// Opkaldsdata: kun når modtageren nås over TCP hele vejen.
+    /// Call data: only when the recipient is reached over TCP all the way.
     fn send_call(&mut self, id: ClientId, dest: Address, data: &[u8]) {
         if self.file_limit(&dest).via_lora {
-            self.send_client(id, &err_ev(0, error_code::NOT_OVER_TCP, "Opkald kræver forbindelse over internettet hele vejen"));
+            self.send_client(id, &err_ev(0, error_code::NOT_OVER_TCP, "Calls require a connection over the internet all the way"));
             return;
         }
         let mut plain = Vec::with_capacity(1 + data.len());
@@ -140,21 +140,21 @@ mod tests {
 
     #[test]
     fn finds_pages_and_index() {
-        let dir = std::env::temp_dir().join(format!("maarse-sider-{}", std::process::id()));
-        fs::create_dir_all(dir.join("vejr")).unwrap();
-        fs::write(dir.join("index.mu"), "# Hej").unwrap();
-        fs::write(dir.join("om.mu"), "# Om").unwrap();
-        fs::write(dir.join("vejr/index.mu"), "# Vejr").unwrap();
+        let dir = std::env::temp_dir().join(format!("maarse-pages-{}", std::process::id()));
+        fs::create_dir_all(dir.join("weather")).unwrap();
+        fs::write(dir.join("index.mu"), "# Hello").unwrap();
+        fs::write(dir.join("about.mu"), "# About").unwrap();
+        fs::write(dir.join("weather/index.mu"), "# Weather").unwrap();
         assert_eq!(find_page(&dir, "index"), Some(dir.join("index.mu")));
-        assert_eq!(find_page(&dir, "om"), Some(dir.join("om.mu")));
-        assert_eq!(find_page(&dir, "vejr"), Some(dir.join("vejr").join("index.mu")));
-        assert_eq!(find_page(&dir, "mangler"), None);
+        assert_eq!(find_page(&dir, "about"), Some(dir.join("about.mu")));
+        assert_eq!(find_page(&dir, "weather"), Some(dir.join("weather").join("index.mu")));
+        assert_eq!(find_page(&dir, "missing"), None);
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn compression_roundtrip() {
-        let m = "# Overskrift\n\nTekst ".repeat(100);
+        let m = "# Heading\n\nText ".repeat(100);
         let c = compress(m.as_bytes());
         assert!(c.len() < m.len() / 5);
         assert_eq!(miniz_oxide::inflate::decompress_to_vec(&c).unwrap(), m.as_bytes());

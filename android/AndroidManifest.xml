@@ -6,16 +6,16 @@
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
 
-    <!-- Bluetooth til noden (Nordic UART). Android 12+: SCAN/CONNECT; ældre: BLUETOOTH + position. -->
+    <!-- Bluetooth to the node (Nordic UART). Android 12+: SCAN/CONNECT; older: BLUETOOTH + location. -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
-    <!-- Talebeskeder. -->
+    <!-- Voice messages. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <!-- Forbindelse til en maarse-host på nettet (valgfri). -->
+    <!-- Connection to a maarse-host on the network (optional). -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />

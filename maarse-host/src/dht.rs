@@ -1,25 +1,25 @@
-//! DHT for backbone-hosts (kun over TCP, aldrig over LoRa).
+//! DHT for backbone hosts (only over TCP, never over LoRa).
 //!
-//! Kademlia-agtig: hver host har en ID = sin Må:rse-adresse, afstand = XOR.
-//! DHT'en gemmer *hvor* en adresse kan nås:
+//! Kademlia-like: every host has an ID = its Må:rse address, distance = XOR.
+//! The DHT stores *where* an address can be reached:
 //!
 //! ```text
-//! nøgle:  Må:rse-adresse (16 bytes)
-//! værdi:  gateway-hostens ID + TCP-endpoint ("vært:port") + hop fra
-//!         gatewayen + det signerede announce fra adressen
+//! key:    Må:rse address (16 bytes)
+//! value:  the gateway host's ID + TCP endpoint ("host:port") + hops from
+//!         the gateway + the signed announce from the address
 //! ```
 //!
-//! Announcet bevises med adressens egen signatur, så ingen kan finde på
-//! adresser. Hvem der *videresender* til adressen er ikke signeret af den;
-//! en løgnagtig gateway kan højst tabe beskeder (de er krypteret ende-til-ende).
+//! The announce is proven by the address's own signature, so nobody can invent
+//! addresses. Who *forwards* to the address is not signed by it;
+//! a lying gateway can at most drop messages (they are encrypted end-to-end).
 //!
-//! Når en host skal nå en ukendt adresse, slår den op i DHT'en, forbinder
-//! direkte til gatewayen som almindelig TCP-peer, og routing klarer resten.
+//! When a host needs to reach an unknown address, it looks it up in the DHT, connects
+//! directly to the gateway as an ordinary TCP peer, and routing does the rest.
 //!
-//! Protokol: klienten åbner en TCP-forbindelse til værtens backbone-port og
-//! sender `D7 D7 | længde (u16 LE) | forespørgsel`; værten svarer med
-//! `længde | svar` og lukker. Almindelige pakkeforbindelser starter aldrig med
-//! D7 D7 (pakker er højst 255 bytes).
+//! Protocol: the client opens a TCP connection to the host's backbone port and
+//! sends `D7 D7 | length (u16 LE) | request`; the host answers with
+//! `length | response` and closes. Ordinary packet connections never start with
+//! D7 D7 (packets are at most 255 bytes).
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
@@ -28,17 +28,17 @@ use std::time::{Duration, Instant};
 use maarse_core::Address;
 use maarse_crypto::verify_announce;
 
-/// Kontakter pr. spand og antal, der gemmes på.
+/// Contacts per bucket and the number of nodes a record is stored on.
 pub const K: usize = 8;
-/// Forespørgsler pr. runde under et opslag.
+/// Requests per round during a lookup.
 pub const ALPHA: usize = 3;
-/// En post udløber efter denne tid, hvis den ikke fornyes.
+/// A record expires after this time if it is not renewed.
 pub const RECORD_TTL: Duration = Duration::from_secs(2 * 3600);
-/// Hvor ofte en gateway genudgiver sine poster.
+/// How often a gateway republishes its records.
 pub const REPUBLISH: Duration = Duration::from_secs(30 * 60);
-/// Første to bytes på en DHT-forbindelse.
+/// First two bytes on a DHT connection.
 pub const MAGIC: [u8; 2] = [0xD7, 0xD7];
-/// Timeout for én forespørgsel.
+/// Timeout for one request.
 pub const RPC_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_EP: usize = 100;
 const MAX_MSG: usize = 4096;
@@ -54,15 +54,15 @@ pub struct Record {
     pub dest: Address,
     pub gw: Address,
     pub ep: String,
-    /// Hop fra gatewayen til adressen, da announcet blev hørt.
+    /// Hops from the gateway to the address when the announce was heard.
     pub hops: u8,
-    /// Alder i sekunder, da posten blev sendt/modtaget.
+    /// Age in seconds when the record was sent/received.
     pub age_s: u32,
     pub announce: Vec<u8>,
 }
 
 impl Record {
-    /// Er announcet ægte og posten fornuftig?
+    /// Is the announce genuine and the record sensible?
     pub fn valid(&self) -> bool {
         !self.ep.is_empty()
             && self.ep.len() <= MAX_EP
@@ -87,7 +87,7 @@ fn bucket_index(me: &Address, other: &Address) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// Routingtabel
+// Routing table
 
 pub struct Table {
     me: Address,
@@ -102,10 +102,10 @@ impl Table {
         }
     }
 
-    /// Tilføjer eller opdaterer en kontakt (seneste bagerst).
+    /// Adds or updates a contact (most recent last).
     pub fn insert(&mut self, c: Contact) {
         let Some(i) = bucket_index(&self.me, &c.id) else {
-            return; // os selv
+            return; // ourselves
         };
         if c.ep.is_empty() || c.ep.len() > MAX_EP {
             return;
@@ -114,7 +114,7 @@ impl Table {
         if let Some(pos) = b.iter().position(|(x, _)| x.id == c.id) {
             b.remove(pos);
         } else if b.len() >= K {
-            // Fuld spand: den ældste skubbes ud, hvis den ikke er hørt længe.
+            // Full bucket: the oldest is evicted if it has not been heard for a long time.
             if b[0].1.elapsed() > Duration::from_secs(15 * 60) {
                 b.remove(0);
             } else {
@@ -147,7 +147,7 @@ impl Table {
 }
 
 // ---------------------------------------------------------------------------
-// Lager for poster
+// Record store
 
 pub struct Store {
     map: HashMap<Address, (Record, Instant)>,
@@ -170,8 +170,8 @@ impl Store {
         r.age_s as u64 + at.elapsed().as_secs()
     }
 
-    /// Gemmer posten, hvis den er gyldig og mindst lige så god som den gamle
-    /// (færre hop, eller den gamle er ved at være forældet).
+    /// Stores the record if it is valid and at least as good as the old one
+    /// (fewer hops, or the old one is about to go stale).
     pub fn put(&mut self, r: Record) -> bool {
         if !r.valid() {
             return false;
@@ -209,7 +209,7 @@ impl Store {
 }
 
 // ---------------------------------------------------------------------------
-// Beskeder
+// Messages
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Req {
@@ -284,7 +284,7 @@ fn get_record(rd: &mut Rd) -> Option<Record> {
     })
 }
 
-/// Forespørgsel: `type | afsender-ID | afsenderens endpoint ("" = ingen) | krop`.
+/// Request: `type | sender ID | sender's endpoint ("" = none) | body`.
 pub fn encode_req(from: &Address, from_ep: Option<&str>, req: &Req) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(match req {
@@ -318,7 +318,7 @@ pub fn decode_req(b: &[u8]) -> Option<(Address, Option<String>, Req)> {
     Some((from, (!ep.is_empty()).then_some(ep), req))
 }
 
-/// Svar: `type | svarerens ID | krop`.
+/// Response: `type | responder's ID | body`.
 pub fn encode_resp(me: &Address, resp: &Resp) -> Vec<u8> {
     let mut out = Vec::new();
     out.push(match resp {
@@ -367,9 +367,9 @@ pub fn decode_resp(b: &[u8]) -> Option<(Address, Resp)> {
 }
 
 // ---------------------------------------------------------------------------
-// Netværk (blokerende; køres i egne tråde)
+// Network (blocking; run in separate threads)
 
-/// Én forespørgsel til `ep`. Svarer kun, hvis alt lykkes inden for tidsgrænsen.
+/// One request to `ep`. Only answers if everything succeeds within the time limit.
 pub fn rpc(ep: &str, me: &Address, my_ep: Option<&str>, req: &Req) -> Option<(Address, Resp)> {
     let addr = ep.to_socket_addrs().ok()?.next()?;
     let mut s = TcpStream::connect_timeout(&addr, RPC_TIMEOUT).ok()?;
@@ -392,7 +392,7 @@ pub fn rpc(ep: &str, me: &Address, my_ep: Option<&str>, req: &Req) -> Option<(Ad
     decode_resp(&resp)
 }
 
-/// Læser én forespørgsel fra en forbindelse, hvor MAGIC allerede er læst.
+/// Reads one request from a connection where MAGIC has already been read.
 pub fn read_request(s: &mut TcpStream) -> Option<Vec<u8>> {
     s.set_read_timeout(Some(RPC_TIMEOUT)).ok()?;
     let mut len = [0u8; 2];
@@ -413,21 +413,21 @@ pub fn write_response(s: &mut TcpStream, resp: &[u8]) {
     let _ = s.write_all(&buf);
 }
 
-/// Resultatet af et opslag.
+/// The result of a lookup.
 #[derive(Default, Debug)]
 pub struct Lookup {
-    /// Fundet post (kun ved `FindValue`).
+    /// Record found (only for `FindValue`).
     pub record: Option<Record>,
-    /// Kontakter, der svarede (lægges i routingtabellen).
+    /// Contacts that answered (put in the routing table).
     pub alive: Vec<Contact>,
-    /// Kontakter, der ikke svarede (fjernes fra routingtabellen).
+    /// Contacts that did not answer (removed from the routing table).
     pub dead: Vec<Address>,
-    /// De K nærmeste levende kontakter til målet.
+    /// The K closest live contacts to the target.
     pub closest: Vec<Contact>,
 }
 
-/// Iterativt Kademlia-opslag. `ask` udfører én forespørgsel (udskiftelig,
-/// så logikken kan testes uden netværk).
+/// Iterative Kademlia lookup. `ask` performs one request (replaceable,
+/// so the logic can be tested without a network).
 pub fn lookup(
     me: &Address,
     start: Vec<Contact>,
@@ -437,7 +437,7 @@ pub fn lookup(
 ) -> Lookup {
     let mut res = Lookup::default();
     let mut short: Vec<Contact> = start;
-    // Endpoints, vi har spurgt (seeds kendes kun ved endpoint, ID = 0).
+    // Endpoints we have asked (seeds are only known by endpoint, ID = 0).
     let mut asked: HashSet<String> = HashSet::new();
     let mut alive: HashSet<Address> = HashSet::new();
     let req = if want_value {
@@ -474,7 +474,7 @@ pub fn lookup(
                         Resp::Nodes(v) => short.extend(v),
                         _ => {}
                     }
-                    // Kontakten kan have været kendt under en midlertidig ID.
+                    // The contact may have been known under a temporary ID.
                     short.retain(|x| x.id != Address::default() || x.ep != c.ep);
                     short.push(c);
                 }
@@ -583,8 +583,8 @@ mod tests {
         assert_eq!(c[1].id, a(0x40));
     }
 
-    /// 200 simulerede hosts, hver kender kun 3 tilfældige andre: opslaget
-    /// skal stadig finde posten, som er gemt hos de K nærmeste.
+    /// 200 simulated hosts, each knows only 3 random others: the lookup
+    /// must still find the record, which is stored at the K closest.
     #[test]
     fn lookup_finds_value_in_simulated_network() {
         let n = 200;
@@ -607,14 +607,14 @@ mod tests {
                     ep: j.to_string(),
                 });
             }
-            let j = (i + 1) % n; // ring, så nettet hænger sammen
+            let j = (i + 1) % n; // a ring, so the network is connected
             t.insert(Contact {
                 id: ids[j],
                 ep: j.to_string(),
             });
         }
-        // Lad hver host lave et opslag efter sig selv (bootstrap), så
-        // tabellerne fyldes som i virkeligheden.
+        // Let every host do a lookup for itself (bootstrap), so the
+        // tables fill up as in reality.
         for i in 0..n {
             let start = tables[i].closest(&ids[i], K);
             let res = lookup(&ids[i], start, &ids[i], false, |c, req| {
@@ -633,7 +633,7 @@ mod tests {
                 tables[i].insert(c);
             }
         }
-        // Gem en post hos de K nærmeste til målet.
+        // Store a record at the K closest to the target.
         let dest_id = Identity::generate(&mut OsRng);
         let dest = dest_id.address();
         let mut stores: Vec<Store> = (0..n).map(|_| Store::new()).collect();
@@ -649,7 +649,7 @@ mod tests {
             let j: usize = c.ep.parse().unwrap();
             assert!(stores[j].put(record(&dest_id, ids[0], 1)));
         }
-        // En anden host finder den.
+        // Another host finds it.
         let asker = 137;
         let res = lookup(
             &ids[asker],

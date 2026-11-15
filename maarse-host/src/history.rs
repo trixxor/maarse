@@ -71,6 +71,8 @@ pub const ST_RECEIVED: u8 = 0;
 pub const ST_SENT: u8 = 1;
 pub const ST_ACKED: u8 = 2;
 pub const ST_DEPOSITED: u8 = 3;
+/// Delivered by carrying (store-carry-forward).
+pub const ST_CARRIED: u8 = 4;
 
 pub const FLAG_OUTGOING: u8 = 1;
 pub const FLAG_LIVE: u8 = 2;
@@ -326,7 +328,7 @@ impl History {
             return None;
         }
         let it = self.items.iter_mut().rev().find(|i| i.outgoing && i.msg_id == msg_id)?;
-        if it.state == ST_ACKED {
+        if it.state == ST_ACKED || it.state == ST_CARRIED {
             return None; // kvittering slår postkasse
         }
         it.state = state;

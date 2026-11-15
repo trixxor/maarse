@@ -494,6 +494,7 @@ function decodeEvent(f) {
     case 0xb4: return { type: "identityChanged", addr: a(1), identity: f.slice(17, 81) };
     case 0xa4: return { type: "name", name: txt(1) };
     case 0xa5: return { type: "call", from: a(1), data: f.slice(17) };
+    case 0xa7: return { type: "carryAcked", msgId: readU64(f, 1) };
     case 0xa6: {
       const n = f[7];
       return { type: "wifi", enabled: !!(f[1] & 1), modem: !!(f[1] & 2), state: f[2], ip: Array.from(f.slice(3, 7)).join("."),
@@ -861,6 +862,11 @@ function onEvent(ev) {
       else if (i.type === "error") log(`${label(ev.from)}: ${i.text}`);
       else if (i.type === "ota" && ev.from === ota.target) { otaOnState(i); break; }
       renderChat();
+      break;
+    }
+    case "carryAcked": {
+      const m = state.byMsgId.get(ev.msgId);
+      if (m) { m.status = "✓ delivered (carried)"; renderChat(); }
       break;
     }
     case "deposited": {
@@ -3421,7 +3427,7 @@ function histDecode(f, t) {
   return null;
 }
 
-const HIST_STATUS = ["", "sendt", "✓ leveret", "📫 i postkasse"];
+const HIST_STATUS = ["", "sendt", "✓ leveret", "📫 i postkasse", "✓ delivered (carried)"];
 function histTime(ts) {
   const d = new Date(ts * 1000), t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return d.toDateString() === new Date().toDateString() ? t : d.toLocaleDateString([], { day: "numeric", month: "short" }) + " " + t;

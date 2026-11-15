@@ -79,6 +79,9 @@ impl Node {
             Event::Acked { msg_id } => {
                 h.set_state(*msg_id, history::ST_ACKED);
             }
+            Event::CarryAcked { msg_id } => {
+                h.set_state(*msg_id, history::ST_CARRIED);
+            }
             Event::Deposited { msg_id } => {
                 h.set_state(*msg_id, history::ST_DEPOSITED);
             }

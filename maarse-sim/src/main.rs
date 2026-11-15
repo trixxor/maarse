@@ -38,6 +38,14 @@ struct Config {
     channel_messages: usize,
     seed: u64,
     sf: u8,
+    /// Flood slot sized from the SF (`qos::slot_ms`) instead of the fixed
+    /// 200 ms. Experimental: worse at SF12 with today's fixed timeouts.
+    sf_slot: bool,
+    /// Turn off local repair (behaviour before it).
+    no_repair: bool,
+    /// Repeaters that go silent at `kill_at_s` (failure injection).
+    kill: usize,
+    kill_at_s: u64,
     duty_permille: u32,
     mode: Mode,
     hop_limit: u8,
@@ -92,6 +100,10 @@ impl Default for Config {
             channel_messages: 10,
             seed: 1,
             sf: 9,
+            sf_slot: false,
+            no_repair: false,
+            kill: 0,
+            kill_at_s: 300,
             duty_permille: 100,
             mode: Mode::Maarse,
             hop_limit: 7,
@@ -132,6 +144,10 @@ fn parse_args() -> Config {
             "--channel-messages" => c.channel_messages = v.parse().expect("--channel-messages"),
             "--seed" => c.seed = v.parse().expect("--seed"),
             "--sf" => c.sf = v.parse().expect("--sf"),
+            "--slot" => c.sf_slot = v == "sf",
+            "--repair" => c.no_repair = v == "off",
+            "--kill" => c.kill = v.parse().expect("--kill (repeaters)"),
+            "--kill-at" => c.kill_at_s = v.parse().expect("--kill-at (seconds)"),
             "--duty" => c.duty_permille = v.parse().expect("--duty (promille)"),
             "--hop-limit" => c.hop_limit = v.parse().expect("--hop-limit"),
             "--duration" => c.duration_s = v.parse().expect("--duration"),
@@ -288,6 +304,8 @@ struct SimNode {
     repeater: bool,
     duty: DutyCycle,
     airtime_us: u64,
+    /// Switched off by failure injection: neither sends nor receives.
+    dead: bool,
 }
 
 struct Tx {
@@ -406,6 +424,10 @@ impl Sim {
                 router.mobile = true; // the car
             }
             router.carry_copies = cfg.carry_copies;
+            router.local_repair = !cfg.no_repair;
+            if cfg.sf_slot {
+                router.slot_ms = maarse_core::qos::slot_ms(&radio.lora);
+            }
             if cfg.forest && !repeater {
                 router.mobile = true;
                 if let Some(h) = cfg.relay_hops {
@@ -437,6 +459,7 @@ impl Sim {
                 repeater,
                 duty: DutyCycle::new(cfg.duty_permille, 0),
                 airtime_us: 0,
+                dead: false,
             });
         }
         // Link budget between all pairs (repeaters stand high and have better antennas).
@@ -774,11 +797,17 @@ impl Sim {
         self.setup_traffic();
         self.trace_setup();
         let end = self.cfg.duration_s * 1000;
+        let kill_at = self.cfg.kill_at_s * 1000;
+        let mut killed = self.cfg.kill == 0;
         while let Some(Reverse((at, _, key))) = self.queue.pop() {
             if at > end {
                 break;
             }
             self.now = at;
+            if !killed && at >= kill_at {
+                killed = true;
+                self.kill_repeaters();
+            }
             let Some(ev) = self.events.remove(&key) else {
                 continue;
             };
@@ -968,7 +997,20 @@ impl Sim {
             })
     }
 
+    /// Failure injection: `--kill` random repeaters go silent.
+    fn kill_repeaters(&mut self) {
+        let mut reps: Vec<usize> = (0..self.nodes.len()).filter(|&i| self.nodes[i].repeater).collect();
+        for _ in 0..self.cfg.kill.min(reps.len()) {
+            let i = self.rng.gen_range(0..reps.len());
+            let r = reps.swap_remove(i);
+            self.nodes[r].dead = true;
+        }
+    }
+
     fn try_tx(&mut self, node: usize, packet: Buf, tries: u8, id: u64) {
+        if self.nodes[node].dead {
+            return;
+        }
         if self.cancelled.remove(&(node, id)) {
             self.stats.suppressed += 1;
             return;
@@ -1066,7 +1108,7 @@ impl Sim {
         }
         let mut rx = trace::Rx::default();
         for r in 0..self.nodes.len() {
-            if r == sender || !self.audible(sender, r) {
+            if r == sender || self.nodes[r].dead || !self.audible(sender, r) {
                 continue;
             }
             let p = self.gain[sender][r];

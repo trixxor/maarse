@@ -137,11 +137,28 @@ pub struct Config {
     /// Run under a service manager (`--service`): no browser, and a settings
     /// restart exits with RESTART_EXIT_CODE so the supervisor starts us again.
     pub service: bool,
+    /// Identities whose signed bulletins we show (`--bulletin-key`).
+    pub bulletin_keys: Vec<maarse_crypto::PublicIdentity>,
 }
 
 /// Public backbone nodes that `--public` connects to. Empty until
 /// someone sets up servers.
 pub const PUBLIC_PEERS: &[&str] = &[];
+
+/// Parses a public identity given as 128 hex digits (signing key, then DH key).
+fn parse_identity(s: &str) -> Result<maarse_crypto::PublicIdentity, String> {
+    let s = s.trim();
+    let bytes: Option<Vec<u8>> = (0..s.len())
+        .step_by(2)
+        .map(|i| s.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+        .collect();
+    match bytes {
+        Some(b) if b.len() == 64 => {
+            maarse_crypto::PublicIdentity::from_bytes(&b).ok_or_else(|| "--bulletin-key: invalid key".to_string())
+        }
+        _ => Err(format!("--bulletin-key: expected 128 hex digits, got '{s}'")),
+    }
+}
 
 const HELP: &str = "\
 maarse-host – gateway and test node for Må:rse
@@ -187,6 +204,10 @@ Usage: maarse-host [options]
   --mqtt-prefix <topic> topic prefix (default: maarse)
   --mqtt-user <name>    user name for the broker
   --mqtt-pass <pass>    password for the broker
+  --bulletin-key <hex>  trust signed bulletins from this identity (128 hex
+                        digits, printed by the sender's host at start-up; can
+                        be repeated). Joins the #bulletin channel, where only
+                        verified bulletins are shown
   --no-browser          do not open the browser automatically
   --service             run under a service manager (systemd, Task Scheduler):
                         implies --no-browser; a settings restart exits with
@@ -224,6 +245,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         wintun: None,
         tun_lora: false,
         service: false,
+        bulletin_keys: Vec::new(),
     };
     let mut mqtt_prefix = "maarse".to_string();
     let (mut mqtt_user, mut mqtt_pass) = (None, None);
@@ -259,6 +281,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
                 c.history_days = Some(n.max(1));
             }
             "--public-addr" => c.public_addr = Some(val("--public-addr")?),
+            "--bulletin-key" => c.bulletin_keys.push(parse_identity(&val("--bulletin-key")?)?),
             "--dht" => c.dht_seeds.push(val("--dht")?),
             "--region" => c.regions.push(val("--region")?.trim().to_lowercase()),
             "--strict-region" => c.strict_region = true,
@@ -399,6 +422,11 @@ fn main() {
     println!("Må:rse-host v{}", env!("CARGO_PKG_VERSION"));
     settings::report(format!("  Address:  {}", node.address()), false);
     settings::report(format!("  Data:     {}", cfg.data_dir.display()), false);
+    let key: String = node.public_identity().to_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    settings::report(format!("  Bulletin key (for --bulletin-key on receivers): {key}"), false);
+    if !cfg.bulletin_keys.is_empty() {
+        settings::report(format!("  Bulletins: trusting {} key(s) on #bulletin", cfg.bulletin_keys.len()), false);
+    }
 
     if let Some(addr) = cfg.listen {
         match links::spawn_tcp_listener(addr, tx.clone()) {

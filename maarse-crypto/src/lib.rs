@@ -14,6 +14,7 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+pub mod bulletin;
 pub mod files;
 pub mod ota;
 pub mod ratchet;
@@ -118,6 +119,10 @@ impl Identity {
 
     pub fn address(&self) -> Address {
         self.public().address()
+    }
+
+    pub(crate) fn signing_key(&self) -> &SigningKey {
+        &self.sign
     }
 
     /// Builds the payload of an announce. The packet is sent with destination =

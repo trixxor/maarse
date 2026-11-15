@@ -202,7 +202,9 @@ A maarse-host at home can work as one shared inbox that the phone, the laptop an
 - Flood suppression (a repeater stays quiet when a nearby neighbour with good SNR has sent the same thing), per-hop acknowledgement with retransmission, and end-to-end acknowledgement.
 - **Route repair:** without an acknowledgement within 20 s the route is forgotten, and the message is sent again with a new path request (up to 2 times). Unanswered path requests are repeated after 45 s (the reply can take a long time in a large net), and a late reply to an older request still counts.
 - **Mobile nodes** (`mobile = true`) do not trust routes older than 30 s.
-- Roles: `Client`, `Repeater` and `Relay` (forest mode, at most 4 hops).
+- **Local repair:** a repeater whose next hop on a path stops answering (no forward after 4 tries) sends the packet straight to a node further along the path that it has heard in the last 2 minutes, or to the recipient itself, with the dead hop cut out. The dead hop is remembered for 5 minutes (or until heard again), so later packets skip it at once. The packet format is unchanged. `maarse-sim --kill N [--kill-at s]` switches N repeaters off mid-run, and `--repair off` compares with the old behaviour (120 nodes, 3 repeaters killed, 8 seeds: 99.2 % → 99.8 % acked, same airtime).
+- **Send priorities** (firmware radio queue, `maarse-core/src/qos.rs`): of the packets that are due, acks, path responses and carry notices go first, then direct messages and bulletins, then channel messages, then fragments (files, voice), and path requests and announces last. A full queue drops the least urgent packet. A flood slot that follows the SF is in `qos::slot_ms` and `maarse-sim --slot sf`, but it is not used: in the simulator it gave no gain at SF11 and fewer deliveries at SF12, probably because the timeouts stay fixed.
+- Roles: `Client`, `Repeater` and `Relay` (forest mode, at most 4 hops). Relays carry messages they cannot deliver (4 copies, see *Carry*); repeaters and clients do not.
 
 ### Edge bridge (relays at the edge of repeater coverage)
 
@@ -215,7 +217,7 @@ A relay that can reach a repeater (say, someone who climbs a hill) is often the 
 
 ### Store-carry-forward ("carry") and the delivered notice
 
-With `carry_copies > 0` (off by default; not enabled in host or firmware yet, `maarse-sim --carry N` to try it), a direct message the router gives up on is carried instead of dropped: the node keeps it with N tokens and hands half of them to new encounters ("binary spray and wait"), and to the destination when it is heard. Copies live 30 minutes. Details are in `maarse-core/src/router.rs` ("Carry").
+With `carry_copies > 0` (on in firmware for the relay role with 4 copies; off for repeaters, clients and the host; `maarse-sim --carry N` to try it), a direct message the router gives up on is carried instead of dropped: the node keeps it with N tokens and hands half of them to new encounters ("binary spray and wait"), and to the destination when it is heard. Copies live 30 minutes. Details are in `maarse-core/src/router.rs` ("Carry").
 
 - **Carry packet** (type 11): a one-element path naming the receiving neighbour, payload `tokens (1) | ttl left in s (u16 BE) | from (PathId, u16 BE) | message`. The message stays end-to-end encrypted.
 - **Delivered notice:** when the destination gets a carried message (also a repeated copy), it sends a type 11 packet *without* a path, addressed to `ack_token(message id)` (the same 16-byte token as an ordinary acknowledgement), with no payload: 18 bytes on the air. Nodes without the notice drop Carry packets without a path, so it is backward tolerant.
@@ -258,6 +260,8 @@ Channel messages can be kept within an area. A region is a lowercase name, e.g. 
 - When a host sees a path request to an unknown address, it looks the address up. That also happens when a client writes to an unknown address; the message then waits for the answer.
 - When the address is found, the host connects directly to the gateway, and ordinary routing takes care of the rest.
 - DHT traffic uses the same TCP port as the backbone. It is recognised by the first two bytes (`D7 D7`).
+- **Full replication in small nets:** with at most 64 known DHT hosts (`dht::FULL_REPLICA_MAX`), a gateway stores its entries on *every* known host, not only the 8 closest. Every host then holds the whole table: lookups are answered locally, and if the backbone splits, each side keeps its copy until the entries expire (2 hours). When a backbone link comes up, the host republishes all its entries at once, so a healed split learns the other side's addresses again within a maintenance round.
+- Mailboxes need no sync after a split: a message waits on the *sender's* host (or one repeater's flash) and is delivered when the recipient's announce reaches it again; the duplicate filter stops double delivery.
 
 ## Battery and energy-driven routing
 
@@ -296,6 +300,16 @@ The firmware has a range test mode for measuring real range, loss and power use 
 ## Position and telemetry
 
 Position is **not** shared by default. Under Diagnostics you can choose the precision (off / about 10 km / about 1 km / precise) and telemetry (battery, uptime, energy status); command `0x22`/`0x23`, reply `0xA2`. The node stores the position, but sends it rounded to the centre of a grid cell (0.1° or 0.01°); only "precise" sends the exact position (the client asks first). The fields are in the announce's app data after the FS field (`0x03` position, `0x04` telemetry, type | length | data, at most 41 of 99 bytes in total), so older nodes ignore them. Received positions and telemetry are shown as a list (event `0xA3`), without maps from outside. Temperature is part of the format, but the nRF52840's TEMP peripheral is owned by Bluetooth (MPSL), so it is not sent yet.
+
+## Signed bulletins
+
+Short notices from a trusted sender (e.g. an emergency organisation) that anyone can check offline (`maarse-crypto/src/bulletin.rs`).
+
+- They are channel messages on the fixed channel `#bulletin`. The plaintext is `0xB1 | timestamp (u32 BE) | Ed25519 signature (64) | text`, signed over `"maarse/bulletin/v1" | channel address | timestamp | text`. That leaves 128 bytes of text (126 with a region).
+- **Sending:** every message a host sends on `#bulletin` is signed with its identity. At start-up the host prints its *bulletin key* (128 hex digits, its public identity).
+- **Receiving:** `maarse-host --bulletin-key <hex>` (can be repeated) trusts that sender and joins `#bulletin`. A message is shown as `[Verified bulletin] …` only if the channel sender is a trusted identity and the signature is valid; everything else on the channel is dropped and logged. The sender's announce is not needed.
+- **On the air:** the firmware's radio queue sends `#bulletin` packets with the priority of direct messages, before other channel traffic.
+- **Not yet:** checking on the firmware and in the Android app without a host (needs a place to store trusted keys), and a setting in the web client instead of the command-line flag.
 
 ## Backup and recovery phrase
 

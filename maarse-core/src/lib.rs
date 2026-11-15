@@ -21,6 +21,7 @@ pub mod dedup;
 pub mod diag;
 pub mod duty;
 pub mod packet;
+pub mod qos;
 pub mod rangetest;
 pub mod region;
 pub mod router;

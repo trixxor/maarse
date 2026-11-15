@@ -176,7 +176,7 @@ Someone with a radio receiver and no keys can read this from a direct message:
 
 | | |
 | --- | --- |
-| 💬 **Messages** | End-to-end encrypted direct messages with delivery receipts and forward secrecy. Public, `#hashtag`, private and regional channels. |
+| 💬 **Messages** | End-to-end encrypted direct messages with delivery receipts and forward secrecy. Public, `#hashtag`, private and regional channels. Signed bulletins from trusted senders, verified offline. |
 | 📦 **Mailbox** | For people who are offline: on the host (7 days, files too) and in repeaters' flash. |
 | 🖼️ **Files and voice** | Pictures and files up to 8 KB over LoRa and 1 MB over the internet; Codec2 voice messages; Opus calls over TCP. |
 | 🌐 **Backbone** | TCP links between hosts with a DHT; ESP32 boards can join over Wi-Fi (a phone hotspot on a hilltop is enough). |
@@ -233,11 +233,10 @@ The Mesh Lab is a simplified model to build intuition, and it says so on the pag
 ## Roadmap
 
 - Field measurement of range and power (range-test mode in the firmware, then a test drive)
-- Turn on carry for the relay role in firmware
 - A written protocol specification
 - External review of the cryptography
 - The phone as its own node, and a gateway to Reticulum
-- Load control: flood slots per SF, queue priorities, request quotas
+- Load control: flood slots per SF (tried, not yet a gain) and request quotas
 
 ## Licence
 

@@ -28,6 +28,17 @@
 //! Acknowledgements follow the same way back. The packet format is unchanged, and several
 //! anchors in a row work by themselves (up to `MAX_HOPS` in total).
 
+//! ## Local repair
+//! A repeater that sends a source-routed packet listens for the next hop to
+//! forward it, and retransmits up to [`HOP_RETRIES`] times. If the next hop
+//! never answers, the repeater looks for a node further along the path that
+//! it has heard in the last two minutes (or the destination itself) and
+//! sends the packet straight there, with the dead hop cut out of the path.
+//! The dead hop is remembered for five minutes (or until it is heard again),
+//! so later packets skip it at once. This saves the sender's end-to-end
+//! timeout and a new path request flooded from the start. The packet format
+//! is unchanged, so older nodes on the path work as before.
+
 //! ## Carry (store-carry-forward)
 //! With `carry_copies > 0`, a direct message the router gives up on (no
 //! route found, or no acknowledgement after the retries) is not dropped but
@@ -170,6 +181,13 @@ const MAX_ANCHORED: usize = 16;
 /// How long a leg is remembered by the anchor (ms): long enough for reply and
 /// acknowledgement, even over many hops.
 const ANCHOR_TTL_MS: u64 = 120_000;
+/// Next hops we remember as dead (see "Local repair").
+const MAX_DEAD_HOPS: usize = 8;
+/// How long a next hop counts as dead, unless we hear it again.
+const DEAD_HOP_MS: u64 = 300_000;
+/// A node further along the path must have been heard this recently to be
+/// used for local repair.
+const BYPASS_FRESH_MS: u64 = 120_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -391,6 +409,9 @@ pub struct RouterStats {
     /// Announces and path requests dropped because the proof of work
     /// (the stamp) was missing or wrong (see [`crate::stamp`]).
     pub bad_stamps: u32,
+    /// Source-routed packets sent past a next hop that stopped answering
+    /// (see "Local repair").
+    pub local_repairs: u32,
 }
 
 /// Routing engine with `R` routes and a duplicate filter of `D` packets.
@@ -453,6 +474,12 @@ pub struct Router<const R: usize, const D: usize> {
     traces: heapless::Vec<(Address, Address, bool), MAX_TRACES>,
     /// Legs we remember as an anchor (see [`Role::Anchor`]).
     anchored: heapless::Vec<Anchored, MAX_ANCHORED>,
+    /// Next hops that stopped answering: (id, until). Packets for them are
+    /// sent past them at once (see "Local repair").
+    dead_hops: heapless::Vec<(PathId, u64), MAX_DEAD_HOPS>,
+    /// Send past next hops that stop answering (see "Local repair"). On by
+    /// default; the simulator turns it off for comparison.
+    pub local_repair: bool,
 }
 
 impl<const R: usize, const D: usize> Router<R, D> {
@@ -510,6 +537,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
             strict_region: false,
             stats: RouterStats::default(),
             neighbors: crate::diag::NeighborTable::new(),
+            dead_hops: heapless::Vec::new(),
+            local_repair: true,
             rx_rssi: 0,
             traces: heapless::Vec::new(),
             anchored: heapless::Vec::new(),
@@ -610,6 +639,72 @@ impl<const R: usize, const D: usize> Router<R, D> {
             deadline_ms: now_ms + delay_ms as u64 + self.hop_timeout_ms as u64,
             tries: 0,
         });
+    }
+
+    /// Is the next hop of this (outgoing) header one we remember as dead?
+    fn is_dead_hop(&self, header: &Header, now_ms: u64) -> bool {
+        let Some(next) = header.path.as_ref().and_then(|p| p.get(header.hops as usize)) else {
+            return false;
+        };
+        self.dead_hops.iter().any(|(d, until)| d == next && *until > now_ms)
+    }
+
+    /// A header that skips the next hop: the path continues at the farthest
+    /// node on it we have heard recently, or ends here if we hear the
+    /// destination itself. `None` if no such node is in range.
+    fn bypass_header(&self, header: &Header, now_ms: u64) -> Option<Header> {
+        if !self.local_repair {
+            return None;
+        }
+        let path = header.path.as_ref()?;
+        let idx = header.hops as usize;
+        if idx >= path.len() {
+            return None;
+        }
+        let fresh = |n: &crate::diag::Neighbor| n.last_ms + BYPASS_FRESH_MS > now_ms;
+        let mut new_path = Path::new();
+        // The destination itself is in range: no more repeaters needed.
+        let dest_near = self.neighbors.iter().any(|n| n.addr == Some(header.dest) && fresh(n));
+        let skip_to = if dest_near {
+            path.len()
+        } else {
+            (idx + 1..path.len())
+                .rev()
+                .find(|&j| path[j] != self.id && self.neighbors.get(path[j]).is_some_and(fresh))?
+        };
+        for (j, id) in path.iter().enumerate() {
+            if j < idx || j >= skip_to {
+                let _ = new_path.push(*id);
+            }
+        }
+        let mut h = header.clone();
+        h.path = Some(new_path);
+        Some(h)
+    }
+
+    /// Local repair: the next hop did not forward a source-routed packet after
+    /// all retries. Instead of leaving it to the sender (end-to-end timeout and
+    /// a new path request flooded from the start), send it past the dead hop
+    /// to a node further along the path that we can hear. The dead hop is
+    /// remembered for a while, so later packets skip it at once.
+    fn local_repair(&mut self, packet: &[u8], now_ms: u64, out: &mut Actions) {
+        let Ok(pkt) = Packet::decode(packet) else {
+            return;
+        };
+        let header = pkt.header.clone();
+        if let Some(dead) = header.path.as_ref().and_then(|p| p.get(header.hops as usize)).copied() {
+            self.dead_hops.retain(|(d, until)| *d != dead && *until > now_ms);
+            if self.dead_hops.is_full() {
+                self.dead_hops.remove(0);
+            }
+            let _ = self.dead_hops.push((dead, now_ms + DEAD_HOP_MS));
+        }
+        let Some(bypass) = self.bypass_header(&header, now_ms) else {
+            return;
+        };
+        self.stats.local_repairs += 1;
+        let payload: Buf = Buf::from_slice(pkt.payload).unwrap_or_default();
+        self.emit_routed(&bypass, &payload, 0, now_ms, out);
     }
 
     /// Forwards a flood later and remembers it, so we can cancel.
@@ -815,7 +910,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 continue;
             }
             if self.forwards[i].tries >= HOP_RETRIES {
-                self.forwards.swap_remove(i);
+                let f = self.forwards.swap_remove(i);
+                self.local_repair(&f.packet, now_ms, &mut out);
                 continue;
             }
             let f = &mut self.forwards[i];
@@ -967,6 +1063,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
             && id != self.id
         {
             self.neighbors.heard(id, addr, snr_db, self.rx_rssi, now_ms);
+            // Heard again: no longer a dead hop.
+            self.dead_hops.retain(|(d, _)| *d != id);
         }
         // Flood forwarding and coverage: the last hop forwarded this request;
         // if it is a repeater, it heard the hop before it.
@@ -1508,6 +1606,13 @@ impl<const R: usize, const D: usize> Router<R, D> {
             let mut header = h.clone();
             header.hops += 1;
             self.stats.forwarded += 1;
+            // The next hop is known to be dead: go past it at once.
+            if self.is_dead_hop(&header, now_ms)
+                && let Some(bypass) = self.bypass_header(&header, now_ms)
+            {
+                self.stats.local_repairs += 1;
+                header = bypass;
+            }
             if h.ptype == PacketType::Probe && diag::trace_fixed_len(pkt.payload).is_some() {
                 // Trace: append the SNR we heard the packet with.
                 let mut p = diag::TraceBuf::from_slice(pkt.payload).unwrap_or_default();
@@ -2232,6 +2337,72 @@ mod tests {
             sent += transmits(&r.tick(d)).len();
         }
         assert_eq!(sent, HOP_RETRIES as usize);
+    }
+
+    #[test]
+    fn dead_next_hop_is_bypassed() {
+        let mut r = node(2, Role::Repeater);
+        // We hear repeater 4, which comes after 3 on the path.
+        r.neighbors.heard(4, None, 5, 0, 0);
+        let header = Header::new(PacketType::Data, Address([5; 16]))
+            .with_path(Path::from_slice(&[2, 3, 4]).unwrap());
+        r.on_receive(&encode(&header, b"x").unwrap(), 0, 0);
+        // Repeater 3 never forwards: after the retries the packet goes to 4.
+        let mut last = Vec::new();
+        while let Some(d) = r.next_deadline() {
+            if d > 60_000 {
+                break;
+            }
+            last = transmits(&r.tick(d));
+            if last.iter().any(|p| Packet::decode(p).unwrap().header.path.as_ref().unwrap().len() == 2) {
+                break;
+            }
+        }
+        let p = Packet::decode(&last[0]).unwrap();
+        assert_eq!(p.header.path.as_ref().unwrap().as_slice(), &[2, 4]);
+        assert_eq!(p.header.hops, 1);
+        assert_eq!(r.stats.local_repairs, 1);
+        // The next packet skips 3 at once.
+        let out = transmits(&r.on_receive(&encode(&header, b"y").unwrap(), 0, 30_000));
+        let p = Packet::decode(&out[0]).unwrap();
+        assert_eq!(p.header.path.as_ref().unwrap().as_slice(), &[2, 4]);
+        // Hearing 3 again makes it usable again.
+        let mut h3 = header.clone();
+        h3.hops = 2;
+        r.on_receive(&encode(&h3, b"z").unwrap(), 0, 31_000);
+        let out = transmits(&r.on_receive(&encode(&header, b"w").unwrap(), 0, 32_000));
+        assert_eq!(Packet::decode(&out[0]).unwrap().header.path.as_ref().unwrap().as_slice(), &[2, 3, 4]);
+    }
+
+    #[test]
+    fn dead_last_repeater_is_bypassed_to_the_destination() {
+        let mut r = node(2, Role::Repeater);
+        let dest = Address([5; 16]);
+        r.neighbors.heard(dest.path_id(), Some(dest), 5, 0, 0);
+        let header = Header::new(PacketType::Data, dest).with_path(Path::from_slice(&[2, 3]).unwrap());
+        r.on_receive(&encode(&header, b"x").unwrap(), 0, 0);
+        let mut found = false;
+        while let Some(d) = r.next_deadline() {
+            for p in transmits(&r.tick(d)) {
+                let p = Packet::decode(&p).unwrap();
+                if p.header.path.as_ref().unwrap().as_slice() == [2] && p.header.hops == 1 {
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "sent straight to the destination");
+    }
+
+    #[test]
+    fn no_bypass_without_a_node_in_range() {
+        let mut r = node(2, Role::Repeater);
+        let header = Header::new(PacketType::Data, Address([5; 16]))
+            .with_path(Path::from_slice(&[2, 3, 4]).unwrap());
+        r.on_receive(&encode(&header, b"x").unwrap(), 0, 0);
+        while let Some(d) = r.next_deadline() {
+            r.tick(d);
+        }
+        assert_eq!(r.stats.local_repairs, 0);
     }
 
     #[test]

@@ -50,6 +50,14 @@ pub type RegionNames = heapless::Vec<u8, 120>;
 /// SNR given to packets from the Wi-Fi backbone link (same as maarse-host's TCP).
 const NET_SNR: i8 = 10;
 
+/// Shown in a conversation when a message from that contact could not be
+/// decrypted (it arrived too late or the session was lost).
+const UNREADABLE_NOTICE: &str =
+    "[A message from this contact could not be decrypted. A new encryption session was started; ask them to send it again.]";
+
+/// Copies per message a relay carries (see `apply_role`).
+const RELAY_CARRY_COPIES: u8 = 4;
+
 /// Where radio settings are stored (flash on the board).
 pub trait Settings {
     fn save_radio(&mut self, cfg: &RadioConfig);
@@ -239,7 +247,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         n.apply_regions(strict, names);
         n.admins = n.settings.load_admins();
         let role = n.settings.load_role();
-        n.router.set_role(role);
+        n.apply_role(role);
         n.join("public");
         n.range_init();
         n
@@ -385,8 +393,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     self.flush_mail(dest);
                 }
                 Action::CarryAcked { msg_id } => {
-                    // Carrying is off in firmware for now; handled like an
-                    // acknowledgement, but the app is told "carried".
+                    // Handled like an acknowledgement, but the app is told
+                    // "carried" (only relays carry, see `apply_role`).
                     if let Some(id) = self.mail_inflight.remove(&msg_id) {
                         self.settings.mail_remove(id);
                         self.mail_delivered += 1;
@@ -548,6 +556,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     }
                     Err(CryptoError::NoSession(a) | CryptoError::Desync(a)) => {
                         log("Message could not be read (the encryption session is lost)");
+                        // Show it in the conversation too, so the loss is not silent.
+                        emit(&Event::DirectReceived { from: a, hops, text: text(UNREADABLE_NOTICE.as_bytes()) });
                         self.resync(a);
                     }
                     Err(_) => {}
@@ -987,10 +997,19 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
+    /// Sets the router's role. Relays (forest mode, handhelds on the move)
+    /// also carry messages they cannot deliver: in the simulator, 4 copies
+    /// gave +14-16 points delivered for about +10 % airtime. Repeaters and
+    /// clients do not carry.
+    fn apply_role(&mut self, role: Role) {
+        self.router.set_role(role);
+        self.router.carry_copies = if role == Role::Relay { RELAY_CARRY_COPIES } else { 0 };
+    }
+
     /// Changes role and stores it in flash. Returns a log text.
     fn set_role(&mut self, role: u8) -> Result<&'static str, &'static str> {
         let r = Role::from_u8(role).ok_or("Unknown role (0 = client, 1 = repeater, 2 = relay)")?;
-        self.router.set_role(r);
+        self.apply_role(r);
         self.settings.save_role(r);
         Ok(match r {
             Role::Client => "Role saved: client",

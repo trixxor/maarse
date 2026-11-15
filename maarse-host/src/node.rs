@@ -25,6 +25,7 @@ use maarse_core::packet::{Header, Packet, encode};
 use maarse_core::stamp;
 use maarse_core::router::MAX_DIRECT_PAYLOAD;
 use maarse_core::{Action, Address, PacketType, Role, Router};
+use maarse_crypto::bulletin;
 use maarse_crypto::ratchet::{self, Format, MAX_FS_TEXT};
 use maarse_crypto::seal::{self, CHUNK_DATA, CryptoError};
 use maarse_crypto::{
@@ -117,10 +118,18 @@ enum Pending {
     Control,
 }
 
+/// Shown in a conversation when a message from that contact could not be
+/// decrypted (it arrived too late or the session was lost).
+const UNREADABLE_NOTICE: &str =
+    "[A message from this contact could not be decrypted. A new encryption session was started; ask them to send it again.]";
+
 /// A sent direct message that may need to go to the mailbox.
 struct OutMsg {
     dest: Address,
-    sealed: Vec<u8>,
+    /// The message in the static format, for the mailbox. A mailbox can
+    /// hold it for days, and a forward-secrecy message that late may fall
+    /// outside the recipient's skipped-key window and never open.
+    mail_sealed: Vec<u8>,
     sent: Instant,
     deposited: bool,
 }
@@ -210,6 +219,8 @@ pub struct Node {
     ext: ext::Ext,
     /// Message history for several screens (see history.rs and node/hist.rs).
     hist: hist::Hist,
+    /// Identities whose signed bulletins we show (`--bulletin-key`).
+    bulletin_keys: Vec<PublicIdentity>,
 }
 
 /// The backbone DHT's state (see dht.rs).
@@ -402,6 +413,7 @@ impl Node {
                 cfg.mqtt.clone().map(|m| crate::mqtt::Mqtt::spawn(m, format!("maarse-{}", short(&addr)))),
             ),
             hist: hist::Hist::open(&cfg.data_dir, cfg.history_days),
+            bulletin_keys: cfg.bulletin_keys.clone(),
         };
         let saved = fs::read_to_string(node.data_dir.join("admins.txt")).unwrap_or_default();
         node.admins = saved.lines().filter_map(parse_addr).collect();
@@ -414,6 +426,9 @@ impl Node {
         }
         let saved = fs::read_to_string(node.data_dir.join("channels.txt")).unwrap_or_default();
         node.join_channel("public", false);
+        if !node.bulletin_keys.is_empty() {
+            node.join_channel(bulletin::CHANNEL_NAME, false);
+        }
         for line in saved.lines().filter(|l| !l.trim().is_empty()) {
             if let Some((name, key)) = parse_private_line(line) {
                 node.join_private_channel(&name, key, false);
@@ -437,6 +452,10 @@ impl Node {
 
     pub fn address(&self) -> Address {
         self.addr
+    }
+
+    pub fn public_identity(&self) -> PublicIdentity {
+        self.identity.public()
     }
 
     fn now_ms(&self) -> u64 {
@@ -519,6 +538,11 @@ impl Node {
                 self.log(format!("link up: {name}"));
                 if name.starts_with("tcp") {
                     let _ = tx.send(self.region_hello());
+                    // A backbone link came up (perhaps a split healed):
+                    // republish everything we can reach at the next maintenance.
+                    for (_, _, last) in self.dht.heard.values_mut() {
+                        *last = None;
+                    }
                 }
                 self.links.insert(id, (name, tx));
                 self.announce();
@@ -718,11 +742,20 @@ impl Node {
             .send_direct(dest, &ct[..n], token(), now)
             .map_err(|_| "The queue is full, try again shortly")?;
         if matches!(kind, Pending::Message) {
+            let mail_sealed = if format == Format::Static {
+                ct[..n].to_vec()
+            } else {
+                let mut st = [0u8; 255];
+                match ratchet::seal(&self.identity, &recipient, &mut self.sessions, false, &mut OsRng, plain, &mut st) {
+                    Ok((m, _)) => st[..m].to_vec(),
+                    Err(_) => ct[..n].to_vec(),
+                }
+            };
             self.outbox.insert(
                 msg_id,
                 OutMsg {
                     dest,
-                    sealed: ct[..n].to_vec(),
+                    mail_sealed,
                     sent: Instant::now(),
                     deposited: false,
                 },
@@ -792,6 +825,9 @@ impl Node {
                 };
                 let mut out = [0u8; 256];
                 match seal::open_channel(key, payload, &mut out) {
+                    Ok((from, n)) if from != self.addr && dest == bulletin::channel() => {
+                        self.on_bulletin(dest, from, hops, &out[..n]);
+                    }
                     Ok((from, n)) if from != self.addr => {
                         self.mqtt_channel(&dest, &from, hops, &out[..n]);
                         self.broadcast(&Event::ChannelReceived {
@@ -883,6 +919,8 @@ impl Node {
                     "message from {} could not be read (the session is lost or out of step)",
                     short(&a)
                 ));
+                // Show it in the conversation too, so the loss is not silent.
+                self.broadcast(&Event::DirectReceived { from: a, hops, text: text(UNREADABLE_NOTICE.as_bytes()) });
                 self.resync(a);
             }
             Err(e) => {
@@ -905,6 +943,21 @@ impl Node {
         if ratchet::reset(&self.identity, &id, &mut self.sessions, &mut OsRng).is_ok() {
             self.fs_peers.insert(peer);
             let _ = self.send_sealed(peer, &[content::RESYNC], Pending::Control);
+        }
+    }
+
+    /// A message on the bulletin channel: shown only if it is signed by a
+    /// trusted identity (`--bulletin-key`); everything else is dropped.
+    fn on_bulletin(&mut self, channel: Address, from: Address, hops: u8, plain: &[u8]) {
+        match bulletin::verify(&from, plain, &self.bulletin_keys) {
+            Some(v) => {
+                self.log(format!("verified bulletin from {}", short(&v.signer)));
+                let mut shown = b"[Verified bulletin] ".to_vec();
+                shown.extend_from_slice(v.text);
+                self.mqtt_channel(&channel, &from, hops, &shown);
+                self.broadcast(&Event::ChannelReceived { channel, from, hops, text: text(&shown) });
+            }
+            None => self.log(format!("dropped an unverified message on {} from {}", bulletin::CHANNEL_NAME, short(&from))),
         }
     }
 
@@ -1413,12 +1466,12 @@ impl Node {
         let Some(postbox) = self.postboxes.get(&m.dest).copied() else {
             return;
         };
-        if postbox == m.dest || 16 + m.sealed.len() > MAX_DIRECT_PAYLOAD {
+        if postbox == m.dest || 16 + m.mail_sealed.len() > MAX_DIRECT_PAYLOAD {
             return;
         }
         m.deposited = true;
         let mut payload = m.dest.0.to_vec();
-        payload.extend_from_slice(&m.sealed);
+        payload.extend_from_slice(&m.mail_sealed);
         let now = self.now_ms();
         if let Ok((dep_id, actions)) =
             self.router
@@ -1785,7 +1838,20 @@ impl Node {
                 let mut nonce = [0u8; 8];
                 OsRng.fill_bytes(&mut nonce);
                 let mut ct = [0u8; 255];
-                let res = seal::seal_channel(&key, &self.addr, nonce, &msg, &mut ct)
+                // On the bulletin channel every message is signed (see bulletin.rs).
+                let mut signed = [0u8; 255];
+                let body: &[u8] = if channel == bulletin::channel() {
+                    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as u32);
+                    match bulletin::sign(&self.identity, ts, &msg, &mut signed) {
+                        Some(n) => &signed[..n],
+                        None => {
+                            return self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "The message is too long"));
+                        }
+                    }
+                } else {
+                    &msg
+                };
+                let res = seal::seal_channel(&key, &self.addr, nonce, body, &mut ct)
                     .ok()
                     .and_then(|n| self.router.send_channel_in(channel, region, &ct[..n]).ok());
                 match res {
@@ -2126,13 +2192,22 @@ impl Node {
         }
         let me = self.addr;
         let my_ep = self.dht.public_ep.clone();
+        // Small backbone: store on every known host (see dht.rs "Full replication").
+        let everyone = if publish.is_some() && self.dht.table.len() <= dht::FULL_REPLICA_MAX {
+            self.dht.table.all()
+        } else {
+            Vec::new()
+        };
         std::thread::spawn(move || {
             let ask = |c: &Contact, r: &dht::Req| dht::rpc(&c.ep, &me, my_ep.as_deref(), r);
             let result = dht::lookup(&me, start, &target, want_value, ask);
             let is_publish = publish.is_some();
             if let Some(rec) = publish {
-                for c in &result.closest {
-                    let _ = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::Store(rec.clone()));
+                let mut done: HashSet<String> = HashSet::new();
+                for c in result.closest.iter().chain(everyone.iter()) {
+                    if done.insert(c.ep.clone()) {
+                        let _ = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::Store(rec.clone()));
+                    }
                 }
             }
             let _ = tx.send(In::DhtDone {
@@ -2314,6 +2389,7 @@ pub(super) mod file_interop_tests {
             wintun: None,
             tun_lora: false,
             service: false,
+            bulletin_keys: Vec::new(),
         }
     }
 
@@ -2576,5 +2652,65 @@ mod filebox_node_tests {
         )));
         let _ = fs::remove_dir_all(dir);
         let _ = fs::remove_dir_all(dir_b);
+    }
+}
+
+#[cfg(test)]
+mod bulletin_tests {
+    //! Signed bulletins on the #bulletin channel (see maarse_crypto::bulletin).
+    use super::*;
+    use std::sync::mpsc::{Receiver, channel};
+
+    fn node(name: &str, trusted: Vec<PublicIdentity>) -> (Node, Receiver<Vec<u8>>) {
+        let dir = std::env::temp_dir().join(format!("maarse-bul-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut c = file_interop_tests::cfg(dir);
+        c.bulletin_keys = trusted;
+        let mut n = Node::new(&c).unwrap();
+        let (tx, rx) = channel();
+        n.clients.insert(1, tx);
+        (n, rx)
+    }
+
+    /// A channel payload on #bulletin from `from`, signed by `signer`.
+    fn sealed(from: &Node, signer: &Node, text: &[u8]) -> Vec<u8> {
+        let mut plain = [0u8; 255];
+        let n = bulletin::sign(&signer.identity, 1_700_000_000, text, &mut plain).unwrap();
+        let mut ct = [0u8; 255];
+        let m = seal::seal_channel(&bulletin::channel_key(), &from.addr, [1; 8], &plain[..n], &mut ct).unwrap();
+        ct[..m].to_vec()
+    }
+
+    fn shown(rx: &Receiver<Vec<u8>>) -> Vec<String> {
+        rx.try_iter()
+            .filter_map(|f| Event::decode(&f[2..]).ok())
+            .filter_map(|e| match e {
+                Event::ChannelReceived { text, .. } => Some(String::from_utf8_lossy(&text).into_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn only_trusted_bulletins_are_shown() {
+        let (auth, _) = node("auth", Vec::new());
+        let (mallory, _) = node("mallory", Vec::new());
+        let (mut b, rx) = node("b", vec![auth.identity.public()]);
+        let ch = bulletin::channel();
+        assert!(b.channels.contains_key(&ch), "joined #bulletin");
+
+        b.on_deliver(PacketType::Channel, ch, &sealed(&auth, &auth, b"Bridge closed"), 2);
+        assert_eq!(shown(&rx), vec!["[Verified bulletin] Bridge closed".to_string()]);
+
+        // An untrusted sender, and a forgery under the trusted address.
+        b.on_deliver(PacketType::Channel, ch, &sealed(&mallory, &mallory, b"Fake"), 2);
+        b.on_deliver(PacketType::Channel, ch, &sealed(&auth, &mallory, b"Fake"), 2);
+        assert!(shown(&rx).is_empty());
+    }
+
+    #[test]
+    fn no_bulletin_channel_without_keys() {
+        let (n, _) = node("nokeys", Vec::new());
+        assert!(!n.channels.contains_key(&bulletin::channel()));
     }
 }

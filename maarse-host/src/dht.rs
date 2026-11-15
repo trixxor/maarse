@@ -16,6 +16,13 @@
 //! When a host needs to reach an unknown address, it looks it up in the DHT, connects
 //! directly to the gateway as an ordinary TCP peer, and routing does the rest.
 //!
+//! ## Full replication
+//! In a small backbone (at most [`FULL_REPLICA_MAX`] known hosts), records are
+//! stored on every known host, not only the K closest. When a backbone link
+//! comes up (e.g. after a split heals), the host republishes all its records,
+//! so both sides learn where the other side's addresses are again. Records
+//! carry the address's own signed announce and expire after [`RECORD_TTL`].
+//!
 //! Protocol: the client opens a TCP connection to the host's backbone port and
 //! sends `D7 D7 | length (u16 LE) | request`; the host answers with
 //! `length | response` and closes. Ordinary packet connections never start with
@@ -41,6 +48,12 @@ pub const MAGIC: [u8; 2] = [0xD7, 0xD7];
 /// Timeout for one request.
 pub const RPC_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_EP: usize = 100;
+/// Up to this many known DHT contacts, a gateway stores its records on *all*
+/// of them instead of only the K closest. With the 20-50 hosts of a national
+/// net, every host then holds the whole table, so a lookup is answered
+/// locally and each side of a split backbone keeps working with its own
+/// copy until the records expire (see "Full replication").
+pub const FULL_REPLICA_MAX: usize = 64;
 const MAX_MSG: usize = 4096;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -143,6 +156,11 @@ impl Table {
 
     pub fn len(&self) -> usize {
         self.buckets.iter().map(Vec::len).sum()
+    }
+
+    /// All contacts.
+    pub fn all(&self) -> Vec<Contact> {
+        self.buckets.iter().flat_map(|b| b.iter().map(|(c, _)| c.clone())).collect()
     }
 }
 

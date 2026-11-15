@@ -108,6 +108,8 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
     let mut duty = DutyCycle::new(p.cfg.duty_permille as u32, Instant::now().as_millis());
     let mut jitter = Jitter(seed | 1);
     let mut queue: heapless::Vec<Planned, QUEUE> = heapless::Vec::new();
+    // Signed bulletins go before other channel traffic (see maarse_core::qos).
+    let urgent = maarse_crypto::bulletin::channel();
     let mut buf = [0u8; 255];
 
     loop {
@@ -116,7 +118,7 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             queue.retain(|q| q.req.id != id);
         }
         while let Ok(req) = RADIO_TX.try_receive() {
-            plan(&mut queue, req);
+            plan(&mut queue, req, &urgent);
         }
         RSTATS.tx_queue.store(queue.len() as u32, Relaxed);
         RSTATS
@@ -125,7 +127,15 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
 
         // Is there anything to send now?
         let now = Instant::now();
-        if let Some(i) = queue.iter().position(|q| q.due <= now) {
+        // Of the packets that are due, the most urgent goes first (acks before
+        // data, data before channel traffic, floods last), then the oldest.
+        if let Some(i) = queue
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| q.due <= now)
+            .min_by_key(|(_, q)| (maarse_core::qos::priority_with(&q.req.packet, &urgent), q.due))
+            .map(|(i, _)| i)
+        {
             let q = queue.swap_remove(i);
             stage(1);
             let _ = lora.enter_standby().await;
@@ -241,7 +251,7 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             Either4::First(Err(_)) => {
                 RSTATS.rx_err.fetch_add(1, Relaxed);
             }
-            Either4::Second(req) => plan(&mut queue, req),
+            Either4::Second(req) => plan(&mut queue, req, &urgent),
             Either4::Third(cfg) => {
                 let _ = lora.enter_standby().await;
                 if let Some(np) = params(lora, cfg) {
@@ -265,18 +275,23 @@ fn stage(n: u32) {
     RSTATS.stage.store(n, Relaxed);
 }
 
-fn plan(queue: &mut heapless::Vec<Planned, QUEUE>, req: TxReq) {
+fn plan(queue: &mut heapless::Vec<Planned, QUEUE>, req: TxReq, urgent: &maarse_core::Address) {
     let due = Instant::now() + Duration::from_millis(req.delay_ms as u64);
     if queue.is_full() {
-        // Full queue: drop the one that is to be sent last.
+        // Full queue: drop the least urgent packet, the latest of those. If the
+        // new packet is less urgent than everything queued, drop it instead.
         RSTATS.dropped.fetch_add(1, Relaxed);
-        if let Some(i) = queue
+        let key = |prio: u8, due: Instant| (prio, due);
+        let worst = queue
             .iter()
             .enumerate()
-            .max_by_key(|(_, q)| q.due)
-            .map(|(i, _)| i)
-        {
-            queue.swap_remove(i);
+            .max_by_key(|(_, q)| key(maarse_core::qos::priority_with(&q.req.packet, urgent), q.due))
+            .map(|(i, q)| (i, key(maarse_core::qos::priority_with(&q.req.packet, urgent), q.due)));
+        match worst {
+            Some((i, k)) if k >= key(maarse_core::qos::priority_with(&req.packet, urgent), due) => {
+                queue.swap_remove(i);
+            }
+            _ => return,
         }
     }
     let _ = queue.push(Planned { due, req });

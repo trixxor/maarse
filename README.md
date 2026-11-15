@@ -77,6 +77,35 @@ Ved opstart skriver hosten en **adgangsnøgle** (gemt i `<data>/adgangsnoegle.tx
 
 Lad kun hosten lytte på et netværk, du stoler på (VPN eller hjemmenet). Nøglen beskytter adgangen, men forbindelsen selv er ikke krypteret uden VPN.
 
+## Running the host as a service
+
+`maarse-host --service` is meant for running under a service manager: it never opens a browser, and when settings are saved in the web client it exits with code 75 instead of starting a copy of itself, so the service manager starts it again. The host copes with being restarted at any time: a missing serial device (LoRa modem or MeshCore node) is retried every few seconds instead of stopping the host, an unplugged device is reopened when it comes back, and backbone peers (`--peer`) are reconnected every 5 seconds.
+
+**Linux (systemd).** The unit in `packaging/systemd/maarse-host.service` runs the host as a dynamic user with its data in `/var/lib/maarse-host`, restarts it on failure, and is hardened (read-only system, no home access, no capabilities, only serial devices visible).
+
+```sh
+cargo build --release -p maarse-host
+sudo install -m 0755 target/release/maarse-host /usr/local/bin/maarse-host
+sudo install -m 0644 packaging/systemd/maarse-host.service /etc/systemd/system/
+echo 'MAARSE_ARGS="--serial /dev/ttyACM0"' | sudo tee /etc/default/maarse-host
+sudo systemctl daemon-reload
+sudo systemctl enable --now maarse-host
+journalctl -u maarse-host -f      # log
+```
+
+Extra options go in `MAARSE_ARGS` in `/etc/default/maarse-host` (restart the service after changing it). `--tun` needs `CAP_NET_ADMIN` and `/dev/net/tun`; add them with `sudo systemctl edit maarse-host` (see the comment in the unit). The web client listens on `127.0.0.1:8080` by default; add `--http 0.0.0.0:8080` for remote access (the access key is in `/var/lib/maarse-host`).
+
+**Windows.** `packaging/windows/install-service.ps1` registers a Scheduled Task that starts at boot as SYSTEM (no login needed). It runs a small supervisor script that starts `maarse-host --service` and starts it again 3 seconds after any non-zero exit. No extra software is needed. From an elevated PowerShell in the repository:
+
+```powershell
+cargo build --release -p maarse-host
+.\packaging\windows\install-service.ps1 -HostArgs '--serial COM6'
+# remove again (data is kept):
+.\packaging\windows\install-service.ps1 -Uninstall
+```
+
+The exe goes to `C:\Program Files\maarse-host`, data to `C:\ProgramData\maarse-host` (change with `-InstallDir` and `-DataDir`). Output of the running host is in `C:\ProgramData\maarse-host\logs\host.log.out` / `host.log.err`; `host.log` keeps start/exit times and the output of earlier runs. Run the script again to change options or update the exe. If you already have an identity in `maarse-data`, copy that folder's contents to the data folder before installing to keep your address.
+
 ## Wi-Fi backbone on ESP32-S3 nodes
 
 A Heltec V4 or XIAO ESP32-S3 can join a Wi-Fi network (for example a phone hotspot on a hilltop) and keep a TCP backbone link to a maarse-host. Everyone who can reach the node over LoRa then reaches the rest of the network: the home host, the DHT and anyone behind it.

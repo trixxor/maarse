@@ -248,9 +248,19 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         n.admins = n.settings.load_admins();
         let role = n.settings.load_role();
         n.apply_role(role);
+        n.apply_radio_timing();
         n.join("public");
         n.range_init();
         n
+    }
+
+    /// Sizes the flood slot from the radio settings and scales the ack,
+    /// path retry and hop timeouts with it (`Router::set_slot`). In
+    /// maarse-sim this beat the fixed 200 ms slot at SF11/SF12 and was equal
+    /// at SF9; the SF slot without scaled timeouts was worse.
+    fn apply_radio_timing(&mut self) {
+        let slot = maarse_core::qos::slot_ms(&self.radio.airtime());
+        self.router.set_slot(slot, true);
     }
 
     /// The main loop. If an announce stamp is being computed (about
@@ -636,6 +646,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::SetRadio(cfg) => match cfg.validate() {
                 Ok(()) => {
                     self.radio = cfg;
+                    self.apply_radio_timing();
                     self.settings.save_radio(&cfg);
                     RADIO_CFG.signal(cfg);
                     self.range_radio_changed();
@@ -942,6 +953,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     // can arrive; then switch.
                     reply(self, Event::Radio(cfg));
                     self.radio = cfg;
+                    self.apply_radio_timing();
                     self.settings.save_radio(&cfg);
                     RADIO_CFG.signal(cfg);
                     self.range_radio_changed();

@@ -300,6 +300,8 @@ struct PendingRequest {
     /// When the request is repeated if there is no reply.
     retry_at_ms: u64,
     tries: u8,
+    /// False while the request waits for the path request quota.
+    sent: bool,
 }
 
 struct Queued {
@@ -412,6 +414,10 @@ pub struct RouterStats {
     /// Source-routed packets sent past a next hop that stopped answering
     /// (see "Local repair").
     pub local_repairs: u32,
+    /// Path requests we did not forward because the quota was used up.
+    pub quota_dropped: u32,
+    /// Own path requests held back to the next minute by the quota.
+    pub quota_held: u32,
 }
 
 /// Routing engine with `R` routes and a duplicate filter of `D` packets.
@@ -480,6 +486,14 @@ pub struct Router<const R: usize, const D: usize> {
     /// Send past next hops that stop answering (see "Local repair"). On by
     /// default; the simulator turns it off for comparison.
     pub local_repair: bool,
+    /// Wait before an unanswered path request is repeated (ms).
+    pub path_retry_ms: u32,
+    /// Load control: path request quota and longer flood delays when the
+    /// measured channel load is high (see [`crate::qos::ChannelLoad`]).
+    pub load_control: bool,
+    load: crate::qos::ChannelLoad,
+    load_high: bool,
+    path_quota: crate::qos::PathQuota,
 }
 
 impl<const R: usize, const D: usize> Router<R, D> {
@@ -539,6 +553,11 @@ impl<const R: usize, const D: usize> Router<R, D> {
             neighbors: crate::diag::NeighborTable::new(),
             dead_hops: heapless::Vec::new(),
             local_repair: true,
+            path_retry_ms: PATH_RETRY_MS as u32,
+            load_control: false,
+            load: crate::qos::ChannelLoad::new(),
+            load_high: false,
+            path_quota: crate::qos::PathQuota::new(),
             rx_rssi: 0,
             traces: heapless::Vec::new(),
             anchored: heapless::Vec::new(),
@@ -577,7 +596,36 @@ impl<const R: usize, const D: usize> Router<R, D> {
         } else {
             0
         };
-        bucket as u32 * self.slot_ms + self.energy.penalty_ms() + relay + self.extra_flood_delay_ms
+        let base = bucket as u32 * self.slot_ms + self.energy.penalty_ms() + relay + self.extra_flood_delay_ms;
+        // Under high load floods wait twice as long, so more copies are heard
+        // (and suppressed) before we send.
+        if self.load_control && self.load_high { base * 2 } else { base }
+    }
+
+    /// Sets the flood slot; with `scale_timeouts` the ack timeout, the path
+    /// request retry interval and the hop timeout grow with it
+    /// (`base * slot / 200`, never below today's values).
+    pub fn set_slot(&mut self, slot_ms: u32, scale_timeouts: bool) {
+        self.slot_ms = slot_ms;
+        let s = if scale_timeouts { slot_ms } else { crate::qos::BASE_SLOT_MS };
+        self.ack_timeout_ms = crate::qos::scale_timeout(DEFAULT_ACK_TIMEOUT_MS, s);
+        self.path_retry_ms = crate::qos::scale_timeout(PATH_RETRY_MS as u32, s);
+        self.hop_timeout_ms = crate::qos::scale_timeout(DEFAULT_HOP_TIMEOUT_MS, s);
+    }
+
+    /// Records channel use (a packet sent or heard) for load control.
+    pub fn note_airtime(&mut self, now_ms: u64, airtime_ms: u32) {
+        self.load.add(now_ms, airtime_ms);
+        self.refresh_load(now_ms);
+    }
+
+    /// Measured channel load over the last minute (per mille).
+    pub fn load_permille(&mut self, now_ms: u64) -> u16 {
+        self.load.permille(now_ms)
+    }
+
+    fn refresh_load(&mut self, now_ms: u64) {
+        self.load_high = self.load.permille(now_ms) >= crate::qos::LOAD_HIGH_PERMILLE;
     }
 
     /// May we forward a flood in `region` (0 = none)?
@@ -879,6 +927,11 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 continue;
             }
             let p = self.pending.swap_remove(i);
+            if !p.sent {
+                // Held back by the quota: send it now with the same token.
+                self.emit_request(p.target, p.token, p.old_tokens.clone(), now_ms, p.tries, &mut out);
+                continue;
+            }
             if p.tries >= PATH_RETRIES {
                 // Give up: the recipient cannot be found now. Messages queued for it
                 // are dropped, so the queue does not fill up (the app can use the mailbox).
@@ -1358,6 +1411,21 @@ impl<const R: usize, const D: usize> Router<R, D> {
         tries: u8,
         out: &mut Actions,
     ) {
+        self.refresh_load(now_ms);
+        if self.load_control && !self.path_quota.take(now_ms, self.load_high) {
+            // Over the quota: wait for the next minute instead of flooding now.
+            self.stats.quota_held += 1;
+            let _ = self.pending.push(PendingRequest {
+                token,
+                old_tokens,
+                target: dest,
+                carried: None,
+                retry_at_ms: (now_ms / 60_000 + 1) * 60_000,
+                tries,
+                sent: false,
+            });
+            return;
+        }
         self.stats.path_requests += 1;
         self.stats.originated += 1;
         // The first message in the queue is sent along if it fits when
@@ -1379,8 +1447,9 @@ impl<const R: usize, const D: usize> Router<R, D> {
             old_tokens,
             target: dest,
             carried,
-            retry_at_ms: now_ms + PATH_RETRY_MS,
+            retry_at_ms: now_ms + self.path_retry_ms as u64 * if self.load_control && self.load_high { 2 } else { 1 },
             tries,
+            sent: true,
         });
         // Proof of work bound to the target and the token (about 256 attempts on average).
         stamp::append(PacketType::PathRequest, &dest, &mut payload);
@@ -1577,6 +1646,11 @@ impl<const R: usize, const D: usize> Router<R, D> {
             record = Path::new();
         } else if record.push(self.id).is_err() {
             return; // Longer than a source path can carry, and we are not an anchor.
+        }
+        self.refresh_load(now_ms);
+        if self.load_control && !self.path_quota.take(now_ms, self.load_high) {
+            self.stats.quota_dropped += 1;
+            return;
         }
         let mut header = Header::new(PacketType::PathRequest, h.dest).with_path(record);
         header.hops = h.hops + 1;
@@ -2471,6 +2545,45 @@ mod tests {
             a.on_receive(&ack[0], 0, 0)
                 .contains(&Action::Acked { msg_id: id })
         );
+    }
+
+    #[test]
+    fn set_slot_scales_timeouts_only_when_asked() {
+        let mut a = node(1, Role::Client);
+        a.set_slot(1_000, false);
+        assert_eq!(a.ack_timeout_ms, DEFAULT_ACK_TIMEOUT_MS);
+        a.set_slot(1_000, true);
+        assert_eq!(a.ack_timeout_ms, 5 * DEFAULT_ACK_TIMEOUT_MS);
+        assert_eq!(a.path_retry_ms as u64, 5 * PATH_RETRY_MS);
+        assert_eq!(a.hop_timeout_ms, 5 * DEFAULT_HOP_TIMEOUT_MS);
+        a.set_slot(100, true);
+        assert_eq!(a.hop_timeout_ms, DEFAULT_HOP_TIMEOUT_MS, "never below today");
+        let (_, out) = a.send_direct(Address([5; 16]), b"x", [1; 16], 0).unwrap();
+        assert_eq!(transmits(&out).len(), 1);
+        assert_eq!(a.next_deadline(), Some(PATH_RETRY_MS));
+    }
+
+    #[test]
+    fn path_request_quota_under_high_load() {
+        let mut a = node(1, Role::Client);
+        a.load_control = true;
+        // A busy channel: 40 s of airtime in the last minute.
+        for t in 0..40u64 {
+            a.note_airtime(t * 1_000, 1_000);
+        }
+        let now = 40_000;
+        let normal = node(1, Role::Client).flood_delay_ms(0);
+        assert_eq!(a.flood_delay_ms(0), 2 * normal);
+        let mut sent = 0;
+        for k in 0..(crate::qos::PATH_QUOTA_PER_MIN as u8 + 2) {
+            let (_, out) = a.send_direct(Address([10 + k; 16]), b"x", [k; 16], now).unwrap();
+            sent += transmits(&out).len();
+        }
+        assert_eq!(sent, crate::qos::PATH_QUOTA_PER_MIN as usize);
+        assert_eq!(a.stats.quota_held, 2);
+        // The held requests go out at the next minute.
+        let out = a.tick(60_000);
+        assert_eq!(transmits(&out).len(), 2);
     }
 
     #[test]

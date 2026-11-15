@@ -39,8 +39,13 @@ struct Config {
     seed: u64,
     sf: u8,
     /// Flood slot sized from the SF (`qos::slot_ms`) instead of the fixed
-    /// 200 ms. Experimental: worse at SF12 with today's fixed timeouts.
+    /// 200 ms. Worse at SF11/SF12 unless `--timeouts scaled` is also given.
     sf_slot: bool,
+    /// Scale the ack, path retry and hop timeouts with the slot
+    /// (`Router::set_slot`).
+    scale_timeouts: bool,
+    /// Path request quota and longer flood delays under high channel load.
+    load_control: bool,
     /// Turn off local repair (behaviour before it).
     no_repair: bool,
     /// Repeaters that go silent at `kill_at_s` (failure injection).
@@ -101,6 +106,8 @@ impl Default for Config {
             seed: 1,
             sf: 9,
             sf_slot: false,
+            scale_timeouts: false,
+            load_control: false,
             no_repair: false,
             kill: 0,
             kill_at_s: 300,
@@ -145,6 +152,8 @@ fn parse_args() -> Config {
             "--seed" => c.seed = v.parse().expect("--seed"),
             "--sf" => c.sf = v.parse().expect("--sf"),
             "--slot" => c.sf_slot = v == "sf",
+            "--timeouts" => c.scale_timeouts = v == "scaled",
+            "--load-control" => c.load_control = v == "on",
             "--repair" => c.no_repair = v == "off",
             "--kill" => c.kill = v.parse().expect("--kill (repeaters)"),
             "--kill-at" => c.kill_at_s = v.parse().expect("--kill-at (seconds)"),
@@ -238,6 +247,7 @@ fn parse_args() -> Config {
                      \x20        [--forest [--forest-db-km 10] [--walk-kmh 5] [--role client|relay|repeater] [--relay-hops H]]\n\
                      \x20        [--hill [--hill-role relay|client|repeater|none] [--hill-gain 10]]\n\
                      \x20        [--carry copies] [--suppress normal|legacy|bridge|bridge-relay|bridge-weak|bridge-weak-relay|none]   (flood suppression for relays in the forest)\n\
+                     \x20        [--slot sf [--timeouts scaled]] [--load-control on]\n\
                      \x20        [--trace-json file|-]   (event trace for maarse-lab)"
                 );
                 std::process::exit(0);
@@ -426,8 +436,9 @@ impl Sim {
             router.carry_copies = cfg.carry_copies;
             router.local_repair = !cfg.no_repair;
             if cfg.sf_slot {
-                router.slot_ms = maarse_core::qos::slot_ms(&radio.lora);
+                router.set_slot(maarse_core::qos::slot_ms(&radio.lora), cfg.scale_timeouts);
             }
+            router.load_control = cfg.load_control;
             if cfg.forest && !repeater {
                 router.mobile = true;
                 if let Some(h) = cfg.relay_hops {
@@ -1054,6 +1065,7 @@ impl Sim {
             return;
         }
         self.nodes[node].airtime_us += airtime as u64;
+        self.nodes[node].router.note_airtime(self.now, airtime.div_ceil(1000));
         self.stats.tx_count += 1;
         if let Ok(p) = Packet::decode(&packet) {
             *self
@@ -1111,6 +1123,7 @@ impl Sim {
             if r == sender || self.nodes[r].dead || !self.audible(sender, r) {
                 continue;
             }
+            self.nodes[r].router.note_airtime(start, ((end - start) as u32).max(1));
             let p = self.gain[sender][r];
             // Half-duplex: the receiver was sending itself. Collision: another transmission
             // is audible and not at least 6 dB weaker (capture effect).

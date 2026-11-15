@@ -1,6 +1,6 @@
-//! Bluetooth: Nordic UART Service (NUS), så webklienten og apps kan tale
-//! companion-protokollen med noden via Bluetooth. Bruger Nordics
-//! SoftDevice Controller (nrf-sdc) og TrouBLE som host.
+//! Bluetooth: Nordic UART Service (NUS), so the web client and apps can speak
+//! the companion protocol with the node via Bluetooth. Uses Nordic's
+//! SoftDevice Controller (nrf-sdc) and TrouBLE as host.
 
 use embassy_futures::join::join;
 use embassy_futures::select::{Either, select};
@@ -9,7 +9,7 @@ use maarse_core::companion::FrameDecoder;
 use maarse_fw_common::bus::{BLE_OUT, USB_IN};
 use trouble_host::prelude::*;
 
-/// Bidder på 20 bytes passer altid (standard ATT-MTU 23).
+/// Chunks of 20 bytes always fit (default ATT MTU 23).
 const CHUNK: usize = 20;
 
 #[gatt_server]
@@ -19,10 +19,10 @@ struct Server {
 
 #[gatt_service(uuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e")]
 struct NordicUart {
-    /// Klienten skriver hertil.
+    /// The client writes here.
     #[characteristic(uuid = "6e400002-b5a3-f393-e0a9-e50e24dcca9e", write, write_without_response)]
     rx: heapless09::Vec<u8, 244>,
-    /// Noden notificerer herfra.
+    /// The node notifies from here.
     #[characteristic(uuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e", notify)]
     tx: heapless09::Vec<u8, 244>,
 }
@@ -54,7 +54,7 @@ pub async fn ble_task(sdc: SoftdeviceController<'static>, mac: [u8; 6], name: &'
                     embassy_time::Timer::after_secs(1).await;
                     continue;
                 };
-                // Gamle rammer fra før forbindelsen smides væk.
+                // Old frames from before the connection are thrown away.
                 while BLE_OUT.try_receive().is_ok() {}
                 select(rx_task(&server, &conn), tx_task(&server, &conn)).await;
             }
@@ -76,7 +76,7 @@ async fn advertise<'v, 's, C: Controller>(
         ],
         &mut adv[..],
     )?;
-    // NUS-UUID'en sendes i scan-svaret, så navnet kan være i reklamen.
+    // The NUS UUID is sent in the scan response, so the name can be in the advertisement.
     let mut scan = [0u8; 31];
     let nus: [u8; 16] = [
         0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0, 0x93, 0xf3, 0xa3, 0xb5, 0x01, 0x00, 0x40, 0x6e,
@@ -92,7 +92,7 @@ async fn advertise<'v, 's, C: Controller>(
     Ok(conn)
 }
 
-/// Data fra klienten: saml rammer og send dem til noden.
+/// Data from the client: collect frames and send them to the node.
 async fn rx_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '_, P>) {
     let rx_handle = server.nus.rx.handle;
     let mut dec = FrameDecoder::new();
@@ -117,7 +117,7 @@ async fn rx_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '
     }
 }
 
-/// Hændelser fra noden: send dem som notifikationer i små bidder.
+/// Events from the node: send them as notifications in small chunks.
 async fn tx_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '_, P>) {
     let tx = &server.nus.tx;
     loop {

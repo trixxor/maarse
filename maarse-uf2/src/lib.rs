@@ -1,5 +1,5 @@
-//! Fælles kode for `maarse-uf2` (ELF -> UF2) og `maarse-sign` (signerede
-//! firmwareopdateringer).
+//! Shared code for `maarse-uf2` (ELF -> UF2) and `maarse-sign` (signed
+//! firmware updates).
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
@@ -17,10 +17,10 @@ pub fn u32le(b: &[u8], o: usize) -> u32 {
     u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
 }
 
-/// Henter (fysisk adresse, data) for alle LOAD-segmenter med indhold.
+/// Gets (physical address, data) for all LOAD segments with content.
 pub fn load_segments(elf: &[u8]) -> Result<Vec<(u32, Vec<u8>)>, String> {
     if elf.len() < 52 || &elf[..4] != b"\x7fELF" || elf[4] != 1 || elf[5] != 1 {
-        return Err("ikke en 32-bit little-endian ELF-fil".into());
+        return Err("not a 32-bit little-endian ELF file".into());
     }
     let phoff = u32le(elf, 28) as usize;
     let phentsize = u16le(elf, 42) as usize;
@@ -35,19 +35,19 @@ pub fn load_segments(elf: &[u8]) -> Result<Vec<(u32, Vec<u8>)>, String> {
         if p_type == 1 && filesz > 0 {
             let data = elf
                 .get(offset..offset + filesz)
-                .ok_or("segment uden for filen")?;
+                .ok_or("segment outside the file")?;
             segs.push((paddr, data.to_vec()));
         }
     }
     if segs.is_empty() {
-        return Err("ingen data i ELF-filen".into());
+        return Err("no data in the ELF file".into());
     }
     Ok(segs)
 }
 
 pub type Pages = BTreeMap<u32, [u8; PAYLOAD]>;
 
-/// Segmenterne fordelt på 256-byte-sider (ubrugte bytes er 0xFF).
+/// The segments spread over 256-byte pages (unused bytes are 0xFF).
 pub fn pages(segs: &[(u32, Vec<u8>)]) -> Pages {
     let mut pages = Pages::new();
     for (addr, data) in segs {
@@ -60,29 +60,29 @@ pub fn pages(segs: &[(u32, Vec<u8>)]) -> Pages {
     pages
 }
 
-/// Læser siderne ud af en UF2-fil.
+/// Reads the pages out of a UF2 file.
 pub fn uf2_pages(uf2: &[u8]) -> Result<Pages, String> {
     if uf2.is_empty() || uf2.len() % 512 != 0 {
-        return Err("ikke en UF2-fil (længden er ikke et multiplum af 512)".into());
+        return Err("not a UF2 file (the length is not a multiple of 512)".into());
     }
     let mut segs = Vec::new();
     for blk in uf2.chunks(512) {
         if u32le(blk, 0) != MAGIC_START0 || u32le(blk, 4) != MAGIC_START1 || u32le(blk, 508) != MAGIC_END {
-            return Err("ugyldig UF2-blok".into());
+            return Err("invalid UF2 block".into());
         }
         let addr = u32le(blk, 12);
         let n = u32le(blk, 16) as usize;
         if n > 476 {
-            return Err("UF2-blok med for meget data".into());
+            return Err("UF2 block with too much data".into());
         }
         segs.push((addr, blk[32..32 + n].to_vec()));
     }
     Ok(pages(&segs))
 }
 
-/// Det kanoniske firmware-image til opdatering over luften: alle sider fra
-/// den laveste til og med den højeste, huller fyldt med 0xFF. Samme regel
-/// bruges af webklienten, når den får en .uf2-fil.
+/// The canonical firmware image for over-the-air updates: all pages from
+/// the lowest up to and including the highest, gaps filled with 0xFF. The same rule
+/// is used by the web client when it gets a .uf2 file.
 pub fn flatten(pages: &Pages) -> Option<(u32, Vec<u8>)> {
     let start = *pages.keys().next()?;
     let end = *pages.keys().last()? + PAYLOAD as u32;
@@ -94,7 +94,7 @@ pub fn flatten(pages: &Pages) -> Option<(u32, Vec<u8>)> {
     Some((start, out))
 }
 
-/// Bygger UF2-blokke på 256 bytes, justeret til 256-byte-grænser.
+/// Builds UF2 blocks of 256 bytes, aligned to 256-byte boundaries.
 pub fn to_uf2(segs: &[(u32, Vec<u8>)], family: u32) -> Vec<u8> {
     let pages = pages(segs);
     let total = pages.len() as u32;
@@ -134,9 +134,9 @@ mod tests {
         assert_eq!(u32le(&uf2, 512 + 12), 0x27100);
         assert_eq!(u32le(&uf2, 1024 + 12), 0x27200);
         assert_eq!(u32le(&uf2, 24), 3);
-        assert_eq!(uf2[512 + 32 + 43], 1); // byte 299 af første segment
+        assert_eq!(uf2[512 + 32 + 43], 1); // byte 299 of the first segment
         assert_eq!(uf2[512 + 32 + 44], 0xFF);
-        // UF2 -> sider -> fladt image giver det samme som fra segmenterne.
+        // UF2 -> pages -> flat image gives the same as from the segments.
         let back = uf2_pages(&uf2).unwrap();
         assert_eq!(back, pages(&segs));
         let (start, img) = flatten(&back).unwrap();

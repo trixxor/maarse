@@ -1,15 +1,15 @@
 //! # maarse-crypto
 //!
-//! Identiteter og signerede announces.
+//! Identities and signed announces.
 //!
-//! * En identitet er to nøglepar: Ed25519 (signaturer) og X25519
-//!   (nøgleudveksling).
-//! * Adressen er de første 16 bytes af SHA-256 over begge offentlige nøgler.
-//! * Et announce beviser, at en adresse tilhører et nøglepar, og kan bære
-//!   lidt app-data (fx energistatus og position til kortet).
+//! * An identity is two key pairs: Ed25519 (signatures) and X25519
+//!   (key exchange).
+//! * The address is the first 16 bytes of SHA-256 over both public keys.
+//! * An announce proves that an address belongs to a key pair, and can carry
+//!   a little app data (e.g. energy status and position for the map).
 //!
-//! Kryptering af beskeder ligger i [`seal`]; forward secrecy for samtaler
-//! (sessioner med ratchet) i [`ratchet`].
+//! Message encryption is in [`seal`]; forward secrecy for conversations
+//! (sessions with a ratchet) in [`ratchet`].
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -28,16 +28,16 @@ use x25519_dalek::{PublicKey as XPublic, StaticSecret};
 
 pub const PUBLIC_IDENTITY_LEN: usize = 64;
 pub const SIGNATURE_LEN: usize = 64;
-/// Fast del af et announce: nøgler + tidsstempel + længde af app-data.
+/// Fixed part of an announce: keys + timestamp + app data length.
 pub const ANNOUNCE_FIXED: usize = PUBLIC_IDENTITY_LEN + 4 + 1;
-/// Største app-data i et announce, så det stadig passer i én LoRa-pakke.
+/// Largest app data in an announce, so it still fits in one LoRa packet.
 pub const MAX_APP_DATA: usize =
     maarse_core::MAX_PACKET - 18 - ANNOUNCE_FIXED - SIGNATURE_LEN - maarse_core::stamp::STAMP_LEN;
 
-/// Domæneseparation, så en announce-signatur ikke kan genbruges til andet.
+/// Domain separation, so an announce signature cannot be reused for anything else.
 const ANNOUNCE_CONTEXT: &[u8] = b"maarse/announce/v0";
 
-/// Offentlig del af en identitet.
+/// Public part of an identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicIdentity {
     pub sign: [u8; 32],
@@ -73,7 +73,7 @@ impl PublicIdentity {
     }
 }
 
-/// En nodes hemmelige identitet.
+/// A node's secret identity.
 pub struct Identity {
     sign: SigningKey,
     dh: StaticSecret,
@@ -90,7 +90,7 @@ impl Identity {
         }
     }
 
-    /// Genskaber en identitet fra 64 gemte bytes (fx fra flash).
+    /// Restores an identity from 64 stored bytes (e.g. from flash).
     pub fn from_secret_bytes(b: &[u8; 64]) -> Self {
         let mut s = [0u8; 32];
         s.copy_from_slice(&b[..32]);
@@ -120,11 +120,11 @@ impl Identity {
         self.public().address()
     }
 
-    /// Bygger payloaden til et announce. Pakken sendes med destination =
-    /// vores egen adresse og pakketype `Announce`.
+    /// Builds the payload of an announce. The packet is sent with destination =
+    /// our own address and packet type `Announce`.
     ///
-    /// Format: offentlige nøgler (64) | tidsstempel (4) | app-data-længde (1)
-    /// | app-data | signatur (64).
+    /// Format: public keys (64) | timestamp (4) | app data length (1)
+    /// | app data | signature (64).
     pub fn announce(
         &self,
         timestamp: u32,
@@ -144,10 +144,10 @@ impl Identity {
     }
 }
 
-/// Payload til et announce (se [`Identity::announce`]).
+/// Payload of an announce (see [`Identity::announce`]).
 pub type AnnounceBuf = heapless::Vec<u8, { maarse_core::MAX_PACKET }>;
 
-/// Et verificeret announce.
+/// A verified announce.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Announce<'a> {
     pub identity: PublicIdentity,
@@ -158,12 +158,12 @@ pub struct Announce<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnnounceError {
     Malformed,
-    /// Adressen passer ikke til nøglerne.
+    /// The address does not match the keys.
     WrongAddress,
     BadSignature,
 }
 
-/// Verificerer et announce mod pakkens destinationsadresse.
+/// Verifies an announce against the packet's destination address.
 pub fn verify_announce<'a>(
     dest: &Address,
     payload: &'a [u8],
@@ -207,7 +207,7 @@ fn signed_message(addr: &Address, body: &[u8]) -> Option<heapless::Vec<u8, 320>>
     Some(m)
 }
 
-/// Adresse for en kanal: hash af kanalens nøgle.
+/// Address of a channel: hash of the channel key.
 pub fn channel_address(key: &[u8; 32]) -> Address {
     let d = Sha256::digest(key);
     let mut a = [0u8; 16];
@@ -215,7 +215,7 @@ pub fn channel_address(key: &[u8; 32]) -> Address {
     Address(a)
 }
 
-/// Nøgle til en hashtag-kanal som `#aarhus`: alle, der kender navnet, kan læse.
+/// Key for a hashtag channel like `#aarhus`: everyone who knows the name can read.
 pub fn hashtag_key(name: &str) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(b"maarse/hashtag/v0");
@@ -223,23 +223,23 @@ pub fn hashtag_key(name: &str) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// Nøglen til den offentlige kanal.
+/// The key of the public channel.
 pub fn public_channel_key() -> [u8; 32] {
     Sha256::digest(b"maarse-public").into()
 }
 
-/// Domæneseparation for sikkerhedsnumre.
-const SAFETY_CONTEXT: &[u8] = b"maarse/sikkerhedsnummer/v0";
-/// Antal SHA-256-runder pr. fingeraftryk. Lavt nok til firmware, men gør det
-/// lidt dyrere at lede efter en nøgle med et bestemt nummer.
+/// Domain separation for safety numbers.
+const SAFETY_CONTEXT: &[u8] = b"maarse/safety-number/v0";
+/// Number of SHA-256 rounds per fingerprint. Low enough for firmware, but makes it
+/// a little more expensive to search for a key with a particular number.
 pub const SAFETY_ITERATIONS: u32 = 512;
 
-/// 30 decimale cifre (ASCII), der kun afhænger af én identitet.
+/// 30 decimal digits (ASCII) that depend on one identity only.
 ///
-/// `h0 = SHA-256(kontekst | sign | dh)`, `h(i+1) = SHA-256(h(i) | sign | dh)`,
-/// i alt [`SAFETY_ITERATIONS`] runder. De første 30 bytes deles i 6 stykker
-/// à 5 bytes; hvert stykke læses som big-endian tal modulo 100000 og skrives
-/// med 5 cifre.
+/// `h0 = SHA-256(context | sign | dh)`, `h(i+1) = SHA-256(h(i) | sign | dh)`,
+/// [`SAFETY_ITERATIONS`] rounds in total. The first 30 bytes are split into 6 pieces
+/// of 5 bytes; each piece is read as a big-endian number modulo 100000 and written
+/// with 5 digits.
 pub fn safety_fingerprint(id: &PublicIdentity) -> [u8; 30] {
     let key = id.to_bytes();
     let mut h: [u8; 32] = {
@@ -269,9 +269,9 @@ pub fn safety_fingerprint(id: &PublicIdentity) -> [u8; 30] {
     out
 }
 
-/// Sikkerhedsnummer for to kontakter: 60 cifre (ASCII), uafhængigt af
-/// rækkefølgen. De to fingeraftryk sorteres og sættes sammen. Vises typisk i
-/// 12 grupper à 5 cifre; er tallet ens på begge telefoner, er nøglerne ægte.
+/// Safety number for two contacts: 60 digits (ASCII), independent of the
+/// order. The two fingerprints are sorted and joined. Usually shown as
+/// 12 groups of 5 digits; if the number is the same on both phones, the keys are genuine.
 pub fn safety_number(a: &PublicIdentity, b: &PublicIdentity) -> [u8; 60] {
     let (fa, fb) = (safety_fingerprint(a), safety_fingerprint(b));
     let (lo, hi) = if fa <= fb { (fa, fb) } else { (fb, fa) };
@@ -312,7 +312,7 @@ mod tests {
         let id = Identity::generate(&mut OsRng);
         let mut payload = id.announce(0, &[0u8; MAX_APP_DATA]).unwrap();
         assert_eq!(payload.len() + 18 + STAMP_LEN, maarse_core::MAX_PACKET);
-        // Med stempel fylder det præcis en pakke, og det kan stadig verificeres.
+        // With a stamp it fills exactly one packet, and it can still be verified.
         let dest = id.address();
         assert!(stamp::append(PacketType::Announce, &dest, &mut payload));
         let pkt = encode(&Header::new(PacketType::Announce, dest), &payload).unwrap();
@@ -328,13 +328,13 @@ mod tests {
         let other = Identity::generate(&mut OsRng);
         let payload = id.announce(1, b"x").unwrap();
 
-        // Rigtig signatur, men sendt som en anden adresse.
+        // A real signature, but sent as a different address.
         assert_eq!(
             verify_announce(&other.address(), &payload),
             Err(AnnounceError::WrongAddress)
         );
 
-        // Ændret app-data.
+        // Changed app data.
         let mut bad = payload.clone();
         let n = bad.len();
         bad[n - SIGNATURE_LEN - 1] ^= 1;
@@ -343,7 +343,7 @@ mod tests {
             Err(AnnounceError::BadSignature)
         );
 
-        // Afkortet.
+        // Truncated.
         assert_eq!(
             verify_announce(&id.address(), &payload[..100]),
             Err(AnnounceError::Malformed)
@@ -358,8 +358,8 @@ mod tests {
         assert_ne!(a, channel_address(&public_channel_key()));
     }
 
-    /// Testvektor. Samme tal står i `tools/safety_number_test.mjs`, som
-    /// tjekker webklientens JavaScript-udgave.
+    /// Test vector. The same number is in `tools/safety_number_test.mjs`, which
+    /// checks the web client's JavaScript version.
     #[test]
     fn safety_number_vector() {
         let a = Identity::from_secret_bytes(&[1u8; 64]).public();
@@ -374,8 +374,8 @@ mod tests {
             "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394ce8d3ad1ccb633ec7b70c17814a5c76ecd029685050d344745ba05870e587d59"
         );
         let n = safety_number(&a, &b);
-        assert_eq!(&n[..], b"490814315733469534137526241006891633028785095264240772532833");
-        // Rækkefølgen er ligegyldig.
+        assert_eq!(&n[..], b"091047891378483515820899286603282445802009510472517494707964");
+        // The order does not matter.
         assert_eq!(n, safety_number(&b, &a));
     }
 

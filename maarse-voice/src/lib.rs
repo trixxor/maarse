@@ -1,18 +1,18 @@
-//! Talebeskeder med Codec2.
+//! Voice messages with Codec2.
 //!
 //! Format (MIME `audio/x-codec2`):
 //!
 //! ```text
-//! "C2" | tilstand (u8: 0 = 3200, 1 = 2400, 2 = 1600, 3 = 1400, 4 = 1300, 5 = 1200 bit/s)
-//!      | antal rammer (u16) | rammer (bits_per_frame/8 bytes hver)
+//! "C2" | mode (u8: 0 = 3200, 1 = 2400, 2 = 1600, 3 = 1400, 4 = 1300, 5 = 1200 bit/s)
+//!      | frame count (u16) | frames (bits_per_frame/8 bytes each)
 //! ```
 //!
-//! Lyden er 8 kHz mono, 16 bit. Ved 1200 bit/s er en ramme 40 ms og 6 bytes,
-//! så 10 sekunder fylder 1505 bytes.
+//! The audio is 8 kHz mono, 16 bit. At 1200 bit/s a frame is 40 ms and 6 bytes,
+//! so 10 seconds take 1505 bytes.
 //!
-//! Til webklienten bygges crate'en som WebAssembly (`wasm32-unknown-unknown`)
-//! med en lille C-lignende grænseflade: `voice_alloc`, `voice_free`,
-//! `voice_encode` og `voice_decode`. Kun den del bruger `unsafe`.
+//! For the web client the crate is built as WebAssembly (`wasm32-unknown-unknown`)
+//! with a small C-like interface: `voice_alloc`, `voice_free`,
+//! `voice_encode` and `voice_decode`. Only that part uses `unsafe`.
 
 use codec2::{Codec2, Codec2Mode};
 
@@ -32,8 +32,8 @@ fn mode(m: u8) -> Option<Codec2Mode> {
     })
 }
 
-/// Koder 8 kHz PCM til en talebesked. En sidste ufuldstændig ramme fyldes
-/// med stilhed.
+/// Encodes 8 kHz PCM into a voice message. A last incomplete frame is filled
+/// with silence.
 pub fn encode(pcm: &[i16], m: u8) -> Option<Vec<u8>> {
     let mut c = Codec2::new(mode(m)?);
     let n = c.samples_per_frame();
@@ -57,8 +57,8 @@ pub fn encode(pcm: &[i16], m: u8) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Afkoder en talebesked til 8 kHz PCM. `None` ved ukendt format eller
-/// afkortede data.
+/// Decodes a voice message to 8 kHz PCM. `None` for an unknown format or
+/// truncated data.
 pub fn decode(data: &[u8]) -> Option<Vec<i16>> {
     if data.len() < HEADER || &data[..2] != MAGIC {
         return None;
@@ -78,13 +78,13 @@ pub fn decode(data: &[u8]) -> Option<Vec<i16>> {
     Some(out)
 }
 
-// ---------- WebAssembly-grænseflade ----------
+// ---------- WebAssembly interface ----------
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use std::alloc::{Layout, alloc, dealloc};
 
-    /// Resultatet af sidste `voice_encode`/`voice_decode`.
+    /// The result of the last `voice_encode`/`voice_decode`.
     static mut RESULT: Vec<u8> = Vec::new();
 
     #[unsafe(no_mangle)]
@@ -97,16 +97,16 @@ mod wasm {
         unsafe { dealloc(p, Layout::from_size_align(n.max(1), 8).unwrap()) }
     }
 
-    /// Koder `n` samples (i16) ved `pcm`. Returnerer længden af resultatet
-    /// (0 ved fejl); hent det med `voice_result_ptr`.
+    /// Encodes `n` samples (i16) at `pcm`. Returns the length of the result
+    /// (0 on error); fetch it with `voice_result_ptr`.
     #[unsafe(no_mangle)]
     pub extern "C" fn voice_encode(pcm: *const i16, n: usize, mode: u8) -> usize {
         let pcm = unsafe { std::slice::from_raw_parts(pcm, n) };
         set(super::encode(pcm, mode).unwrap_or_default())
     }
 
-    /// Afkoder `n` bytes ved `data` til PCM (i16, little endian). Returnerer
-    /// længden i bytes (0 ved fejl).
+    /// Decodes `n` bytes at `data` to PCM (i16, little endian). Returns
+    /// the length in bytes (0 on error).
     #[unsafe(no_mangle)]
     pub extern "C" fn voice_decode(data: *const u8, n: usize) -> usize {
         let data = unsafe { std::slice::from_raw_parts(data, n) };
@@ -142,7 +142,7 @@ mod tests {
         assert_eq!(enc.len(), HEADER + 250 * 6);
         let dec = decode(&enc).unwrap();
         assert_eq!(dec.len(), 250 * 320);
-        // Der kommer lyd ud (ikke kun stilhed).
+        // Audio comes out (not just silence).
         let energy: f64 = dec.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / dec.len() as f64;
         assert!(energy > 1e5, "energi {energy}");
     }
@@ -151,13 +151,13 @@ mod tests {
     fn all_modes_roundtrip_and_bad_input() {
         for m in 0..=5 {
             let enc = encode(&tone(1.0), m).unwrap();
-            assert!(decode(&enc).is_some(), "tilstand {m}");
+            assert!(decode(&enc).is_some(), "mode {m}");
         }
         assert!(encode(&tone(1.0), 9).is_none());
         assert!(decode(b"C2").is_none());
         assert!(decode(b"XX\x05\x01\x00").is_none());
         let mut enc = encode(&tone(1.0), 5).unwrap();
         enc.truncate(enc.len() - 1);
-        assert!(decode(&enc).is_none(), "afkortet");
+        assert!(decode(&enc).is_none(), "truncated");
     }
 }

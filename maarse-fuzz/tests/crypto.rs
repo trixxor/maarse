@@ -1,5 +1,5 @@
-//! Fuzz-mål for maarse-crypto: verificering af announces og åbning af
-//! direkte beskeder, kanalbeskeder og filbidder med vilkårligt input.
+//! Fuzz targets for maarse-crypto: verifying announces and opening
+//! direct messages, channel messages and file chunks with arbitrary input.
 
 use maarse_core::Address;
 use maarse_crypto::seal::{self, open_channel, open_chunk, open_direct};
@@ -7,7 +7,7 @@ use maarse_crypto::{Identity, PublicIdentity, public_channel_key, verify_announc
 use maarse_fuzz::run;
 
 fn ids() -> (Identity, Identity) {
-    // Faste nøgler, så kørslen er deterministisk.
+    // Fixed keys, so the run is deterministic.
     (Identity::from_secret_bytes(&[1; 64]), Identity::from_secret_bytes(&[2; 64]))
 }
 
@@ -19,7 +19,7 @@ fn fuzz_verify_announce() {
         a.announce(8, b"app-data her").unwrap().to_vec(),
     ];
     run("announce", &corpus, 270, |b| {
-        // Både med adressen afledt af input (når nøglerne kan læses) og en fast.
+        // Both with the address derived from the input (when the keys can be read) and a fixed one.
         if let Some(p) = PublicIdentity::from_bytes(b) {
             let _ = verify_announce(&p.address(), b);
         }
@@ -40,12 +40,12 @@ fn fuzz_open_direct() {
     let a_pub = a.public();
     run("open-direct", &corpus, 270, |p| {
         let lookup = |s: &Address| (*s == a_pub.address()).then_some(a_pub);
-        // Både rigelig og for lille udbuffer.
+        // Both an ample and a too small output buffer.
         let mut out = [0u8; 255];
         let _ = open_direct(&b, p, lookup, &mut out);
         let mut small = [0u8; 8];
         let _ = open_direct(&b, p, lookup, &mut small);
-        // Opslag, der altid svarer (med en forkert nøgle).
+        // A lookup that always answers (with a wrong key).
         let _ = open_direct(&b, p, |_| Some(a_pub), &mut out);
     });
 }
@@ -55,7 +55,7 @@ fn fuzz_open_channel() {
     let (a, _) = ids();
     let key = public_channel_key();
     let mut corpus = Vec::new();
-    for msg in [&b"hej kanal"[..], &[1u8; 150][..]] {
+    for msg in [&b"hi channel"[..], &[1u8; 150][..]] {
         let mut out = [0u8; 255];
         let n = seal::seal_channel(&key, &a.address(), [3; 8], msg, &mut out).unwrap();
         corpus.push(out[..n].to_vec());
@@ -95,7 +95,7 @@ fn fuzz_open_ratchet() {
     let mut rng = rand_core::OsRng;
     let a_pub = a.public();
     let b_pub = b.public();
-    // Korpus: init, svar (ratchet) og næste tur fra A.
+    // Corpus: init, reply (ratchet) and the next turn from A.
     let mut sa: FixedStore<2> = FixedStore::new();
     let mut sb: FixedStore<2> = FixedStore::new();
     let mut corpus = Vec::new();
@@ -107,11 +107,11 @@ fn fuzz_open_ratchet() {
     let n = ratchet::seal(&b, &a_pub, &mut sb, true, &mut rng, &[9u8; 80], &mut out).unwrap().0;
     corpus.push(out[..n].to_vec());
     ratchet::open(&a, &out[..n], &mut sa, |_| Some(b_pub), &mut pt).unwrap();
-    let n = ratchet::seal(&a, &b_pub, &mut sa, true, &mut rng, b"igen", &mut out).unwrap().0;
+    let n = ratchet::seal(&a, &b_pub, &mut sa, true, &mut rng, b"again", &mut out).unwrap().0;
     corpus.push(out[..n].to_vec());
     let b_state = sb.get_mut(&a_pub.address()).unwrap().clone();
     run("open-ratchet", &corpus, 270, |p| {
-        // Hver kørsel på en frisk kopi af B's tilstand.
+        // Every run on a fresh copy of B's state.
         let mut store: FixedStore<2> = FixedStore::new();
         store.insert(b_state.clone());
         let mut out = [0u8; 255];
@@ -122,7 +122,7 @@ fn fuzz_open_ratchet() {
     });
 }
 
-/// Firmware-manifestet læses fra radio/USB, før noget andet tjekkes.
+/// The firmware manifest is read from radio/USB before anything else is checked.
 #[test]
 fn fuzz_ota_manifest() {
     use maarse_crypto::ota::{self, Manifest, Policy};
@@ -146,7 +146,7 @@ fn fuzz_ota_manifest() {
     });
 }
 
-/// Modtageren styret af vilkårlige bidder (offset, længde) mod flash i RAM.
+/// The receiver driven by arbitrary chunks (offset, length) against flash in RAM.
 #[test]
 fn fuzz_ota_receiver() {
     use maarse_crypto::ota::{self, BLOCK, Manifest, Policy, Receiver, Staging};
@@ -183,7 +183,7 @@ fn fuzz_ota_receiver() {
     let img: Vec<u8> = (0..9000u32).map(|i| (i * 31) as u8).collect();
     let m = Manifest::sign(&ota::dev_signing_key(), 1, 2, &img);
     let policy = Policy { public_key: ota::dev_public_key(), board: 1, current_version: 1, capacity: 16384 };
-    // Startet én gang (signaturtjek er langsomt uden optimering), kopieres pr. kørsel.
+    // Started once (the signature check is slow without optimisation), copied per run.
     let mut st0 = Ram(vec![0xFF; 16384], vec![0xFF; BLOCK as usize]);
     let mut r0 = Receiver::new();
     r0.begin(&mut st0, m, &policy, false).unwrap();
@@ -191,7 +191,7 @@ fn fuzz_ota_receiver() {
         let mut st = Ram(st0.0.clone(), st0.1.clone());
         let mut r = r0.clone();
         for op in ops.chunks(3) {
-            // Enten den rigtige næste bid eller et vilkårligt offset.
+            // Either the right next chunk or an arbitrary offset.
             let len = *op.get(1).unwrap_or(&0) as usize * 4;
             let off = if op[0] & 1 == 0 {
                 r.next
@@ -202,12 +202,12 @@ fn fuzz_ota_receiver() {
             let data = img.get(off as usize..end).unwrap_or(&[]);
             let _ = r.chunk(&mut st, off, data);
             if op[0] == 7 {
-                // "Genstart": en ny modtager genoptager fra metasiden.
+                // "Restart": a new receiver resumes from the meta page.
                 r = Receiver::new();
                 r.begin(&mut st, m, &policy, false).unwrap();
             }
         }
-        // Bliver imaget færdigt, skal det være korrekt.
+        // If the image is finished, it must be correct.
         if r.end().is_ok() {
             assert_eq!(&st.0[..img.len()], &img[..]);
         }

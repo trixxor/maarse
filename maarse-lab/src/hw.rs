@@ -1,5 +1,5 @@
-//! Live hardwarevisning: læser status fra rigtige boards over
-//! companion-protokollen. Kun porte givet med `--port` åbnes.
+//! Live hardware view: reads status from real boards over
+//! the companion protocol. Only ports given with `--port` are opened.
 
 use crate::{broadcast, cfg};
 use maarse_core::companion::{Command, Event, FrameDecoder};
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 static PAUSE: AtomicBool = AtomicBool::new(false);
 static LAST: Mutex<Option<HashMap<String, Value>>> = Mutex::new(None);
 
-/// Slip portene, mens en hardwaretest bruger dem.
+/// Release the ports while a hardware test uses them.
 pub fn pause(on: bool) {
     PAUSE.store(on, Ordering::SeqCst);
     if on {
@@ -36,7 +36,7 @@ fn publish(port: &str, f: impl FnOnce(&mut Value)) {
         let m = g.get_or_insert_with(HashMap::new);
         let e = m
             .entry(port.to_string())
-            .or_insert_with(|| json!({"type":"hw","port":port,"status":"starter","stats":{},"log":[]}));
+            .or_insert_with(|| json!({"type":"hw","port":port,"status":"starting","stats":{},"log":[]}));
         f(e);
         e.clone()
     };
@@ -52,7 +52,7 @@ pub fn spawn_all() {
 fn poll(port: String) {
     loop {
         if PAUSE.load(Ordering::SeqCst) {
-            publish(&port, |e| e["status"] = json!("på pause (hardwaretest kører)"));
+            publish(&port, |e| e["status"] = json!("paused (hardware test running)"));
             while PAUSE.load(Ordering::SeqCst) {
                 thread::sleep(Duration::from_millis(200));
             }
@@ -62,10 +62,10 @@ fn poll(port: String) {
             .open()
         {
             Ok(p) => {
-                publish(&port, |e| e["status"] = json!("forbundet"));
+                publish(&port, |e| e["status"] = json!("connected"));
                 session(&port, p);
             }
-            Err(err) => publish(&port, |e| e["status"] = json!(format!("kan ikke åbne: {err}"))),
+            Err(err) => publish(&port, |e| e["status"] = json!(format!("cannot open: {err}"))),
         }
         thread::sleep(Duration::from_secs(2));
     }
@@ -91,7 +91,7 @@ fn session(port: &str, mut p: Box<dyn serialport::SerialPort>) {
             last_poll = Instant::now();
         }
         if last_rx.elapsed() > Duration::from_secs(10) {
-            publish(port, |e| e["status"] = json!("intet svar (er det en Må:rse-node?)"));
+            publish(port, |e| e["status"] = json!("no reply (is it a Må:rse node?)"));
         }
         match p.read(&mut buf) {
             Ok(n) if n > 0 => {
@@ -117,7 +117,7 @@ fn hex(b: &[u8]) -> String {
 fn on_event(port: &str, ev: Event) {
     match ev {
         Event::Info { addr, repeater, version, .. } => publish(port, |e| {
-            e["status"] = json!("forbundet");
+            e["status"] = json!("connected");
             e["addr"] = json!(hex(&addr.0));
             e["repeater"] = json!(repeater);
             e["version"] = json!(version);
@@ -127,7 +127,7 @@ fn on_event(port: &str, ev: Event) {
                                  "dbm":r.tx_power_dbm,"duty_permille":r.duty_permille});
         }),
         Event::Stats { items } => publish(port, |e| {
-            e["status"] = json!("forbundet");
+            e["status"] = json!("connected");
             for (k, v) in items.iter() {
                 e["stats"][k.to_string()] = json!(v);
             }

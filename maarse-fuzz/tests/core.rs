@@ -1,5 +1,5 @@
-//! Fuzz-mål for maarse-core: pakker, companion-rammer og beskedindhold.
-//! Kør længere med fx `MAARSE_FUZZ_ITERS=2000000 cargo test -p maarse-fuzz --release`.
+//! Fuzz targets for maarse-core: packets, companion frames and message content.
+//! Run longer with e.g. `MAARSE_FUZZ_ITERS=2000000 cargo test -p maarse-fuzz --release`.
 
 use maarse_core::companion::{Command, Event, FrameDecoder, MAX_FRAME, RadioConfig, Text};
 use maarse_core::content::{self, FileOffer};
@@ -24,7 +24,7 @@ fn fuzz_packet_decode() {
     }
     run("packet", &corpus, MAX_PACKET + 8, |b| {
         if let Ok(p) = Packet::decode(b) {
-            // Dekodet => kan kodes igen og giver samme pakke.
+            // Decoded => can be encoded again and gives the same packet.
             let again = packet::encode(&p.header, p.payload).expect("genkodning");
             assert_eq!(Packet::decode(&again).expect("gendekodning"), p);
         }
@@ -35,7 +35,7 @@ fn fuzz_packet_decode() {
 fn fuzz_companion_command() {
     let corpus: Vec<Vec<u8>> = [
         Command::GetInfo,
-        Command::SendDirect { req: 7, dest: Address([3; 16]), text: text(b"hej med dig") },
+        Command::SendDirect { req: 7, dest: Address([3; 16]), text: text(b"hello there") },
         Command::JoinChannel { name: text(b"#aarhus") },
         Command::AnnounceNow,
         Command::FileBegin {
@@ -51,8 +51,8 @@ fn fuzz_companion_command() {
     .map(|c| c.encode()[2..].to_vec())
     .collect();
     run("companion-command", &corpus, MAX_FRAME + 8, |b| {
-        // Kun rammer, der kan komme gennem FrameDecoder (<= MAX_FRAME), skal
-        // kunne genkodes uden tab.
+        // Only frames that can get through FrameDecoder (<= MAX_FRAME) must
+        // re-encode without loss.
         if let (true, Ok(c)) = (b.len() <= MAX_FRAME, Command::decode(b)) {
             let f = c.encode();
             assert_eq!(Command::decode(&f[2..]).expect("gendekodning"), c);
@@ -62,8 +62,8 @@ fn fuzz_companion_command() {
 
 #[test]
 fn fuzz_companion_event() {
-    // Ingen kendt korpus her ud over typebytes; tilfældige rammer med
-    // tvungen gyldig typebyte giver god dækning.
+    // No known corpus here besides type bytes; random frames with a
+    // forced valid type byte give good coverage.
     let corpus: Vec<Vec<u8>> = (0x80u8..=0xa0)
         .chain(0x00..=0x20)
         .map(|t| {
@@ -83,8 +83,8 @@ fn fuzz_companion_event() {
 
 #[test]
 fn fuzz_frame_decoder_stream() {
-    // Strømmen klippes i tilfældige stykker; dekoderen må aldrig gå i panik,
-    // hænge eller returnere en ramme over MAX_FRAME.
+    // The stream is cut into random pieces; the decoder must never panic,
+    // hang or return a frame over MAX_FRAME.
     let good = Command::JoinChannel { name: text(b"#kbh") }.encode().to_vec();
     let corpus = vec![good.clone(), [good.clone(), good.clone()].concat()];
     let mut rng = Rng::new(1);
@@ -99,11 +99,11 @@ fn fuzz_frame_decoder_stream() {
             while let Some(f) = d.next_frame() {
                 assert!(!f.is_empty() && f.len() <= MAX_FRAME);
                 frames += 1;
-                assert!(frames <= b.len(), "uendelig løkke i next_frame");
+                assert!(frames <= b.len(), "infinite loop in next_frame");
             }
         }
     });
-    // En gyldig ramme efter skrald skal stadig findes.
+    // A valid frame after garbage must still be found.
     let mut d = FrameDecoder::new();
     d.push(&[0xff; 7]);
     d.push(&good);
@@ -137,9 +137,9 @@ fn fuzz_content_parse() {
     });
 }
 
-/// Router::on_receive med en strøm af pakker fra luften. Inputformat:
-/// gentagne `[længde][snr][pakke]`. Routeren beholder tilstand mellem
-/// pakkerne, og alt, den selv sender, skal kunne afkodes igen.
+/// Router::on_receive with a stream of packets from the air. Input format:
+/// repeated `[length][snr][packet]`. The router keeps state between
+/// the packets, and everything it sends itself must decode again.
 #[test]
 fn fuzz_router_on_receive() {
     use maarse_core::{Action, Role, Router};
@@ -175,7 +175,7 @@ fn fuzz_router_on_receive() {
                 acts.extend(r.tick(now + 5_000));
                 for a in acts {
                     if let Action::Transmit { packet, .. } = a {
-                        Packet::decode(&packet).expect("routeren sendte en ugyldig pakke");
+                        Packet::decode(&packet).expect("the router sent an invalid packet");
                     }
                 }
             }
@@ -183,8 +183,8 @@ fn fuzz_router_on_receive() {
     }
 }
 
-/// RadioConfig fra companion (SetRadio) og flash: kun gyldige indstillinger
-/// bruges til sendetid; det må aldrig gå i panik.
+/// RadioConfig from companion (SetRadio) and flash: only valid settings
+/// are used for time on air; it must never panic.
 #[test]
 fn fuzz_radio_config() {
     let corpus = vec![RadioConfig::EU_DEFAULT.to_bytes().to_vec()];

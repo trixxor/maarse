@@ -1,12 +1,12 @@
-//! Vælger hukommelseslayout efter board.
+//! Chooses the memory layout by board.
 //!
-//! Begge boards har Adafruits UF2-bootloader og en SoftDevice i flash, som
-//! firmwaren ikke bruger, men skal ligge efter:
-//! * WisMesh Tag (RAK4630): S140 v6 -> appen starter ved 0x26000
-//! * XIAO nRF52840: S140 v7 -> appen starter ved 0x27000
-//! Appen må højst gå til 0x88000; 0x88000-0xE8FFF er mellemlager til
-//! firmwareopdatering og 0xE9000 dens metaside (se src/ota.rs).
-//! 0xEA000-0xEBFFF er postkasse, siden 0xEC000 nodens identitet.
+//! Both boards have Adafruit's UF2 bootloader and a SoftDevice in flash, which
+//! the firmware does not use, but must be placed after:
+//! * WisMesh Tag (RAK4630): S140 v6 -> the app starts at 0x26000
+//! * XIAO nRF52840: S140 v7 -> the app starts at 0x27000
+//! The app may go at most to 0x88000; 0x88000-0xE8FFF is the staging area for
+//! firmware updates and 0xE9000 its meta page (see src/ota.rs).
+//! 0xEA000-0xEBFFF is the mailbox, the page at 0xEC000 the node's identity.
 use std::{env, fs, path::PathBuf};
 
 fn main() {
@@ -15,7 +15,7 @@ fn main() {
     let xiao = env::var_os("CARGO_FEATURE_BOARD_XIAO_NRF52840").is_some();
     if wismesh == xiao {
         panic!(
-            "Vælg præcis ét board: --features board-wismesh-tag eller --features board-xiao-nrf52840"
+            "Choose exactly one board: --features board-wismesh-tag or --features board-xiao-nrf52840"
         );
     }
     let origin: u32 = if wismesh { 0x26000 } else { 0x27000 };
@@ -25,7 +25,7 @@ fn main() {
         end - origin
     );
     fs::write(out.join("memory.x"), memory).unwrap();
-    // Startadressen til UF2-konverteringen i scriptet.
+    // The start address for the UF2 conversion in the script.
     fs::write(out.join("app-start.txt"), format!("0x{origin:X}")).unwrap();
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rerun-if-changed=build.rs");
@@ -33,7 +33,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MAARSE_FW_VERSION");
     if env::var_os("MAARSE_RELEASE_PUBKEY").is_none() {
         println!(
-            "cargo:warning=MAARSE_RELEASE_PUBKEY er ikke sat: firmwaren stoler på den OFFENTLIGE udviklingsnøgle til opdateringer. Kun til udvikling!"
+            "cargo:warning=MAARSE_RELEASE_PUBKEY is not set: the firmware trusts the PUBLIC development key for updates. For development only!"
         );
     }
     println!("cargo:rustc-link-arg=--nmagic");

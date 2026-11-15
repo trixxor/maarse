@@ -1,27 +1,27 @@
-//! Regioner for kanaler og andre floods.
+//! Regions for channels and other floods.
 //!
-//! En region er et navn med små bogstaver, fx `dk` eller `nordjylland`. På
-//! luften bæres den som et 16-bit id (se [`region_id`]); 0 betyder uden
-//! region (global, som før).
+//! A region is a lowercase name, e.g. `dk` or `nordjylland`. On
+//! the air it is carried as a 16-bit id (see [`region_id`]); 0 means no
+//! region (global, as before).
 //!
-//! Hver node har en liste med op til [`MAX_REGIONS`] regioner, den betjener.
-//! Hierarki udtrykkes med konfiguration: en repeater i Aalborg har
-//! `["dk", "nordjylland"]`. Et flood med region videresendes kun af noder,
-//! hvis liste indeholder regionen. En node uden regioner videresender alt,
-//! medmindre den er `strict` – så videresender den kun floods uden region.
-//! Modtagelse til egen bruger filtreres aldrig.
+//! Every node has a list of up to [`MAX_REGIONS`] regions it serves.
+//! Hierarchy is expressed by configuration: a repeater in Aalborg has
+//! `["dk", "nordjylland"]`. A flood with a region is only forwarded by nodes
+//! whose list contains the region. A node without regions forwards everything,
+//! unless it is `strict` – then it only forwards floods without a region.
+//! Reception for the node's own user is never filtered.
 
-/// Største antal regioner pr. node.
+/// Largest number of regions per node.
 pub const MAX_REGIONS: usize = 8;
 
 pub type Regions = heapless::Vec<u16, MAX_REGIONS>;
 
-/// 16-bit id for et regionsnavn: FNV-1a (32 bit) over
-/// `"maarse-region:" + navn med små bogstaver`, foldet til 16 bit
-/// (høje 16 bit XOR lave 16 bit). Tomt navn giver 0; et hash, der rammer 0,
-/// bliver 1.
+/// 16-bit id for a region name: FNV-1a (32 bit) over
+/// `"maarse-region:" + lowercase name`, folded to 16 bits
+/// (high 16 bits XOR low 16 bits). An empty name gives 0; a hash that hits 0
+/// becomes 1.
 ///
-/// FNV i stedet for SHA-256, så kernen forbliver uden kryptoafhængighed.
+/// FNV instead of SHA-256, so the core stays free of crypto dependencies.
 pub fn region_id(name: &str) -> u16 {
     let name = name.trim();
     if name.is_empty() {
@@ -45,12 +45,12 @@ pub fn region_id(name: &str) -> u16 {
     }
 }
 
-/// Deler en kommasepareret liste (`"dk, nordjylland"`) i navne.
+/// Splits a comma separated list (`"dk, nordjylland"`) into names.
 pub fn names(list: &str) -> impl Iterator<Item = &str> {
     list.split(',').map(str::trim).filter(|s| !s.is_empty())
 }
 
-/// Id'er for en kommasepareret liste (højst [`MAX_REGIONS`]).
+/// Ids for a comma separated list (at most [`MAX_REGIONS`]).
 pub fn parse_list(list: &str) -> Regions {
     let mut v = Regions::new();
     for n in names(list) {
@@ -62,7 +62,7 @@ pub fn parse_list(list: &str) -> Regions {
     v
 }
 
-/// Deler et kanalnavn `navn@region` i (navn, region). Uden `@` er regionen tom.
+/// Splits a channel name `name@region` into (name, region). Without `@` the region is empty.
 pub fn split_channel(name: &str) -> (&str, &str) {
     match name.rsplit_once('@') {
         Some((n, r)) => (n.trim(), r.trim()),
@@ -70,7 +70,7 @@ pub fn split_channel(name: &str) -> (&str, &str) {
     }
 }
 
-/// Må en node med `regions` (og `strict`) videresende et flood i `region`?
+/// May a node with `regions` (and `strict`) forward a flood in `region`?
 pub fn forwards(regions: &[u16], strict: bool, region: u16) -> bool {
     if region == 0 {
         return true;
@@ -106,14 +106,14 @@ mod tests {
     fn forwarding_rule() {
         let dk = region_id("dk");
         let nj = region_id("nordjylland");
-        // Uden region: altid.
+        // Without a region: always.
         assert!(forwards(&[], false, 0));
         assert!(forwards(&[], true, 0));
         assert!(forwards(&[dk], true, 0));
-        // Tom liste: alt, medmindre strict.
+        // Empty list: everything, unless strict.
         assert!(forwards(&[], false, nj));
         assert!(!forwards(&[], true, nj));
-        // Liste: kun egne regioner.
+        // List: only its own regions.
         assert!(forwards(&[dk, nj], false, nj));
         assert!(forwards(&[dk], true, dk));
         assert!(!forwards(&[dk], false, nj));

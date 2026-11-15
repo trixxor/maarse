@@ -1,12 +1,12 @@
-//! Må:rse-firmware til nRF52840 + SX1262 (RAK WisMesh Tag, XIAO nRF52840 + Wio-SX1262).
+//! Må:rse firmware for nRF52840 + SX1262 (RAK WisMesh Tag, XIAO nRF52840 + Wio-SX1262).
 //!
-//! * LoRa: standard 869,525 MHz, 125 kHz, SF9, CR 4/5, 22 dBm, 10 % duty
-//!   cycle. Kan ændres fra webklienten og gemmes i flash.
-//! * USB (seriel): companion-protokollen til webklienten, eller
-//!   modem-tilstand, når en maarse-host bruger noden som radio.
-//! * Bluetooth (Nordic UART Service): samme companion-protokol som USB.
+//! * LoRa: default 869.525 MHz, 125 kHz, SF9, CR 4/5, 22 dBm, 10 % duty
+//!   cycle. Can be changed from the web client and is stored in flash.
+//! * USB (serial): the companion protocol for the web client, or
+//!   modem mode when a maarse-host uses the node as a radio.
+//! * Bluetooth (Nordic UART Service): the same companion protocol as USB.
 //!
-//! Byg: se scripts/build-firmware.sh (eller .ps1).
+//! Build: see scripts/build-firmware.sh (or .ps1).
 
 #![no_std]
 #![no_main]
@@ -55,8 +55,8 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     mpsl.run().await
 }
 
-/// Chip-temperaturen hvert minut. TEMP-enheden ejes af MPSL, så den læses
-/// gennem den (enhed 0,25 °C).
+/// The chip temperature every minute. The TEMP peripheral is owned by MPSL, so it is read
+/// through it (unit 0.25 °C).
 #[embassy_executor::task]
 async fn temp_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     loop {
@@ -68,10 +68,10 @@ async fn temp_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    // Urene styres af MPSL (Bluetooth); den eksterne krystal til USB bedes
-    // om længere nede.
-    // MPSL reserverer interrupt-prioritet 0, 1 og 4. Alt andet skal ligge
-    // lavere (2, 3, 5-7), ellers kan fx DIO1-interruptet fra LoRa gå tabt.
+    // The clocks are controlled by MPSL (Bluetooth); the external crystal for USB is requested
+    // further down.
+    // MPSL reserves interrupt priorities 0, 1 and 4. Everything else must be
+    // lower (2, 3, 5-7), otherwise e.g. the DIO1 interrupt from LoRa can be lost.
     let mut nrf_cfg = embassy_nrf::config::Config::default();
     nrf_cfg.gpiote_interrupt_priority = Priority::P2;
     nrf_cfg.time_interrupt_priority = Priority::P2;
@@ -81,12 +81,12 @@ async fn main(spawner: Spawner) {
     interrupt::RNG.set_priority(Priority::P3);
     interrupt::SAADC.set_priority(Priority::P3);
 
-    // ----- board-specifikke ben -----
+    // ----- board-specific pins -----
     #[cfg(feature = "board-wismesh-tag")]
     let (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, led) = {
-        // RAK4630: SX1262 får strøm via P1.05; LED (blå) på P1.04.
+        // RAK4630: the SX1262 gets power via P1.05; LED (blue) on P1.04.
         let power = Output::new(p.P1_05, Level::High, OutputDrive::Standard);
-        core::mem::forget(power); // Skal blive tændt.
+        core::mem::forget(power); // Must stay on.
         embassy_time::Timer::after_millis(10).await;
         (
             p.P1_11,
@@ -105,7 +105,7 @@ async fn main(spawner: Spawner) {
     };
     #[cfg(feature = "board-xiao-nrf52840")]
     let (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, led) = (
-        // Wio-SX1262 til XIAO: CS D4, DIO1 D1, BUSY D3, RESET D2, RXEN D5.
+        // Wio-SX1262 for the XIAO: CS D4, DIO1 D1, BUSY D3, RESET D2, RXEN D5.
         p.P1_13,
         p.P1_14,
         p.P1_15,
@@ -114,34 +114,34 @@ async fn main(spawner: Spawner) {
         Input::new(p.P0_03, Pull::None),
         Input::new(p.P0_29, Pull::None),
         Some(Output::new(p.P0_05, Level::Low, OutputDrive::Standard)),
-        // Grøn LED på P0.30, tænder ved lav.
+        // Green LED on P0.30, lit when low.
         (
             Output::new(p.P0_30, Level::High, OutputDrive::Standard),
             false,
         ),
     );
 
-    // ----- batteri (se battery.rs) -----
+    // ----- battery (see battery.rs) -----
     {
         use embassy_nrf::saadc::{ChannelConfig, Config, Gain, Saadc, Time};
         #[cfg(feature = "board-xiao-nrf52840")]
         let (pin, enable) = (
             p.P0_31,
-            // VBAT_ENABLE (P0.14) lav = deleren tændt.
+            // VBAT_ENABLE (P0.14) low = the divider is on.
             Some(Output::new(p.P0_14, Level::Low, OutputDrive::Standard)),
         );
         #[cfg(feature = "board-wismesh-tag")]
         let (pin, enable) = (p.P0_05, None::<Output<'static>>);
         let mut ch = ChannelConfig::single_ended(pin);
-        ch.gain = Gain::Gain1_5; // 0,6 V / (1/5) = 3,0 V fuldt udslag
-        ch.time = Time::_40US; // høj kildeimpedans (MΩ-deler)
+        ch.gain = Gain::Gain1_5; // 0.6 V / (1/5) = 3.0 V full scale
+        ch.time = Time::_40US; // high source impedance (MΩ divider)
         let adc = Saadc::new(p.SAADC, Irqs, Config::default(), [ch]);
         spawner.spawn(battery::battery_task(adc, enable).unwrap());
     }
 
-    // ----- tilfældighed og identitet -----
-    // Hardware-tilfældighed: bruges af Bluetooth-controlleren og som frø til
-    // en ChaCha20-generator for nodens kryptografi.
+    // ----- randomness and identity -----
+    // Hardware randomness: used by the Bluetooth controller and as a seed for
+    // a ChaCha20 generator for the node's cryptography.
     static RNG: StaticCell<Rng<'static, embassy_nrf::mode::Async>> = StaticCell::new();
     let hw_rng = RNG.init(Rng::new(p.RNG, Irqs));
     let mut seed = [0u8; 32];
@@ -175,7 +175,7 @@ async fn main(spawner: Spawner) {
     };
     let lora = match LoRa::new(Sx126x::new(spi, iv, sx_cfg), false, Delay).await {
         Ok(l) => Some(l),
-        Err(_) => None, // Radioen svarer ikke: noden kører videre uden, så USB virker.
+        Err(_) => None, // The radio does not answer: the node carries on without it, so USB works.
     };
     let radio_ok = lora.is_some();
     if let Some(lora) = lora {
@@ -195,7 +195,7 @@ async fn main(spawner: Spawner) {
     let mpsl = MPSL.init(mpsl::MultiprotocolServiceLayer::new(mpsl_p, Irqs, lfclk).unwrap());
     spawner.spawn(mpsl_task(mpsl).unwrap());
     spawner.spawn(temp_task(mpsl).unwrap());
-    // USB kræver den eksterne krystal hele tiden.
+    // USB needs the external crystal all the time.
     if let Ok(hf) = mpsl.request_hfclk().await {
         core::mem::forget(hf);
     }
@@ -213,7 +213,7 @@ async fn main(spawner: Spawner) {
     if let Ok(controller) = built {
         let mut mac = [0u8; 6];
         mac.copy_from_slice(&addr.0[..6]);
-        mac[5] |= 0xC0; // tilfældig statisk adresse
+        mac[5] |= 0xC0; // random static address
         static NAME: StaticCell<heapless::String<16>> = StaticCell::new();
         let name = NAME.init({
             let mut n = heapless::String::new();
@@ -229,15 +229,15 @@ async fn main(spawner: Spawner) {
     // ----- USB -----
     spawner.spawn(usb::usb_task(p.USBD, Irqs).unwrap());
 
-    // ----- noden selv -----
+    // ----- the node itself -----
     let mut node =
         maarse_fw_common::node::FwNode::new(identity, rng, flash, radio_cfg, radio_ok);
     node.run().await;
 }
 
-/// Taler direkte med SX1262 over SPI, før lora-phy overtager: læser sync
-/// word, status og fejlflag efter TCXO-start og kalibrering. Resultatet
-/// kan ses i status (nøgle 55-58).
+/// Talks directly to the SX1262 over SPI before lora-phy takes over: reads the sync
+/// word, status and error flags after TCXO start and calibration. The result
+/// can be seen in the status (keys 55-58).
 async fn radio_selftest(
     spi: &mut ExclusiveDevice<Spim<'static>, Output<'static>, Delay>,
     reset: &mut Output<'static>,
@@ -260,7 +260,7 @@ async fn radio_selftest(
     embassy_time::Timer::after_millis(10).await;
     wait_busy().await;
     RADIO_DIAG[3].store(busy.is_high() as u32, Relaxed);
-    // ReadRegister 0x0740 (2 bytes): opcode, adresse, NOP, data, data.
+    // ReadRegister 0x0740 (2 bytes): opcode, address, NOP, data, data.
     let mut b = [0x1D, 0x07, 0x40, 0, 0, 0];
     let _ = spi.transfer_in_place(&mut b).await;
     RADIO_DIAG[0].store(u32::from(b[4]) << 8 | u32::from(b[5]), Relaxed);
@@ -270,16 +270,16 @@ async fn radio_selftest(
     let _ = spi.transfer_in_place(&mut b).await;
     RADIO_DIAG[1].store(b[1] as u32, Relaxed);
     wait_busy().await;
-    // SetDIO3AsTCXOCtrl 1,8 V, timeout 5 ms (320 × 15,625 µs).
+    // SetDIO3AsTCXOCtrl 1.8 V, timeout 5 ms (320 × 15.625 µs).
     let _ = spi.write(&[0x97, 0x02, 0x00, 0x01, 0x40]).await;
     wait_busy().await;
-    // ClearDeviceErrors, Calibrate(alle), vent.
+    // ClearDeviceErrors, Calibrate(all), wait.
     let _ = spi.write(&[0x07, 0x00, 0x00]).await;
     wait_busy().await;
     let _ = spi.write(&[0x89, 0x7F]).await;
     embassy_time::Timer::after_millis(10).await;
     wait_busy().await;
-    // GetDeviceErrors: status, fejl (2 bytes).
+    // GetDeviceErrors: status, errors (2 bytes).
     let mut b = [0x17, 0, 0, 0];
     let _ = spi.transfer_in_place(&mut b).await;
     RADIO_DIAG[2].store(u32::from(b[2]) << 8 | u32::from(b[3]), Relaxed);

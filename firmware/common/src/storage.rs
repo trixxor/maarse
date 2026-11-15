@@ -1,30 +1,30 @@
-//! Flash-lager fælles for alle boards (alt der implementerer `NorFlash`).
+//! Flash storage shared by all boards (anything that implements `NorFlash`).
 //!
-//! To områder:
+//! Two areas:
 //!
-//! * Indstillingssiden (én slettesektor, 4 KB):
+//! * The settings page (one erase sector, 4 KB):
 //!   ```text
-//!   0x000: "MRS1" + hemmelig nøgle (64; erstattes af `SetIdentity`)
-//!   0x080: "RCF1" + radioindstillinger (16)
-//!   0x100: "ADM1" + antal (1) + administratorer (4 × 16)
-//!   0x180: "ROL1" + rolle (1: 0 = klient, 1 = repeater, 2 = relay)
-//!   0x200: "REG1" + strict (1) + længde (1) + regionsnavne (≤ 120, kommasepareret)
-//!   0x300: "SHR1" + delingsindstillinger (10, se `companion::Sharing`)
+//!   0x000: "MRS1" + secret key (64; replaced by `SetIdentity`)
+//!   0x080: "RCF1" + radio settings (16)
+//!   0x100: "ADM1" + count (1) + administrators (4 × 16)
+//!   0x180: "ROL1" + role (1: 0 = client, 1 = repeater, 2 = relay)
+//!   0x200: "REG1" + strict (1) + length (1) + region names (≤ 120, comma separated)
+//!   0x300: "SHR1" + sharing settings (10, see `companion::Sharing`)
 //!   0x320: "NAM1" + length (1) + display name (≤ 24)
 //!   0x340: "WIF1" + flags (1: bit 0 enabled, bit 1 modem) + SSID (1 + 32) + password (1 + 64) + peer (1 + 64)
 //!   ```
-//!   Uden "SHR1" deles hverken position eller telemetri (standard).
-//!   Skrives kun første gang og når radio/administratorer/rolle/regioner ændres.
-//!   Ældre flash uden "ROL1" (slettet = 0xFF) giver repeater; uden "REG1"
-//!   ingen regioner (videresend alt).
+//!   Without "SHR1" neither position nor telemetry is shared (the default).
+//!   Only written the first time and when radio/administrators/role/regions change.
+//!   Older flash without "ROL1" (erased = 0xFF) gives repeater; without "REG1"
+//!   no regions (forward everything).
 //!
-//! * Postkassen (to sektorer, 8 KB): poster skrives efter hinanden — et
-//!   hovedord `[0xA5, status, længde lo, længde hi]`, modtager (16) og den
-//!   krypterede besked, fyldt op til hele ord. En leveret post markeres ved at
-//!   skrive status = 0 (samme ord skrives højst to gange, hvilket NOR-flash
-//!   tillader). Er området fuldt, pakkes de aktive poster sammen via RAM.
+//! * The mailbox (two sectors, 8 KB): entries are written one after another — a
+//!   header word `[0xA5, status, length lo, length hi]`, recipient (16) and the
+//!   encrypted message, padded to whole words. A delivered entry is marked by
+//!   writing status = 0 (the same word is written at most twice, which NOR flash
+//!   allows). If the area is full, the active entries are compacted via RAM.
 //!
-//! Alle læsninger og skrivninger er justeret til 4 bytes.
+//! All reads and writes are aligned to 4 bytes.
 
 use embedded_storage::nor_flash::NorFlash;
 use rand_core::{CryptoRng, RngCore};
@@ -52,24 +52,24 @@ const WIFI_MAGIC: &[u8; 4] = b"WIF1";
 const WIFI_OFF: usize = 0x340;
 const WIFI_LEN: usize = 4 + 1 + 33 + 65 + 65;
 const _: () = assert!(NAME_OFF + 5 + maarse_core::appdata::MAX_NAME <= WIFI_OFF);
-/// Brugt del af siden, rundet op til hele ord.
+/// Used part of the page, rounded up to whole words.
 const USED: usize = (WIFI_OFF + WIFI_LEN).div_ceil(4) * 4;
 const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
 
 const MAIL_MAGIC: u8 = 0xA5;
-/// Største besked i postkassen.
+/// Largest message in the mailbox.
 pub const MAIL_MAX: usize = 256;
-/// Bufferen til sammenpakning skal være mindst så stor som postkasseområdet.
+/// The compaction buffer must be at least as large as the mailbox area.
 pub const MAIL_AREA: usize = 8192;
 
 fn rec_len(msg: usize) -> u32 {
     (4 + 16 + msg).div_ceil(4) as u32 * 4
 }
 
-/// Indstillinger og postkasse i flash.
+/// Settings and mailbox in flash.
 ///
-/// * `cfg`: adressen på indstillingssiden (4 KB, justeret).
-/// * `mail`: starten af postkasseområdet (8 KB, justeret).
+/// * `cfg`: the address of the settings page (4 KB, aligned).
+/// * `mail`: the start of the mailbox area (8 KB, aligned).
 pub struct FlashSettings<F: NorFlash + 'static> {
     pub flash: F,
     cfg: u32,
@@ -78,15 +78,15 @@ pub struct FlashSettings<F: NorFlash + 'static> {
     ota: Option<OtaConfig<F>>,
 }
 
-/// Firmwareopdatering: hvor mellemlageret og metasiden ligger (absolutte
-/// flash-adresser, 4 KB-justeret) og hvordan boardet installerer.
+/// Firmware update: where the staging area and the meta page are (absolute
+/// flash addresses, 4 KB aligned) and how the board installs.
 pub struct OtaConfig<F> {
     pub board: u16,
     pub staging: u32,
     pub capacity: u32,
     pub meta: u32,
-    /// Installerer det verificerede image og genstarter; returnerer kun
-    /// ved fejl.
+    /// Installs the verified image and restarts; only returns
+    /// on error.
     pub install: fn(&mut F, &maarse_crypto::ota::Manifest, &OtaConfig<F>) -> &'static str,
 }
 
@@ -101,7 +101,7 @@ impl<F: NorFlash> FlashSettings<F> {
         }
     }
 
-    /// Slår firmwareopdatering til (se [`OtaConfig`]).
+    /// Enables firmware updates (see [`OtaConfig`]).
     pub fn with_ota(mut self, ota: OtaConfig<F>) -> Self {
         self.ota = Some(ota);
         self
@@ -138,7 +138,7 @@ impl<F: NorFlash> FlashSettings<F> {
         id
     }
 
-    /// Gemte radioindstillinger, ellers `default`.
+    /// Stored radio settings, otherwise `default`.
     pub fn load_radio(&mut self, default: RadioConfig) -> RadioConfig {
         let buf = self.read_page();
         if &buf[RADIO_OFF..RADIO_OFF + 4] == RADIO_MAGIC
@@ -155,7 +155,7 @@ impl<F: NorFlash> FlashSettings<F> {
         scan(&mut self.flash, self.mail, end, f)
     }
 
-    /// Flytter de aktive poster sammen i starten af området.
+    /// Moves the active entries together at the start of the area.
     fn compact(&mut self) {
         let (start, end) = (self.mail, self.mail_end());
         let Self { flash, buf, .. } = self;
@@ -175,8 +175,8 @@ impl<F: NorFlash> FlashSettings<F> {
     }
 }
 
-/// Gennemløber posterne: (flash, adresse, aktiv, modtager, beskedlængde).
-/// Returnerer adressen lige efter sidste post.
+/// Walks through the entries: (flash, address, active, recipient, message length).
+/// Returns the address right after the last entry.
 fn scan<F: NorFlash>(
     flash: &mut F,
     start: u32,
@@ -191,7 +191,7 @@ fn scan<F: NorFlash>(
         }
         let len = u16::from_le_bytes([h[2], h[3]]) as usize;
         if len > MAIL_MAX || a + rec_len(len) > end {
-            break; // ødelagt post: resten ignoreres (pakkes væk senere)
+            break; // corrupt entry: the rest is ignored (compacted away later)
         }
         let r = Address::from_slice(&h[4..20]).unwrap_or_default();
         f(flash, a, h[1] == 0xFF, r, len);
@@ -254,7 +254,7 @@ impl<F: NorFlash> crate::ota::OtaPort for FlashSettings<F> {
     }
     fn install(&mut self, m: &maarse_crypto::ota::Manifest) -> &'static str {
         let Some(o) = self.ota.take() else {
-            return "Opdatering er ikke slået til";
+            return "Updates are not enabled";
         };
         let err = (o.install)(&mut self.flash, m, &o);
         self.ota = Some(o);
@@ -272,7 +272,7 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         buf[..4].copy_from_slice(ID_MAGIC);
         buf[4..68].copy_from_slice(secret);
         self.write_page(&buf);
-        // Læs tilbage: siden slettes og skrives, så tjek at det lykkedes.
+        // Read back: the page is erased and written, so check that it succeeded.
         let back = self.read_page();
         back[..4] == *ID_MAGIC && back[4..68] == secret[..]
     }

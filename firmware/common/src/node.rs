@@ -1,8 +1,8 @@
-//! Noden: routing, kryptering, announces og companion-kommandoer.
+//! The node: routing, encryption, announces and companion commands.
 //!
-//! Modem-tilstand: sender en maarse-host rammen `0x41`, overtager hosten
-//! routingen, og noden er kun radio. `0x40 | pakke` sendes over LoRa, og
-//! alt modtaget sendes til hosten som `0xC0 | snr | pakke`.
+//! Modem mode: when a maarse-host sends the frame `0x41`, the host takes over
+//! routing, and the node is only a radio. `0x40 | packet` is sent over LoRa, and
+//! everything received is sent to the host as `0xC0 | snr | packet`.
 
 mod ext;
 mod identity;
@@ -31,55 +31,55 @@ use maarse_crypto::{
 mod files;
 
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(900);
-/// Forsøg pr. bid, når et announce-stempel regnes ud. 256 SHA-256-blokke
-/// tager ca. 20 ms på en 64 MHz Cortex-M4; derefter får executoren fri.
+/// Attempts per slice when an announce stamp is computed. 256 SHA-256 blocks
+/// take about 20 ms on a 64 MHz Cortex-M4; then the executor gets a turn.
 const STAMP_CHUNK: u32 = 256;
-/// Forward secrecy-sessioner i RAM (ca. 650 bytes hver). De gemmes ikke i
-/// flash: flash slettes ikke sikkert (gamle nøgler ville kunne genskabes) og
-/// slides af hyppige skrivninger. Efter genstart starter noden en ny session,
-/// når den får en besked, den ikke kan læse (se `resync`).
+/// Forward secrecy sessions in RAM (about 650 bytes each). They are not stored in
+/// flash: flash is not erased securely (old keys could be recovered) and
+/// wears from frequent writes. After a restart the node starts a new session
+/// when it gets a message it cannot read (see `resync`).
 const SESSIONS: usize = 8;
-/// En ny session pga. en ulæselig besked højst så ofte pr. kontakt.
+/// A new session because of an unreadable message at most this often per contact.
 const RESYNC_EVERY: Duration = Duration::from_secs(60);
 
 type Name = heapless::String<40>;
-/// Regionsnavne, kommasepareret (fx `dk,nordjylland`).
+    /// Region names, comma separated (e.g. `dk,nordjylland`).
 pub type RegionNames = heapless::Vec<u8, 120>;
 
 /// SNR given to packets from the Wi-Fi backbone link (same as maarse-host's TCP).
 const NET_SNR: i8 = 10;
 
-/// Hvor radioindstillinger gemmes (flash på boardet).
+/// Where radio settings are stored (flash on the board).
 pub trait Settings {
     fn save_radio(&mut self, cfg: &RadioConfig);
     fn save_admins(&mut self, admins: &[Address]);
     fn load_admins(&mut self) -> heapless::Vec<Address, 4>;
-    /// Gemmer nodens rolle. Standard: gemmes ikke.
+    /// Stores the node's role. Default: not stored.
     fn save_role(&mut self, _role: Role) {}
-    /// Gemt rolle; standard (og ældre flash uden rolle) er repeater.
+    /// Stored role; the default (and older flash without a role) is repeater.
     fn load_role(&mut self) -> Role {
         Role::Repeater
     }
-    /// Gemmer regionsliste og `strict`. Standard: gemmes ikke.
+    /// Stores the region list and `strict`. Default: not stored.
     fn save_regions(&mut self, _strict: bool, _names: &[u8]) {}
-    /// Gemte regioner; standard (og ældre flash) er ingen.
+    /// Stored regions; the default (and older flash) is none.
     fn load_regions(&mut self) -> (bool, RegionNames) {
         (false, RegionNames::new())
     }
-    /// Erstatter den gemte identitet (64 hemmelige bytes). Returnerer
-    /// `false`, hvis den ikke kunne gemmes. Standard: kan ikke.
+    /// Replaces the stored identity (64 secret bytes). Returns
+    /// `false` if it could not be stored. Default: cannot.
     fn save_identity(&mut self, _secret: &[u8; 64]) -> bool {
         false
     }
-    /// Gemmer delingsindstillinger (position/telemetri). Standard: gemmes ikke.
+    /// Stores sharing settings (position/telemetry). Default: not stored.
     fn save_sharing(&mut self, _s: &maarse_core::companion::Sharing) {}
-    /// Gemte delingsindstillinger; standard er ingen deling.
+    /// Stored sharing settings; the default is no sharing.
     fn load_sharing(&mut self) -> maarse_core::companion::Sharing {
         Default::default()
     }
-    /// Gemmer visningsnavnet (tomt = intet). Standard: gemmes ikke.
+    /// Stores the display name (empty = none). Default: not stored.
     fn save_name(&mut self, _name: &[u8]) {}
-    /// Gemt visningsnavn; standard er intet.
+    /// Stored display name; the default is none.
     fn load_name(&mut self) -> maarse_core::appdata::Name {
         Default::default()
     }
@@ -90,22 +90,22 @@ pub trait Settings {
         Default::default()
     }
 
-    // ----- postkasse (valgfri; standard: ingen) -----
+    // ----- mailbox (optional; default: none) -----
 
-    /// Gemmer en krypteret besked til `recipient`. Returnerer et ID.
+    /// Stores an encrypted message for `recipient`. Returns an ID.
     fn mail_add(&mut self, _recipient: &Address, _sealed: &[u8]) -> Option<u32> {
         None
     }
-    /// Kalder `f(id, besked)` for hver gemt besked til `recipient`.
+    /// Calls `f(id, message)` for every stored message for `recipient`.
     fn mail_for(&mut self, _recipient: &Address, _f: &mut dyn FnMut(u32, &[u8])) {}
     fn mail_remove(&mut self, _id: u32) {}
-    /// (antal modtagere, antal beskeder)
+    /// (number of recipients, number of messages)
     fn mail_count(&mut self) -> (u32, u32) {
         (0, 0)
     }
 
-    /// Mellemlager og installation til firmwareopdatering (se
-    /// [`crate::ota`]). Standard: understøttes ikke.
+    /// Staging area and installation for firmware updates (see
+    /// [`crate::ota`]). Default: not supported.
     fn ota(&mut self) -> Option<&mut dyn crate::ota::OtaPort> {
         None
     }
@@ -118,7 +118,7 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     identity: Identity,
     addr: Address,
     known: FnvIndexMap<Address, PublicIdentity, 64>,
-    /// Kontakter, der kan forward secrecy (announce eller FS-besked).
+    /// Contacts that can do forward secrecy (announce or FS message).
     fs_peers: FnvIndexSet<Address, 64>,
     sessions: FixedStore<SESSIONS>,
     resynced: FnvIndexMap<Address, Instant, 8>,
@@ -135,20 +135,20 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     started: Instant,
     admins: heapless::Vec<Address, 4>,
     control_seen: FnvIndexMap<Address, u32, 4>,
-    /// Unix-tid ved opstart, når klienten har fortalt os klokken.
+    /// Unix time at start-up, once the client has told us the time.
     boot_unix: Option<u32>,
-    /// Post fra postkassen, der er sendt og venter på kvittering: msg_id -> post-ID.
+    /// Mail from the mailbox that has been sent and awaits acknowledgement: msg_id -> mail ID.
     mail_inflight: FnvIndexMap<u64, u32, 16>,
     mail_delivered: u32,
-    /// Announce, hvis arbejdsbevis er ved at blive regnet ud (se `run`).
+    /// Announce whose proof of work is being computed (see `run`).
     stamping: Option<(maarse_crypto::AnnounceBuf, StampSearch)>,
     region_names: RegionNames,
-    /// Billeder og filer (se [`files`]).
+    /// Pictures and files (see [`files`]).
     files: files::Files,
-    /// Diagnose, batteri og deling (se node/ext.rs).
+    /// Diagnostics, battery and sharing (see node/ext.rs).
     ext: ext::Ext,
     ota: crate::ota::OtaManager,
-    /// Sidste tæller i en udgående kontrolkommando (skal stige strengt).
+    /// Last counter in an outgoing control command (must increase strictly).
     last_control: u32,
 }
 
@@ -189,8 +189,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             u32::from_be_bytes([addr.0[0], addr.0[1], addr.0[2], addr.0[3]]),
             Relaxed,
         );
-        // Rollen vælges i appen (`SetRole`) og hentes fra flash nedenfor;
-        // standard er repeater (fast strøm).
+        // The role is chosen in the app (`SetRole`) and loaded from flash below;
+        // the default is repeater (mains power).
         static ROUTER: static_cell::StaticCell<Router<256, 1024>> = static_cell::StaticCell::new();
         let router = ROUTER.init_with(|| Router::new(addr, Role::Repeater));
         let mut n = FwNode {
@@ -229,15 +229,15 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         n.admins = n.settings.load_admins();
         let role = n.settings.load_role();
         n.router.set_role(role);
-        n.join("offentlig");
+        n.join("public");
         n
     }
 
-    /// Hovedløkken. Er et announce-stempel ved at blive regnet ud (ca.
-    /// 4.096 forsøg, 0,3 s på en nRF52840), tages det i bidder på
-    /// [`STAMP_CHUNK`] forsøg. Mellem bidderne giver vi executoren fri med
-    /// `yield_now`, så radio, USB og Bluetooth ikke venter mere end ca. 20 ms,
-    /// og modtagne pakker og kommandoer behandles som normalt.
+    /// The main loop. If an announce stamp is being computed (about
+    /// 4,096 attempts, 0.3 s on an nRF52840), it is done in slices of
+    /// [`STAMP_CHUNK`] attempts. Between the slices we give the executor a turn with
+    /// `yield_now`, so radio, USB and Bluetooth wait no more than about 20 ms,
+    /// and received packets and commands are handled as normal.
     pub async fn run(&mut self) -> ! {
         loop {
             if self.stamping.is_some() {
@@ -266,7 +266,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
-    /// Ét bid af stempel-søgningen. Sender announcet, når stemplet er fundet.
+    /// One slice of the stamp search. Sends the announce when the stamp is found.
     fn stamp_step(&mut self) {
         let Some((payload, search)) = self.stamping.as_mut() else {
             return;
@@ -339,8 +339,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let Some(payload) = self.identity.announce(ts, &app) else {
             return;
         };
-        // Stemplet regnes ud i baggrunden af `run` (se `stamp_step`). Et nyt
-        // announce erstatter et, der endnu ikke er færdigt.
+        // The stamp is computed in the background by `run` (see `stamp_step`). A new
+        // announce replaces one that is not finished yet.
         if let Some(search) = StampSearch::new(PacketType::Announce, &self.addr, &payload) {
             self.stamping = Some((payload, search));
         }
@@ -470,7 +470,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             PacketType::Announce if dest != self.addr => {
                 if let Ok(a) = verify_announce(&dest, payload) {
                     if self.known.insert(dest, a.identity).is_err() {
-                        // Fuld: glem den ældste.
+                        // Full: forget the oldest.
                         if let Some(k) = self.known.keys().next().copied() {
                             self.known.remove(&k);
                         }
@@ -502,7 +502,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 }
                 match res.map(|o| (o.from, o.len)) {
                     Ok((from, n)) => match content::parse(&out[..n]) {
-                        Some(Content::Resync) => log("Kontakten startede en ny krypteringssession"),
+                        Some(Content::Resync) => log("The contact started a new encryption session"),
                         Some(Content::Text(t)) => {
                             crate::bus::note_message(&from, t);
                             emit(&Event::DirectReceived {
@@ -520,14 +520,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         Some(Content::ControlReply(_, frame)) => {
                             emit(&Event::RemoteReply { from, frame: text(frame) })
                         }
-                        Some(Content::PageRequest(_)) => log("Sideanmodning: denne node har ingen sider"),
+                        Some(Content::PageRequest(_)) => log("Page request: this node has no pages"),
                         _ => {}
                     },
                     Err(CryptoError::UnknownSender(_)) => {
-                        log("Besked fra ukendt afsender (intet announce endnu)")
+                        log("Message from an unknown sender (no announce yet)")
                     }
                     Err(CryptoError::NoSession(a) | CryptoError::Desync(a)) => {
-                        log("Besked kunne ikke læses (krypteringssessionen er tabt)");
+                        log("Message could not be read (the encryption session is lost)");
                         self.resync(a);
                     }
                     Err(_) => {}
@@ -536,12 +536,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             PacketType::Fragment => self.file_chunk(payload),
             PacketType::Probe => self.on_trace(dest, payload),
             PacketType::Deposit => {
-                // Vi er postkasse for en anden: gem beskeden til modtageren.
+                // We are a mailbox for someone else: store the message for the recipient.
                 if let Some(recipient) = Address::from_slice(payload) {
                     if self.settings.mail_add(&recipient, &payload[16..]).is_some() {
                         self.flush_mail(recipient);
                     } else {
-                        log("Postkassen er fuld");
+                        log("The mailbox is full");
                     }
                 }
             }
@@ -583,13 +583,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             _ => {}
         }
         let Ok(cmd) = Command::decode(&frame) else {
-            return err(0, error_code::BAD_FRAME, "ugyldig ramme");
+            return err(0, error_code::BAD_FRAME, "invalid frame");
         };
         let Some(cmd) = self.ext_command(cmd) else {
             self.modem = false;
             return;
         };
-        // Status og radioindstillinger må hentes uden at forlade modem-tilstand.
+        // Status and radio settings may be fetched without leaving modem mode.
         if !matches!(
             cmd,
             Command::GetStats | Command::GetRadio | Command::SetRadio(_) | Command::SetRole { .. }
@@ -609,7 +609,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     self.settings.save_radio(&cfg);
                     RADIO_CFG.signal(cfg);
                     emit(&Event::Radio(cfg));
-                    log("Radioindstillinger gemt");
+                    log("Radio settings saved");
                 }
                 Err(e) => err(0, error_code::BAD_FRAME, e),
             },
@@ -641,13 +641,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     emit(&Event::Heard { addr: *a, hops: 0, identity: Some(id.to_bytes()) });
                 }
                 if !self.radio_ok {
-                    log("Radioen svarer ikke - tjek board-valget");
+                    log("The radio does not answer - check the board choice");
                 }
                 self.file_client_connected();
             }
             Command::AnnounceNow => {
                 self.announce();
-                log("Announce sendes, når arbejdsbeviset er regnet ud");
+                log("The announce is sent when the proof of work has been computed");
             }
             Command::JoinChannel { name } => {
                 let name = core::str::from_utf8(&name).unwrap_or("");
@@ -662,10 +662,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 dest,
                 text: msg,
             } => self.send_content(req, dest, &content::text(&msg)),
-            Command::SendCall { .. } => err(0, error_code::NOT_OVER_TCP, "Opkald kræver maarse-host (TCP)"),
+            Command::SendCall { .. } => err(0, error_code::NOT_OVER_TCP, "Calls need maarse-host (TCP)"),
             Command::RequestPage { req, dest, path } => match content::page_request(&path) {
                 Some(plain) => self.send_content(req, dest, &plain),
-                None => err(req, error_code::TOO_LARGE, "Ugyldig sti"),
+                None => err(req, error_code::TOO_LARGE, "Invalid path"),
             },
             Command::SendChannel {
                 req,
@@ -673,7 +673,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 text: msg,
             } => {
                 let Some((_, key, nm)) = self.channels.iter().find(|(a, _, _)| *a == channel) else {
-                    return err(req, error_code::NOT_IN_CHANNEL, "Ikke med i kanalen");
+                    return err(req, error_code::NOT_IN_CHANNEL, "Not a member of the channel");
                 };
                 let key = *key;
                 let region = maarse_core::region::region_id(maarse_core::region::split_channel(nm).1);
@@ -688,7 +688,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         emit(&Event::Sent { req, msg_id: 0 });
                         self.apply(actions);
                     }
-                    None => err(req, error_code::TOO_LARGE, "Beskeden er for lang"),
+                    None => err(req, error_code::TOO_LARGE, "The message is too long"),
                 }
             }
             Command::Remote { req, dest, frame } => {
@@ -703,12 +703,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         | Command::OtaEnd { .. }
                         | Command::OtaStatus)
                 ) {
-                    return err(req, error_code::BAD_FRAME, "Kun status, radio, rolle og firmware kan fjernstyres");
+                    return err(req, error_code::BAD_FRAME, "Only status, radio, role and firmware can be controlled remotely");
                 }
                 let Some(now) = self.unix_now() else {
-                    return err(req, error_code::BAD_FRAME, "Klokken er ikke sat (forbind igen)");
+                    return err(req, error_code::BAD_FRAME, "The clock is not set (connect again)");
                 };
-                // Skal stige strengt: firmware-bidder kan komme flere pr. sekund.
+                // Must increase strictly: firmware chunks can come several per second.
                 let counter = now.max(self.last_control.wrapping_add(1));
                 self.last_control = counter;
                 let plain = content::control(content::CONTROL, counter, &frame);
@@ -728,7 +728,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 self.apply_regions(strict, names);
                 self.settings.save_regions(strict, &self.region_names);
                 emit(&self.regions_event());
-                log("Regioner gemt");
+                log("Regions saved");
             }
             Command::GetRegions => emit(&self.regions_event()),
             Command::GetWifi => {
@@ -752,9 +752,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 log("Wi-Fi saved; restarting to apply");
                 crate::bus::RESTART.signal(());
             }
-            // Kun hosten kender ruten godt nok til at svare; klienten falder
-            // tilbage til `Info.max_file` (8 KB på firmware).
-            Command::GetFileLimit { .. } => err(0, error_code::BAD_FRAME, "ukendt kommando"),
+            // Only the host knows the route well enough to answer; the client falls
+            // back to `Info.max_file` (8 KB on firmware).
+            Command::GetFileLimit { .. } => err(0, error_code::BAD_FRAME, "unknown command"),
             Command::SetTime { unix } => {
                 self.boot_unix = Some(unix.saturating_sub(self.started.elapsed().as_secs() as u32));
             }
@@ -762,7 +762,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 let ev = self.ota.handle(self.settings.ota(), &cmd, false);
                 emit(&ev);
             }
-            // Håndteres i node/ext.rs.
+            // Handled in node/ext.rs.
             Command::TraceRoute { .. }
             | Command::GetNeighbors
             | Command::SetSharing(_)
@@ -778,7 +778,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
-    /// Prøver at levere post til `recipient` (hvis vi har nogen).
+    /// Tries to deliver mail to `recipient` (if we have any).
     fn flush_mail(&mut self, recipient: Address) {
         let mut items: heapless::Vec<(u32, heapless::Vec<u8, 255>), 4> = heapless::Vec::new();
         self.settings.mail_for(&recipient, &mut |id, sealed| {
@@ -801,15 +801,15 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         self.boot_unix.map(|b| b + self.started.elapsed().as_secs() as u32)
     }
 
-    /// Krypterer med forward secrecy, hvis modparten kan, ellers statisk.
-    /// Krypterer og sender en direkte besked (tekst eller sideanmodning).
+    /// Encrypts with forward secrecy if the other party can, otherwise static.
+    /// Encrypts and sends a direct message (text or page request).
     fn send_content(&mut self, req: u16, dest: Address, plain: &[u8]) {
         let Some(recipient) = self.known.get(&dest).copied() else {
-            return err(req, error_code::UNKNOWN_DEST, "Modtageren er ikke hørt endnu");
+            return err(req, error_code::UNKNOWN_DEST, "The recipient has not been heard yet");
         };
         let mut ct = [0u8; 255];
         let Ok(n) = self.seal(&recipient, plain, &mut ct) else {
-            return err(req, error_code::TOO_LARGE, "Beskeden er for lang");
+            return err(req, error_code::TOO_LARGE, "The message is too long");
         };
         let mut token = [0u8; 16];
         self.rng.fill_bytes(&mut token);
@@ -818,7 +818,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 emit(&Event::Sent { req, msg_id });
                 self.apply(actions);
             }
-            Err(_) => err(req, error_code::QUEUE_FULL, "Køen er fuld"),
+            Err(_) => err(req, error_code::QUEUE_FULL, "The queue is full"),
         }
     }
 
@@ -841,7 +841,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
-    /// Ny session med `peer` og en tom resync-besked, så modparten skifter.
+    /// A new session with `peer` and an empty resync message, so the other party switches.
     fn resync(&mut self, peer: Address) {
         let Some(id) = self.known.get(&peer).copied() else {
             return;
@@ -859,23 +859,23 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
-    /// Krypterer og sender en direkte besked.
+    /// Encrypts and sends a direct message.
     fn send_plain(&mut self, dest: Address, plain: &[u8]) -> Result<u64, &'static str> {
-        let recipient = *self.known.get(&dest).ok_or("Modtageren er ikke hørt endnu")?;
+        let recipient = *self.known.get(&dest).ok_or("The recipient has not been heard yet")?;
         let mut ct = [0u8; 255];
-        let n = self.seal(&recipient, plain, &mut ct).map_err(|_| "Beskeden er for lang")?;
+        let n = self.seal(&recipient, plain, &mut ct).map_err(|_| "The message is too long")?;
         let mut token = [0u8; 16];
         self.rng.fill_bytes(&mut token);
         let (msg_id, actions) = self
             .router
             .send_direct(dest, &ct[..n], token, now_ms())
-            .map_err(|_| "Køen er fuld")?;
+            .map_err(|_| "The queue is full")?;
         self.apply(actions);
         Ok(msg_id)
     }
 
-    /// En kontrolkommando over radio. Afsenderen er bevist af krypteringen
-    /// og skal stå på listen over administratorer.
+    /// A control command over radio. The sender is proven by the encryption
+    /// and must be on the list of administrators.
     fn on_control(&mut self, from: Address, counter: u32, frame: &[u8]) {
         let reply = |node: &mut Self, ev: Event| {
             let f = ev.encode();
@@ -884,10 +884,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         };
         let deny = |msg: &str| Event::Error { req: 0, code: error_code::BAD_FRAME, text: text(msg.as_bytes()) };
         if !self.admins.contains(&from) {
-            return reply(self, deny("Du er ikke administrator for denne node"));
+            return reply(self, deny("You are not an administrator of this node"));
         }
-        // Tælleren (afsenderens ur) skal stige; kender vi klokken, må den
-        // højst være 10 minutter fra vores.
+        // The counter (the sender's clock) must increase; if we know the time, it may
+        // be at most 10 minutes from ours.
         let last = self.control_seen.get(&from).copied().unwrap_or(0);
         let fresh = self.unix_now().is_none_or(|now| counter.abs_diff(now) <= 600);
         if counter <= last || !fresh {
@@ -905,8 +905,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Ok(Command::GetRadio) => reply(self, Event::Radio(self.radio)),
             Ok(Command::SetRadio(cfg)) => match cfg.validate() {
                 Ok(()) => {
-                    // Svar først med de gamle indstillinger aktive, så svaret
-                    // kan nå frem; skift derefter.
+                    // Reply first with the old settings active, so the reply
+                    // can arrive; then switch.
                     reply(self, Event::Radio(cfg));
                     self.radio = cfg;
                     self.settings.save_radio(&cfg);
@@ -933,16 +933,16 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 let ev = self.ota.handle(self.settings.ota(), &c, true);
                 reply(self, ev);
             }
-            _ => reply(self, deny("Kommandoen kan ikke fjernstyres")),
+            _ => reply(self, deny("The command cannot be controlled remotely")),
         }
     }
 
-    /// Sætter routerens regioner ud fra en kommasepareret navneliste.
+    /// Sets the router's regions from a comma separated list of names.
     fn apply_regions(&mut self, strict: bool, names: RegionNames) {
         let s = core::str::from_utf8(&names).unwrap_or("");
         self.router.regions = maarse_core::region::parse_list(s);
         self.router.strict_region = strict;
-        // Gem normaliseret: små bogstaver, uden mellemrum, højst 8.
+        // Store normalised: lowercase, without spaces, at most 8.
         let mut norm = RegionNames::new();
         for n in maarse_core::region::names(s).take(maarse_core::region::MAX_REGIONS) {
             if !norm.is_empty() {
@@ -963,16 +963,16 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
-    /// Skifter rolle og gemmer den i flash. Returnerer en logtekst.
+    /// Changes role and stores it in flash. Returns a log text.
     fn set_role(&mut self, role: u8) -> Result<&'static str, &'static str> {
-        let r = Role::from_u8(role).ok_or("Ukendt rolle (0 = klient, 1 = repeater, 2 = relay)")?;
+        let r = Role::from_u8(role).ok_or("Unknown role (0 = client, 1 = repeater, 2 = relay)")?;
         self.router.set_role(r);
         self.settings.save_role(r);
         Ok(match r {
-            Role::Client => "Rolle gemt: klient",
-            Role::Repeater => "Rolle gemt: repeater",
-            Role::Relay => "Rolle gemt: relay",
-            Role::Anchor => "Rolle gemt: anker",
+            Role::Client => "Role saved: client",
+            Role::Repeater => "Role saved: repeater",
+            Role::Relay => "Role saved: relay",
+            Role::Anchor => "Role saved: anchor",
         })
     }
 
@@ -1042,14 +1042,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     fn join(&mut self, name: &str) {
-        // `navn@region`: regionen mærker beskeder, vi sender til kanalen.
+        // `name@region`: the region tags messages we send to the channel.
         let (lower, region) = maarse_core::region::split_channel(name);
         let (label, key): (&str, [u8; 32]) = match lower {
-            "" | "offentlig" | "#offentlig" | "public" | "#public" => {
-                ("offentlig", public_channel_key())
+            "" | "public" | "#public" => {
+                ("public", public_channel_key())
             }
             n => (n, {
-                // Hashtag-kanaler er altid små bogstaver og med '#'.
+                // Hashtag channels are always lowercase and with '#'.
                 let mut s: heapless::String<24> = heapless::String::new();
                 if !n.starts_with('#') {
                     let _ = s.push('#');
@@ -1063,7 +1063,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             }),
         };
         let mut nm = Name::new();
-        if label != "offentlig" && !label.starts_with('#') {
+        if label != "public" && !label.starts_with('#') {
             let _ = nm.push('#');
         }
         let region_part = if region.is_empty() { None } else { Some(region) };
@@ -1075,8 +1075,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         self.join_key(nm, key);
     }
 
-    /// Privat kanal: nøglen er tilfældig og kommer fra en invitation. Navnet
-    /// er kun til visning (afkortes til 24 bytes).
+    /// Private channel: the key is random and comes from an invitation. The name
+    /// is only for display (truncated to 24 bytes).
     fn join_private(&mut self, name: &str, key: [u8; 32]) {
         let mut nm = Name::new();
         for c in name.trim().chars() {
@@ -1093,12 +1093,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     fn join_key(&mut self, nm: Name, key: [u8; 32]) {
         let addr = channel_address(&key);
         if let Some(ch) = self.channels.iter_mut().find(|(a, _, _)| *a == addr) {
-            // Allerede med: opdatér navnet (og dermed regionen).
+            // Already a member: update the name (and with it the region).
             ch.2 = nm;
         } else {
             if self.channels.push((addr, key, nm)).is_err() {
 
-                return log("Højst 4 kanaler på denne node");
+                return log("At most 4 channels on this node");
             }
             let _ = self.router.subscribe(addr);
         }

@@ -1,14 +1,14 @@
-//! Må:rse-firmware til ESP32-S3 + SX1262.
+//! Må:rse firmware for ESP32-S3 + SX1262.
 //!
-//! * Heltec WiFi LoRa 32 V4 (med OLED-display og PA-forstærker)
+//! * Heltec WiFi LoRa 32 V4 (with OLED display and PA amplifier)
 //! * Seeed XIAO ESP32-S3 + Wio-SX1262
 //!
-//! Samme opførsel som nRF-firmwaren: companion-protokollen over USB
-//! (USB-Serial-JTAG), modem-tilstand for maarse-host, radioindstillinger og
-//! administratorer i flash, en postkasse i flash og Bluetooth (Nordic UART
-//! Service, samme GATT-tjeneste og navn som på nRF).
+//! The same behaviour as the nRF firmware: the companion protocol over USB
+//! (USB-Serial-JTAG), modem mode for maarse-host, radio settings and
+//! administrators in flash, a mailbox in flash and Bluetooth (Nordic UART
+//! Service, the same GATT service and name as on nRF).
 //!
-//! Byg: scripts/build-firmware.sh heltec-v4 (kræver espup og espflash).
+//! Build: scripts/build-firmware.sh heltec-v4 (needs espup and espflash).
 
 #![no_std]
 #![no_main]
@@ -93,8 +93,8 @@ fn fnv1a16(s: &str) -> u32 {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    // Genstart i stedet for at hænge: en repeater ude i marken skal komme
-    // tilbage af sig selv.
+    // Restart instead of hanging: a repeater out in the field must come
+    // back by itself.
     // Printed over USB (read with `espflash monitor`); a client reading
     // companion frames skips text it cannot parse.
     esp_println::println!("\r\nPANIC: {info}\r");
@@ -199,12 +199,12 @@ async fn stable_task() {
     set_crash_count(0);
 }
 
-/// Må:rse-partitionen (se partitions.csv): indstillinger, postkasse og
-/// OTA-metaside.
+/// The Må:rse partition (see partitions.csv): settings, mailbox and
+/// OTA meta page.
 const MAARSE_PART: u32 = 0x210000;
 const CFG_ADDR: u32 = MAARSE_PART;
 const MAIL_START: u32 = MAARSE_PART + 0x1000;
-/// Metaside til firmwareopdatering (manifest + fremskridt), se ota.rs.
+/// Meta page for firmware updates (manifest + progress), see ota.rs.
 const OTA_META: u32 = MAARSE_PART + 0x3000;
 
 /// Restarts the board when the node asks (new Wi-Fi settings), after a
@@ -222,28 +222,28 @@ async fn main(spawner: Spawner) {
     let p = esp_hal::init(esp_hal::Config::default());
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
-    // Heap til BLE-controlleren (esp-radio), 72 KB. Resten af firmwaren
-    // bruger ingen heap. De 64 KB ligger i RAM, som bootloaderen frigiver
-    // efter opstart; ellers fylder de statiske data så meget, at stakken
-    // ikke er plads ("stack pointer out of range" og genstart ved opstart).
+    // Heap for the BLE controller (esp-radio), 72 KB. The rest of the firmware
+    // uses no heap. The 64 KB are in RAM that the bootloader frees
+    // after start-up; otherwise the static data takes so much that the stack
+    // has no room ("stack pointer out of range" and a restart at start-up).
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
     esp_alloc::heap_allocator!(size: 8 * 1024);
     // Wi-Fi (when enabled) needs buffers on top of Bluetooth's. 72 KB more
     // left too little stack and the board restarted at boot; 40 KB leaves
     // about 65 KB of stack.
 
-    // ----- board-specifikke ben -----
+    // ----- board-specific pins -----
     // (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, rf_tx, led, standard-radio)
     #[cfg(feature = "board-heltec-v4")]
     let (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, rf_tx, led, default_radio) = {
-        // PA-modul: V4.2 har GC1109, V4.3 har KCT8103L. Begge får strøm via
-        // GPIO7 og chip-enable på GPIO2. Hvilken der sidder, ses (som i
-        // Meshtastic) ved at læse GPIO2 som input, efter GPIO7 er tændt:
-        // høj = KCT8103L, lav = GC1109.
-        // Under afsendelse skal PA'en slås til via rf_tx, som radioen sætter
-        // høj ved TX og lav ellers:
-        //   GC1109:   GPIO46 (CPS: høj = fuld PA, lav = bypass)
-        //   KCT8103L: GPIO5  (CTX: høj = TX, lav = RX med LNA)
+        // PA module: V4.2 has GC1109, V4.3 has KCT8103L. Both get power via
+        // GPIO7 and chip enable on GPIO2. Which one is fitted is seen (as in
+        // Meshtastic) by reading GPIO2 as input after GPIO7 is switched on:
+        // high = KCT8103L, low = GC1109.
+        // During transmission the PA must be switched on via rf_tx, which the radio sets
+        // high on TX and low otherwise:
+        //   GC1109:   GPIO46 (CPS: high = full PA, low = bypass)
+        //   KCT8103L: GPIO5  (CTX: high = TX, low = RX with LNA)
         let pa_power = Output::new(p.GPIO7, Level::High, OutputConfig::default());
         core::mem::forget(pa_power);
         Timer::after_millis(1).await;
@@ -276,7 +276,7 @@ async fn main(spawner: Spawner) {
             None::<Output<'static>>,
             Some(pa_tx),
             Output::new(p.GPIO35, Level::Low, OutputConfig::default()),
-            // PA'en giver ca. +7..+10 dB: 10 dBm ind ≈ 17–20 dBm ud.
+            // The PA gives about +7..+10 dB: 10 dBm in ≈ 17–20 dBm out.
             RadioConfig {
                 tx_power_dbm: 10,
                 ..RadioConfig::EU_DEFAULT
@@ -285,7 +285,7 @@ async fn main(spawner: Spawner) {
     };
     #[cfg(feature = "board-xiao-esp32s3")]
     let (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, rf_tx, led, default_radio) = (
-        // Wio-SX1262 på XIAO ESP32-S3 (B2B-stik).
+        // Wio-SX1262 on the XIAO ESP32-S3 (B2B connector).
         p.GPIO7,
         p.GPIO8,
         p.GPIO9,
@@ -293,14 +293,14 @@ async fn main(spawner: Spawner) {
         Output::new(p.GPIO42, Level::High, OutputConfig::default()),
         Input::new(p.GPIO39, InputConfig::default().with_pull(Pull::None)),
         Input::new(p.GPIO40, InputConfig::default().with_pull(Pull::None)),
-        // RXEN på GPIO38: høj under modtagelse.
+        // RXEN on GPIO38: high during reception.
         Some(Output::new(p.GPIO38, Level::Low, OutputConfig::default())),
         None::<Output<'static>>,
-        // Brugerens LED (orange) på GPIO21, tænder ved lav.
+        // The user LED (orange) on GPIO21, lit when low.
         Output::new(p.GPIO21, Level::High, OutputConfig::default()),
         RadioConfig::EU_DEFAULT,
     );
-    // Kun til kodetjek med den almindelige værktøjskæde.
+    // Only for code checking with the ordinary toolchain.
     #[cfg(feature = "check-esp32c6")]
     let (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, rf_tx, led, default_radio) = (
         p.GPIO4,
@@ -317,8 +317,8 @@ async fn main(spawner: Spawner) {
     );
     let led_on_high = cfg!(not(feature = "board-xiao-esp32s3"));
 
-    // ----- tilfældighed og identitet -----
-    // Ægte tilfældighed fra ADC-støj, kun brugt som frø.
+    // ----- randomness and identity -----
+    // True randomness from ADC noise, only used as a seed.
     #[allow(unused_mut)]
     let mut adc1 = p.ADC1;
     let trng_src = TrngSource::new(p.RNG, adc1.reborrow());
@@ -387,7 +387,7 @@ async fn main(spawner: Spawner) {
         let addr = identity.address();
         let mut mac = [0u8; 6];
         mac.copy_from_slice(&addr.0[..6]);
-        mac[5] |= 0xC0; // tilfældig statisk adresse
+        mac[5] |= 0xC0; // random static address
         static NAME: StaticCell<heapless::String<16>> = StaticCell::new();
         let name = NAME.init({
             let mut n = heapless::String::new();
@@ -421,7 +421,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(stable_task().unwrap());
     spawner.spawn(memory_task().unwrap());
 
-    // ----- batteri (Heltec V4; XIAO ESP32-S3 har ingen deler: ukendt) -----
+    // ----- battery (Heltec V4; the XIAO ESP32-S3 has no divider: unknown) -----
     #[cfg(feature = "board-heltec-v4")]
     {
         let (adc, pin) = battery::setup(adc1, p.GPIO1);
@@ -434,7 +434,7 @@ async fn main(spawner: Spawner) {
     // ----- display (Heltec V4) -----
     #[cfg(feature = "board-heltec-v4")]
     {
-        // Vext (GPIO36, aktiv lav) forsyner OLED'en; reset på GPIO21.
+        // Vext (GPIO36, active low) powers the OLED; reset on GPIO21.
         let vext = Output::new(p.GPIO36, Level::Low, OutputConfig::default());
         core::mem::forget(vext);
         let mut rst = Output::new(p.GPIO21, Level::Low, OutputConfig::default());
@@ -450,7 +450,7 @@ async fn main(spawner: Spawner) {
         spawner.spawn(display::display_task(i2c, button).unwrap());
     }
 
-    // ----- noden selv -----
+    // ----- the node itself -----
     // The node (about 65 KB) runs in its own task. Kept in `main`, it made the
     // main task's future 67 KB, and the stack frame that builds that future
     // stays reserved for the whole run: 95 KB of stack were gone before

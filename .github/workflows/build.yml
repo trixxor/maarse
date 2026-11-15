@@ -1,4 +1,4 @@
-name: Byg og test
+name: Build and test
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Test
         run: cargo test --workspace
-      - name: Byg maarse-host
+      - name: Build maarse-host
         run: cargo build --release -p maarse-host
       - name: Upload (Linux)
         if: runner.os == 'Linux'

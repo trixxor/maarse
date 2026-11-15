@@ -1,21 +1,21 @@
-//! Firmwareopdatering på ESP32-S3 med ESP-IDF's to OTA-partitioner.
+//! Firmware update on the ESP32-S3 with ESP-IDF's two OTA partitions.
 //!
 //! Flash-layout (partitions.csv):
 //!
 //! ```text
 //! 0x009000  nvs       16 KB
-//! 0x00D000  otadata    8 KB   (hvilken app-partition bootloaderen starter)
+//! 0x00D000  otadata    8 KB   (which app partition the bootloader starts)
 //! 0x00F000  phy_init   4 KB
-//! 0x010000  ota_0      2 MB   (samme sted som den gamle `factory`)
-//! 0x210000  maarse    64 KB   (uændret: indstillinger, postkasse, OTA-metaside)
+//! 0x010000  ota_0      2 MB   (the same place as the old `factory`)
+//! 0x210000  maarse    64 KB   (unchanged: settings, mailbox, OTA meta page)
 //! 0x220000  ota_1      2 MB
 //! ```
 //!
-//! Den nye firmware skrives til den partition, der ikke kører, og
-//! verificeres (signatur + SHA-256). Derefter peger `otadata` på den, og
-//! noden genstarter. Er den nye app ugyldig, starter bootloaderen den
-//! gamle. Den kørende app markeres som gyldig ved opstart ([`mark_booted`]),
-//! så en bootloader med rollback slået til ikke ruller tilbage.
+//! The new firmware is written to the partition that is not running, and
+//! verified (signature + SHA-256). Then `otadata` points to it, and
+//! the node restarts. If the new app is invalid, the bootloader starts the
+//! old one. The running app is marked as valid at start-up ([`mark_booted`]),
+//! so a bootloader with rollback enabled does not roll back.
 
 use esp_bootloader_esp_idf::ota::OtaImageState;
 use esp_bootloader_esp_idf::ota_updater::OtaUpdater;
@@ -33,9 +33,9 @@ const OTA_0: u32 = 0x10000;
 const OTA_1: u32 = 0x220000;
 const SLOT: u32 = 0x200000;
 
-/// Markerer den kørende app som gyldig og finder mellemlageret (den
-/// partition, der ikke kører). `None` med den gamle partitionstabel
-/// (`factory`): så kan noden kun opdateres over USB med espflash.
+/// Marks the running app as valid and finds the staging area (the
+/// partition that is not running). `None` with the old partition table
+/// (`factory`): then the node can only be updated over USB with espflash.
 pub fn config(flash: &mut FlashStorage<'static>, meta: u32) -> Option<OtaConfig<FlashStorage<'static>>> {
     let mut buf = [0u8; PARTITION_TABLE_MAX_LEN];
     let booted = {
@@ -63,14 +63,14 @@ fn mark_booted(flash: &mut FlashStorage<'static>) {
 fn install(flash: &mut FlashStorage<'static>, m: &Manifest, cfg: &OtaConfig<FlashStorage<'static>>) -> &'static str {
     let mut magic = [0u8; 4];
     if flash.read(cfg.staging, &mut magic).is_err() || magic[0] != 0xE9 || m.size > cfg.capacity {
-        return "Imaget er ikke et ESP-IDF app-image";
+        return "The image is not an ESP-IDF app image";
     }
     let mut buf = [0u8; PARTITION_TABLE_MAX_LEN];
     let Ok(mut ota) = OtaUpdater::new(flash, &mut buf) else {
-        return "Partitionstabellen har ikke to OTA-partitioner";
+        return "The partition table does not have two OTA partitions";
     };
     if ota.activate_next_partition().is_err() {
-        return "Kunne ikke skrive otadata";
+        return "Could not write otadata";
     }
     let _ = ota.set_current_ota_state(OtaImageState::New);
     esp_hal::system::software_reset()

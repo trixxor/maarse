@@ -1,29 +1,29 @@
-//! Indholdet i en direkte besked (efter dekryptering).
+//! The content of a direct message (after decryption).
 //!
-//! Første byte angiver typen:
-//! * `0x00` tekst (UTF-8)
-//! * `0x01` filtilbud: der kommer en fil i `Fragment`-pakker
-//! * `0x02` kontrolkommando til en node: tæller (u32) + companion-kommando
-//! * `0x03` svar på en kontrolkommando: tæller (u32) + companion-hændelse
-//! * `0x04` resync: ingen data. Sendes som init i en ny FS-session, når vi
-//!   har fået en ratchet-besked, vi ikke kan læse (fx efter genstart).
-//! * `0x05` anmodning om en `maarse://`-side: sti (UTF-8, højst
-//!   [`MAX_PAGE_PATH`] bytes). Svaret er en almindelig fil med MIME
-//!   [`PAGE_MIME`] (deflate-komprimeret sidemarkup) og stien som navn.
-//!   Se [`page_path`].
-//! * `0x06` opkald: signalering og lyd (Opus) mellem to klienter. Formatet
-//!   inden i bestemmes af klienterne; noder sender det kun videre, og kun
-//!   over TCP (maarse-host), aldrig over LoRa.
-//! * `0x07` IP-tunnel: et stykke af en IPv6-pakke, kun over TCP.
+//! The first byte gives the type:
+//! * `0x00` text (UTF-8)
+//! * `0x01` file offer: a file follows in `Fragment` packets
+//! * `0x02` control command to a node: counter (u32) + companion command
+//! * `0x03` reply to a control command: counter (u32) + companion event
+//! * `0x04` resync: no data. Sent as init in a new FS session when we
+//!   have received a ratchet message we cannot read (e.g. after a restart).
+//! * `0x05` request for a `maarse://` page: path (UTF-8, at most
+//!   [`MAX_PAGE_PATH`] bytes). The reply is an ordinary file with MIME
+//!   [`PAGE_MIME`] (deflate-compressed page markup) and the path as name.
+//!   See [`page_path`].
+//! * `0x06` call: signalling and audio (Opus) between two clients. The format
+//!   inside is decided by the clients; nodes only pass it on, and only
+//!   over TCP (maarse-host), never over LoRa.
+//! * `0x07` IP tunnel: a piece of an IPv6 packet, TCP only.
 //!
-//! Kontrolkommandoer er krypterede direkte beskeder, så modtageren ved med
-//! sikkerhed, hvem afsenderen er. Noden udfører dem kun, hvis afsenderen
-//! står på dens liste over administratorer, og tælleren er højere end sidst.
+//! Control commands are encrypted direct messages, so the recipient knows for
+//! sure who the sender is. The node only carries them out if the sender is
+//! on its list of administrators and the counter is higher than last time.
 //!
 //! ```text
-//! filtilbud: 0x01 | fil-ID (8) | størrelse (u32) | antal bidder (u16)
-//!            | bidstørrelse (u8) | nøgle (32) | SHA-256/16 (16)
-//!            | MIME-længde (u8) | MIME | navn
+//! file offer: 0x01 | file ID (8) | size (u32) | chunk count (u16)
+//!            | chunk size (u8) | key (32) | SHA-256/16 (16)
+//!            | MIME length (u8) | MIME | name
 //! ```
 
 pub const TEXT: u8 = 0x00;
@@ -33,17 +33,17 @@ pub const CONTROL_REPLY: u8 = 0x03;
 pub const RESYNC: u8 = 0x04;
 pub const PAGE_REQUEST: u8 = 0x05;
 pub const CALL: u8 = 0x06;
-/// IP-tunnel: et stykke af en IPv6-pakke (se maarse-host/src/tunnel.rs).
+/// IP tunnel: a piece of an IPv6 packet (see maarse-host/src/tunnel.rs).
 pub const IP: u8 = 0x07;
 
-/// MIME for en `maarse://`-side: Må:rse-markup (UTF-8), komprimeret med
-/// rå deflate (RFC 1951). Ikke HTML: klienten viser kun tekst, overskrifter
-/// og links, så en side fra en fremmed ikke kan køre kode.
+/// MIME for a `maarse://` page: Må:rse markup (UTF-8), compressed with
+/// raw deflate (RFC 1951). Not HTML: the client only shows text, headings
+/// and links, so a page from a stranger cannot run code.
 pub const PAGE_MIME: &[u8] = b"text/x-maarse-page;deflate";
-/// Længste sti i en sideanmodning.
+/// Longest path in a page request.
 pub const MAX_PAGE_PATH: usize = 60;
 
-/// Fast del af et filtilbud.
+/// Fixed part of a file offer.
 pub const OFFER_FIXED: usize = 1 + 8 + 4 + 2 + 1 + 32 + 16 + 1;
 
 pub type Small = heapless::Vec<u8, 64>;
@@ -64,17 +64,17 @@ pub struct FileOffer {
 pub enum Content<'a> {
     Text(&'a [u8]),
     FileOffer(FileOffer),
-    /// (tæller, companion-kommando uden længdefelt)
+    /// (counter, companion command without length field)
     Control(u32, &'a [u8]),
-    /// (tæller, companion-hændelse uden længdefelt)
+    /// (counter, companion event without length field)
     ControlReply(u32, &'a [u8]),
-    /// Afsenderen har startet en ny FS-session med os.
+    /// The sender has started a new FS session with us.
     Resync,
-    /// Anmodning om en side; stien er renset med [`page_path`].
+    /// Request for a page; the path is cleaned with [`page_path`].
     PageRequest(Small),
-    /// Opkald (signalering eller lyd); indholdet er klienternes.
+    /// Call (signalling or audio); the content belongs to the clients.
     Call(&'a [u8]),
-    /// IP-tunnel: pakke-ID (u16) | stykke nr. | antal | data.
+    /// IP tunnel: packet ID (u16) | piece no. | count | data.
     Ip(&'a [u8]),
     Unknown(u8),
 }
@@ -115,7 +115,7 @@ impl FileOffer {
     }
 }
 
-/// Fortolker en dekrypteret direkte besked.
+/// Parses a decrypted direct message.
 pub fn parse(plain: &[u8]) -> Option<Content<'_>> {
     match *plain.first()? {
         TEXT => Some(Content::Text(&plain[1..])),
@@ -139,8 +139,8 @@ pub fn parse(plain: &[u8]) -> Option<Content<'_>> {
     }
 }
 
-/// Bygger en kontrolkommando eller et svar (`kind` = `CONTROL` /
-/// `CONTROL_REPLY`). `frame` er type + indhold uden længdefelt.
+/// Builds a control command or a reply (`kind` = `CONTROL` /
+/// `CONTROL_REPLY`). `frame` is type + content without length field.
 pub fn control(kind: u8, counter: u32, frame: &[u8]) -> heapless::Vec<u8, 256> {
     let mut v = heapless::Vec::new();
     let _ = v.push(kind);
@@ -149,9 +149,9 @@ pub fn control(kind: u8, counter: u32, frame: &[u8]) -> heapless::Vec<u8, 256> {
     v
 }
 
-/// Renser en sidesti: små bogstaver, cifre, `-`, `_`, `.` og `/`; ingen
-/// `..`, ingen tomme led. Tom sti (eller `/`) bliver `index`. Ugyldig sti
-/// giver `None`, så den aldrig kan pege uden for sidemappen.
+/// Cleans a page path: lowercase letters, digits, `-`, `_`, `.` and `/`; no
+/// `..`, no empty segments. An empty path (or `/`) becomes `index`. An invalid
+/// path gives `None`, so it can never point outside the pages folder.
 pub fn page_path(raw: &[u8]) -> Option<Small> {
     let raw = core::str::from_utf8(raw).ok()?;
     let raw = raw.trim().trim_matches('/');
@@ -175,7 +175,7 @@ pub fn page_path(raw: &[u8]) -> Option<Small> {
     Some(out)
 }
 
-/// Bygger en sideanmodning. `None`, hvis stien er ugyldig.
+/// Builds a page request. `None` if the path is invalid.
 pub fn page_request(path: &[u8]) -> Option<heapless::Vec<u8, 64>> {
     let p = page_path(path)?;
     let mut v = heapless::Vec::new();
@@ -184,7 +184,7 @@ pub fn page_request(path: &[u8]) -> Option<heapless::Vec<u8, 64>> {
     Some(v)
 }
 
-/// Bygger en tekstbesked.
+/// Builds a text message.
 pub fn text(t: &[u8]) -> heapless::Vec<u8, 256> {
     let mut v = heapless::Vec::new();
     let _ = v.push(TEXT);
@@ -206,7 +206,7 @@ mod tests {
             key: [1; 32],
             hash: [2; 16],
             mime: Small::from_slice(b"image/webp").unwrap(),
-            name: Small::from_slice("kort æ.webp".as_bytes()).unwrap(),
+            name: Small::from_slice("short æ.webp".as_bytes()).unwrap(),
         };
         let b = o.encode();
         assert_eq!(parse(&b), Some(Content::FileOffer(o)));
@@ -218,7 +218,7 @@ mod tests {
         assert_eq!(parse(&c), Some(Content::Control(7, &[0x09][..])));
         let r = control(CONTROL_REPLY, 7, &[0x92, 1, 2]);
         assert_eq!(parse(&r), Some(Content::ControlReply(7, &[0x92, 1, 2][..])));
-        assert_eq!(parse(&[CONTROL, 1, 0, 0, 0]), Some(Content::Unknown(CONTROL)), "mangler kommando");
+        assert_eq!(parse(&[CONTROL, 1, 0, 0, 0]), Some(Content::Unknown(CONTROL)), "missing command");
     }
 
     #[test]
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(p(""), Some("index".into()));
         assert_eq!(p("/"), Some("index".into()));
         assert_eq!(p("/vejr/aarhus/"), Some("vejr/aarhus".into()));
-        assert_eq!(p("om.mu"), Some("om.mu".into()));
+        assert_eq!(p("about.mu"), Some("about.mu".into()));
         assert_eq!(p("../hemmelig"), None);
         assert_eq!(p("a/../b"), None);
         assert_eq!(p("a//b"), None);

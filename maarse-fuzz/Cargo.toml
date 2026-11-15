@@ -5,9 +5,9 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
-# Portabel fuzzing (virker også på Windows/MSVC, hvor cargo-fuzz/libFuzzer
-# ikke er pålidelig): deterministiske tilfældige og muterede input mod alle
-# dekodere, der læser bytes udefra. Se README ("Fuzzing").
+# Portable fuzzing (also works on Windows/MSVC, where cargo-fuzz/libFuzzer
+# is not reliable): deterministic random and mutated inputs against all
+# decoders that read bytes from outside. See README ("Fuzzing").
 
 [dependencies]
 

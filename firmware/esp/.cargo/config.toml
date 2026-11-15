@@ -1,4 +1,4 @@
-# Byg med Espressifs værktøjskæde:  cargo +esp build --release --features board-heltec-v4
+# Build with Espressif's toolchain:  cargo +esp build --release --features board-heltec-v4
 [build]
 target = "xtensa-esp32s3-none-elf"
 

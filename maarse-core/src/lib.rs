@@ -6,7 +6,7 @@
 //! The crate is `no_std` and uses no heap, so it can run directly on an
 //! nRF52840. All tables have fixed sizes, chosen with const generics.
 //!
-//! See the specification "Må:rse – protocol specification v0.1".
+//! See the protocol specification in `docs/protocol-spec.md`.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]

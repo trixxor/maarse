@@ -233,7 +233,6 @@ The Mesh Lab is a simplified model to build intuition, and it says so on the pag
 ## Roadmap
 
 - Field measurement of range and power (range-test mode in the firmware, then a test drive)
-- A written protocol specification
 - External review of the cryptography
 - The phone as its own node, and a gateway to Reticulum
 - Load control: flood slots per SF (tried, not yet a gain) and request quotas

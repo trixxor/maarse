@@ -1,0 +1,16 @@
+[package]
+name = "maarse-tray"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows system-tray app that shows and controls the maarse-host Scheduled Task"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

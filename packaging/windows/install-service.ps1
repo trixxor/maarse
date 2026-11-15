@@ -25,8 +25,13 @@
     Extra command-line options for maarse-host, e.g. '--serial COM6 --peer host:4242'.
 .PARAMETER TaskName
     Name of the Scheduled Task (default: maarse-host).
+.PARAMETER Tray
+    Also install maarse-tray.exe (from -TrayExe) and put a shortcut to it in
+    the current user's Startup folder, so the tray icon starts at login.
+.PARAMETER TrayExe
+    Path to maarse-tray.exe (default: target\release\maarse-tray.exe).
 .PARAMETER Uninstall
-    Stop and remove the task (the data folder is kept).
+    Stop and remove the task and the tray shortcut (the data folder is kept).
 #>
 [CmdletBinding()]
 param(
@@ -35,6 +40,8 @@ param(
     [string]$DataDir = "$env:ProgramData\maarse-host",
     [string]$HostArgs = "",
     [string]$TaskName = "maarse-host",
+    [switch]$Tray,
+    [string]$TrayExe = "target\release\maarse-tray.exe",
     [switch]$Uninstall
 )
 
@@ -56,7 +63,11 @@ function Stop-HostTask {
         Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
+$trayLink = Join-Path ([Environment]::GetFolderPath("Startup")) "maarse-tray.lnk"
+
 if ($Uninstall) {
+    Get-Process maarse-tray -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Remove-Item -Force $trayLink -ErrorAction SilentlyContinue
     Stop-HostTask
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
@@ -115,6 +126,23 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Principal $runAs -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
+
+if ($Tray) {
+    if (-not (Test-Path $TrayExe)) {
+        throw "maarse-tray.exe not found at '$TrayExe'. Build it with: cargo build --release -p maarse-tray"
+    }
+    Get-Process maarse-tray -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    $trayTarget = Join-Path $InstallDir "maarse-tray.exe"
+    Copy-Item -Force $TrayExe $trayTarget
+    $shell = New-Object -ComObject WScript.Shell
+    $lnk = $shell.CreateShortcut($trayLink)
+    $lnk.TargetPath = $trayTarget
+    $lnk.Arguments = "--task `"$TaskName`" --data `"$DataDir`" --install-dir `"$InstallDir`""
+    $lnk.Description = "Maarse host tray icon"
+    $lnk.Save()
+    # Not started from here: this shell is elevated and the tray should not be.
+    Write-Host "Tray app added to Startup: $trayLink (starts at next login, or open the shortcut)"
+}
 
 Write-Host "Installed and started task '$TaskName'."
 Write-Host "  Exe:  $(Join-Path $InstallDir 'maarse-host.exe')"

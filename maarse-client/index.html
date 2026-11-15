@@ -251,6 +251,169 @@
     .page { padding: 4px 14px 12px; }
     /* </mobile> */
   }
+
+  /* ===================== new shell (design A: calm messenger) =====================
+     Five areas: Chats, Nodes, Map, Network, Settings. Desktop: rail + list + content.
+     Phone: one column (list or content) with tabs at the bottom. A status strip is
+     always on top. Every feature has one home; see docs/mockups/README.md. */
+  :root { --surface: var(--raised); --surface-2: color-mix(in srgb, var(--bg) 70%, var(--line)); --faint: color-mix(in srgb, var(--muted) 70%, var(--bg)); }
+  body { display: flex; flex-direction: column; }
+  .app { flex: 1; min-height: 0; display: grid; grid-template-columns: 84px minmax(0, 1fr); }
+  .col { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; }
+  svg.i.s { width: 14px; height: 14px; }
+
+  .rail { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+          padding: max(12px, env(safe-area-inset-top, 0px)) 6px 12px; }
+  .rail .brand { justify-content: center; padding: 4px 0 12px; }
+  .rail .brand h1 { font-size: 17px; margin: 0; font-weight: 750; }
+  .rail .brand .colon { color: var(--accent); }
+  .rail button, .tabs button { display: grid; justify-items: center; gap: 3px; border: 0; background: none; padding: 6px 2px; font-size: 12px; color: var(--muted); position: relative; border-radius: 12px; }
+  .rail button .pill, .tabs button .pill { width: 52px; height: 30px; border-radius: 999px; display: grid; place-items: center; transition: background .15s; }
+  .rail button.on, .tabs button.on { color: var(--ink); font-weight: 600; }
+  .rail button.on .pill, .tabs button.on .pill { background: var(--accent-soft); color: var(--accent); }
+  .rail button:hover:not(.on) .pill { background: var(--bg); }
+  .rail .badge, .tabs .badge { position: absolute; top: 2px; right: 10px; }
+  .badge.warnb { background: var(--warn); }
+  .tabs { display: none; }
+
+  header.strip { display: flex; align-items: center; gap: 10px; padding: 8px 16px; padding-top: max(8px, env(safe-area-inset-top, 0px));
+                 background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: nowrap; min-width: 0; cursor: default; }
+  header.strip .status { background: none; border: 0; padding: 0; font-size: 14px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  header.strip .status b { font-weight: 650; }
+  .strip .chips { display: flex; gap: 6px; min-width: 0; overflow: hidden; }
+  .strip .sc { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--muted); background: var(--bg); border: 1px solid var(--line);
+               border-radius: 999px; padding: 2px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .strip .sc b { font-weight: 600; color: var(--ink); }
+  .strip .sc.warn { border-color: var(--signal); background: var(--signal-soft); }
+  header.strip.off { background: var(--warn-soft); }
+  #btn-side { display: none; }
+  .warnbar { display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: var(--signal-soft); border-bottom: 1px solid var(--line); font-size: 13.5px; flex-wrap: wrap; }
+  .warnbar svg { color: var(--signal); }
+  .warnbar span { flex: 1 1 260px; }
+  .warnbar button { padding: 5px 10px; font-size: 13px; }
+
+  main { flex: 1; display: grid; grid-template-columns: 320px minmax(0, 1fr); min-height: 0; }
+  body[data-tab="map"] main { grid-template-columns: minmax(0, 1fr); }
+  body[data-tab="map"] aside { display: none; }
+  aside { padding: 0 0 24px; gap: 0; }
+  .pane { display: flex; flex-direction: column; gap: 2px; padding: 0 10px; }
+  .pane-head { display: flex; align-items: center; padding: 14px 6px 6px; }
+  .pane-head h2 { margin: 0; font-size: 22px; text-transform: none; letter-spacing: -.01em; color: var(--ink); font-weight: 700; }
+  .filters { display: flex; gap: 6px; padding: 2px 4px 8px; overflow-x: auto; }
+  .filters button { padding: 4px 11px; border-radius: 999px; font-size: 12.5px; color: var(--muted); }
+  .filters button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .conv { padding: 9px 8px; border-radius: 12px; }
+  .conv .av { width: 38px; height: 38px; font-size: 15px; }
+  .conv .t { flex: 1; min-width: 0; display: grid; }
+  .conv .t .name { flex: none; font-weight: 600; }
+  .conv .t small { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv .tag, .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 6px; background: var(--bg); color: var(--muted); font-weight: 500; margin-left: 4px; vertical-align: 1px; }
+  .tag.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+  .tag.sig { background: var(--signal-soft); color: var(--signal); }
+  .tag.mc { background: color-mix(in srgb, #7a5cc8 18%, transparent); color: #8a6fd8; }
+  details.add summary { display: flex; align-items: center; gap: 6px; }
+  .grp { margin: 16px 6px 4px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; display: flex; justify-content: space-between; }
+  .grp small { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--faint); }
+  nav.tools.list { display: grid; grid-template-columns: 1fr; gap: 0; margin: 0; background: var(--raised); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  nav.tools.list button { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: center; text-align: left; padding: 10px 12px; border-radius: 0; border: 0;
+                          border-top: 1px solid var(--line); background: transparent; }
+  nav.tools.list button:first-child { border-top: 0; }
+  nav.tools.list button > svg { width: 30px; height: 30px; padding: 6px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); }
+  nav.tools.list button span { display: grid; min-width: 0; font-weight: 550; }
+  nav.tools.list button small { font-size: 12px; color: var(--muted); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  nav.tools.list button.active { background: var(--accent-soft); }
+  nav.tools.list button:hover:not(:disabled) { background: var(--bg); }
+  nav.tools.list button:disabled { opacity: .5; }
+  .me-card { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 4px; }
+  .me-card .av.big { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 18px; background: var(--accent-soft); color: var(--accent); }
+  .me-t { display: grid; min-width: 0; }
+  .me-t .me { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; word-break: normal; }
+  button.icon.ghost { padding: 6px; }
+
+  .chat-head { padding: 12px 20px; }
+  #chat-title { font-size: 18px; }
+  .msg .meta .st { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; font-weight: 600; }
+  .msg .meta .st.ok { color: var(--ok); } .msg .meta .st.mbx { color: var(--signal); } .msg .meta .st.bad { color: var(--warn); }
+  .empty p { margin: 0; }
+
+  /* overview, activity, node and map views */
+  .ov { display: grid; gap: 14px; max-width: 980px; }
+  .health { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--ok) 14%, var(--raised)); font-size: 14px; }
+  .health.sig { background: var(--signal-soft); } .health.bad { background: var(--warn-soft); }
+  .health svg { color: var(--ok); margin-top: 1px; } .health.sig svg { color: var(--signal); } .health.bad svg { color: var(--warn); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .tile { background: var(--raised); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; display: grid; gap: 2px; align-content: start; }
+  .tile .k { font-size: 12px; color: var(--muted); }
+  .tile .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tile .v small { font-size: 12px; font-weight: 500; color: var(--muted); }
+  .tile .x { font-size: 12px; color: var(--muted); }
+  .bar { height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; margin-top: 4px; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  .card { background: var(--raised); border: 1px solid var(--line); border-radius: 16px; padding: 14px; display: grid; gap: 10px; }
+  .card h4 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .card h4 .grow { flex: 1; }
+  .two { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; }
+  .chart svg { width: 100%; height: auto; display: block; }
+  .axis { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .axis .lim { color: var(--signal); }
+  .nbr { display: grid; grid-template-columns: minmax(0, 1fr) 90px 62px 46px; gap: 7px 10px; align-items: center; font-size: 13.5px; }
+  .nbr .snr { font-family: var(--mono); font-size: 12.5px; text-align: right; }
+  .nbr .seen { font-size: 12px; color: var(--muted); text-align: right; }
+  .snrbar { height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; }
+  .snrbar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+  .snrbar.weak i { background: var(--signal); } .snr.weak { color: var(--signal); }
+  .cardnote { font-size: 12.5px; color: var(--muted); margin: 0; }
+  .toolgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+  .toolgrid button { display: grid; justify-items: center; gap: 6px; padding: 12px 6px; border-radius: 14px; font-size: 13px; }
+  .toolgrid button svg { width: 32px; height: 32px; padding: 7px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); }
+  .feed { display: grid; background: var(--raised); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; max-width: 900px; }
+  .ev { display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: start; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 13.5px; }
+  .ev:first-child { border-top: 0; }
+  .ev .ic { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; background: var(--bg); color: var(--muted); }
+  .ev .ic.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+  .ev .ic.acc { background: var(--accent-soft); color: var(--accent); }
+  .ev .ic.sig { background: var(--signal-soft); color: var(--signal); }
+  .ev .ic.bad { background: var(--warn-soft); color: var(--warn); }
+  .ev .tm { font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  .ev.problem { background: var(--warn-soft); }
+  .ev .tx { overflow-wrap: anywhere; }
+  .live { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ok); font-weight: 600; }
+  .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+  .metric { background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; display: grid; }
+  .metric .k { font-size: 12px; color: var(--muted); } .metric .v { font-weight: 650; font-variant-numeric: tabular-nums; }
+  #map { height: 100%; min-height: 360px; border-radius: 14px; border: 1px solid var(--line); background: var(--bg); }
+  .messages.mapmode { padding: 0; }
+  .messages.mapmode #map { border-radius: 0; border: 0; }
+  .mapnote { position: absolute; left: 12px; bottom: 12px; z-index: 500; background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; font-size: 12.5px; max-width: 320px; box-shadow: var(--shadow); }
+  .leaflet-container { font: inherit; }
+
+  @media (max-width: 760px) {
+    .app { grid-template-columns: minmax(0, 1fr); }
+    .rail { display: none; }
+    .tabs { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--panel); border-top: 1px solid var(--line);
+            padding: 4px 4px max(4px, env(safe-area-inset-bottom, 0px)); flex: none; }
+    .tabs button .pill { width: 56px; }
+    header.strip { padding: 6px 10px; padding-top: max(6px, env(safe-area-inset-top, 0px)); gap: 6px; flex-wrap: wrap; }
+    header.strip .status { flex: 1 1 0; font-size: 13.5px; }
+    .strip .chips { order: 5; width: 100%; overflow-x: auto; }
+    .strip .sc { font-size: 12px; padding: 1px 8px; }
+    .strip .spacer { display: none; }
+    .connect { width: auto; }
+    .connect button { padding: 6px 10px; }
+    #btn-disconnect .lbl { display: none; }
+    main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+    aside { border: 0; max-height: none; box-shadow: none; }
+    body:not(.side-closed) section.chat { display: none; }
+    body.side-closed aside { display: none; }
+    body[data-tab="map"] section.chat { display: flex; }
+    body.side-closed #btn-side { display: inline-flex; padding: 5px 7px; }
+    .composer #btn-send .lbl { display: none; }
+    .composer #btn-send { padding: 9px 12px; }
+    .two { grid-template-columns: minmax(0, 1fr); }
+    .nbr { grid-template-columns: minmax(0, 1fr) 70px 56px 36px; }
+    .messages { padding: 12px; }
+  }
 </style>
 </head>
 <body>
@@ -273,94 +436,170 @@
   <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11l-8.5 8.5a5 5 0 0 1-7-7L13 4a3.3 3.3 0 0 1 4.7 4.7L9.3 17a1.7 1.7 0 0 1-2.3-2.3L15 7"/></symbol>
   <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
   <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2-7z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+  <symbol id="i-nodes" viewBox="0 0 24 24"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="17" r="2.5"/><path d="M8 8.6l2.8 6.2M16 8.6l-2.8 6.2M8.5 7h7"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14"/></symbol>
+  <symbol id="i-net" viewBox="0 0 24 24"><path d="M12 13v8M8.5 9.5a5 5 0 0 1 7 0M5.5 6.5a9 9 0 0 1 13 0"/><circle cx="12" cy="12.5" r="1.4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+  <symbol id="i-batt" viewBox="0 0 24 24"><rect x="2.5" y="7.5" width="17" height="9" rx="2"/><path d="M22 10.5v3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M3 13l3-8h12l3 8v6H3zM3 13h5l1 2h6l1-2h5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-log" viewBox="0 0 24 24"><path d="M5 6h14M5 10.5h14M5 15h9M5 19.5h6"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-6-6.2-6-11a6 6 0 0 1 12 0c0 4.8-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/></symbol>
 </svg>
 <div id="pwa-update" hidden>New version – <button id="btn-pwa-reload">reload</button></div>
-<header>
-  <button id="btn-side" class="ghost" title="Show/hide conversations and settings" aria-label="Menu"><svg class="i"><use href="#i-menu"/></svg></button>
-  <div class="brand"><h1>Må<span class="colon">:</span>rse</h1><span class="morse" aria-hidden="true">−− ·−·−− ·−· ··· ·</span></div>
-  <span class="status"><span id="dot" class="dot"></span><span id="status">Not connected</span></span>
-  <span class="spacer"></span>
-  <div class="connect">
-    <button id="btn-ws" class="primary" hidden><svg class="i"><use href="#i-host"/></svg>Connect to maarse-host</button>
-    <button id="btn-serial"><svg class="i"><use href="#i-usb"/></svg>USB</button>
-    <button id="btn-ble"><svg class="i"><use href="#i-bt"/></svg>Bluetooth</button>
-    <button id="btn-disconnect" hidden><svg class="i"><use href="#i-x"/></svg>Disconnect</button>
+<div class="app">
+<nav class="rail" id="rail" aria-label="Main">
+  <div class="brand"><h1>Må<span class="colon">:</span>rse</h1></div>
+  <button data-tab="chats" class="on"><span class="pill"><svg class="i"><use href="#i-chat"/></svg></span>Chats<span class="badge" id="tab-unread" hidden></span></button>
+  <button data-tab="nodes"><span class="pill"><svg class="i"><use href="#i-nodes"/></svg></span>Nodes</button>
+  <button data-tab="map"><span class="pill"><svg class="i"><use href="#i-map"/></svg></span>Map</button>
+  <button data-tab="network"><span class="pill"><svg class="i"><use href="#i-net"/></svg></span>Network</button>
+  <button data-tab="settings"><span class="pill"><svg class="i"><use href="#i-gear"/></svg></span>Settings<span class="badge warnb" id="tab-warn" hidden>!</span></button>
+</nav>
+
+<div class="col">
+  <header class="strip" id="strip">
+    <button id="btn-side" class="ghost" title="Back to the list" aria-label="Back"><svg class="i"><use href="#i-back"/></svg></button>
+    <span id="dot" class="dot"></span>
+    <span class="status" id="status">Not connected</span>
+    <span class="chips" id="strip-chips">
+      <span class="sc" id="st-bat" hidden title="Battery"><svg class="i s"><use href="#i-batt"/></svg><b></b></span>
+      <span class="sc" id="st-sf" hidden title="Radio"><svg class="i s"><use href="#i-radio"/></svg><b></b></span>
+      <span class="sc" id="st-air" hidden title="Airtime used in the last hour (legal limit 10 %)"><svg class="i s"><use href="#i-clock"/></svg><b></b></span>
+      <span class="sc" id="st-bb" hidden title="Links (backbone, modem)"><svg class="i s"><use href="#i-globe"/></svg><b></b></span>
+      <span class="sc" id="st-mbx" hidden title="Messages waiting in the mailbox"><svg class="i s"><use href="#i-box"/></svg><b></b></span>
+    </span>
+    <span class="spacer"></span>
+    <div class="connect">
+      <button id="btn-ws" class="primary" hidden><svg class="i"><use href="#i-host"/></svg>Connect to maarse-host</button>
+      <button id="btn-serial"><svg class="i"><use href="#i-usb"/></svg>USB</button>
+      <button id="btn-ble"><svg class="i"><use href="#i-bt"/></svg>Bluetooth</button>
+      <button id="btn-disconnect" hidden title="Disconnect"><svg class="i"><use href="#i-x"/></svg><span class="lbl">Disconnect</span></button>
+    </div>
+  </header>
+  <div class="warnbar" id="backup-warn" hidden>
+    <svg class="i"><use href="#i-key"/></svg>
+    <span><b>Your recovery phrase is not backed up.</b> If this node is lost, so is your identity.</span>
+    <button id="btn-bk-now">Back up now</button>
+    <button id="btn-bk-dismiss" class="ghost">I have a backup</button>
   </div>
-</header>
 
-<main>
-  <aside>
-    <div class="me-card">
-      <span class="label">My node</span>
-      <div class="me" id="me">–</div>
-      <div class="me-actions">
-        <button id="btn-copy" disabled><svg class="i"><use href="#i-copy"/></svg>Copy</button>
-        <button id="btn-myqr" disabled><svg class="i"><use href="#i-qr"/></svg>QR code</button>
-        <button id="btn-announce" disabled title="Tell the network you are here"><svg class="i"><use href="#i-wave"/></svg>Announce</button>
+  <main>
+    <aside>
+      <!-- Chats -->
+      <div class="pane" id="pane-chats">
+        <div class="pane-head"><h2>Chats</h2></div>
+        <div class="filters" id="chat-filters"><button data-f="all" class="on">All</button><button data-f="dm">People</button><button data-f="ch">Channels</button><button data-f="unread">Unread</button></div>
+        <div id="channels"></div>
+        <div id="contacts"></div>
+        <div id="mc-side" hidden></div>
+        <details class="add">
+          <summary><svg class="i s"><use href="#i-plus"/></svg>Join a channel</summary>
+          <div class="adders">
+            <div class="row"><input id="join-name" placeholder="#channel or #channel@region" title="E.g. #hike@nordjylland: messages you send are kept within the region"><button id="btn-join" disabled>Join</button></div>
+            <div class="row"><button id="btn-private-new" disabled>New private channel</button><button id="btn-private-join" disabled>Use invitation</button></div>
+          </div>
+        </details>
+        <details class="add">
+          <summary><svg class="i s"><use href="#i-plus"/></svg>Add a contact</summary>
+          <div class="adders">
+            <input id="add-addr" placeholder="Address (32 hex characters) or contact link">
+            <div class="row"><input id="add-name" placeholder="Nickname (only for you)"><button id="btn-add">Add</button></div>
+            <p class="hint">You can write to a node once your node has heard its announce.</p>
+          </div>
+        </details>
       </div>
-    </div>
 
-    <nav class="tools" aria-label="Tools">
-      <button id="btn-status" data-view="status" disabled><svg class="i"><use href="#i-status"/></svg>Status</button>
-      <button id="btn-radio" data-view="radio" disabled><svg class="i"><use href="#i-radio"/></svg>Radio</button>
-      <button id="btn-diag" data-view="diag" disabled><svg class="i"><use href="#i-diag"/></svg>Diagnostics</button>
-      <button id="btn-range" data-view="range" disabled title="Field measurement of range, loss and power use"><svg class="i"><use href="#i-range"/></svg>Range test</button>
-      <button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg>Pages</button>
-      <button id="btn-firmware" data-view="firmware" disabled><svg class="i"><use href="#i-chip"/></svg>Firmware</button>
-      <button id="btn-settings" data-view="settings" disabled title="VPN, backbone, MQTT, MeshCore etc. on maarse-host"><svg class="i"><use href="#i-chip"/></svg>Settings</button>
-      <button id="btn-service" data-view="service" disabled title="Status, live log, restart and stop of maarse-host"><svg class="i"><use href="#i-host"/></svg>Service</button>
-      <button id="btn-backup" data-view="backup" title="Recovery phrase and encrypted backup"><svg class="i"><use href="#i-key"/></svg>Security</button>
-    </nav>
-    <div class="row"><button id="btn-notify" hidden>Turn on notifications</button><button id="btn-install" hidden>Install app</button></div>
-
-    <h2>Channels</h2>
-    <div id="channels"></div>
-    <details class="add">
-      <summary>+ Join a channel</summary>
-      <div class="adders">
-        <div class="row"><input id="join-name" placeholder="#channel or #channel@region" title="E.g. #hike@nordjylland: messages you send are kept within the region"><button id="btn-join" disabled>Join</button></div>
-        <div class="row"><button id="btn-private-new" disabled>New private channel</button><button id="btn-private-join" disabled>Use invitation</button></div>
+      <!-- Nodes -->
+      <div class="pane" id="pane-nodes" hidden>
+        <div class="pane-head"><h2>Nodes</h2></div>
+        <div class="filters" id="node-filters"><button data-f="all" class="on">All</button><button data-f="contacts">Contacts</button><button data-f="heard">Heard</button><button data-f="pos">With position</button></div>
+        <div id="nodes-list"></div>
       </div>
-    </details>
 
-    <h2>Contacts</h2>
-    <div id="contacts"></div>
-    <details class="add">
-      <summary>+ Add contact</summary>
-      <div class="adders">
-        <input id="add-addr" placeholder="Address (32 hex characters) or contact link">
-        <div class="row"><input id="add-name" placeholder="Nickname (only for you)"><button id="btn-add">Add</button></div>
-        <p class="hint">You can write to a node once your node has heard its announce.</p>
+      <!-- Network -->
+      <div class="pane" id="pane-network" hidden>
+        <div class="pane-head"><h2>Network</h2></div>
+        <nav class="tools list" aria-label="Network">
+          <button id="btn-net" data-view="network"><svg class="i"><use href="#i-net"/></svg><span>Overview<small>Health, airtime, neighbours</small></span></button>
+          <button id="btn-activity" data-view="activity"><svg class="i"><use href="#i-log"/></svg><span>Activity<small>Everything that happens, live</small></span></button>
+          <button id="btn-diag" data-view="diag" disabled><svg class="i"><use href="#i-diag"/></svg><span>Neighbours and trace route<small>Who you hear, how far a route reaches</small></span></button>
+          <button id="btn-status" data-view="status" disabled><svg class="i"><use href="#i-status"/></svg><span>All counters<small>Every number the node keeps</small></span></button>
+          <button id="btn-range" data-view="range" disabled title="Field measurement of range, loss and power use"><svg class="i"><use href="#i-range"/></svg><span>Range test<small>Measure range and power in the field</small></span></button>
+          <button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg><span>Pages<small>Browse maarse:// pages</small></span></button>
+          <button id="btn-announce" disabled title="Tell the network you are here"><svg class="i"><use href="#i-wave"/></svg><span>Announce now<small>Tell the network you are here</small></span></button>
+        </nav>
       </div>
-    </details>
-    <div id="mc-side" hidden></div>
-  </aside>
 
-  <section class="chat">
-    <div class="chat-head"><div id="chat-title">No conversation selected</div><div class="sub" id="chat-sub"></div><div id="chat-tools"></div></div>
-    <div class="messages" id="messages">
-      <div class="empty" id="empty">
-        <h2>Connect to a node</h2>
-        <div class="choices">
-          <div><svg class="i"><use href="#i-host"/></svg><span><b>maarse-host</b> on this computer</span></div>
-          <div><svg class="i"><use href="#i-usb"/></svg><span>A radio via <b>USB</b></span></div>
-          <div><svg class="i"><use href="#i-bt"/></svg><span>A radio via <b>Bluetooth</b></span></div>
+      <!-- Settings -->
+      <div class="pane" id="pane-settings" hidden>
+        <div class="pane-head"><h2>Settings</h2></div>
+        <div class="me-card">
+          <span class="av big" id="me-av">?</span>
+          <div class="me-t"><b id="me-name">Not connected</b><div class="me" id="me">–</div></div>
+          <button id="btn-copy" class="ghost icon" disabled title="Copy my address"><svg class="i"><use href="#i-copy"/></svg></button>
         </div>
-        <small>USB and Bluetooth require Chrome or Edge.</small>
+        <h3 class="grp">You <small>this identity</small></h3>
+        <nav class="tools list">
+          <button id="btn-myqr" data-view="myqr" disabled><svg class="i"><use href="#i-qr"/></svg><span>Contact card and QR code<small>Let others add you</small></span></button>
+          <button id="btn-diag2" data-view="diag" disabled><svg class="i"><use href="#i-pin"/></svg><span>Name, position and telemetry<small>What your announces share</small></span></button>
+          <button id="btn-backup" data-view="backup"><svg class="i"><use href="#i-key"/></svg><span>Backup and recovery<small id="bk-sub">Recovery phrase and encrypted backup</small></span></button>
+        </nav>
+        <h3 class="grp">This node <small>saved on the node</small></h3>
+        <nav class="tools list">
+          <button id="btn-radio" data-view="radio" disabled><svg class="i"><use href="#i-radio"/></svg><span>Radio, role and regions<small>Frequency, SF, administrators, Wi-Fi backbone</small></span></button>
+          <button id="btn-firmware" data-view="firmware" disabled><svg class="i"><use href="#i-chip"/></svg><span>Firmware<small>Update over USB, Bluetooth or the network</small></span></button>
+        </nav>
+        <h3 class="grp">Host <small>maarse-host</small></h3>
+        <nav class="tools list">
+          <button id="btn-settings" data-view="settings" disabled title="VPN, backbone, MQTT, MeshCore etc. on maarse-host"><svg class="i"><use href="#i-host"/></svg><span>Host settings<small>Backbone, VPN, MQTT, MeshCore bridge</small></span></button>
+          <button id="btn-service" data-view="service" disabled title="Status, live log, restart and stop of maarse-host"><svg class="i"><use href="#i-status"/></svg><span>Service and log<small>Restart, stop, host log</small></span></button>
+        </nav>
+        <p class="hint" id="host-hint">Connect to a maarse-host to change these.</p>
+        <h3 class="grp">App <small>this device only</small></h3>
+        <nav class="tools list">
+          <button id="btn-theme"><svg class="i"><use href="#i-sun"/></svg><span>Appearance<small id="theme-sub">System</small></span></button>
+          <button id="btn-notify" hidden><svg class="i"><use href="#i-bell"/></svg><span>Turn on notifications<small>For new messages</small></span></button>
+          <button id="btn-install" hidden><svg class="i"><use href="#i-plus"/></svg><span>Install app<small>Use Må:rse like an app</small></span></button>
+        </nav>
       </div>
-    </div>
-    <div class="composer" id="composer">
-      <button id="btn-file" class="icon" title="Send picture or file" aria-label="Send picture or file" disabled><svg class="i"><use href="#i-clip"/></svg></button>
-      <button id="btn-voice" class="icon" title="Record voice message" aria-label="Record voice message" disabled><svg class="i"><use href="#i-mic"/></svg></button>
-      <input id="file" type="file" hidden>
-      <input id="text" placeholder="Write a message" disabled>
-      <span class="count" id="count"></span>
-      <button id="btn-send" class="primary" disabled><svg class="i"><use href="#i-send"/></svg>Send</button>
-    </div>
-  </section>
-</main>
+    </aside>
 
-<details class="log"><summary>Log</summary><div id="log"></div></details>
+    <section class="chat">
+      <div class="chat-head"><div id="chat-title">No conversation selected</div><div class="sub" id="chat-sub"></div><div id="chat-tools"></div></div>
+      <div class="messages" id="messages">
+        <div class="empty" id="empty">
+          <h2>Connect to your node</h2>
+          <p>Your node is the small radio that sends and receives. Må:rse talks to it and stores nothing on any server.</p>
+          <div class="choices">
+            <div><svg class="i"><use href="#i-host"/></svg><span><b>maarse-host</b> on this computer or at home</span></div>
+            <div><svg class="i"><use href="#i-usb"/></svg><span>A radio via <b>USB</b></span></div>
+            <div><svg class="i"><use href="#i-bt"/></svg><span>A radio via <b>Bluetooth</b></span></div>
+          </div>
+          <small>USB and Bluetooth need Chrome or Edge.</small>
+        </div>
+      </div>
+      <div class="composer" id="composer">
+        <button id="btn-file" class="icon" title="Send picture or file" aria-label="Send picture or file" disabled><svg class="i"><use href="#i-clip"/></svg></button>
+        <button id="btn-voice" class="icon" title="Record voice message" aria-label="Record voice message" disabled><svg class="i"><use href="#i-mic"/></svg></button>
+        <input id="file" type="file" hidden>
+        <input id="text" placeholder="Write a message" disabled>
+        <span class="count" id="count"></span>
+        <button id="btn-send" class="primary" disabled aria-label="Send"><svg class="i"><use href="#i-send"/></svg><span class="lbl">Send</span></button>
+      </div>
+    </section>
+  </main>
+  <nav class="tabs" id="tabs" aria-label="Main"></nav>
+</div>
+</div>
+<div id="log" hidden></div>
+
 
 <script>
 "use strict";
@@ -676,6 +915,7 @@ let nicknames = store.get("nicknames", {});
 const $ = id => document.getElementById(id);
 
 function log(s) {
+  if (typeof pushActivity === "function") pushActivity(s);
   const el = $("log");
   const line = document.createElement("div");
   line.textContent = new Date().toLocaleTimeString() + "  " + s;
@@ -709,25 +949,30 @@ function convRow(key, name, title) {
   d.title = title;
   const av = document.createElement("span"); av.className = "av";
   av.textContent = key.startsWith("ch:") ? "#" : ((name.replace(/^~/, "").match(/[\p{L}\p{N}]/u) || ["?"])[0]).toUpperCase();
+  const t = document.createElement("div"); t.className = "t";
   const n = document.createElement("span"); n.className = "name"; n.textContent = name;
-  d.append(av, n);
+  const pv = document.createElement("small"); pv.textContent = typeof lastLine === "function" ? lastLine(key) : "";
+  t.append(n, pv);
+  d.append(av, t);
   const u = state.unread.get(key);
   if (u) { const b = document.createElement("span"); b.className = "badge"; b.textContent = u; d.appendChild(b); }
-  d.onclick = () => { setView("chat"); state.active = key; state.unread.delete(key); histMarkRead(key); renderSide(); renderChat(); };
+  d.onclick = () => { markTab("chats"); setView("chat"); state.active = key; state.unread.delete(key); histMarkRead(key); renderSide(); renderChat(); };
   return d;
 }
 
 function renderSide() {
   const ch = $("channels"); ch.replaceChildren();
-  for (const [addr, name] of state.channels) ch.appendChild(convRow("ch:" + addr, name, addr));
+  for (const [addr, name] of state.channels) if (chatVisible("ch:" + addr)) ch.appendChild(convRow("ch:" + addr, name, addr));
   const ct = $("contacts"); ct.replaceChildren();
   const all = new Set([...state.contacts.keys(), ...Object.keys(nicknames),
     ...[...state.convs.keys()].filter(k => k.startsWith("dm:")).map(k => k.slice(3))]);
   for (const addr of all) {
     const heard = state.contacts.get(addr)?.heard;
-    ct.appendChild(convRow("dm:" + addr, label(addr) + (isVerified(addr) ? " ✓" : "") + (heard ? "" : " (not heard)"), addr));
+    if (chatVisible("dm:" + addr)) ct.appendChild(convRow("dm:" + addr, label(addr) + (isVerified(addr) ? " ✓" : "") + (heard ? "" : " · not heard"), addr));
   }
-  if (!all.size) { const p = document.createElement("p"); p.className = "hint"; p.textContent = "None yet."; ct.appendChild(p); }
+  if (!state.channels.size && !all.size) { const p = document.createElement("p"); p.className = "hint"; p.textContent = transport ? "No conversations yet. Join #public below, or add a contact from their link or QR code." : "Connect to your node to start."; ct.appendChild(p); }
+  updateUnreadBadge();
+  if (state.tab === "nodes") renderNodes();
   pwaTitle();
 }
 
@@ -735,6 +980,8 @@ function renderChat() {
   const key = state.active, box = $("messages");
   box.replaceChildren();
   $("composer").hidden = state.view !== "chat";
+  box.classList.remove("mapmode");
+  if (renderShellView(box)) return;
   if (state.view === "status") return renderStatus(box);
   if (state.view === "radio") return renderRadio(box);
   if (state.view === "diag") return renderDiag(box);
@@ -777,7 +1024,9 @@ function renderChat() {
       p.appendChild(bar); d.appendChild(p);
     }
     const meta = document.createElement("div"); meta.className = "meta";
-    meta.textContent = m.time + (m.mine ? "  " + m.status : (m.hops !== undefined ? `  ${m.hops} hops` : ""));
+    meta.textContent = m.time + (!m.mine && m.hops !== undefined ? ` · ${m.hops} ${m.hops === 1 ? "hop" : "hops"}` : "");
+    const sw = m.mine ? statusWords(m.status) : null;
+    if (sw) meta.append(el("span", { className: "st " + sw.cls, textContent: sw.text }));
     d.appendChild(meta);
     box.appendChild(d);
   }
@@ -799,8 +1048,10 @@ function updateComposer() {
 
 function setConnected(on, name) {
   $("dot").classList.toggle("on", on);
-  $("status").innerHTML = on ? `Connected via <b>${name}</b>` : "Not connected";
-  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-diag", "btn-range", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
+  $("status").innerHTML = on ? `<b>${name}</b>` : "Not connected";
+  $("host-hint").hidden = on && transport instanceof WsTransport;
+  startStripPoll(on); updateStrip(); updateMe();
+  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-diag2", "btn-status", "btn-radio", "btn-diag", "btn-range", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
   $("btn-settings").disabled = !(on && transport instanceof WsTransport);
   $("btn-service").disabled = !(on && transport instanceof WsTransport);
@@ -821,7 +1072,8 @@ function onEvent(ev) {
     case "info":
       state.me = ev.addr; state.maxText = ev.maxText; state.maxFile = ev.maxFile;
       $("me").textContent = ev.addr;
-      onIdentityInfo(ev);
+      onIdentityInfo(ev); updateMe();
+      if (transport) transport.send(Cmd.getName());
       log(`Node ${short(ev.addr)} (protocol v${ev.version}, max. ${ev.maxText} bytes per message)`);
       break;
     case "joined":
@@ -850,7 +1102,7 @@ function onEvent(ev) {
     }
     case "acked": {
       const m = state.byMsgId.get(ev.msgId);
-      if (m) { m.status = "✓ delivered"; renderChat(); }
+      if (m) { m.status = "✓ delivered"; log("Delivered: " + (m.text || m.name || "message").slice(0, 60)); renderChat(); }
       break;
     }
     case "direct":
@@ -862,7 +1114,7 @@ function onEvent(ev) {
       addMessage("ch:" + ev.channel, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
       pwaIncoming("ch:" + ev.channel, (state.channels.get(ev.channel) || "channel") + " · " + label(ev.from), ev.text);
       break;
-    case "stats": state.stats = ev.items; if (["status", "radio", "diag"].includes(state.view)) renderChat(); break;
+    case "stats": state.stats = ev.items; noteStats(); updateStrip(); if (["status", "radio", "diag", "network"].includes(state.view)) renderChat(); break;
     case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
     case "admins": state.admins = ev.list; if (state.view === "radio") renderChat(); break;
     case "regions": state.regions = ev; if (state.view === "radio") renderChat(); break;
@@ -884,12 +1136,12 @@ function onEvent(ev) {
     }
     case "carryAcked": {
       const m = state.byMsgId.get(ev.msgId);
-      if (m) { m.status = "✓ delivered (carried)"; renderChat(); }
+      if (m) { m.status = "✓ delivered (carried)"; log("Delivered (carried by others): " + (m.text || "message").slice(0, 60)); renderChat(); }
       break;
     }
     case "deposited": {
       const m = state.byMsgId.get(ev.msgId);
-      if (m) { m.status = "📫 in mailbox"; renderChat(); }
+      if (m) { m.status = "📫 in mailbox"; log("Waiting in the mailbox: " + (m.text || "message").slice(0, 60)); renderChat(); }
       break;
     }
     case "fileStarted": {
@@ -962,11 +1214,11 @@ function onEvent(ev) {
     case "neighbors":
       if (ev.part === 0) state.neighborsNext = [];
       state.neighborsNext.push(...ev.items);
-      if (ev.last) { state.neighbors = state.neighborsNext; if (state.view === "diag") renderChat(); }
+      if (ev.last) { state.neighbors = state.neighborsNext; if (state.view === "diag" || state.view === "network") renderChat(); }
       break;
     case "sharing": state.sharing = ev; if (state.view === "diag") renderChat(); break;
     case "call": onCallData(ev.from, ev.data); break;
-    case "name": state.myName = ev.name; if (state.view === "diag") renderChat(); break;
+    case "name": state.myName = ev.name; updateMe(); if (state.view === "diag") renderChat(); break;
     case "wifi": state.wifi = ev; if (state.view === "radio") renderChat(); break;
     case "nodeInfo": {
       const old = state.nodeInfo.get(ev.addr) || {};
@@ -1634,7 +1886,8 @@ function setView(v) {
   if (v !== "backup") { bkReset(); bk.msg = ""; bk.qr = null; }
   else if (transport && !state.target) { transport.send(Cmd.getRegions()); transport.send(Cmd.getSharing()); transport.send(Cmd.getStats()); }
   state.view = v;
-  for (const b of document.querySelectorAll("nav.tools button")) b.classList.toggle("active", b.dataset.view === v);
+  markTab(tabOfView(v));
+  for (const b of document.querySelectorAll("nav.tools button")) b.classList.toggle("active", b.dataset.view === v && (v !== "diag" || b.closest(".pane") === $("pane-" + state.tab)));
   mobileSide(false); $("messages").scrollTop = 0;
   clearInterval(state.statsTimer);
   if (transport && state.target) {
@@ -1656,6 +1909,12 @@ function setView(v) {
       state.statsTimer = setInterval(poll, 10000);
     }
     if (v === "range") { transport.send(Cmd.getRangeTest()); transport.send(Cmd.getRadio()); }
+    if (v === "network") {
+      let n = 0;
+      const poll = () => { transport?.send(Cmd.getStats()); if (n++ % 3 === 0) transport?.send(Cmd.getNeighbors()); };
+      poll(); transport.send(Cmd.getSharing());
+      state.statsTimer = setInterval(poll, 5000);
+    }
 
   }
   renderChat();
@@ -4051,10 +4310,429 @@ function pwaTitle() {
   let n = pwaHiddenUnread;
   for (const v of state.unread.values()) n += v;
   document.title = n ? `(${n}) Må:rse` : "Må:rse";
-  $("btn-side").innerHTML = '<svg class="i"><use href="#i-menu"/></svg>' + (n ? `<span class="badge">${n}</span>` : "");
+  // The unread count is shown on the Chats tab (updateUnreadBadge); the strip button is a plain back arrow.
 }
 
 // Mobile: the side panel is hidden once something is selected, and shown again with ☰.
+// ---------- shell: five areas, status strip, nodes, overview, activity, map ----------
+// Chats · Nodes · Map · Network · Settings. Each view belongs to one area (VIEW_TAB),
+// so the navigation always shows where you are. See docs/mockups/README.md.
+
+Object.assign(state, { tab: "chats", activity: [], airHist: [], nodeSel: null, chatFilter: "all", nodeFilter: "all", stripTimer: null });
+var VIEW_TAB = { chat: "chats", mc: "chats", remote: "chats", node: "nodes", map: "map", network: "network", activity: "network",
+  status: "network", range: "network", pages: "network", radio: "settings", firmware: "settings", settings: "settings",
+  service: "settings", backup: "settings", myqr: "settings" };
+
+// The phone tabs are a copy of the rail (without ids, so ids stay unique).
+{
+  const t = $("tabs");
+  for (const b of $("rail").querySelectorAll("button[data-tab]")) {
+    const c = b.cloneNode(true);
+    c.querySelectorAll("[id]").forEach(e => { e.dataset.mirror = e.id; e.removeAttribute("id"); });
+    t.appendChild(c);
+  }
+}
+document.querySelectorAll("button[data-tab]").forEach(b => b.onclick = () => setTab(b.dataset.tab));
+
+function markTab(t) {
+  state.tab = t; document.body.dataset.tab = t;
+  document.querySelectorAll("button[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  for (const p of ["chats", "nodes", "network", "settings"]) $("pane-" + p).hidden = p !== t;
+}
+// Which area a view belongs to. Managing another node (state.target) belongs to Nodes.
+function tabOfView(v) {
+  if (state.target && ["status", "radio", "firmware"].includes(v)) return "nodes";
+  if (v === "diag") return state.tab === "settings" ? "settings" : "network";
+  return VIEW_TAB[v] || state.tab;
+}
+function setTab(t) {
+  markTab(t);
+  if (t === "chats") { setView(state.view === "mc" ? "mc" : "chat"); mobileSide(true); }
+  else if (t === "nodes") { renderNodes(); setView("node"); mobileSide(!state.nodeSel); }
+  else if (t === "map") setView("map");
+  else if (t === "network") setView("network");
+  else if (t === "settings") {
+    const v = transport && !backupOk() ? "backup" : transport ? "radio" : "backup";
+    setView(window.matchMedia("(max-width: 760px)").matches ? state.view : v);
+    mobileSide(true);
+  }
+}
+
+// ---------- status strip ----------
+var statVal = k => { const it = state.stats?.find(x => x[0] === k); return it ? it[1] : null; };
+function chip(id, text, warn) { const c = $(id); c.hidden = text == null; if (text != null) { c.querySelector("b").textContent = text; c.classList.toggle("warn", !!warn); } }
+function updateStrip() {
+  const on = !!transport;
+  $("strip").classList.toggle("off", !on);
+  if (!on) { for (const id of ["st-bat", "st-sf", "st-air", "st-bb", "st-mbx"]) $(id).hidden = true; return; }
+  const pct = statVal(85), mv = statVal(49), usb = statVal(82);
+  chip("st-bat", pct != null ? pct + " %" : mv ? (mv / 1000).toFixed(2) + " V" : null, pct != null && pct < 20);
+  const sf = statVal(46);
+  chip("st-sf", sf != null ? "SF" + sf : null);
+  const duty = statVal(41);
+  chip("st-air", duty != null ? (duty / 10).toFixed(1) + " %" : null, duty >= 80);
+  const links = statVal(5);
+  chip("st-bb", links ? links + (links === 1 ? " link" : " links") : null);
+  const mbx = statVal(61);
+  chip("st-mbx", mbx ? String(mbx) : null);
+}
+function startStripPoll(on) {
+  clearInterval(state.stripTimer);
+  if (!on) return;
+  const poll = () => { if (transport && !state.target && !state.statsTimer) transport.send(Cmd.getStats()); };
+  setTimeout(poll, 800);
+  state.stripTimer = setInterval(poll, 20000);
+}
+function noteStats() {
+  const duty = statVal(41);
+  if (duty == null) return;
+  state.airHist.push({ t: Date.now(), duty, rx: statVal(30) || 0, tx: statVal(32) || 0 });
+  if (state.airHist.length > 240) state.airHist.shift();
+}
+
+// ---------- me card and backup warning ----------
+var backupOk = () => !state.me || store.get("backupOk:" + state.me, false);
+function updateMe() {
+  const n = state.myName || (state.me ? "My node" : "Not connected");
+  $("me-name").textContent = n;
+  $("me-av").textContent = (n.match(/[\p{L}\p{N}]/u) || ["?"])[0].toUpperCase();
+  updateBackupWarn();
+}
+function updateBackupWarn() {
+  const show = !!state.me && !backupOk();
+  $("backup-warn").hidden = !show;
+  document.querySelectorAll("#tab-warn, [data-mirror='tab-warn']").forEach(e => e.hidden = !show);
+  $("bk-sub").textContent = show ? "Not backed up yet" : "Recovery phrase and encrypted backup";
+  $("bk-sub").style.color = show ? "var(--warn)" : "";
+}
+$("btn-bk-now").onclick = () => { markTab("settings"); setView("backup"); };
+$("btn-bk-dismiss").onclick = () => { if (state.me) store.set("backupOk:" + state.me, true); updateBackupWarn(); };
+
+// ---------- theme ----------
+function applyTheme() {
+  const t = store.get("theme", "system");
+  if (t === "system") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  $("theme-sub").textContent = { system: "Follows the system", light: "Light", dark: "Dark" }[t];
+}
+$("btn-theme").onclick = () => { const order = ["system", "light", "dark"]; store.set("theme", order[(order.indexOf(store.get("theme", "system")) + 1) % 3]); applyTheme(); };
+applyTheme();
+
+// ---------- chats list filters ----------
+document.querySelectorAll("#chat-filters button").forEach(b => b.onclick = () => {
+  state.chatFilter = b.dataset.f;
+  document.querySelectorAll("#chat-filters button").forEach(x => x.classList.toggle("on", x === b));
+  renderSide();
+});
+function chatVisible(key) {
+  const f = state.chatFilter;
+  if (f === "dm") return key.startsWith("dm:");
+  if (f === "ch") return key.startsWith("ch:");
+  if (f === "unread") return !!state.unread.get(key);
+  return true;
+}
+function lastLine(key) {
+  const list = state.convs.get(key);
+  const m = list && list[list.length - 1];
+  if (!m) return "";
+  const what = m.voice ? "Voice message" : m.url ? (m.mime?.startsWith("image/") ? "Picture" : "File") : (m.text || "");
+  return (m.mine ? "You: " : key.startsWith("ch:") && m.from ? label(m.from) + ": " : "") + what;
+}
+function updateUnreadBadge() {
+  let n = 0; for (const v of state.unread.values()) n += v;
+  document.querySelectorAll("#tab-unread, [data-mirror='tab-unread']").forEach(e => { e.hidden = !n; e.textContent = n; });
+}
+
+// ---------- message status in words ----------
+function statusWords(s) {
+  if (!s) return null;
+  if (s.startsWith("error")) return { cls: "bad", text: "⚠ Not delivered: " + s.slice(6).trim() };
+  if (s.includes("carried")) return { cls: "ok", text: "✓ Delivered (carried)" };
+  if (s.includes("from mailbox")) return { cls: "ok", text: "✓ Delivered from mailbox" };
+  if (s.includes("mailbox")) return { cls: "mbx", text: "✉ Waiting in mailbox" };
+  if (s.includes("delivered")) return { cls: "ok", text: "✓ Delivered" };
+  if (s === "sent") return { cls: "", text: "Sent · waiting for acknowledgement" };
+  if (s.startsWith("sending") || s.startsWith("preparing")) return { cls: "", text: "◷ Sending" };
+  return { cls: "", text: s };
+}
+
+// ---------- nodes ----------
+document.querySelectorAll("#node-filters button").forEach(b => b.onclick = () => {
+  state.nodeFilter = b.dataset.f;
+  document.querySelectorAll("#node-filters button").forEach(x => x.classList.toggle("on", x === b));
+  renderNodes();
+});
+function ago(d) {
+  if (!d) return "";
+  const s = Math.round((Date.now() - d) / 1000);
+  return s < 60 ? s + " s ago" : s < 3600 ? Math.round(s / 60) + " min ago" : s < 86400 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " d ago";
+}
+function renderNodes() {
+  const box = $("nodes-list"); if (!box) return;
+  box.replaceChildren();
+  const all = new Set([...state.contacts.keys(), ...state.nodeInfo.keys(), ...Object.keys(nicknames)]);
+  all.delete(state.me);
+  const f = state.nodeFilter;
+  let n = 0;
+  for (const a of all) {
+    const k = state.nodeInfo.get(a) || {}, heard = state.contacts.get(a)?.heard;
+    if (f === "contacts" && !nicknames[a] && !state.convs.has("dm:" + a)) continue;
+    if (f === "heard" && !heard) continue;
+    if (f === "pos" && !k.position) continue;
+    const parts = [];
+    if (k.hops != null) parts.push(k.hops === 0 ? "direct" : k.hops + (k.hops === 1 ? " hop" : " hops"));
+    if (k.at) parts.push("heard " + ago(k.at)); else if (!heard) parts.push("not heard yet");
+    if (k.position) parts.push("📍");
+    const d = el("div", { className: "conv" + (state.view === "node" && state.nodeSel === a ? " active" : ""), title: a });
+    d.append(el("span", { className: "av", textContent: (label(a).replace(/^~/, "").match(/[\p{L}\p{N}]/u) || ["?"])[0].toUpperCase() }));
+    const t = el("div", { className: "t" });
+    t.append(el("span", { className: "name", textContent: label(a) + (isVerified(addrSafe(a)) ? " ✓" : "") }), el("small", { textContent: parts.join(" · ") }));
+    d.append(t);
+    d.onclick = () => openNode(a);
+    box.append(d); n++;
+  }
+  if (!n) box.append(el("p", { className: "hint", textContent: transport ? "No nodes heard yet. Nodes appear here when your node hears their announce." : "Connect to your node to see who is around." }));
+}
+var addrSafe = a => a;
+function openNode(a) { state.nodeSel = a; state.target = null; markTab("nodes"); setView("node"); renderNodes(); }
+function renderNode(box) {
+  const a = state.nodeSel;
+  if (!a) {
+    $("chat-title").textContent = "Nodes"; $("chat-sub").textContent = "";
+    box.append(el("div", { className: "empty" }, el("h2", { textContent: "Pick a node" }), el("p", { textContent: "Contacts and every node your node has heard. Open one to message it, see its signal and battery, find it on the map, or manage it if you are an administrator." })));
+    return;
+  }
+  const k = state.nodeInfo.get(a) || {};
+  $("chat-title").textContent = label(a); $("chat-sub").textContent = a;
+  const ov = el("div", { className: "ov" });
+  const met = el("div", { className: "metrics" });
+  const m = (key, v) => met.append(el("div", { className: "metric" }, el("span", { className: "k", textContent: key }), el("span", { className: "v", textContent: v })));
+  m("Distance", k.hops == null ? "–" : k.hops === 0 ? "direct" : k.hops + (k.hops === 1 ? " hop" : " hops"));
+  m("Last heard", k.at ? ago(k.at) : state.contacts.get(a)?.heard ? "this session" : "not yet");
+  m("Battery", k.telemetry ? (k.telemetry.mv ? (k.telemetry.mv / 1000).toFixed(2) + " V" : k.telemetry.usb ? "USB" : "unknown") : "–");
+  m("Energy", k.telemetry ? ENERGY[k.telemetry.energy] || "–" : "–");
+  m("Uptime", k.telemetry ? fmt(k.telemetry.uptime, "time") : "–");
+  m("Position", k.position ? PRECISION[k.position.prec] : "not shared");
+  const nb = state.neighbors.find(x => a.startsWith(x.prefix));
+  if (nb) m("Signal (direct)", (nb.snr > 0 ? "+" : "") + nb.snr + " dB");
+  m("Verified", isVerified(a) ? "yes ✓" : "no");
+  ov.append(met);
+  const acts = el("div", { className: "row" });
+  const b = (t, f, primary) => { const x = el("button", { textContent: t, className: primary ? "primary" : "" }); x.onclick = f; acts.append(x); };
+  b("Message", () => { state.active = "dm:" + a; state.unread.delete(state.active); markTab("chats"); setView("chat"); renderSide(); renderChat(); }, true);
+  if (k.position) b("Show on map", () => { state.mapFocus = a; markTab("map"); setView("map"); });
+  ov.append(acts);
+  const mg = el("div", { className: "card" });
+  mg.append(el("h4", { textContent: "Manage" }),
+    el("p", { className: "cardnote", textContent: "For nodes you administer. Each fetch or change goes over LoRa and costs a little airtime, so nothing is fetched until you press a button." }));
+  const mrow = el("div", { className: "row" });
+  for (const [t, v] of [["Status and counters", "status"], ["Radio, role and regions", "radio"], ["Firmware", "firmware"]]) {
+    const x = el("button", { textContent: t }); x.disabled = !transport;
+    x.onclick = () => { state.target = a; markTab("nodes"); setView(v); };
+    mrow.append(x);
+  }
+  mg.append(mrow);
+  ov.append(mg);
+  box.append(ov);
+}
+
+// ---------- network overview ----------
+function sparkline(vals, w, h, vmax) {
+  const n = vals.length;
+  const pts = vals.map((v, i) => [(i * w / Math.max(1, n - 1)).toFixed(1), (h - Math.min(v, vmax) / vmax * (h - 8)).toFixed(1)]);
+  const line = "M" + pts.map(p => p.join(" ")).join(" L");
+  return { line, area: line + ` L${w} ${h} L0 ${h}Z` };
+}
+function renderNetwork(box) {
+  $("chat-title").textContent = "Network";
+  $("chat-sub").textContent = transport ? "Updated every 5 seconds while this page is open" : "";
+  const ov = el("div", { className: "ov" });
+  box.append(ov);
+  if (!transport) { ov.append(el("div", { className: "health bad" }, el("span", { textContent: "Not connected. Connect to your node to see how the network is doing." }))); return; }
+  const pct = statVal(85), duty = statVal(41), noise = statVal(80), weak = state.neighbors.filter(x => x.snr < -7);
+  const issues = [];
+  if (pct != null && pct < 20) issues.push(`the battery is low (${pct} %)`);
+  if (duty != null && duty >= 80) issues.push(`airtime is close to the legal limit (${(duty / 10).toFixed(1)} % of 10 %)`);
+  if (weak.length) issues.push(`${weak.length} neighbour${weak.length > 1 ? "s are" : " is"} weak`);
+  const h = el("div", { className: "health" + (issues.length ? " sig" : "") });
+  h.innerHTML = issues.length ? `<b>Works, with ${issues.length === 1 ? "one thing" : "some things"} to look at:</b>&nbsp;${issues.join(", ")}.`
+    : `<b>Everything works.</b>&nbsp;Radio${pct != null ? ", battery" : ""} and airtime are fine${state.neighbors.length ? `, ${state.neighbors.length} neighbour${state.neighbors.length > 1 ? "s" : ""} heard directly` : ""}.`;
+  ov.append(h);
+  if (!state.stats) { ov.append(el("div", { className: "muted", textContent: "Fetching…" })); return; }
+  const tiles = el("div", { className: "tiles" });
+  const tile = (k, v, x, bar) => { const t = el("div", { className: "tile" }); t.innerHTML = `<span class="k">${k}</span><span class="v">${v}</span>${x ? `<span class="x">${x}</span>` : ""}${bar != null ? `<div class="bar"><i style="width:${Math.min(100, bar)}%"></i></div>` : ""}`; tiles.append(t); };
+  const mv = statVal(49);
+  if (pct != null || mv) tile("Battery", pct != null ? pct + " %" : (mv / 1000).toFixed(2) + " V", [mv ? (mv / 1000).toFixed(2) + " V" : "", statVal(81) != null ? ENERGY[statVal(81)] : ""].filter(Boolean).join(" · "));
+  if (statVal(46) != null) tile("Radio", `SF${statVal(46)} <small>${statVal(47) ?? ""} kHz</small>`, [statVal(45) ? fmt(statVal(45), "MHz") : "", statVal(48) != null ? statVal(48) + " dBm" : ""].filter(Boolean).join(" · "));
+  if (duty != null) tile("Airtime, last hour", `${(duty / 10).toFixed(1)} % <small>of 10 %</small>`, null, duty);
+  if (noise != null) tile("Noise floor", `${noise} <small>dBm</small>`, noise < -110 ? "Quiet" : noise < -100 ? "Some noise" : "Noisy");
+  if (statVal(5) != null) tile("Links", String(statVal(5)), statVal(72) != null ? `DHT: ${statVal(72)} contacts` : "TCP, serial, Wi-Fi");
+  if (statVal(61) != null) tile("Mailbox", `${statVal(61)} <small>stored</small>`, statVal(60) ? `for ${statVal(60)} recipients` : "");
+  if (statVal(2) != null) tile("Known nodes", String(statVal(2)), statVal(3) != null ? `${statVal(3)} routes` : "");
+  if (statVal(1) != null) tile("Uptime", fmt(statVal(1), "time"), statVal(7) != null ? fmt(statVal(7), "role") : "");
+  ov.append(tiles);
+
+  const two = el("div", { className: "two" });
+  const ch = el("div", { className: "card" });
+  ch.append(el("h4", {}, "Airtime", el("span", { className: "grow" }), el("span", { className: "muted", style: "font-size:12px;font-weight:500", textContent: "share of the legal 10 %" })));
+  const hist = state.airHist.slice(-120);
+  if (hist.length < 2) ch.append(el("p", { className: "cardnote", textContent: "Collecting… the graph fills in while Må:rse is open." }));
+  else {
+    const { line, area } = sparkline(hist.map(x => x.duty), 600, 120, 100);
+    const c = el("div", { className: "chart" });
+    c.innerHTML = `<svg viewBox="0 0 600 120" preserveAspectRatio="none" role="img" aria-label="Airtime over time against the 10 percent limit">
+      <line x1="0" y1="8" x2="600" y2="8" stroke="var(--signal)" stroke-dasharray="5 5" stroke-width="1.2" vector-effect="non-scaling-stroke"/>
+      <path d="${area}" fill="var(--accent)" opacity=".15"/><path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+      <div class="axis"><span>${new Date(hist[0].t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span><span class="lim">legal limit 10 %</span><span>now · ${(hist[hist.length - 1].duty / 10).toFixed(1)} %</span></div>`;
+    ch.append(c);
+    const first = hist[0], last = hist[hist.length - 1];
+    ch.append(el("p", { className: "cardnote", textContent: `Since ${new Date(first.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}: ${last.rx - first.rx} packets received, ${last.tx - first.tx} sent.` }));
+  }
+  const nbc = el("div", { className: "card" });
+  nbc.append(el("h4", {}, "Neighbours", el("span", { className: "tag", textContent: "heard directly" })));
+  if (!state.neighbors.length) nbc.append(el("p", { className: "cardnote", textContent: "No direct neighbours heard yet." }));
+  else {
+    const g = el("div", { className: "nbr" });
+    for (const x of [...state.neighbors].sort((p, q) => q.snr - p.snr).slice(0, 8)) {
+      const addr = [...state.nodeInfo.keys(), ...state.contacts.keys()].find(a => a.startsWith(x.prefix));
+      const w = Math.max(4, Math.min(100, (x.snr + 12) / 22 * 100)), weakx = x.snr < -7;
+      const nm = el("span", { textContent: addr ? label(addr) : "#" + x.prefix, style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap" + (addr ? ";cursor:pointer" : "") });
+      if (addr) nm.onclick = () => openNode(addr);
+      g.append(nm, el("span", { className: "snrbar" + (weakx ? " weak" : "") }, el("i", { style: `width:${w}%` })),
+        el("span", { className: "snr" + (weakx ? " weak" : ""), textContent: (x.snr > 0 ? "+" : "") + x.snr + " dB" }),
+        el("span", { className: "seen", textContent: x.age < 60 ? x.age + " s" : Math.round(x.age / 60) + " m" }));
+    }
+    nbc.append(g, el("p", { className: "cardnote", textContent: "Signal-to-noise: a longer bar is better. Below about −7 dB, packets start to get lost." }));
+  }
+  two.append(ch, nbc);
+  ov.append(two);
+  const tg = el("div", { className: "toolgrid" });
+  for (const [ic, t, f] of [["i-log", "Activity", () => setView("activity")], ["i-diag", "Trace route", () => setView("diag")], ["i-status", "All counters", () => setView("status")],
+    ["i-range", "Range test", () => setView("range")], ["i-pages", "Pages", () => setView("pages")], ["i-wave", "Announce now", () => { transport?.send(Cmd.announce()); log("Announce sent"); }]]) {
+    const x = el("button"); x.innerHTML = `<svg class="i"><use href="#${ic}"/></svg>${t}`; x.onclick = f; tg.append(x);
+  }
+  ov.append(tg);
+}
+
+// ---------- activity ----------
+var ACT_KINDS = [
+  ["bad", /error|fail|could not|not delivered|denied|timeout|lost|invalid|refused|no answer|not acknowledged/i],
+  ["ok", /deliver|acknowledg|✓|received|joined|connected to|installed/i],
+  ["sig", /mailbox|carr/i],
+  ["acc", /heard|announce|route|trace|path|neighbour|node /i],
+];
+function actKind(t) { for (const [k, re] of ACT_KINDS) if (re.test(t)) return k; return ""; }
+function pushActivity(s) {
+  if (!state.activity) state.activity = [];
+  state.activity.push({ t: new Date(), text: s, kind: actKind(s) });
+  if (state.activity.length > 600) state.activity.shift();
+  if (state.view === "activity") { clearTimeout(state.actTimer); state.actTimer = setTimeout(renderChat, 250); }
+}
+state.actFilter = "all";
+function renderActivity(box) {
+  $("chat-title").textContent = "Activity";
+  $("chat-sub").textContent = "Everything your node and Må:rse do, newest first. Kept while this page is open.";
+  const bar = el("div", { className: "filters", style: "padding:0 0 10px" });
+  const F = [["all", "All"], ["msg", "Messages"], ["acc", "Routing"], ["links", "Links"], ["bad", "Problems"]];
+  for (const [k, t] of F) {
+    const n = k === "bad" ? state.activity.filter(x => x.kind === "bad").length : 0;
+    const b = el("button", { textContent: t + (n ? " " + n : ""), className: state.actFilter === k ? "on" : "" });
+    b.onclick = () => { state.actFilter = k; renderChat(); }; bar.append(b);
+  }
+  const exp = el("button", { textContent: "Export" });
+  exp.onclick = () => { const blob = new Blob([state.activity.map(x => x.t.toISOString() + "  " + x.text).join("\n")], { type: "text/plain" }); const u = URL.createObjectURL(blob); const a = el("a", { href: u, download: "maarse-activity.txt" }); a.click(); setTimeout(() => URL.revokeObjectURL(u), 2000); };
+  bar.append(el("span", { className: "live", style: "margin-left:auto", textContent: "Live" }), exp);
+  box.append(bar);
+  const list = state.activity.filter(x => {
+    const f = state.actFilter;
+    if (f === "all") return true;
+    if (f === "msg") return x.kind === "ok" || /message|sent|deliver|file|voice/i.test(x.text);
+    if (f === "links") return /link|connect|backbone|tcp|serial|modem|wi-?fi|meshcore|bluetooth|usb/i.test(x.text);
+    return x.kind === f;
+  });
+  const feed = el("div", { className: "feed" });
+  const ICON = { ok: "i-send", bad: "i-x", sig: "i-box", acc: "i-wave", "": "i-status" };
+  for (const x of list.slice().reverse().slice(0, 300)) {
+    const r = el("div", { className: "ev" + (x.kind === "bad" ? " problem" : "") });
+    r.innerHTML = `<span class="ic ${x.kind}"><svg class="i s"><use href="#${ICON[x.kind]}"/></svg></span>`;
+    r.append(el("span", { className: "tx", textContent: x.text }), el("span", { className: "tm", textContent: x.t.toLocaleTimeString() }));
+    feed.append(r);
+  }
+  if (!list.length) feed.append(el("div", { className: "ev" }, el("span"), el("span", { className: "tx muted", textContent: "Nothing yet." })));
+  box.append(feed);
+}
+
+// ---------- map (online: OpenStreetMap tiles via Leaflet) ----------
+var leafletP = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve();
+  if (!leafletP) leafletP = new Promise((res, rej) => {
+    const css = el("link", { rel: "stylesheet", href: "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" });
+    document.head.append(css);
+    const s = el("script", { src: "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" });
+    s.onload = res; s.onerror = () => { leafletP = null; rej(new Error("offline")); };
+    document.head.append(s);
+  });
+  return leafletP;
+}
+function renderMap(box) {
+  $("chat-title").textContent = "Map";
+  $("chat-sub").textContent = "Positions shared in announces. Map tiles: © OpenStreetMap contributors (needs internet).";
+  box.classList.add("mapmode");
+  const div = el("div", { id: "map", style: "flex:1" });
+  box.append(div);
+  loadLeaflet().then(() => drawMap(div)).catch(() => {
+    div.replaceChildren(el("div", { className: "empty" }, el("h2", { textContent: "The map needs internet" }),
+      el("p", { textContent: "Map tiles come from OpenStreetMap. Positions are still listed on each node's page under Nodes." })));
+  });
+}
+function drawMap(div) {
+  if (!div.isConnected) return;
+  const L = window.L;
+  const map = L.map(div, { zoomControl: true });
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap contributors" }).addTo(map);
+  const pts = [];
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#1f6f5c";
+  const add = (lat, lon, prec, title, sub, addr, mine) => {
+    const ll = [lat, lon]; pts.push(ll);
+    const radius = prec === 1 ? 10000 : prec === 2 ? 1000 : 0;
+    if (radius) L.circle(ll, { radius, color: accent, weight: 1, fillOpacity: .12 }).addTo(map);
+    const mk = L.circleMarker(ll, { radius: mine ? 9 : 7, color: "#fff", weight: 2, fillColor: mine ? accent : "#5d6d66", fillOpacity: 1 }).addTo(map);
+    const pop = el("div", {}, el("b", { textContent: title }), el("div", { textContent: sub, style: "font-size:12px;color:#5d6d66" }));
+    if (addr) { const b = el("button", { textContent: "Open node", style: "margin-top:6px" }); b.onclick = () => openNode(addr); pop.append(b); }
+    mk.bindPopup(pop);
+    if (addr && state.mapFocus === addr) setTimeout(() => mk.openPopup(), 300);
+  };
+  const sh = state.sharing;
+  if (sh && sh.prec > 0 && (sh.lat || sh.lon)) add(sh.lat, sh.lon, sh.prec, "You", "Your shared position (" + PRECISION[sh.prec] + ")", null, true);
+  for (const k of state.nodeInfo.values()) {
+    if (!k.position) continue;
+    const sub = [k.hops != null ? (k.hops === 0 ? "direct" : k.hops + " hops") : "", PRECISION[k.position.prec], k.at ? "heard " + ago(k.at) : ""].filter(Boolean).join(" · ");
+    add(k.position.lat, k.position.lon, k.position.prec, label(k.addr), sub, k.addr, false);
+  }
+  const focus = state.mapFocus && state.nodeInfo.get(state.mapFocus)?.position;
+  if (focus) map.setView([focus.lat, focus.lon], 12);
+  else if (pts.length > 1) map.fitBounds(pts, { padding: [40, 40], maxZoom: 13 });
+  else if (pts.length === 1) map.setView(pts[0], 11);
+  else map.setView([56.2, 10.2], 7);
+  state.mapFocus = null;
+  if (!pts.length) {
+    const n = el("div", { className: "mapnote", textContent: "No positions yet. Nodes appear here when they share a position in their announce (Settings › Name, position and telemetry)." });
+    div.append(n);
+  }
+  setTimeout(() => map.invalidateSize(), 50);
+}
+
+$("btn-net").onclick = () => setView("network");
+$("btn-activity").onclick = () => setView("activity");
+$("btn-diag2").onclick = () => { markTab("settings"); setView("diag"); };
+function renderShellView(box) {
+  if (state.view === "network") { renderNetwork(box); return true; }
+  if (state.view === "activity") { renderActivity(box); return true; }
+  if (state.view === "map") { renderMap(box); return true; }
+  if (state.view === "node") { renderNode(box); return true; }
+  return false;
+}
+
 function mobileSide(open) { document.body.classList.toggle("side-closed", !open); }
 $("btn-side").onclick = () => mobileSide(document.body.classList.contains("side-closed"));
 
@@ -4082,7 +4760,7 @@ function pwaNotifyButton() {
   if (!("Notification" in window)) { b.hidden = true; return; }
   b.hidden = false;
   const on = Notification.permission === "granted" && store.get("notify", false);
-  b.textContent = Notification.permission === "denied" ? "Notifications blocked" : on ? "Turn off notifications" : "Turn on notifications";
+  b.innerHTML = `<svg class="i"><use href="#i-bell"/></svg><span>${Notification.permission === "denied" ? "Notifications blocked" : on ? "Turn off notifications" : "Turn on notifications"}<small>For new messages</small></span>`;
   b.disabled = Notification.permission === "denied";
   b.title = "Show a notification when a message arrives while Må:rse is in the background";
 }

@@ -1,0 +1,875 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Må:rse Operator Console</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout concept: a field-radio console. A telemetry bar runs across the top of every
+     screen like an instrument panel; panels are square-cornered with hairlines; every number,
+     address and time is set in the monospace face. System fonts only (the client is offline). */
+  :root {
+    --page: #e6eae8; --bg: #f3f5f4; --panel: #ffffff; --panel-2: #edf1ef; --ink: #0f1714; --muted: #54645d; --faint: #85958e;
+    --line: #d2dad6; --line-2: #e4e9e6; --accent: #13795f; --accent-ink: #ffffff; --accent-soft: #d6ece3;
+    --amber: #9c5f08; --amber-soft: #fbeed6; --red: #b23b22; --red-soft: #f8e1da; --ok: #23804c; --ok-soft: #dcefe3;
+    --mc: #6a4fb3; --mc-soft: #ece6f8; --mine: #e2f0ea; --frame: #c4cec9;
+    --shadow: 0 1px 2px rgba(15, 23, 20, .06), 0 10px 28px rgba(15, 23, 20, .10);
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+    --r: 6px;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page: #050807; --bg: #0a0f0d; --panel: #111915; --panel-2: #17211c; --ink: #dfe9e4; --muted: #8b9d95; --faint: #61736b;
+      --line: #24322c; --line-2: #1b2621; --accent: #4fd1a5; --accent-ink: #04120c; --accent-soft: #123529;
+      --amber: #f0b252; --amber-soft: #33280f; --red: #f08a6c; --red-soft: #3a1d16; --ok: #6fd29f; --ok-soft: #143022;
+      --mc: #b9a3f0; --mc-soft: #2a2343; --mine: #15302a; --frame: #24322c;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 28px rgba(0, 0, 0, .45);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --page: #050807; --bg: #0a0f0d; --panel: #111915; --panel-2: #17211c; --ink: #dfe9e4; --muted: #8b9d95; --faint: #61736b;
+    --line: #24322c; --line-2: #1b2621; --accent: #4fd1a5; --accent-ink: #04120c; --accent-soft: #123529;
+    --amber: #f0b252; --amber-soft: #33280f; --red: #f08a6c; --red-soft: #3a1d16; --ok: #6fd29f; --ok-soft: #143022;
+    --mc: #b9a3f0; --mc-soft: #2a2343; --mine: #15302a; --frame: #24322c;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 28px rgba(0, 0, 0, .45);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 var(--font);
+         padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 64px; }
+  svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  svg.s { width: 13px; height: 13px; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .cap { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+
+  /* ---------- review sheet ---------- */
+  .sheet { max-width: 1232px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .intro { display: grid; gap: 10px; max-width: 760px; }
+  .intro h1 { margin: 0; font-size: 28px; line-height: 1.15; text-wrap: balance; }
+  .intro h1 .colon, .brand .colon { color: var(--accent); }
+  .intro p { margin: 0; color: var(--muted); max-width: 65ch; font-size: 15px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); padding: 2px; }
+  .seg button { border: 0; background: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; color: var(--muted); }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+  .toolbar a { color: var(--accent); font-size: 14px; }
+  .sheet > section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; }
+  .sheet h2 { margin: 0; font: 600 12px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .phones { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 28px 24px; justify-items: center; }
+  figure { margin: 0; display: grid; gap: 10px; width: min(360px, 100%); align-content: start; }
+  figcaption { font-size: 13px; color: var(--muted); }
+  figcaption b { color: var(--ink); }
+  .wide { overflow-x: auto; padding-bottom: 8px; min-width: 0; }
+  .wide figure { width: 1200px; }
+  .hint-scroll { font-size: 13px; color: var(--muted); display: none; }
+  @media (max-width: 1260px) { .hint-scroll { display: block; } }
+
+  /* ---------- phone ---------- */
+  .phone { width: 100%; height: 740px; background: var(--bg); border: 1px solid var(--frame); border-radius: 28px; overflow: hidden;
+           display: flex; flex-direction: column; box-shadow: var(--shadow); position: relative; }
+  .os { height: 26px; flex: none; display: flex; justify-content: space-between; align-items: center; padding: 0 22px; font-size: 12px; font-weight: 600; background: var(--panel); }
+  .scroll { flex: 1; overflow: auto; min-height: 0; }
+  /* The telemetry bar: the persistent status element of this direction. */
+  .tele { flex: none; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .tele .who { display: flex; align-items: center; gap: 8px; padding: 6px 12px 4px; font-size: 12px; white-space: nowrap; overflow: hidden; }
+  .tele .who b { font-family: var(--mono); font-size: 12px; letter-spacing: .02em; }
+  .tele .who .grow { flex: 1; }
+  .tele .cells { display: grid; grid-template-columns: repeat(6, 1fr); border-top: 1px solid var(--line-2); }
+  .tele .cell { padding: 4px 0 5px 10px; display: grid; gap: 0; border-left: 1px solid var(--line-2); min-width: 0; }
+  .tele .cell:first-child { border-left: 0; }
+  .tele .cell .cap { font-size: 9px; }
+  .tele .cell .num { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .tele .cell.warn .num { color: var(--amber); }
+  .led { width: 8px; height: 8px; border-radius: 2px; background: var(--ok); flex: none; }
+  .led.amb { background: var(--amber); } .led.red { background: var(--red); } .led.off { background: var(--faint); }
+  .tabs { flex: none; display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--line); background: var(--panel); padding-bottom: 8px; }
+  .tabs a { display: grid; justify-items: center; gap: 2px; padding-top: 7px; font-size: 10.5px; color: var(--muted); text-decoration: none; border-top: 2px solid transparent; position: relative; }
+  .tabs a.on { color: var(--ink); border-top-color: var(--accent); font-weight: 600; }
+  .tabs a.on svg { color: var(--accent); }
+  .tabs a .badge { position: absolute; top: 3px; left: calc(50% + 6px); }
+  .head { flex: none; display: flex; align-items: center; gap: 6px; padding: 10px 12px 8px; }
+  .head h3 { margin: 0; font-size: 19px; flex: 1; letter-spacing: -.005em; }
+  .ibtn { width: 32px; height: 32px; border-radius: var(--r); display: grid; place-items: center; border: 1px solid var(--line); background: var(--panel); cursor: pointer; }
+  .ibtn.bare { border-color: transparent; background: none; }
+  .badge { min-width: 17px; height: 17px; padding: 0 4px; border-radius: 4px; background: var(--accent); color: var(--accent-ink); font: 700 10.5px var(--mono); display: inline-grid; place-items: center; }
+  .badge.n { background: var(--panel-2); color: var(--muted); }
+  .tag { display: inline-flex; align-items: center; gap: 3px; font: 600 10px var(--mono); letter-spacing: .04em; text-transform: uppercase; padding: 1px 5px;
+         border-radius: 3px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); background: var(--ok-soft); }
+  .tag.amb { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); background: var(--amber-soft); }
+  .tag.red { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); background: var(--red-soft); }
+  .tag.acc { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--accent-soft); }
+  .tag.mc { color: var(--mc); border-color: color-mix(in srgb, var(--mc) 40%, transparent); background: var(--mc-soft); }
+  .pad { padding: 0 12px 14px; display: grid; gap: 10px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); }
+  .panel > .ph { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line-2); }
+  .panel > .ph .grow { flex: 1; }
+  .panel > .pb { padding: 8px 10px; display: grid; gap: 6px; }
+  .alert { display: grid; grid-template-columns: 8px 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; font-size: 13px; border-top: 1px solid var(--line-2); }
+  .alert:first-of-type { border-top: 0; }
+  .alert .num { font-size: 11.5px; color: var(--muted); }
+  .spark { width: 100%; height: 54px; display: block; }
+  .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; }
+  .kpi { padding: 6px 10px; border-left: 1px solid var(--line-2); display: grid; }
+  .kpi:first-child { border-left: 0; }
+  .kpi .num { font-size: 17px; font-weight: 600; }
+  .kpi .num small { font-size: 11px; color: var(--muted); font-weight: 500; }
+  table.t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.t th { text-align: left; font: 600 9.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 5px 8px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+  table.t td { padding: 5px 8px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+  table.t tr:last-child td { border-bottom: 0; }
+  table.t .r { text-align: right; }
+  table.t td.num, table.t td .num { font-size: 12px; }
+  .bar { display: inline-block; width: 52px; height: 6px; background: var(--panel-2); border-radius: 1px; vertical-align: middle; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .bar.amb i { background: var(--amber); }
+  .toolrow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .tool { display: grid; justify-items: center; gap: 4px; padding: 8px 2px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); font-size: 11px; }
+  .tool svg { color: var(--accent); }
+  .grp { font: 600 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 10px 12px 4px; display: flex; justify-content: space-between; }
+  .ln { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; padding: 7px 12px; border-bottom: 1px solid var(--line-2); background: var(--panel); }
+  .ln.sel { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  .ln .t { min-width: 0; display: grid; }
+  .ln .n { display: flex; gap: 6px; align-items: center; font-weight: 600; font-size: 13.5px; min-width: 0; }
+  .ln .n .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ln .p { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ln .r { display: grid; justify-items: end; gap: 3px; font: 11px var(--mono); color: var(--faint); }
+  .av { width: 30px; height: 30px; border-radius: var(--r); display: grid; place-items: center; font: 700 13px var(--mono); background: var(--panel-2); color: var(--accent); border: 1px solid var(--line); }
+  .av.ch { color: var(--muted); }
+  .av.pv { color: var(--amber); }
+  .av.rp { color: var(--muted); border-style: dashed; }
+  .vf { color: var(--accent); }
+
+  /* conversation */
+  .ch-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .ch-head .t { flex: 1; min-width: 0; display: grid; }
+  .ch-head .t b { display: flex; gap: 5px; align-items: center; font-size: 15px; }
+  .ch-head .t small { font: 11px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+  .daysep { display: flex; align-items: center; gap: 8px; font: 10px var(--mono); letter-spacing: .1em; color: var(--faint); text-transform: uppercase; }
+  .daysep::before, .daysep::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+  .m { max-width: 86%; align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 9px; display: grid; gap: 3px; font-size: 14px; }
+  .m.me { align-self: flex-end; background: var(--mine); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+  .m.fail { border-color: var(--red); background: var(--red-soft); }
+  .m .rt { display: flex; gap: 6px; align-items: center; justify-content: space-between; font: 10.5px var(--mono); color: var(--muted); flex-wrap: wrap; }
+  .m .rt .grow { flex: 1; }
+  .m .acts { display: flex; gap: 6px; margin-top: 2px; }
+  .m .acts button { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .04em; border: 1px solid var(--line); background: var(--panel); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+  .m .acts button.pri { background: var(--red); color: var(--panel); border-color: var(--red); }
+  .insp { border-top: 1px dashed var(--line); margin-top: 4px; padding-top: 5px; display: grid; gap: 2px; font: 11px var(--mono); color: var(--muted); }
+  .insp div { display: grid; grid-template-columns: 44px 1fr; gap: 6px; }
+  .insp b { color: var(--ink); font-weight: 600; }
+  .compose { flex: none; display: flex; gap: 6px; align-items: center; padding: 7px 8px 9px; background: var(--panel); border-top: 1px solid var(--line); }
+  .compose .in { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: var(--r); padding: 7px 10px; color: var(--faint); background: var(--bg); display: flex; justify-content: space-between; font-size: 13.5px; }
+  .compose .in small { font: 10.5px var(--mono); }
+  .send { width: 34px; height: 34px; border: 0; border-radius: var(--r); background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; }
+
+  /* node detail */
+  .nodehero { padding: 10px 12px; display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center; }
+  .nodehero .av { width: 44px; height: 44px; font-size: 16px; }
+  .nodehero h4 { margin: 0; font-size: 17px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2); background: var(--panel); }
+  .metrics div { padding: 6px 10px; border-left: 1px solid var(--line-2); display: grid; }
+  .metrics div:nth-child(3n+1) { border-left: 0; }
+  .metrics div:nth-child(n+4) { border-top: 1px solid var(--line-2); }
+  .metrics .num { font-size: 14px; font-weight: 600; }
+  .subtabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); background: var(--panel); padding: 0 6px; }
+  .subtabs a { padding: 8px 10px; font-size: 13px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .subtabs a.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  .row2 { display: grid; grid-template-columns: 1fr auto 13px; gap: 10px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--line-2); font-size: 13px; }
+  .row2:first-child { border-top: 0; }
+  .row2 .t { display: grid; min-width: 0; }
+  .row2 .t span { font-size: 11.5px; color: var(--muted); }
+  .row2 .v { font: 12px var(--mono); color: var(--muted); text-align: right; }
+  .row2 > svg { color: var(--faint); }
+  .note { display: grid; grid-template-columns: 16px 1fr; gap: 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent); background: var(--amber-soft); border-radius: var(--r); font-size: 12.5px; }
+  .note svg { color: var(--amber); margin-top: 2px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 12px; border-radius: var(--r); border: 1px solid var(--line); background: var(--panel); font-weight: 600; font-size: 13px; cursor: pointer; }
+  .btn.pri { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  /* map */
+  .mapwrap { position: relative; flex: 1; min-height: 0; background: var(--panel-2); overflow: hidden; }
+  .mapwrap svg.map { width: 100%; height: 100%; display: block; }
+  .mapchips { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; gap: 5px; flex-wrap: wrap; }
+  .mchip { font: 600 10.5px var(--mono); text-transform: uppercase; letter-spacing: .04em; padding: 4px 8px; border-radius: 4px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
+  .mchip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .mapcard { position: absolute; left: 8px; right: 8px; bottom: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; display: grid; gap: 6px; box-shadow: var(--shadow); }
+  .maplegend { position: absolute; left: 8px; top: 44px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 8px; display: grid; gap: 3px; font: 10.5px var(--mono); color: var(--muted); }
+  .maplegend span { display: flex; align-items: center; gap: 6px; }
+
+  /* settings */
+  .sbox { margin: 0 12px 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--faint); font-size: 13px; display: flex; gap: 8px; align-items: center; }
+  .srow { display: grid; grid-template-columns: 1fr auto auto 13px; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line-2); background: var(--panel); font-size: 13.5px; }
+  .srow .t { display: grid; min-width: 0; }
+  .srow .t span { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .v { font: 12px var(--mono); color: var(--muted); }
+  .srow > svg { color: var(--faint); }
+  .srow.dim { color: var(--faint); }
+  .pending { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--ink); color: var(--bg); font-size: 12.5px; }
+  .pending .grow { flex: 1; }
+  .pending .btn { padding: 4px 10px; font-size: 12px; background: transparent; color: var(--bg); border-color: color-mix(in srgb, var(--bg) 35%, transparent); }
+  .pending .btn.pri { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+  /* ---------- desktop ---------- */
+  .desk { width: 1200px; height: 760px; border: 1px solid var(--frame); border-radius: 10px; overflow: hidden; background: var(--bg); display: grid;
+          grid-template-rows: 32px auto 1fr; box-shadow: var(--shadow); }
+  .chrome { display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--panel-2); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .chrome i { width: 11px; height: 11px; border-radius: 50%; background: var(--line); }
+  .chrome .url { margin-left: 16px; padding: 2px 12px; border-radius: 4px; background: var(--panel); font: 11.5px var(--mono); }
+  .dtele { display: grid; grid-template-columns: 230px repeat(8, 1fr); background: var(--panel); border-bottom: 1px solid var(--line); }
+  .dtele > div { padding: 6px 12px; border-left: 1px solid var(--line-2); display: grid; gap: 1px; min-width: 0; }
+  .dtele > div:first-child { border-left: 0; display: flex; align-items: center; gap: 10px; }
+  .dtele .num { font-size: 13.5px; font-weight: 600; white-space: nowrap; }
+  .dtele .num small { font-size: 11px; color: var(--muted); font-weight: 500; }
+  .dtele .brand { font-weight: 800; font-size: 15px; }
+  .dtele .warn .num { color: var(--amber); }
+  .dapp { display: grid; grid-template-columns: 230px 1fr 320px; min-height: 0; }
+  .dapp.two { grid-template-columns: 230px 1fr; }
+  .dapp.set { grid-template-columns: 230px 250px 1fr; }
+  .side { background: var(--panel); border-right: 1px solid var(--line); overflow: auto; padding: 6px 0 12px; min-height: 0; }
+  .side .sec { font: 600 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 12px 14px 4px; display: flex; justify-content: space-between; align-items: center; }
+  .side a { display: flex; align-items: center; gap: 8px; padding: 5px 14px; font-size: 13.5px; color: var(--ink); text-decoration: none; }
+  .side a .c { margin-left: auto; font: 11px var(--mono); color: var(--faint); }
+  .side a.on { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); font-weight: 600; }
+  .side a.u { font-weight: 650; }
+  .side a .hash { width: 16px; text-align: center; color: var(--faint); font-family: var(--mono); }
+  .main { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .act { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .act .ph { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line-2); }
+  .act .ph b { flex: 1; font-size: 13.5px; }
+  .act .filters { display: flex; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--line-2); flex-wrap: wrap; }
+  .feed { overflow: auto; font: 11.5px/1.4 var(--mono); }
+  .feed div { display: grid; grid-template-columns: 58px 62px 1fr; gap: 6px; padding: 4px 12px; border-bottom: 1px solid var(--line-2); }
+  .feed .tm { color: var(--faint); }
+  .feed .k { font-weight: 700; font-size: 10px; letter-spacing: .04em; padding-top: 1px; }
+  .k.ann { color: var(--muted); } .k.ack { color: var(--accent); } .k.mbx { color: var(--amber); } .k.err { color: var(--red); } .k.lnk { color: var(--ok); } .k.mc { color: var(--mc); }
+  .feed .tx { color: var(--ink); font-family: var(--font); font-size: 12px; }
+  .dash { padding: 14px; display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; overflow: auto; align-content: start; }
+  .c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c5 { grid-column: span 5; } .c6 { grid-column: span 6; } .c7 { grid-column: span 7; } .c8 { grid-column: span 8; } .c12 { grid-column: span 12; }
+  .chart { width: 100%; height: 150px; display: block; }
+  .setcats { background: var(--panel-2); border-right: 1px solid var(--line); overflow: auto; padding: 6px 0; }
+  .setcats .sec { font: 600 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 12px 14px 4px; display: flex; justify-content: space-between; }
+  .setcats a { display: flex; align-items: center; gap: 8px; padding: 5px 14px; font-size: 13.5px; color: var(--ink); text-decoration: none; }
+  .setcats a .c { margin-left: auto; font: 11px var(--mono); color: var(--muted); }
+  .setcats a.on { background: var(--panel); box-shadow: inset 3px 0 0 var(--accent); font-weight: 600; }
+  .sform { padding: 16px 22px; overflow: auto; display: grid; gap: 14px; align-content: start; }
+  .sform h3 { margin: 0; font-size: 19px; display: flex; gap: 8px; align-items: center; }
+  .frow { display: grid; grid-template-columns: 200px 1fr; gap: 14px; align-items: start; padding: 10px 0; border-top: 1px solid var(--line-2); }
+  .frow label { font-size: 13px; font-weight: 600; display: grid; gap: 2px; }
+  .frow label span { font-weight: 400; font-size: 12px; color: var(--muted); }
+  .inp { border: 1px solid var(--line); border-radius: var(--r); padding: 6px 10px; background: var(--panel); font: 13px var(--mono); display: flex; justify-content: space-between; align-items: center; max-width: 360px; }
+  .inp.changed { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+  <symbol id="i-nodes" viewBox="0 0 24 24"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="17" r="2.5"/><path d="M8 8.6l2.8 6.2M16 8.6l-2.8 6.2M8.5 7h7"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14"/></symbol>
+  <symbol id="i-net" viewBox="0 0 24 24"><path d="M12 13v8M8.5 9.5a5 5 0 0 1 7 0M5.5 6.5a9 9 0 0 1 13 0"/><circle cx="12" cy="12.5" r="1.4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></symbol>
+  <symbol id="i-bt" viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></symbol>
+  <symbol id="i-usb" viewBox="0 0 24 24"><path d="M12 3v14M10 6l2-3 2 3M8 9v3l4 2M16 8v3l-4 2"/><circle cx="12" cy="19" r="2"/></symbol>
+  <symbol id="i-host" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M3 13l3-8h12l3 8v6H3zM3 13h5l1 2h6l1-2h5"/></symbol>
+  <symbol id="i-carry" viewBox="0 0 24 24"><rect x="3" y="9" width="10" height="9" rx="1"/><path d="M3 12.5h10M15 13.5h6M18 10.5l3 3-3 3"/></symbol>
+  <symbol id="i-check2" viewBox="0 0 24 24"><path d="M2 12.5l4 4 9-9M11 16l.5.5 9.5-9.5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3.5l9.5 17h-19zM12 10v4.5M12 17.5v.5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM8.5 12l2.5 2.5 4.5-5"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11l-8.5 8.5a5 5 0 0 1-7-7L13 4a3.3 3.3 0 0 1 4.7 4.7L9.3 17a1.7 1.7 0 0 1-2.3-2.3L15 7"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2-7z"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14.5 8.5l2 2"/></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h6a3 3 0 0 0 0-6h-4a3 3 0 0 1 0-6h6"/></symbol>
+  <symbol id="i-ruler" viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2"/></symbol>
+  <symbol id="i-page" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 20V11M11 20V5M17 20v-7M3 20h18"/></symbol>
+  <symbol id="i-log" viewBox="0 0 24 24"><path d="M5 6h14M5 10.5h14M5 15h9M5 19.5h6"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2.5 9a15 15 0 0 1 19 0M5.5 12.5a10 10 0 0 1 13 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.3" r=".8"/></symbol>
+  <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-6.5-7-12a7 7 0 0 1 14 0c0 5.5-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z" fill="currentColor"/></symbol>
+  <symbol id="i-bridge" viewBox="0 0 24 24"><path d="M5 8h14l-3-3M19 16H5l3 3"/></symbol>
+  <symbol id="i-radio" viewBox="0 0 24 24"><rect x="3" y="9" width="18" height="11" rx="2"/><path d="M7 9l10-5"/><circle cx="16" cy="14.5" r="2.5"/><path d="M6 13h4M6 16h4"/></symbol>
+  <symbol id="i-admin" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 10.5-4M17 13v3l2 1M20.5 16a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="i-qr" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/></symbol>
+</svg>
+
+<div class="sheet">
+  <header class="intro">
+    <h1>Må<span class="colon">:</span>rse UI · Direction B, operator console</h1>
+    <p>The network comes first. A telemetry bar runs across the top of every screen like an instrument panel, the Network tab is the home screen, and a live activity feed replaces the hidden log. Same five areas and the same homes for every feature as direction A, laid out for people who run repeaters. Example data, English UI.</p>
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Theme">
+        <button type="button" data-t="system" aria-pressed="true">System</button>
+        <button type="button" data-t="light" aria-pressed="false">Light</button>
+        <button type="button" data-t="dark" aria-pressed="false">Dark</button>
+      </div>
+      <a href="ui-a.html">Compare with direction A, calm messenger</a>
+      <a href="README.md">Inventory and structure (README)</a>
+    </div>
+  </header>
+
+  <section>
+    <h2>Phone (Android app)</h2>
+    <div class="phones">
+
+      <!-- 1. Network home -->
+      <figure>
+        <div class="phone">
+          <div class="os"><span>12:41</span><span>▲ ▮</span></div>
+          <div class="tele">
+            <div class="who"><span class="led"></span><b>HELTEC V4</b><span class="muted"><svg class="i s" style="vertical-align:-2px"><use href="#i-bt"/></svg> BLE −61 dBm</span><span class="grow"></span><span class="mono muted" style="font-size:11px">up 3h12m</span></div>
+            <div class="cells">
+              <div class="cell"><span class="cap">Bat</span><span class="num">87%</span></div>
+              <div class="cell"><span class="cap">Radio</span><span class="num">SF9</span></div>
+              <div class="cell"><span class="cap">Air</span><span class="num">2.3%</span></div>
+              <div class="cell"><span class="cap">Noise</span><span class="num">−118</span></div>
+              <div class="cell"><span class="cap">Wi-Fi</span><span class="num">↔ ok</span></div>
+              <div class="cell"><span class="cap">Mbx</span><span class="num">2</span></div>
+            </div>
+          </div>
+          <div class="head"><h3>Network</h3><button class="ibtn" aria-label="Announce"><svg class="i"><use href="#i-net"/></svg></button></div>
+          <div class="scroll"><div class="pad">
+            <div class="panel">
+              <div class="ph"><span class="cap">Needs attention</span><span class="grow"></span><span class="badge">2</span></div>
+              <div class="alert"><span class="led red"></span><span>Recovery phrase not written down</span><span class="num">Settings</span></div>
+              <div class="alert"><span class="led amb"></span><span>Skanderborg RPT is weak, −8.0 dB</span><span class="num">6 min</span></div>
+            </div>
+            <div class="panel">
+              <div class="ph"><span class="cap">Airtime · last 60 min</span><span class="grow"></span><span class="num" style="font-size:12px">2.3% <span class="muted">of 10%</span></span></div>
+              <div class="pb">
+                <svg class="spark" viewBox="0 0 300 54" preserveAspectRatio="none" role="img" aria-label="Airtime per minute, last hour, peak 4.1 percent">
+                  <title>Airtime per minute: 0.8 to 4.1%, limit 10%</title>
+                  <line x1="0" y1="6" x2="300" y2="6" stroke="var(--amber)" stroke-width="1" stroke-dasharray="3 3"/>
+                  <line x1="0" y1="53" x2="300" y2="53" stroke="var(--line)" stroke-width="1"/>
+                  <path d="M0 48 L20 46 L40 47 L60 42 L80 44 L100 38 L120 45 L140 43 L160 34 L180 40 L200 44 L220 41 L240 36 L260 42 L280 39 L300 41 L300 53 L0 53Z" fill="var(--accent)" opacity=".14"/>
+                  <path d="M0 48 L20 46 L40 47 L60 42 L80 44 L100 38 L120 45 L140 43 L160 34 L180 40 L200 44 L220 41 L240 36 L260 42 L280 39 L300 41" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+                  <circle cx="298" cy="41" r="3" fill="var(--accent)" stroke="var(--panel)" stroke-width="1.5"/>
+                </svg>
+                <div style="display:flex;justify-content:space-between" class="cap"><span>−60 min</span><span style="color:var(--amber)">limit 10%</span><span>now</span></div>
+              </div>
+              <div class="kpis" style="border-top:1px solid var(--line-2)">
+                <div class="kpi"><span class="cap">Packets in</span><span class="num">1 204</span></div>
+                <div class="kpi"><span class="cap">Out</span><span class="num">388</span></div>
+                <div class="kpi"><span class="cap">Forwarded</span><span class="num">291</span></div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="ph"><span class="cap">Neighbours</span><span class="grow"></span><span class="cap">heard directly</span></div>
+              <table class="t"><thead><tr><th>Node</th><th class="r">SNR</th><th>Link</th><th class="r">Seen</th></tr></thead><tbody>
+                <tr><td>Mols RPT</td><td class="r num">+7.5</td><td><span class="bar"><i style="width:90%"></i></span></td><td class="r num">20s</td></tr>
+                <tr><td>Aarhus N anchor</td><td class="r num">+3.0</td><td><span class="bar"><i style="width:70%"></i></span></td><td class="r num">1m</td></tr>
+                <tr><td>~Jonas</td><td class="r num">−2.5</td><td><span class="bar"><i style="width:45%"></i></span></td><td class="r num">40s</td></tr>
+                <tr><td>Skanderborg RPT</td><td class="r num" style="color:var(--amber)">−8.0</td><td><span class="bar amb"><i style="width:20%"></i></span></td><td class="r num">6m</td></tr>
+              </tbody></table>
+            </div>
+            <div class="panel">
+              <div class="ph"><span class="cap">Links</span></div>
+              <div class="row2"><div class="t">Wi-Fi backbone<span>Hotspot "Pixel" → 10.8.0.2:4242</span></div><span class="tag ok">up 2h14m</span><svg class="i s"><use href="#i-chev"/></svg></div>
+              <div class="row2"><div class="t">My mailbox<span>Aarhus N anchor · 2 waiting for me</span></div><span class="tag acc">fetch</span><svg class="i s"><use href="#i-chev"/></svg></div>
+            </div>
+            <div class="toolrow">
+              <div class="tool"><svg class="i"><use href="#i-route"/></svg>Trace</div>
+              <div class="tool"><svg class="i"><use href="#i-ruler"/></svg>Range</div>
+              <div class="tool"><svg class="i"><use href="#i-page"/></svg>Pages</div>
+              <div class="tool"><svg class="i"><use href="#i-chart"/></svg>Counters</div>
+              <div class="tool"><svg class="i"><use href="#i-log"/></svg>Activity</div>
+            </div>
+          </div></div>
+          <nav class="tabs"><a class="on"><svg class="i"><use href="#i-net"/></svg>Network<span class="badge">2</span></a><a><svg class="i"><use href="#i-chat"/></svg>Chats<span class="badge">4</span></a><a><svg class="i"><use href="#i-nodes"/></svg>Nodes</a><a><svg class="i"><use href="#i-map"/></svg>Map</a><a><svg class="i"><use href="#i-gear"/></svg>Settings</a></nav>
+        </div>
+        <figcaption><b>Network (home).</b> Opens on the state of the mesh: what needs attention, airtime against the legal limit, neighbours and links. The telemetry bar above is identical on every screen and taps open the connection details.</figcaption>
+      </figure>
+
+      <!-- 2. Chats -->
+      <figure>
+        <div class="phone">
+          <div class="os"><span>12:41</span><span>▲ ▮</span></div>
+          <div class="tele">
+            <div class="who"><span class="led"></span><b>HELTEC V4</b><span class="muted"><svg class="i s" style="vertical-align:-2px"><use href="#i-bt"/></svg> BLE −61 dBm</span><span class="grow"></span><span class="mono muted" style="font-size:11px">up 3h12m</span></div>
+            <div class="cells">
+              <div class="cell"><span class="cap">Bat</span><span class="num">87%</span></div><div class="cell"><span class="cap">Radio</span><span class="num">SF9</span></div><div class="cell"><span class="cap">Air</span><span class="num">2.3%</span></div><div class="cell"><span class="cap">Noise</span><span class="num">−118</span></div><div class="cell"><span class="cap">Wi-Fi</span><span class="num">↔ ok</span></div><div class="cell"><span class="cap">Mbx</span><span class="num">2</span></div>
+            </div>
+          </div>
+          <div class="head"><h3>Chats</h3><button class="ibtn bare" aria-label="Search"><svg class="i"><use href="#i-search"/></svg></button><button class="ibtn" aria-label="New"><svg class="i"><use href="#i-plus"/></svg></button></div>
+          <div class="scroll">
+            <div class="grp"><span>Channels</span><span>4</span></div>
+            <div class="ln"><span class="av ch">#</span><div class="t"><div class="n"><span class="nm">public</span></div><div class="p">~Jonas: Anyone on SF9 near Silkeborg tonight?</div></div><div class="r">12:38<span class="badge">3</span></div></div>
+            <div class="ln"><span class="av pv"><svg class="i s"><use href="#i-lock"/></svg></span><div class="t"><div class="n"><span class="nm">Family</span><span class="tag">private</span></div><div class="p">~Ole: Picture</div></div><div class="r">11:50<span class="badge">1</span></div></div>
+            <div class="ln"><span class="av ch">#</span><div class="t"><div class="n"><span class="nm">aarhus</span><span class="tag">@midtjylland</span></div><div class="p">~Sara: The repeater on the tower is back</div></div><div class="r">10:12</div></div>
+            <div class="ln"><span class="av ch">#</span><div class="t"><div class="n"><span class="nm">hike</span><span class="tag">@nordjylland</span><span class="tag mc">⇄ MC</span></div><div class="p">Per (MeshCore): Trail closed at Rubjerg</div></div><div class="r">yday</div></div>
+            <div class="grp"><span>Direct</span><span>4</span></div>
+            <div class="ln"><span class="av">M</span><div class="t"><div class="n"><span class="nm">~Mette</span><svg class="i s vf"><use href="#i-shield"/></svg></div><div class="p">You: Bring a spare 18650</div></div><div class="r">12:33<span class="tag">sending</span></div></div>
+            <div class="ln"><span class="av">J</span><div class="t"><div class="n"><span class="nm">~Jonas</span></div><div class="p">Voice message · 0:12</div></div><div class="r">yday</div></div>
+            <div class="ln"><span class="av">A</span><div class="t"><div class="n"><span class="nm">~Anna</span></div><div class="p">You: Thanks for the antenna!</div></div><div class="r">Mon<span class="tag amb">in mbx</span></div></div>
+            <div class="ln"><span class="av">O</span><div class="t"><div class="n"><span class="nm">~Ole</span><svg class="i s vf"><use href="#i-shield"/></svg></div><div class="p">You: Call me when you are home</div></div><div class="r">Sun<span class="tag ok">dlvd</span></div></div>
+            <div class="grp"><span>MeshCore rooms</span><span>1</span></div>
+            <div class="ln"><span class="av rp">R</span><div class="t"><div class="n"><span class="nm">Aarhus Room</span><span class="tag mc">MC</span></div><div class="p">Log in to read · room server</div></div><div class="r"><svg class="i s"><use href="#i-chev"/></svg></div></div>
+          </div>
+          <nav class="tabs"><a><svg class="i"><use href="#i-net"/></svg>Network<span class="badge">2</span></a><a class="on"><svg class="i"><use href="#i-chat"/></svg>Chats<span class="badge">4</span></a><a><svg class="i"><use href="#i-nodes"/></svg>Nodes</a><a><svg class="i"><use href="#i-map"/></svg>Map</a><a><svg class="i"><use href="#i-gear"/></svg>Settings</a></nav>
+        </div>
+        <figcaption><b>Chats.</b> Grouped by kind with counts, denser rows, and the last outgoing state as a short code on the right. MeshCore rooms sit in the same list with a clear tag instead of a separate sidebar.</figcaption>
+      </figure>
+
+      <!-- 3. Conversation -->
+      <figure>
+        <div class="phone">
+          <div class="os"><span>12:41</span><span>▲ ▮</span></div>
+          <div class="tele">
+            <div class="who"><span class="led"></span><b>HELTEC V4</b><span class="muted"><svg class="i s" style="vertical-align:-2px"><use href="#i-bt"/></svg> BLE −61 dBm</span><span class="grow"></span><span class="mono muted" style="font-size:11px">up 3h12m</span></div>
+            <div class="cells">
+              <div class="cell"><span class="cap">Bat</span><span class="num">87%</span></div><div class="cell"><span class="cap">Radio</span><span class="num">SF9</span></div><div class="cell"><span class="cap">Air</span><span class="num">2.3%</span></div><div class="cell"><span class="cap">Noise</span><span class="num">−118</span></div><div class="cell"><span class="cap">Wi-Fi</span><span class="num">↔ ok</span></div><div class="cell"><span class="cap">Mbx</span><span class="num">2</span></div>
+            </div>
+          </div>
+          <div class="ch-head"><button class="ibtn bare" aria-label="Back"><svg class="i"><use href="#i-back"/></svg></button><span class="av">M</span><div class="t"><b>~Mette <svg class="i s vf"><use href="#i-shield"/></svg></b><small>4c1e90aa · 2 hops via Mols RPT · 3m</small></div><button class="ibtn bare" aria-label="Call"><svg class="i"><use href="#i-phone"/></svg></button><button class="ibtn bare" aria-label="More"><svg class="i"><use href="#i-more"/></svg></button></div>
+          <div class="scroll"><div class="log">
+            <div class="daysep">Today</div>
+            <div class="m">Are you going up to Mols Bjerge today?<div class="rt"><span>12:02</span><span>2 hops · +7.5 dB</span></div></div>
+            <div class="m me">Yes, leaving at 13. Bringing the solar repeater.<div class="rt"><span>12:04</span><span class="tag ok"><svg class="i s"><use href="#i-check2"/></svg>Delivered</span></div></div>
+            <div class="m me">Can you check if the anchor at Aarhus N is up?<div class="rt"><span>12:10</span><span class="tag ok"><svg class="i s"><use href="#i-box"/></svg>From mailbox</span></div>
+              <div class="insp"><div><span>12:10</span><b>sent → Mols RPT</b></div><div><span>12:11</span><span>no answer, 3 tries</span></div><div><span>12:11</span><span>left at Aarhus N anchor</span></div><div><span>12:26</span><b>picked up, acknowledged</b></div></div></div>
+            <div class="m me"><div style="display:flex;gap:8px;align-items:center"><svg class="i"><use href="#i-play"/></svg><span class="mono" style="font-size:12px">▁▃▅▂▆▃▁▄▂ 0:08</span></div><div class="rt"><span>12:24</span><span class="tag ok"><svg class="i s"><use href="#i-carry"/></svg>Carried</span></div></div>
+            <div class="m me fail">See you at the parking lot<div class="rt"><span>12:29</span><span class="tag red"><svg class="i s"><use href="#i-warn"/></svg>No ack</span></div><div class="acts"><button class="pri">Retry</button><button>To mailbox</button><button>Trace</button></div></div>
+            <div class="m me">Bring a spare 18650<div class="rt"><span>12:33</span><span class="tag"><svg class="i s"><use href="#i-clock"/></svg>Sending 1/3</span></div></div>
+          </div></div>
+          <div class="compose"><button class="ibtn bare" aria-label="Attach"><svg class="i"><use href="#i-clip"/></svg></button><div class="in">Message ~Mette<small>0/180 B</small></div><button class="ibtn bare" aria-label="Voice"><svg class="i"><use href="#i-mic"/></svg></button><button class="send" aria-label="Send"><svg class="i"><use href="#i-send"/></svg></button></div>
+        </div>
+        <figcaption><b>Conversation.</b> Every message shows hops and signal; tapping one expands an inline route log (shown on the mailbox message). A failed message offers Retry, To mailbox and Trace right where it failed.</figcaption>
+      </figure>
+
+      <!-- 4. Node detail -->
+      <figure>
+        <div class="phone">
+          <div class="os"><span>12:41</span><span>▲ ▮</span></div>
+          <div class="tele">
+            <div class="who"><span class="led"></span><b>HELTEC V4</b><span class="muted"><svg class="i s" style="vertical-align:-2px"><use href="#i-bt"/></svg> BLE −61 dBm</span><span class="grow"></span><span class="mono muted" style="font-size:11px">up 3h12m</span></div>
+            <div class="cells">
+              <div class="cell"><span class="cap">Bat</span><span class="num">87%</span></div><div class="cell"><span class="cap">Radio</span><span class="num">SF9</span></div><div class="cell"><span class="cap">Air</span><span class="num">2.3%</span></div><div class="cell"><span class="cap">Noise</span><span class="num">−118</span></div><div class="cell"><span class="cap">Wi-Fi</span><span class="num">↔ ok</span></div><div class="cell"><span class="cap">Mbx</span><span class="num">2</span></div>
+            </div>
+          </div>
+          <div class="ch-head"><button class="ibtn bare" aria-label="Back"><svg class="i"><use href="#i-back"/></svg></button><div class="t"><b>Node</b></div><button class="ibtn bare" aria-label="More"><svg class="i"><use href="#i-more"/></svg></button></div>
+          <div class="scroll">
+            <div class="nodehero" style="background:var(--panel)"><span class="av rp">R</span><div style="display:grid;gap:2px;min-width:0"><h4>Mols RPT <span class="tag">Repeater</span><span class="tag acc">You are admin</span></h4><span class="mono muted" style="font-size:11px">9b20 e7c4 115a 3d08 …</span></div></div>
+            <div class="metrics">
+              <div><span class="cap">SNR</span><span class="num">+7.5 dB</span></div><div><span class="cap">RSSI</span><span class="num">−92 dBm</span></div><div><span class="cap">Hops</span><span class="num">1</span></div>
+              <div><span class="cap">Battery</span><span class="num">3.91 V</span></div><div><span class="cap">Uptime</span><span class="num">14d 6h</span></div><div><span class="cap">Seen</span><span class="num">20 s</span></div>
+            </div>
+            <div class="subtabs"><a>Overview</a><a class="on">Manage</a><a>Trace</a><a>Pages</a></div>
+            <div class="pad" style="padding-top:10px">
+              <div class="note"><svg class="i"><use href="#i-warn"/></svg><span>Remote management goes over LoRa and costs airtime. Each read is one request; nothing is fetched until you ask.</span></div>
+              <div class="panel">
+                <div class="row2"><div class="t">Status and counters<span>Fetched 4 min ago</span></div><span class="v">Fetch</span><svg class="i s"><use href="#i-chev"/></svg></div>
+                <div class="row2"><div class="t">Radio<span>Must match the rest of the network</span></div><span class="v">869.525 SF9</span><svg class="i s"><use href="#i-chev"/></svg></div>
+                <div class="row2"><div class="t">Role<span>Forwards everything it hears</span></div><span class="v">Repeater</span><svg class="i s"><use href="#i-chev"/></svg></div>
+                <div class="row2"><div class="t">Regions<span>Forwards channel messages for</span></div><span class="v">dk, midtjylland</span><svg class="i s"><use href="#i-chev"/></svg></div>
+                <div class="row2"><div class="t">Firmware<span>0.9.3 available · about 40 min at SF9</span></div><span class="tag amb">0.9.2</span><svg class="i s"><use href="#i-chev"/></svg></div>
+              </div>
+              <div class="btns"><button class="btn"><svg class="i s"><use href="#i-chat"/></svg>Message</button><button class="btn"><svg class="i s"><use href="#i-route"/></svg>Trace route</button><button class="btn"><svg class="i s"><use href="#i-map"/></svg>On map</button></div>
+            </div>
+          </div>
+          <nav class="tabs"><a><svg class="i"><use href="#i-net"/></svg>Network<span class="badge">2</span></a><a><svg class="i"><use href="#i-chat"/></svg>Chats<span class="badge">4</span></a><a class="on"><svg class="i"><use href="#i-nodes"/></svg>Nodes</a><a><svg class="i"><use href="#i-map"/></svg>Map</a><a><svg class="i"><use href="#i-gear"/></svg>Settings</a></nav>
+        </div>
+        <figcaption><b>Node detail.</b> Remote administration moves off the "This node / Remote: …" dropdowns and into the node itself. The Manage tab appears only where you are an administrator.</figcaption>
+      </figure>
+
+      <!-- 5. Map -->
+      <figure>
+        <div class="phone">
+          <div class="os"><span>12:41</span><span>▲ ▮</span></div>
+          <div class="tele">
+            <div class="who"><span class="led"></span><b>HELTEC V4</b><span class="muted"><svg class="i s" style="vertical-align:-2px"><use href="#i-bt"/></svg> BLE −61 dBm</span><span class="grow"></span><span class="mono muted" style="font-size:11px">up 3h12m</span></div>
+            <div class="cells">
+              <div class="cell"><span class="cap">Bat</span><span class="num">87%</span></div><div class="cell"><span class="cap">Radio</span><span class="num">SF9</span></div><div class="cell"><span class="cap">Air</span><span class="num">2.3%</span></div><div class="cell"><span class="cap">Noise</span><span class="num">−118</span></div><div class="cell"><span class="cap">Wi-Fi</span><span class="num">↔ ok</span></div><div class="cell"><span class="cap">Mbx</span><span class="num">2</span></div>
+            </div>
+          </div>
+          <div class="mapwrap">
+            <svg class="map" viewBox="0 0 360 560" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Positions shared in announces, drawn on a grid around your node">
+              <defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="var(--line)" stroke-width="1"/></pattern></defs>
+              <rect width="360" height="560" fill="url(#grid)"/>
+              <circle cx="170" cy="300" r="80" fill="none" stroke="var(--line)" stroke-dasharray="4 4"/>
+              <circle cx="170" cy="300" r="160" fill="none" stroke="var(--line)" stroke-dasharray="4 4"/>
+              <text x="174" y="216" font-family="ui-monospace, Consolas, monospace" font-size="10" fill="var(--faint)">10 km</text>
+              <text x="174" y="136" font-family="ui-monospace, Consolas, monospace" font-size="10" fill="var(--faint)">20 km</text>
+              <line x1="170" y1="300" x2="268" y2="214" stroke="var(--accent)" stroke-width="2.5"/>
+              <line x1="170" y1="300" x2="150" y2="168" stroke="var(--accent)" stroke-width="2"/>
+              <line x1="170" y1="300" x2="70" y2="350" stroke="var(--accent)" stroke-width="1.5" opacity=".7"/>
+              <line x1="170" y1="300" x2="150" y2="412" stroke="var(--amber)" stroke-width="1.5" stroke-dasharray="3 3"/>
+              <line x1="268" y1="214" x2="300" y2="150" stroke="var(--faint)" stroke-width="1.2"/>
+              <text x="226" y="250" font-family="ui-monospace, Consolas, monospace" font-size="10" fill="var(--muted)">+7.5</text>
+              <text x="132" y="236" font-family="ui-monospace, Consolas, monospace" font-size="10" fill="var(--muted)">+3.0</text>
+              <text x="166" y="372" font-family="ui-monospace, Consolas, monospace" font-size="10" fill="var(--amber)">−8.0</text>
+              <circle cx="300" cy="150" r="22" fill="var(--accent)" opacity=".12"/>
+              <circle cx="300" cy="150" r="5" fill="var(--panel)" stroke="var(--accent)" stroke-width="2"/>
+              <text x="256" y="138" font-family="system-ui, sans-serif" font-size="11" fill="var(--ink)">~Mette</text>
+              <rect x="261" y="207" width="14" height="14" rx="2" fill="var(--panel)" stroke="var(--ink)" stroke-width="2"/>
+              <text x="280" y="226" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="var(--ink)">Mols RPT</text>
+              <rect x="143" y="161" width="14" height="14" rx="2" fill="var(--panel)" stroke="var(--ink)" stroke-width="2"/>
+              <text x="162" y="166" font-family="system-ui, sans-serif" font-size="11" fill="var(--ink)">Aarhus N anchor</text>
+              <circle cx="70" cy="350" r="5" fill="var(--panel)" stroke="var(--accent)" stroke-width="2"/>
+              <text x="50" y="372" font-family="system-ui, sans-serif" font-size="11" fill="var(--ink)">~Jonas</text>
+              <rect x="143" y="405" width="14" height="14" rx="2" fill="var(--panel)" stroke="var(--amber)" stroke-width="2"/>
+              <text x="162" y="417" font-family="system-ui, sans-serif" font-size="11" fill="var(--ink)">Skanderborg RPT</text>
+              <circle cx="170" cy="300" r="9" fill="var(--accent)" stroke="var(--panel)" stroke-width="3"/>
+              <text x="184" y="304" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="var(--ink)">You</text>
+            </svg>
+            <div class="mapchips"><span class="mchip on">All 11</span><span class="mchip">Repeaters</span><span class="mchip">Contacts</span><span class="mchip">Links</span><span class="mchip">24 h</span></div>
+            <div class="maplegend"><span><svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>repeater</span><span><svg width="10" height="10"><circle cx="5" cy="5" r="3.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>person</span><span><svg width="18" height="10"><line x1="0" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="2"/></svg>direct link</span><span><svg width="18" height="10"><circle cx="9" cy="5" r="4.5" fill="currentColor" opacity=".25"/></svg>about 1 km</span></div>
+            <div class="mapcard">
+              <div style="display:flex;align-items:center;gap:8px"><span class="av rp">R</span><div style="flex:1;display:grid"><b>Mols RPT</b><span class="mono muted" style="font-size:11px">18.4 km · 1 hop · +7.5 dB · 20 s</span></div><span class="tag ok">online</span></div>
+              <div class="btns"><button class="btn" style="flex:1">Open node</button><button class="btn" style="flex:1"><svg class="i s"><use href="#i-route"/></svg>Trace</button></div>
+            </div>
+          </div>
+          <nav class="tabs"><a><svg class="i"><use href="#i-net"/></svg>Network<span class="badge">2</span></a><a><svg class="i"><use href="#i-chat"/></svg>Chats<span class="badge">4</span></a><a><svg class="i"><use href="#i-nodes"/></svg>Nodes</a><a class="on"><svg class="i"><use href="#i-map"/></svg>Map</a><a><svg class="i"><use href="#i-gear"/></svg>Settings</a></nav>
+        </div>
+        <figcaption><b>Map.</b> Positions from announces, drawn on a distance grid around you so it works offline with no map tiles. Rounded positions are drawn as a soft circle, not a pin. Direct links carry their SNR.</figcaption>
+      </figure>
+
+      <!-- 6. Settings -->
+      <figure>
+        <div class="phone">
+          <div class="os"><span>12:41</span><span>▲ ▮</span></div>
+          <div class="tele">
+            <div class="who"><span class="led"></span><b>HELTEC V4</b><span class="muted"><svg class="i s" style="vertical-align:-2px"><use href="#i-bt"/></svg> BLE −61 dBm</span><span class="grow"></span><span class="mono muted" style="font-size:11px">up 3h12m</span></div>
+            <div class="cells">
+              <div class="cell"><span class="cap">Bat</span><span class="num">87%</span></div><div class="cell"><span class="cap">Radio</span><span class="num">SF9</span></div><div class="cell"><span class="cap">Air</span><span class="num">2.3%</span></div><div class="cell"><span class="cap">Noise</span><span class="num">−118</span></div><div class="cell"><span class="cap">Wi-Fi</span><span class="num">↔ ok</span></div><div class="cell"><span class="cap">Mbx</span><span class="num">2</span></div>
+            </div>
+          </div>
+          <div class="head"><h3>Settings</h3><button class="ibtn bare" aria-label="My QR code"><svg class="i"><use href="#i-qr"/></svg></button></div>
+          <div class="sbox"><svg class="i s"><use href="#i-search"/></svg>Search settings, e.g. "region"</div>
+          <div class="scroll">
+            <div class="grp"><span>You</span></div>
+            <div class="srow"><div class="t">Name and contact card<span>~Birk · 3f9a51c2…</span></div><span class="tag">node</span><span></span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="srow"><div class="t">Position and telemetry<span>Not shared</span></div><span class="tag">node</span><span class="v">off</span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="srow"><div class="t">Backup and recovery<span>Recovery phrase not written down</span></div><span class="tag red">todo</span><span></span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="srow"><div class="t">Verified contacts<span>Safety numbers you compared</span></div><span class="tag">app</span><span class="v">3</span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="grp"><span>This node · Heltec V4</span><span>fw 0.9.3</span></div>
+            <div class="srow"><div class="t">Radio<span>Må:rse default</span></div><span class="tag">node</span><span class="v">SF9</span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="srow"><div class="t">Role and regions<span>dk, midtjylland</span></div><span class="tag">node</span><span class="v">RPT</span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="srow"><div class="t">Administrators<span>9b20e7c4, 4c1e90aa</span></div><span class="tag">node</span><span class="v">2</span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="srow"><div class="t">Wi-Fi backbone<span>Pixel → 10.8.0.2:4242</span></div><span class="tag">node</span><span class="v">on</span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="srow"><div class="t">Firmware update<span>Signed .uf2 / .bin + manifest</span></div><span class="tag">node</span><span></span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="grp"><span>Host</span><span>not connected</span></div>
+            <div class="srow dim"><div class="t">Backbone, VPN, MeshCore, MQTT, storage, service<span>Connect to a maarse-host to change these</span></div><span class="tag">host</span><span></span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="grp"><span>App</span></div>
+            <div class="srow"><div class="t">Notifications</div><span class="tag">app</span><span class="v">on</span><svg class="i s"><use href="#i-chev"/></svg></div>
+            <div class="srow"><div class="t">Saved connections</div><span class="tag">app</span><span class="v">3</span><svg class="i s"><use href="#i-chev"/></svg></div>
+          </div>
+          <div class="pending"><svg class="i s"><use href="#i-warn"/></svg><span class="grow">1 change waiting: role → Client</span><button class="btn">Undo</button><button class="btn pri">Send to node</button></div>
+          <nav class="tabs"><a><svg class="i"><use href="#i-net"/></svg>Network<span class="badge">2</span></a><a><svg class="i"><use href="#i-chat"/></svg>Chats<span class="badge">4</span></a><a><svg class="i"><use href="#i-nodes"/></svg>Nodes</a><a><svg class="i"><use href="#i-map"/></svg>Map</a><a class="on"><svg class="i"><use href="#i-gear"/></svg>Settings</a></nav>
+        </div>
+        <figcaption><b>Settings.</b> One searchable list. Every row says where it is stored (node, host, app) and its current value. Changes queue up in a bar and are sent together, so nothing changes on the radio by accident.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>Desktop (browser, served by maarse-host)</h2>
+    <p class="hint-scroll">Scroll sideways inside each frame to see the full 1200 px layout.</p>
+
+    <!-- D1 console -->
+    <div class="wide"><figure>
+      <div class="desk">
+        <div class="chrome"><i></i><i></i><i></i><span class="url">127.0.0.1:8080</span></div>
+        <div class="dtele">
+          <div><span class="brand">Må<span class="colon">:</span>rse</span><span class="led"></span><span class="mono" style="font-size:12px">maarse-host · local</span></div>
+          <div><span class="cap">Radio modem</span><span class="num">Heltec V4 <small>COM6</small></span></div>
+          <div><span class="cap">Radio</span><span class="num">SF9 <small>869.525</small></span></div>
+          <div><span class="cap">Airtime 1 h</span><span class="num">2.3% <small>/ 10%</small></span></div>
+          <div><span class="cap">Noise</span><span class="num">−118 <small>dBm</small></span></div>
+          <div><span class="cap">Neighbours</span><span class="num">4</span></div>
+          <div><span class="cap">Backbone</span><span class="num">2 <small>peers</small></span></div>
+          <div><span class="cap">Mailbox</span><span class="num">14 <small>stored</small></span></div>
+          <div><span class="cap">MeshCore</span><span class="num" style="color:var(--mc)">bridged</span></div>
+        </div>
+        <div class="dapp">
+          <nav class="side">
+            <div class="sec"><span>Network</span></div>
+            <a><svg class="i s"><use href="#i-net"/></svg>Overview<span class="c">2 alerts</span></a>
+            <a><svg class="i s"><use href="#i-log"/></svg>Activity</a>
+            <div class="sec"><span>Chats</span><svg class="i s"><use href="#i-plus"/></svg></div>
+            <a class="u"><span class="hash">#</span>public<span class="badge">3</span></a>
+            <a class="u"><span class="hash"><svg class="i s"><use href="#i-lock"/></svg></span>Family<span class="badge">1</span></a>
+            <a><span class="hash">#</span>aarhus<span class="c">@midtjylland</span></a>
+            <a><span class="hash">#</span>hike<span class="c" style="color:var(--mc)">⇄ MC</span></a>
+            <a class="on"><span class="hash">@</span>~Mette<svg class="i s vf"><use href="#i-shield"/></svg></a>
+            <a><span class="hash">@</span>~Jonas</a>
+            <a><span class="hash">@</span>~Anna<span class="c" style="color:var(--amber)">in mbx</span></a>
+            <a><span class="hash">@</span>~Ole</a>
+            <div class="sec"><span>Nodes</span></div>
+            <a><svg class="i s"><use href="#i-user"/></svg>Contacts<span class="c">6</span></a>
+            <a><svg class="i s"><use href="#i-wifi"/></svg>Heard nearby<span class="c">14</span></a>
+            <a><svg class="i s"><use href="#i-radio"/></svg>Repeaters<span class="c">5</span></a>
+            <a><svg class="i s"><use href="#i-bridge"/></svg>MeshCore<span class="c">9</span></a>
+            <div class="sec"><span>More</span></div>
+            <a><svg class="i s"><use href="#i-map"/></svg>Map</a>
+            <a><svg class="i s"><use href="#i-gear"/></svg>Settings<span class="c" style="color:var(--red)">1 todo</span></a>
+          </nav>
+          <div class="main">
+            <div class="ch-head" style="padding:8px 14px"><span class="av">M</span><div class="t"><b>~Mette <svg class="i s vf"><use href="#i-shield"/></svg><span class="tag ok">verified</span></b><small>4c1e 90aa 27f3 b812 … · 2 hops via Mols RPT · heard 3 min ago · 3.88 V</small></div><button class="btn"><svg class="i s"><use href="#i-phone"/></svg>Call</button><button class="btn"><svg class="i s"><use href="#i-route"/></svg>Trace</button><button class="ibtn" aria-label="More"><svg class="i"><use href="#i-more"/></svg></button></div>
+            <div class="scroll"><div class="log" style="padding:14px 18px">
+              <div class="daysep">Today</div>
+              <div class="m">Are you going up to Mols Bjerge today?<div class="rt"><span>12:02</span><span>2 hops · +7.5 dB</span></div></div>
+              <div class="m me">Yes, leaving at 13. Bringing the solar repeater.<div class="rt"><span>12:04</span><span class="tag ok"><svg class="i s"><use href="#i-check2"/></svg>Delivered</span></div></div>
+              <div class="m me">Can you check if the anchor at Aarhus N is up?<div class="rt"><span>12:10</span><span class="tag ok"><svg class="i s"><use href="#i-box"/></svg>Delivered from mailbox</span></div>
+                <div class="insp"><div><span>12:10</span><b>sent → Mols RPT</b></div><div><span>12:11</span><span>no answer after 3 tries</span></div><div><span>12:11</span><span>left in her mailbox at Aarhus N anchor</span></div><div><span>12:26</span><b>picked up, acknowledged</b></div></div></div>
+              <div class="m">The mast is up, picture coming.<div class="rt"><span>12:20</span><span>2 hops · +6.0 dB</span></div></div>
+              <div class="m me"><div style="display:flex;gap:8px;align-items:center"><svg class="i"><use href="#i-play"/></svg><span class="mono" style="font-size:12px">▁▃▅▂▆▃▁▄▂▅▃▁ 0:08</span></div><div class="rt"><span>12:24</span><span class="tag ok"><svg class="i s"><use href="#i-carry"/></svg>Delivered (carried by ~Jonas)</span></div></div>
+              <div class="m me">antenna-photo.jpg · 212 KB<div class="rt"><span>12:27</span><span class="tag amb"><svg class="i s"><use href="#i-box"/></svg>Waiting in mailbox</span></div></div>
+              <div class="m me fail">See you at the parking lot<div class="rt"><span>12:29</span><span class="tag red"><svg class="i s"><use href="#i-warn"/></svg>Not acknowledged</span></div><div class="acts"><button class="pri">Retry</button><button>Leave in mailbox</button><button>Trace route</button></div></div>
+              <div class="m me">Bring a spare 18650<div class="rt"><span>12:33</span><span class="tag"><svg class="i s"><use href="#i-clock"/></svg>Sending, try 1 of 3</span></div></div>
+            </div></div>
+            <div class="compose"><button class="ibtn bare" aria-label="Attach"><svg class="i"><use href="#i-clip"/></svg></button><div class="in">Message ~Mette<small>0/180 bytes</small></div><button class="ibtn bare" aria-label="Voice"><svg class="i"><use href="#i-mic"/></svg></button><button class="send" aria-label="Send"><svg class="i"><use href="#i-send"/></svg></button></div>
+          </div>
+          <aside class="act">
+            <div class="ph"><b>Activity</b><span class="led"></span><span class="cap">live</span></div>
+            <div class="filters"><span class="mchip on">All</span><span class="mchip">Messages</span><span class="mchip">Routing</span><span class="mchip">Links</span><span class="mchip">Errors</span></div>
+            <div class="feed">
+              <div><span class="tm">12:38:02</span><span class="k ann">ANNOUNCE</span><span class="tx">~Jonas, 1 hop, −2.5 dB</span></div>
+              <div><span class="tm">12:37:44</span><span class="k mc">MESHCORE</span><span class="tx">Per → #hike, bridged to Må:rse</span></div>
+              <div><span class="tm">12:33:10</span><span class="k">SEND</span><span class="tx">to ~Mette, try 1 of 3</span></div>
+              <div><span class="tm">12:29:51</span><span class="k err">NO ACK</span><span class="tx">to ~Mette after 3 tries</span></div>
+              <div><span class="tm">12:27:30</span><span class="k mbx">MAILBOX</span><span class="tx">file for ~Mette left at Aarhus N anchor</span></div>
+              <div><span class="tm">12:26:12</span><span class="k ack">ACK</span><span class="tx">~Mette picked up 1 message from mailbox</span></div>
+              <div><span class="tm">12:24:40</span><span class="k ack">ACK</span><span class="tx">voice message carried by ~Jonas</span></div>
+              <div><span class="tm">12:21:05</span><span class="k lnk">LINK UP</span><span class="tx">backbone vps.example.net:4242</span></div>
+              <div><span class="tm">12:19:58</span><span class="k err">LINK DOWN</span><span class="tx">backbone vps.example.net:4242, retry in 30 s</span></div>
+              <div><span class="tm">12:15:00</span><span class="k ann">ANNOUNCE</span><span class="tx">Skanderborg RPT, 1 hop, −8.0 dB</span></div>
+              <div><span class="tm">12:11:31</span><span class="k mbx">MAILBOX</span><span class="tx">message for ~Mette left at Aarhus N anchor</span></div>
+              <div><span class="tm">12:04:09</span><span class="k ack">ACK</span><span class="tx">~Mette, 2 hops</span></div>
+              <div><span class="tm">12:00:00</span><span class="k ann">ANNOUNCE</span><span class="tx">this node (scheduled)</span></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+      <figcaption><b>Desktop console.</b> Telemetry bar across the window; sidebar with the five areas, where chats are listed inline under Chats; conversation in the middle; the Activity feed on the right replaces the collapsed Log strip and puts acknowledgements, mailbox events and link changes in plain words.</figcaption>
+    </figure></div>
+
+    <!-- D2 dashboard -->
+    <div class="wide"><figure>
+      <div class="desk">
+        <div class="chrome"><i></i><i></i><i></i><span class="url">127.0.0.1:8080/#network</span></div>
+        <div class="dtele">
+          <div><span class="brand">Må<span class="colon">:</span>rse</span><span class="led"></span><span class="mono" style="font-size:12px">maarse-host · local</span></div>
+          <div><span class="cap">Radio modem</span><span class="num">Heltec V4 <small>COM6</small></span></div>
+          <div><span class="cap">Radio</span><span class="num">SF9 <small>869.525</small></span></div>
+          <div><span class="cap">Airtime 1 h</span><span class="num">2.3% <small>/ 10%</small></span></div>
+          <div><span class="cap">Noise</span><span class="num">−118 <small>dBm</small></span></div>
+          <div><span class="cap">Neighbours</span><span class="num">4</span></div>
+          <div><span class="cap">Backbone</span><span class="num">2 <small>peers</small></span></div>
+          <div><span class="cap">Mailbox</span><span class="num">14 <small>stored</small></span></div>
+          <div><span class="cap">MeshCore</span><span class="num" style="color:var(--mc)">bridged</span></div>
+        </div>
+        <div class="dapp two">
+          <nav class="side">
+            <div class="sec"><span>Network</span></div>
+            <a class="on"><svg class="i s"><use href="#i-net"/></svg>Overview<span class="c">2 alerts</span></a>
+            <a><svg class="i s"><use href="#i-log"/></svg>Activity</a>
+            <a><svg class="i s"><use href="#i-route"/></svg>Trace route</a>
+            <a><svg class="i s"><use href="#i-ruler"/></svg>Range test</a>
+            <a><svg class="i s"><use href="#i-page"/></svg>Pages</a>
+            <a><svg class="i s"><use href="#i-chart"/></svg>All counters</a>
+            <div class="sec"><span>Chats</span></div>
+            <a class="u"><span class="hash">#</span>public<span class="badge">3</span></a>
+            <a class="u"><span class="hash"><svg class="i s"><use href="#i-lock"/></svg></span>Family<span class="badge">1</span></a>
+            <a><span class="hash">#</span>aarhus</a>
+            <a><span class="hash">@</span>~Mette</a>
+            <a><span class="hash">@</span>~Jonas</a>
+            <div class="sec"><span>Nodes</span></div>
+            <a><svg class="i s"><use href="#i-user"/></svg>Contacts<span class="c">6</span></a>
+            <a><svg class="i s"><use href="#i-radio"/></svg>Repeaters<span class="c">5</span></a>
+            <div class="sec"><span>More</span></div>
+            <a><svg class="i s"><use href="#i-map"/></svg>Map</a>
+            <a><svg class="i s"><use href="#i-gear"/></svg>Settings</a>
+          </nav>
+          <div class="main">
+            <div class="dash">
+              <div class="c12" style="display:flex;align-items:center;gap:10px"><h3 style="margin:0;font-size:19px;flex:1">Network overview</h3><span class="mono muted" style="font-size:12px">host v0.9.3 · up 2 d 4 h · data C:\maarse</span><button class="btn"><svg class="i s"><use href="#i-net"/></svg>Announce</button></div>
+              <div class="c12 panel">
+                <div class="alert"><span class="led amb"></span><span>Skanderborg RPT is weak (−8.0 dB, 19 packets). Check its antenna or add a repeater between.</span><span class="num">6 min</span></div>
+                <div class="alert"><span class="led amb"></span><span>Backbone vps.example.net:4242 dropped once in the last hour.</span><span class="num">19 min</span></div>
+              </div>
+              <div class="c8 panel">
+                <div class="ph"><span class="cap">Airtime per minute · last 60 min</span><span class="grow"></span><span class="num" style="font-size:12px">avg 2.3% · peak 4.1% · limit 10%</span></div>
+                <div class="pb">
+                  <svg class="chart" viewBox="0 0 640 150" role="img" aria-label="Airtime per minute over the last hour, well under the 10 percent limit">
+                    <title>Airtime: average 2.3%, peak 4.1% at 12:03, limit 10%</title>
+                    <g font-family="ui-monospace, Consolas, monospace" font-size="10" fill="var(--muted)">
+                      <text x="0" y="14">10%</text><text x="0" y="74">5%</text><text x="0" y="134">0%</text>
+                      <text x="40" y="148">11:41</text><text x="320" y="148" text-anchor="middle">12:11</text><text x="636" y="148" text-anchor="end">12:41</text>
+                    </g>
+                    <line x1="36" y1="10" x2="640" y2="10" stroke="var(--amber)" stroke-dasharray="4 4"/>
+                    <line x1="36" y1="70" x2="640" y2="70" stroke="var(--line-2)"/>
+                    <line x1="36" y1="130" x2="640" y2="130" stroke="var(--line)"/>
+                    <path d="M36 112 L76 108 L116 110 L156 98 L196 104 L236 81 L276 106 L316 101 L356 94 L396 100 L436 105 L476 99 L516 90 L556 102 L596 96 L640 102 L640 130 L36 130Z" fill="var(--accent)" opacity=".14"/>
+                    <path d="M36 112 L76 108 L116 110 L156 98 L196 104 L236 81 L276 106 L316 101 L356 94 L396 100 L436 105 L476 99 L516 90 L556 102 L596 96 L640 102" fill="none" stroke="var(--accent)" stroke-width="2"/>
+                    <circle cx="236" cy="81" r="4" fill="var(--accent)" stroke="var(--panel)" stroke-width="2"/>
+                    <text x="244" y="77" font-family="ui-monospace, Consolas, monospace" font-size="10" fill="var(--ink)">4.1% peak</text>
+                    <circle cx="638" cy="102" r="4" fill="var(--accent)" stroke="var(--panel)" stroke-width="2"/>
+                  </svg>
+                </div>
+              </div>
+              <div class="c4 panel">
+                <div class="ph"><span class="cap">Mailbox</span></div>
+                <div class="kpis"><div class="kpi"><span class="cap">Stored here</span><span class="num">14</span></div><div class="kpi"><span class="cap">Recipients</span><span class="num">5</span></div><div class="kpi"><span class="cap">Delivered</span><span class="num">212</span></div></div>
+                <div class="row2" style="border-top:1px solid var(--line-2)"><div class="t">My mailbox<span>Aarhus N anchor</span></div><span class="tag acc">2 waiting</span><svg class="i s"><use href="#i-chev"/></svg></div>
+                <div class="row2"><div class="t">File mailbox<span>38 MB of 200 MB</span></div><span class="bar"><i style="width:19%"></i></span><span></span></div>
+              </div>
+              <div class="c7 panel">
+                <div class="ph"><span class="cap">Neighbours · heard directly over LoRa</span></div>
+                <table class="t"><thead><tr><th>Node</th><th>Role</th><th class="r">SNR</th><th>Link</th><th class="r">RSSI</th><th class="r">Seen</th><th class="r">Pkts</th></tr></thead><tbody>
+                  <tr><td>Mols RPT</td><td>Repeater</td><td class="r num">+7.5 dB</td><td><span class="bar"><i style="width:90%"></i></span></td><td class="r num">−92</td><td class="r num">20 s</td><td class="r num">412</td></tr>
+                  <tr><td>Aarhus N anchor</td><td>Anchor</td><td class="r num">+3.0 dB</td><td><span class="bar"><i style="width:70%"></i></span></td><td class="r num">−101</td><td class="r num">1 min</td><td class="r num">288</td></tr>
+                  <tr><td>~Jonas</td><td>Client</td><td class="r num">−2.5 dB</td><td><span class="bar"><i style="width:45%"></i></span></td><td class="r num">−109</td><td class="r num">40 s</td><td class="r num">37</td></tr>
+                  <tr><td>Skanderborg RPT</td><td>Repeater</td><td class="r num" style="color:var(--amber)">−8.0 dB</td><td><span class="bar amb"><i style="width:20%"></i></span></td><td class="r num">−117</td><td class="r num">6 min</td><td class="r num">19</td></tr>
+                </tbody></table>
+              </div>
+              <div class="c5 panel">
+                <div class="ph"><span class="cap">Links of this host</span></div>
+                <table class="t"><thead><tr><th>Link</th><th>Kind</th><th class="r">Up</th><th class="r">In / out</th></tr></thead><tbody>
+                  <tr><td><span class="led" style="display:inline-block;margin-right:6px"></span>COM6</td><td>LoRa modem</td><td class="r num">3 h</td><td class="r num">1 204 / 388</td></tr>
+                  <tr><td><span class="led" style="display:inline-block;margin-right:6px"></span>10.8.0.1:4242</td><td>Backbone</td><td class="r num">2 d</td><td class="r num">8 911 / 7 020</td></tr>
+                  <tr><td><span class="led amb" style="display:inline-block;margin-right:6px"></span>vps.example.net</td><td>Backbone</td><td class="r num">20 min</td><td class="r num">2 340 / 2 112</td></tr>
+                  <tr><td><span class="led" style="display:inline-block;margin-right:6px"></span>COM9</td><td>MeshCore</td><td class="r num">3 h</td><td class="r num">96 / 41</td></tr>
+                </tbody></table>
+              </div>
+              <div class="c12 panel">
+                <div class="ph"><span class="cap">Counters</span><span class="grow"></span><span class="cap">since start · updated every 5 s</span></div>
+                <div class="kpis" style="grid-template-columns:repeat(8,1fr)">
+                  <div class="kpi"><span class="cap">Routes found</span><span class="num">63</span></div>
+                  <div class="kpi"><span class="cap">Route requests</span><span class="num">71</span></div>
+                  <div class="kpi"><span class="cap">Hops forwarded</span><span class="num">2 904</span></div>
+                  <div class="kpi"><span class="cap">Floods cancelled</span><span class="num">418</span></div>
+                  <div class="kpi"><span class="cap">Acks received</span><span class="num">351</span></div>
+                  <div class="kpi"><span class="cap">DHT contacts</span><span class="num">31</span></div>
+                  <div class="kpi"><span class="cap">DHT lookups</span><span class="num">12 <small>/ 11 found</small></span></div>
+                  <div class="kpi"><span class="cap">Errors</span><span class="num">0</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption><b>Desktop network overview.</b> Alerts in words first, then airtime against the legal limit, mailbox, neighbours, the host's links and the most useful counters. The old Status table, Diagnostics page and the two host device lists all land here; the full counter list is one click away.</figcaption>
+    </figure></div>
+
+    <!-- D3 settings -->
+    <div class="wide"><figure>
+      <div class="desk">
+        <div class="chrome"><i></i><i></i><i></i><span class="url">127.0.0.1:8080/#settings-meshcore</span></div>
+        <div class="dtele">
+          <div><span class="brand">Må<span class="colon">:</span>rse</span><span class="led"></span><span class="mono" style="font-size:12px">maarse-host · local</span></div>
+          <div><span class="cap">Radio modem</span><span class="num">Heltec V4 <small>COM6</small></span></div>
+          <div><span class="cap">Radio</span><span class="num">SF9 <small>869.525</small></span></div>
+          <div><span class="cap">Airtime 1 h</span><span class="num">2.3% <small>/ 10%</small></span></div>
+          <div><span class="cap">Noise</span><span class="num">−118 <small>dBm</small></span></div>
+          <div><span class="cap">Neighbours</span><span class="num">4</span></div>
+          <div><span class="cap">Backbone</span><span class="num">2 <small>peers</small></span></div>
+          <div><span class="cap">Mailbox</span><span class="num">14 <small>stored</small></span></div>
+          <div><span class="cap">MeshCore</span><span class="num" style="color:var(--mc)">bridged</span></div>
+        </div>
+        <div class="dapp set">
+          <nav class="side">
+            <div class="sec"><span>Network</span></div>
+            <a><svg class="i s"><use href="#i-net"/></svg>Overview</a>
+            <a><svg class="i s"><use href="#i-log"/></svg>Activity</a>
+            <div class="sec"><span>Chats</span></div>
+            <a><span class="hash">#</span>public<span class="badge">3</span></a>
+            <a><span class="hash">@</span>~Mette</a>
+            <div class="sec"><span>Nodes</span></div>
+            <a><svg class="i s"><use href="#i-user"/></svg>Contacts<span class="c">6</span></a>
+            <a><svg class="i s"><use href="#i-radio"/></svg>Repeaters<span class="c">5</span></a>
+            <div class="sec"><span>More</span></div>
+            <a><svg class="i s"><use href="#i-map"/></svg>Map</a>
+            <a class="on"><svg class="i s"><use href="#i-gear"/></svg>Settings</a>
+          </nav>
+          <nav class="setcats">
+            <div class="sec"><span>You</span><span>app + node</span></div>
+            <a>Name and contact card</a>
+            <a>Position and telemetry<span class="c">off</span></a>
+            <a>Backup and recovery<span class="tag red">todo</span></a>
+            <a>Verified contacts<span class="c">3</span></a>
+            <div class="sec"><span>This node</span><span>Heltec V4</span></div>
+            <a>Radio<span class="c">SF9</span></a>
+            <a>Role and regions<span class="c">RPT</span></a>
+            <a>Administrators<span class="c">2</span></a>
+            <a>Firmware<span class="c">0.9.3</span></a>
+            <div class="sec"><span>Host</span><span>this computer</span></div>
+            <a>Backbone and DHT<span class="c">2 peers</span></a>
+            <a>LoRa modem<span class="c">COM6</span></a>
+            <a class="on">MeshCore bridge<span class="c">on</span></a>
+            <a>VPN tunnel<span class="c">off</span></a>
+            <a>MQTT<span class="c">on</span></a>
+            <a>Storage and mailbox</a>
+            <a>Web access</a>
+            <a>Service and log</a>
+            <div class="sec"><span>App</span><span>this browser</span></div>
+            <a>Notifications</a>
+            <a>Saved connections</a>
+          </nav>
+          <div class="main">
+            <div class="sform">
+              <div style="display:grid;gap:4px"><h3>MeshCore bridge <span class="tag ok">connected</span><span class="tag">host</span></h3><span class="muted" style="font-size:13px">A MeshCore radio on this computer joins chosen channels to Må:rse channels. Saved in settings.txt; saving restarts the host (about 5 s) and the page reconnects by itself.</span></div>
+              <div class="frow"><label>MeshCore radio<span>Serial port with companion_radio_usb firmware</span></label><div style="display:grid;gap:6px"><div class="inp">COM9 · MC Base<svg class="i s"><use href="#i-down"/></svg></div><span class="mono muted" style="font-size:11.5px">869.618 MHz · BW 62.5 · SF8 · 22 dBm · 9 contacts</span></div></div>
+              <div class="frow"><label>Baud rate</label><div class="inp">115200<span class="muted">default</span></div></div>
+              <div class="frow"><label>Channel bridges<span>Messages are copied both ways, tagged with the network they came from</span></label>
+                <div class="panel" style="max-width:520px">
+                  <table class="t"><thead><tr><th>Må:rse channel</th><th></th><th>MeshCore channel</th><th class="r">Slot</th><th></th></tr></thead><tbody>
+                    <tr><td>#public</td><td class="muted">⇄</td><td>Public</td><td class="r num">0</td><td class="r"><svg class="i s muted"><use href="#i-more"/></svg></td></tr>
+                    <tr><td>#hike@nordjylland</td><td class="muted">⇄</td><td>#hike</td><td class="r num">3</td><td class="r"><svg class="i s muted"><use href="#i-more"/></svg></td></tr>
+                    <tr><td><span class="inp changed" style="display:inline-flex;padding:2px 8px">#aarhus</span></td><td class="muted">⇄</td><td><span class="inp changed" style="display:inline-flex;padding:2px 8px">#aarhus</span></td><td class="r num">4</td><td class="r"><span class="tag amb">new</span></td></tr>
+                  </tbody></table>
+                </div></div>
+              <div class="frow"><label>Command line<span>Options given at start win over this page</span></label><div class="mono muted" style="font-size:12px">none for MeshCore</div></div>
+              <div class="pending" style="border-radius:var(--r)"><svg class="i s"><use href="#i-warn"/></svg><span class="grow">1 change. Saving restarts maarse-host; chats and the radio pause for about 5 s.</span><button class="btn">Discard</button><button class="btn pri">Save and restart host</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption><b>Desktop settings.</b> Host settings stop being a long form of command-line flags: each topic gets its own page, with the live state next to the inputs and the restart consequence spelled out before saving.</figcaption>
+    </figure></div>
+  </section>
+</div>
+
+<script>
+  (function () {
+    var root = document.documentElement, btns = document.querySelectorAll(".seg button");
+    function apply(t) {
+      if (t === "system") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", t);
+      btns.forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.t === t)); });
+    }
+    var saved = "system";
+    try { saved = localStorage.getItem("maarse-mock-theme") || "system"; } catch (e) {}
+    if (location.hash === "#dark" || location.hash === "#light") saved = location.hash.slice(1);
+    apply(saved);
+    btns.forEach(function (b) {
+      b.addEventListener("click", function () {
+        apply(b.dataset.t);
+        try { localStorage.setItem("maarse-mock-theme", b.dataset.t); } catch (e) {}
+      });
+    });
+  })();
+</script>
+</body>
+</html>

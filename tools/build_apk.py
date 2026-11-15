@@ -1,13 +1,13 @@
-"""Bygger Må:rse-appen til Android (APK) uden Gradle, direkte med SDK'ens
-værktøjer: aapt2, javac, d8, zipalign og apksigner.
+"""Builds the Må:rse app for Android (APK) without Gradle, directly with the SDK's
+tools: aapt2, javac, d8, zipalign and apksigner.
 
     python tools/build_apk.py            -> dist/maarse.apk
 
-Webklienten (maarse-client/) lægges ind som assets. Kræver Android SDK
-(ANDROID_HOME, ellers %LOCALAPPDATA%/Android/Sdk) med build-tools og en
-platform (35+), samt en JDK (JAVA_HOME eller javac i PATH). APK'en signeres
-med en debug-nøgle (~/.android/debug.keystore, laves hvis den mangler), eller
-med MAARSE_APK_KEYSTORE/MAARSE_APK_PASS ved en udgivelse.
+The web client (maarse-client/) is added as assets. Requires the Android SDK
+(ANDROID_HOME, otherwise %LOCALAPPDATA%/Android/Sdk) with build-tools and a
+platform (35+), plus a JDK (JAVA_HOME or javac in PATH). The APK is signed
+with a debug key (~/.android/debug.keystore, created if missing), or
+with MAARSE_APK_KEYSTORE/MAARSE_APK_PASS for a release.
 """
 import glob, os, shutil, subprocess, sys, zipfile
 
@@ -24,7 +24,7 @@ def find_sdk():
               os.path.expanduser("~/Android/Sdk"), "C:/Android/Sdk"]:
         if c and os.path.isdir(os.path.join(c, "build-tools")):
             return c
-    sys.exit("Android SDK ikke fundet (sæt ANDROID_HOME)")
+    sys.exit("Android SDK not found (set ANDROID_HOME)")
 
 
 def newest(path, minimum=0):
@@ -32,7 +32,7 @@ def newest(path, minimum=0):
         return [int(x) if x.isdigit() else 0 for x in n.replace("android-", "").split(".")]
     items = [n for n in os.listdir(path) if key(n)[0] >= minimum]
     if not items:
-        sys.exit(f"intet i {path}")
+        sys.exit(f"nothing in {path}")
     return os.path.join(path, sorted(items, key=key)[-1])
 
 
@@ -42,14 +42,14 @@ def tool(name):
         return os.path.join(jh, "bin", name + EXE)
     p = shutil.which(name)
     if not p:
-        sys.exit(f"{name} ikke fundet (installér en JDK og sæt JAVA_HOME)")
+        sys.exit(f"{name} not found (install a JDK and set JAVA_HOME)")
     return p
 
 
 def run(*args):
     r = subprocess.run([str(a) for a in args], capture_output=True, text=True)
     if r.returncode != 0:
-        sys.exit(f"FEJL: {' '.join(map(str, args[:2]))}\n{r.stdout}\n{r.stderr}")
+        sys.exit(f"ERROR: {' '.join(map(str, args[:2]))}\n{r.stdout}\n{r.stderr}")
     return r.stdout
 
 
@@ -63,9 +63,9 @@ shutil.rmtree(OUT, ignore_errors=True)
 for d in ["res/mipmap", "assets/web", "gen", "classes", "dex"]:
     os.makedirs(os.path.join(OUT, d), exist_ok=True)
 
-# Ressourcer: ikon fra webklienten.
+# Resources: icon from the web client.
 shutil.copy(os.path.join(ROOT, "maarse-client", "icon-192.png"), os.path.join(OUT, "res", "mipmap", "ic_launcher.png"))
-# Assets: hele webklienten.
+# Assets: the whole web client.
 for f in os.listdir(os.path.join(ROOT, "maarse-client")):
     shutil.copy(os.path.join(ROOT, "maarse-client", f), os.path.join(OUT, "assets", "web", f))
 
@@ -91,8 +91,8 @@ with zipfile.ZipFile(unsigned, "a", zipfile.ZIP_DEFLATED) as z:
 aligned = os.path.join(OUT, "aligned.apk")
 run(os.path.join(bt, "zipalign" + EXE), "-f", "-p", "4", unsigned, aligned)
 
-# Udgivelse: MAARSE_APK_KEYSTORE + MAARSE_APK_PASS (fx fra tools/release.py);
-# ellers debug-nøglen.
+# Release: MAARSE_APK_KEYSTORE + MAARSE_APK_PASS (e.g. from tools/release.py);
+# otherwise the debug key.
 ks = os.environ.get("MAARSE_APK_KEYSTORE") or os.path.expanduser("~/.android/debug.keystore")
 ks_pass = os.environ.get("MAARSE_APK_PASS", "android")
 if not os.environ.get("MAARSE_APK_KEYSTORE") and not os.path.exists(ks):
@@ -105,4 +105,4 @@ apk = os.path.join(ROOT, "dist", "maarse.apk")
 run(os.path.join(bt, "apksigner" + BAT), "sign", "--ks", ks, "--ks-pass", "pass:" + ks_pass,
     "--key-pass", "pass:" + ks_pass, "--out", apk, aligned)
 run(os.path.join(bt, "apksigner" + BAT), "verify", apk)
-print(f"Færdig: {apk} ({os.path.getsize(apk) // 1024} KB)")
+print(f"Done: {apk} ({os.path.getsize(apk) // 1024} KB)")

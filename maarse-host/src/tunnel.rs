@@ -1,34 +1,34 @@
-//! IP-tunnel: IPv6 over Må:rse, så fx ping, SSH og mosh kan køre mellem noder.
+//! IP tunnel: IPv6 over Må:rse, so that e.g. ping, SSH and mosh can run between nodes.
 //!
-//! Hver node har en IPv6-adresse udledt af dens Må:rse-adresse:
-//! `fd` + de første 15 bytes (ULA, `fd00::/8`).
+//! Every node has an IPv6 address derived from its Må:rse address:
+//! `fd` + the first 15 bytes (ULA, `fd00::/8`).
 //!
-//! ## Optimeret til LoRa
-//! * **Session:** afsenderen laver en tilfældig nøgle og et session-ID og
-//!   sender dem én gang i en krypteret direkte besked (indholdstype `0x07`,
-//!   type 1). Derefter går IP-trafikken som `Datagram`-pakker (type 10) med
-//!   kun 28 bytes overhead (ID 8, tæller 4, MAC 16) og uden kvittering fra
-//!   ende til ende; kvittering og gensending pr. hop gælder stadig. Nøglen
-//!   skiftes hvert 5. minut.
-//! * **Header-komprimering:** IPv6-headeren (40 bytes) bliver 2-7 bytes, når
-//!   adresserne er afsenderens og modtagerens egne; UDP-headeren 8 -> 6.
-//! * **MSS-clamping:** TCP-SYN får en MSS, så segmenterne passer i én pakke.
-//! * **Opdeling og NACK:** større pakker deles i stykker; mangler der stykker
-//!   efter et par sekunder, beder modtageren om netop dem.
+//! ## Optimised for LoRa
+//! * **Session:** the sender creates a random key and a session ID and
+//!   sends them once in an encrypted direct message (content type `0x07`,
+//!   type 1). After that the IP traffic goes as `Datagram` packets (type 10) with
+//!   only 28 bytes of overhead (ID 8, counter 4, MAC 16) and without end-to-end
+//!   acknowledgement; per-hop acknowledgement and retransmission still apply. The key
+//!   is changed every 5 minutes.
+//! * **Header compression:** the IPv6 header (40 bytes) becomes 2-7 bytes when
+//!   the addresses are the sender's and recipient's own; the UDP header 8 -> 6.
+//! * **MSS clamping:** TCP SYN gets an MSS so the segments fit in one packet.
+//! * **Fragmentation and NACK:** larger packets are split into pieces; if pieces are missing
+//!   after a few seconds, the recipient asks for exactly those.
 //!
 //! ```text
-//! Datagram:    session-ID (8) | tæller (u32) | ChaCha20-Poly1305(indhold)
-//! Indhold:     1 | pakke-ID | stykke nr. | antal | data      (stykke)
-//!              2 | pakke-ID | manglende stykker (u16, bitmaske) (NACK)
-//! Komprimeret: 0x80|flag | næste header | [hop limit] | [trafikklasse+flow (4)] | ...
-//!              UDP: kildeport | målport | checksum | data (længden udledes)
-//!              0x00 | hele IPv6-pakken (når den ikke kan komprimeres)
+//! Datagram:    session ID (8) | counter (u32) | ChaCha20-Poly1305(content)
+//! Content:     1 | packet ID | piece no. | count | data      (piece)
+//!              2 | packet ID | missing pieces (u16, bitmask) (NACK)
+//! Compressed:  0x80|flag | next header | [hop limit] | [traffic class+flow (4)] | ...
+//!              UDP: source port | dest port | checksum | data (length is derived)
+//!              0x00 | the whole IPv6 packet (when it cannot be compressed)
 //! ```
 //!
-//! Over TCP bruges tunnelen altid; over LoRa kun med `--tun-lora`.
-//! `--tun` opretter en netværksadapter (Wintun på Windows, `/dev/net/tun` på
-//! Linux; kræver administrator/root og featuren `tun`). Uden adapter svarer
-//! hosten selv på ping (ICMPv6 echo) til sin adresse.
+//! Over TCP the tunnel is always used; over LoRa only with `--tun-lora`.
+//! `--tun` creates a network adapter (Wintun on Windows, `/dev/net/tun` on
+//! Linux; requires administrator/root and the `tun` feature). Without an adapter the
+//! host itself answers ping (ICMPv6 echo) to its address.
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
@@ -36,24 +36,24 @@ use maarse_core::Address;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-/// Største IP-pakke (IPv6-minimum).
+/// Largest IP packet (the IPv6 minimum).
 pub const MTU: usize = 1280;
-/// Overhead i et datagram: session-ID, tæller og MAC.
+/// Overhead in a datagram: session ID, counter and MAC.
 pub const DG_OVERHEAD: usize = 8 + 4 + 16;
-/// Data pr. stykke i et datagram.
+/// Data per piece in a datagram.
 pub const FRAG_DATA: usize = maarse_core::router::MAX_DIRECT_PAYLOAD - DG_OVERHEAD - 4;
-/// MSS til TCP gennem tunnelen: ét segment pr. stykke (IPv6-headeren
-/// komprimeres; TCP-headeren med valgmuligheder er op til ca. 32 bytes).
+/// MSS for TCP through the tunnel: one segment per piece (the IPv6 header is
+/// compressed; the TCP header with options is up to about 32 bytes).
 pub const TUN_MSS: u16 = (FRAG_DATA - 7 - 32) as u16;
 const REKEY_AFTER: Duration = Duration::from_secs(300);
 const NACK_AFTER: Duration = Duration::from_secs(2);
 const GIVE_UP: Duration = Duration::from_secs(12);
 const KEEP_SENT: Duration = Duration::from_secs(15);
 
-/// Kontrolbesked (sendes forseglet som indholdstype `0x07`): ny sessionsnøgle.
+/// Control message (sent sealed as content type `0x07`): new session key.
 pub const CTRL_KEY: u8 = 1;
 
-/// IPv6-adressen for en Må:rse-adresse.
+/// The IPv6 address for a Må:rse address.
 pub fn ip_of(a: &Address) -> [u8; 16] {
     let mut ip = [0u8; 16];
     ip[0] = 0xfd;
@@ -65,15 +65,15 @@ pub fn ip_text(ip: &[u8; 16]) -> String {
     std::net::Ipv6Addr::from(*ip).to_string()
 }
 
-/// Mål-adressen i en IPv6-pakke.
+/// The destination address in an IPv6 packet.
 pub fn ipv6_dst(p: &[u8]) -> Option<[u8; 16]> {
     (p.len() >= 40 && p[0] >> 4 == 6).then(|| p[24..40].try_into().unwrap())
 }
 
-// ---------- header-komprimering ----------
+// ---------- header compression ----------
 
-/// Komprimerer en IPv6-pakke fra `src` til `dst`. Passer adresserne ikke,
-/// sendes pakken hel (med 0x00 foran).
+/// Compresses an IPv6 packet from `src` to `dst`. If the addresses do not match,
+/// the packet is sent whole (prefixed with 0x00).
 pub fn compress(p: &[u8], src: &[u8; 16], dst: &[u8; 16]) -> Vec<u8> {
     let plen = if p.len() >= 40 { u16::from_be_bytes([p[4], p[5]]) as usize } else { 0 };
     if p.len() < 40 || p[0] >> 4 != 6 || &p[8..24] != src || &p[24..40] != dst || p.len() != 40 + plen {
@@ -102,7 +102,7 @@ pub fn compress(p: &[u8], src: &[u8; 16], dst: &[u8; 16]) -> Vec<u8> {
         v.extend_from_slice(&tcfl);
     }
     if udp {
-        v.extend_from_slice(&p[40..44]); // porte
+        v.extend_from_slice(&p[40..44]); // ports
         v.extend_from_slice(&p[46..48]); // checksum
         v.extend_from_slice(&p[48..]);
     } else {
@@ -111,7 +111,7 @@ pub fn compress(p: &[u8], src: &[u8; 16], dst: &[u8; 16]) -> Vec<u8> {
     v
 }
 
-/// Genskaber IPv6-pakken.
+/// Restores the IPv6 packet.
 pub fn decompress(c: &[u8], src: &[u8; 16], dst: &[u8; 16]) -> Option<Vec<u8>> {
     let (&flags, rest) = c.split_first()?;
     if flags == 0x00 {
@@ -161,10 +161,10 @@ pub fn decompress(c: &[u8], src: &[u8; 16], dst: &[u8; 16]) -> Option<Vec<u8>> {
     Some(p)
 }
 
-// ---------- MSS-clamping ----------
+// ---------- MSS clamping ----------
 
-/// Sænker MSS i en TCP-SYN (IPv6 uden udvidelses-headers) til `mss` og
-/// regner checksummen om. Returnerer true, hvis pakken blev ændret.
+/// Lowers the MSS in a TCP SYN (IPv6 without extension headers) to `mss` and
+/// recomputes the checksum. Returns true if the packet was changed.
 pub fn clamp_mss(p: &mut [u8], mss: u16) -> bool {
     if p.len() < 60 || p[0] >> 4 != 6 || p[6] != 6 {
         return false;
@@ -172,7 +172,7 @@ pub fn clamp_mss(p: &mut [u8], mss: u16) -> bool {
     let t = 40;
     let off = ((p[t + 12] >> 4) as usize) * 4;
     if p[t + 13] & 0x02 == 0 || off < 20 || p.len() < t + off {
-        return false; // ikke SYN
+        return false; // not SYN
     }
     let mut i = t + 20;
     let mut changed = false;
@@ -202,7 +202,7 @@ pub fn clamp_mss(p: &mut [u8], mss: u16) -> bool {
     changed
 }
 
-/// Checksum for TCP/UDP/ICMPv6 med IPv6-pseudo-header.
+/// Checksum for TCP/UDP/ICMPv6 with the IPv6 pseudo header.
 fn l4_checksum(p: &[u8], next_header: u8) -> u16 {
     let body = &p[40..];
     let mut sum: u32 = 0;
@@ -221,7 +221,7 @@ fn l4_checksum(p: &[u8], next_header: u8) -> u16 {
     !(sum as u16)
 }
 
-/// Svar på ping: er `p` en ICMPv6 echo request til `me`, returneres svaret.
+/// Ping reply: if `p` is an ICMPv6 echo request to `me`, the reply is returned.
 pub fn echo_reply(p: &[u8], me: &[u8; 16]) -> Option<Vec<u8>> {
     if p.len() < 48 || p[0] >> 4 != 6 || p[6] != 58 || &p[24..40] != me || p[40] != 128 {
         return None;
@@ -242,7 +242,7 @@ pub fn echo_reply(p: &[u8], me: &[u8; 16]) -> Option<Vec<u8>> {
     Some(r)
 }
 
-// ---------- sessioner ----------
+// ---------- sessions ----------
 
 fn seal(key: &[u8; 32], id: &[u8; 8], ctr: u32, plain: &[u8]) -> Vec<u8> {
     let mut nonce = [0u8; 12];
@@ -253,7 +253,7 @@ fn seal(key: &[u8; 32], id: &[u8; 8], ctr: u32, plain: &[u8]) -> Vec<u8> {
     head.extend_from_slice(&ctr.to_be_bytes());
     let ct = ChaCha20Poly1305::new(Key::from_slice(key))
         .encrypt(Nonce::from_slice(&nonce), Payload { msg: plain, aad: &head })
-        .expect("kryptering kan ikke fejle");
+        .expect("encryption cannot fail");
     head.extend_from_slice(&ct);
     head
 }
@@ -282,7 +282,7 @@ struct OutSession {
 struct InSession {
     peer: Address,
     key: [u8; 32],
-    /// Højeste tæller og en bitmaske over de 64 før (mod gentagelser).
+    /// Highest counter and a bitmask over the 64 before it (against replays).
     max: u32,
     seen: u64,
     created: Instant,
@@ -312,23 +312,23 @@ struct Partial {
     parts: Vec<Option<Vec<u8>>>,
 }
 
-/// Det, tunnelen beder noden gøre.
+/// What the tunnel asks the node to do.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TunOut {
-    /// Send et datagram (PacketType::Datagram) til noden.
+    /// Send a datagram (PacketType::Datagram) to the node.
     Datagram(Address, Vec<u8>),
-    /// Send en forseglet kontrolbesked (indholdstype 0x07) til noden.
+    /// Send a sealed control message (content type 0x07) to the node.
     Control(Address, Vec<u8>),
-    /// En hel, afkomprimeret IP-pakke fra noden.
+    /// A whole, decompressed IP packet from the node.
     Packet(Address, Vec<u8>),
 }
 
-/// Tunnelens tilstand i en host.
+/// The tunnel's state in a host.
 #[derive(Default)]
 pub struct Tunnel {
     out: HashMap<Address, OutSession>,
     inn: HashMap<[u8; 8], InSession>,
-    /// Datagrammer med ukendt session (nøglen er måske på vej).
+    /// Datagrams with an unknown session (the key may be on its way).
     early: VecDeque<(Instant, Vec<u8>)>,
     partial: HashMap<(Address, u8), Partial>,
     sent: HashMap<(Address, u8), (Instant, Vec<Vec<u8>>)>,
@@ -346,7 +346,7 @@ pub struct TunStats {
 }
 
 impl Tunnel {
-    /// Sender en IP-pakke fra os (`me`) til `dest`.
+    /// Sends an IP packet from us (`me`) to `dest`.
     pub fn send(&mut self, me: &Address, dest: Address, packet: &[u8], now: Instant, rng: &mut impl FnMut(&mut [u8])) -> Vec<TunOut> {
         let mut out = Vec::new();
         let mut p = packet.to_vec();
@@ -365,12 +365,12 @@ impl Tunnel {
             out.push(TunOut::Control(dest, ctrl));
             self.out.insert(dest, OutSession { id, key, ctr: 0, created: now, pkt: 0 });
         }
-        let s = self.out.get_mut(&dest).expect("lige oprettet");
+        let s = self.out.get_mut(&dest).expect("just created");
         s.pkt = s.pkt.wrapping_add(1);
         let pkt = s.pkt;
         let chunks: Vec<&[u8]> = c.chunks(FRAG_DATA).collect();
         if chunks.len() > 16 {
-            return out; // større end MTU; burde ikke ske
+            return out; // larger than the MTU; should not happen
         }
         let mut frags = Vec::new();
         for (i, ch) in chunks.iter().enumerate() {
@@ -389,7 +389,7 @@ impl Tunnel {
         out
     }
 
-    /// En kontrolbesked (indholdstype 0x07) fra `from`.
+    /// A control message (content type 0x07) from `from`.
     pub fn on_control(&mut self, from: Address, data: &[u8], me: &Address, now: Instant) -> Vec<TunOut> {
         if data.len() < 41 || data[0] != CTRL_KEY {
             return Vec::new();
@@ -398,7 +398,7 @@ impl Tunnel {
         let key: [u8; 32] = data[9..41].try_into().unwrap();
         self.inn.retain(|_, s| s.peer != from || now.duration_since(s.created) < REKEY_AFTER * 2);
         self.inn.insert(id, InSession { peer: from, key, max: 0, seen: 0, created: now });
-        // Datagrammer, der kom før nøglen.
+        // Datagrams that arrived before the key.
         let early: Vec<Vec<u8>> = std::mem::take(&mut self.early).into_iter().map(|(_, d)| d).collect();
         let mut out = Vec::new();
         for d in early {
@@ -407,7 +407,7 @@ impl Tunnel {
         out
     }
 
-    /// Et datagram til os.
+    /// A datagram for us.
     pub fn on_datagram(&mut self, dg: &[u8], me: &Address, now: Instant) -> Vec<TunOut> {
         let mut out = Vec::new();
         let Some(id) = dg.get(..8).and_then(|b| <[u8; 8]>::try_from(b).ok()) else { return out };
@@ -471,7 +471,7 @@ impl Tunnel {
         out
     }
 
-    /// Kaldes jævnligt: NACK for ufuldstændige pakker, oprydning.
+    /// Called regularly: NACK for incomplete packets, cleanup.
     pub fn tick(&mut self, now: Instant) -> Vec<TunOut> {
         let mut out = Vec::new();
         self.sent.retain(|_, (t, _)| now.duration_since(*t) < KEEP_SENT);
@@ -493,15 +493,15 @@ impl Tunnel {
                 out.push(TunOut::Datagram(peer, seal(&o.key, &o.id, o.ctr, &plain)));
                 self.stats.nacks_sent += 1;
             }
-            // Uden udgående session kan vi ikke sende NACK; afsenderen får ingen.
+            // Without an outgoing session we cannot send a NACK; the sender gets none.
         }
         out
     }
 }
 
-/// Opretter adapteren og starter læse- og skrivetråde. Pakker fra
-/// adapteren sendes til noden som `In::TunPacket`; returnerer en kanal,
-/// der skriver pakker til adapteren.
+/// Creates the adapter and starts reader and writer threads. Packets from
+/// the adapter are sent to the node as `In::TunPacket`; returns a channel
+/// that writes packets to the adapter.
 #[cfg(feature = "tun")]
 pub fn spawn(
     me: [u8; 16],
@@ -565,23 +565,23 @@ mod tests {
     #[test]
     fn compression_roundtrips_and_saves() {
         let (s, d) = (ip_of(&a(1)), ip_of(&a(2)));
-        let icmp = ping(s, d, b"hej");
+        let icmp = ping(s, d, b"hi!");
         let c = compress(&icmp, &s, &d);
-        assert_eq!(c.len(), 2 + 8 + 3, "IPv6-header bliver 2 bytes");
+        assert_eq!(c.len(), 2 + 8 + 3, "the IPv6 header becomes 2 bytes");
         assert_eq!(decompress(&c, &s, &d).unwrap(), icmp);
-        // UDP: længden udledes.
+        // UDP: the length is derived.
         let mut udp = vec![0x1f, 0x90, 0xea, 0x60, 0, 13, 0xab, 0xcd];
         udp.extend_from_slice(b"mosh!");
         let up = ipv6(s, d, 17, &udp);
         let c = compress(&up, &s, &d);
         assert_eq!(c.len(), 2 + 6 + 5);
         assert_eq!(decompress(&c, &s, &d).unwrap(), up);
-        // Andre adresser: sendes hel.
+        // Other addresses: sent whole.
         let other = ping(ip_of(&a(9)), d, b"x");
         let c = compress(&other, &s, &d);
         assert_eq!(c[0], 0);
         assert_eq!(decompress(&c, &s, &d).unwrap(), other);
-        // Hop limit og flow label bevares.
+        // Hop limit and flow label are kept.
         let mut odd = icmp.clone();
         odd[7] = 3;
         odd[2] = 0x55;
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn mss_is_clamped_with_valid_checksum() {
         let (s, d) = (ip_of(&a(1)), ip_of(&a(2)));
-        // TCP SYN med MSS 1220 og en NOP.
+        // TCP SYN with MSS 1220 and a NOP.
         let mut tcp = vec![0xc3, 0x50, 0x00, 0x16, 0, 0, 0, 1, 0, 0, 0, 0, 0x60, 0x02, 0xff, 0xff, 0, 0, 0, 0];
         tcp.extend_from_slice(&[2, 4, 0x04, 0xc4]);
         tcp[12] = 0x60; // 24 bytes header
@@ -600,8 +600,8 @@ mod tests {
         p[56..58].copy_from_slice(&c.to_be_bytes());
         assert!(clamp_mss(&mut p, TUN_MSS));
         assert_eq!(u16::from_be_bytes([p[62], p[63]]), TUN_MSS);
-        assert_eq!(l4_checksum(&p, 6), 0, "checksummen stemmer");
-        assert!(!clamp_mss(&mut p, TUN_MSS), "allerede lav nok");
+        assert_eq!(l4_checksum(&p, 6), 0, "the checksum is correct");
+        assert!(!clamp_mss(&mut p, TUN_MSS), "already low enough");
     }
 
     fn rng() -> impl FnMut(&mut [u8]) {
@@ -637,19 +637,19 @@ mod tests {
         let (ma, mb) = (a(1), a(2));
         let (mut ta, mut tb) = (Tunnel::default(), Tunnel::default());
         let now = Instant::now();
-        let p = ping(ip_of(&ma), ip_of(&mb), b"hej");
+        let p = ping(ip_of(&ma), ip_of(&mb), b"hi!");
         let out = ta.send(&ma, mb, &p, now, &mut rng());
         let dgs: Vec<&Vec<u8>> = out.iter().filter_map(|o| if let TunOut::Datagram(_, d) = o { Some(d) } else { None }).collect();
         assert_eq!(dgs.len(), 1);
-        assert!(dgs[0].len() <= DG_OVERHEAD + 4 + 2 + 8 + 3, "ping fylder {} bytes", dgs[0].len());
+        assert!(dgs[0].len() <= DG_OVERHEAD + 4 + 2 + 8 + 3, "ping takes {} bytes", dgs[0].len());
         let replay = dgs[0].clone();
-        // Datagrammet kommer før nøglen: det gemmes og leveres, når nøglen kommer.
+        // The datagram arrives before the key: it is kept and delivered when the key arrives.
         let got = tb.on_datagram(&replay, &mb, now);
         assert!(got.is_empty());
         let ctrl = out.iter().find_map(|o| if let TunOut::Control(_, c) = o { Some(c.clone()) } else { None }).unwrap();
         let got = tb.on_control(ma, &ctrl, &mb, now);
         assert_eq!(got, vec![TunOut::Packet(ma, p.clone())]);
-        // Gentagelse afvises.
+        // A replay is rejected.
         assert!(tb.on_datagram(&replay, &mb, now).is_empty());
     }
 
@@ -658,18 +658,18 @@ mod tests {
         let (ma, mb) = (a(1), a(2));
         let (mut ta, mut tb) = (Tunnel::default(), Tunnel::default());
         let now = Instant::now();
-        // B skal have en udgående session for at kunne sende NACK.
+        // B needs an outgoing session to be able to send a NACK.
         let warm = ping(ip_of(&mb), ip_of(&ma), b"x");
         let o = tb.send(&mb, ma, &warm, now, &mut rng());
         deliver(&mb, &mut ta, &ma, o, &[], now);
         let big = ping(ip_of(&ma), ip_of(&mb), &[0x5a; 1000]);
         let out = ta.send(&ma, mb, &big, now, &mut rng());
         assert!(out.iter().filter(|o| matches!(o, TunOut::Datagram(..))).count() >= 6);
-        // Stykke 2 går tabt.
+        // Piece 2 is lost.
         assert!(deliver(&ma, &mut tb, &mb, out, &[2], now).is_empty());
         let nack = tb.tick(now + Duration::from_secs(3));
         assert_eq!(nack.len(), 1);
-        // NACK til A, som sender det manglende stykke igen.
+        // NACK to A, which sends the missing piece again.
         let resend = deliver(&mb, &mut ta, &ma, nack, &[], now);
         assert_eq!(ta.stats.resent, 1);
         let got = deliver(&ma, &mut tb, &mb, resend, &[], now);
@@ -680,7 +680,7 @@ mod tests {
     fn answers_ping_with_valid_checksum() {
         let me = ip_of(&a(1));
         let other = ip_of(&a(2));
-        let req = ping(other, me, b"hej");
+        let req = ping(other, me, b"hi!");
         let rep = echo_reply(&req, &me).unwrap();
         assert_eq!(rep[40], 129);
         assert_eq!(l4_checksum(&rep, 58), 0);

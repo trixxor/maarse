@@ -1,11 +1,11 @@
-// Service worker til Må:rse-webklienten: gemmer app-skallen, så den kan åbnes uden net.
-// Hæv VERSION, når filerne ændres; klienten viser så "Ny version – genindlæs".
+// Service worker for the Må:rse web client: caches the app shell so it can be opened offline.
+// Bump VERSION when the files change; the client then shows "New version – reload".
 "use strict";
 const VERSION = "maarse-v1";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {
-  // Ingen skipWaiting her: den nye version venter, til brugeren trykker "genindlæs".
+  // No skipWaiting here: the new version waits until the user presses "reload".
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: "reload" })))));
 });
 
@@ -22,14 +22,14 @@ self.addEventListener("fetch", e => {
   const url = new URL(req.url);
   if (req.method !== "GET" || url.origin !== location.origin || url.pathname.endsWith("/ws")) return;
   if (req.mode === "navigate") {
-    // Netværk først, så en opdateret host altid vinder; ellers den gemte skal.
+    // Network first, so an updated host always wins; otherwise the cached shell.
     e.respondWith(fetch(req).catch(() => caches.match("index.html", { cacheName: VERSION })));
     return;
   }
   e.respondWith(caches.match(req, { cacheName: VERSION }).then(r => r || fetch(req)));
 });
 
-// Klik på en notifikation: hent vinduet frem.
+// Click on a notification: bring the window to the front.
 self.addEventListener("notificationclick", e => {
   e.notification.close();
   e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {

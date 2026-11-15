@@ -1,9 +1,9 @@
-//! Forward secrecy-sessioner (se `maarse_crypto::ratchet`), gemt på disk.
+//! Forward secrecy sessions (see `maarse_crypto::ratchet`), stored on disk.
 //!
-//! Filen `sessioner.bin` er bare sessionerne efter hinanden (fast længde).
-//! Den skrives atomisk (midlertidig fil + omdøbning) efter hver ændring - på
-//! en PC er det billigt, og en mistet tilstand betyder tabte beskeder.
-//! Filen indeholder hemmelige nøgler, ligesom `identitet`.
+//! The file `sessions.bin` is just the sessions one after another (fixed length).
+//! It is written atomically (temporary file + rename) after every change - on
+//! a PC that is cheap, and a lost state means lost messages.
+//! The file contains secret keys, just like `identity`.
 
 use maarse_core::Address;
 use maarse_crypto::ratchet::{SESSION_LEN, Session, SessionStore};
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-/// Højst så mange sessioner (de mindst brugte smides ud).
+/// At most this many sessions (the least used are evicted).
 const MAX_SESSIONS: usize = 4096;
 
 pub struct Sessions {
@@ -44,14 +44,14 @@ impl Sessions {
         self.map.len()
     }
 
-    /// Glemmer alle sessioner (ny identitet) og skriver det til disk.
+    /// Forgets all sessions (new identity) and writes that to disk.
     pub fn clear(&mut self) {
         self.map.clear();
         self.dirty = true;
         self.save();
     }
 
-    /// Skriver til disk, hvis noget er ændret siden sidst.
+    /// Writes to disk if anything has changed since last time.
     pub fn save(&mut self) {
         if !self.dirty {
             return;
@@ -72,7 +72,7 @@ impl SessionStore for Sessions {
     fn get_mut(&mut self, peer: &Address) -> Option<&mut Session> {
         self.clock += 1;
         let clock = self.clock;
-        // Kaldes kun, når sessionen skal bruges (og typisk ændres).
+        // Only called when the session is about to be used (and typically changed).
         self.dirty = true;
         self.map.get_mut(peer).map(|(t, s)| {
             *t = clock;
@@ -102,7 +102,7 @@ mod tests {
     fn saves_and_loads() {
         let dir = std::env::temp_dir().join(format!("maarse-sess-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("sessioner.bin");
+        let path = dir.join("sessions.bin");
         let me = Identity::generate(&mut OsRng);
         let peer = Identity::generate(&mut OsRng).public();
         let mut s = Sessions::load(path.clone());

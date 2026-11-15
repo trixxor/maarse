@@ -1,6 +1,6 @@
-//! IP-tunnel i noden (se `crate::tunnel`): pakker fra adapteren sendes som
-//! datagrammer i en session; hele pakker skrives til adapteren eller
-//! besvares (ping), når hosten ikke har nogen adapter.
+//! IP tunnel in the node (see `crate::tunnel`): packets from the adapter are sent as
+//! datagrams in a session; whole packets are written to the adapter or
+//! answered (ping) when the host has no adapter.
 
 use super::{Node, Pending, short, token};
 use crate::tunnel::{self, TunOut};
@@ -19,21 +19,21 @@ impl Node {
         self.tun_tx = Some(tx);
     }
 
-    /// En pakke fra adapteren: find noden og send den gennem tunnelen.
+    /// A packet from the adapter: find the node and send it through the tunnel.
     pub(super) fn on_tun_packet(&mut self, p: &[u8]) {
         let Some(dst) = tunnel::ipv6_dst(p) else { return };
         if dst == self.my_ip() || p.len() > tunnel::MTU {
             return;
         }
         let Some(dest) = self.known.keys().find(|a| tunnel::ip_of(a) == dst).copied() else {
-            return; // ukendt adresse (multicast, fremmede net …)
+            return; // unknown address (multicast, foreign networks …)
         };
         self.tunnel_send(dest, p);
     }
 
     fn tunnel_send(&mut self, dest: Address, p: &[u8]) {
         if self.file_limit(&dest).via_lora && !self.tun_lora {
-            return; // IP over LoRa kun med --tun-lora
+            return; // IP over LoRa only with --tun-lora
         }
         let me = self.addr;
         let outs = self.tunnel.send(&me, dest, p, Instant::now(), &mut |b| OsRng.fill_bytes(b));
@@ -77,9 +77,9 @@ impl Node {
     }
 
     fn on_tun_whole(&mut self, from: Address, pkt: Vec<u8>) {
-        // Kun pakker fra afsenderens egen adresse til vores.
+        // Only packets from the sender's own address to ours.
         if pkt.len() < 40 || pkt[8..24] != tunnel::ip_of(&from) || tunnel::ipv6_dst(&pkt) != Some(self.my_ip()) {
-            self.log(format!("IP-pakke fra {} med forkert adresse smidt væk", short(&from)));
+            self.log(format!("IP packet from {} with wrong address discarded", short(&from)));
             return;
         }
         if let Some(tx) = &self.tun_tx {

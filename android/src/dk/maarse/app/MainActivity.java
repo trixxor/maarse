@@ -45,19 +45,19 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Må:rse til Android: webklienten (assets/index.html) i en WebView plus en
- * Bluetooth-bro til noden (Nordic UART Service), fordi WebView ikke har Web
- * Bluetooth. Webklienten bruger broen via window.MaarseAndroid og får data
- * tilbage gennem window.__maarseBle.
+ * Må:rse for Android: the web client (assets/index.html) in a WebView plus a
+ * Bluetooth bridge to the node (Nordic UART Service), because WebView has no Web
+ * Bluetooth. The web client uses the bridge via window.MaarseAndroid and gets data
+ * back through window.__maarseBle.
  *
- * Siden serveres fra https://app.maarse.local/ (opsnappet her), så den er en
- * sikker kontekst: mikrofon og DecompressionStream virker.
+ * The page is served from https://app.maarse.local/ (intercepted here), so it is a
+ * secure context: microphone and DecompressionStream work.
  */
 public class MainActivity extends Activity {
     static final String ORIGIN = "https://app.maarse.local/";
     static final UUID NUS = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
-    static final UUID NUS_RX = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e"); // vi skriver
-    static final UUID NUS_TX = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"); // noden notificerer
+    static final UUID NUS_RX = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e"); // we write
+    static final UUID NUS_TX = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"); // the node notifies
     static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     static final int REQ_BLE = 1, REQ_MIC = 2;
 
@@ -87,7 +87,7 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false);
-        // ws:// til en maarse-host (fx over VPN) fra den sikre interne side.
+        // ws:// to a maarse-host (e.g. over VPN) from the secure internal page.
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         web.addJavascriptInterface(new Bridge(), "MaarseAndroid");
         web.setWebViewClient(new WebViewClient() {
@@ -183,7 +183,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ---------- tilladelser ----------
+    // ---------- permissions ----------
 
     String[] blePerms() {
         if (Build.VERSION.SDK_INT >= 31)
@@ -202,22 +202,22 @@ public class MainActivity extends Activity {
         boolean ok = res.length > 0;
         for (int r : res) ok &= r == PackageManager.PERMISSION_GRANTED;
         if (code == REQ_BLE) {
-            if (ok) startConnect(); else js("onError(" + q("Bluetooth-tilladelse blev afvist") + ")");
+            if (ok) startConnect(); else js("onError(" + q("Bluetooth permission was denied") + ")");
         } else if (code == REQ_MIC && pendingMic != null) {
             if (ok) pendingMic.grant(pendingMic.getResources()); else pendingMic.deny();
             pendingMic = null;
         }
     }
 
-    // ---------- scanning og valg af node ----------
+    // ---------- scanning and choosing a node ----------
 
     @SuppressLint("MissingPermission")
     void startConnect() {
-        if (adapter == null) { js("onError(" + q("Telefonen har ikke Bluetooth") + ")"); return; }
+        if (adapter == null) { js("onError(" + q("The phone has no Bluetooth") + ")"); return; }
         if (!hasBlePerms()) { requestPermissions(blePerms(), REQ_BLE); return; }
-        if (!adapter.isEnabled()) { js("onError(" + q("Slå Bluetooth til og prøv igen") + ")"); return; }
+        if (!adapter.isEnabled()) { js("onError(" + q("Turn on Bluetooth and try again") + ")"); return; }
         BluetoothLeScanner sc = adapter.getBluetoothLeScanner();
-        if (sc == null) { js("onError(" + q("Bluetooth er ikke klar") + ")"); return; }
+        if (sc == null) { js("onError(" + q("Bluetooth is not ready") + ")"); return; }
 
         final List<BluetoothDevice> found = new ArrayList<>();
         final ArrayAdapter<String> names = new ArrayAdapter<>(this, android.R.layout.select_dialog_item);
@@ -229,7 +229,7 @@ public class MainActivity extends Activity {
                 found.add(d);
                 String n = d.getName();
                 if (n == null && r.getScanRecord() != null) n = r.getScanRecord().getDeviceName();
-                names.add((n != null ? n : "Ukendt node") + "  ·  " + r.getRssi() + " dBm");
+                names.add((n != null ? n : "Unknown node") + "  ·  " + r.getRssi() + " dBm");
                 names.notifyDataSetChanged();
             }
         };
@@ -237,10 +237,10 @@ public class MainActivity extends Activity {
         ScanSettings set = new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
         sc.startScan(Collections.singletonList(f), set, cb);
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle("Vælg en Må:rse-node")
+                .setTitle("Choose a Må:rse node")
                 .setAdapter(names, (dlg, which) -> { sc.stopScan(cb); connectTo(found.get(which)); })
-                .setNegativeButton("Annullér", (dlg, which) -> { sc.stopScan(cb); js("onError(" + q("Annulleret") + ")"); })
-                .setOnCancelListener(dlg -> { sc.stopScan(cb); js("onError(" + q("Annulleret") + ")"); })
+                .setNegativeButton("Cancel", (dlg, which) -> { sc.stopScan(cb); js("onError(" + q("Cancelled") + ")"); })
+                .setOnCancelListener(dlg -> { sc.stopScan(cb); js("onError(" + q("Cancelled") + ")"); })
                 .show();
     }
 
@@ -249,7 +249,7 @@ public class MainActivity extends Activity {
     @SuppressLint("MissingPermission")
     void connectTo(BluetoothDevice d) {
         closeGatt();
-        final String name = d.getName() != null ? d.getName() : "ukendt";
+        final String name = d.getName() != null ? d.getName() : "unknown";
         gatt = d.connectGatt(this, false, new BluetoothGattCallback() {
             @Override
             public void onConnectionStateChange(BluetoothGatt g, int status, int state) {
@@ -270,7 +270,7 @@ public class MainActivity extends Activity {
             @Override
             public void onServicesDiscovered(BluetoothGatt g, int status) {
                 android.bluetooth.BluetoothGattService s = g.getService(NUS);
-                if (s == null) { js("onError(" + q("Noden har ikke Nordic UART") + ")"); g.disconnect(); return; }
+                if (s == null) { js("onError(" + q("The node has no Nordic UART") + ")"); g.disconnect(); return; }
                 rx = s.getCharacteristic(NUS_RX);
                 BluetoothGattCharacteristic tx = s.getCharacteristic(NUS_TX);
                 g.setCharacteristicNotification(tx, true);
@@ -298,7 +298,7 @@ public class MainActivity extends Activity {
         }, BluetoothDevice.TRANSPORT_LE);
     }
 
-    /** Skriver næste bid; én skrivning ad gangen (Android kræver det). */
+    /** Writes the next chunk; one write at a time (Android requires it). */
     @SuppressLint("MissingPermission")
     void pump() {
         byte[] next;

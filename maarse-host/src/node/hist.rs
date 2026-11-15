@@ -1,5 +1,5 @@
-//! Kroge mellem noden og beskedhistorikken (se history.rs): gem beskeder,
-//! besvar 0x30-0x32 og send egne beskeder live til de andre skærme.
+//! Hooks between the node and the message history (see history.rs): store messages,
+//! answer 0x30-0x32 and send our own messages live to the other screens.
 
 use super::{Node, err_ev, unix_now};
 use crate::ClientId;
@@ -15,10 +15,10 @@ pub(super) struct Hist {
 
 impl Hist {
     pub(super) fn open(data_dir: &std::path::Path, days: Option<u32>) -> Self {
-        let store = days.and_then(|d| match History::open(data_dir.join("historik"), d, unix_now()) {
+        let store = days.and_then(|d| match History::open(data_dir.join("history"), d, unix_now()) {
             Ok(h) => Some(h),
             Err(e) => {
-                eprintln!("historik kunne ikke åbnes: {e}");
+                eprintln!("history could not be opened: {e}");
                 None
             }
         });
@@ -41,7 +41,7 @@ impl Node {
         }
     }
 
-    /// Ved forbindelse: fortæl, at historik findes, og send ulæste.
+    /// On connect: announce that history exists, and send unread counts.
     pub(super) fn hist_greet(&self, id: ClientId) {
         let Some(h) = &self.hist.store else { return };
         self.send_raw(id, h.info_frame());
@@ -50,7 +50,7 @@ impl Node {
         }
     }
 
-    /// Kaldes for hver hændelse, der sendes til alle klienter.
+    /// Called for every event that is sent to all clients.
     pub(super) fn hist_observe(&mut self, ev: &Event) {
         let Some(h) = self.hist.store.as_mut() else { return };
         let me = self.addr;
@@ -89,8 +89,8 @@ impl Node {
         }
     }
 
-    /// En af vores skærme (`id`) har sendt noget: gem det og vis det live
-    /// på de andre skærme.
+    /// One of our screens (`id`) has sent something: store it and show it live
+    /// on the other screens.
     pub(super) fn hist_sent(&mut self, id: ClientId, kind: u8, conv: Address, msg_id: u64, content: &[u8]) {
         let from = self.addr;
         let Some(h) = self.hist.store.as_mut() else { return };
@@ -116,7 +116,7 @@ impl Node {
             } else {
                 0
             };
-            return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Historik er slået fra"));
+            return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "History is disabled"));
         };
         match history::parse_command(frame) {
             Some(HistCmd::Get { req, conv, before, limit }) => {
@@ -140,11 +140,11 @@ impl Node {
                     self.send_raw(id, f);
                 }
             }
-            None => self.send_client(id, &err_ev(0, error_code::BAD_FRAME, "ugyldig ramme")),
+            None => self.send_client(id, &err_ev(0, error_code::BAD_FRAME, "invalid frame")),
         }
     }
 
-    /// Fra housekeeping: fjern gamle poster cirka hver time.
+    /// From housekeeping: remove old records about every hour.
     pub(super) fn hist_maintain(&mut self) {
         if self.hist.last_prune.elapsed() < Duration::from_secs(3600) {
             return;
@@ -154,7 +154,7 @@ impl Node {
             && let Ok(n) = h.prune(unix_now())
             && n > 0
         {
-            self.log(format!("historik: {n} gamle beskeder slettet"));
+            self.log(format!("history: {n} old messages deleted"));
         }
     }
 }

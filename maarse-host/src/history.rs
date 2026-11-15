@@ -1,53 +1,53 @@
-//! Beskedhistorik på hosten: én fælles indbakke, som flere skærme (telefon,
-//! bærbar, stationær) kan følge samtidig.
+//! Message history on the host: one shared inbox that several screens (phone,
+//! laptop, desktop) can follow at the same time.
 //!
-//! # Lagring
+//! # Storage
 //!
-//! Alt ligger i `<data>/historik/log.txt`, en append-only tekstlog med én
-//! post pr. linje (tabulator-adskilt, binære felter hex-kodet):
+//! Everything is in `<data>/history/log.txt`, an append-only text log with one
+//! record per line (tab-separated, binary fields hex-encoded):
 //!
 //! ```text
-//! M <id> <unix> <art> <flag> <tilstand> <hop> <msg_id> <samtale> <fra> <indhold>
-//! S <id> <tilstand>                      leveringstilstand ændret
-//! R <samtale> <id>                       læst til og med <id>
+//! M <id> <unix> <kind> <flag> <state> <hops> <msg_id> <conv> <from> <content>
+//! S <id> <state>                         delivery state changed
+//! R <conv> <id>                          read up to and including <id>
 //! ```
 //!
-//! * `art`: 1 = direkte besked, 2 = kanalbesked, 3 = fil (kun metadata).
-//! * `flag`: bit 0 = udgående (sendt fra en af vores skærme).
-//! * `tilstand`: 0 = modtaget, 1 = sendt, 2 = kvitteret, 3 = i postkasse.
-//! * `samtale`: modpartens adresse (direkte/fil) eller kanalens adresse.
-//! * `indhold`: teksten (UTF-8) eller for filer: størrelse (u32 LE) |
-//!   MIME-længde (u8) | MIME | navn. Filernes indhold gemmes ikke.
+//! * `kind`: 1 = direct message, 2 = channel message, 3 = file (metadata only).
+//! * `flag`: bit 0 = outgoing (sent from one of our screens).
+//! * `state`: 0 = received, 1 = sent, 2 = acknowledged, 3 = in mailbox.
+//! * `conv`: the peer's address (direct/file) or the channel's address.
+//! * `content`: the text (UTF-8) or for files: size (u32 LE) |
+//!   MIME length (u8) | MIME | name. File contents are not stored.
 //!
-//! Hele loggen læses ind ved opstart (LoRa-beskeder er små; 90 dage fylder
-//! typisk få MB). Ældre poster end `--history-days` fjernes ved opstart og
-//! derefter hver time ved at skrive loggen om (ny fil + omdøbning).
+//! The whole log is read at startup (LoRa messages are small; 90 days
+//! typically take a few MB). Records older than `--history-days` are removed at
+//! startup and then every hour by rewriting the log (new file + rename).
 //!
-//! **Privatliv:** loggen er *ikke* krypteret. Beskederne er ende-til-ende-
-//! krypteret på radio og backbone, men hosten dekrypterer dem, og med
-//! historik slået til ligger klarteksten på hostens disk. Brug
-//! `--no-history` på en delt eller usikker maskine.
+//! **Privacy:** the log is *not* encrypted. Messages are end-to-end
+//! encrypted on radio and backbone, but the host decrypts them, and with
+//! history enabled the plaintext lies on the host's disk. Use
+//! `--no-history` on a shared or untrusted machine.
 //!
-//! # Companion-protokol (kun maarse-host; firmware svarer "ugyldig ramme")
+//! # Companion protocol (maarse-host only; firmware answers "invalid frame")
 //!
-//! Kommandoer:
-//! * `0x30 GetHistory`: req (u16) | samtale (16, nuller = alle) | før id
-//!   (u64, 0 = nyeste) | antal (u8, højst 200). Svar: `HistoryItem`'er
-//!   (ældste først) og til sidst `HistoryEnd`.
-//! * `0x31 MarkRead`: samtale (16) | til og med id (u64, 0 = alt indtil nu).
-//!   Sendes videre til alle skærme som `ReadMark`.
-//! * `0x32 GetReadState`: svar: én `ReadMark` pr. samtale.
+//! Commands:
+//! * `0x30 GetHistory`: req (u16) | conv (16, zeros = all) | before id
+//!   (u64, 0 = newest) | count (u8, at most 200). Answer: `HistoryItem`s
+//!   (oldest first) and finally `HistoryEnd`.
+//! * `0x31 MarkRead`: conv (16) | up to and including id (u64, 0 = everything so far).
+//!   Forwarded to all screens as `ReadMark`.
+//! * `0x32 GetReadState`: answer: one `ReadMark` per conversation.
 //!
-//! Hændelser:
-//! * `0xB0 HistoryItem`: id (u64) | unix (u32) | flag (u8: bit 0 udgående,
-//!   bit 1 live = netop sendt fra en anden skærm) | art (u8) | tilstand (u8)
-//!   | hop (u8) | msg_id (u64) | samtale (16) | fra (16) | indhold (resten).
-//! * `0xB1 HistoryEnd`: req (u16) | samtale (16) | antal (u8) | flere (u8)
-//!   | ældste id (u64).
-//! * `0xB2 ReadMark`: samtale (16) | til og med id (u64) | ulæste (u16).
-//! * `0xB3 HistoryInfo`: slået til (u8) | dage (u16) | antal (u32) |
-//!   nyeste id (u64). Sendes ved forbindelse; klienten bruger kun historik,
-//!   når den har fået denne.
+//! Events:
+//! * `0xB0 HistoryItem`: id (u64) | unix (u32) | flag (u8: bit 0 outgoing,
+//!   bit 1 live = just sent from another screen) | kind (u8) | state (u8)
+//!   | hops (u8) | msg_id (u64) | conv (16) | from (16) | content (the rest).
+//! * `0xB1 HistoryEnd`: req (u16) | conv (16) | count (u8) | more (u8)
+//!   | oldest id (u64).
+//! * `0xB2 ReadMark`: conv (16) | up to and including id (u64) | unread (u16).
+//! * `0xB3 HistoryInfo`: enabled (u8) | days (u16) | count (u32) |
+//!   newest id (u64). Sent on connect; the client only uses history
+//!   once it has received this.
 
 use maarse_core::Address;
 use std::collections::HashMap;
@@ -94,7 +94,7 @@ pub struct Item {
     pub content: Vec<u8>,
 }
 
-/// Kommandoer, som historikken håndterer (typerne 0x30-0x32).
+/// Commands handled by the history (types 0x30-0x32).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HistCmd {
     Get { req: u16, conv: Option<Address>, before: u64, limit: u8 },
@@ -127,7 +127,7 @@ pub fn parse_command(frame: &[u8]) -> Option<HistCmd> {
     }
 }
 
-/// Indhold for en fil: størrelse | MIME-længde | MIME | navn.
+/// Content for a file: size | MIME length | MIME | name.
 pub fn file_content(size: u32, mime: &[u8], name: &[u8]) -> Vec<u8> {
     let mime = &mime[..mime.len().min(64)];
     let mut v = size.to_le_bytes().to_vec();
@@ -200,7 +200,7 @@ pub struct History {
 }
 
 impl History {
-    /// Åbner (eller opretter) `<data>/historik` og fjerner gamle poster.
+    /// Opens (or creates) `<data>/history` and removes old records.
     pub fn open(dir: PathBuf, days: u32, now: u32) -> std::io::Result<Self> {
         fs::create_dir_all(&dir)?;
         let mut h = History { dir, days, items: Vec::new(), read: HashMap::new(), next_id: 1, file: None };
@@ -251,7 +251,7 @@ impl History {
                         *e = (*e).max(id);
                     }
                 }
-                _ => {} // halv linje efter et nedbrud o.l.
+                _ => {} // half a line after a crash or similar
             }
         }
         self.items.sort_by_key(|i| i.id);
@@ -284,7 +284,7 @@ impl History {
         }
     }
 
-    /// Fjerner poster ældre end `days` dage og skriver loggen om.
+    /// Removes records older than `days` days and rewrites the log.
     pub fn prune(&mut self, now: u32) -> std::io::Result<usize> {
         let cutoff = now.saturating_sub(self.days.saturating_mul(86_400));
         let before = self.items.len();
@@ -292,7 +292,7 @@ impl History {
         let removed = before - self.items.len();
         let oldest = self.items.first().map_or(u64::MAX, |i| i.id);
         let latest = self.items.last().map_or(0, |i| i.id);
-        // Læsemærker for samtaler uden poster er ligegyldige.
+        // Read marks for conversations without records do not matter.
         self.read.retain(|c, _| self.items.iter().any(|i| i.conv == *c));
         if removed == 0 && oldest != u64::MAX && self.log_path().exists() {
             return Ok(0);
@@ -312,7 +312,7 @@ impl History {
         Ok(removed)
     }
 
-    /// Gemmer en ny post og giver den et id.
+    /// Stores a new record and gives it an id.
     pub fn add(&mut self, mut it: Item) -> Item {
         it.id = self.next_id;
         self.next_id += 1;
@@ -322,14 +322,14 @@ impl History {
         it
     }
 
-    /// Opdaterer leveringstilstanden for en udgående besked (`msg_id`).
+    /// Updates the delivery state of an outgoing message (`msg_id`).
     pub fn set_state(&mut self, msg_id: u64, state: u8) -> Option<u64> {
         if msg_id == 0 {
             return None;
         }
         let it = self.items.iter_mut().rev().find(|i| i.outgoing && i.msg_id == msg_id)?;
         if it.state == ST_ACKED || it.state == ST_CARRIED {
-            return None; // kvittering slår postkasse
+            return None; // an acknowledgement beats the mailbox
         }
         it.state = state;
         let id = it.id;
@@ -337,8 +337,8 @@ impl History {
         Some(id)
     }
 
-    /// Markerer `conv` som læst til og med `up_to` (0 = seneste). Giver
-    /// (læsemærke, ulæste).
+    /// Marks `conv` as read up to and including `up_to` (0 = latest). Returns
+    /// (read mark, unread).
     pub fn mark_read(&mut self, conv: Address, up_to: u64) -> (u64, usize) {
         let newest = self.items.iter().rev().find(|i| i.conv == conv).map_or(0, |i| i.id);
         let target = if up_to == 0 { newest } else { up_to.min(newest) };
@@ -356,7 +356,7 @@ impl History {
         self.items.iter().filter(|i| i.conv == conv && !i.outgoing && i.id > mark).count()
     }
 
-    /// (samtale, læsemærke, ulæste) for alle samtaler med poster.
+    /// (conversation, read mark, unread) for all conversations with records.
     pub fn read_state(&self) -> Vec<(Address, u64, usize)> {
         let mut convs: Vec<Address> = Vec::new();
         for i in &self.items {
@@ -370,8 +370,8 @@ impl History {
             .collect()
     }
 
-    /// En side: højst `limit` poster før `before` (0 = nyeste), ældste først.
-    /// Giver også, om der er ældre poster.
+    /// A page: at most `limit` records before `before` (0 = newest), oldest first.
+    /// Also returns whether there are older records.
     pub fn page(&self, conv: Option<Address>, before: u64, limit: usize) -> (Vec<&Item>, bool) {
         let limit = limit.clamp(1, MAX_PAGE);
         let mut out: Vec<&Item> = self
@@ -432,8 +432,8 @@ mod tests {
         let now = 1_800_000_000;
         {
             let mut h = History::open(d.clone(), 90, now).unwrap();
-            let a = h.add(msg(1, now, false, "hej æøå"));
-            let b = h.add(msg(1, now + 1, true, "svar"));
+            let a = h.add(msg(1, now, false, "hello æøå"));
+            let b = h.add(msg(1, now + 1, true, "reply"));
             assert_eq!((a.id, b.id), (1, 2));
             assert_eq!(h.set_state(b.msg_id, ST_DEPOSITED), Some(2));
             assert_eq!(h.set_state(b.msg_id, ST_ACKED), Some(2));
@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(h.len(), 4);
         let (p, more) = h.page(Some(Address([1; 16])), 0, 10);
         assert!(!more);
-        assert_eq!(p[0].content, "hej æøå".as_bytes());
+        assert_eq!(p[0].content, "hello æøå".as_bytes());
         assert_eq!(p[1].state, ST_ACKED);
         assert!(p[1].outgoing);
         assert_eq!(h.unread(Address([1; 16])), 0);
@@ -488,19 +488,19 @@ mod tests {
         let day = 86_400;
         let now = 1_800_000_000;
         let mut h = History::open(d.clone(), 2, now).unwrap();
-        h.add(msg(1, now - 5 * day, false, "gammel"));
-        h.add(msg(2, now - 3 * day, false, "gammel 2"));
-        h.add(msg(1, now - day, false, "ny"));
+        h.add(msg(1, now - 5 * day, false, "old"));
+        h.add(msg(2, now - 3 * day, false, "old 2"));
+        h.add(msg(1, now - day, false, "new"));
         h.mark_read(Address([2; 16]), 0);
         assert_eq!(h.prune(now).unwrap(), 2);
         assert_eq!(h.len(), 1);
-        let n = h.add(msg(1, now, false, "nyere"));
-        assert_eq!(n.id, 4, "id'er genbruges ikke");
+        let n = h.add(msg(1, now, false, "newer"));
+        assert_eq!(n.id, 4, "ids are not reused");
         let h = History::open(d.clone(), 2, now).unwrap();
         assert_eq!(h.len(), 2);
         assert_eq!(h.read_state().len(), 1);
         let text = fs::read_to_string(d.join("log.txt")).unwrap();
-        assert!(!text.contains(&hex(b"gammel")));
+        assert!(!text.contains(&hex(b"old")));
         let _ = fs::remove_dir_all(&d);
     }
 

@@ -1,30 +1,30 @@
-//! Gateway til MeshCore.
+//! Gateway to MeshCore.
 //!
-//! En MeshCore-node med den officielle *companion_radio_usb*-firmware sidder
-//! på en seriel port. Vi taler MeshCores companion-protokol med den (samme
-//! protokol som MeshCore-apps bruger over USB) og lader MeshCore-noden klare
-//! al MeshCore-kryptografi. På Må:rse-siden er broen bare endnu en klient af
-//! vores egen node (som webklienten), så node.rs ikke skal ændres.
+//! A MeshCore node with the official *companion_radio_usb* firmware sits
+//! on a serial port. We speak MeshCore's companion protocol with it (the same
+//! protocol MeshCore apps use over USB) and let the MeshCore node handle
+//! all MeshCore cryptography. On the Må:rse side the bridge is just another client of
+//! our own node (like the web client), so node.rs does not need to change.
 //!
-//! Protokollen er genimplementeret ud fra MeshCores kildekode (MIT-licens,
-//! <https://github.com/meshcore-dev/MeshCore>). Henvisningerne nedenfor er
-//! til `main`-grenen i november 2026:
+//! The protocol is reimplemented from MeshCore's source code (MIT licence,
+//! <https://github.com/meshcore-dev/MeshCore>). The references below are
+//! to the `main` branch in November 2026:
 //!
-//! * `src/helpers/ArduinoSerialInterface.cpp` – rammer på seriel.
-//! * `examples/companion_radio/MyMesh.cpp` – kommandoer, svar og push-koder.
-//! * `src/helpers/BaseChatMesh.cpp` – kanalbeskeders tekstformat.
+//! * `src/helpers/ArduinoSerialInterface.cpp` – framing on serial.
+//! * `examples/companion_radio/MyMesh.cpp` – commands, responses and push codes.
+//! * `src/helpers/BaseChatMesh.cpp` – the text format of channel messages.
 //!
-//! Semantik:
+//! Semantics:
 //!
-//! * MeshCore-kanal ⇄ Må:rse-kanal efter `--meshcore-bridge`
-//!   (standard `offentlig=public`). Tekst får afsenderen foran:
-//!   `[MC Alice] hej` mod Må:rse, `[Må 1a2b3c4d] hej` mod MeshCore.
-//! * Løkker: tekst, der allerede er brobygget (`[MC …` / `[Må …`), sendes
-//!   ikke tilbage, og samme tekst i samme kanal sendes højst én gang pr.
+//! * MeshCore channel ⇄ Må:rse channel according to `--meshcore-bridge`
+//!   (default `public=public`). Text gets the sender prefixed:
+//!   `[MC Alice] hi` towards Må:rse, `[Må 1a2b3c4d] hi` towards MeshCore.
+//! * Loops: text that has already been bridged (`[MC …` / `[Må …`) is not sent
+//!   back, and the same text in the same channel is sent at most once per
 //!   [`DEDUP_SECS`].
-//! * Direkte beskeder: send en Må:rse-DM til gatewayen med `@Navn tekst`, så
-//!   går den til MeshCore-kontakten `Navn`. Svar fra kontakten går tilbage
-//!   til den seneste Må:rse-afsender (eller til `@<32 hex-tegn>` i teksten).
+//! * Direct messages: send a Må:rse DM to the gateway with `@Name text`, and
+//!   it goes to the MeshCore contact `Name`. Replies from the contact go back
+//!   to the latest Må:rse sender (or to `@<32 hex chars>` in the text).
 
 use crate::{In, next_id};
 use maarse_core::Address;
@@ -38,7 +38,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-// ---------- protokolkonstanter (MyMesh.cpp linje 9-140) ----------
+// ---------- protocol constants (MyMesh.cpp lines 9-140) ----------
 
 const CMD_APP_START: u8 = 1;
 const CMD_SEND_TXT_MSG: u8 = 2;
@@ -78,31 +78,31 @@ const PUSH_STATUS_RESPONSE: u8 = 0x87;
 const PUSH_TRACE_DATA: u8 = 0x89;
 const PUSH_NEW_ADVERT: u8 = 0x8A;
 
-/// TXT_TYPE_PLAIN (MyMesh.cpp, `CMD_SEND_CHANNEL_TXT_MSG` kræver denne).
+/// TXT_TYPE_PLAIN (MyMesh.cpp, `CMD_SEND_CHANNEL_TXT_MSG` requires this).
 const TXT_PLAIN: u8 = 0;
-/// TXT_TYPE_CLI_DATA: admin-kommando til en repeater og dens svar
-/// (src/helpers/TxtDataHelpers.h linje 7).
+/// TXT_TYPE_CLI_DATA: admin command to a repeater and its reply
+/// (src/helpers/TxtDataHelpers.h line 7).
 const TXT_CLI: u8 = 1;
-/// OUT_PATH_UNKNOWN (src/helpers/ContactInfo.h linje 6); også "ikke flood" i beskeder.
+/// OUT_PATH_UNKNOWN (src/helpers/ContactInfo.h line 6); also "not flood" in messages.
 const PATH_UNKNOWN: u8 = 0xFF;
-/// Den protokolversion, vi beder om med CMD_DEVICE_QUERY (≥ 3 giver SNR).
+/// The protocol version we ask for with CMD_DEVICE_QUERY (≥ 3 gives SNR).
 const APP_TARGET_VER: u8 = 3;
-/// `MAX_FRAME_SIZE` i MeshCore (BaseSerialInterface.h) er 172; vi tillader lidt mere.
+/// `MAX_FRAME_SIZE` in MeshCore (BaseSerialInterface.h) is 172; we allow a bit more.
 const MAX_MC_FRAME: usize = 255;
-/// `MAX_TEXT_LEN` i BaseChatMesh.h (10 AES-blokke).
+/// `MAX_TEXT_LEN` in BaseChatMesh.h (10 AES blocks).
 const MC_MAX_TEXT: usize = 160;
-/// Kanalpladser, vi kigger på (MeshCores `MAX_GROUP_CHANNELS` er typisk 8-40).
+/// Channel slots we look at (MeshCore's `MAX_GROUP_CHANNELS` is typically 8-40).
 const CHANNEL_SCAN: u8 = 16;
-/// `PUBLIC_GROUP_PSK` "izOH6cXN6mrJ5e26oRXNcg==" (MyMesh.cpp linje 113), base64-afkodet.
+/// `PUBLIC_GROUP_PSK` "izOH6cXN6mrJ5e26oRXNcg==" (MyMesh.cpp line 113), base64-decoded.
 pub const PUBLIC_PSK: [u8; 16] = [
     0x8b, 0x33, 0x87, 0xe9, 0xc5, 0xcd, 0xea, 0x6a, 0xc9, 0xe5, 0xed, 0xba, 0xa1, 0x15, 0xcd, 0x72,
 ];
-/// Samme tekst i samme kanal brobygges højst én gang inden for dette tidsrum.
+/// The same text in the same channel is bridged at most once within this period.
 pub const DEDUP_SECS: u32 = 300;
 
-/// Nøglen til en MeshCore-hashtagkanal: de første 16 bytes af
-/// SHA-256("#navn"). Det er konventionen i MeshCore-apps; firmwaren får bare
-/// nøglen via CMD_SET_CHANNEL.
+/// The key of a MeshCore hashtag channel: the first 16 bytes of
+/// SHA-256("#name"). That is the convention in MeshCore apps; the firmware just gets
+/// the key via CMD_SET_CHANNEL.
 pub fn hashtag_secret(name: &str) -> [u8; 16] {
     let h = Sha256::digest(name.as_bytes());
     let mut k = [0u8; 16];
@@ -110,10 +110,10 @@ pub fn hashtag_secret(name: &str) -> [u8; 16] {
     k
 }
 
-// ---------- rammer ----------
+// ---------- frames ----------
 
-/// Ramme fra os til MeshCore-noden: `'<'` | længde (u16 LE) | indhold
-/// (ArduinoSerialInterface.cpp linje 46-57).
+/// Frame from us to the MeshCore node: `'<'` | length (u16 LE) | content
+/// (ArduinoSerialInterface.cpp lines 46-57).
 pub fn encode_frame(payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(payload.len() + 3);
     v.push(b'<');
@@ -122,9 +122,9 @@ pub fn encode_frame(payload: &[u8]) -> Vec<u8> {
     v
 }
 
-/// Samler rammer fra MeshCore-noden: `'>'` | længde (u16 LE) | indhold
-/// (ArduinoSerialInterface.cpp linje 31-33). Bytes uden for en ramme (fx
-/// debug-udskrifter) springes over.
+/// Collects frames from the MeshCore node: `'>'` | length (u16 LE) | content
+/// (ArduinoSerialInterface.cpp lines 31-33). Bytes outside a frame (e.g.
+/// debug output) are skipped.
 #[derive(Default)]
 pub struct McDecoder {
     buf: Vec<u8>,
@@ -165,34 +165,34 @@ impl McDecoder {
     }
 }
 
-// ---------- kommandoer (indhold uden rammehoved) ----------
+// ---------- commands (content without frame header) ----------
 
-/// CMD_DEVICE_QUERY | app_target_ver (MyMesh.cpp linje 1056-1057).
+/// CMD_DEVICE_QUERY | app_target_ver (MyMesh.cpp lines 1056-1057).
 pub fn cmd_device_query() -> Vec<u8> {
     vec![CMD_DEVICE_QUERY, APP_TARGET_VER]
 }
 
-/// CMD_APP_START | 7 reserverede bytes | appnavn (MyMesh.cpp linje 1076-1080).
+/// CMD_APP_START | 7 reserved bytes | app name (MyMesh.cpp lines 1076-1080).
 pub fn cmd_app_start(app: &str) -> Vec<u8> {
     let mut v = vec![CMD_APP_START, 0, 0, 0, 0, 0, 0, 0];
     v.extend_from_slice(app.as_bytes());
     v
 }
 
-/// CMD_SET_DEVICE_TIME | sekunder (u32 LE) (MyMesh.cpp linje 1287-1289).
+/// CMD_SET_DEVICE_TIME | seconds (u32 LE) (MyMesh.cpp lines 1287-1289).
 pub fn cmd_set_time(unix: u32) -> Vec<u8> {
     let mut v = vec![CMD_SET_DEVICE_TIME];
     v.extend_from_slice(&unix.to_le_bytes());
     v
 }
 
-/// CMD_GET_CHANNEL | idx (MyMesh.cpp linje 1752).
+/// CMD_GET_CHANNEL | idx (MyMesh.cpp line 1752).
 pub fn cmd_get_channel(idx: u8) -> Vec<u8> {
     vec![CMD_GET_CHANNEL, idx]
 }
 
-/// CMD_SET_CHANNEL | idx | navn (32 bytes, nul-udfyldt) | nøgle (16 bytes)
-/// (MyMesh.cpp linje 1769-1774).
+/// CMD_SET_CHANNEL | idx | name (32 bytes, zero-padded) | key (16 bytes)
+/// (MyMesh.cpp lines 1769-1774).
 pub fn cmd_set_channel(idx: u8, name: &str, secret: &[u8; 16]) -> Vec<u8> {
     let mut v = vec![CMD_SET_CHANNEL, idx];
     let mut n = [0u8; 32];
@@ -204,18 +204,18 @@ pub fn cmd_set_channel(idx: u8, name: &str, secret: &[u8; 16]) -> Vec<u8> {
     v
 }
 
-/// CMD_GET_CONTACTS uden 'since' (MyMesh.cpp linje 1238).
+/// CMD_GET_CONTACTS without 'since' (MyMesh.cpp line 1238).
 pub fn cmd_get_contacts() -> Vec<u8> {
     vec![CMD_GET_CONTACTS]
 }
 
-/// CMD_SYNC_NEXT_MESSAGE (MyMesh.cpp linje 1415).
+/// CMD_SYNC_NEXT_MESSAGE (MyMesh.cpp line 1415).
 pub fn cmd_sync_next() -> Vec<u8> {
     vec![CMD_SYNC_NEXT_MESSAGE]
 }
 
-/// CMD_SEND_CHANNEL_TXT_MSG | txt_type | idx | tidsstempel (u32 LE) | tekst
-/// (MyMesh.cpp linje 1178-1185). Firmwaren sætter selv "nodenavn: " foran.
+/// CMD_SEND_CHANNEL_TXT_MSG | txt_type | idx | timestamp (u32 LE) | text
+/// (MyMesh.cpp lines 1178-1185). The firmware itself prefixes "node name: ".
 pub fn cmd_send_channel(idx: u8, unix: u32, msg: &str) -> Vec<u8> {
     let mut v = vec![CMD_SEND_CHANNEL_TXT_MSG, TXT_PLAIN, idx];
     v.extend_from_slice(&unix.to_le_bytes());
@@ -223,15 +223,15 @@ pub fn cmd_send_channel(idx: u8, unix: u32, msg: &str) -> Vec<u8> {
     v
 }
 
-/// CMD_SEND_TXT_MSG | txt_type | forsøg | tidsstempel (u32 LE) |
-/// offentlig nøgle-præfiks (6 bytes) | tekst (MyMesh.cpp linje 1132-1142).
+/// CMD_SEND_TXT_MSG | txt_type | attempt | timestamp (u32 LE) |
+/// public key prefix (6 bytes) | text (MyMesh.cpp lines 1132-1142).
 pub fn cmd_send_txt(prefix: &[u8; 6], unix: u32, msg: &str) -> Vec<u8> {
     cmd_send_typed(TXT_PLAIN, prefix, unix, msg)
 }
 
-/// Som [`cmd_send_txt`] med valgfri txt_type. Med TXT_TYPE_CLI_DATA sendes
-/// teksten som admin-kommando (MyMesh.cpp linje 1149-1151; firmwaren bruger
-/// sit eget ur til tidsstemplet).
+/// Like [`cmd_send_txt`] with an optional txt_type. With TXT_TYPE_CLI_DATA the
+/// text is sent as an admin command (MyMesh.cpp lines 1149-1151; the firmware uses
+/// its own clock for the timestamp).
 pub fn cmd_send_typed(txt_type: u8, prefix: &[u8; 6], unix: u32, msg: &str) -> Vec<u8> {
     let mut v = vec![CMD_SEND_TXT_MSG, txt_type, 0];
     v.extend_from_slice(&unix.to_le_bytes());
@@ -240,19 +240,19 @@ pub fn cmd_send_typed(txt_type: u8, prefix: &[u8; 6], unix: u32, msg: &str) -> V
     v
 }
 
-/// CMD_SEND_SELF_ADVERT | 1 = flood, 0 = zero-hop (MyMesh.cpp linje 1297-1313).
+/// CMD_SEND_SELF_ADVERT | 1 = flood, 0 = zero-hop (MyMesh.cpp lines 1297-1313).
 pub fn cmd_self_advert(flood: bool) -> Vec<u8> {
     vec![CMD_SEND_SELF_ADVERT, flood as u8]
 }
 
-/// CMD_REMOVE_CONTACT | offentlig nøgle (32) (MyMesh.cpp linje 1349-1358).
+/// CMD_REMOVE_CONTACT | public key (32) (MyMesh.cpp lines 1349-1358).
 pub fn cmd_remove_contact(key: &[u8; 32]) -> Vec<u8> {
     let mut v = vec![CMD_REMOVE_CONTACT];
     v.extend_from_slice(key);
     v
 }
 
-/// CMD_SEND_LOGIN | offentlig nøgle (32) | adgangskode (MyMesh.cpp linje 1577-1596).
+/// CMD_SEND_LOGIN | public key (32) | password (MyMesh.cpp lines 1577-1596).
 pub fn cmd_login(key: &[u8; 32], password: &str) -> Vec<u8> {
     let mut v = vec![CMD_SEND_LOGIN];
     v.extend_from_slice(key);
@@ -260,15 +260,15 @@ pub fn cmd_login(key: &[u8; 32], password: &str) -> Vec<u8> {
     v
 }
 
-/// CMD_SEND_STATUS_REQ | offentlig nøgle (32) (MyMesh.cpp linje 1630-1646).
+/// CMD_SEND_STATUS_REQ | public key (32) (MyMesh.cpp lines 1630-1646).
 pub fn cmd_status_req(key: &[u8; 32]) -> Vec<u8> {
     let mut v = vec![CMD_SEND_STATUS_REQ];
     v.extend_from_slice(key);
     v
 }
 
-/// CMD_SEND_TRACE_PATH | tag (u32 LE) | auth (u32) | flags | sti
-/// (companion_radio/MyMesh.cpp). flags = 0: 1-byte hash pr. hop.
+/// CMD_SEND_TRACE_PATH | tag (u32 LE) | auth (u32) | flags | path
+/// (companion_radio/MyMesh.cpp). flags = 0: 1-byte hash per hop.
 pub fn cmd_trace(tag: u32, path: &[u8]) -> Vec<u8> {
     let mut v = vec![CMD_SEND_TRACE_PATH];
     v.extend_from_slice(&tag.to_le_bytes());
@@ -277,8 +277,8 @@ pub fn cmd_trace(tag: u32, path: &[u8]) -> Vec<u8> {
     v
 }
 
-/// Sti til et MeshCore-ping: ud ad kontaktens kendte rute, til kontakten selv
-/// og samme vej tilbage. Kun repeatere/rum videresender trace-pakker.
+/// Path for a MeshCore ping: out along the contact's known route, to the contact itself
+/// and the same way back. Only repeaters/rooms forward trace packets.
 pub fn ping_path(c: &McContact) -> Option<Vec<u8>> {
     let n = usize::from(hops(c.out_path_len)?);
     let out = c.out_path.get(..n)?;
@@ -288,42 +288,42 @@ pub fn ping_path(c: &McContact) -> Option<Vec<u8>> {
     Some(p)
 }
 
-// ---------- svar og push ----------
+// ---------- responses and push ----------
 
-/// En MeshCore-kontakt (writeContactRespFrame, MyMesh.cpp linje 171-191).
+/// A MeshCore contact (writeContactRespFrame, MyMesh.cpp lines 171-191).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McContact {
     pub key: [u8; 32],
-    /// ADV_TYPE_* (src/helpers/AdvertDataHelpers.h linje 7-11).
+    /// ADV_TYPE_* (src/helpers/AdvertDataHelpers.h lines 7-11).
     pub kind: u8,
-    /// Rå out_path_len: 0xFF = ukendt (flood), ellers antal hop i de nederste 6 bit.
+    /// Raw out_path_len: 0xFF = unknown (flood), otherwise hop count in the lower 6 bits.
     pub out_path_len: u8,
-    /// Hash-bytes for ruten (64 bytes i rammen; de første `hops` gælder).
+    /// Hash bytes for the route (64 bytes in the frame; the first `hops` apply).
     pub out_path: Vec<u8>,
     pub name: String,
-    /// Kontaktens eget ur ved seneste annoncering.
+    /// The contact's own clock at the latest advert.
     pub last_advert: u32,
-    /// Grader × 1 000 000 (ContactInfo.h linje 18).
+    /// Degrees × 1 000 000 (ContactInfo.h line 18).
     pub lat: i32,
     pub lon: i32,
 }
 
-/// Nodens egne oplysninger og radioindstillinger (RESP_CODE_SELF_INFO).
+/// The node's own information and radio settings (RESP_CODE_SELF_INFO).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct McSelf {
     pub name: String,
     pub key: [u8; 32],
     pub tx_power: u8,
-    /// kHz (firmwaren sender `freq * 1000` med freq i MHz).
+    /// kHz (the firmware sends `freq * 1000` with freq in MHz).
     pub freq_khz: u32,
-    /// Hz (firmwaren sender `bw * 1000` med bw i kHz).
+    /// Hz (the firmware sends `bw * 1000` with bw in kHz).
     pub bw_hz: u32,
     pub sf: u8,
     pub cr: u8,
 }
 
-/// Status fra en repeater (RepeaterStats, examples/simple_repeater/MyMesh.h
-/// linje 44-60). Felter efter rammens ende er `None`.
+/// Status from a repeater (RepeaterStats, examples/simple_repeater/MyMesh.h
+/// lines 44-60). Fields after the end of the frame are `None`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct McStatus {
     pub batt_mv: Option<u16>,
@@ -379,17 +379,17 @@ pub enum McEvent {
     DeviceInfo { fw_ver: u8 },
     SelfInfo(McSelf),
     ContactsStart,
-    /// RESP_CODE_CONTACT (`push` = false) eller PUSH_CODE_NEW_ADVERT (`push` = true).
+    /// RESP_CODE_CONTACT (`push` = false) or PUSH_CODE_NEW_ADVERT (`push` = true).
     Contact { c: McContact, push: bool },
-    /// PUSH_CODE_ADVERT: en kendt kontakt har annonceret igen.
+    /// PUSH_CODE_ADVERT: a known contact has advertised again.
     Advert { key: [u8; 32] },
     EndOfContacts,
     Sent,
-    /// PUSH_CODE_TRACE_DATA: SNR × 4 for hvert hop og til sidst for os selv.
+    /// PUSH_CODE_TRACE_DATA: SNR × 4 for each hop and finally for ourselves.
     Trace { tag: u32, snrs: Vec<i8>, last: i8 },
-    /// `snr4` er SNR × 4 (kun v3); `path_len` er rå (0xFF = direkte rute).
+    /// `snr4` is SNR × 4 (v3 only); `path_len` is raw (0xFF = direct route).
     ChannelMsg { idx: u8, ts: u32, text: String, snr4: Option<i8>, path_len: u8 },
-    /// `txt_type` er TXT_TYPE_PLAIN eller TXT_TYPE_CLI_DATA (andre giver `Other`).
+    /// `txt_type` is TXT_TYPE_PLAIN or TXT_TYPE_CLI_DATA (others give `Other`).
     ContactMsg { prefix: [u8; 6], ts: u32, text: String, txt_type: u8, snr4: Option<i8>, path_len: u8 },
     NoMoreMessages,
     ChannelInfo { idx: u8, name: String, secret: [u8; 16] },
@@ -397,7 +397,7 @@ pub enum McEvent {
     LoginOk { prefix: [u8; 6], admin: bool },
     LoginFail { prefix: [u8; 6] },
     Status { prefix: [u8; 6], st: McStatus },
-    /// Andre svar (kode < 0x80) og push-beskeder (≥ 0x80), vi ikke bruger.
+    /// Other responses (code < 0x80) and push messages (≥ 0x80) that we do not use.
     Other(u8),
 }
 
@@ -410,7 +410,7 @@ fn u32le(b: &[u8]) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(..4)?.try_into().ok()?))
 }
 
-/// Afkoder en ramme fra MeshCore-noden. Kortere rammer end forventet giver
+/// Decodes a frame from the MeshCore node. Frames shorter than expected give
 /// `None`.
 pub fn decode_event(f: &[u8]) -> Option<McEvent> {
     let code = *f.first()?;
@@ -420,7 +420,7 @@ pub fn decode_event(f: &[u8]) -> Option<McEvent> {
         RESP_DEVICE_INFO => McEvent::DeviceInfo { fw_ver: *f.get(1)? },
         // code, adv_type, tx_power, max_tx_power, pub_key(32), lat(4), lon(4),
         // multi_acks, loc_policy, telemetry, manual_add, freq(4), bw(4), sf, cr,
-        // navn (MyMesh.cpp linje 1085-1116): navnet starter ved byte 58.
+        // name (MyMesh.cpp lines 1085-1116): the name starts at byte 58.
         RESP_SELF_INFO => McEvent::SelfInfo(McSelf {
             tx_power: *f.get(2)?,
             key: f.get(4..36)?.try_into().ok()?,
@@ -431,9 +431,9 @@ pub fn decode_event(f: &[u8]) -> Option<McEvent> {
             name: cstr(f.get(58..).unwrap_or(&[])),
         }),
         RESP_CONTACTS_START => McEvent::ContactsStart,
-        // code, pub_key(32), type, flags, out_path_len, out_path(64), navn(32),
+        // code, pub_key(32), type, flags, out_path_len, out_path(64), name(32),
         // last_advert(4), lat(4), lon(4), lastmod(4)
-        // (writeContactRespFrame, MyMesh.cpp linje 171-191).
+        // (writeContactRespFrame, MyMesh.cpp lines 171-191).
         RESP_CONTACT | PUSH_NEW_ADVERT => McEvent::Contact {
             c: McContact {
                 key: f.get(1..33)?.try_into().ok()?,
@@ -447,12 +447,12 @@ pub fn decode_event(f: &[u8]) -> Option<McEvent> {
             },
             push: code == PUSH_NEW_ADVERT,
         },
-        // code, pub_key(32) (onDiscoveredContact, MyMesh.cpp linje 363-365).
+        // code, pub_key(32) (onDiscoveredContact, MyMesh.cpp lines 363-365).
         PUSH_ADVERT => McEvent::Advert { key: f.get(1..33)?.try_into().ok()? },
         RESP_END_OF_CONTACTS => McEvent::EndOfContacts,
         RESP_SENT => McEvent::Sent,
-        // v3: code, snr*4, res1, res2, idx, path_len, txt_type, ts(4), tekst;
-        // v<3 mangler de tre første bytes efter koden (MyMesh.cpp linje 558-584).
+        // v3: code, snr*4, res1, res2, idx, path_len, txt_type, ts(4), text;
+        // v<3 lacks the first three bytes after the code (MyMesh.cpp lines 558-584).
         RESP_CHANNEL_MSG | RESP_CHANNEL_MSG_V3 => {
             let v3 = code == RESP_CHANNEL_MSG_V3;
             let r = if v3 { f.get(4..)? } else { &f[1..] };
@@ -467,8 +467,8 @@ pub fn decode_event(f: &[u8]) -> Option<McEvent> {
                 path_len: r[1],
             }
         }
-        // v3: code, snr*4, res1, res2, prefix(6), path_len, txt_type, ts(4), tekst
-        // (queueMessage, MyMesh.cpp linje 440-466).
+        // v3: code, snr*4, res1, res2, prefix(6), path_len, txt_type, ts(4), text
+        // (queueMessage, MyMesh.cpp lines 440-466).
         RESP_CONTACT_MSG | RESP_CONTACT_MSG_V3 => {
             let v3 = code == RESP_CONTACT_MSG_V3;
             let r = if v3 { f.get(4..)? } else { &f[1..] };
@@ -485,7 +485,7 @@ pub fn decode_event(f: &[u8]) -> Option<McEvent> {
             }
         }
         RESP_NO_MORE_MESSAGES => McEvent::NoMoreMessages,
-        // code, idx, navn(32), nøgle(16) (MyMesh.cpp linje 1756-1762).
+        // code, idx, name(32), key(16) (MyMesh.cpp lines 1756-1762).
         RESP_CHANNEL_INFO => McEvent::ChannelInfo {
             idx: *f.get(1)?,
             name: cstr(f.get(2..34)?),
@@ -493,20 +493,20 @@ pub fn decode_event(f: &[u8]) -> Option<McEvent> {
         },
         PUSH_MSG_WAITING => McEvent::MsgWaiting,
         // code, permissions (bit 0 = admin), prefix(6), … (onContactResponse,
-        // MyMesh.cpp linje 698-716).
+        // MyMesh.cpp lines 698-716).
         PUSH_LOGIN_SUCCESS => McEvent::LoginOk {
             admin: f.get(1)? & 1 != 0,
             prefix: f.get(2..8)?.try_into().ok()?,
         },
-        // code, reserveret, prefix(6) (MyMesh.cpp linje 717-721).
+        // code, reserved, prefix(6) (MyMesh.cpp lines 717-721).
         PUSH_LOGIN_FAIL => McEvent::LoginFail { prefix: f.get(2..8)?.try_into().ok()? },
-        // code, reserveret, prefix(6), RepeaterStats (MyMesh.cpp linje 731-738).
+        // code, reserved, prefix(6), RepeaterStats (MyMesh.cpp lines 731-738).
         PUSH_STATUS_RESPONSE => McEvent::Status {
             prefix: f.get(2..8)?.try_into().ok()?,
             st: McStatus::parse(&f[8..]),
         },
         // code, res, path_len, flags, tag(4), auth(4), hashes(path_len),
-        // snrs(path_len >> (flags & 3)), sidste snr (onTraceRecv).
+        // snrs(path_len >> (flags & 3)), last snr (onTraceRecv).
         PUSH_TRACE_DATA => {
             let plen = usize::from(*f.get(2)?);
             let n = plen >> (f.get(3)? & 3);
@@ -521,34 +521,34 @@ pub fn decode_event(f: &[u8]) -> Option<McEvent> {
     })
 }
 
-// ---------- broen (ren logik, ingen I/O) ----------
+// ---------- the bridge (pure logic, no I/O) ----------
 
-/// Hvad broen vil have sendt.
+/// What the bridge wants sent.
 #[derive(Debug, PartialEq, Eq)]
-#[allow(clippy::large_enum_variant)] // kortlivede værdier
+#[allow(clippy::large_enum_variant)] // short-lived values
 pub enum Out {
-    /// Indhold til MeshCore-noden (uden rammehoved).
+    /// Content for the MeshCore node (without frame header).
     Mc(Vec<u8>),
-    /// Companion-kommando til vores egen Må:rse-node.
+    /// Companion command to our own Må:rse node.
     Node(Command),
     Log(String),
-    /// JSON-hændelse til webklienterne på `/mc`.
+    /// JSON event to the web clients on `/mc`.
     Ui(String),
 }
 
-/// Hvilken MeshCore-kanal en Må:rse-kanal kobles til.
+/// Which MeshCore channel a Må:rse channel is linked to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mapping {
-    /// Som Må:rse-noden kalder den: `offentlig` eller `#navn`.
+    /// As the Må:rse node calls it: `public` or `#name`.
     pub maarse: String,
-    /// `public` eller `#navn` (små bogstaver).
+    /// `public` or `#name` (lower case).
     pub meshcore: String,
 }
 
 fn norm_maarse(s: &str) -> String {
     let n = s.trim().to_lowercase();
     match n.as_str() {
-        "" | "offentlig" | "#offentlig" | "public" | "#public" => "offentlig".into(),
+        "" | "public" | "#public" => "public".into(),
         _ if n.starts_with('#') => n,
         _ => format!("#{n}"),
     }
@@ -557,27 +557,27 @@ fn norm_maarse(s: &str) -> String {
 fn norm_meshcore(s: &str) -> String {
     let n = s.trim().to_lowercase();
     match n.as_str() {
-        "" | "public" | "#public" | "offentlig" => "public".into(),
+        "" | "public" | "#public" => "public".into(),
         _ if n.starts_with('#') => n,
         _ => format!("#{n}"),
     }
 }
 
-/// Fortolker `--meshcore-bridge <maarse-kanal>=<meshcore-kanal>`. Uden `=`
-/// bruges samme navn på begge sider.
+/// Parses `--meshcore-bridge <maarse-channel>=<meshcore-channel>`. Without `=`
+/// the same name is used on both sides.
 pub fn parse_mapping(s: &str) -> Result<Mapping, String> {
     let (a, b) = s.split_once('=').unwrap_or((s, s));
     if a.trim().is_empty() && b.trim().is_empty() {
-        return Err(format!("--meshcore-bridge: ugyldig værdi '{s}'"));
+        return Err(format!("--meshcore-bridge: invalid value '{s}'"));
     }
     Ok(Mapping { maarse: norm_maarse(a), meshcore: norm_meshcore(b) })
 }
 
-/// Bro-valg fra webklienten: MeshCore-kanal -> Må:rse-kanal (`None` = ingen bro).
+/// Bridge choices from the web client: MeshCore channel -> Må:rse channel (`None` = no bridge).
 pub type Overrides = Vec<(String, Option<String>)>;
 
-/// Læser `<data>/meshcore-broer.txt`: én linje pr. MeshCore-kanal,
-/// `<maarse-kanal>=<meshcore-kanal>` eller `-=<meshcore-kanal>` for ingen bro.
+/// Reads `<data>/meshcore-bridges.txt`: one line per MeshCore channel,
+/// `<maarse-channel>=<meshcore-channel>` or `-=<meshcore-channel>` for no bridge.
 pub fn parse_overrides(s: &str) -> Overrides {
     let mut v: Overrides = Vec::new();
     for l in s.lines().map(str::trim) {
@@ -599,7 +599,7 @@ pub fn format_overrides(o: &Overrides) -> String {
         .collect()
 }
 
-/// Hvad der skal ske, når en kommando fra webklienten lykkes.
+/// What should happen when a command from the web client succeeds.
 #[derive(Clone, Debug)]
 enum Effect {
     None,
@@ -611,11 +611,11 @@ enum Effect {
 enum Pend {
     Cmd(u8),
     GetChannel,
-    /// Kommando fra webklienten (`op`).
+    /// Command from the web client (`op`).
     Ui(&'static str, Effect),
 }
 
-/// Afkorter til højst `max` bytes uden at skære et tegn over.
+/// Truncates to at most `max` bytes without cutting a character in half.
 fn clip(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
@@ -660,21 +660,21 @@ fn kind_name(k: u8) -> &'static str {
     }
 }
 
-/// Antal hop ud fra en rå path_len (Packet.h linje 79-80), `None` hvis ukendt.
+/// Hop count from a raw path_len (Packet.h lines 79-80), `None` if unknown.
 fn hops(p: u8) -> Option<u8> {
     (p != PATH_UNKNOWN).then_some(p & 63)
 }
 
 fn err_text(e: u8) -> String {
-    // ERR_CODE_* (MyMesh.cpp linje 135-140).
+    // ERR_CODE_* (MyMesh.cpp lines 135-140).
     match e {
-        1 => "ikke understøttet af noden".into(),
-        2 => "ikke fundet".into(),
-        3 => "tabellen er fuld".into(),
-        4 => "forkert tilstand".into(),
-        5 => "filfejl på noden".into(),
-        6 => "ugyldigt argument".into(),
-        _ => format!("fejlkode {e}"),
+        1 => "not supported by the node".into(),
+        2 => "not found".into(),
+        3 => "the table is full".into(),
+        4 => "wrong state".into(),
+        5 => "file error on the node".into(),
+        6 => "invalid argument".into(),
+        _ => format!("error code {e}"),
     }
 }
 
@@ -684,38 +684,38 @@ fn ui_err(op: &str, msg: &str) -> Out {
 
 pub struct Bridge {
     maps: Vec<Mapping>,
-    /// Kommandoer sendt til MeshCore-noden, der venter på svar (i rækkefølge).
+    /// Commands sent to the MeshCore node that are waiting for a response (in order).
     pending: VecDeque<Pend>,
-    /// MeshCore-kanalpladser, vi har set: idx -> (navn, nøgle).
+    /// MeshCore channel slots we have seen: idx -> (name, key).
     mc_slots: HashMap<u8, (String, [u8; 16])>,
-    /// MeshCore-kanal (`public`/`#navn`) -> plads.
+    /// MeshCore channel (`public`/`#name`) -> slot.
     mc_idx: HashMap<String, u8>,
     channels_ready: bool,
-    /// Må:rse-kanaladresse -> navn (fra `ChannelJoined`).
+    /// Må:rse channel address -> name (from `ChannelJoined`).
     maarse_ch: HashMap<Address, String>,
-    /// Visningsnavne på Må:rse-noder (fra `NodeInfo`).
+    /// Display names of Må:rse nodes (from `NodeInfo`).
     names: HashMap<Address, String>,
-    /// Vores Må:rse-adresse (fra `Info`).
+    /// Our Må:rse address (from `Info`).
     my_addr: Option<Address>,
-    /// MeshCore-nodens egne oplysninger (navnet sættes foran kanalbeskeder af firmwaren).
+    /// The MeshCore node's own information (the firmware prefixes the name to channel messages).
     me: McSelf,
-    /// MeshCore-kontakter efter offentlig nøgle.
+    /// MeshCore contacts by public key.
     contacts: HashMap<[u8; 32], McContact>,
-    /// Ukendte kontakter, der har annonceret (PUSH_ADVERT har kun nøglen);
-    /// navn og type sendes til webklienten, når kontaktlisten er hentet.
+    /// Unknown contacts that have advertised (PUSH_ADVERT has only the key);
+    /// name and type are sent to the web client once the contact list has been fetched.
     lookup: HashSet<[u8; 32]>,
-    /// Udestående ping: tag -> (kontakt, afsendt).
+    /// Outstanding pings: tag -> (contact, sent).
     pings: HashMap<u32, ([u8; 32], std::time::Instant)>,
-    /// Hvem på Må:rse skrev senest til en MeshCore-kontakt.
+    /// Who on Må:rse last wrote to a MeshCore contact.
     dm_route: HashMap<[u8; 6], Address>,
-    /// Kontakter, webklienten har skrevet til (de får ingen hjælpetekst).
+    /// Contacts the web client has written to (they get no help text).
     ui_dm: HashSet<[u8; 6]>,
-    /// (hash, tid) for brobyggede beskeder.
+    /// (hash, time) for bridged messages.
     seen: VecDeque<(u64, u32)>,
     syncing: bool,
     connected: bool,
     port: String,
-    /// Bro-valg fra webklienten (gemmes i `save_to`).
+    /// Bridge choices from the web client (stored in `save_to`).
     overrides: Overrides,
     save_to: Option<PathBuf>,
 }
@@ -723,7 +723,7 @@ pub struct Bridge {
 impl Bridge {
     pub fn new(mut maps: Vec<Mapping>) -> Self {
         if maps.is_empty() {
-            maps.push(Mapping { maarse: "offentlig".into(), meshcore: "public".into() });
+            maps.push(Mapping { maarse: "public".into(), meshcore: "public".into() });
         }
         Bridge {
             maps,
@@ -749,7 +749,7 @@ impl Bridge {
         }
     }
 
-    /// Anvender gemte bro-valg oven på `--meshcore-bridge`.
+    /// Applies saved bridge choices on top of `--meshcore-bridge`.
     pub fn apply_overrides(&mut self, o: Overrides) {
         for (mc, m) in &o {
             self.maps.retain(|x| x.meshcore != *mc);
@@ -760,9 +760,9 @@ impl Bridge {
         self.overrides = o;
     }
 
-    /// Sådan vises en Må:rse-afsender i MeshCore: visningsnavnet, hvis
-    /// noden har et (højst 24 bytes, ikke bevist), ellers 8 hex-tegn.
-    /// Klammer fjernes fra navnet, så det ikke kan ligne et andet præfiks.
+    /// How a Må:rse sender is shown in MeshCore: the display name if
+    /// the node has one (at most 24 bytes, not proven), otherwise 8 hex characters.
+    /// Brackets are removed from the name so it cannot look like another prefix.
     fn label(&self, a: &Address) -> String {
         match self.names.get(a) {
             Some(n) => {
@@ -783,12 +783,12 @@ impl Bridge {
         self.contacts.values().find(|c| c.key.starts_with(p))
     }
 
-    /// Fuld nøgle i hex, hvis kontakten kendes, ellers præfikset.
+    /// Full key in hex if the contact is known, otherwise the prefix.
     fn key_text(&self, p: &[u8; 6]) -> String {
         self.contact_by_prefix(p).map(|c| hex(&c.key)).unwrap_or_else(|| hex(p))
     }
 
-    /// Nøgle (64 hex) eller præfiks (≥ 12 hex) af en kendt kontakt.
+    /// Key (64 hex) or prefix (≥ 12 hex) of a known contact.
     fn find_key(&self, s: &str) -> Option<[u8; 32]> {
         let b = unhex(s)?;
         if let Ok(k) = <[u8; 32]>::try_from(b.as_slice()) {
@@ -800,7 +800,7 @@ impl Bridge {
         self.contact_by_prefix(&b).map(|c| c.key)
     }
 
-    /// Navnet, MeshCore-kanalen på pladsen har i broen (`public`/`#navn`).
+    /// The name the MeshCore channel in the slot has in the bridge (`public`/`#name`).
     fn slot_key(&self, idx: u8) -> Option<String> {
         let (name, secret) = self.mc_slots.get(&idx)?;
         if name.is_empty() && secret.iter().all(|&b| b == 0) {
@@ -809,8 +809,8 @@ impl Bridge {
         Some(if *secret == PUBLIC_PSK { "public".into() } else { norm_meshcore(name) })
     }
 
-    /// Bygger `mc_idx` ud fra pladserne: offentlig og hashtags med den rigtige
-    /// nøgle først, så andre kanaler efter navn.
+    /// Builds `mc_idx` from the slots: public and hashtags with the right
+    /// key first, then other channels by name.
     fn reindex(&mut self) {
         self.mc_idx.clear();
         let mut slots: Vec<_> = self.mc_slots.iter().map(|(i, v)| (*i, v.clone())).collect();
@@ -879,7 +879,7 @@ impl Bridge {
         v.to_string()
     }
 
-    /// Kaldes ved opstart: deltag i Må:rse-kanalerne.
+    /// Called at startup: join the Må:rse channels.
     pub fn node_start(&self) -> Vec<Out> {
         let mut out = vec![Out::Node(Command::GetInfo)];
         for m in &self.maps {
@@ -888,7 +888,7 @@ impl Bridge {
         out
     }
 
-    /// Kaldes, hver gang der (gen)forbindes til MeshCore-noden.
+    /// Called every time we (re)connect to the MeshCore node.
     pub fn mc_start(&mut self, now: u32) -> Vec<Out> {
         self.pending.clear();
         self.mc_slots.clear();
@@ -907,14 +907,14 @@ impl Bridge {
         out
     }
 
-    /// Kaldes, når forbindelsen til MeshCore-noden er mistet.
+    /// Called when the connection to the MeshCore node is lost.
     pub fn mc_lost(&mut self) -> Vec<Out> {
         self.connected = false;
         self.pending.clear();
         vec![Out::Ui(self.state_json())]
     }
 
-    /// Kaldes jævnligt: hent beskeder, hvis en MSG_WAITING er gået tabt.
+    /// Called regularly: fetch messages in case a MSG_WAITING was lost.
     pub fn poll(&mut self) -> Vec<Out> {
         let mut out = Vec::new();
         if !self.syncing && self.channels_ready {
@@ -924,7 +924,7 @@ impl Bridge {
         out
     }
 
-    /// Sand, hvis beskeden ikke er brobygget for nylig (og husker den).
+    /// True if the message has not been bridged recently (and remembers it).
     fn fresh(&mut self, chan: &str, body: &str, now: u32) -> bool {
         while self.seen.front().is_some_and(|&(_, t)| now.saturating_sub(t) > DEDUP_SECS) {
             self.seen.pop_front();
@@ -946,7 +946,7 @@ impl Bridge {
     }
 
     fn resolve_channels(&mut self, out: &mut Vec<Out>) {
-        // Kendte pladser: offentlig efter nøgle, hashtags efter nøgle eller navn.
+        // Known slots: public by key, hashtags by key or name.
         self.reindex();
         let mut free: Vec<u8> = self.mc_slots.keys().copied().filter(|i| self.slot_key(*i).is_none()).collect();
         free.sort();
@@ -956,7 +956,7 @@ impl Bridge {
                 continue;
             }
             if free.is_empty() {
-                out.push(Out::Log(format!("MeshCore: ingen ledig kanalplads til {w}")));
+                out.push(Out::Log(format!("MeshCore: no free channel slot for {w}")));
                 continue;
             }
             let idx = free.remove(0);
@@ -965,19 +965,19 @@ impl Bridge {
             } else {
                 (w.clone(), hashtag_secret(&w))
             };
-            out.push(Out::Log(format!("MeshCore: opretter kanal {name} på plads {idx}")));
+            out.push(Out::Log(format!("MeshCore: creating channel {name} in slot {idx}")));
             self.mc(out, Pend::Cmd(CMD_SET_CHANNEL), cmd_set_channel(idx, &name, &secret));
             self.mc_slots.insert(idx, (name, secret));
             self.mc_idx.insert(w, idx);
         }
         self.channels_ready = true;
         let list: Vec<String> = self.maps.iter().map(|m| format!("{} ⇄ {}", m.maarse, m.meshcore)).collect();
-        out.push(Out::Log(format!("MeshCore: bro klar ({})", list.join(", "))));
-        // Hent beskeder, der ventede, mens vi forbandt.
+        out.push(Out::Log(format!("MeshCore: bridge ready ({})", list.join(", "))));
+        // Fetch messages that were waiting while we connected.
         out.extend(self.poll());
     }
 
-    /// Svar på en kommando fra webklienten.
+    /// Response to a command from the web client.
     fn ui_reply(&mut self, op: &'static str, eff: Effect, ev: &McEvent, out: &mut Vec<Out>) {
         match ev {
             McEvent::Ok | McEvent::Sent => {
@@ -999,7 +999,7 @@ impl Bridge {
                 }
             }
             McEvent::Err(e) => out.push(ui_err(op, &format!("MeshCore: {}", err_text(*e)))),
-            _ => out.push(ui_err(op, "uventet svar fra MeshCore-noden")),
+            _ => out.push(ui_err(op, "unexpected response from the MeshCore node")),
         }
     }
 
@@ -1007,8 +1007,8 @@ impl Bridge {
         let mut out = Vec::new();
         let Some(ev) = decode_event(frame) else { return out };
         let code = frame[0];
-        // Svar (kode < 0x80) hører til den ældste ventende kommando; kontakter
-        // kommer som START, CONTACT … END, og kun END afslutter.
+        // Responses (code < 0x80) belong to the oldest waiting command; contacts
+        // come as START, CONTACT … END, and only END completes.
         let pend = if code < 0x80 && !matches!(code, RESP_CONTACTS_START | RESP_CONTACT) {
             self.pending.pop_front()
         } else {
@@ -1023,11 +1023,11 @@ impl Bridge {
                 self.mc_slots.insert(idx, (name, secret));
             }
             McEvent::SelfInfo(me) => {
-                out.push(Out::Log(format!("MeshCore: forbundet til '{}'", me.name)));
+                out.push(Out::Log(format!("MeshCore: connected to '{}'", me.name)));
                 self.me = me;
             }
             McEvent::DeviceInfo { fw_ver } if fw_ver < 3 => {
-                out.push(Out::Log(format!("MeshCore: gammel firmware (v{fw_ver}), opdatér companion_radio")));
+                out.push(Out::Log(format!("MeshCore: old firmware (v{fw_ver}), update companion_radio")));
             }
             McEvent::Contact { c, push } => {
                 if self.lookup.remove(&c.key) || push {
@@ -1056,7 +1056,7 @@ impl Bridge {
                     ev["name"] = json!(c.name);
                     ev["type"] = json!(kind_name(c.kind));
                 } else if self.lookup.insert(key) && self.lookup.len() == 1 {
-                    // Firmwaren har tilføjet kontakten selv; hent den for navn og type.
+                    // The firmware added the contact itself; fetch it for name and type.
                     self.mc(&mut out, Pend::Cmd(CMD_GET_CONTACTS), cmd_get_contacts());
                 }
                 out.push(Out::Ui(ev.to_string()));
@@ -1065,7 +1065,7 @@ impl Bridge {
                 if let Some(Pend::Cmd(c)) = pend
                     && c != CMD_SET_DEVICE_TIME
                 {
-                    out.push(Out::Log(format!("MeshCore: kommando {c} fejlede (kode {e})")));
+                    out.push(Out::Log(format!("MeshCore: command {c} failed (code {e})")));
                 }
                 if matches!(pend, Some(Pend::Cmd(CMD_SYNC_NEXT_MESSAGE))) {
                     self.syncing = false;
@@ -1130,7 +1130,7 @@ impl Bridge {
                 out.push(Out::Ui(json!({"ev":"status","key":self.key_text(&prefix),"fields":f}).to_string()));
             }
             McEvent::Other(RESP_CONTACT_MSG | RESP_CONTACT_MSG_V3 | RESP_CHANNEL_MSG | RESP_CHANNEL_MSG_V3) => {
-                // Ikke-tekst (fx signeret): spring over, hent næste.
+                // Non-text (e.g. signed): skip, fetch the next.
                 self.syncing = false;
                 out.extend(self.poll());
             }
@@ -1147,13 +1147,13 @@ impl Bridge {
         out
     }
 
-    /// Kommando fra en webklient (JSON fra `/mc`).
+    /// Command from a web client (JSON from `/mc`).
     pub fn on_ui(&mut self, v: &Value, now: u32) -> Vec<Out> {
         let mut out = Vec::new();
         let op = v["op"].as_str().unwrap_or("");
         let s = |k: &str| v[k].as_str().unwrap_or("");
         let idx = v["idx"].as_u64().and_then(|i| u8::try_from(i).ok());
-        // Navnet på kommandoen, som 'static til Pend::Ui.
+        // The command's name, as 'static for Pend::Ui.
         const OPS: [&str; 10] =
             ["advert", "send", "chan_send", "chan_set", "chan_del", "contact_del", "login", "status", "cli", "ping"];
         let sop = OPS.iter().copied().find(|o| *o == op);
@@ -1161,7 +1161,7 @@ impl Bridge {
             "state" => out.push(Out::Ui(self.state_json())),
             "bridge" => {
                 let Some(key) = idx.and_then(|i| self.slot_key(i)) else {
-                    out.push(ui_err(op, "ukendt kanalplads"));
+                    out.push(ui_err(op, "unknown channel slot"));
                     return out;
                 };
                 let maarse = v["maarse"].as_str().filter(|m| !m.trim().is_empty()).map(norm_maarse);
@@ -1176,20 +1176,20 @@ impl Bridge {
                     }
                 }
                 out.push(Out::Log(format!(
-                    "MeshCore: bro {key} ⇄ {}",
-                    maarse.as_deref().unwrap_or("(ingen)")
+                    "MeshCore: bridge {key} ⇄ {}",
+                    maarse.as_deref().unwrap_or("(none)")
                 )));
                 self.overrides.retain(|(k, _)| *k != key);
                 self.overrides.push((key, maarse));
                 if let Some(p) = &self.save_to
                     && let Err(e) = std::fs::write(p, format_overrides(&self.overrides))
                 {
-                    out.push(Out::Log(format!("MeshCore: kunne ikke gemme {}: {e}", p.display())));
+                    out.push(Out::Log(format!("MeshCore: could not save {}: {e}", p.display())));
                 }
                 out.push(Out::Ui(json!({"ev":"ok","op":"bridge"}).to_string()));
                 out.push(Out::Ui(self.state_json()));
             }
-            _ if !self.connected => out.push(ui_err(op, "MeshCore-noden er ikke forbundet")),
+            _ if !self.connected => out.push(ui_err(op, "The MeshCore node is not connected")),
             "refresh" => {
                 self.mc_slots.clear();
                 self.contacts.clear();
@@ -1204,7 +1204,7 @@ impl Bridge {
             }
             "send" | "cli" => {
                 let Some(k) = self.find_key(s("to")).or_else(|| self.find_key(s("key"))) else {
-                    out.push(ui_err(op, "ukendt kontakt"));
+                    out.push(ui_err(op, "unknown contact"));
                     return out;
                 };
                 let p: [u8; 6] = k[..6].try_into().unwrap();
@@ -1218,24 +1218,24 @@ impl Bridge {
             }
             "chan_send" => {
                 let Some(i) = idx.filter(|i| self.slot_key(*i).is_some()) else {
-                    out.push(ui_err(op, "ukendt kanalplads"));
+                    out.push(ui_err(op, "unknown channel slot"));
                     return out;
                 };
-                // Firmwaren sætter "<nodenavn>: " foran (BaseChatMesh.cpp linje 523).
+                // The firmware prefixes "<node name>: " (BaseChatMesh.cpp line 523).
                 let room = MC_MAX_TEXT.saturating_sub(self.me.name.len() + 2);
                 self.mc(&mut out, Pend::Ui("chan_send", Effect::None), cmd_send_channel(i, now, clip(s("text"), room)));
             }
             "chan_set" => {
                 let name = s("name").trim().to_string();
                 let Some(i) = idx.filter(|i| *i < CHANNEL_SCAN) else {
-                    out.push(ui_err(op, "ugyldig kanalplads"));
+                    out.push(ui_err(op, "invalid channel slot"));
                     return out;
                 };
                 let secret: Option<[u8; 16]> = match v["secret"].as_str().filter(|x| !x.is_empty()) {
                     Some(h) => match unhex(h).and_then(|b| b.try_into().ok()) {
                         Some(k) => Some(k),
                         None => {
-                            out.push(ui_err(op, "nøglen skal være 32 hex-tegn"));
+                            out.push(ui_err(op, "the key must be 32 hex characters"));
                             return out;
                         }
                     },
@@ -1244,21 +1244,21 @@ impl Bridge {
                     None => None,
                 };
                 let (Some(secret), false) = (secret, name.is_empty()) else {
-                    out.push(ui_err(op, "angiv et navn og en nøgle (eller et navn med #)"));
+                    out.push(ui_err(op, "give a name and a key (or a name with #)"));
                     return out;
                 };
                 self.mc(&mut out, Pend::Ui("chan_set", Effect::Slot(i, name.clone(), secret)), cmd_set_channel(i, &name, &secret));
             }
             "chan_del" => {
                 let Some(i) = idx.filter(|i| *i < CHANNEL_SCAN) else {
-                    out.push(ui_err(op, "ugyldig kanalplads"));
+                    out.push(ui_err(op, "invalid channel slot"));
                     return out;
                 };
                 self.mc(&mut out, Pend::Ui("chan_del", Effect::Slot(i, String::new(), [0; 16])), cmd_set_channel(i, "", &[0; 16]));
             }
             "contact_del" | "login" | "status" => {
                 let Some(k) = self.find_key(s("key")) else {
-                    out.push(ui_err(op, "ukendt kontakt"));
+                    out.push(ui_err(op, "unknown contact"));
                     return out;
                 };
                 let (eff, cmd) = match op {
@@ -1270,11 +1270,11 @@ impl Bridge {
             }
             "ping" => {
                 let Some(c) = self.find_key(s("key")).and_then(|k| self.contacts.get(&k)) else {
-                    out.push(ui_err(op, "ukendt kontakt"));
+                    out.push(ui_err(op, "unknown contact"));
                     return out;
                 };
                 let Some(path) = ping_path(c) else {
-                    out.push(ui_err(op, "ingen kendt rute til kontakten endnu (vent på en annoncering eller et svar)"));
+                    out.push(ui_err(op, "no known route to the contact yet (wait for an advert or a reply)"));
                     return out;
                 };
                 let key = c.key;
@@ -1285,7 +1285,7 @@ impl Bridge {
                 self.pings.insert(tag, (key, std::time::Instant::now()));
                 self.mc(&mut out, Pend::Ui("ping", Effect::None), cmd_trace(tag, &path));
             }
-            _ => out.push(ui_err(op, "ukendt kommando")),
+            _ => out.push(ui_err(op, "unknown command")),
         }
         out
     }
@@ -1294,7 +1294,7 @@ impl Bridge {
         let Some(mc) = self.mc_idx.iter().find(|(_, i)| **i == idx).map(|(n, _)| n.clone()) else {
             return;
         };
-        // Kanaltekst er "<afsender>: <besked>" (BaseChatMesh.cpp linje 523).
+        // Channel text is "<sender>: <message>" (BaseChatMesh.cpp line 523).
         let (from, body) = t.split_once(": ").unwrap_or(("?", t));
         if body.starts_with("[Må ") || body.starts_with("[MC ") || from == self.me.name {
             return;
@@ -1337,11 +1337,11 @@ impl Bridge {
                     text: text(clip(&msg, 200).as_bytes()),
                 }));
             }
-            // Webklienten fører samtalen med kontakten: ingen hjælpetekst.
+            // The web client is having the conversation with the contact: no help text.
             None if self.ui_dm.contains(&prefix) => {}
             None => {
                 let me = self.my_addr.map(|a| a.to_string()).unwrap_or_default();
-                let help = format!("Må:rse-gateway {me}. Skriv: @<Må:rse-adresse, 32 hex-tegn> besked");
+                let help = format!("Må:rse gateway {me}. Write: @<Må:rse address, 32 hex chars> message");
                 let now = unix_now();
                 out.push(Out::Mc(cmd_send_txt(&prefix, now, clip(&help, MC_MAX_TEXT - 10))));
                 self.pending.push_back(Pend::Cmd(CMD_SEND_TXT_MSG));
@@ -1379,18 +1379,18 @@ impl Bridge {
                     if !self.fresh(&mc, &body, now) {
                         continue;
                     }
-                    // Firmwaren sætter "<nodenavn>: " foran (BaseChatMesh.cpp linje 523).
+                    // The firmware prefixes "<node name>: " (BaseChatMesh.cpp line 523).
                     let room = MC_MAX_TEXT.saturating_sub(self.me.name.len() + 2);
                     let msg = format!("[Må {}] {body}", self.label(&from));
                     self.mc(&mut out, Pend::Cmd(CMD_SEND_CHANNEL_TXT_MSG), cmd_send_channel(idx, now, clip(&msg, room)));
                 }
             }
             Event::DirectReceived { from, text: t, .. } => {
-                // Kun "@Navn tekst" er til broen; alt andet er til hostens egen bruger.
+                // Only "@Name text" is for the bridge; everything else is for the host's own user.
                 let s = String::from_utf8_lossy(&t).into_owned();
                 let Some(rest) = s.trim().strip_prefix('@') else { return out };
                 let lower = rest.to_lowercase();
-                // Længste kontaktnavn, teksten starter med (navne kan have mellemrum).
+                // The longest contact name the text starts with (names can contain spaces).
                 let hit = self
                     .contacts
                     .values()
@@ -1411,7 +1411,7 @@ impl Bridge {
                     }
                     None => {
                         let first = rest.split(' ').next().unwrap_or("");
-                        let m = format!("MeshCore-gateway: kender ingen kontakt '{first}'");
+                        let m = format!("MeshCore gateway: no known contact '{first}'");
                         out.push(Out::Node(Command::SendDirect { req: 0, dest: from, text: text(m.as_bytes()) }));
                     }
                 }
@@ -1422,31 +1422,31 @@ impl Bridge {
     }
 }
 
-// ---------- webklienter (/mc) ----------
+// ---------- web clients (/mc) ----------
 
-/// Forbindelsen mellem MeshCore-tråden og webklienterne på `/mc`.
+/// The connection between the MeshCore thread and the web clients on `/mc`.
 struct Hub {
-    /// Én afsender pr. forbundet webklient (JSON-tekst).
+    /// One sender per connected web client (JSON text).
     subs: Mutex<Vec<Sender<String>>>,
-    /// Kommandoer til MeshCore-tråden; `None` uden `--meshcore`.
+    /// Commands for the MeshCore thread; `None` without `--meshcore`.
     cmd: Mutex<Option<Sender<String>>>,
 }
 
 static HUB: Hub = Hub { subs: Mutex::new(Vec::new()), cmd: Mutex::new(None) };
 
-/// Ny webklient: modtager alle hændelser fra nu af.
+/// New web client: receives all events from now on.
 pub fn subscribe() -> Receiver<String> {
     let (tx, rx) = channel();
     HUB.subs.lock().unwrap_or_else(|e| e.into_inner()).push(tx);
     rx
 }
 
-/// Sender en JSON-kommando til MeshCore-tråden. Falsk uden `--meshcore`.
+/// Sends a JSON command to the MeshCore thread. False without `--meshcore`.
 pub fn command(json: String) -> bool {
     HUB.cmd.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|t| t.send(json).is_ok())
 }
 
-/// `state`, når hosten kører uden `--meshcore`.
+/// `state` when the host runs without `--meshcore`.
 pub fn disabled_state() -> String {
     json!({"ev":"state","connected":false,"enabled":false,"contacts":[],"channels":[]}).to_string()
 }
@@ -1461,7 +1461,7 @@ fn unix_now() -> u32 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0)
 }
 
-/// Hvor ofte vi spørger efter beskeder, hvis en MSG_WAITING er gået tabt.
+/// How often we ask for messages in case a MSG_WAITING was lost.
 const POLL_EVERY: Duration = Duration::from_secs(15);
 
 struct Ctx<'a> {
@@ -1494,13 +1494,13 @@ impl Ctx<'_> {
         Ok(())
     }
 
-    /// Kommandoer fra webklienterne.
+    /// Commands from the web clients.
     fn ui_commands(&self, bridge: &mut Bridge) -> Vec<Out> {
         let mut outs = Vec::new();
         while let Ok(s) = self.ui.try_recv() {
             match serde_json::from_str::<Value>(&s) {
                 Ok(v) => outs.extend(bridge.on_ui(&v, unix_now())),
-                Err(_) => outs.push(ui_err("?", "ugyldig JSON")),
+                Err(_) => outs.push(ui_err("?", "invalid JSON")),
             }
         }
         outs
@@ -1520,7 +1520,7 @@ fn node_events(crx: &Receiver<Vec<u8>>, dec: &mut FrameDecoder) -> Vec<Event> {
     evs
 }
 
-/// Én forbindelse til MeshCore-noden. Returnerer, når porten fejler.
+/// One connection to the MeshCore node. Returns when the port fails.
 fn session<P: Read + Write>(
     port: &mut P,
     bridge: &mut Bridge,
@@ -1560,12 +1560,12 @@ fn session<P: Read + Write>(
     }
 }
 
-/// Filen med bro-valg fra webklienten.
+/// The file with bridge choices from the web client.
 pub fn overrides_file(data_dir: &Path) -> PathBuf {
-    data_dir.join("meshcore-broer.txt")
+    data_dir.join("meshcore-bridges.txt")
 }
 
-/// Starter broen i en tråd. Forbinder igen, hvis porten forsvinder.
+/// Starts the bridge in a thread. Reconnects if the port disappears.
 pub fn spawn(port: String, baud: u32, maps: Vec<Mapping>, data_dir: PathBuf, tx: Sender<In>) {
     let (ui_tx, ui_rx) = channel();
     *HUB.cmd.lock().unwrap_or_else(|e| e.into_inner()) = Some(ui_tx);
@@ -1590,12 +1590,12 @@ pub fn spawn(port: String, baud: u32, maps: Vec<Mapping>, data_dir: PathBuf, tx:
                 Ok(mut sp) => {
                     let _ = sp.write_data_terminal_ready(true);
                     let r = session(&mut sp, &mut bridge, &crx, &mut ndec, &ctx);
-                    eprintln!("  MeshCore: {port} mistet ({r:?}), prøver igen");
+                    eprintln!("  MeshCore: {port} lost ({r:?}), retrying");
                 }
-                Err(e) => eprintln!("  MeshCore: kan ikke åbne {port}: {e}"),
+                Err(e) => eprintln!("  MeshCore: cannot open {port}: {e}"),
             }
             let _ = ctx.dispatch(None, bridge.mc_lost());
-            // Følg med i Må:rse-kanaler og webklienter, mens vi venter.
+            // Keep up with Må:rse channels and web clients while we wait.
             let until = Instant::now() + Duration::from_secs(5);
             while Instant::now() < until {
                 for ev in node_events(&crx, &mut ndec) {
@@ -1617,8 +1617,8 @@ mod tests {
         Address([b; 16])
     }
 
-    /// RESP_CODE_CHANNEL_MSG_RECV_V3-ramme som i onChannelMessageRecv
-    /// (MyMesh.cpp linje 559-578): kode, snr*4, 0, 0, idx, path_len, txt_type, ts, tekst.
+    /// RESP_CODE_CHANNEL_MSG_RECV_V3 frame as in onChannelMessageRecv
+    /// (MyMesh.cpp lines 559-578): code, snr*4, 0, 0, idx, path_len, txt_type, ts, text.
     fn chan_frame(idx: u8, ts: u32, t: &str) -> Vec<u8> {
         let mut f = vec![RESP_CHANNEL_MSG_V3, 0x28, 0, 0, idx, 2, TXT_PLAIN];
         f.extend_from_slice(&ts.to_le_bytes());
@@ -1626,7 +1626,7 @@ mod tests {
         f
     }
 
-    /// RESP_CODE_CHANNEL_INFO (MyMesh.cpp linje 1756-1762).
+    /// RESP_CODE_CHANNEL_INFO (MyMesh.cpp lines 1756-1762).
     fn info_frame(idx: u8, name: &str, secret: &[u8; 16]) -> Vec<u8> {
         let mut f = vec![RESP_CHANNEL_INFO, idx];
         let mut n = [0u8; 32];
@@ -1638,9 +1638,9 @@ mod tests {
 
     #[test]
     fn frame_header_matches_arduino_serial_interface() {
-        // '<' (0x3c), længde LSB, MSB (ArduinoSerialInterface.cpp linje 46-57).
+        // '<' (0x3c), length LSB, MSB (ArduinoSerialInterface.cpp lines 46-57).
         assert_eq!(encode_frame(&[0x16, 0x03]), vec![0x3c, 0x02, 0x00, 0x16, 0x03]);
-        // '>' (0x3e) fra noden (linje 31-33); skrald før rammen ignoreres.
+        // '>' (0x3e) from the node (lines 31-33); garbage before the frame is ignored.
         let mut d = McDecoder::default();
         d.push(b"debug\r\n>\x01");
         assert_eq!(d.next_frame(), None);
@@ -1658,13 +1658,13 @@ mod tests {
         assert_eq!(cmd_get_channel(2), vec![31, 2]);
         assert_eq!(cmd_sync_next(), vec![10]);
         assert_eq!(
-            cmd_send_channel(1, 0x6553f100, "hej"),
-            vec![3, 0, 1, 0x00, 0xf1, 0x53, 0x65, b'h', b'e', b'j']
+            cmd_send_channel(1, 0x6553f100, "hi!"),
+            vec![3, 0, 1, 0x00, 0xf1, 0x53, 0x65, b'h', b'i', b'!']
         );
         let p = [1, 2, 3, 4, 5, 6];
         assert_eq!(cmd_send_txt(&p, 1, "x"), vec![2, 0, 0, 1, 0, 0, 0, 1, 2, 3, 4, 5, 6, b'x']);
         let s = cmd_set_channel(3, "#test", &hashtag_secret("#test"));
-        assert_eq!(s.len(), 2 + 32 + 16); // MyMesh.cpp linje 1769
+        assert_eq!(s.len(), 2 + 32 + 16); // MyMesh.cpp line 1769
         assert_eq!(&s[2..7], b"#test");
         assert_eq!(s[7], 0);
         assert_eq!(s[34..36], [0x9c, 0xd8]);
@@ -1672,7 +1672,7 @@ mod tests {
 
     #[test]
     fn public_psk_is_base64_of_firmware_constant() {
-        // "izOH6cXN6mrJ5e26oRXNcg==" afkodet med base64.
+        // "izOH6cXN6mrJ5e26oRXNcg==" decoded with base64.
         const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let s = b"izOH6cXN6mrJ5e26oRXNcg";
         let mut bits = 0u32;
@@ -1692,17 +1692,17 @@ mod tests {
     #[test]
     fn decode_responses() {
         assert!(matches!(
-            decode_event(&chan_frame(0, 0x11223344, "Alice: hej")),
-            Some(McEvent::ChannelMsg { idx: 0, ts: 0x11223344, ref text, .. }) if text == "Alice: hej"
+            decode_event(&chan_frame(0, 0x11223344, "Alice: hi!")),
+            Some(McEvent::ChannelMsg { idx: 0, ts: 0x11223344, ref text, .. }) if text == "Alice: hi!"
         ));
-        // v<3-variant (RESP_CODE_CHANNEL_MSG_RECV): ingen snr/reserverede bytes.
+        // v<3 variant (RESP_CODE_CHANNEL_MSG_RECV): no snr/reserved bytes.
         let mut old = vec![RESP_CHANNEL_MSG, 1, 0xff, TXT_PLAIN, 1, 0, 0, 0];
         old.extend_from_slice(b"Bo: hi");
         assert_eq!(
             decode_event(&old),
             Some(McEvent::ChannelMsg { idx: 1, ts: 1, text: "Bo: hi".into(), snr4: None, path_len: 0xff })
         );
-        // RESP_CODE_CONTACT_MSG_RECV_V3 (MyMesh.cpp linje 440-459).
+        // RESP_CODE_CONTACT_MSG_RECV_V3 (MyMesh.cpp lines 440-459).
         let mut dm = vec![RESP_CONTACT_MSG_V3, 0, 0, 0, 9, 8, 7, 6, 5, 4, 0xff, TXT_PLAIN, 5, 0, 0, 0];
         dm.extend_from_slice(b"yo");
         assert_eq!(
@@ -1734,7 +1734,7 @@ mod tests {
             decode_event(&c),
             Some(McEvent::Contact { ref c, push: false }) if c.key == [0xaa; 32] && c.name == "Alice"
         ));
-        // RESP_CODE_SELF_INFO: navnet starter ved byte 58.
+        // RESP_CODE_SELF_INFO: the name starts at byte 58.
         let mut si = vec![RESP_SELF_INFO];
         si.extend_from_slice(&[0; 57]);
         si.extend_from_slice(b"Gw");
@@ -1747,18 +1747,18 @@ mod tests {
 
     #[test]
     fn mapping_parse() {
-        assert_eq!(parse_mapping("offentlig=public").unwrap(), Mapping { maarse: "offentlig".into(), meshcore: "public".into() });
+        assert_eq!(parse_mapping("public=public").unwrap(), Mapping { maarse: "public".into(), meshcore: "public".into() });
         assert_eq!(parse_mapping("Aarhus").unwrap(), Mapping { maarse: "#aarhus".into(), meshcore: "#aarhus".into() });
         assert_eq!(parse_mapping("#dk=#Denmark").unwrap(), Mapping { maarse: "#dk".into(), meshcore: "#denmark".into() });
         assert!(parse_mapping("=").is_err());
     }
 
-    /// En broen klar med offentlig ⇄ public (plads 0) og #test ⇄ #test, som
-    /// skal oprettes på den ledige plads 1.
+    /// A bridge ready with public ⇄ public (slot 0) and #test ⇄ #test, which
+    /// must be created in the free slot 1.
     fn ready_bridge() -> (Bridge, Vec<Out>) {
-        let mut b = Bridge::new(vec![parse_mapping("offentlig=public").unwrap(), parse_mapping("#test").unwrap()]);
+        let mut b = Bridge::new(vec![parse_mapping("public=public").unwrap(), parse_mapping("#test").unwrap()]);
         b.on_node(Event::Info { addr: addr(9), repeater: false, version: 2, max_text: 240, max_file: 0, identity: None }, 0);
-        b.on_node(Event::ChannelJoined { channel: addr(1), name: text(b"offentlig") }, 0);
+        b.on_node(Event::ChannelJoined { channel: addr(1), name: text(b"public") }, 0);
         b.on_node(Event::ChannelJoined { channel: addr(2), name: text(b"#test") }, 0);
         b.mc_start(100);
         let mut si = vec![RESP_DEVICE_INFO, 8];
@@ -1768,7 +1768,7 @@ mod tests {
         si.extend_from_slice(&[0; 57]);
         si.extend_from_slice(b"Gw");
         b.on_mc(&si, 100);
-        b.on_mc(&[RESP_ERR, 6], 100); // tid
+        b.on_mc(&[RESP_ERR, 6], 100); // time
         b.on_mc(&[RESP_CONTACTS_START, 1, 0, 0, 0], 100);
         let mut c = vec![RESP_CONTACT];
         c.extend_from_slice(&[0xaa; 32]);
@@ -1814,31 +1814,31 @@ mod tests {
     fn bridges_both_ways_with_prefix_and_no_loops() {
         let (mut b, _) = ready_bridge();
         // MeshCore -> Må:rse.
-        let out = b.on_mc(&chan_frame(0, 1, "Alice: hej"), 200);
-        assert_eq!(sent_texts(&out), vec!["[MC Alice] hej"]);
+        let out = b.on_mc(&chan_frame(0, 1, "Alice: hi!"), 200);
+        assert_eq!(sent_texts(&out), vec!["[MC Alice] hi!"]);
         let wire: Vec<&Out> = out.iter().filter(|o| !matches!(o, Out::Ui(_))).collect();
         assert!(matches!(&wire[..], [Out::Mc(_), Out::Node(Command::SendChannel { channel, .. })] if *channel == addr(1)));
-        // Samme besked igen (fx via en anden gateway) brobygges ikke.
-        assert!(sent_texts(&b.on_mc(&chan_frame(0, 2, "Alice: hej"), 210)).is_empty());
-        // Allerede brobygget tekst sendes ikke tilbage.
+        // The same message again (e.g. via another gateway) is not bridged.
+        assert!(sent_texts(&b.on_mc(&chan_frame(0, 2, "Alice: hi!"), 210)).is_empty());
+        // Already bridged text is not sent back.
         assert!(sent_texts(&b.on_mc(&chan_frame(0, 3, "Gw2: [Må 01020304] x"), 220)).is_empty());
-        // Ukendt kanalplads ignoreres.
+        // Unknown channel slot is ignored.
         assert!(sent_texts(&b.on_mc(&chan_frame(5, 3, "Bo: y"), 220)).is_empty());
-        // #test-kanalen på plads 1 går til Må:rse #test.
-        let out = b.on_mc(&chan_frame(1, 4, "Bo: tjek"), 230);
+        // The #test channel in slot 1 goes to Må:rse #test.
+        let out = b.on_mc(&chan_frame(1, 4, "Bo: check"), 230);
         assert!(out.iter().any(|o| matches!(o, Out::Node(Command::SendChannel { channel, .. }) if *channel == addr(2))));
 
         // Må:rse -> MeshCore.
         let ev = |t: &str, from: Address| Event::ChannelReceived { channel: addr(1), from, hops: 1, text: text(t.as_bytes()) };
-        let out = b.on_node(ev("hej igen", addr(0x1a)), 300);
-        assert_eq!(sent_texts(&out), vec!["[Må 1a1a1a1a] hej igen"]);
+        let out = b.on_node(ev("hi again", addr(0x1a)), 300);
+        assert_eq!(sent_texts(&out), vec!["[Må 1a1a1a1a] hi again"]);
         assert!(matches!(&out[0], Out::Mc(p) if p[2] == 0 && p[3..7] == 300u32.to_le_bytes()));
-        // Vores egen brobyggede besked (fra en anden gateway) går ikke tilbage.
-        assert!(b.on_node(ev("[MC Alice] hej", addr(0x1b)), 310).is_empty());
-        // Gentagelse inden for DEDUP_SECS droppes, efter er den ok.
-        assert!(b.on_node(ev("hej igen", addr(0x1a)), 320).is_empty());
-        assert_eq!(sent_texts(&b.on_node(ev("hej igen", addr(0x1a)), 300 + DEDUP_SECS + 1)).len(), 1);
-        // Lang tekst afkortes, så "Gw: " + tekst er højst MC_MAX_TEXT.
+        // Our own bridged message (from another gateway) does not go back.
+        assert!(b.on_node(ev("[MC Alice] hi!", addr(0x1b)), 310).is_empty());
+        // A repeat within DEDUP_SECS is dropped, after that it is ok.
+        assert!(b.on_node(ev("hi again", addr(0x1a)), 320).is_empty());
+        assert_eq!(sent_texts(&b.on_node(ev("hi again", addr(0x1a)), 300 + DEDUP_SECS + 1)).len(), 1);
+        // Long text is truncated so "Gw: " + text is at most MC_MAX_TEXT.
         let long = "æ".repeat(200);
         let out = b.on_node(ev(&long, addr(0x1a)), 1000);
         let s = &sent_texts(&out)[0];
@@ -1857,35 +1857,35 @@ mod tests {
             name: n.and_then(|n| maarse_core::appdata::clean_name(n.as_bytes())),
         };
         b.on_node(named(Some("Dennis")), 100);
-        assert_eq!(sent_texts(&b.on_node(ev("hej", addr(0x1a)), 110)), vec!["[Må Dennis] hej"]);
-        // Klammer i navnet fjernes, så det ikke kan efterligne et præfiks.
+        assert_eq!(sent_texts(&b.on_node(ev("hi!", addr(0x1a)), 110)), vec!["[Må Dennis] hi!"]);
+        // Brackets in the name are removed so it cannot imitate a prefix.
         b.on_node(named(Some("[MC x]")), 120);
-        assert_eq!(sent_texts(&b.on_node(ev("to", addr(0x1a)), 130)), vec!["[Må MC x] to"]);
-        // Navnet fjernet: tilbage til adressen.
+        assert_eq!(sent_texts(&b.on_node(ev("two", addr(0x1a)), 130)), vec!["[Må MC x] two"]);
+        // Name removed: back to the address.
         b.on_node(named(None), 140);
-        assert_eq!(sent_texts(&b.on_node(ev("tre", addr(0x1a)), 150)), vec!["[Må 1a1a1a1a] tre"]);
+        assert_eq!(sent_texts(&b.on_node(ev("three", addr(0x1a)), 150)), vec!["[Må 1a1a1a1a] three"]);
     }
 
     #[test]
     fn direct_messages() {
         let (mut b, _) = ready_bridge();
-        // Må:rse-bruger skriver "@Alice Mob hej" til gatewayen.
+        // A Må:rse user writes "@Alice Mob hi!" to the gateway.
         let from = addr(0x33);
-        let out = b.on_node(Event::DirectReceived { from, hops: 1, text: text(b"@alice mob hej") }, 50);
-        assert_eq!(out, vec![Out::Mc(cmd_send_txt(&[0xaa; 6], 50, "[Må 33333333] hej"))]);
-        // Svaret går tilbage til samme Må:rse-bruger.
+        let out = b.on_node(Event::DirectReceived { from, hops: 1, text: text(b"@alice mob hi!") }, 50);
+        assert_eq!(out, vec![Out::Mc(cmd_send_txt(&[0xaa; 6], 50, "[Må 33333333] hi!"))]);
+        // The reply goes back to the same Må:rse user.
         let mut dm = vec![RESP_CONTACT_MSG_V3, 0, 0, 0, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xff, TXT_PLAIN, 5, 0, 0, 0];
-        dm.extend_from_slice(b"svar");
+        dm.extend_from_slice(b"reply");
         let out = b.on_mc(&dm, 60);
-        assert!(out.contains(&Out::Node(Command::SendDirect { req: 0, dest: from, text: text(b"[MC Alice Mob] svar") })));
-        // Ukendt kontakt giver en fejl tilbage til afsenderen.
-        let out = b.on_node(Event::DirectReceived { from, hops: 1, text: text(b"@Ukendt hej") }, 70);
+        assert!(out.contains(&Out::Node(Command::SendDirect { req: 0, dest: from, text: text(b"[MC Alice Mob] reply") })));
+        // An unknown contact gives an error back to the sender.
+        let out = b.on_node(Event::DirectReceived { from, hops: 1, text: text(b"@Unknown hi!") }, 70);
         assert!(matches!(&out[..], [Out::Node(Command::SendDirect { dest, .. })] if *dest == from));
-        // Almindelige DM'er til hosten røres ikke.
-        assert!(b.on_node(Event::DirectReceived { from, hops: 1, text: text(b"hej") }, 80).is_empty());
+        // Ordinary DMs to the host are not touched.
+        assert!(b.on_node(Event::DirectReceived { from, hops: 1, text: text(b"hi!") }, 80).is_empty());
     }
 
-    /// Falsk seriel port: giver de forberedte bytes og gemmer det skrevne.
+    /// Fake serial port: yields the prepared bytes and stores what is written.
     struct MockPort {
         input: VecDeque<Vec<u8>>,
         written: Vec<u8>,
@@ -1918,13 +1918,13 @@ mod tests {
         let (tx, rx) = channel::<In>();
         let (ctx_tx, crx) = channel::<Vec<u8>>();
         let mut bridge = Bridge::new(vec![]);
-        // Noden fortæller om kanalen "offentlig".
-        ctx_tx.send(Event::ChannelJoined { channel: addr(1), name: text(b"offentlig") }.encode().to_vec()).unwrap();
+        // The node tells us about the channel "public".
+        ctx_tx.send(Event::ChannelJoined { channel: addr(1), name: text(b"public") }.encode().to_vec()).unwrap();
         let mut ndec = FrameDecoder::new();
         for e in node_events(&crx, &mut ndec) {
             bridge.on_node(e, 0);
         }
-        // Svar fra MeshCore: device info, self info, ok (tid), kontakter, kanaler, besked.
+        // Responses from MeshCore: device info, self info, ok (time), contacts, channels, message.
         let mut frames: Vec<Vec<u8>> = vec![vec![RESP_DEVICE_INFO, 8], vec![RESP_OK]];
         frames.insert(1, {
             let mut s = vec![RESP_SELF_INFO];
@@ -1939,7 +1939,7 @@ mod tests {
             frames.push(vec![RESP_ERR, 2]);
         }
         frames.push(vec![PUSH_MSG_WAITING]);
-        frames.push(chan_frame(0, 1, "Alice: hej fra MeshCore"));
+        frames.push(chan_frame(0, 1, "Alice: hi! from MeshCore"));
         frames.push(vec![RESP_NO_MORE_MESSAGES]);
         let mut wire = Vec::new();
         for f in &frames {
@@ -1947,15 +1947,15 @@ mod tests {
             wire.extend_from_slice(&(f.len() as u16).to_le_bytes());
             wire.extend_from_slice(f);
         }
-        // Del strømmen i små stykker, som en rigtig seriel port.
+        // Split the stream into small pieces, like a real serial port.
         let mut port = MockPort { input: wire.chunks(7).map(|c| c.to_vec()).collect(), written: Vec::new() };
         let (_ui_tx, ui_rx) = channel::<String>();
         let ctx = Ctx { tx: &tx, id: 42, ui: &ui_rx };
         let r = session(&mut port, &mut bridge, &crx, &mut ndec, &ctx);
         assert_eq!(r.unwrap_err().kind(), ErrorKind::BrokenPipe);
-        // Det første, der skrives, er CMD_DEVICE_QUERY i en '<'-ramme.
+        // The first thing written is CMD_DEVICE_QUERY in a '<' frame.
         assert_eq!(port.written[..5], [b'<', 2, 0, CMD_DEVICE_QUERY, APP_TARGET_VER]);
-        // Beskeden er sendt til Må:rse-kanalen med præfiks.
+        // The message has been sent to the Må:rse channel with a prefix.
         let sent: Vec<Command> = rx
             .try_iter()
             .filter_map(|m| match m {
@@ -1963,8 +1963,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(sent.contains(&Command::SendChannel { req: 0, channel: addr(1), text: text(b"[MC Alice] hej fra MeshCore") }));
-        // Og vi har bedt om næste besked (CMD_SYNC_NEXT_MESSAGE).
+        assert!(sent.contains(&Command::SendChannel { req: 0, channel: addr(1), text: text(b"[MC Alice] hi! from MeshCore") }));
+        // And we have asked for the next message (CMD_SYNC_NEXT_MESSAGE).
         assert!(port.written.windows(4).any(|w| w == [b'<', 1, 0, CMD_SYNC_NEXT_MESSAGE]));
     }
 }
@@ -1975,7 +1975,7 @@ mod ping_tests {
 
     #[test]
     fn trace_frame_og_sti() {
-        // 2 hop med 1-byte hash: [0x89, res, plen=2, flags=0, tag, auth, AA BB, snr1 snr2, sidste]
+        // 2 hops with 1-byte hash: [0x89, res, plen=2, flags=0, tag, auth, AA BB, snr1 snr2, last]
         let mut f = vec![PUSH_TRACE_DATA, 0, 2, 0];
         f.extend_from_slice(&0x1234_5678u32.to_le_bytes());
         f.extend_from_slice(&[0; 4]);

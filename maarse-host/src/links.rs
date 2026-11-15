@@ -1,17 +1,17 @@
-//! Pakke-links: TCP-backbone og seriel LoRa-modem.
+//! Packet links: TCP backbone and serial LoRa modem.
 //!
-//! TCP: hver pakke sendes som `længde (u16 LE) | pakke`.
+//! TCP: every packet is sent as `length (u16 LE) | packet`.
 //!
-//! Regionshilsen over TCP: lige efter forbindelsen sender hver side en
-//! "pakke" `0xFF 'R' 'G' | strict (1) | antal (1) | region-id (u16 BE) …`
-//! med de regioner, den betjener (se `maarse_core::region`). Den afkodes
-//! aldrig som en Må:rse-pakke (version 3), så ældre hosts tæller den blot
-//! som ugyldig. Herefter sender vi kun floods med region til peers, der
-//! betjener regionen. Peers uden hilsen får alt (som før).
+//! Region hello over TCP: right after connecting, each side sends a
+//! "packet" `0xFF 'R' 'G' | strict (1) | count (1) | region id (u16 BE) …`
+//! with the regions it serves (see `maarse_core::region`). It is never
+//! decoded as a Må:rse packet (version 3), so older hosts just count it
+//! as invalid. After that we only send floods with a region to peers that
+//! serve the region. Peers without a hello get everything (as before).
 //!
-//! Seriel modem-tilstand (kræver firmware, der understøtter den):
-//! * host -> node: `længde | 0x40 | pakke`         (send pakken over LoRa)
-//! * node -> host: `længde | 0xC0 | snr (i8) | pakke` (modtaget over LoRa)
+//! Serial modem mode (requires firmware that supports it):
+//! * host -> node: `length | 0x40 | packet`         (send the packet over LoRa)
+//! * node -> host: `length | 0xC0 | snr (i8) | packet` (received over LoRa)
 //!
 //! LoRa modem over Wi-Fi: an ESP32 node in Wi-Fi modem mode connects to the
 //! backbone port and sends `MM` first ([`MODEM_HELLO`]). Then:
@@ -21,7 +21,7 @@
 //! as LoRa (not `tcp …`).
 //!
 //! Every link is also kept in a small registry for the device list in the
-//! web client (`/api/enheder`, see [`devices_json`]).
+//! web client (`/api/devices`, see [`devices_json`]).
 
 use crate::{In, next_id};
 use std::io::{Read, Write};
@@ -33,7 +33,7 @@ use std::time::Duration;
 use maarse_core::MAX_PACKET;
 use maarse_core::companion::FrameDecoder;
 
-/// SNR, vi angiver for pakker over TCP (et "perfekt" link).
+/// SNR we report for packets over TCP (a "perfect" link).
 const TCP_SNR: i8 = 10;
 
 /// First two bytes from an ESP32 node in Wi-Fi modem mode.
@@ -117,10 +117,10 @@ pub fn devices_json() -> String {
     serde_json::json!({ "devices": list }).to_string()
 }
 
-/// Start på en regionshilsen over TCP.
+/// Start of a region hello over TCP.
 pub const REGION_HELLO: [u8; 3] = [0xFF, b'R', b'G'];
 
-/// Koder en regionshilsen.
+/// Encodes a region hello.
 pub fn region_hello(strict: bool, regions: &[u16]) -> Vec<u8> {
     let mut v = REGION_HELLO.to_vec();
     v.push(strict as u8);
@@ -131,7 +131,7 @@ pub fn region_hello(strict: bool, regions: &[u16]) -> Vec<u8> {
     v
 }
 
-/// Afkoder en regionshilsen: (strict, regioner).
+/// Decodes a region hello: (strict, regions).
 pub fn parse_region_hello(data: &[u8]) -> Option<(bool, Vec<u16>)> {
     let rest = data.strip_prefix(&REGION_HELLO)?;
     let (&strict, rest) = rest.split_first()?;
@@ -153,10 +153,10 @@ pub fn spawn_tcp_listener(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<(
             thread::spawn(move || {
                 let name = stream
                     .peer_addr()
-                    .map(|a| format!("tcp ind {a}"))
+                    .map(|a| format!("tcp in {a}"))
                     .unwrap_or_default();
-                // De første to bytes afgør, om det er en DHT-forespørgsel
-                // eller en almindelig pakkeforbindelse.
+                // The first two bytes decide whether this is a DHT request
+                // or an ordinary packet connection.
                 let mut first = [0u8; 2];
                 let mut s = stream;
                 if s.read_exact(&mut first).is_err() {
@@ -165,7 +165,7 @@ pub fn spawn_tcp_listener(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<(
                 if first == crate::dht::MAGIC {
                     serve_dht(s, &tx);
                 } else if first == MODEM_HELLO {
-                    let name = name.replace("tcp ind", "wifi-modem");
+                    let name = name.replace("tcp in", "wifi-modem");
                     run_tcp_modem(s, name, tx);
                 } else {
                     run_tcp(s, name, tx, Some(u16::from_le_bytes(first)));
@@ -176,20 +176,20 @@ pub fn spawn_tcp_listener(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<(
     Ok(())
 }
 
-/// Forbinder til en anden maarse-host og prøver igen, hvis forbindelsen går.
+/// Connects to another maarse-host and retries if the connection drops.
 pub fn spawn_tcp_peer(peer: String, tx: Sender<In>) {
     thread::spawn(move || {
         loop {
             match TcpStream::connect(&peer) {
-                Ok(s) => run_tcp(s, format!("tcp ud {peer}"), tx.clone(), None),
-                Err(e) => eprintln!("[tcp] kunne ikke forbinde til {peer}: {e}"),
+                Ok(s) => run_tcp(s, format!("tcp out {peer}"), tx.clone(), None),
+                Err(e) => eprintln!("[tcp] could not connect to {peer}: {e}"),
             }
             thread::sleep(Duration::from_secs(5));
         }
     });
 }
 
-/// Besvarer én DHT-forespørgsel via nodens hovedløkke.
+/// Answers one DHT request via the node's main loop.
 fn serve_dht(mut s: TcpStream, tx: &Sender<In>) {
     let Some(data) = crate::dht::read_request(&mut s) else {
         return;
@@ -246,7 +246,7 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
         }
         let n = u16::from_le_bytes(len) as usize;
         if n == 0 || n > MAX_PACKET {
-            break; // Ugyldig strøm: luk.
+            break; // Invalid stream: close.
         }
         let mut data = vec![0u8; n];
         if reader.read_exact(&mut data).is_err() {
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(parse_region_hello(&h), Some((true, vec![1, 0xabcd])));
         assert_eq!(parse_region_hello(&region_hello(false, &[])), Some((false, vec![])));
         assert_eq!(parse_region_hello(&h[..h.len() - 1]), None);
-        // Hilsenen kan aldrig forveksles med en Må:rse-pakke.
+        // The hello can never be mistaken for a Må:rse packet.
         assert!(maarse_core::Packet::decode(&h).is_err());
     }
 }
@@ -350,22 +350,22 @@ port: String, baud: u32, tx: Sender<In>) {
                 .timeout(Duration::from_millis(10))
                 .open()
             {
-                Ok(p) => run_serial(p, format!("seriel {port}"), &tx),
-                Err(e) => eprintln!("[seriel] kunne ikke åbne {port}: {e}"),
+                Ok(p) => run_serial(p, format!("serial {port}"), &tx),
+                Err(e) => eprintln!("[serial] could not open {port}: {e}"),
             }
             thread::sleep(Duration::from_secs(3));
         }
     });
 }
 
-/// Læser og skriver i samme tråd. Porten klones bevidst ikke: på Windows
-/// laver `try_clone` et håndtag, der kan arves (DuplicateHandle med
-/// bInheritHandle = TRUE), og så ville processen fra en genstart holde porten
-/// låst for altid ("Adgang nægtet").
+/// Reads and writes in the same thread. The port is deliberately not cloned: on Windows
+/// `try_clone` creates a handle that can be inherited (DuplicateHandle with
+/// bInheritHandle = TRUE), and then the process from a restart would keep the port
+/// locked forever ("Access denied").
 fn run_serial(mut port: Box<dyn serialport::SerialPort>, name: String, tx: &Sender<In>) {
     let id = next_id();
     let (wtx, wrx) = channel::<Vec<u8>>();
-    // Sæt noden i modem-tilstand: hosten står for routingen.
+    // Put the node in modem mode: the host does the routing.
     if port.write_all(&[1, 0, 0x41]).is_err() {
         return;
     }

@@ -1,13 +1,13 @@
-//! Fuzz-mål for DHT-beskeder (bytes fra vilkårlige TCP-peers).
-//! Kør med `cargo test -p maarse-host --release fuzz_`. Antal iterationer
-//! styres af `MAARSE_FUZZ_ITERS` (se maarse-fuzz).
+//! Fuzz targets for DHT messages (bytes from arbitrary TCP peers).
+//! Run with `cargo test -p maarse-host --release fuzz_`. The number of iterations
+//! is controlled by `MAARSE_FUZZ_ITERS` (see maarse-fuzz).
 
 use crate::dht::{self, Contact, Record, Req, Resp, Store};
 use maarse_core::Address;
 use maarse_crypto::Identity;
 use maarse_fuzz::run;
 
-/// Største DHT-besked, `read_request`/`rpc` accepterer.
+/// Largest DHT message that `read_request`/`rpc` accept.
 const MAX_MSG: usize = 4096;
 
 fn record() -> Record {
@@ -38,7 +38,7 @@ fn fuzz_dht_decode_req() {
     run("dht-req", &corpus, 600, |b| {
         if let Some((from, ep, req)) = dht::decode_req(b) {
             assert_eq!(dht::decode_req(&dht::encode_req(&from, ep.as_deref(), &req)), Some((from, ep, req.clone())));
-            // Det, serveren gør med en STORE: valider og gem.
+            // What the server does with a STORE: validate and store.
             if let Req::Store(r) = req {
                 let _ = store.put(r);
                 let _ = store.get(&from);
@@ -46,8 +46,8 @@ fn fuzz_dht_decode_req() {
             }
         }
     });
-    // Også store, tilfældige beskeder op til MAX_MSG.
-    run("dht-req-stor", &[], MAX_MSG, |b| {
+    // Also large, random messages up to MAX_MSG.
+    run("dht-req-large", &[], MAX_MSG, |b| {
         let _ = dht::decode_req(b);
     });
 }

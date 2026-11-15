@@ -74,8 +74,22 @@ pub fn bind(addr: SocketAddr) -> std::io::Result<TcpListener> {
     }
 }
 
+/// Set by `--service`: a service manager owns the process lifetime.
+pub static SERVICE: AtomicBool = AtomicBool::new(false);
+
+/// Exit code used to ask the service manager for a restart (EX_TEMPFAIL).
+pub const RESTART_EXIT_CODE: i32 = 75;
+
 /// Starter en ny proces med samme kommandolinje og afslutter denne.
 pub fn restart() -> ! {
+    if SERVICE.load(std::sync::atomic::Ordering::Relaxed) {
+        // A detached child would be killed with our cgroup (systemd) or be
+        // invisible to the supervisor, so let the supervisor restart us.
+        println!("
+[settings] exiting with code {RESTART_EXIT_CODE} so the service manager restarts the host
+");
+        std::process::exit(RESTART_EXIT_CODE);
+    }
     println!("\n[indstillinger] genstarter med nye indstillinger …\n");
     let exe = std::env::current_exe().expect("current_exe");
     match std::process::Command::new(exe)

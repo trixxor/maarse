@@ -1,0 +1,66 @@
+# systemd unit for maarse-host.
+#
+# Install (see README, "Running the host as a service"):
+#   sudo install -m 0755 target/release/maarse-host /usr/local/bin/maarse-host
+#   sudo install -m 0644 packaging/systemd/maarse-host.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now maarse-host
+#
+# Extra options (serial port, peers, ...) go in /etc/default/maarse-host:
+#   MAARSE_ARGS="--serial /dev/ttyACM0 --peer example.org:4242"
+# Options saved from the web client live in /var/lib/maarse-host and are
+# applied as well.
+
+[Unit]
+Description=Maarse LoRa mesh host
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/maarse-host
+ExecStart=/usr/local/bin/maarse-host --service --data /var/lib/maarse-host $MAARSE_ARGS
+# Restart on crashes and on the settings restart (exit code 75).
+Restart=on-failure
+RestartSec=3
+# Never give up: a missing USB radio must not leave the host stopped.
+StartLimitIntervalSec=0
+
+# Dedicated user and data dir (/var/lib/maarse-host).
+DynamicUser=yes
+StateDirectory=maarse-host
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/maarse-host
+# Serial access to LoRa / MeshCore nodes.
+SupplementaryGroups=dialout
+
+# Hardening.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+# PrivateDevices would hide /dev/ttyACM*; allow only serial devices instead.
+DevicePolicy=closed
+DeviceAllow=char-ttyACM rw
+DeviceAllow=char-ttyUSB rw
+DeviceAllow=char-ttyS rw
+# For --tun, add: AmbientCapabilities=CAP_NET_ADMIN, CapabilityBoundingSet=CAP_NET_ADMIN,
+# DeviceAllow=/dev/net/tun rw (in a drop-in: systemctl edit maarse-host).
+
+[Install]
+WantedBy=multi-user.target

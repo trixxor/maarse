@@ -2305,6 +2305,7 @@ pub(super) mod file_interop_tests {
             tun: false,
             wintun: None,
             tun_lora: false,
+            service: false,
         }
     }
 

@@ -1,4 +1,5 @@
-//! Packet links: TCP backbone and serial LoRa modem.
+//! Packet links: TCP backbone and serial LoRa modem (serial links, KISS and
+//! UDP are in `extra_links`).
 //!
 //! TCP: every packet is sent as `length (u16 LE) | packet`.
 //!
@@ -25,7 +26,7 @@
 
 use crate::{In, next_id};
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
 use std::sync::mpsc::{Sender, channel};
 use std::thread;
@@ -34,7 +35,7 @@ use maarse_core::MAX_PACKET;
 use maarse_core::companion::FrameDecoder;
 
 /// SNR we report for packets over TCP (a "perfect" link).
-const TCP_SNR: i8 = 10;
+pub(crate) const TCP_SNR: i8 = 10;
 
 /// First two bytes from an ESP32 node in Wi-Fi modem mode.
 pub const MODEM_HELLO: [u8; 2] = *b"MM";
@@ -45,7 +46,7 @@ pub const MODEM_HELLO: [u8; 2] = *b"MM";
 struct LinkInfo {
     id: u32,
     name: String,
-    /// `backbone`, `usb-modem` or `wifi-modem`.
+    /// `backbone`, `usb-modem`, `wifi-modem`, `serial-link`, `kiss`, `kiss-tcp` or `udp`.
     kind: &'static str,
     since: u64,
     rx: u64,
@@ -64,18 +65,18 @@ fn with_registry<T>(f: impl FnOnce(&mut Vec<LinkInfo>) -> T) -> T {
     f(&mut REGISTRY.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-fn register(id: u32, name: &str, kind: &'static str) {
+pub(crate) fn register(id: u32, name: &str, kind: &'static str) {
     let now = unix_now();
     with_registry(|r| {
         r.push(LinkInfo { id, name: name.to_string(), kind, since: now, rx: 0, tx: 0, last_rx: 0, last_snr: None })
     });
 }
 
-fn unregister(id: u32) {
+pub(crate) fn unregister(id: u32) {
     with_registry(|r| r.retain(|l| l.id != id));
 }
 
-fn note_rx(id: u32, snr: Option<i8>) {
+pub(crate) fn note_rx(id: u32, snr: Option<i8>) {
     let now = unix_now();
     with_registry(|r| {
         if let Some(l) = r.iter_mut().find(|l| l.id == id) {
@@ -88,7 +89,7 @@ fn note_rx(id: u32, snr: Option<i8>) {
     });
 }
 
-fn note_tx(id: u32) {
+pub(crate) fn note_tx(id: u32) {
     with_registry(|r| {
         if let Some(l) = r.iter_mut().find(|l| l.id == id) {
             l.tx += 1;

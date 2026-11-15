@@ -22,7 +22,9 @@ macro_rules! eprintln {
 }
 
 mod dht;
+mod extra_links;
 mod filebox;
+mod framing;
 mod history;
 #[cfg(test)]
 mod fuzz_tests;
@@ -107,6 +109,16 @@ pub struct Config {
     pub peers: Vec<String>,
     pub serial: Option<String>,
     pub baud: u32,
+    /// Host-to-host serial lines (`--serial-link <port>[:baud]`).
+    pub serial_links: Vec<(String, u32)>,
+    /// KISS TNCs on serial ports (`--kiss <port>[:baud]`) and over TCP (`--kiss-tcp`).
+    pub kiss: Vec<(String, u32)>,
+    pub kiss_tcp: Vec<String>,
+    pub kiss_opts: extra_links::KissOptions,
+    /// UDP: our socket (`--udp-listen`), peers (`--udp-peer`) and LAN broadcast port.
+    pub udp_listen: Option<SocketAddr>,
+    pub udp_peers: Vec<String>,
+    pub udp_broadcast: Option<u16>,
     pub open_browser: bool,
     pub max_file: u32,
     /// The file mailbox quota per recipient and in total (bytes; 0 disables it).
@@ -171,6 +183,33 @@ Usage: maarse-host [options]
   --peer <host:port>    connect to another maarse-host (can be repeated)
   --serial <port>       LoRa node in modem mode, e.g. COM3 or /dev/ttyACM0
   --baud <rate>         serial baud rate (default: 115200)
+  --serial-link <port>[:baud]
+                        direct link to another maarse-host over a serial line
+                        (null-modem cable, USB-serial, transparent radio modem);
+                        default 115200 baud. At 230400 baud or more it counts
+                        as backbone (like TCP), below that as a slow radio link
+                        (can be repeated)
+  --kiss <port>[:baud]  KISS TNC on a serial port, e.g. a packet radio TNC or
+                        an RNode-like KISS device (default 9600 baud; can be
+                        repeated). Counts as a slow radio link
+  --kiss-tcp <host:port>
+                        KISS TNC over TCP, e.g. Direwolf on port 8001
+                        (reconnects every 5 s; can be repeated)
+  --kiss-txdelay <N>    KISS TXDELAY sent to the TNC, in 10 ms units
+  --kiss-persist <N>    KISS persistence (0-255)
+  --kiss-slottime <N>   KISS slot time, in 10 ms units
+  --kiss-callsign <CALL[-SSID]>
+                        wrap KISS packets in AX.25 UI frames from this
+                        callsign (to QST), for amateur-radio identification
+  --udp-listen <addr:port>
+                        UDP socket for backbone peers, e.g. 0.0.0.0:4243;
+                        senders become peers and are forgotten after 3 minutes
+                        of silence
+  --udp-peer <host:port>
+                        send to this UDP peer (can be repeated)
+  --udp-broadcast <port>
+                        find peers on the LAN: broadcast to this port and accept
+                        packets from any sender on it
   --public              also connect to the public backbone nodes
   --max-file <KB>       largest file sent and received (default: 1024)
   --history-days <N>    keep message history for N days, so several screens see
@@ -227,6 +266,13 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         peers: Vec::new(),
         serial: None,
         baud: 115_200,
+        serial_links: Vec::new(),
+        kiss: Vec::new(),
+        kiss_tcp: Vec::new(),
+        kiss_opts: Default::default(),
+        udp_listen: None,
+        udp_peers: Vec::new(),
+        udp_broadcast: None,
         open_browser: true,
         max_file: 1024 * 1024,
         filebox_per_recipient: 20 << 20,
@@ -268,6 +314,18 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--peer" => c.peers.push(val("--peer")?),
             "--serial" => c.serial = Some(val("--serial")?),
             "--baud" => c.baud = val("--baud")?.parse().map_err(|_| "--baud: invalid number")?,
+            "--serial-link" => c.serial_links.push(extra_links::parse_port_baud(&val("--serial-link")?, 115_200)?),
+            "--kiss" => c.kiss.push(extra_links::parse_port_baud(&val("--kiss")?, 9600)?),
+            "--kiss-tcp" => c.kiss_tcp.push(val("--kiss-tcp")?),
+            "--kiss-txdelay" => c.kiss_opts.txdelay = Some(val("--kiss-txdelay")?.parse().map_err(|_| "--kiss-txdelay: expected 0-255")?),
+            "--kiss-persist" => c.kiss_opts.persist = Some(val("--kiss-persist")?.parse().map_err(|_| "--kiss-persist: expected 0-255")?),
+            "--kiss-slottime" => c.kiss_opts.slottime = Some(val("--kiss-slottime")?.parse().map_err(|_| "--kiss-slottime: expected 0-255")?),
+            "--kiss-callsign" => {
+                c.kiss_opts.callsign = Some(framing::Callsign::parse(&val("--kiss-callsign")?).map_err(|e| format!("--kiss-callsign: {e}"))?)
+            }
+            "--udp-listen" => c.udp_listen = addr(val("--udp-listen")?, "--udp-listen")?,
+            "--udp-peer" => c.udp_peers.push(val("--udp-peer")?),
+            "--udp-broadcast" => c.udp_broadcast = Some(val("--udp-broadcast")?.parse().map_err(|_| "--udp-broadcast: invalid port")?),
             "--no-browser" => c.open_browser = false,
             "--service" => {
                 c.service = true;
@@ -441,6 +499,40 @@ fn main() {
     if let Some(port) = &cfg.serial {
         settings::report(format!("  Serial:   {port} @ {} baud (modem mode)", cfg.baud), false);
         links::spawn_serial(port.clone(), cfg.baud, tx.clone());
+    }
+    for (port, baud) in &cfg.serial_links {
+        let class = if *baud >= extra_links::FAST_SERIAL_BAUD { "backbone" } else { "slow link" };
+        settings::report(format!("  Serial link: {port} @ {baud} baud ({class})"), false);
+        extra_links::spawn_serial_link(port.clone(), *baud, tx.clone());
+    }
+    for (port, baud) in &cfg.kiss {
+        settings::report(format!("  KISS TNC: {port} @ {baud} baud"), false);
+        extra_links::spawn_kiss(port.clone(), *baud, cfg.kiss_opts.clone(), tx.clone());
+    }
+    for addr in &cfg.kiss_tcp {
+        settings::report(format!("  KISS TNC: tcp {addr}"), false);
+        extra_links::spawn_kiss_tcp(addr.clone(), cfg.kiss_opts.clone(), tx.clone());
+    }
+    let udp_target = |a: &String| extra_links::UdpTarget { name: format!("udp {a}"), addr: a.clone() };
+    if let Some(port) = cfg.udp_broadcast {
+        let bind: SocketAddr = ([0, 0, 0, 0], port).into();
+        let target = extra_links::UdpTarget { name: format!("udp broadcast {port}"), addr: format!("255.255.255.255:{port}") };
+        // The peers ride on the broadcast socket unless --udp-listen gives them their own.
+        let mut targets = vec![target];
+        if cfg.udp_listen.is_none() {
+            targets.extend(cfg.udp_peers.iter().map(udp_target));
+        }
+        match extra_links::spawn_udp(bind, true, targets, tx.clone()) {
+            Ok(()) => settings::report(format!("  UDP:      LAN broadcast on port {port}"), false),
+            Err(e) => settings::report(format!("  UDP:      could not use port {port}: {e}"), true),
+        }
+    }
+    if cfg.udp_listen.is_some() || (cfg.udp_broadcast.is_none() && !cfg.udp_peers.is_empty()) {
+        let bind = cfg.udp_listen.unwrap_or_else(|| ([0, 0, 0, 0], 0).into());
+        match extra_links::spawn_udp(bind, false, cfg.udp_peers.iter().map(udp_target).collect(), tx.clone()) {
+            Ok(()) => settings::report(format!("  UDP:      {bind}, {} peer(s)", cfg.udp_peers.len()), false),
+            Err(e) => settings::report(format!("  UDP:      could not bind {bind}: {e}"), true),
+        }
     }
     if let Some(port) = &cfg.meshcore {
         settings::report(format!("  MeshCore: {port} @ {} baud (companion_radio_usb)", cfg.meshcore_baud), false);

@@ -76,3 +76,40 @@ fn fuzz_dht_decode_resp() {
         }
     });
 }
+
+/// Serial-link and KISS byte streams: the unstuffer and frame decoders must
+/// never panic, every decoded packet must re-encode to a frame that decodes
+/// to the same packet, and a valid frame after any garbage is still found.
+#[test]
+fn fuzz_link_framing() {
+    use crate::framing::{Callsign, Framing, Unstuffer, udp_decode, udp_encode};
+    let framings = [
+        Framing::SerialLink,
+        Framing::Kiss { callsign: None },
+        Framing::Kiss { callsign: Some(Callsign::parse("N0CALL-3").unwrap()) },
+    ];
+    let corpus: Vec<Vec<u8>> = framings.iter().map(|f| f.encode(&[0x30, 0xC0, 0xDB, 1, 2])).collect();
+    run("link-framing", &corpus, 600, |b| {
+        for f in &framings {
+            let mut u = Unstuffer::new();
+            u.push(b);
+            while let Some(body) = u.next_body() {
+                if let Some(pkt) = f.decode(&body) {
+                    let mut again = Unstuffer::new();
+                    again.push(&f.encode(&pkt));
+                    assert_eq!(f.decode(&again.next_body().unwrap()), Some(pkt));
+                }
+            }
+            // Resynchronisation: a good frame after the garbage is decoded.
+            u.push(&f.encode(b"sync"));
+            let mut last = None;
+            while let Some(body) = u.next_body() {
+                last = f.decode(&body).or(last);
+            }
+            assert_eq!(last.as_deref(), Some(&b"sync"[..]));
+        }
+        if let Some((inst, pkt)) = udp_decode(b) {
+            assert_eq!(udp_decode(&udp_encode(inst, pkt)), Some((inst, pkt)));
+        }
+    });
+}

@@ -179,7 +179,7 @@ Someone with a radio receiver and no keys can read this from a direct message:
 | 💬 **Messages** | End-to-end encrypted direct messages with delivery receipts and forward secrecy. Public, `#hashtag`, private and regional channels. Signed bulletins from trusted senders, verified offline. |
 | 📦 **Mailbox** | For people who are offline: on the host (7 days, files too) and in repeaters' flash. |
 | 🖼️ **Files and voice** | Pictures and files up to 8 KB over LoRa and 1 MB over the internet; Codec2 voice messages; Opus calls over TCP. |
-| 🌐 **Backbone** | TCP links between hosts with a DHT; ESP32 boards can join over Wi-Fi (a phone hotspot on a hilltop is enough). |
+| 🌐 **Backbone** | TCP and UDP links between hosts with a DHT, plus serial lines and KISS TNCs (serial or TCP, e.g. Direwolf); ESP32 boards can join over Wi-Fi (a phone hotspot on a hilltop is enough). |
 | 📄 **`maarse://` pages** | Tiny compressed pages served from a host. Not HTML, so a page can never run code on your device. |
 | 🌲 **Forest mode and carry** | Handheld relays when there are no repeaters; messages carried by people on the move. |
 | 🔁 **Gateway to MeshCore** | Bridges a Må:rse channel and a MeshCore channel both ways, tried on hardware. |

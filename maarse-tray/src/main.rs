@@ -168,15 +168,23 @@ mod win {
     }
 
     fn client_url(fragment: &str) -> String {
-        let mut url = format!("http://{}/", http_addr());
+        // The web client reads the key from the fragment (`#token=…`), the same
+        // form the host prints at startup; extra flags follow as `&service`.
+        let mut parts = Vec::new();
         if let Ok(t) = std::fs::read_to_string(cfg().data.join("access-key.txt")) {
             let t = t.trim();
             if !t.is_empty() {
-                url.push_str("?token=");
-                url.push_str(t);
+                parts.push(format!("token={t}"));
             }
         }
-        url.push_str(fragment);
+        if !fragment.is_empty() {
+            parts.push(fragment.to_string());
+        }
+        let mut url = format!("http://{}/", http_addr());
+        if !parts.is_empty() {
+            url.push('#');
+            url.push_str(&parts.join("&"));
+        }
         url
     }
 
@@ -302,7 +310,7 @@ mod win {
                 run_elevated(&format!("{}; Start-Sleep -Seconds 2; {}", stop_script(), start_script()))
             }
             ID_WEB => shell_execute("open", &client_url(""), None),
-            ID_SERVICE => shell_execute("open", &client_url("#service"), None),
+            ID_SERVICE => shell_execute("open", &client_url("service"), None),
             ID_LOGS => {
                 let dir = cfg().data.join("logs");
                 shell_execute("open", &dir.to_string_lossy(), None);

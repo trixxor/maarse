@@ -188,6 +188,11 @@
   .page blockquote { border-left: 3px solid var(--accent); margin: 10px 0; padding: 2px 12px; color: var(--muted); }
   .page a { color: var(--accent); font-weight: 600; }
   .secure { max-width: 580px; }
+  .svc { max-width: 900px; }
+  .svc-log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; height: 50vh; overflow: auto;
+    font-family: var(--mono); font-size: 12px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; margin: 0; }
+  .svc-log .err { color: #d33; }
+  .svc-confirm { border-color: #d33; margin-top: 8px; }
   .secure h3 { font-size: 15px; margin: 18px 0 6px; }
   .safety { display: grid; grid-template-columns: repeat(4, max-content); gap: 6px 18px; font-family: var(--mono);
             font-size: 20px; letter-spacing: 1px; margin: 12px 0; font-variant-numeric: tabular-nums; }
@@ -301,6 +306,7 @@
       <button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg>Pages</button>
       <button id="btn-firmware" data-view="firmware" disabled><svg class="i"><use href="#i-chip"/></svg>Firmware</button>
       <button id="btn-settings" data-view="settings" disabled title="VPN, backbone, MQTT, MeshCore etc. on maarse-host"><svg class="i"><use href="#i-chip"/></svg>Settings</button>
+      <button id="btn-service" data-view="service" disabled title="Status, live log, restart and stop of maarse-host"><svg class="i"><use href="#i-host"/></svg>Service</button>
       <button id="btn-backup" data-view="backup" title="Recovery phrase and encrypted backup"><svg class="i"><use href="#i-key"/></svg>Security</button>
     </nav>
     <div class="row"><button id="btn-notify" hidden>Turn on notifications</button><button id="btn-install" hidden>Install app</button></div>
@@ -535,8 +541,11 @@ const remoteHost = {
   set: (v) => store.set("remoteHost", v),
 };
 {
-  const m = location.hash.match(/token=([0-9a-fA-F]{16,})/);
-  if (m) { store.set("hostToken", m[1]); history.replaceState(null, "", location.pathname); }
+  const m = location.hash.match(/token=([0-9a-fA-F]{16,})/) || location.search.match(/token=([0-9a-fA-F]{16,})/);
+  // "#service" (used by maarse-tray) opens the Service page once connected.
+  if (/(^#|&)service/.test(location.hash)) store.set("openServiceOnConnect", true);
+  if (m) store.set("hostToken", m[1]);
+  if (m || location.hash) history.replaceState(null, "", location.pathname);
 }
 function wsUrl() {
   const r = remoteHost.get();
@@ -729,6 +738,7 @@ function renderChat() {
   if (state.view === "firmware") return renderFirmware(box);
   if (state.view === "backup") return renderBackup(box);
   if (state.view === "settings") return renderSettings(box);
+  if (state.view === "service") return renderService(box);
   if (state.view === "mc") return renderMc(box);
   renderChatTools();
   if (renderSecurityView(box)) return;
@@ -787,6 +797,8 @@ function setConnected(on, name) {
   for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-status", "btn-radio", "btn-diag", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
   $("btn-settings").disabled = !(on && transport instanceof WsTransport);
+  $("btn-service").disabled = !(on && transport instanceof WsTransport);
+  if (!$("btn-service").disabled && store.get("openServiceOnConnect", false)) { store.set("openServiceOnConnect", false); $("btn-service").click(); }
   if (on && transport instanceof WsTransport) mcConnect(); else mcClose();
   $("btn-disconnect").hidden = !on;
   for (const id of ["btn-ws", "btn-serial", "btn-ble"]) $(id).disabled = on;
@@ -3341,6 +3353,139 @@ function renderSettings(box) {
   wrap.append(el("div", { className: "row" }, save, restart), out);
 }
 $("btn-settings").onclick = () => { hs.data = null; hs.msg = ""; setView("settings"); hsLoad(); };
+
+// ---------- Service page: host status, live log, restart and stop ----------
+const svc = { status: null, err: "", msg: "", lines: [], last: 0, filter: "", paused: false, timer: 0, confirm: null };
+const SVC_MAX = 2000;
+async function svcFetch(path, params = "") {
+  const { base, q } = hsBase();
+  const query = [q.replace(/^\?/, ""), params].filter(Boolean).join("&");
+  const r = await fetch(`${base}${path}${query ? "?" + query : ""}`, { cache: "no-store" });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function svcPoll() {
+  if (state.view !== "service") { clearInterval(svc.timer); svc.timer = 0; return; }
+  try {
+    svc.status = await svcFetch("/api/service/status");
+    if (!svc.paused) {
+      let res = await svcFetch("/api/service/log", `since=${svc.last}`);
+      // The host restarted: its sequence numbers start again from 1.
+      if (res.last < svc.last) {
+        svc.lines.push({ seq: 0, t: Date.now(), err: false, text: "----- host restarted -----" });
+        svc.last = 0;
+        res = await svcFetch("/api/service/log", "since=0");
+      }
+      if (res.lines.length) {
+        svc.lines.push(...res.lines);
+        if (svc.lines.length > SVC_MAX) svc.lines.splice(0, svc.lines.length - SVC_MAX);
+      }
+      svc.last = res.last;
+    }
+    svc.err = "";
+  } catch (e) { svc.err = "Host not reachable: " + e.message; }
+  svcUpdate();
+}
+function svcStart() {
+  clearInterval(svc.timer);
+  svc.timer = setInterval(svcPoll, 2000);
+  svcPoll();
+}
+function svcFmtUptime(s) {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : m ? `${m} min ${s % 60} s` : `${s} s`;
+}
+function svcMatches(l) { return !svc.filter || l.text.toLowerCase().includes(svc.filter.toLowerCase()); }
+function svcLineEl(l) {
+  return el("div", { className: l.err ? "err" : "", textContent: `${new Date(l.t).toLocaleTimeString()}  ${l.text}` });
+}
+// Updates status and log in place so the filter box keeps focus.
+function svcUpdate() {
+  const st = $("svc-status"), logBox = $("svc-log"), msg = $("svc-msg");
+  if (!st || !logBox) return;
+  msg.textContent = svc.err || svc.msg;
+  msg.hidden = !(svc.err || svc.msg);
+  st.replaceChildren();
+  const s = svc.status;
+  if (s) {
+    const row = (k, v) => st.append(el("div", { className: "row" }, el("b", { textContent: k + ": " }), el("span", { textContent: v })));
+    row("Version", "v" + s.version);
+    row("Uptime", svcFmtUptime(s.uptime_s) + (s.started ? ` (since ${new Date(s.started * 1000).toLocaleString()})` : ""));
+    row("PID", String(s.pid));
+    row("Data folder", s.data_dir);
+    row("Mode", s.service ? `Service (--service): restart exits with code ${s.restart_exit_code} and the service manager starts the host again` : "Standalone: restart starts a new process");
+    st.append(el("h3", { textContent: "Links" }));
+    if (!s.links.length) st.append(el("p", { className: "hint", textContent: "No serial devices, modems or backbone peers connected." }));
+    for (const d of s.links) {
+      st.append(el("div", { className: "row" },
+        el("b", { textContent: (DEVICE_KINDS[d.kind] || d.kind) + " " }),
+        el("span", { className: "hint", textContent: `${d.name} · up ${hsAgo(d.up_s)} · in ${d.rx} / out ${d.tx} · last heard ${hsAgo(d.last_rx_s)}${d.snr != null ? ` · SNR ${d.snr} dB` : ""}` })));
+    }
+  } else if (!svc.err) st.append(el("p", { className: "hint", textContent: "Fetching …" }));
+  const atBottom = logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 30;
+  const shown = svc.lines.filter(svcMatches);
+  logBox.replaceChildren(...shown.map(svcLineEl));
+  if (atBottom) logBox.scrollTop = logBox.scrollHeight;
+  const cnt = $("svc-count");
+  if (cnt) cnt.textContent = `${shown.length} of ${svc.lines.length} lines${svc.paused ? " · paused" : ""}`;
+}
+async function svcAction(path, msg) {
+  svc.confirm = null;
+  try { await hsPost(path, ""); svc.msg = msg; }
+  catch (e) { svc.msg = "Failed: " + e.message; }
+  renderChat();
+}
+function renderService(box) {
+  $("chat-title").textContent = "Host service";
+  $("chat-sub").textContent = "Status, live log and control of maarse-host";
+  const wrap = el("div", { className: "secure svc" });
+  box.append(wrap);
+  wrap.append(el("p", { id: "svc-msg", className: "warn", hidden: true }));
+  wrap.append(el("h3", { textContent: "Status" }), el("div", { id: "svc-status" }));
+
+  wrap.append(el("h3", { textContent: "Control" }));
+  const restart = el("button", { textContent: "Restart host" });
+  const stop = el("button", { textContent: "Stop host" });
+  restart.onclick = () => { svc.confirm = "restart"; renderChat(); };
+  stop.onclick = () => { svc.confirm = "stop"; renderChat(); };
+  wrap.append(el("div", { className: "row" }, restart, stop));
+  if (svc.confirm) {
+    const isStop = svc.confirm === "stop";
+    const text = isStop
+      ? (svc.status?.service
+        ? "Stop the host? It exits with code 0, so the service manager leaves it stopped. It has to be started again on the computer (service manager or tray app); this page cannot start it."
+        : "Stop the host? It exits and this page loses the connection. It has to be started again on the computer.")
+      : "Restart the host? The connection drops for a few seconds.";
+    const yes = el("button", { textContent: isStop ? "Yes, stop" : "Yes, restart" });
+    const no = el("button", { textContent: "Cancel" });
+    yes.onclick = () => isStop
+      ? svcAction("/api/service/stop", "The host has been stopped.")
+      : svcAction("/api/service/restart", "The host is restarting …");
+    no.onclick = () => { svc.confirm = null; renderChat(); };
+    wrap.append(el("div", { className: "warn svc-confirm", role: "alertdialog" }, el("p", { textContent: text }), el("div", { className: "row" }, yes, no)));
+    setTimeout(() => no.focus(), 0);
+  }
+
+  wrap.append(el("h3", { textContent: "Log" }));
+  const filter = el("input", { type: "search", placeholder: "Filter", value: svc.filter, spellcheck: false, autocomplete: "off" });
+  filter.oninput = () => { svc.filter = filter.value; svcUpdate(); };
+  const pause = el("button", { textContent: svc.paused ? "Resume" : "Pause" });
+  pause.onclick = () => { svc.paused = !svc.paused; pause.textContent = svc.paused ? "Resume" : "Pause"; if (svc.paused) svcUpdate(); else svcPoll(); };
+  const dl = el("button", { textContent: "Download" });
+  dl.onclick = () => {
+    const text = svc.lines.filter(svcMatches).map(l => `${new Date(l.t).toISOString()} ${l.err ? "E" : "I"} ${l.text}`).join("\n") + "\n";
+    const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain" })), download: `maarse-host-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.log` });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  const clear = el("button", { textContent: "Clear view" });
+  clear.onclick = () => { svc.lines = []; svcUpdate(); };
+  wrap.append(el("div", { className: "row" }, filter, pause, dl, clear), el("p", { id: "svc-count", className: "hint" }));
+  wrap.append(el("pre", { id: "svc-log", className: "svc-log" }));
+  svcUpdate();
+  const lb = $("svc-log"); lb.scrollTop = lb.scrollHeight;
+}
+$("btn-service").onclick = () => { svc.msg = ""; svc.confirm = null; svc.status = null; setView("service"); svcStart(); };
 
 $("btn-myqr").onclick = () => setView("myqr");
 $("btn-backup").onclick = () => setView("backup");

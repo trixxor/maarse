@@ -11,7 +11,14 @@
 //! * timeline events (internet down, power cut, kill repeaters, alerts);
 //! * signed area alerts (real `maarse_crypto::bulletin`) with coverage;
 //! * an event trace in the `--trace-json` format of the CLI, extended with
-//!   message tags so one message can be followed through the network.
+//!   message tags so one message can be followed through the network, the
+//!   source path and intended next hop of every routed transmission, the SNR
+//!   of every reception and the cause of every collision;
+//! * clutter areas (forest) and radio degradation in an area (storm, jamming);
+//! * walkers that wander around a point;
+//! * an optional DHT-directed backbone for path requests (`dht_backbone`);
+//! * an optional "home routing" model (`home_routing`): fixed infrastructure,
+//!   home repeaters and a location lookup at the gateway, see [`Engine::send_message`].
 
 use crate::scenario::*;
 use maarse_core::airtime::LoraParams;
@@ -55,6 +62,14 @@ const TRACE_CAP: usize = 400_000;
 /// Margin around an alert area inside which forwarders still forward it
 /// (simulator-layer area scope, see AREA-ALERTS.md).
 const AREA_MARGIN_M: f64 = 15_000.0;
+/// Home routing: links between fixed nodes count as infrastructure when their
+/// SNR is this far above the limit (a margin, like a planned link).
+const INFRA_MARGIN_DB: f64 = 5.0;
+/// Home routing: a lookup without an answer is asked again after this long
+/// (a datagram's last hop has no retransmission), at most `LOOKUP_TRIES`
+/// times; then the sender falls back to a path request.
+const LOOKUP_RETRY_MS: u64 = 4_000;
+const LOOKUP_TRIES: u8 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -198,6 +213,10 @@ pub struct SimNode {
     speed: f64,
     links: Vec<usize>,
     pub label: String,
+    /// Wandering: radius (m) around `home`, and the current target point.
+    wander: f64,
+    home: (f64, f64),
+    target: Option<(f64, f64)>,
 }
 
 impl SimNode {
@@ -222,6 +241,56 @@ struct Tx {
     start: u64,
     end: u64,
     packet: Buf,
+    /// Intended next hop of a routed packet (-1: a flood, or unknown).
+    nx: i64,
+    /// A flood (no source path): copies at other nodes are redundant.
+    flood: bool,
+}
+
+/// An area with extra radio loss (clutter or degradation), in metres.
+struct LossArea {
+    poly: Vec<(f64, f64)>,
+    circle: Option<(f64, f64, f64)>,
+    /// Bounding box (min x, min y, max x, max y).
+    bbox: (f64, f64, f64, f64),
+    db: f64,
+}
+
+impl LossArea {
+    fn new(poly: Vec<(f64, f64)>, circle: Option<(f64, f64, f64)>, db: f64) -> LossArea {
+        let bbox = if let Some((x, y, r)) = circle {
+            (x - r, y - r, x + r, y + r)
+        } else {
+            poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, p| (b.0.min(p.0), b.1.min(p.1), b.2.max(p.0), b.3.max(p.1)))
+        };
+        LossArea { poly, circle, bbox, db }
+    }
+    fn contains(&self, x: f64, y: f64) -> bool {
+        if x < self.bbox.0 || y < self.bbox.1 || x > self.bbox.2 || y > self.bbox.3 {
+            return false;
+        }
+        if let Some((cx, cy, r)) = self.circle {
+            return (x - cx).hypot(y - cy) <= r;
+        }
+        point_in_poly(x, y, &self.poly)
+    }
+    /// Length (m) of the segment a-b that runs inside the area, by sampling.
+    fn inside_len(&self, a: (f64, f64), b: (f64, f64)) -> f64 {
+        let (lo_x, hi_x) = (a.0.min(b.0), a.0.max(b.0));
+        let (lo_y, hi_y) = (a.1.min(b.1), a.1.max(b.1));
+        if hi_x < self.bbox.0 || hi_y < self.bbox.1 || lo_x > self.bbox.2 || lo_y > self.bbox.3 {
+            return 0.0;
+        }
+        let d = (a.0 - b.0).hypot(a.1 - b.1);
+        let n = ((d / 250.0).ceil() as usize).clamp(4, 64);
+        let inside = (0..n)
+            .filter(|&k| {
+                let f = (k as f64 + 0.5) / n as f64;
+                self.contains(a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
+            })
+            .count();
+        d * inside as f64 / n as f64
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -236,6 +305,7 @@ enum Ev {
     Energy,
     Neighbors,
     Timeline { idx: usize },
+    LookupTimeout { msg: usize },
 }
 
 pub struct Msg {
@@ -328,6 +398,23 @@ pub struct Stats {
     pub channel_deliveries: u64,
     pub channel_receivers: u64,
     pub scope_dropped: u64,
+    /// Collisions split by what was lost: a copy of a flood (redundant), a
+    /// routed packet at a bystander, or a routed packet at its intended next
+    /// hop (the ones that cost a retransmission). Half-duplex: the receiver
+    /// was transmitting itself.
+    pub coll_flood: u64,
+    pub coll_next_hop: u64,
+    pub coll_half_duplex: u64,
+    pub dht_lookups: u64,
+    pub dht_misses: u64,
+    /// Home routing: lookups asked, answered with a route, known unreachable,
+    /// and fallbacks to a path request (by reason).
+    pub home_lookups: u64,
+    pub home_routed: u64,
+    pub home_unreachable: u64,
+    /// Lookups answered by the sender's own home (local registry).
+    pub home_local: u64,
+    pub home_fallback: std::collections::BTreeMap<String, u64>,
     /// Queue delay per priority (0..=4): sum ms, count, max.
     pub qdelay: [(u64, u64, u64); 5],
     pub by_type: std::collections::BTreeMap<String, u64>,
@@ -365,6 +452,38 @@ pub struct Engine {
     /// Packet ids of announces we injected (for reach queries).
     pub announces: Vec<(usize, u64, u64)>,
     timeline_done: usize,
+    /// Path id / address -> node index (for readable traces).
+    ids: HashMap<u16, usize>,
+    addr_idx: HashMap<Address, usize>,
+    clutter: Vec<LossArea>,
+    degrade: Vec<LossArea>,
+    /// DHT backbone: gateway host per node (-1 = none), recomputed when dirty.
+    gw: Vec<i32>,
+    gw_dirty: bool,
+    /// Direct backbone connections made after a DHT lookup.
+    dyn_links: HashSet<(usize, usize)>,
+    /// Path request reply token -> tag, so the path response is traced too.
+    token_tags: HashMap<Address, u32>,
+    /// Home routing model: infrastructure links between fixed nodes, the home
+    /// (fixed) node of every node, radio islands, and open lookups.
+    infra: Vec<Vec<u32>>,
+    home: Vec<i32>,
+    rcomp: Vec<i32>,
+    infra_dirty: bool,
+    lookups: HashMap<usize, Lookup>,
+}
+
+/// A location lookup of the home routing model (one per message).
+struct Lookup {
+    from: usize,
+    to: usize,
+    gw: usize,
+    /// Forwarders from the sender to the registry node (way back reversed).
+    up: Vec<usize>,
+    /// The answer: forwarders from the sender to the destination.
+    route: Vec<usize>,
+    tries: u8,
+    done: bool,
 }
 
 const ALERT_TAG: u32 = 0x8000_0000;
@@ -404,7 +523,10 @@ impl Engine {
             let mut addr = [0u8; 16];
             rng.fill(&mut addr[..]);
             let sf = if spec.sf >= 7 && spec.sf <= 12 { spec.sf } else { sc.sf.clamp(7, 12) };
-            let mut router = Box::new(Node::new(Address(addr), kind.role()));
+            // Home routing model: hosts are anchors, so a route longer than a
+            // source path can hold is split into legs at the gateways.
+            let role = if f.home_routing && kind == Kind::Host { Role::Anchor } else { kind.role() };
+            let mut router = Box::new(Node::new(Address(addr), role));
             let _ = router.subscribe(public_channel);
             let _ = router.subscribe(bulletin_channel);
             router.mobile = kind == Kind::Mobile;
@@ -447,6 +569,9 @@ impl Engine {
                 route,
                 links: Vec::new(),
                 label: spec.label.clone(),
+                wander: spec.wander_m.max(0.0),
+                home: (x, y),
+                target: None,
             });
         }
         let mut links = Vec::new();
@@ -487,8 +612,32 @@ impl Engine {
             traffic,
             announces: Vec::new(),
             timeline_done: 0,
+            ids: HashMap::new(),
+            addr_idx: HashMap::new(),
+            clutter: Vec::new(),
+            degrade: Vec::new(),
+            gw: Vec::new(),
+            gw_dirty: true,
+            dyn_links: HashSet::new(),
+            token_tags: HashMap::new(),
+            infra: Vec::new(),
+            home: Vec::new(),
+            rcomp: Vec::new(),
+            infra_dirty: true,
+            lookups: HashMap::new(),
             sc,
         };
+        for (k, n) in e.nodes.iter().enumerate() {
+            e.ids.entry(n.router.id).or_insert(k);
+            e.addr_idx.insert(n.router.addr, k);
+        }
+        e.clutter = e
+            .sc
+            .clutter
+            .iter()
+            .filter(|c| c.polygon.len() >= 3 && c.db_per_km > 0.0)
+            .map(|c| LossArea::new(c.polygon.iter().map(|[la, lo]| to_xy(*la, *lo)).collect(), None, c.db_per_km))
+            .collect();
         e.build_links();
         e.seed_neighbors();
         // Timeline, sorted by time (stable).
@@ -530,10 +679,22 @@ impl Engine {
         if d > horizon_m(na.h, nb.h) {
             return None;
         }
-        let g = na.kind.ant_db() + nb.kind.ant_db() + height_db(na.h) + height_db(nb.h);
+        let g = na.kind.ant_db() + nb.kind.ant_db() + height_db(na.h) + height_db(nb.h) - self.extra_loss(a, b);
         let r = self.radio(na.sf);
         let rx = r.rx_dbm(d, g);
         (r.snr(rx) >= r.snr_min - 6.0).then_some(rx as f32)
+    }
+
+    /// Extra loss (dB) on the link a-b: clutter along the line, plus
+    /// degradation areas that contain either end.
+    fn extra_loss(&self, a: usize, b: usize) -> f64 {
+        if self.clutter.is_empty() && self.degrade.is_empty() {
+            return 0.0;
+        }
+        let (pa, pb) = ((self.nodes[a].x, self.nodes[a].y), (self.nodes[b].x, self.nodes[b].y));
+        let clutter: f64 = self.clutter.iter().map(|c| c.inside_len(pa, pb) / 1000.0 * c.db).sum();
+        let degrade: f64 = self.degrade.iter().filter(|g| g.contains(pa.0, pa.1) || g.contains(pb.0, pb.1)).map(|g| g.db).sum();
+        clutter + degrade
     }
 
     fn build_links(&mut self) {
@@ -732,6 +893,8 @@ impl Engine {
                 self.schedule(self.now + 10_000, Ev::Energy);
             }
             Ev::Neighbors => {
+                self.gw_dirty = true;
+        self.infra_dirty = true;
                 self.seed_neighbors();
                 self.schedule(self.now + 60_000, Ev::Neighbors);
             }
@@ -740,6 +903,11 @@ impl Engine {
                 self.timeline_done += 1;
                 self.inject(&ev);
             }
+            Ev::LookupTimeout { msg } => match self.lookups.get(&msg) {
+                Some(l) if !l.done && l.tries < LOOKUP_TRIES => self.ask(msg),
+                Some(l) if !l.done => self.home_fallback(msg, "timeout"),
+                _ => {}
+            },
         }
     }
 
@@ -772,8 +940,19 @@ impl Engine {
                 Action::Transmit { packet, delay_ms, id } => {
                     let Ok(p) = Packet::decode(&packet) else { continue };
                     let pid = packet_id(p.header.ptype, &p.header.dest, p.payload);
+                    // A path response is sent from the router's tick (no causing
+                    // packet): it belongs to the request whose reply token it
+                    // is addressed to.
+                    let tag = tag.or_else(|| {
+                        (p.header.ptype == PacketType::PathResponse).then(|| self.token_tags.get(&p.header.dest).copied()).flatten()
+                    });
                     if let Some(t) = tag {
                         self.tags.entry(pid).or_insert(t);
+                        if p.header.ptype == PacketType::PathRequest
+                            && let Some(tok) = p.payload.get(..16).and_then(Address::from_slice)
+                        {
+                            self.token_tags.entry(tok).or_insert(t);
+                        }
                     }
                     // Simulator-layer area scope for alerts (proposal).
                     if self.sc.features.area_scope
@@ -793,14 +972,49 @@ impl Engine {
                     // (maarse-host), filtered by the peer's regions.
                     if self.sc.features.backbone {
                         let region = p.header.region;
-                        let peers: Vec<(usize, bool)> = self.nodes[node]
+                        let dht = self.sc.features.dht_backbone;
+                        let directed = dht && p.header.ptype == PacketType::PathRequest;
+                        let mut peers: Vec<(usize, bool)> = self.nodes[node]
                             .links
                             .iter()
                             .filter_map(|&k| self.link_ok(k).then(|| {
                                 let l = &self.links[k];
                                 (if l.a == node { l.b } else { l.a }, l.wifi)
                             }))
+                            // DHT mode: path requests do not go to every TCP peer.
+                            .filter(|&(_, wifi)| !directed || wifi)
                             .collect();
+                        if directed && self.has_internet(node) {
+                            // DHT lookup: the host that can reach the destination,
+                            // then a direct connection to it (maarse-host dht_connect).
+                            let target = self.addr_idx.get(&p.header.dest).copied();
+                            let gw = target.map_or(-1, |t| self.gateway_of(t));
+                            self.stats.dht_lookups += 1;
+                            let tj = self.tag_json(pid);
+                            let dst = target.map_or(-1, |t| t as i64);
+                            if gw >= 0 && gw as usize != node && self.has_internet(gw as usize) {
+                                let gw = gw as usize;
+                                self.dyn_links.insert((node.min(gw), node.max(gw)));
+                                self.tr(format!("{{\"t\":{},\"ev\":\"dht\",\"n\":{node},\"to\":{gw},\"dst\":{dst},\"pid\":\"{pid:016x}\"{tj}}}", self.now));
+                                peers.push((gw, false));
+                            } else if gw as usize != node {
+                                self.stats.dht_misses += 1;
+                                self.tr(format!("{{\"t\":{},\"ev\":\"dht\",\"n\":{node},\"to\":-1,\"dst\":{dst},\"pid\":\"{pid:016x}\"{tj}}}", self.now));
+                            }
+                        } else if (dht || self.sc.features.home_routing) && p.header.path.is_some() && self.has_internet(node) {
+                            // Routed packets also use the direct connections.
+                            let extra: Vec<usize> = self
+                                .dyn_links
+                                .iter()
+                                .filter_map(|&(a, b)| if a == node { Some(b) } else if b == node { Some(a) } else { None })
+                                .filter(|&o| self.has_internet(o) && self.nodes[o].alive())
+                                .collect();
+                            for o in extra {
+                                if !peers.iter().any(|&(q, _)| q == o) {
+                                    peers.push((o, false));
+                                }
+                            }
+                        }
                         for (peer, wifi) in peers {
                             if region != 0 && !self.nodes[peer].router.forwards_region(region) {
                                 continue;
@@ -881,6 +1095,7 @@ impl Engine {
                     self.tr(format!("{{\"t\":{},\"ev\":\"deliver\",\"msg\":{i},\"n\":{node},\"hops\":{hops}}}", self.now));
                 }
             }
+            PacketType::Datagram => self.on_lookup_datagram(node, payload),
             PacketType::Channel if dest == self.public_channel => self.stats.channel_deliveries += 1,
             PacketType::Channel if dest == self.bulletin_channel => {
                 // The bulletin sender is the authority; verify like a client would.
@@ -897,6 +1112,27 @@ impl Engine {
             }
             _ => {}
         }
+    }
+
+    /// For the trace: the source path as node indices (`,"path":[..]`; for a
+    /// path request `,"trail":[..]`, the repeaters it passed; empty for other
+    /// floods), the intended next hop (-1 for floods) and the final
+    /// destination node (-1 if the destination is a token or a channel).
+    fn route_info(&self, h: &Header) -> (String, i64, i64) {
+        let idx = |id: &u16| self.ids.get(id).map_or(-1, |&k| k as i64);
+        let dst = self.addr_idx.get(&h.dest).map_or(-1, |&k| k as i64);
+        let Some(path) = &h.path else { return (String::new(), -1, dst) };
+        let nodes: Vec<String> = path.iter().map(|id| idx(id).to_string()).collect();
+        // A path request carries the trail so far, but it is a flood: no next hop.
+        if h.ptype == PacketType::PathRequest {
+            return (format!(",\"trail\":[{}]", nodes.join(",")), -1, dst);
+        }
+        let nx = match path.get(h.hops as usize) {
+            Some(id) => idx(id),
+            // Last stretch: the destination itself (if it is a node).
+            None => dst,
+        };
+        (format!(",\"path\":[{}]", nodes.join(",")), nx, dst)
     }
 
     fn ready(&mut self, node: usize, packet: Buf, id: u64) {
@@ -989,20 +1225,28 @@ impl Engine {
         self.nodes[node].router.note_airtime(self.now, airtime.div_ceil(1000));
         self.stats.tx_count += 1;
         let end = self.now + (airtime as u64).div_ceil(1000);
-        let (pname, hops, region, pid) = match Packet::decode(&q.packet) {
-            Ok(p) => (ptype_name(p.header.ptype), p.header.hops, p.header.region, packet_id(p.header.ptype, &p.header.dest, p.payload)),
-            Err(_) => ("?", 0, 0, q.id),
+        let (pname, hops, region, pid, route) = match Packet::decode(&q.packet) {
+            Ok(p) => (
+                ptype_name(p.header.ptype),
+                p.header.hops,
+                p.header.region,
+                packet_id(p.header.ptype, &p.header.dest, p.payload),
+                self.route_info(&p.header),
+            ),
+            Err(_) => ("?", 0, 0, q.id, (String::new(), -1, -1)),
         };
+        let (path_json, nx, dst) = route;
         let pname = if pname == "Channel" && q.packet.get(2..18) == Some(&self.bulletin_channel.0[..]) { "Bulletin" } else { pname };
         *self.stats.by_type.entry(pname.to_string()).or_default() += 1;
         let tx = self.next_tx;
         self.next_tx += 1;
         let tj = self.tag_json(pid);
         self.tr(format!(
-            "{{\"t\":{},\"ev\":\"tx\",\"n\":{node},\"id\":{tx},\"end\":{end},\"air\":{airtime},\"p\":\"{pname}\",\"pid\":\"{pid:016x}\",\"hops\":{hops},\"rg\":{region},\"prio\":{},\"qd\":{delay}{tj}}}",
+            "{{\"t\":{},\"ev\":\"tx\",\"n\":{node},\"id\":{tx},\"end\":{end},\"air\":{airtime},\"p\":\"{pname}\",\"pid\":\"{pid:016x}\",\"hops\":{hops},\"rg\":{region},\"prio\":{},\"qd\":{delay},\"nx\":{nx},\"dst\":{dst}{path_json}{tj}}}",
             self.now, q.prio
         ));
-        self.active.push(Tx { id: tx, sender: node, start: self.now, end, packet: q.packet });
+        let flood = nx < 0 && !path_json.starts_with(",\"path\"");
+        self.active.push(Tx { id: tx, sender: node, start: self.now, end, packet: q.packet, nx, flood });
         self.nodes[node].busy_until = end;
         self.schedule(end, Ev::TxEnd { tx });
         if !self.nodes[node].txq.is_empty() {
@@ -1014,7 +1258,7 @@ impl Engine {
         let now = self.now;
         self.active.retain(|t| t.end + TX_KEEP_MS > now);
         let Some(t) = self.active.iter().find(|t| t.id == tx) else { return };
-        let (sender, start, end) = (t.sender, t.start, t.end);
+        let (sender, start, end, nx, flood) = (t.sender, t.start, t.end, t.nx, t.flood);
         let packet = t.packet.clone();
         let overlapping: Vec<usize> = self
             .active
@@ -1034,7 +1278,9 @@ impl Engine {
         };
         let receivers: Vec<(u32, f32)> = self.nodes[sender].nbrs.clone();
         let mut ok = String::new();
+        let mut snrs = String::new();
         let mut coll = String::new();
+        let mut cause = String::new();
         for (r, p) in receivers {
             let r = r as usize;
             let snr = p as f64 - noise;
@@ -1042,19 +1288,38 @@ impl Engine {
                 continue;
             }
             self.nodes[r].router.note_airtime(start, ((end - start) as u32).max(1));
-            let lost = overlapping.iter().any(|&o| {
-                o == r
-                    || (o != sender
-                        && self.nodes[o]
-                            .gain_to(r as u32)
-                            .is_some_and(|g| (g as f64 - noise) >= snr_min - 6.0 && g > p - 6.0))
-            });
-            if lost {
+            // Lost if the receiver was transmitting itself (half-duplex), or
+            // another audible transmission was not at least 6 dB weaker. The
+            // cause is the strongest interferer (-1 = half-duplex).
+            let lost = if overlapping.contains(&r) {
+                Some(-1i64)
+            } else {
+                overlapping
+                    .iter()
+                    .filter(|&&o| o != sender)
+                    .filter_map(|&o| self.nodes[o].gain_to(r as u32).map(|g| (o, g)))
+                    .filter(|&(_, g)| (g as f64 - noise) >= snr_min - 6.0 && g > p - 6.0)
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(o, _)| o as i64)
+            };
+            if let Some(by) = lost {
                 self.stats.collisions += 1;
-                let _ = write!(coll, "{}{r}", if coll.is_empty() { "" } else { "," });
+                if by < 0 {
+                    self.stats.coll_half_duplex += 1;
+                }
+                if flood {
+                    self.stats.coll_flood += 1;
+                } else if r as i64 == nx {
+                    self.stats.coll_next_hop += 1;
+                }
+                let sep = if coll.is_empty() { "" } else { "," };
+                let _ = write!(coll, "{sep}{r}");
+                let _ = write!(cause, "{sep}{by}");
                 continue;
             }
-            let _ = write!(ok, "{}{r}", if ok.is_empty() { "" } else { "," });
+            let sep = if ok.is_empty() { "" } else { "," };
+            let _ = write!(ok, "{sep}{r}");
+            let _ = write!(snrs, "{sep}{}", snr.round() as i32);
             let snr8 = snr.clamp(-30.0, 30.0) as i8;
             let before = self.nodes[r].router.stats;
             let actions = self.nodes[r].router.on_receive(&packet, snr8, now);
@@ -1062,7 +1327,9 @@ impl Engine {
             self.apply(r, actions.into_iter().collect(), tag);
         }
         let tj = self.tag_json(pid);
-        self.tr(format!("{{\"t\":{now},\"ev\":\"rx\",\"id\":{tx},\"n\":{sender},\"pid\":\"{pid:016x}\",\"ok\":[{ok}],\"coll\":[{coll}]{tj}}}"));
+        self.tr(format!(
+            "{{\"t\":{now},\"ev\":\"rx\",\"id\":{tx},\"n\":{sender},\"pid\":\"{pid:016x}\",\"nx\":{nx},\"ok\":[{ok}],\"snr\":[{snrs}],\"coll\":[{coll}],\"cw\":[{cause}]{tj}}}"
+        ));
     }
 
     // ---------- traffic ----------
@@ -1133,6 +1400,21 @@ impl Engine {
     }
 
     /// Sends a direct message (also used by the UI). Returns the message index.
+    ///
+    /// With `home_routing` (a model of a protocol that does not exist yet) a
+    /// sender without a route first asks the gateway of its island where the
+    /// destination is. The gateway knows every node's home: the fixed node
+    /// (repeater, mast, host, Wi-Fi node) it hears best, as a registry fed by
+    /// announces would. The fixed nodes know the routes between them (links
+    /// with a 5 dB margin, shortest in hops), as a proactive infrastructure
+    /// routing would, since they do not move. The answer is a source path:
+    /// sender's home ... (gateway ⇢ TCP ⇢ gateway) ... destination's home. The
+    /// lookup itself is a real datagram over the radio in both directions, and
+    /// the message then goes through the real routers along that path, with
+    /// their per-hop acks, local repair and fallback to a path request when it
+    /// fails. Without an answer, the sender falls back to a path request; when
+    /// the destination is known to be unreachable (another island without a
+    /// working gateway), nothing is flooded.
     pub fn send_message(&mut self, from: usize, to: usize) -> usize {
         let m = self.msgs.len();
         let mut payload = format!("message {m} from {from} to {to}: ").into_bytes();
@@ -1145,6 +1427,22 @@ impl Engine {
             return m;
         }
         let dest = self.nodes[to].router.addr;
+        if self.sc.features.home_routing && !self.nodes[from].router.has_route(&dest) {
+            self.start_lookup(m);
+            return m;
+        }
+        self.send_real(m);
+        m
+    }
+
+    /// Hands message `m` to its sender's router (route or path request).
+    fn send_real(&mut self, m: usize) {
+        let (from, to) = (self.msgs[m].from, self.msgs[m].to);
+        if !self.nodes[from].alive() {
+            return;
+        }
+        let payload = self.msgs[m].payload.clone();
+        let dest = self.nodes[to].router.addr;
         let mut token = [0u8; 16];
         self.rng.fill(&mut token[..]);
         let before = self.nodes[from].router.stats;
@@ -1152,7 +1450,309 @@ impl Engine {
             self.after_router(from, before, Some(m as u32));
             self.apply(from, actions.into_iter().collect(), Some(m as u32));
         }
-        m
+    }
+
+    // ---------- home routing model ----------
+
+    fn is_fixed(&self, i: usize) -> bool {
+        let n = &self.nodes[i];
+        n.alive() && matches!(n.kind, Kind::Repeater | Kind::Anchor | Kind::Host | Kind::Wifi) && n.route.len() < 2 && n.wander <= 0.0
+    }
+
+    /// Infrastructure links, homes and radio islands (recomputed when the
+    /// network changed: deaths, events, every 60 s for moving nodes).
+    fn refresh_infra(&mut self) {
+        if !self.infra_dirty && self.home.len() == self.nodes.len() {
+            return;
+        }
+        self.infra_dirty = false;
+        let n = self.nodes.len();
+        let fixed: Vec<bool> = (0..n).map(|i| self.is_fixed(i)).collect();
+        let good = |e: &Engine, i: usize, rx: f32| {
+            let r = e.radio(e.nodes[i].sf);
+            r.snr(rx as f64) >= r.snr_min + INFRA_MARGIN_DB
+        };
+        let mut infra = vec![Vec::new(); n];
+        let mut home = vec![-1i32; n];
+        for i in 0..n {
+            if !self.nodes[i].alive() {
+                continue;
+            }
+            if fixed[i] {
+                home[i] = i as i32;
+                let mut l: Vec<(u32, f32)> = self.nodes[i].nbrs.iter().copied().filter(|&(j, rx)| fixed[j as usize] && good(self, i, rx)).collect();
+                // Strongest first, so the shortest path prefers strong links.
+                l.sort_by(|a, b| b.1.total_cmp(&a.1));
+                infra[i] = l.into_iter().map(|(j, _)| j).collect();
+            } else if let Some(&(j, _)) = self.nodes[i]
+                .nbrs
+                .iter()
+                .filter(|&&(j, rx)| fixed[j as usize] && self.audible_rx(i, rx))
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+            {
+                home[i] = j as i32;
+            }
+        }
+        self.infra = infra;
+        self.home = home;
+        self.rcomp = self.components_with(false);
+    }
+
+    /// Shortest path in hops over infrastructure links, `a` and `b` included.
+    fn infra_path(&self, a: usize, b: usize) -> Option<Vec<usize>> {
+        if a == b {
+            return Some(vec![a]);
+        }
+        let mut prev = vec![u32::MAX; self.nodes.len()];
+        prev[a] = a as u32;
+        let mut q = std::collections::VecDeque::from([a]);
+        while let Some(u) = q.pop_front() {
+            for &v in &self.infra[u] {
+                let v = v as usize;
+                if prev[v] != u32::MAX {
+                    continue;
+                }
+                prev[v] = u as u32;
+                if v == b {
+                    let mut path = vec![b];
+                    let mut x = b;
+                    while x != a {
+                        x = prev[x] as usize;
+                        path.push(x);
+                    }
+                    path.reverse();
+                    return Some(path);
+                }
+                q.push_back(v);
+            }
+        }
+        None
+    }
+
+    /// Forwarders between `from` and `to` (both excluded) along the fixed
+    /// infrastructure, via the gateways if they are on different islands.
+    /// When that is longer than a source path holds, the route is split at the
+    /// sender's gateway (an anchor): the sender's leg ends just before it, and
+    /// the gateway gets its own route for the rest (`Ok((leg, Some((gw, rest))))`).
+    /// Err: why there is no such path ("no_home", "no_infra_path",
+    /// "unreachable", "too_long").
+    fn home_path(&mut self, from: usize, to: usize) -> Result<(Vec<usize>, Option<(usize, Vec<usize>)>), &'static str> {
+        self.refresh_infra();
+        let (ha, hb) = (self.home[from], self.home[to]);
+        if ha < 0 || hb < 0 {
+            return Err("no_home");
+        }
+        let (ha, hb) = (ha as usize, hb as usize);
+        let strip = |c: Vec<usize>| -> Vec<usize> { c.into_iter().filter(|&x| x != from && x != to).collect() };
+        // Two candidates: all the way by radio (same island), or up to the
+        // sender's gateway, over the backbone, and down from the destination's
+        // gateway. The one with fewer radio hops wins.
+        let radio = if self.rcomp[ha] == self.rcomp[hb] { self.infra_path(ha, hb).map(strip) } else { None };
+        let (g1, g2) = (self.gateway_of(from), self.gateway_of(to));
+        let via = if g1 >= 0 && g2 >= 0 && g1 != g2 {
+            let (g1, g2) = (g1 as usize, g2 as usize);
+            match (self.infra_path(ha, g1), self.infra_path(g2, hb)) {
+                (Some(u), Some(d)) => Some((g1, g2, u, d)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let via_len = via.as_ref().map(|(_, _, u, d)| u.len() + d.len());
+        match (&radio, via_len) {
+            (Some(r), Some(v)) if r.len() <= v.min(maarse_core::MAX_PATH) => return Ok((r.clone(), None)),
+            (Some(r), None) if r.len() <= maarse_core::MAX_PATH => return Ok((r.clone(), None)),
+            (Some(_), None) => return Err("too_long"),
+            (None, None) if self.rcomp[ha] == self.rcomp[hb] => return Err("no_infra_path"),
+            (None, None) => return Err("unreachable"),
+            _ => {}
+        }
+        let Some((g1, g2, up, down)) = via else { return Err("no_infra_path") };
+        // The gateways connect directly after the lookup (DHT).
+        self.dyn_links.insert((g1.min(g2), g1.max(g2)));
+        let mut whole = up.clone();
+        whole.extend(down.iter().copied());
+        let path = strip(whole);
+        if path.len() <= maarse_core::MAX_PATH {
+            return Ok((path, None));
+        }
+        // Split at the sender's gateway (an anchor): leg 1 ends before it.
+        let leg: Vec<usize> = strip(up).into_iter().filter(|&x| x != g1).collect();
+        let rest = strip(down);
+        if leg.len() > maarse_core::MAX_PATH || rest.len() > maarse_core::MAX_PATH || g1 == from {
+            return Err("too_long");
+        }
+        Ok((leg, Some((g1, rest))))
+    }
+
+    fn path_of(&self, nodes: &[usize]) -> maarse_core::Path {
+        let mut p = maarse_core::Path::new();
+        for &x in nodes {
+            let _ = p.push(self.nodes[x].router.id);
+        }
+        p
+    }
+
+    fn nodes_json(v: &[usize]) -> String {
+        v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
+    }
+
+    /// Sends a lookup datagram from `a` to `b` along the installed path.
+    fn send_datagram(&mut self, a: usize, b: usize, path: &[usize], body: &[u8], m: usize) {
+        let dest = self.nodes[b].router.addr;
+        let p = self.path_of(path);
+        self.nodes[a].router.add_route(dest, p, self.now);
+        let mut token = [0u8; 16];
+        self.rng.fill(&mut token[..]);
+        let before = self.nodes[a].router.stats;
+        if let Ok((_, actions)) = self.nodes[a].router.send_typed(PacketType::Datagram, dest, body, token, self.now) {
+            self.after_router(a, before, Some(m as u32));
+            self.apply(a, actions.into_iter().collect(), Some(m as u32));
+        }
+    }
+
+    fn start_lookup(&mut self, m: usize) {
+        let (from, to) = (self.msgs[m].from, self.msgs[m].to);
+        self.stats.home_lookups += 1;
+        self.refresh_infra();
+        // Local registry: announces flood `LOCAL_SCOPE` hops, so every fixed
+        // node already hears the announces of nodes that close. The sender's
+        // own home answers for them (one hop away, or the sender itself).
+        let (h, t) = (self.home[from], self.home[to]);
+        if h >= 0 && t >= 0 && self.rcomp[h as usize] == self.rcomp[t as usize] {
+            let (h, t) = (h as usize, t as usize);
+            if self.infra_path(h, t).is_some_and(|c| c.len() <= maarse_core::LOCAL_SCOPE as usize + 1) {
+                self.stats.home_local += 1;
+                self.tr(format!("{{\"t\":{},\"ev\":\"lookup\",\"n\":{from},\"to\":{h},\"local\":true,\"path\":[],\"msg\":{m}}}", self.now));
+                self.lookups.insert(m, Lookup { from, to, gw: h, up: Vec::new(), route: Vec::new(), tries: 0, done: false });
+                return self.ask(m);
+            }
+        }
+        let gw = self.gateway_of(from);
+        if gw < 0 {
+            return self.home_fallback(m, "no_gateway");
+        }
+        let gw = gw as usize;
+        let up: Vec<usize> = match (self.home[from], gw) {
+            (h, g) if h >= 0 => match self.infra_path(h as usize, g) {
+                Some(c) => c.into_iter().filter(|&x| x != from && x != gw).collect(),
+                None => return self.home_fallback(m, "no_infra_path"),
+            },
+            _ => return self.home_fallback(m, "no_home"),
+        };
+        if up.len() > maarse_core::MAX_PATH {
+            return self.home_fallback(m, "too_long");
+        }
+        self.tr(format!("{{\"t\":{},\"ev\":\"lookup\",\"n\":{from},\"to\":{gw},\"path\":[{}],\"msg\":{m}}}", self.now, Self::nodes_json(&up)));
+        self.lookups.insert(m, Lookup { from, to, gw, up, route: Vec::new(), tries: 0, done: false });
+        self.ask(m);
+    }
+
+    /// Sends (or resends) the lookup question to the registry node.
+    fn ask(&mut self, m: usize) {
+        let Some(l) = self.lookups.get_mut(&m) else { return };
+        l.tries += 1;
+        let (from, reg, up) = (l.from, l.gw, l.up.clone());
+        self.schedule(self.now + LOOKUP_RETRY_MS, Ev::LookupTimeout { msg: m });
+        if reg == from {
+            return self.answer_lookup(m);
+        }
+        let mut body = vec![b'L'];
+        body.extend_from_slice(&(m as u32).to_be_bytes());
+        self.send_datagram(from, reg, &up, &body, m);
+    }
+
+    fn on_lookup_datagram(&mut self, node: usize, payload: &[u8]) {
+        if payload.len() < 5 {
+            return;
+        }
+        let m = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]) as usize;
+        let Some(l) = self.lookups.get(&m) else { return };
+        if l.done {
+            return;
+        }
+        match payload[0] {
+            b'L' if node == l.gw => self.answer_lookup(m),
+            b'R' | b'N' | b'U' if node == l.from => self.finish_lookup(m, payload[0]),
+            _ => {}
+        }
+    }
+
+    /// The gateway answers: R (a route follows), U (known unreachable) or N.
+    fn answer_lookup(&mut self, m: usize) {
+        let (from, to, gw, up) = {
+            let l = &self.lookups[&m];
+            (l.from, l.to, l.gw, l.up.clone())
+        };
+        let res = self.home_path(from, to);
+        let (code, path) = match &res {
+            Ok((p, _)) => (b'R', p.clone()),
+            Err("unreachable") => (b'U', Vec::new()),
+            Err(_) => (b'N', Vec::new()),
+        };
+        // A split route: the gateway (anchor) gets its own route to the
+        // destination now (the registry is on the gateways).
+        if let Ok((_, Some((anchor, rest)))) = &res {
+            let dest = self.nodes[to].router.addr;
+            let p = self.path_of(rest);
+            self.nodes[*anchor].router.add_route(dest, p, self.now);
+            self.tr(format!("{{\"t\":{},\"ev\":\"route_split\",\"n\":{anchor},\"path\":[{}],\"msg\":{m}}}", self.now, Self::nodes_json(rest)));
+        }
+        let why = match &res {
+            Ok(_) => "",
+            Err(w) => w,
+        };
+        self.tr(format!(
+            "{{\"t\":{},\"ev\":\"lookup_answer\",\"n\":{gw},\"to\":{from},\"ok\":{},\"why\":\"{why}\",\"path\":[{}],\"msg\":{m}}}",
+            self.now,
+            code == b'R',
+            Self::nodes_json(&path)
+        ));
+        if let Some(l) = self.lookups.get_mut(&m) {
+            l.route = path.clone();
+        }
+        if gw == from {
+            return self.finish_lookup(m, code);
+        }
+        let mut body = vec![code];
+        body.extend_from_slice(&(m as u32).to_be_bytes());
+        let back: Vec<usize> = up.iter().rev().copied().collect();
+        self.send_datagram(gw, from, &back, &body, m);
+        let _ = to;
+    }
+
+    fn finish_lookup(&mut self, m: usize, code: u8) {
+        let Some(l) = self.lookups.get_mut(&m) else { return };
+        l.done = true;
+        let (from, to, path) = (l.from, l.to, l.route.clone());
+        match code {
+            b'R' => {
+                self.stats.home_routed += 1;
+                let dest = self.nodes[to].router.addr;
+                let p = self.path_of(&path);
+                self.nodes[from].router.add_route(dest, p, self.now);
+                self.tr(format!("{{\"t\":{},\"ev\":\"lookup_done\",\"n\":{from},\"path\":[{}],\"msg\":{m}}}", self.now, Self::nodes_json(&path)));
+                self.send_real(m);
+            }
+            b'U' => {
+                // Known unreachable: do not flood the country for nothing (in
+                // the real system the message would wait in the mailbox).
+                self.stats.home_unreachable += 1;
+                self.tr(format!("{{\"t\":{},\"ev\":\"lookup_done\",\"n\":{from},\"unreachable\":true,\"msg\":{m}}}", self.now));
+            }
+            _ => self.home_fallback(m, "no_path"),
+        }
+    }
+
+    /// No usable answer: fall back to an ordinary path request.
+    fn home_fallback(&mut self, m: usize, why: &str) {
+        if let Some(l) = self.lookups.get_mut(&m) {
+            l.done = true;
+        }
+        *self.stats.home_fallback.entry(why.to_string()).or_default() += 1;
+        let from = self.msgs[m].from;
+        self.tr(format!("{{\"t\":{},\"ev\":\"lookup_fallback\",\"n\":{from},\"why\":\"{why}\",\"msg\":{m}}}", self.now));
+        self.send_real(m);
     }
 
     fn send_channel(&mut self, from: usize) {
@@ -1271,9 +1871,30 @@ impl Engine {
 
     // ---------- timeline ----------
 
+    /// Nodes inside an area; an empty area means every node.
+    fn nodes_in(&self, area: &Area) -> Vec<usize> {
+        let (poly, circle) = area_xy(area);
+        let everywhere = circle.is_none() && poly.len() < 3;
+        (0..self.nodes.len())
+            .filter(|&i| {
+                let (x, y) = (self.nodes[i].x, self.nodes[i].y);
+                everywhere || if let Some((cx, cy, r)) = circle { (x - cx).hypot(y - cy) <= r } else { point_in_poly(x, y, &poly) }
+            })
+            .collect()
+    }
+
+    fn revive_node(&mut self, i: usize) {
+        if self.nodes[i].dead == DeadWhy::Killed {
+            self.nodes[i].dead = DeadWhy::Alive;
+            self.tr(format!("{{\"t\":{},\"ev\":\"revive\",\"n\":{i}}}", self.now));
+        }
+    }
+
     pub fn inject(&mut self, ev: &TimedEvent) {
         let what = ev.kind.as_str();
         self.tr(format!("{{\"t\":{},\"ev\":\"event\",\"what\":\"{what}\",\"region\":\"{}\"}}", self.now, ev.region));
+        self.gw_dirty = true;
+        self.infra_dirty = true;
         match what {
             "internet_down" => {
                 if ev.region.is_empty() {
@@ -1291,11 +1912,8 @@ impl Engine {
                 }
             }
             "power_cut" => {
-                let (poly, circle) = area_xy(&ev.area);
-                for i in 0..self.nodes.len() {
-                    let (x, y) = (self.nodes[i].x, self.nodes[i].y);
-                    let hit = if let Some((cx, cy, r)) = circle { (x - cx).hypot(y - cy) <= r } else { point_in_poly(x, y, &poly) };
-                    if hit && self.nodes[i].mains {
+                for i in self.nodes_in(&ev.area) {
+                    if self.nodes[i].mains {
                         self.nodes[i].powered = false;
                         if self.nodes[i].battery_wh <= 0.0 && self.nodes[i].alive() {
                             self.kill(i, DeadWhy::Power);
@@ -1305,7 +1923,7 @@ impl Engine {
                 self.update_energy_levels();
             }
             "power_restore" => {
-                for i in 0..self.nodes.len() {
+                for i in self.nodes_in(&ev.area) {
                     if self.nodes[i].mains {
                         self.nodes[i].powered = true;
                         if matches!(self.nodes[i].dead, DeadWhy::Power | DeadWhy::Battery) {
@@ -1327,17 +1945,43 @@ impl Engine {
                 }
             }
             "kill" => {
-                if ev.node < self.nodes.len() {
-                    self.kill(ev.node, DeadWhy::Killed);
+                let list = if ev.nodes.is_empty() { vec![ev.node] } else { ev.nodes.clone() };
+                let n_nodes = self.nodes.len();
+                for i in list.into_iter().filter(|&i| i < n_nodes) {
+                    self.kill(i, DeadWhy::Killed);
+                }
+            }
+            "kill_area" => {
+                let want = ev.node_kind.as_str();
+                for i in self.nodes_in(&ev.area) {
+                    if want.is_empty() || want == "any" || self.nodes[i].kind.name() == want {
+                        self.kill(i, DeadWhy::Killed);
+                    }
                 }
             }
             "revive" => {
-                for n in &mut self.nodes {
-                    if n.dead == DeadWhy::Killed {
-                        n.dead = DeadWhy::Alive;
-                    }
+                let list: Vec<usize> = if ev.nodes.is_empty() { (0..self.nodes.len()).collect() } else { ev.nodes.clone() };
+                let n_nodes = self.nodes.len();
+                for i in list.into_iter().filter(|&i| i < n_nodes) {
+                    self.revive_node(i);
                 }
                 self.seed_neighbors();
+            }
+            "host_internet" => {
+                if ev.node < self.nodes.len() {
+                    self.nodes[ev.node].internet = ev.up;
+                }
+            }
+            "degrade" => {
+                let (poly, circle) = area_xy(&ev.area);
+                if (circle.is_some() || poly.len() >= 3) && ev.db > 0.0 {
+                    self.degrade.push(LossArea::new(poly, circle, ev.db));
+                    self.build_links();
+                }
+            }
+            "degrade_clear" => {
+                self.degrade.clear();
+                self.build_links();
             }
             "link" => {
                 if let Some(l) = self.links.get_mut(ev.index) {
@@ -1363,6 +2007,8 @@ impl Engine {
     }
 
     fn kill(&mut self, i: usize, why: DeadWhy) {
+        self.gw_dirty = true;
+        self.infra_dirty = true;
         if self.nodes[i].alive() {
             self.nodes[i].dead = why;
             self.nodes[i].txq.clear();
@@ -1420,6 +2066,26 @@ impl Engine {
     }
 
     fn move_nodes(&mut self) {
+        let walkers: Vec<usize> = (0..self.nodes.len()).filter(|&i| self.nodes[i].wander > 0.0 && self.nodes[i].route.len() < 2).collect();
+        for i in walkers {
+            let step = self.nodes[i].speed * 2.0;
+            let target = match self.nodes[i].target {
+                Some(t) if (t.0 - self.nodes[i].x).hypot(t.1 - self.nodes[i].y) > step => t,
+                _ => {
+                    // A new random point in the disc around home.
+                    let r = self.nodes[i].wander * self.rng.gen_range(0.0f64..1.0).sqrt();
+                    let a = self.rng.gen_range(0.0..std::f64::consts::TAU);
+                    let t = (self.nodes[i].home.0 + r * a.cos(), self.nodes[i].home.1 + r * a.sin());
+                    self.nodes[i].target = Some(t);
+                    t
+                }
+            };
+            let n = &self.nodes[i];
+            let d = (target.0 - n.x).hypot(target.1 - n.y);
+            let f = if d > 0.0 { (step / d).min(1.0) } else { 0.0 };
+            let p = (n.x + (target.0 - n.x) * f, n.y + (target.1 - n.y) * f);
+            self.place(i, p);
+        }
         let movers: Vec<usize> = (0..self.nodes.len()).filter(|&i| self.nodes[i].route.len() >= 2).collect();
         for i in movers {
             let n = &mut self.nodes[i];
@@ -1447,18 +2113,24 @@ impl Engine {
                 }
                 s -= l;
             }
-            let old = Self::cell(n.x, n.y);
-            n.x = p.0;
-            n.y = p.1;
-            let new = Self::cell(p.0, p.1);
-            if old != new {
-                if let Some(v) = self.grid.get_mut(&old) {
-                    v.retain(|&j| j as usize != i);
-                }
-                self.grid.entry(new).or_default().push(i as u32);
-            }
-            self.relink(i);
+            self.place(i, p);
         }
+    }
+
+    /// Moves node `i` to `p` and recomputes its links.
+    fn place(&mut self, i: usize, p: (f64, f64)) {
+        let n = &mut self.nodes[i];
+        let old = Self::cell(n.x, n.y);
+        n.x = p.0;
+        n.y = p.1;
+        let new = Self::cell(p.0, p.1);
+        if old != new {
+            if let Some(v) = self.grid.get_mut(&old) {
+                v.retain(|&j| j as usize != i);
+            }
+            self.grid.entry(new).or_default().push(i as u32);
+        }
+        self.relink(i);
     }
 
     // ---------- queries ----------
@@ -1491,6 +2163,17 @@ impl Engine {
             "airtime_s": self.nodes.iter().map(|x| x.airtime_us).sum::<u64>() as f64 / 1e6,
             "busiest_airtime_s": busiest as f64 / 1e6,
             "collisions": self.stats.collisions,
+            "coll_flood": self.stats.coll_flood,
+            "coll_next_hop": self.stats.coll_next_hop,
+            "coll_half_duplex": self.stats.coll_half_duplex,
+            "dht_lookups": self.stats.dht_lookups,
+            "dht_misses": self.stats.dht_misses,
+            "home_lookups": self.stats.home_lookups,
+            "home_routed": self.stats.home_routed,
+            "home_unreachable": self.stats.home_unreachable,
+            "home_local": self.stats.home_local,
+            "home_fallback": self.stats.home_fallback,
+            "degraded_areas": self.degrade.len(),
             "duty_drops": self.stats.duty_drops,
             "duty_hits": self.nodes.iter().map(|x| x.duty_hits as u64).sum::<u64>(),
             "busy_drops": self.stats.busy_drops,
@@ -1567,10 +2250,40 @@ impl Engine {
         json!({"state": alive, "lat": x, "lon": y, "battery": batt, "airtime_ms": air, "queue": q, "comp": comp, "links_ok": links})
     }
 
+    /// DHT backbone: the host with internet that can reach node `t` by radio
+    /// (the nearest one in its radio island), or -1.
+    fn gateway_of(&mut self, t: usize) -> i32 {
+        if self.gw_dirty || self.gw.len() != self.nodes.len() {
+            self.gw_dirty = false;
+            let comp = self.components_with(false);
+            let hosts: Vec<usize> = (0..self.nodes.len()).filter(|&i| self.nodes[i].alive() && self.has_internet(i)).collect();
+            self.gw = (0..self.nodes.len())
+                .map(|i| {
+                    if comp[i] < 0 {
+                        return -1;
+                    }
+                    let d = |h: usize| (self.nodes[h].x - self.nodes[i].x).hypot(self.nodes[h].y - self.nodes[i].y);
+                    hosts
+                        .iter()
+                        .copied()
+                        .filter(|&h| comp[h] == comp[i])
+                        .min_by(|&a, &b| d(a).total_cmp(&d(b)))
+                        .map_or(-1, |h| h as i32)
+                })
+                .collect();
+        }
+        self.gw.get(t).copied().unwrap_or(-1)
+    }
+
     /// Connected components ("islands") of the forwarding graph: forwarders
     /// that hear each other both ways, plus working backbone links; users join
     /// the component of a forwarder they hear (or stay alone).
     pub fn components(&self) -> Vec<i32> {
+        self.components_with(true)
+    }
+
+    /// Like [`Engine::components`]; `backbone = false` gives radio islands only.
+    pub fn components_with(&self, backbone: bool) -> Vec<i32> {
         let n = self.nodes.len();
         let mut parent: Vec<usize> = (0..n).collect();
         fn find(p: &mut [usize], mut i: usize) -> usize {
@@ -1594,7 +2307,7 @@ impl Engine {
             }
         }
         for k in 0..self.links.len() {
-            if self.sc.features.backbone && self.link_ok(k) {
+            if backbone && self.sc.features.backbone && self.link_ok(k) {
                 let (a, b) = (find(&mut parent, self.links[k].a), find(&mut parent, self.links[k].b));
                 parent[a] = b;
             }
@@ -1652,6 +2365,8 @@ impl Engine {
             "duty_budget_used_pct": n.airtime_us as f64 / 1000.0 / (self.sc.duty_permille as f64 / 1000.0 * self.now.max(1) as f64) * 100.0,
             "duty_hits": n.duty_hits,
             "neighbors": nb, "radio_neighbors": radio_nbrs, "routes": routes, "queue": queue,
+            "dead_hops": rt.dead_hops().iter().filter(|(_, until)| *until > self.now).map(|(id, until)| json!({"node": ids.get(id), "for_s": (until - self.now) as f64 / 1000.0})).collect::<Vec<_>>(),
+            "gateway": self.gw.get(i).copied().unwrap_or(-1),
             "links": n.links.iter().map(|&k| json!({"index": k, "peer": if self.links[k].a == i { self.links[k].b } else { self.links[k].a }, "kind": if self.links[k].wifi { "wifi" } else { "tcp" }, "ok": self.link_ok(k)})).collect::<Vec<_>>(),
             "stats": {
                 "rx_packets": s.rx_packets, "rx_duplicates": s.rx_duplicates, "forwarded": s.forwarded, "originated": s.originated,

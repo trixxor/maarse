@@ -1,0 +1,215 @@
+<title>Må:rse Denmark Simulator</title>
+<meta name="description" content="Build and break a national Må:rse LoRa mesh across Denmark, running the real router code compiled to WebAssembly.">
+<link rel="stylesheet" href="vendor/leaflet-lite.css?v=9">
+<link rel="stylesheet" href="style.css?v=9">
+<header id="top">
+  <div class="brand"><b>Må:rse</b> Denmark Simulator <a href="README.md">How it works</a></div>
+  <div class="ctrl">
+    <select id="preset" title="Scenario preset"></select>
+    <button id="btn-reset" title="Rebuild the simulation from the scenario (t = 0)">⟲ Reset</button>
+    <button id="btn-theme" title="Light / dark map">◐</button>
+  </div>
+  <div class="honest">Simplified radio model (log-distance path loss, antenna height, radio horizon, forest loss per km). Not a coverage prediction; a simulator is not a field measurement. The routing is the real <code>maarse-core</code> Router.</div>
+</header>
+
+<div id="main">
+  <aside id="side">
+    <nav id="tabs">
+      <button data-tab="ask" id="tab-ask-btn" hidden>Ask Claude</button>
+      <button data-tab="journey" class="on">Journey</button>
+      <button data-tab="build">Build</button>
+      <button data-tab="disaster">Disaster</button>
+      <button data-tab="terrain">Terrain</button>
+      <button data-tab="alerts">Alerts</button>
+      <button data-tab="stats">Stats</button>
+      <button data-tab="log">Log</button>
+    </nav>
+
+    <section id="tab-ask" class="tab">
+      <h3>Ask Claude</h3>
+      <p class="hint" id="ask-hint">Ask a question about the network. Claude builds a test, runs it in this simulator (the real router code), shows it on the map and explains the result. It uses your own Claude usage.</p>
+      <p class="hint" id="ask-note"></p>
+      <div id="ask-log"></div>
+      <textarea id="ask-q" rows="3" placeholder="e.g. What happens to Bornholm if the internet goes down?"></textarea>
+      <div class="row"><button id="ask-send" class="primary">Ask</button><button id="ask-stop" hidden>Stop</button><button id="ask-new">New conversation</button></div>
+      <div id="ask-examples">
+        <button>What happens to messages to Bornholm if the internet goes down?</button>
+        <button>Does home routing help at 30 messages per minute? Compare it with today.</button>
+        <button>Follow a message from Skagen to Esbjerg and explain the route it takes.</button>
+        <button>How many repeaters in Nordjylland can fail before messages stop arriving?</button>
+      </div>
+    </section>
+
+    <section id="tab-journey" class="tab on">
+      <h3>Send one message and watch it</h3>
+      <p class="hint">Type a town (the nearest handheld there sends or receives), or pick a node on the map.</p>
+      <label>From <input id="jr-from" list="town-list" placeholder="e.g. Skagen" size="14"><button id="jr-pick-from" title="Click a node on the map">Pick</button></label>
+      <label>To <input id="jr-to" list="town-list" placeholder="e.g. Roenne" size="14"><button id="jr-pick-to" title="Click a node on the map">Pick</button></label>
+      <datalist id="town-list"></datalist>
+      <label><input type="checkbox" id="jr-quiet"> Quiet network (stop other traffic while it travels)</label>
+      <button id="btn-journey" class="primary">Send and follow</button>
+      <div id="journey"></div>
+      <h3>Any message</h3>
+      <p class="hint">Messages from the traffic generator. Click one to follow it.</p>
+      <div id="msg-list" class="scroll"></div>
+      <div id="reach"></div>
+    </section>
+
+    <section id="tab-build" class="tab">
+      <h3>Map tools</h3>
+      <div class="tools" id="tools">
+        <button data-tool="select" class="on">Select / move</button>
+        <button data-tool="delete">Delete</button>
+        <button data-tool="handheld">+ Handheld</button>
+        <button data-tool="relay">+ Relay</button>
+        <button data-tool="repeater">+ Repeater</button>
+        <button data-tool="anchor">+ Anchor (mast)</button>
+        <button data-tool="host">+ Host (gateway)</button>
+        <button data-tool="wifi">+ ESP32 Wi-Fi</button>
+        <button data-tool="mobile">+ Car (draw route)</button>
+        <button data-tool="link-tcp">Link: TCP</button>
+        <button data-tool="link-wifi">Link: Wi-Fi P2P</button>
+      </div>
+      <p class="hint" id="tool-hint">Click a node to inspect it; drag to move.</p>
+
+      <h3>Generate Denmark</h3>
+      <label>Users <input type="range" id="g-users" min="50" max="3000" step="50" value="600"><span></span></label>
+      <label>Repeater spacing (km) <input type="range" id="g-rep" min="8" max="40" step="1" value="18"><span></span></label>
+      <label>Hosts with internet (%) <input type="range" id="g-net" min="0" max="100" step="5" value="70"><span></span></label>
+      <label>Seed <input type="number" id="g-seed" value="1" min="1"></label>
+      <button id="btn-generate" class="primary">Generate</button>
+      <button id="btn-clear">Clear map</button>
+
+      <h3>Features</h3>
+      <div id="features"></div>
+      <label>Default SF <select id="sc-sf"><option>7</option><option>8</option><option selected>9</option><option>10</option><option>11</option><option>12</option></select></label>
+      <label>Duty cycle (‰) <input type="number" id="sc-duty" value="100" min="1" max="1000"></label>
+
+      <h3>Traffic</h3>
+      <label>Direct msgs / min <input type="number" id="tr-direct" value="6" min="0" step="1"></label>
+      <label>Channel msgs / min <input type="number" id="tr-channel" value="1" min="0" step="0.5"></label>
+      <label>Local share <input type="number" id="tr-local" value="0.8" min="0" max="1" step="0.1"></label>
+
+      <h3>Map</h3>
+      <label><input type="checkbox" id="opt-islands" checked> Colour by island (radio component)</label>
+      <label><input type="checkbox" id="opt-links"> Show radio links of the selected node</label>
+      <label><input type="checkbox" id="opt-backbone" checked> Show backbone links</label>
+
+      <h3>Scenario file</h3>
+      <button id="btn-export">Export JSON</button>
+      <label class="file">Import JSON <input type="file" id="file-import" accept=".json,application/json"></label>
+      <p class="hint" id="sc-info"></p>
+    </section>
+
+    <section id="tab-disaster" class="tab">
+      <p class="hint">Applies now (and goes on the timeline, so Reset replays it), or at the time below. With a duration, the damage is undone afterwards.</p>
+      <div class="row">
+        <label>At t = <input type="number" id="ev-at" placeholder="now" min="0" style="width:70px"> s</label>
+        <label>for <input type="number" id="ev-dur" placeholder="ever" min="0" style="width:60px"> min</label>
+      </div>
+      <h3>Single nodes and links</h3>
+      <div class="tools">
+        <button data-dtool="kill">Kill / revive a node (click)</button>
+        <button data-dtool="net">Cut internet of a host (click)</button>
+      </div>
+      <p class="hint">Turn off one backbone link: click the link on the map (Build tab, "Select").</p>
+      <h3>Areas (draw a polygon, double-click to finish)</h3>
+      <label>Destroy <select id="ev-kind"><option value="any">every node</option><option value="repeater">repeaters</option><option value="anchor">masts</option><option value="host">hosts</option><option value="handheld">handhelds</option></select> <button data-ev="kill_area">in an area</button></label>
+      <label>Radio loss <input type="number" id="ev-db" value="15" min="1" max="60" style="width:55px"> dB <button data-ev="degrade">in an area</button></label>
+      <p class="hint">Radio loss: storm, heavy rain or jamming; every link with an end inside loses that much.</p>
+      <div class="row"><button data-ev="power_cut">Power cut in an area</button><button data-ev="power_cut_all">Power cut everywhere</button><button data-ev="power_restore">Power back</button></div>
+      <h3>Internet</h3>
+      <div class="row"><button data-ev="internet_down">Internet down everywhere</button><button data-ev="internet_up">Internet back</button></div>
+      <label>Region <select id="ev-region"><option>nordjylland</option><option>midtjylland</option><option>syddanmark</option><option>sjaelland</option><option>hovedstaden</option></select> <button data-ev="internet_down_region">Internet down</button></label>
+      <h3>Random failures</h3>
+      <label>N <input type="number" id="ev-n" value="10" min="1" style="width:60px"> <button data-ev="kill_random">Kill N random repeaters</button> <button data-ev="revive">Revive all</button> <button data-ev="degrade_clear">Clear radio loss</button></label>
+      <h3>Timeline</h3>
+      <div id="timeline"></div>
+    </section>
+
+    <section id="tab-terrain" class="tab">
+      <h3>Forest and clutter</h3>
+      <p class="hint">A link loses this many dB for every km of its straight line inside the area.</p>
+      <label>Loss <input type="number" id="cl-db" value="10" min="1" max="60" style="width:55px"> dB/km <button id="btn-clutter">Draw an area</button></label>
+      <div id="clutter-list"></div>
+      <h3>Walkers</h3>
+      <p class="hint">Click a point: a group appears there and wanders around it.</p>
+      <label>People <input type="number" id="wk-n" value="10" min="1" max="200" style="width:60px"> as <select id="wk-role"><option value="relay">relays</option><option value="handheld">handhelds</option></select></label>
+      <label>Radius <input type="number" id="wk-r" value="2" min="0.2" step="0.2" style="width:60px"> km, speed <input type="number" id="wk-v" value="5" min="0" step="1" style="width:50px"> km/h</label>
+      <button id="btn-walkers">Place a group (click map)</button>
+      <h3>Forest scenario</h3>
+      <label>Walkers <input type="number" id="fo-walkers" min="1" max="100" style="width:55px"> as <select id="fo-role"><option value="relay">relays</option><option value="handheld">handhelds</option></select></label>
+      <label>Forest radius <input type="number" id="fo-r" min="1" max="15" step="0.5" style="width:55px"> km, loss <input type="number" id="fo-db" min="0" max="40" style="width:50px"> dB/km</label>
+      <label>Repeater <input type="number" id="fo-rep" min="2" max="40" style="width:50px"> km from the centre</label>
+      <label><input type="checkbox" id="fo-hill"> Relay on a hill, antenna <input type="number" id="fo-hillh" min="2" max="100" style="width:50px"> m</label>
+      <label>Walking speed <input type="number" id="fo-v" min="0" max="20" style="width:50px"> km/h</label>
+      <button id="btn-forest" class="primary">Build the forest scenario</button>
+    </section>
+
+    <section id="tab-alerts" class="tab">
+      <p class="hint">A signed bulletin (real <code>maarse_crypto::bulletin</code>) on <code>#bulletin</code>, sent with the bulletin priority (<code>qos::priority_with</code>). The area travels inside the signed text; see AREA-ALERTS.md.</p>
+      <label>Sender <select id="al-from"></select></label>
+      <label>Type <select id="al-kind"><option value="evacuation">Evacuation</option><option value="fire">Fire</option><option value="flood">Flood</option><option value="water">Water</option><option value="info">Info</option></select></label>
+      <label>Text <input id="al-text" value="Evacuate now" maxlength="60"></label>
+      <button id="btn-al-circle">Draw circle and send</button>
+      <button id="btn-al-poly">Draw polygon and send</button>
+      <div id="alert-list"></div>
+    </section>
+
+    <section id="tab-stats" class="tab">
+      <div id="stats"></div>
+      <h3>Compare runs</h3>
+      <label>Turn off / on <select id="cmp-feature">
+        <option value="carry">carry</option><option value="local_repair" selected>local repair</option><option value="backbone">backbone</option><option value="dht_backbone">DHT backbone</option><option value="home_routing">home routing</option><option value="regions">regions</option><option value="sf_slot">SF slot</option><option value="scale_timeouts">scaled timeouts</option><option value="load_control">load control</option><option value="area_scope">area scope (alerts)</option>
+      </select></label>
+      <label>Duration (s) <input type="number" id="cmp-dur" value="900" min="60" step="60"></label>
+      <button id="btn-compare" class="primary">Run both</button>
+      <div id="compare"></div>
+    </section>
+
+    <section id="tab-log" class="tab">
+      <div class="row">
+        <input id="lg-node" placeholder="node" size="5">
+        <select id="lg-type"><option value="">any packet</option></select>
+        <input id="lg-msg" placeholder="msg" size="5">
+        <select id="lg-ev"><option value="">any event</option></select>
+      </div>
+      <div class="row"><button id="btn-log">Refresh</button><button id="btn-log-json">Export JSON</button><button id="btn-log-csv">Export CSV</button></div>
+      <div id="log" class="scroll mono"></div>
+    </section>
+
+    <section id="inspector" class="hidden"></section>
+  </aside>
+
+  <div id="mapwrap">
+    <div id="map"></div>
+    <div id="hud" class="ov"></div>
+    <div id="legend" class="ov"><button id="lg-toggle" title="Legend">Legend ▸</button><div id="legend-body" class="closed"></div></div>
+    <div id="card" class="ov hidden"></div>
+    <div id="feed" class="ov">
+      <div class="feed-head">
+        <b id="fd-title" title="Click to fold / unfold">Live packets ▾</b>
+        <label title="Hide copies of floods (path requests, announces, channel messages)"><input type="checkbox" id="fd-routed"> routed only</label>
+        <label title="Only packets of the message you follow"><input type="checkbox" id="fd-msg"> this message</label>
+        <button id="fd-pause" title="Freeze the list">❚❚</button>
+      </div>
+      <div id="feed-rows"></div>
+    </div>
+    <div id="tl" class="ov">
+      <button id="btn-play" class="primary" title="Play / pause (space)">▶</button>
+      <button id="btn-step" title="Advance 1 simulated second">+1 s</button>
+      <span class="speeds" id="speeds"><button data-s="1">1×</button><button data-s="10" class="on">10×</button><button data-s="60">60×</button><button data-s="200">200×</button><button data-s="1000">1000×</button></span>
+      <canvas id="tl-canvas" height="34"></canvas>
+      <span id="clock">0:00</span>
+      <span id="behind" class="warn hidden" title="The browser cannot keep up with this speed">CPU-bound</span>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="dk-land.js"></script>
+<script src="dk-towns.js"></script>
+<script src="scenarios.js?v=9"></script>
+<script src="maarse-sim.js?v=9"></script>
+<script src="app.js?v=9"></script>
+<script src="ask.js?v=9"></script>

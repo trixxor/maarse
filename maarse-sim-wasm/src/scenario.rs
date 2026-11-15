@@ -43,6 +43,9 @@ pub struct Scenario {
     pub links: Vec<LinkSpec>,
     pub traffic: Traffic,
     pub events: Vec<TimedEvent>,
+    /// Areas with extra radio loss, e.g. forest: a link loses `db_per_km` for
+    /// every km of its straight line that runs inside the area.
+    pub clutter: Vec<Clutter>,
     /// Record the event trace (needed for follow / reach / animation).
     #[serde(default = "yes")]
     pub trace: bool,
@@ -62,6 +65,7 @@ impl Default for Scenario {
             links: Vec::new(),
             traffic: Traffic::default(),
             events: Vec::new(),
+            clutter: Vec::new(),
             trace: true,
         }
     }
@@ -89,6 +93,14 @@ pub struct Features {
     /// Simulator layer: forwarders far outside an alert's area do not forward
     /// it (proposal, see AREA-ALERTS.md). Off = plain bulletin flood.
     pub area_scope: bool,
+    /// Backbone path requests go only to the host that can reach the
+    /// destination (a DHT lookup plus a direct connection), instead of to
+    /// every connected backbone link as `maarse-host` does with its peers.
+    pub dht_backbone: bool,
+    /// Model of routing over the fixed infrastructure: home repeaters, a
+    /// location lookup at the gateway and fixed routes (see
+    /// `Engine::send_message`). Not a protocol that exists yet.
+    pub home_routing: bool,
 }
 
 impl Default for Features {
@@ -102,6 +114,8 @@ impl Default for Features {
             scale_timeouts: false,
             load_control: false,
             area_scope: false,
+            dht_backbone: false,
+            home_routing: false,
         }
     }
 }
@@ -130,6 +144,9 @@ pub struct NodeSpec {
     /// Mobile nodes: route as [[lat, lon], ...] and speed.
     pub route: Vec<[f64; 2]>,
     pub speed_kmh: f64,
+    /// Wandering (people walking around): radius in metres around the start
+    /// point; the node walks to random points inside it at `speed_kmh`.
+    pub wander_m: f64,
     pub label: String,
 }
 
@@ -148,6 +165,7 @@ impl Default for NodeSpec {
             region: String::new(),
             route: Vec::new(),
             speed_kmh: 0.0,
+            wander_m: 0.0,
             label: String::new(),
         }
     }
@@ -213,9 +231,21 @@ pub struct Area {
     pub polygon: Vec<[f64; 2]>,
 }
 
+/// A clutter area (forest, town): extra loss per km inside the polygon.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Clutter {
+    pub label: String,
+    pub polygon: Vec<[f64; 2]>,
+    pub db_per_km: f64,
+}
+
 /// One timeline event. `type` picks the action:
-/// internet_down {region?}, internet_up {region?}, power_cut {area, battery},
-/// power_restore, kill_random {n, kind}, revive, link {index, up},
+/// internet_down {region?}, internet_up {region?}, power_cut {area?} (no area =
+/// everywhere), power_restore {area?}, kill_random {n, node_kind},
+/// kill {node | nodes}, revive {nodes?} (none = all killed), kill_area {area,
+/// node_kind?}, host_internet {node, up}, degrade {area, db} (extra radio loss
+/// for links with an end inside), degrade_clear, link {index, up},
 /// alert {from, alert, area, text}, announce {node}, set_traffic {traffic}.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -234,5 +264,8 @@ pub struct TimedEvent {
     pub alert: String,
     pub text: String,
     pub node: usize,
+    pub nodes: Vec<usize>,
+    /// Extra loss in dB (degrade).
+    pub db: f64,
     pub traffic: Option<Traffic>,
 }

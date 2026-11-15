@@ -56,10 +56,10 @@
     return [lat + dyKm / 110.574, lon + dxKm / (111.32 * Math.cos(lat * Math.PI / 180))];
   }
 
-  const DEFAULT_FEATURES = { carry: false, local_repair: true, backbone: true, regions: false, sf_slot: false, scale_timeouts: false, load_control: false, area_scope: false };
+  const DEFAULT_FEATURES = { carry: false, local_repair: true, backbone: true, regions: false, sf_slot: false, scale_timeouts: false, load_control: false, area_scope: false, dht_backbone: false, home_routing: false };
 
   function base(name, seed) {
-    return { name, seed, sf: 9, duty_permille: 100, tx_dbm: 20, duration_s: 1800, features: Object.assign({}, DEFAULT_FEATURES), nodes: [], links: [], traffic: { direct_per_min: 6, channel_per_min: 1, local_share: 0.8, local_km: 25, start_s: 5, stop_s: 0, spammers: [], spam_per_min: 0 }, events: [], trace: true };
+    return { name, seed, sf: 9, duty_permille: 100, tx_dbm: 20, duration_s: 1800, features: Object.assign({}, DEFAULT_FEATURES), nodes: [], links: [], traffic: { direct_per_min: 6, channel_per_min: 1, local_share: 0.8, local_km: 25, start_s: 5, stop_s: 0, spammers: [], spam_per_min: 0 }, events: [], clutter: [], trace: true };
   }
 
   // ---------- Denmark generator ----------
@@ -197,21 +197,8 @@
     },
     forest: {
       title: "Group in the forest (Rold Skov)",
-      text: "Like maarse-sim --forest/--hill: ten walkers with relays in Rold Skov, a repeater 12 km away by the base, one relay on a hill (20 m antenna). Clients are relays here.",
-      build: (land, towns, seed) => {
-        const s = base("Group in the forest", seed);
-        const R = rng(seed), c = [56.80, 9.85];
-        s.nodes.push({ kind: "repeater", lat: 56.80, lon: 10.05, label: "Repeater 12 km away" });
-        s.nodes.push({ kind: "handheld", lat: 56.802, lon: 10.055, label: "Base" });
-        s.nodes.push({ kind: "relay", lat: c[0], lon: c[1], h: 20, label: "Relay on the hill" });
-        for (let k = 0; k < 10; k++) {
-          const route = [];
-          for (let j = 0; j < 6; j++) route.push(offset(c[0], c[1], (R() - 0.5) * 8, (R() - 0.5) * 8));
-          s.nodes.push({ kind: "relay", lat: route[0][0], lon: route[0][1], route, speed_kmh: 5, label: "Walker " + (k + 1) });
-        }
-        s.traffic = { direct_per_min: 3, channel_per_min: 0.5, local_share: 1, local_km: 30, start_s: 5, stop_s: 0, spammers: [], spam_per_min: 0 };
-        return s;
-      },
+      text: "Like maarse-sim --forest/--hill: walkers with relays wander in Rold Skov (forest loss per km inside the trees), a repeater 12 km away by the base, one relay on a hill. Change it on the Terrain tab.",
+      build: (land, towns, seed) => forest({ seed }),
     },
     festival: {
       title: "Dense city festival (Roskilde)",
@@ -240,7 +227,36 @@
     },
   };
 
-  const api = { rng, landIndex, generateDenmark, PRESETS, km, offset, nearestTown, DEFAULT_FEATURES, base };
+  // The forest scenario with options (Terrain tab):
+  // walkers, role (relay|handheld), radiusKm, dbPerKm, hill (bool), hillH (m),
+  // walkKmh, repeaterKm (distance from the forest centre to the repeater).
+  const FOREST_DEFAULTS = { walkers: 10, role: "relay", radiusKm: 4, dbPerKm: 10, hill: true, hillH: 20, walkKmh: 5, repeaterKm: 12, seed: 1 };
+  function forest(opts) {
+    const o = Object.assign({}, FOREST_DEFAULTS, opts || {});
+    const s = base("Group in the forest", o.seed);
+    const c = [56.80, 9.85];
+    // The forest: an irregular ring of points around the centre.
+    const R = rng(o.seed + 99), ring = [];
+    for (let k = 0; k < 14; k++) {
+      const a = k / 14 * Math.PI * 2, r = (o.radiusKm + 1.5) * (0.85 + R() * 0.3);
+      ring.push(offset(c[0], c[1], Math.cos(a) * r, Math.sin(a) * r));
+    }
+    s.clutter = [{ label: "Rold Skov", polygon: ring, db_per_km: o.dbPerKm }];
+    const [rl, ro] = offset(c[0], c[1], o.repeaterKm, 0);
+    s.nodes.push({ kind: "repeater", lat: rl, lon: ro, label: "Repeater " + o.repeaterKm + " km away" });
+    s.nodes.push({ kind: "handheld", lat: rl + 0.002, lon: ro + 0.005, label: "Base" });
+    if (o.hill) s.nodes.push({ kind: "relay", lat: c[0] + 0.01, lon: c[1] + 0.02, h: o.hillH, label: "Relay on the hill" });
+    const W = rng(o.seed);
+    for (let k = 0; k < o.walkers; k++) {
+      const [la, lo] = offset(c[0], c[1], (W() - 0.5) * o.radiusKm, (W() - 0.5) * o.radiusKm);
+      s.nodes.push({ kind: o.role, lat: +la.toFixed(5), lon: +lo.toFixed(5), wander_m: o.radiusKm * 1000 / 2, speed_kmh: o.walkKmh, label: "Walker " + (k + 1) });
+    }
+    s.traffic = { direct_per_min: 3, channel_per_min: 0.5, local_share: 1, local_km: 30, start_s: 5, stop_s: 0, spammers: [], spam_per_min: 0 };
+    s.forest = o;
+    return s;
+  }
+
+  const api = { rng, landIndex, generateDenmark, PRESETS, km, offset, nearestTown, DEFAULT_FEATURES, FOREST_DEFAULTS, forest, base };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.DkScenarios = api;
 })(typeof window !== "undefined" ? window : globalThis);

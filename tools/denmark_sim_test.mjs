@@ -68,7 +68,83 @@ check(reach.heard > 1, "the announce reach set is not empty");
 // Inspector.
 const ins = sim.inspect(ev.n);
 check(Array.isArray(ins.neighbors) && ins.stats && typeof ins.stats.local_repairs === "number", "node inspector returns neighbours and stats");
+check(Array.isArray(ins.dead_hops), "node inspector lists dead next hops");
+
+// Transparency: routed transmissions name their next hop, receptions carry
+// SNR, collisions their cause, and the collision split adds up.
+const all = [];
+for (let since = 0; ;) { const r = sim.events(since, 50000); all.push(...r.lines); if (r.next === since || !r.lines.length) break; since = r.next; }
+const routedTx = all.filter(e => e.ev === "tx" && e.path);
+check(routedTx.length > 0 && routedTx.every(e => typeof e.nx === "number"), `routed transmissions carry their path and next hop (${routedTx.length})`);
+check(all.filter(e => e.ev === "tx" && e.p === "PathRequest").every(e => e.nx === -1 && Array.isArray(e.trail)), "path requests are floods with a trail, not a next hop");
+const rxs = all.filter(e => e.ev === "rx");
+check(rxs.every(e => e.snr.length === e.ok.length && e.cw.length === e.coll.length), "receptions carry one SNR per receiver and one cause per collision");
+check(s.coll_flood + s.coll_next_hop <= s.collisions, `collision split adds up (flood ${s.coll_flood}, next hop ${s.coll_next_hop}, all ${s.collisions})`);
 sim.free();
+
+// 1b. Granular disasters: kill / revive nodes, destroy an area, radio loss.
+{
+  const sc2 = DK.generateDenmark({ users: 150, repeaterKm: 22, seed }, window.DK_LAND, window.DK_TOWNS);
+  sc2.duration_s = 300;
+  const reps = sc2.nodes.map((n, i) => n.kind === "repeater" ? i : -1).filter(i => i >= 0).slice(0, 3);
+  const x = new Sim(sc2);
+  x.step(10_000);
+  x.inject({ type: "kill", nodes: reps });
+  check(reps.every(i => x.state().state[i] === "k"), "kill {nodes} kills exactly those nodes");
+  x.inject({ type: "revive", nodes: [reps[0]] });
+  const st = x.state().state;
+  check(st[reps[0]] === "a" && st[reps[1]] === "k", "revive {nodes} revives only the listed node");
+  const before = x.inspect(reps[1] + 1).radio_neighbors.length;
+  const c = sc2.nodes[reps[1] + 1];
+  x.inject({ type: "degrade", area: { circle: [c.lat, c.lon, 30000] }, db: 30 });
+  const after = x.inspect(reps[1] + 1).radio_neighbors.length;
+  check(after < before || before === 0, `radio loss in an area removes links (${before} -> ${after} neighbours)`);
+  x.inject({ type: "degrade_clear" });
+  check(x.inspect(reps[1] + 1).radio_neighbors.length === before, "clearing the radio loss restores the links");
+  x.inject({ type: "kill_area", area: { circle: [c.lat, c.lon, 15000] }, node_kind: "any" });
+  check(x.state().state[reps[1] + 1] === "k", "kill_area destroys nodes inside the area");
+  x.free();
+}
+
+// 1c. DHT backbone: path requests go to one gateway host, not to every peer.
+{
+  const sc3 = DK.generateDenmark({ users: 250, repeaterKm: 22, seed }, window.DK_LAND, window.DK_TOWNS);
+  sc3.duration_s = 300; sc3.features.dht_backbone = true;
+  const x = new Sim(sc3);
+  x.step(300_000);
+  const y = x.summary();
+  check(y.dht_lookups > 0 && y.delivered_pct > 0, `DHT backbone looks up gateways and still delivers (${y.dht_lookups} lookups, ${y.delivered_pct.toFixed(0)} %)`);
+  x.free();
+}
+
+// 1e. Home routing model: lookups give routes over the fixed infrastructure,
+// so far fewer path requests go on the air than today.
+{
+  const run = (home) => {
+    const sc4 = DK.generateDenmark({ users: 250, repeaterKm: 22, seed }, window.DK_LAND, window.DK_TOWNS);
+    sc4.duration_s = 300; sc4.trace = false; sc4.features.home_routing = home; sc4.features.dht_backbone = home;
+    const x = new Sim(sc4); x.step(300_000); const y = x.summary(); x.free(); return y;
+  };
+  const today = run(false), home = run(true);
+  console.log(`home routing: ${home.home_lookups} lookups (${home.home_local} local), ${home.home_routed} routed; path requests ${home.by_type.PathRequest || 0} vs ${today.by_type.PathRequest || 0} today; delivered ${home.delivered_pct.toFixed(0)} % vs ${today.delivered_pct.toFixed(0)} %`);
+  check(home.home_routed > 0 && home.delivered_pct > 0, "home routing answers lookups with routes and delivers");
+  check((home.by_type.PathRequest || 0) < (today.by_type.PathRequest || 0) / 2, "home routing floods far fewer path requests than today");
+}
+
+// 1d. Forest: clutter areas cut links; walkers move.
+{
+  const plain = DK.forest({ dbPerKm: 0, seed });
+  const dense = DK.forest({ dbPerKm: 20, seed });
+  const a = new Sim(plain), d = new Sim(dense);
+  const walker = plain.nodes.findIndex(n => n.wander_m > 0);
+  const na = a.inspect(walker).radio_neighbors.length, nd = d.inspect(walker).radio_neighbors.length;
+  check(nd < na, `forest loss cuts radio links (${na} neighbours without, ${nd} with 20 dB/km)`);
+  const p0 = [a.state().lat[walker], a.state().lon[walker]];
+  a.step(120_000);
+  const p1 = [a.state().lat[walker], a.state().lon[walker]];
+  check(p0[0] !== p1[0] || p0[1] !== p1[1], "walkers wander");
+  a.free(); d.free();
+}
 
 // 2. Every preset builds and runs a minute.
 for (const [id, p] of Object.entries(DK.PRESETS)) {

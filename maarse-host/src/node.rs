@@ -536,7 +536,7 @@ impl Node {
         match msg {
             In::LinkUp { id, name, tx } => {
                 self.log(format!("link up: {name}"));
-                if name.starts_with("tcp") {
+                if crate::extra_links::is_backbone(&name) {
                     let _ = tx.send(self.region_hello());
                     // A backbone link came up (perhaps a split healed):
                     // republish everything we can reach at the next maintenance.
@@ -568,7 +568,7 @@ impl Node {
                 if self
                     .links
                     .get(&link)
-                    .is_some_and(|(n, _)| !n.starts_with("tcp"))
+                    .is_some_and(|(n, _)| n.starts_with("serial ") || n.starts_with("wifi-modem"))
                 {
                     // A LoRa modem (USB or Wi-Fi): the SNR is real.
                     self.counters.last_snr = Some(snr);
@@ -632,7 +632,7 @@ impl Node {
             .as_ref()
             .is_some_and(|h| h.ptype == PacketType::Fragment && self.path_kind(&h.dest) == PathKind::Tcp);
         for (id, (name, tx)) in &self.links {
-            if tcp_only && !name.starts_with("tcp") {
+            if tcp_only && !crate::extra_links::is_backbone(name) {
                 continue;
             }
             // Floods with a region only to peers that serve the region.
@@ -867,7 +867,7 @@ impl Node {
                     }
                 }
                 if let Some(link) = self.rx_link {
-                    let tcp = self.links.get(&link).is_some_and(|(n, _)| n.starts_with("tcp"));
+                    let tcp = self.links.get(&link).is_some_and(|(n, _)| crate::extra_links::is_backbone(n));
                     self.heard_via.insert(dest, (link, tcp, hops));
                 }
                 self.broadcast(&Event::Heard { addr: dest, hops, identity: Some(a.identity.to_bytes()) });
@@ -1723,7 +1723,7 @@ impl Node {
         self.router.strict_region = strict;
         let hello = self.region_hello();
         for (name, tx) in self.links.values() {
-            if name.starts_with("tcp") {
+            if crate::extra_links::is_backbone(&name) {
                 let _ = tx.send(hello.clone());
             }
         }
@@ -2371,6 +2371,13 @@ pub(super) mod file_interop_tests {
             peers: Vec::new(),
             serial: None,
             baud: 115_200,
+            serial_links: Vec::new(),
+            kiss: Vec::new(),
+            kiss_tcp: Vec::new(),
+            kiss_opts: Default::default(),
+            udp_listen: None,
+            udp_peers: Vec::new(),
+            udp_broadcast: None,
             open_browser: false,
             max_file: 1024 * 1024,
             filebox_per_recipient: 20 << 20,
@@ -2483,7 +2490,7 @@ mod filebox_node_tests {
         let (tx, _rx) = channel();
         let id = n.links.len() as LinkId + 1;
         n.links.insert(id, (link.to_string(), tx));
-        n.heard_via.insert(peer, (id, link.starts_with("tcp"), hops));
+        n.heard_via.insert(peer, (id, crate::extra_links::is_backbone(link), hops));
     }
 
     fn begin(n: &mut Node, req: u16, dest: Address, size: u32) {

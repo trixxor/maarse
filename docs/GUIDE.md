@@ -49,7 +49,7 @@ Then connect with the web client via **USB / serial** (needs Chrome or Edge) or 
 | Display name in announces | yes (`name.txt`) | yes, stored in flash (not tried on hardware) | yes, stored in flash (not tried on hardware) |
 | Voice messages (Codec2, 1200 bit/s) | yes, in the web client | yes, as a file (encoded in the web client) | yes, as a file (encoded in the web client) |
 | `maarse://` pages | serves `<data>/pages/` and fetches pages | fetches pages (does not serve) | fetches pages (does not serve) |
-| Connection | TCP backbone + DHT, WebSocket, serial LoRa modem | USB and Bluetooth | USB and Bluetooth (yes, not tried on hardware) |
+| Connection | TCP backbone + DHT, UDP, serial link, KISS TNC (serial or TCP), WebSocket, serial LoRa modem | USB and Bluetooth | USB and Bluetooth (yes, not tried on hardware) |
 | Display | – | – | Heltec V4: 3 pages, switch with the PRG button |
 
 The web client (`maarse-client/index.html`) works over WebSocket (maarse-host), USB/serial and Bluetooth (Nordic UART). It scales pictures down automatically so they fit under the limit: 8 KB over LoRa and 1 MB over the internet.
@@ -143,6 +143,28 @@ A Heltec V4 or XIAO ESP32-S3 can join a Wi-Fi network (for example a phone hotsp
 - **Safety:** Wi-Fi starts 10 s after boot, so USB is always reachable first. If starting it crashes the board twice in a row, it is skipped (state 10) until the board has run stably for 60 s. Panics are printed over USB (`PANIC: …`). The status page shows free stack and heap and the crash count (keys 87–92).
 - **Tested on hardware** (Heltec V4.3, 14 Nov 2026): joins a WPA2 network, gets an address by DHCP, answers ping (6–20 ms), keeps the link to a maarse-host (`LINKED`) and joins again after the access point restarts; switching between Bluetooth and Wi-Fi with the button works both ways. Not yet tested: messages from LoRa through the Wi-Fi link, DNS names as host, and the XIAO ESP32-S3.
 - **Host:** backbone links use TCP keepalive (30 s idle, then every 10 s), so a node that drops off its hotspot without closing the link is noticed and the link is closed.
+
+## Other links: serial, KISS and UDP
+
+Besides TCP peers, the serial LoRa modem and Wi-Fi modems, maarse-host can carry Må:rse packets over a few more link types, in the spirit of Reticulum's interfaces. Every flag can be repeated, every link shows up in `GET /api/devices` (kinds `serial-link`, `kiss`, `kiss-tcp`, `udp`) with packets in and out, and the code is in `maarse-host/src/extra_links.rs` with the pure framing in `maarse-host/src/framing.rs`.
+
+**Serial backbone link** (`--serial-link <port>[:baud]`, default 115200 baud). A direct host-to-host link over a serial line: a null-modem cable, two USB-serial adapters, or radio modems that act as a transparent serial pipe. Both ends run `--serial-link`. Framing: `FEND | stuffed(packet | CRC-16/CCITT-FALSE, big endian) | FEND`, with KISS byte stuffing (`0xC0` as `0xDB 0xDC`, `0xDB` as `0xDB 0xDD`). Since `0xC0` never appears inside a frame, the reader resynchronises at the next frame after line noise; frames with a bad CRC, a bad escape or more than the largest packet are dropped. The port is reopened every 3 s after it disappears, like `--serial`.
+
+*Fast or slow:* at **230400 baud or more** the link is named `serial-link fast <port>` and counts as backbone, like TCP (file limit `--max-file`, region hello, calls). Below that it is named `serial-link <port>` and counts as a slow radio link (8 KB file limit; file chunks for a TCP recipient are not sent on it). For a cable between two PCs, give a high baud rate (e.g. `--serial-link COM5:921600`); for a radio modem whose air rate is low, keep the port speed below 230400 even if the USB side could go faster.
+
+**KISS TNC** (`--kiss <port>[:baud]`, default 9600 baud). Talks to a standard KISS TNC: a hardware packet-radio TNC, Direwolf's serial KISS, or an RNode-like KISS device. Every Må:rse packet goes unchanged into a KISS data frame on port 0 (`FEND 0x00 data FEND`, with FEND/FESC/TFEND/TFESC escaping); frames for other ports and command frames are ignored. The TNC does its own checksum on the air, so no CRC is added. Optional parameters are sent to the TNC when the link opens: `--kiss-txdelay <N>` (10 ms units), `--kiss-persist <0-255>`, `--kiss-slottime <N>` (10 ms units). A KISS link counts as a slow radio link.
+
+**KISS over TCP** (`--kiss-tcp <host:port>`), e.g. Direwolf's KISS port: `--kiss-tcp 127.0.0.1:8001`. Same framing and parameters as `--kiss`; reconnects every 5 s.
+
+**Callsign (amateur radio).** On amateur bands the station must identify itself. `--kiss-callsign <CALL[-SSID]>` wraps every packet in an AX.25 UI frame from that callsign to `QST` (control `0x03`, PID `0xF0`), which other packet stations and monitors can show. Received frames then must be AX.25 UI frames (digipeater fields are skipped); the info field is the Må:rse packet. Note that Må:rse payloads are encrypted, which amateur rules in many countries do not allow: check your licence before using KISS on amateur bands.
+
+**UDP** (`--udp-listen <addr:port>`, `--udp-peer <host:port>`, `--udp-broadcast <port>`). One Må:rse packet per datagram, prefixed with 7 bytes: magic `4D A5`, version `01` and a random instance id (u32 BE) of the sending socket. Datagrams without the prefix are dropped at once. Every remote address is its own link, `udp <addr>`: configured peers stay, peers learned from received datagrams are forgotten after 3 minutes of silence. UDP links count as backbone (like TCP) and get the same region hello.
+
+- `--udp-listen 0.0.0.0:4243` binds the socket others send to; `--udp-peer host:4243` sends to a peer (without `--udp-listen` an ephemeral port is used, and the peer answers to it).
+- `--udp-broadcast 4243` is simple LAN discovery: the host binds port 4243, sends every packet to `255.255.255.255:4243` (link `udp broadcast 4243`) and accepts datagrams from any sender on the LAN, which then become `udp <addr>` peers. A host drops its own broadcasts by the instance id. Peers on the LAN get each packet both by broadcast and unicast; the router's duplicate filter drops the second copy.
+- *Loss:* UDP gives no delivery guarantee. Routed packets already have per-hop retransmission and end-to-end acknowledgements, and file chunks are resent until they are acknowledged (see "File limit by route"), so a lost datagram costs a retry, not the message. Floods (announces, channel messages) are not retransmitted on any backbone link, but are heard again from other neighbours or at the next announce.
+
+**Tested** without hardware: the codec (stuffing, CRC, resync after garbage, split reads, AX.25), two links over an in-memory serial pipe with line noise, KISS over TCP against a fake TNC on loopback, two hosts over UDP on 127.0.0.1, and a fuzz target (`cargo test -p maarse-host --release fuzz_link_framing`). **Not yet tested** on real serial ports, hardware TNCs, Direwolf or a LAN broadcast.
 
 ## Android app (APK)
 

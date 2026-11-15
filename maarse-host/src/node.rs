@@ -1905,6 +1905,14 @@ impl Node {
                 id,
                 &err_ev(0, error_code::BAD_FRAME, "maarse-host uses the computer's network; Wi-Fi settings are for ESP32 nodes."),
             ),
+            Command::SetRangeTest(_) | Command::GetRangeTest => self.send_client(
+                id,
+                &err_ev(
+                    0,
+                    error_code::BAD_FRAME,
+                    "The range test runs on the radio node itself. Connect to it via USB or Bluetooth.",
+                ),
+            ),
             Command::GetRadio | Command::SetRadio(_) => self.send_client(
                 id,
                 &err_ev(

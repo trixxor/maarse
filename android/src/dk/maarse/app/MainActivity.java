@@ -17,6 +17,7 @@ import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Build;
@@ -26,6 +27,7 @@ import android.os.Looper;
 import android.os.ParcelUuid;
 import android.util.Base64;
 import android.view.Window;
+import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
@@ -59,7 +61,7 @@ public class MainActivity extends Activity {
     static final UUID NUS_RX = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e"); // we write
     static final UUID NUS_TX = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"); // the node notifies
     static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
-    static final int REQ_BLE = 1, REQ_MIC = 2;
+    static final int REQ_BLE = 1, REQ_MIC = 2, REQ_GEO = 3;
 
     WebView web;
     final Handler main = new Handler(Looper.getMainLooper());
@@ -70,6 +72,9 @@ public class MainActivity extends Activity {
     boolean writing = false;
     int chunk = 20;
     PermissionRequest pendingMic;
+    // Location for the range test page (phone GPS per received beacon).
+    GeolocationPermissions.Callback pendingGeo;
+    String pendingGeoOrigin;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -87,6 +92,7 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false);
+        s.setGeolocationEnabled(true);
         // ws:// to a maarse-host (e.g. over VPN) from the secure internal page.
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         web.addJavascriptInterface(new Bridge(), "MaarseAndroid");
@@ -110,6 +116,21 @@ public class MainActivity extends Activity {
             public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
                 android.util.Log.i("maarse", m.messageLevel() + " " + m.message() + " (" + m.sourceId() + ":" + m.lineNumber() + ")");
                 return true;
+            }
+
+            @Override
+            public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback cb) {
+                // Only our own page asks; the user still answers Android's prompt.
+                if (!origin.startsWith(ORIGIN.substring(0, ORIGIN.length() - 1))) { cb.invoke(origin, false, false); return; }
+                main.post(() -> {
+                    if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                        cb.invoke(origin, true, false);
+                    } else {
+                        pendingGeo = cb;
+                        pendingGeoOrigin = origin;
+                        requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_GEO);
+                    }
+                });
             }
 
             @Override
@@ -177,6 +198,19 @@ public class MainActivity extends Activity {
             pump();
         }
 
+        /** Hands a text file (e.g. a range test CSV) to another app: Drive, mail, Files … */
+        @JavascriptInterface
+        public void shareText(String name, String text) {
+            main.post(() -> {
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType("text/csv");
+                send.putExtra(Intent.EXTRA_SUBJECT, name);
+                send.putExtra(Intent.EXTRA_TITLE, name);
+                send.putExtra(Intent.EXTRA_TEXT, text);
+                startActivity(Intent.createChooser(send, name));
+            });
+        }
+
         @JavascriptInterface
         public void disconnect() {
             main.post(MainActivity.this::closeGatt);
@@ -203,6 +237,12 @@ public class MainActivity extends Activity {
         for (int r : res) ok &= r == PackageManager.PERMISSION_GRANTED;
         if (code == REQ_BLE) {
             if (ok) startConnect(); else js("onError(" + q("Bluetooth permission was denied") + ")");
+        } else if (code == REQ_GEO && pendingGeo != null) {
+            // Coarse alone is enough to answer; the page then gets a rough position.
+            boolean any = false;
+            for (int r : res) any |= r == PackageManager.PERMISSION_GRANTED;
+            pendingGeo.invoke(pendingGeoOrigin, any, false);
+            pendingGeo = null;
         } else if (code == REQ_MIC && pendingMic != null) {
             if (ok) pendingMic.grant(pendingMic.getResources()); else pendingMic.deny();
             pendingMic = null;

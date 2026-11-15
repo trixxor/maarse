@@ -316,6 +316,14 @@ async fn main(spawner: Spawner) {
         RadioConfig::EU_DEFAULT,
     );
     let led_on_high = cfg!(not(feature = "board-xiao-esp32s3"));
+    // Current profile for the range test's power estimates (0.1 mA). Typical
+    // values, not measured: the ESP32-S3 running with Bluetooth is about 40 mA,
+    // the Heltec V4's OLED about 10 mA more and its PA module adds an LNA on
+    // receive and roughly 100 mA on transmit. See docs/FIELD-TEST.md.
+    #[cfg(feature = "board-heltec-v4")]
+    maarse_fw_common::power::set_profile(500, 95, 1000);
+    #[cfg(not(feature = "board-heltec-v4"))]
+    maarse_fw_common::power::set_profile(400, 55, 0);
 
     // ----- randomness and identity -----
     // True randomness from ADC noise, only used as a seed.

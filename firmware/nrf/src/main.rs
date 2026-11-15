@@ -121,6 +121,11 @@ async fn main(spawner: Spawner) {
         ),
     );
 
+    // ----- current profile for the range test's power estimates -----
+    // Typical values, not measured on this board: MCU with USB and Bluetooth
+    // advertising about 3 mA, SX1262 receiving (boosted) 5.3 mA plus the RF
+    // switch; no external PA. See docs/FIELD-TEST.md for how to measure them.
+    maarse_fw_common::power::set_profile(30, 55, 0);
     // ----- battery (see battery.rs) -----
     {
         use embassy_nrf::saadc::{ChannelConfig, Config, Gain, Saadc, Time};

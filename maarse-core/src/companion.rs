@@ -16,6 +16,9 @@
 //! Commands 0x30-0x33 and events 0xB0-0xB3 are reserved for the
 //! message history in maarse-host (see `maarse-host/src/history.rs`). They
 //! are only decoded there; firmware answers with `Error` (invalid frame).
+//!
+//! Commands 0x2a-0x2b and events 0xa8-0xab are the range test (see
+//! [`crate::rangetest`]); only firmware nodes with a radio answer them.
 
 use crate::addr::Address;
 
@@ -179,6 +182,13 @@ pub enum Command {
     /// and sends a new announce. The reply is `IdentityChanged`.
     /// 0x35-0x37 are kept free for linked devices.
     SetIdentity { confirm: bool, secret: [u8; 64] },
+    /// 0x2a: start or stop the range test (see [`crate::rangetest::Config`]).
+    /// With [`crate::rangetest::FLAG_PERSIST`] the setting is kept in flash and
+    /// resumed after a restart; otherwise it lasts until the next restart. Local
+    /// only. The reply is `RangeState`.
+    SetRangeTest(crate::rangetest::Config),
+    /// 0x2b: range test status. The reply is `RangeState` followed by `Power`.
+    GetRangeTest,
 }
 
 /// Flag in `Command::SetIdentity`: the user has confirmed the replacement.
@@ -443,6 +453,115 @@ pub enum Event {
     /// 0xb4: the node's identity has been replaced (reply to `SetIdentity`).
     /// Format: new address (16) | public identity (64).
     IdentityChanged { addr: Address, identity: [u8; 64] },
+    /// 0xa8: range test status (reply to `SetRangeTest`/`GetRangeTest`, and
+    /// after every SF step on a receiver). See [`RangeState`].
+    RangeState(RangeState),
+    /// 0xa9: the receiver heard a range test beacon. See [`RangeRx`].
+    RangeRx(RangeRx),
+    /// 0xaa: the beacon queued a beacon for transmission. See [`RangeTx`].
+    RangeTx(RangeTx),
+    /// 0xab: power use estimate and battery (every minute while a range test
+    /// runs, and after `GetRangeTest`). See [`PowerReport`].
+    Power(PowerReport),
+}
+
+/// Per-SF results on a range test receiver (12 bytes): sf | rx (u16) | lost
+/// (u16) | average RSSI (i16, dBm) | lowest RSSI (i16) | average SNR x 4 (i16)
+/// | lowest SNR (i8, dB).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct RangeSfStat {
+    pub sf: u8,
+    pub rx: u16,
+    pub lost: u16,
+    pub rssi_avg: i16,
+    pub rssi_min: i16,
+    pub snr_avg_x4: i16,
+    pub snr_min: i8,
+}
+
+/// Range test status (`Event::RangeState`). Format: config (15) | current SF |
+/// flags (bit 0: the receiver follows the beacon's schedule) | count (u32) |
+/// missed (u32) | seq (u32) | per-SF results ([`RangeSfStat`], 12 B each).
+///
+/// On a beacon `count` is beacons queued, `missed` beacons that could not be
+/// transmitted (duty cycle or busy channel) and `seq` the next sequence number.
+/// On a receiver `count` is beacons received, `missed` beacons lost (from
+/// sequence gaps) and `seq` the last sequence number heard.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct RangeState {
+    pub config: crate::rangetest::Config,
+    pub sf: u8,
+    pub synced: bool,
+    pub count: u32,
+    pub missed: u32,
+    pub seq: u32,
+    pub per_sf: heapless::Vec<RangeSfStat, { crate::rangetest::MAX_STEPS }>,
+}
+
+/// A received beacon (`Event::RangeRx`). Format: uptime (u32, ms) | sender (4) |
+/// seq (u32) | sf | rssi (i16, dBm) | snr (i8, dB) | length | lost (u16, since
+/// the previous beacon) | skipped (u16, the sender's own count of beacons it
+/// could not send) | tx power (i8, dBm) | battery (u16, mV, the beacon's) |
+/// [lat_e7 (i32) | lon_e7 (i32)].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct RangeRx {
+    pub uptime_ms: u32,
+    pub sender: [u8; 4],
+    pub seq: u32,
+    pub sf: u8,
+    pub rssi: i16,
+    pub snr: i8,
+    pub len: u8,
+    pub lost: u16,
+    pub skipped: u16,
+    pub tx_power_dbm: i8,
+    pub battery_mv: u16,
+    pub position: Option<(i32, i32)>,
+}
+
+/// A beacon was queued (`Event::RangeTx`). Format: uptime (u32, ms) | seq
+/// (u32) | sf | slot | interval (u16, s) | airtime (u16, ms) | estimated charge
+/// (u32, mA*ms = uC, airtime x the board's estimated TX current) | skipped (u16).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct RangeTx {
+    pub uptime_ms: u32,
+    pub seq: u32,
+    pub sf: u8,
+    pub slot: u8,
+    pub interval_s: u16,
+    pub airtime_ms: u16,
+    pub charge_ma_ms: u32,
+    pub skipped: u16,
+}
+
+/// Time and estimated charge spent in one range test mode since boot (12 B):
+/// seconds (u32) | TX on-time (u32, ms) | estimated charge (u32, mA*s).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct PowerPhase {
+    pub secs: u32,
+    pub tx_ms: u32,
+    pub charge_mas: u32,
+}
+
+/// Power report (`Event::Power`). All currents and charges are *estimates*
+/// from the board's current profile (base + receive + transmit current) and
+/// the measured TX on-time, not measurements. Format: uptime (u32, s) |
+/// battery (u16, mV, 0 = unknown) | external power (i8: -1 unknown, 0, 1) |
+/// mode | tx power (i8, dBm) | base current (u16, 0.1 mA) | receive current
+/// (u16, 0.1 mA) | transmit current (u16, 0.1 mA, at the current TX power) |
+/// TX packets (u32) | phases off, beacon, receiver ([`PowerPhase`], 12 B each).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct PowerReport {
+    pub uptime_s: u32,
+    pub battery_mv: u16,
+    pub ext_power: i8,
+    pub mode: u8,
+    pub tx_power_dbm: i8,
+    pub base_ma_x10: u16,
+    pub rx_ma_x10: u16,
+    pub tx_ma_x10: u16,
+    pub tx_packets: u32,
+    pub phases: [PowerPhase; 3],
 }
 
 /// The LoRa radio settings.
@@ -839,6 +958,8 @@ impl Command {
                 let flags = if *confirm { IDENTITY_CONFIRM } else { 0 };
                 W::new(0x34).b(&[flags]).b(secret).done()
             }
+            Command::SetRangeTest(c) => W::new(0x2a).b(&c.to_bytes()).done(),
+            Command::GetRangeTest => W::new(0x2b).done(),
         }
     }
 
@@ -920,6 +1041,10 @@ impl Command {
                 secret.copy_from_slice(r.take(64)?);
                 Command::SetIdentity { confirm, secret }
             }
+            0x2a => Command::SetRangeTest(
+                crate::rangetest::Config::from_bytes(r.take(crate::rangetest::Config::LEN)?).ok_or(FrameError::TooShort)?,
+            ),
+            0x2b => Command::GetRangeTest,
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -1101,6 +1226,65 @@ impl Event {
                 W::new(0xa3).b(&addr.0).b(&[*hops]).b(&data).done()
             }
             Event::IdentityChanged { addr, identity } => W::new(0xb4).b(&addr.0).b(identity).done(),
+            Event::RangeState(st) => {
+                let mut w = W::new(0xa8)
+                    .b(&st.config.to_bytes())
+                    .b(&[st.sf, st.synced as u8])
+                    .b(&st.count.to_le_bytes())
+                    .b(&st.missed.to_le_bytes())
+                    .b(&st.seq.to_le_bytes());
+                for p in &st.per_sf {
+                    w = w
+                        .b(&[p.sf])
+                        .b(&p.rx.to_le_bytes())
+                        .b(&p.lost.to_le_bytes())
+                        .b(&p.rssi_avg.to_le_bytes())
+                        .b(&p.rssi_min.to_le_bytes())
+                        .b(&p.snr_avg_x4.to_le_bytes())
+                        .b(&[p.snr_min as u8]);
+                }
+                w.done()
+            }
+            Event::RangeRx(x) => {
+                let w = W::new(0xa9)
+                    .b(&x.uptime_ms.to_le_bytes())
+                    .b(&x.sender)
+                    .b(&x.seq.to_le_bytes())
+                    .b(&[x.sf])
+                    .b(&x.rssi.to_le_bytes())
+                    .b(&[x.snr as u8, x.len])
+                    .b(&x.lost.to_le_bytes())
+                    .b(&x.skipped.to_le_bytes())
+                    .b(&[x.tx_power_dbm as u8])
+                    .b(&x.battery_mv.to_le_bytes());
+                match x.position {
+                    Some((lat, lon)) => w.b(&lat.to_le_bytes()).b(&lon.to_le_bytes()).done(),
+                    None => w.done(),
+                }
+            }
+            Event::RangeTx(x) => W::new(0xaa)
+                .b(&x.uptime_ms.to_le_bytes())
+                .b(&x.seq.to_le_bytes())
+                .b(&[x.sf, x.slot])
+                .b(&x.interval_s.to_le_bytes())
+                .b(&x.airtime_ms.to_le_bytes())
+                .b(&x.charge_ma_ms.to_le_bytes())
+                .b(&x.skipped.to_le_bytes())
+                .done(),
+            Event::Power(p) => {
+                let mut w = W::new(0xab)
+                    .b(&p.uptime_s.to_le_bytes())
+                    .b(&p.battery_mv.to_le_bytes())
+                    .b(&[p.ext_power as u8, p.mode, p.tx_power_dbm as u8])
+                    .b(&p.base_ma_x10.to_le_bytes())
+                    .b(&p.rx_ma_x10.to_le_bytes())
+                    .b(&p.tx_ma_x10.to_le_bytes())
+                    .b(&p.tx_packets.to_le_bytes());
+                for ph in &p.phases {
+                    w = w.b(&ph.secs.to_le_bytes()).b(&ph.tx_ms.to_le_bytes()).b(&ph.charge_mas.to_le_bytes());
+                }
+                w.done()
+            }
         }
     }
 
@@ -1277,6 +1461,68 @@ impl Event {
                 let addr = r.addr()?;
                 let identity = r.identity().ok_or(FrameError::TooShort)?;
                 Event::IdentityChanged { addr, identity }
+            }
+            0xa8 => {
+                let config = crate::rangetest::Config::from_bytes(r.take(crate::rangetest::Config::LEN)?)
+                    .ok_or(FrameError::TooShort)?;
+                let (sf, synced) = (r.u8()?, r.u8()? & 1 != 0);
+                let (count, missed, seq) = (r.u32()?, r.u32()?, r.u32()?);
+                let mut per_sf = heapless::Vec::new();
+                while !r.0.is_empty() {
+                    let p = RangeSfStat {
+                        sf: r.u8()?,
+                        rx: r.u16()?,
+                        lost: r.u16()?,
+                        rssi_avg: r.u16()? as i16,
+                        rssi_min: r.u16()? as i16,
+                        snr_avg_x4: r.u16()? as i16,
+                        snr_min: r.u8()? as i8,
+                    };
+                    per_sf.push(p).map_err(|_| FrameError::TooLong)?;
+                }
+                Event::RangeState(RangeState { config, sf, synced, count, missed, seq, per_sf })
+            }
+            0xa9 => {
+                let uptime_ms = r.u32()?;
+                let mut sender = [0u8; 4];
+                sender.copy_from_slice(r.take(4)?);
+                let (seq, sf, rssi) = (r.u32()?, r.u8()?, r.u16()? as i16);
+                let (snr, len) = (r.u8()? as i8, r.u8()?);
+                let (lost, skipped, tx_power_dbm, battery_mv) = (r.u16()?, r.u16()?, r.u8()? as i8, r.u16()?);
+                let position = if r.0.len() >= 8 { Some((r.u32()? as i32, r.u32()? as i32)) } else { None };
+                Event::RangeRx(RangeRx { uptime_ms, sender, seq, sf, rssi, snr, len, lost, skipped, tx_power_dbm, battery_mv, position })
+            }
+            0xaa => Event::RangeTx(RangeTx {
+                uptime_ms: r.u32()?,
+                seq: r.u32()?,
+                sf: r.u8()?,
+                slot: r.u8()?,
+                interval_s: r.u16()?,
+                airtime_ms: r.u16()?,
+                charge_ma_ms: r.u32()?,
+                skipped: r.u16()?,
+            }),
+            0xab => {
+                let (uptime_s, battery_mv) = (r.u32()?, r.u16()?);
+                let (ext_power, mode, tx_power_dbm) = (r.u8()? as i8, r.u8()?, r.u8()? as i8);
+                let (base_ma_x10, rx_ma_x10, tx_ma_x10) = (r.u16()?, r.u16()?, r.u16()?);
+                let tx_packets = r.u32()?;
+                let mut phases = [PowerPhase::default(); 3];
+                for ph in phases.iter_mut() {
+                    *ph = PowerPhase { secs: r.u32()?, tx_ms: r.u32()?, charge_mas: r.u32()? };
+                }
+                Event::Power(PowerReport {
+                    uptime_s,
+                    battery_mv,
+                    ext_power,
+                    mode,
+                    tx_power_dbm,
+                    base_ma_x10,
+                    rx_ma_x10,
+                    tx_ma_x10,
+                    tx_packets,
+                    phases,
+                })
             }
             t => return Err(FrameError::UnknownType(t)),
         })
@@ -1652,6 +1898,87 @@ mod tests {
         roundtrip_ev(Event::Name { name: text(b"Ida") });
         roundtrip_cmd(Command::SendCall { dest: Address([4; 16]), data: text(&[1, 2, 3]) });
         roundtrip_ev(Event::Call { from: Address([4; 16]), data: text(&[9]) });
+    }
+
+    #[test]
+    fn range_test_roundtrip() {
+        use crate::rangetest::{Config, FLAG_PERSIST, mode};
+        let cfg = Config { mode: mode::BEACON, flags: FLAG_PERSIST, interval_s: 10, sf_mask: 0x3f, per_step: 5, pad: 0, lat_e7: 561_000_000, lon_e7: 102_000_000 };
+        roundtrip_cmd(Command::SetRangeTest(cfg));
+        roundtrip_cmd(Command::SetRangeTest(Config::default()));
+        roundtrip_cmd(Command::GetRangeTest);
+        assert_eq!(&Command::GetRangeTest.encode()[..], &[1, 0, 0x2b]);
+        assert_eq!(Command::SetRangeTest(cfg).encode().len(), 2 + 1 + Config::LEN);
+        assert!(Command::decode(&[0x2a, 1, 2, 3]).is_err());
+
+        let stat = |sf| RangeSfStat { sf, rx: 40, lost: 3, rssi_avg: -118, rssi_min: -131, snr_avg_x4: -37, snr_min: -14 };
+        let full = RangeState {
+            config: Config { mode: mode::RECEIVER, ..cfg },
+            sf: 12,
+            synced: true,
+            count: 1234,
+            missed: 56,
+            seq: 1290,
+            per_sf: (7..=12).map(stat).collect(),
+        };
+        assert!(Event::RangeState(full.clone()).encode().len() <= MAX_FRAME + 2);
+        roundtrip_ev(Event::RangeState(full));
+        roundtrip_ev(Event::RangeState(RangeState::default()));
+
+        let rx = RangeRx {
+            uptime_ms: 3_600_123,
+            sender: [0xde, 0xad, 0xbe, 0xef],
+            seq: 77,
+            sf: 11,
+            rssi: -127,
+            snr: -15,
+            len: 30,
+            lost: 2,
+            skipped: 1,
+            tx_power_dbm: 22,
+            battery_mv: 4012,
+            position: Some((561_567_000, -102_107_000)),
+        };
+        roundtrip_ev(Event::RangeRx(rx));
+        roundtrip_ev(Event::RangeRx(RangeRx { position: None, ..rx }));
+        assert_eq!(Event::RangeRx(RangeRx { position: None, ..rx }).encode().len(), 2 + 25);
+
+        roundtrip_ev(Event::RangeTx(RangeTx {
+            uptime_ms: 99,
+            seq: 5,
+            sf: 12,
+            slot: 4,
+            interval_s: 21,
+            airtime_ms: 1581,
+            charge_ma_ms: 186_558,
+            skipped: 0,
+        }));
+        let p = PowerReport {
+            uptime_s: 7200,
+            battery_mv: 3950,
+            ext_power: -1,
+            mode: mode::BEACON,
+            tx_power_dbm: 22,
+            base_ma_x10: 30,
+            rx_ma_x10: 53,
+            tx_ma_x10: 1180,
+            tx_packets: 300,
+            phases: [
+                PowerPhase { secs: 3600, tx_ms: 1000, charge_mas: 30_000 },
+                PowerPhase { secs: 3000, tx_ms: 300_000, charge_mas: 60_000 },
+                PowerPhase { secs: 600, tx_ms: 0, charge_mas: 5000 },
+            ],
+        };
+        roundtrip_ev(Event::Power(p));
+        roundtrip_ev(Event::Power(PowerReport::default()));
+        assert_eq!(Event::Power(p).encode().len(), 2 + 56);
+        for (e, code) in [
+            (Event::RangeState(RangeState::default()), 0xa8),
+            (Event::RangeRx(rx), 0xa9),
+            (Event::Power(p), 0xab),
+        ] {
+            assert_eq!(e.encode()[2], code);
+        }
     }
 
     #[test]

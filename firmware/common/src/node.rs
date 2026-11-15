@@ -6,6 +6,7 @@
 
 mod ext;
 mod identity;
+mod range;
 
 use crate::bus::{
     Frame, Pkt, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_TX, RSTATS, TxReq, USB_IN, USB_OUT,
@@ -89,6 +90,13 @@ pub trait Settings {
     fn load_wifi(&mut self) -> maarse_core::companion::WifiSettings {
         Default::default()
     }
+    /// Stores a range test setting that should survive a restart (mode off =
+    /// none). Default: not stored.
+    fn save_range(&mut self, _cfg: &maarse_core::rangetest::Config) {}
+    /// Stored range test setting; the default is off.
+    fn load_range(&mut self) -> maarse_core::rangetest::Config {
+        Default::default()
+    }
 
     // ----- mailbox (optional; default: none) -----
 
@@ -150,6 +158,8 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     ota: crate::ota::OtaManager,
     /// Last counter in an outgoing control command (must increase strictly).
     last_control: u32,
+    /// Range test and power accounting (see node/range.rs).
+    range: range::Range,
 }
 
 fn now_ms() -> u64 {
@@ -221,6 +231,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             ext: ext::Ext::new(),
             ota: crate::ota::OtaManager::new(),
             last_control: 0,
+            range: range::Range::new(),
         };
         n.ext.sharing = n.settings.load_sharing();
         n.ext.name = n.settings.load_name();
@@ -230,6 +241,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let role = n.settings.load_role();
         n.router.set_role(role);
         n.join("public");
+        n.range_init();
         n
     }
 
@@ -299,6 +311,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         if let Some(t) = self.ota.deadline() {
             d = d.min(t);
         }
+        if let Some(t) = self.range.deadline() {
+            d = d.min(t);
+        }
         d
     }
 
@@ -307,6 +322,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         self.apply(actions);
         self.file_tick();
         self.power_tick();
+        self.range_tick();
         if Instant::now() >= self.next_announce {
             if !self.modem && !self.wifi_modem {
                 self.announce();
@@ -330,6 +346,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             packet,
             delay_ms,
             id,
+            sf: 0,
         });
     }
 
@@ -396,7 +413,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     fn on_net(&mut self, pkt: Pkt) {
         if self.wifi_modem {
             // From the host: send it over LoRa as it is.
-            let _ = RADIO_TX.try_send(TxReq { packet: pkt, delay_ms: 0, id: 0 });
+            let _ = RADIO_TX.try_send(TxReq { packet: pkt, delay_ms: 0, id: 0, sf: 0 });
             return;
         }
         if self.modem {
@@ -458,6 +475,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             let _ = f.push(snr as u8);
             let _ = f.extend_from_slice(&pkt);
             let _ = USB_OUT.try_send(f);
+            return;
+        }
+        if self.range_on_radio(&pkt, snr) {
             return;
         }
         self.router.rx_rssi = RSTATS.last_rssi.load(Relaxed) as i16;
@@ -585,7 +605,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let Ok(cmd) = Command::decode(&frame) else {
             return err(0, error_code::BAD_FRAME, "invalid frame");
         };
-        let Some(cmd) = self.ext_command(cmd) else {
+        let Some(cmd) = self.ext_command(cmd).and_then(|c| self.range_command(c)) else {
             self.modem = false;
             return;
         };
@@ -608,6 +628,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     self.radio = cfg;
                     self.settings.save_radio(&cfg);
                     RADIO_CFG.signal(cfg);
+                    self.range_radio_changed();
                     emit(&Event::Radio(cfg));
                     log("Radio settings saved");
                 }
@@ -768,7 +789,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             | Command::SetSharing(_)
             | Command::GetSharing
             | Command::SetName { .. }
-            | Command::GetName => {}
+            | Command::GetName
+            | Command::SetRangeTest(_)
+            | Command::GetRangeTest => {}
             Command::FileBegin { req, dest, size, mime, name } => {
                 self.file_begin(req, dest, size, &mime, &name)
             }
@@ -911,6 +934,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     self.radio = cfg;
                     self.settings.save_radio(&cfg);
                     RADIO_CFG.signal(cfg);
+                    self.range_radio_changed();
                 }
                 Err(e) => reply(self, deny(e)),
             },

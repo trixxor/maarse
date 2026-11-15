@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 250" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="13">
+<style>
+  .bg { fill: #ffffff; } .ink { fill: #17202a; } .muted { fill: #5b6673; } .land { fill: #eef4e8; } .cloud { fill: #eaf2fd; stroke: #1f6fd1; }
+  .rep { fill: #17202a; } .host { fill: #17202a; } .ma { fill: #1f6fd1; } .mas { stroke: #1f6fd1; } .wave { stroke: #1f6fd1; fill: none; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #171c22; } .ink { fill: #e7ebef; } .muted { fill: #9ba6b2; } .land { fill: #1f2a1e; } .cloud { fill: #16243a; stroke: #5ea6ff; }
+    .rep { fill: #e7ebef; } .host { fill: #e7ebef; } .ma { fill: #5ea6ff; } .mas { stroke: #5ea6ff; } .wave { stroke: #5ea6ff; }
+  }
+  .pkt { offset-path: path('M70,175 L170,150 L270,165 L330,140 C380,40 520,40 570,140 L630,165 L730,150 L830,175'); animation: go 7s ease-in-out infinite; }
+  @keyframes go { 0% { offset-distance: 0%; opacity: 0; } 3% { opacity: 1; } 85% { offset-distance: 100%; opacity: 1; } 92%, 100% { offset-distance: 100%; opacity: 0; } }
+  .done { opacity: 0; animation: done 7s infinite; } @keyframes done { 0%, 84% { opacity: 0; } 86%, 96% { opacity: 1; } 100% { opacity: 0; } }
+</style>
+<rect class="bg" width="900" height="250" rx="16"/>
+<rect class="land" x="24" y="110" width="330" height="120" rx="18"/>
+<rect class="land" x="546" y="110" width="330" height="120" rx="18"/>
+<text class="muted" x="40" y="132" font-weight="600">LoRa · a forest in Jutland</text>
+<text class="muted" x="860" y="132" text-anchor="end" font-weight="600">LoRa · a cabin near Oslo</text>
+<path class="cloud" d="M350,95 C350,55 400,40 450,45 C500,40 550,55 550,95 C550,110 350,110 350,95 Z" stroke-width="2"/>
+<text class="ma" x="450" y="78" text-anchor="middle" font-weight="700">internet backbone + DHT</text>
+<text class="muted" x="450" y="96" text-anchor="middle" font-size="12">no central server</text>
+<!-- left -->
+<circle class="ma" cx="70" cy="175" r="9"/><text class="ink" x="70" y="200" text-anchor="middle">Anna</text>
+<path class="rep" d="M170,140 l10,18 h-20z"/><path class="rep" d="M270,155 l10,18 h-20z"/>
+<rect class="host" x="318" y="130" width="24" height="22" rx="4"/><text class="muted" x="330" y="172" text-anchor="middle" font-size="11">host</text>
+<!-- right -->
+<rect class="host" x="558" y="130" width="24" height="22" rx="4"/><text class="muted" x="570" y="172" text-anchor="middle" font-size="11">host</text>
+<path class="rep" d="M630,155 l10,18 h-20z"/><path class="rep" d="M730,140 l10,18 h-20z"/>
+<circle class="ma" cx="830" cy="175" r="9"/><text class="ink" x="830" y="200" text-anchor="middle">Ben</text>
+<path class="wave" d="M70,175 L170,150 L270,165 L330,140 C380,40 520,40 570,140 L630,165 L730,150 L830,175" stroke-width="2" stroke-dasharray="5 6" stroke-opacity=".5"/>
+<circle class="ma pkt" r="7"/>
+<text class="ma done" x="830" y="160" text-anchor="middle" font-weight="700">✓ delivered</text>
+<text class="muted" x="450" y="236" text-anchor="middle" font-size="12">Same address, same end-to-end encryption, whether it travels by radio or by internet.</text>
+</svg>

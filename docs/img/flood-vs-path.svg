@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 340" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="14">
+<style>
+  .bg { fill: #ffffff; } .ink { fill: #17202a; } .muted { fill: #5b6673; } .node { fill: #5b6673; } .rep { fill: #17202a; }
+  .line { stroke: #dfe4ea; } .mt { stroke: #2e8b57; fill: none; } .mtf { fill: #2e8b57; } .ma { stroke: #1f6fd1; } .maf { fill: #1f6fd1; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #171c22; } .ink { fill: #e7ebef; } .muted { fill: #9ba6b2; } .node { fill: #9ba6b2; } .rep { fill: #e7ebef; }
+    .line { stroke: #2a323b; } .mt { stroke: #5cc489; } .mtf { fill: #5cc489; } .ma { stroke: #5ea6ff; } .maf { fill: #5ea6ff; }
+  }
+  .ring { transform-box: fill-box; transform-origin: center; opacity: 0; animation: ring 6s infinite; stroke-width: 2.5; }
+  @keyframes ring { 0% { transform: scale(.1); opacity: 0; } 2% { opacity: .9; } 14% { transform: scale(1); opacity: 0; } 100% { opacity: 0; } }
+  .r1 { animation-delay: 0s; } .r2 { animation-delay: .7s; } .r3 { animation-delay: 1.4s; } .r4 { animation-delay: 2.1s; }
+  .pkt { animation: move 6s infinite; offset-rotate: 0deg; }
+  @keyframes move { 0% { offset-distance: 0%; opacity: 0; } 4% { opacity: 1; } 70% { offset-distance: 100%; opacity: 1; } 80%, 100% { offset-distance: 100%; opacity: 0; } }
+  .tick { opacity: 0; animation: tick 6s infinite; }
+  @keyframes tick { 0% { opacity: 0; } 5% { opacity: 1; } 85% { opacity: 1; } 95%, 100% { opacity: 0; } }
+  .t1 { animation-delay: 1.3s; } .t2 { animation-delay: 2.6s; } .t3 { animation-delay: 3.9s; }
+</style>
+<rect class="bg" width="900" height="340" rx="16"/>
+<text class="ink" x="225" y="36" text-anchor="middle" font-weight="700" font-size="18">Flood</text>
+<text class="muted" x="225" y="58" text-anchor="middle">Everyone who hears it repeats it</text>
+<text class="ink" x="675" y="36" text-anchor="middle" font-weight="700" font-size="18">Path</text>
+<text class="muted" x="675" y="58" text-anchor="middle">Find the route once, then only the route sends</text>
+<line class="line" x1="450" y1="26" x2="450" y2="316" stroke-width="2"/>
+
+<!-- flood -->
+<g>
+  <circle class="ring mt r1" cx="60" cy="190" r="80"/>
+  <circle class="ring mt r2" cx="140" cy="120" r="80"/><circle class="ring mt r2" cx="140" cy="260" r="80"/><circle class="ring mt r2" cx="120" cy="190" r="80"/>
+  <circle class="ring mt r3" cx="230" cy="110" r="80"/><circle class="ring mt r3" cx="230" cy="270" r="80"/><circle class="ring mt r3" cx="250" cy="190" r="80"/>
+  <circle class="ring mt r4" cx="330" cy="140" r="80"/><circle class="ring mt r4" cx="330" cy="250" r="80"/>
+  <g class="node"><circle cx="140" cy="120" r="6"/><circle cx="140" cy="260" r="6"/><circle cx="120" cy="190" r="6"/><circle cx="230" cy="110" r="6"/><circle cx="230" cy="270" r="6"/><circle cx="250" cy="190" r="6"/><circle cx="330" cy="140" r="6"/><circle cx="330" cy="250" r="6"/></g>
+  <circle class="mtf" cx="60" cy="190" r="8"/><circle class="mtf" cx="395" cy="195" r="8"/>
+  <text class="ink" x="60" y="218" text-anchor="middle">from</text><text class="ink" x="395" y="223" text-anchor="middle">to</text>
+  <text class="ink" x="225" y="320" text-anchor="middle"><tspan font-weight="700">9 transmissions</tspan> · every message, every time</text>
+</g>
+
+<!-- path -->
+<g>
+  <g class="node"><circle cx="590" cy="110" r="6"/><circle cx="600" cy="270" r="6"/><circle cx="700" cy="270" r="6"/><circle cx="770" cy="110" r="6"/><circle cx="660" cy="120" r="6"/></g>
+  <path class="rep" d="M600,175 l10,17 h-20z"/><path class="rep" d="M720,170 l10,17 h-20z"/>
+  <circle class="maf" cx="510" cy="190" r="8"/><circle class="maf" cx="845" cy="195" r="8"/>
+  <text class="ink" x="510" y="218" text-anchor="middle">from</text><text class="ink" x="845" y="223" text-anchor="middle">to</text>
+  <path id="route" class="ma" d="M510,190 L600,186 L720,181 L845,195" fill="none" stroke-width="3.5" stroke-opacity=".35"/>
+  <circle class="maf pkt" r="7" style="offset-path: path('M510,190 L600,186 L720,181 L845,195')"/>
+  <text class="maf tick t1" x="555" y="176" text-anchor="middle" font-weight="700">✓</text>
+  <text class="maf tick t2" x="660" y="171" text-anchor="middle" font-weight="700">✓</text>
+  <text class="maf tick t3" x="785" y="176" text-anchor="middle" font-weight="700">✓</text>
+  <text class="muted" x="675" y="240" text-anchor="middle" font-size="13">✓ = Må:rse acknowledges every hop</text>
+  <text class="ink" x="675" y="320" text-anchor="middle"><tspan font-weight="700">3 transmissions</tspan> · and the route is reused</text>
+</g>
+</svg>

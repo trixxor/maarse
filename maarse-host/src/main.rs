@@ -122,6 +122,9 @@ pub struct Config {
     pub wintun: Option<String>,
     /// Tillad IP-tunnel over LoRa (`--tun-lora`); ellers kun over TCP.
     pub tun_lora: bool,
+    /// Run under a service manager (`--service`): no browser, and a settings
+    /// restart exits with RESTART_EXIT_CODE so the supervisor starts us again.
+    pub service: bool,
 }
 
 /// Offentlige backbone-noder, som `--public` forbinder til. Tom indtil
@@ -173,6 +176,9 @@ Brug: maarse-host [valg]
   --mqtt-user <navn>    brugernavn til brokeren
   --mqtt-pass <kode>    adgangskode til brokeren
   --no-browser          åbn ikke browseren automatisk
+  --service             run under a service manager (systemd, Task Scheduler):
+                        implies --no-browser; a settings restart exits with
+                        code 75 and leaves the restart to the supervisor
   --help                vis denne tekst
 
 Eksempel med to computere:
@@ -205,6 +211,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         tun: false,
         wintun: None,
         tun_lora: false,
+        service: false,
     };
     let mut mqtt_prefix = "maarse".to_string();
     let (mut mqtt_user, mut mqtt_pass) = (None, None);
@@ -228,6 +235,10 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--serial" => c.serial = Some(val("--serial")?),
             "--baud" => c.baud = val("--baud")?.parse().map_err(|_| "--baud: ugyldigt tal")?,
             "--no-browser" => c.open_browser = false,
+            "--service" => {
+                c.service = true;
+                c.open_browser = false;
+            }
             "--no-history" => c.history_days = None,
             "--history-days" => {
                 let n: u32 = val("--history-days")?
@@ -362,6 +373,7 @@ fn main() {
             std::process::exit(2);
         }
     };
+    settings::SERVICE.store(cfg.service, std::sync::atomic::Ordering::Relaxed);
     let (tx, rx) = std::sync::mpsc::channel();
     #[allow(unused_mut)]
     let mut node = match node::Node::new(&cfg) {
@@ -438,4 +450,16 @@ fn main() {
         settings::report(format!("  DHT:      offentlig som {ep}"), false);
     }
     node.run(rx, tx);
+}
+
+#[cfg(test)]
+mod service_tests {
+    #[test]
+    fn service_flag_implies_no_browser() {
+        let c = crate::parse_from(vec!["--service".into()]).unwrap();
+        assert!(c.service);
+        assert!(!c.open_browser);
+        let d = crate::parse_from(Vec::new()).unwrap();
+        assert!(!d.service && d.open_browser);
+    }
 }

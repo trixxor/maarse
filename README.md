@@ -115,6 +115,17 @@ cargo build --release -p maarse-host -p maarse-tray
 
 It takes `--task`, `--data` and `--install-dir` if the defaults were changed (the Startup shortcut passes them). `-Uninstall` also removes the shortcut.
 
+**Service page and control API.** The web client's *Service* page (in the tools menu when connected to a host over WebSocket) shows the host's version, uptime, PID, data folder, whether it runs with `--service`, and its links, plus a live log with filter, pause and download, and buttons to restart or stop the host. The same HTTP endpoints can be used by other tools (for example a tray app). Like the other `/api/` endpoints they need the access key as `?token=<key>` (from `access-key.txt` in the data folder), except for requests from the same machine without a foreign `Origin` header.
+
+- `GET /api/service/status` returns JSON:
+  - `version` (string), `pid` (number), `uptime_s` (seconds since start), `started` (Unix time in seconds)
+  - `data_dir` (absolute path of the data folder), `service` (true when started with `--service`), `restart_exit_code` (75)
+  - `links`: the current links, each `{ "name", "kind" ("backbone", "usb-modem" or "wifi-modem"), "up_s", "rx", "tx", "last_rx_s" (null if nothing heard yet), "snr" (null or dB) }`
+  - `log_last`: sequence number of the newest log line
+- `GET /api/service/log?since=N` returns `{ "first", "last", "capacity", "lines": [{ "seq", "t", "err", "text" }] }` with every line whose `seq` is greater than `N` (`since=0` or no `since` gives the whole buffer). The host keeps the last 2000 lines of everything it prints in memory; `seq` starts at 1 and grows by one per line, `t` is Unix time in milliseconds and `err` is true for lines written to stderr. Poll with `since` set to the previous `last`. If `last` is smaller than the value you sent, the host has restarted and you should start again from `since=0`.
+- `POST /api/service/restart` (same as the older `POST /api/restart`) answers `ok` and restarts the host: with `--service` it exits with code 75 so the service manager starts it again, otherwise it starts a new copy of itself.
+- `POST /api/service/stop` answers `ok` and exits the host cleanly with code 0. Under the systemd unit (`Restart=on-failure`) and the Windows supervisor (restarts only after a non-zero exit) the host then stays stopped until it is started again by the service manager.
+
 ## Wi-Fi backbone on ESP32-S3 nodes
 
 A Heltec V4 or XIAO ESP32-S3 can join a Wi-Fi network (for example a phone hotspot on a hilltop) and keep a TCP backbone link to a maarse-host. Everyone who can reach the node over LoRa then reaches the rest of the network: the home host, the DHT and anyone behind it.

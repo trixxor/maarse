@@ -1,12 +1,12 @@
 //! # maarse-core
 //!
-//! Kernen i Må:rse-protokollen: adresser, pakkeformat, dublet-filter,
-//! rutetabel, sendetidsbudget og routing-motoren.
+//! The core of the Må:rse protocol: addresses, packet format, duplicate filter,
+//! route table, airtime budget and the routing engine.
 //!
-//! Crate'en er `no_std` og bruger ingen heap, så den kan køre direkte på en
-//! nRF52840. Alle tabeller har faste størrelser, som vælges med const generics.
+//! The crate is `no_std` and uses no heap, so it can run directly on an
+//! nRF52840. All tables have fixed sizes, chosen with const generics.
 //!
-//! Se specifikationen "Må:rse – protokolspecifikation v0.1".
+//! See the specification "Må:rse – protocol specification v0.1".
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -30,11 +30,11 @@ pub use addr::{Address, PathId};
 pub use packet::{Header, Packet, PacketType, Path};
 pub use router::{Action, Energy, Role, Router};
 
-/// Største LoRa-pakke i bytes.
+/// Largest LoRa packet in bytes.
 pub const MAX_PACKET: usize = 255;
-/// Største antal hop en pakke må tage (protokolgrænse).
+/// Largest number of hops a packet may take (protocol limit).
 pub const MAX_HOPS: u8 = 64;
-/// Største antal hop i en kildesti (2 bytes pr. hop, 24 bytes i alt).
+/// Largest number of hops in a source path (2 bytes per hop, 24 bytes in total).
 pub const MAX_PATH: usize = 12;
-/// Standard-rækkevidde for floodede kanaler og announces (hop).
+/// Default range for flooded channels and announces (hops).
 pub const LOCAL_SCOPE: u8 = 8;

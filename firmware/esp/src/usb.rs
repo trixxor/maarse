@@ -1,5 +1,5 @@
-//! USB-Serial-JTAG (ESP32-S3's indbyggede USB): companion-rammer ind og ud.
-//! Vises som en almindelig seriel port på PC'en (ingen driver nødvendig).
+//! USB-Serial-JTAG (the ESP32-S3's built-in USB): companion frames in and out.
+//! Shows up as an ordinary serial port on the PC (no driver needed).
 
 use embassy_futures::join::join;
 use embedded_io_async::{Read, Write};
@@ -33,8 +33,8 @@ pub async fn usb_task(usb: USB_DEVICE<'static>) {
     let writer = async {
         loop {
             let frame = USB_OUT.receive().await;
-            // Er der ingen vært tilsluttet, fyldes FIFO'en op; write_all
-            // venter så, og rammen kasseres efter et sekund.
+            // If no host is connected, the FIFO fills up; write_all
+            // then waits, and the frame is discarded after a second.
             let _ = embassy_time::with_timeout(
                 embassy_time::Duration::from_secs(1),
                 async {

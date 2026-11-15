@@ -1,4 +1,4 @@
-//! Kanaler og fælles tællere mellem opgaverne (radio, USB og node).
+//! Channels and shared counters between the tasks (radio, USB and node).
 
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering::Relaxed};
@@ -19,19 +19,19 @@ pub struct TxReq {
     pub id: u64,
 }
 
-/// Modtaget over LoRa: pakke og SNR.
+/// Received over LoRa: packet and SNR.
 pub static RADIO_RX: Channel<M, (Pkt, i8), 4> = Channel::new();
-/// Skal sendes over LoRa.
+/// To be sent over LoRa.
 pub static RADIO_TX: Channel<M, TxReq, 8> = Channel::new();
-/// Annullér en planlagt udsendelse.
+/// Cancel a planned transmission.
 pub static RADIO_CANCEL: Channel<M, u64, 8> = Channel::new();
-/// Nye radioindstillinger.
+/// New radio settings.
 pub static RADIO_CFG: Signal<M, RadioConfig> = Signal::new();
-/// Rammer fra USB (uden længdefelt).
+/// Frames from USB (without length field).
 pub static USB_IN: Channel<M, Frame, 4> = Channel::new();
-/// Færdige rammer til USB (med længdefelt).
+/// Finished frames for USB (with length field).
 pub static USB_OUT: Channel<M, FrameBuf, 16> = Channel::new();
-/// Færdige rammer til Bluetooth (med længdefelt).
+/// Finished frames for Bluetooth (with length field).
 pub static BLE_OUT: Channel<M, FrameBuf, 16> = Channel::new();
 
 /// Packets received on the Wi-Fi backbone link (TCP), one Må:rse packet each.
@@ -79,7 +79,7 @@ pub fn note(code: u32, secs: u32) {
 /// Ask the board to restart (to apply saved Wi-Fi settings).
 pub static RESTART: Signal<M, ()> = Signal::new();
 
-/// Radiostatistik, opdateres af radio-opgaven.
+/// Radio statistics, updated by the radio task.
 pub struct RadioStats {
     pub rx_ok: AtomicU32,
     pub rx_err: AtomicU32,
@@ -93,7 +93,7 @@ pub struct RadioStats {
     pub bytes_tx: AtomicU32,
     pub last_rssi: AtomicI32,
     pub last_snr: AtomicI32,
-    /// Glidende gennemsnit × 16.
+    /// Moving average × 16.
     pub avg_rssi_x16: AtomicI32,
     pub avg_snr_x16: AtomicI32,
     pub min_rssi: AtomicI32,
@@ -156,16 +156,16 @@ impl RadioStats {
     }
 }
 
-/// Til displayet: antal kendte noder, antal modtagne beskeder og den seneste.
+/// For the display: number of known nodes, number of received messages and the latest one.
 pub static KNOWN_NODES: AtomicU32 = AtomicU32::new(0);
 pub static MSG_COUNT: AtomicU32 = AtomicU32::new(0);
 pub type Preview = heapless::String<64>;
 pub static LAST_MSG: Mutex<M, RefCell<(u32, Preview)>> =
     Mutex::new(RefCell::new((0, heapless::String::new())));
-/// Nodens egen kortadresse (første 4 bytes), til displayet.
+/// The node's own short address (first 4 bytes), for the display.
 pub static MY_SHORT: AtomicU32 = AtomicU32::new(0);
 
-/// Husker den seneste besked (afsenderens kortadresse og starten af teksten).
+/// Remembers the latest message (the sender's short address and the start of the text).
 pub fn note_message(from: &Address, text: &[u8]) {
     MSG_COUNT.fetch_add(1, Relaxed);
     let short = u32::from_be_bytes([from.0[0], from.0[1], from.0[2], from.0[3]]);
@@ -179,10 +179,10 @@ pub fn note_message(from: &Address, text: &[u8]) {
     LAST_MSG.lock(|m| *m.borrow_mut() = (short, p));
 }
 
-/// Fejlsøgning af radioen ved opstart (sættes af board-koden):
-/// [0] sync word-register 0x0740 (forventet 0x1424), [1] status-byte,
-/// [2] device errors efter TCXO + kalibrering (0 = ingen fejl),
-/// [3] BUSY-niveau efter reset (0 = lav, som forventet).
+/// Radio debugging at start-up (set by the board code):
+/// [0] sync word register 0x0740 (expected 0x1424), [1] status byte,
+/// [2] device errors after TCXO + calibration (0 = no errors),
+/// [3] BUSY level after reset (0 = low, as expected).
 pub static RADIO_DIAG: [AtomicU32; 4] = [
     AtomicU32::new(0xFFFF_FFFF),
     AtomicU32::new(0xFFFF_FFFF),

@@ -1,29 +1,29 @@
-//! Kryptering af beskeder.
+//! Message encryption.
 //!
-//! ## Direkte beskeder
+//! ## Direct messages
 //!
-//! Envejs-mønster i stil med Noise `X`, tilpasset LoRa (64 bytes overhead):
-//!
-//! ```text
-//! e_pub (32) | afsender ⊕ k1 (16) | ChaCha20-Poly1305(k2, besked) | tag (16)
-//!
-//! es = DH(e, R)          k1 = HKDF(es)                -> skjuler afsenderen
-//! ss = DH(S, R)          k2 = HKDF(es || ss, e, R, S) -> krypterer og autentificerer
-//! ```
-//!
-//! * Kun modtageren kan se, hvem afsenderen er.
-//! * `ss` beviser, at beskeden kommer fra afsenderen. Ændres den skjulte
-//!   afsender, bliver `k2` forkert, og dekrypteringen fejler.
-//! * Den friske nøgle `e` betyder, at en lækket afsendernøgle ikke afslører
-//!   gamle beskeder. Fuld forward secrecy mod lækket modtagernøgle giver
-//!   sessionerne i [`crate::ratchet`]; dette format er deres fallback.
-//!
-//! ## Kanaler
+//! One-way pattern in the style of Noise `X`, adapted to LoRa (64 bytes overhead):
 //!
 //! ```text
-//! nonce (8) | ChaCha20-Poly1305(k, afsender (16) | besked) | tag (16)
+//! e_pub (32) | sender ⊕ k1 (16) | ChaCha20-Poly1305(k2, message) | tag (16)
+//!
+//! es = DH(e, R)          k1 = HKDF(es)                -> hides the sender
+//! ss = DH(S, R)          k2 = HKDF(es || ss, e, R, S) -> encrypts and authenticates
 //! ```
-//! Alle med kanalnøglen kan læse og skrive. Afsenderen er ikke bevist.
+//!
+//! * Only the recipient can see who the sender is.
+//! * `ss` proves that the message comes from the sender. If the hidden
+//!   sender is changed, `k2` becomes wrong, and decryption fails.
+//! * The fresh key `e` means that a leaked sender key does not reveal
+//!   old messages. Full forward secrecy against a leaked recipient key is given by
+//!   the sessions in [`crate::ratchet`]; this format is their fallback.
+//!
+//! ## Channels
+//!
+//! ```text
+//! nonce (8) | ChaCha20-Poly1305(k, sender (16) | message) | tag (16)
+//! ```
+//! Everyone with the channel key can read and write. The sender is not proven.
 
 use crate::{Identity, PublicIdentity};
 use chacha20poly1305::aead::AeadInPlace;
@@ -36,30 +36,30 @@ use x25519_dalek::{EphemeralSecret, PublicKey as XPublic};
 
 pub const DM_OVERHEAD: usize = 32 + 16 + 16;
 pub const CHANNEL_OVERHEAD: usize = 8 + 16 + 16;
-/// Største tekst i en direkte besked (én pakke med en fuld sti på 12 hop).
+/// Largest text in a direct message (one packet with a full path of 12 hops).
 pub const MAX_DM_TEXT: usize = maarse_core::router::MAX_DIRECT_PAYLOAD - DM_OVERHEAD;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CryptoError {
     BufferTooSmall,
     Malformed,
-    /// Vi kender ikke afsenderens nøgler endnu (intet announce hørt).
+    /// We do not know the sender's keys yet (no announce heard).
     UnknownSender(Address),
-    /// Forkert nøgle, forfalsket eller ødelagt besked.
+    /// Wrong key, forged or corrupted message.
     Decrypt,
-    /// Ratchet-besked, men ingen session med afsenderen (se [`crate::ratchet`]).
+    /// Ratchet message, but no session with the sender (see [`crate::ratchet`]).
     NoSession(Address),
-    /// Sessionen med afsenderen passer ikke til beskeden.
+    /// The session with the sender does not match the message.
     Desync(Address),
 }
 
 fn mask_key(es: &[u8; 32], e_pub: &[u8; 32], recipient: &Address) -> [u8; 16] {
-    let hk = Hkdf::<Sha256>::new(Some(b"maarse/dm/v0/afsender"), es);
+    let hk = Hkdf::<Sha256>::new(Some(b"maarse/dm/v0/sender"), es);
     let mut info = [0u8; 48];
     info[..32].copy_from_slice(e_pub);
     info[32..].copy_from_slice(&recipient.0);
     let mut k = [0u8; 16];
-    // Kan ikke fejle: 16 bytes er under HKDF's grænse.
+    // Cannot fail: 16 bytes is below HKDF's limit.
     let _ = hk.expand(&info, &mut k);
     k
 }
@@ -84,8 +84,8 @@ fn message_key(
     k
 }
 
-/// Krypterer en direkte besked til `recipient`. Skriver til `out` og
-/// returnerer længden (`msg.len() + DM_OVERHEAD`).
+/// Encrypts a direct message to `recipient`. Writes to `out` and
+/// returns the length (`msg.len() + DM_OVERHEAD`).
 pub fn seal_direct(
     sender: &Identity,
     recipient: &PublicIdentity,
@@ -118,7 +118,7 @@ pub fn seal_direct(
     let (head, rest) = out.split_at_mut(48);
     let body = &mut rest[..msg.len()];
     body.copy_from_slice(msg);
-    // Nøglen er ny for hver besked (frisk e), så en fast nonce er sikker.
+    // The key is new for every message (fresh e), so a fixed nonce is safe.
     let tag = ChaCha20Poly1305::new(Key::from_slice(&key))
         .encrypt_in_place_detached(Nonce::from_slice(&[0u8; 12]), head, body)
         .map_err(|_| CryptoError::Malformed)?;
@@ -126,8 +126,8 @@ pub fn seal_direct(
     Ok(total)
 }
 
-/// Dekrypterer en direkte besked til `me`. `lookup` slår afsenderens
-/// offentlige nøgler op (fra hørte announces). Returnerer afsender og længde.
+/// Decrypts a direct message to `me`. `lookup` looks up the sender's
+/// public keys (from heard announces). Returns sender and length.
 pub fn open_direct(
     me: &Identity,
     payload: &[u8],
@@ -174,13 +174,13 @@ pub fn open_direct(
 }
 
 fn channel_key(key: &[u8; 32]) -> [u8; 32] {
-    let hk = Hkdf::<Sha256>::new(Some(b"maarse/kanal/v0"), key);
+    let hk = Hkdf::<Sha256>::new(Some(b"maarse/channel/v0"), key);
     let mut k = [0u8; 32];
-    let _ = hk.expand(b"besked", &mut k);
+    let _ = hk.expand(b"message", &mut k);
     k
 }
 
-/// Krypterer en kanalbesked. `nonce` skal være 8 tilfældige bytes.
+/// Encrypts a channel message. `nonce` must be 8 random bytes.
 pub fn seal_channel(
     key: &[u8; 32],
     sender: &Address,
@@ -206,7 +206,7 @@ pub fn seal_channel(
     Ok(total)
 }
 
-/// Dekrypterer en kanalbesked. Returnerer (påstået) afsender og længde.
+/// Decrypts a channel message. Returns the (claimed) sender and length.
 pub fn open_channel(
     key: &[u8; 32],
     payload: &[u8],
@@ -250,7 +250,7 @@ mod tests {
         let (a, b) = pair();
         let a_pub = a.public();
         let mut ct = [0u8; 255];
-        let n = seal_direct(&a, &b.public(), &mut OsRng, b"hej fra A", &mut ct).unwrap();
+        let n = seal_direct(&a, &b.public(), &mut OsRng, b"hi from A", &mut ct).unwrap();
         assert_eq!(n, 9 + DM_OVERHEAD);
         let mut pt = [0u8; 255];
         let (from, len) = open_direct(
@@ -261,7 +261,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(from, a.address());
-        assert_eq!(&pt[..len], b"hej fra A");
+        assert_eq!(&pt[..len], b"hi from A");
     }
 
     #[test]
@@ -310,13 +310,13 @@ mod tests {
 
     #[test]
     fn impersonation_fails() {
-        // C kender B's offentlige nøgle og påstår at være A.
+        // C knows B's public key and claims to be A.
         let (a, b) = pair();
         let c = Identity::generate(&mut OsRng);
         let a_pub = a.public();
         let mut ct = [0u8; 100];
-        let n = seal_direct(&c, &b.public(), &mut OsRng, b"jeg er A", &mut ct).unwrap();
-        // Ombyt den skjulte afsender til A's adresse.
+        let n = seal_direct(&c, &b.public(), &mut OsRng, b"I am A", &mut ct).unwrap();
+        // Swap the hidden sender for A's address.
         let mut pt = [0u8; 100];
         let e_pub: [u8; 32] = ct[..32].try_into().unwrap();
         let es = b.dh.diffie_hellman(&XPublic::from(e_pub));
@@ -336,10 +336,10 @@ mod tests {
         let key = hashtag_key("#test");
         let me = Address([3; 16]);
         let mut ct = [0u8; 100];
-        let n = seal_channel(&key, &me, [9; 8], b"hej kanal", &mut ct).unwrap();
+        let n = seal_channel(&key, &me, [9; 8], b"hi channel", &mut ct).unwrap();
         let mut pt = [0u8; 100];
         let (from, len) = open_channel(&key, &ct[..n], &mut pt).unwrap();
-        assert_eq!((from, &pt[..len]), (me, &b"hej kanal"[..]));
+        assert_eq!((from, &pt[..len]), (me, &b"hi channel"[..]));
         assert_eq!(
             open_channel(&public_channel_key(), &ct[..n], &mut pt),
             Err(CryptoError::Decrypt)
@@ -355,9 +355,9 @@ mod tests {
     }
 }
 
-/// Overhead for én bid af en fil: fil-ID (8) + indeks (2) + tag (16).
+/// Overhead for one chunk of a file: file ID (8) + index (2) + tag (16).
 pub const CHUNK_OVERHEAD: usize = 8 + 2 + 16;
-/// Bytes fildata pr. bid, så en bid passer i én pakke med fuld sti.
+/// Bytes of file data per chunk, so a chunk fits in one packet with a full path.
 pub const CHUNK_DATA: usize = maarse_core::router::MAX_DIRECT_PAYLOAD - CHUNK_OVERHEAD;
 
 fn chunk_nonce(file_id: u64, index: u16) -> [u8; 12] {
@@ -367,8 +367,8 @@ fn chunk_nonce(file_id: u64, index: u16) -> [u8; 12] {
     n
 }
 
-/// Krypterer bid nr. `index` af en fil med filens egen nøgle (som sendes
-/// i det krypterede filtilbud).
+/// Encrypts chunk no. `index` of a file with the file's own key (which is sent
+/// in the encrypted file offer).
 pub fn seal_chunk(
     key: &[u8; 32],
     file_id: u64,
@@ -395,7 +395,7 @@ pub fn seal_chunk(
     Ok(total)
 }
 
-/// Læser fil-ID og indeks uden at dekryptere (til at finde den rette fil).
+/// Reads file ID and index without decrypting (to find the right file).
 pub fn chunk_header(payload: &[u8]) -> Option<(u64, u16)> {
     if payload.len() < CHUNK_OVERHEAD {
         return None;
@@ -405,7 +405,7 @@ pub fn chunk_header(payload: &[u8]) -> Option<(u64, u16)> {
     Some((id, idx))
 }
 
-/// Dekrypterer en bid. Returnerer længden af data i `out`.
+/// Decrypts a chunk. Returns the length of data in `out`.
 pub fn open_chunk(key: &[u8; 32], payload: &[u8], out: &mut [u8]) -> Result<usize, CryptoError> {
     let (file_id, index) = chunk_header(payload).ok_or(CryptoError::Malformed)?;
     let n = payload.len() - CHUNK_OVERHEAD;
@@ -437,7 +437,7 @@ mod chunk_tests {
         assert_eq!(chunk_header(&ct[..n]), Some((42, 3)));
         let mut pt = [0u8; 255];
         assert_eq!(open_chunk(&key, &ct[..n], &mut pt), Ok(CHUNK_DATA));
-        // Ombyttet indeks eller anden nøgle afvises.
+        // A swapped index or a different key is rejected.
         let mut bad = ct;
         bad[8] = 4;
         assert!(open_chunk(&key, &bad[..n], &mut pt).is_err());

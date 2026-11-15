@@ -1,6 +1,6 @@
-//! Diagnose (trace route, naboer, støjgulv), batteri/energistyret routing
-//! og deling af position/telemetri. Holdt ude af node.rs, så hovedfilen
-//! kun har få kroge.
+//! Diagnostics (trace route, neighbours, noise floor), battery/energy-driven routing
+//! and sharing of position/telemetry. Kept out of node.rs, so the main file
+//! only has a few hooks.
 
 use super::{FwNode, Settings, emit, err, log, now_ms};
 use crate::power;
@@ -11,14 +11,14 @@ use maarse_core::companion::{Command, Event, Sharing, Stats, error_code, neighbo
 use maarse_core::{Address, Energy, battery, diag};
 use rand_core::{CryptoRng, RngCore};
 
-/// Så ofte opdateres energistatus ud fra batterimålingen.
+/// How often the energy status is updated from the battery measurement.
 const POWER_EVERY: Duration = Duration::from_secs(power::SAMPLE_EVERY_S);
 
 pub(super) struct Ext {
     pub(super) sharing: Sharing,
-    /// Vores visningsnavn (tomt = intet).
+    /// Our display name (empty = none).
     pub(super) name: appdata::Name,
-    /// Igangværende trace routes: mål -> req.
+    /// Trace routes in progress: target -> req.
     traces: heapless::Vec<(Address, u16), 4>,
     pub(super) next_power: Instant,
 }
@@ -51,7 +51,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         v
     }
 
-    /// Opdaterer energistatus ud fra batteriet (kaldes fra `on_timer`).
+    /// Updates the energy status from the battery (called from `on_timer`).
     pub(super) fn power_tick(&mut self) {
         if Instant::now() < self.ext.next_power {
             return;
@@ -64,21 +64,21 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         if new != old {
             self.router.energy = new;
             log(match new {
-                Energy::Full => "Energi: fuld",
-                Energy::Ok => "Energi: ok",
-                Energy::Low => "Energi: lav - videresender kun direkte beskeder",
-                Energy::Critical => "Energi: kritisk - videresender intet",
+                Energy::Full => "Energy: full",
+                Energy::Ok => "Energy: ok",
+                Energy::Low => "Energy: low - only forwarding direct messages",
+                Energy::Critical => "Energy: critical - forwarding nothing",
             });
         }
     }
 
-    /// Kommandoer til diagnose og deling. Returnerer kommandoen, hvis den
-    /// ikke hører til her.
+    /// Commands for diagnostics and sharing. Returns the command if it
+    /// does not belong here.
     pub(super) fn ext_command(&mut self, cmd: Command) -> Option<Command> {
         match cmd {
             Command::TraceRoute { req, dest } => {
                 if dest == self.addr {
-                    err(req, error_code::UNKNOWN_DEST, "Det er os selv");
+                    err(req, error_code::UNKNOWN_DEST, "That is ourselves");
                     return None;
                 }
                 if self.ext.traces.is_full() {
@@ -102,14 +102,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 self.ext.sharing = s;
                 self.settings.save_sharing(&s);
                 emit(&Event::Sharing(s));
-                log("Deling gemt; vises i næste announce");
+                log("Sharing saved; shown in the next announce");
             }
             Command::GetName => emit(&Event::Name { name: text(&self.ext.name) }),
             Command::SetName { name } => {
                 self.ext.name = appdata::clean_name(&name).unwrap_or_default();
                 self.settings.save_name(&self.ext.name);
                 emit(&Event::Name { name: text(&self.ext.name) });
-                log("Navn gemt; vises i næste announce");
+                log("Name saved; shown in the next announce");
             }
             other => return Some(other),
         }

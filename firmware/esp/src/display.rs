@@ -1,10 +1,10 @@
-//! OLED-display (128×64, SSD1306/SSD1315) på Heltec V4.
+//! OLED display (128×64, SSD1306/SSD1315) on the Heltec V4.
 //!
-//! Knappen (PRG/GPIO0) skifter mellem tre sider:
-//! 1. oversigt: adresse, kendte noder, beskeder, forbindelser (USB, BT,
-//!    Wi-Fi med IP) og den seneste besked
-//! 2. radio: RSSI/SNR, pakker ind/ud, fejl og duty cycle
-//! 3. slukket (sparer strøm og skærm)
+//! The button (PRG/GPIO0) switches between three pages:
+//! 1. overview: address, known nodes, messages, connections (USB, BT,
+//!    Wi-Fi with IP) and the latest message
+//! 2. radio: RSSI/SNR, packets in/out, errors and duty cycle
+//! 3. off (saves power and the screen)
 //!
 //! Holding the button for 3 s switches between Bluetooth and Wi-Fi (only one
 //! runs at a time); the node saves the choice and restarts.
@@ -43,7 +43,7 @@ pub async fn display_task(i2c: I2c<'static, Blocking>, mut button: Input<'static
     let mut d = Ssd1306::new(iface, DisplaySize128x64, DisplayRotation::Rotate0)
         .into_buffered_graphics_mode();
     if d.init().is_err() {
-        return; // intet display: noden kører videre uden
+        return; // no display: the node carries on without it
     }
     let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
     let mut page = 0u8;
@@ -173,13 +173,13 @@ fn radio(l: &mut [Line; 6]) {
     );
     let _ = write!(
         l[1],
-        "Gns {} / {}",
+        "Avg {} / {}",
         s.avg_rssi_x16.load(Relaxed) / 16,
         s.avg_snr_x16.load(Relaxed) / 16
     );
-    let _ = write!(l[2], "Ind {} fejl {}", s.rx_ok.load(Relaxed), s.rx_err.load(Relaxed));
-    let _ = write!(l[3], "Ud {} fejl {}", s.tx_ok.load(Relaxed), s.tx_err.load(Relaxed));
+    let _ = write!(l[2], "In {} err {}", s.rx_ok.load(Relaxed), s.rx_err.load(Relaxed));
+    let _ = write!(l[3], "Out {} err {}", s.tx_ok.load(Relaxed), s.tx_err.load(Relaxed));
     let d = s.duty_used_permille.load(Relaxed);
-    let _ = write!(l[4], "Duty {}.{}% ko {}", d / 10, d % 10, s.tx_queue.load(Relaxed));
-    let _ = write!(l[5], "Optaget {} kass {}", s.cad_busy.load(Relaxed), s.dropped.load(Relaxed));
+    let _ = write!(l[4], "Duty {}.{}% q {}", d / 10, d % 10, s.tx_queue.load(Relaxed));
+    let _ = write!(l[5], "Busy {} drop {}", s.cad_busy.load(Relaxed), s.dropped.load(Relaxed));
 }

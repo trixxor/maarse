@@ -1,77 +1,77 @@
-//! Forward secrecy for samtaler: en lille "double ratchet" til LoRa.
+//! Forward secrecy for conversations: a small "double ratchet" for LoRa.
 //!
-//! **Udkast - skal gennemgås af en ekstern kryptograf før v1.0.**
+//! **Draft - must be reviewed by an external cryptographer before v1.0.**
 //!
-//! ## Idé
+//! ## Idea
 //!
-//! Det gamle format ([`crate::seal`], kaldet *statisk*) krypterer hver besked
-//! med modtagerens faste nøgle. Stjæles den nøgle, kan alle gamle beskeder
-//! læses. Her bygger to kontakter i stedet en *session* op, hvor nøglerne
-//! hele tiden skiftes og de brugte slettes:
+//! The old format ([`crate::seal`], called *static*) encrypts every message
+//! with the recipient's static key. If that key is stolen, all old messages can be
+//! read. Here two contacts instead build up a *session*, where the keys
+//! change all the time and the used ones are deleted:
 //!
-//! * **Start (init)**: A laver et frisk ratchet-nøglepar `A1` og regner
-//!   `es = DH(A1, B)` og `ss = DH(A, B)` med B's faste nøgle - præcis som det
-//!   statiske format. Det giver rodnøgle og første kædenøgle. A kan sende med
-//!   det samme (ingen ekstra rundtur, virker også via postkasse). Init-beskeder
-//!   er kun lige så sikre som det statiske format.
-//! * **Ratchet**: Når B svarer, laver B et frisk nøglepar `B1` og blander
-//!   `DH(B1, A1)` ind i rodnøglen. Når A svarer igen, `A2` og `DH(A2, B1)`, osv.
-//!   Hver tur sletter den gamle hemmelige nøgle. Efter første svar kan hverken
-//!   A's eller B's faste nøgle åbne beskederne, og en lækket sessionstilstand
-//!   heler, så snart begge parter har taget en tur mere.
-//! * **Hash-kæde**: Inden for en tur afledes en ny beskednøgle pr. besked
-//!   (`kæde -> (ny kæde, beskednøgle)`), og den brugte slettes.
-//! * **Tab og forkert rækkefølge**: Hver besked har et nummer `n` i sin kæde og
-//!   `pn` = antal beskeder i afsenderens forrige kæde. Overspringes beskeder,
-//!   gemmes deres nøgler i et lille vindue ([`MAX_SKIP`] pr. session). Kommer
-//!   en besked senere end vinduet, kan den ikke længere åbnes (den er tabt).
+//! * **Start (init)**: A makes a fresh ratchet key pair `A1` and computes
+//!   `es = DH(A1, B)` and `ss = DH(A, B)` with B's static key - exactly like the
+//!   static format. That gives the root key and the first chain key. A can send right
+//!   away (no extra round trip, also works via a mailbox). Init messages
+//!   are only as secure as the static format.
+//! * **Ratchet**: When B answers, B makes a fresh key pair `B1` and mixes
+//!   `DH(B1, A1)` into the root key. When A answers again, `A2` and `DH(A2, B1)`, etc.
+//!   Every turn deletes the old secret key. After the first reply neither
+//!   A's nor B's static key can open the messages, and a leaked session state
+//!   heals as soon as both parties have taken one more turn.
+//! * **Hash chain**: Within a turn a new message key is derived per message
+//!   (`chain -> (new chain, message key)`), and the used one is deleted.
+//! * **Loss and wrong order**: Every message has a number `n` in its chain and
+//!   `pn` = number of messages in the sender's previous chain. If messages are skipped,
+//!   their keys are stored in a small window ([`MAX_SKIP`] per session). If
+//!   a message arrives later than the window, it can no longer be opened (it is lost).
 //!
-//! ## Format (69 bytes overhead, 5 mere end det statiske)
+//! ## Format (69 bytes overhead, 5 more than the static one)
 //!
 //! ```text
-//! type (1) | ratchet-nøgle (32) | afsender ⊕ maske (16) | n (u16 LE) | pn (u16 LE)
-//!   | ChaCha20-Poly1305(beskednøgle, besked, AAD = de 53 header-bytes) | tag (16)
+//! type (1) | ratchet key (32) | sender ⊕ mask (16) | n (u16 LE) | pn (u16 LE)
+//!   | ChaCha20-Poly1305(message key, message, AAD = the 53 header bytes) | tag (16)
 //!
-//! type  0xF0 = init (A har ikke hørt fra B i denne session endnu)
+//! type  0xF0 = init (A has not heard from B in this session yet)
 //!       0xF1 = ratchet
-//! maske = HKDF(DH(ratchet-nøgle, modtagerens faste nøgle))   (skjuler afsenderen)
+//! mask = HKDF(DH(ratchet key, the recipient's static key))   (hides the sender)
 //! ```
 //!
-//! * Den første byte i det statiske format er en tilfældig byte af en
-//!   offentlig nøgle. Starter en besked med `0xF0`/`0xF1`, prøves det nye
-//!   format først og ellers det gamle ([`open`] klarer begge). Nye noder kan
-//!   altså stadig læse gamle beskeder. Gamle noder kan ikke læse de nye, så
-//!   en node bruger kun det nye format til kontakter, der melder det i deres
-//!   announce ([`APP_FS`]) eller allerede har sendt os en FS-besked.
-//! * Afsenderen skjules som i det statiske format. Ratchet-nøglen gentages i
-//!   alle beskeder i samme tur, så en lytter kan se, at de hører sammen.
-//! * Nøglen er ny for hver besked, så noncen er fast (nul).
+//! * The first byte in the static format is a random byte of a
+//!   public key. If a message starts with `0xF0`/`0xF1`, the new
+//!   format is tried first and otherwise the old one ([`open`] handles both). New nodes can
+//!   therefore still read old messages. Old nodes cannot read the new ones, so
+//!   a node only uses the new format for contacts that announce it in their
+//!   announce ([`APP_FS`]) or have already sent us an FS message.
+//! * The sender is hidden as in the static format. The ratchet key is repeated in
+//!   all messages of the same turn, so a listener can see that they belong together.
+//! * The key is new for every message, so the nonce is fixed (zero).
 //!
-//! ## Afledning
+//! ## Derivation
 //!
 //! ```text
 //! init:   rk0 | ck0  = HKDF(salt "maarse/fs/v1/init", es || ss, info A1 | R | S)
-//! rod:    rk' | ck   = HKDF(salt rk, DH(...), info "maarse/fs/v1/rod")
-//! kæde:   ck' = HKDF-Expand(ck, "maarse/fs/v1/kaede"),
-//!         mk  = HKDF-Expand(ck, "maarse/fs/v1/besked")
-//! maske:  HKDF(salt "maarse/fs/v1/afsender", DH(...), info ratchet-nøgle | R)
+//! root:   rk' | ck   = HKDF(salt rk, DH(...), info "maarse/fs/v1/root")
+//! chain:  ck' = HKDF-Expand(ck, "maarse/fs/v1/chain"),
+//!         mk  = HKDF-Expand(ck, "maarse/fs/v1/message")
+//! mask:   HKDF(salt "maarse/fs/v1/sender", DH(...), info ratchet key | R)
 //! ```
 //!
-//! ## Samtidig start
+//! ## Simultaneous start
 //!
-//! Starter begge parter en session, før de har hørt fra hinanden, vinder
-//! init fra den laveste adresse. Taberens init-beskeder kan stadig læses.
+//! If both parties start a session before they have heard from each other, the
+//! init from the lowest address wins. The loser's init messages can still be read.
 //!
-//! ## Kendte huller
+//! ## Known gaps
 //!
-//! * Init-beskeder (før første svar) har ingen forward secrecy mod B's faste
-//!   nøgle - som i dag. Der er ingen forud-udgivne nøgler (prekeys).
-//! * Mister modtageren sin tilstand (fx firmware genstarter), kan beskeder
-//!   sendt i den gamle session ikke læses. Noden svarer så med en ny init
-//!   (`Content::Resync`), og samtalen fortsætter derfra.
-//! * En genafspillet gammel init kan nulstille en session (kun lammelse,
-//!   ikke læsning). Det kan også en forfalsket besked, der udløser en resync.
-//! * Ingen header-kryptering: n, pn og ratchet-nøglen er synlige.
+//! * Init messages (before the first reply) have no forward secrecy against B's static
+//!   key - as today. There are no pre-published keys (prekeys).
+//! * If the recipient loses its state (e.g. the firmware restarts), messages
+//!   sent in the old session cannot be read. The node then answers with a new init
+//!   (`Content::Resync`), and the conversation continues from there.
+//! * A replayed old init can reset a session (only denial of service,
+//!   not reading). So can a forged message that triggers a resync.
+//! * No header encryption: n, pn and the ratchet key are visible.
 
 use crate::seal::CryptoError;
 use crate::{Identity, PublicIdentity};
@@ -88,22 +88,22 @@ pub const INIT: u8 = 0xF0;
 pub const RATCHET: u8 = 0xF1;
 pub const HEADER_LEN: usize = 1 + 32 + 16 + 2 + 2;
 pub const FS_OVERHEAD: usize = HEADER_LEN + 16;
-/// Største tekst, der kan sendes i begge formater (én pakke, fuld sti).
+/// Largest text that can be sent in both formats (one packet, full path).
 pub const MAX_FS_TEXT: usize = maarse_core::router::MAX_DIRECT_PAYLOAD - FS_OVERHEAD;
-/// Overspringede beskednøgler, der gemmes pr. session.
+/// Skipped message keys stored per session.
 pub const MAX_SKIP: usize = 8;
-/// Så mange beskeder må en kæde højst springe frem ad gangen (mod at en
-/// forfalsket besked får os til at regne længe).
+/// A chain may skip at most this many messages ahead at a time (so that a
+/// forged message cannot make us compute for a long time).
 pub const MAX_JUMP: u16 = 512;
-/// Announce-felt: "jeg kan forward secrecy (v1)". Ingen data.
+/// Announce field: "I can do forward secrecy (v1)". No data.
 pub const APP_FS: u8 = 0x02;
-/// Gamle ratchet-nøgler fra modparten, vi kan genkende (så en for sen
-/// besked ikke tolkes som en ødelagt session).
+/// Old ratchet keys from the other party that we can recognise (so a late
+/// message is not taken for a broken session).
 const OLD_PUBS: usize = 4;
 
-/// Læser app-data fra et announce: melder noden forward secrecy?
+/// Reads app data from an announce: does the node announce forward secrecy?
 ///
-/// Kendte felter: `0x01` postkasse (16 bytes), `0x02` FS (ingen data).
+/// Known fields: `0x01` mailbox (16 bytes), `0x02` FS (no data).
 pub fn announces_fs(app_data: &[u8]) -> bool {
     let mut i = 0;
     while i < app_data.len() {
@@ -118,11 +118,11 @@ pub fn announces_fs(app_data: &[u8]) -> bool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
-    /// Det gamle format (ingen forward secrecy).
+    /// The old format (no forward secrecy).
     Static,
-    /// Første beskeder i en session (som statisk, indtil modparten svarer).
+    /// First messages in a session (like static, until the other party answers).
     Init,
-    /// Fuld forward secrecy.
+    /// Full forward secrecy.
     Ratchet,
 }
 
@@ -142,7 +142,7 @@ struct Skipped {
 }
 const SKIPPED_LEN: usize = 1 + 8 + 2 + 32;
 
-/// Tilstanden for én samtale (én kontakt). Fast størrelse, ingen heap.
+/// The state of one conversation (one contact). Fixed size, no heap.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Session {
     peer: Address,
@@ -160,16 +160,16 @@ pub struct Session {
     has_cks: bool,
     has_ckr: bool,
     has_dhs: bool,
-    /// Vi startede sessionen og har ikke hørt fra modparten endnu.
+    /// We started the session and have not heard from the other party yet.
     pending: bool,
-    /// Næste afsendelse skal tage et nyt ratchet-skridt.
+    /// The next send must take a new ratchet step.
     need_step: bool,
     skipped: [Skipped; MAX_SKIP],
     skip_cursor: u8,
     old_pubs: [[u8; 8]; OLD_PUBS],
 }
 
-/// Længden af [`Session::to_bytes`].
+/// The length of [`Session::to_bytes`].
 pub const SESSION_LEN: usize = 1 + 16 + 32 * 2 + 4 + 32 + 2 + 32 * 2 + 16 + 32 * 2 + 1
     + MAX_SKIP * SKIPPED_LEN
     + 1
@@ -190,7 +190,7 @@ impl Drop for Session {
 
 impl core::fmt::Debug for Session {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // Aldrig nøgler i logs.
+        // Never keys in logs.
         f.debug_struct("Session")
             .field("peer", &self.peer)
             .field("ns", &self.ns)
@@ -200,11 +200,11 @@ impl core::fmt::Debug for Session {
     }
 }
 
-/// Hvor sessioner gemmes (host: HashMap på disk; firmware: fast antal i RAM).
+/// Where sessions are stored (host: HashMap on disk; firmware: a fixed number in RAM).
 pub trait SessionStore {
     fn get_mut(&mut self, peer: &Address) -> Option<&mut Session>;
-    /// Indsætter eller erstatter sessionen for `s.peer()`. Et fuldt lager
-    /// må smide en anden session ud (den falder så tilbage til init).
+    /// Inserts or replaces the session for `s.peer()`. A full store
+    /// may evict another session (it then falls back to init).
     fn insert(&mut self, s: Session);
 }
 
@@ -253,20 +253,20 @@ fn kdf_init(
 
 fn kdf_rk(rk: &[u8; 32], dh_out: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
     let mut okm = [0u8; 64];
-    let _ = Hkdf::<Sha256>::new(Some(rk), dh_out).expand(b"maarse/fs/v1/rod", &mut okm);
+    let _ = Hkdf::<Sha256>::new(Some(rk), dh_out).expand(b"maarse/fs/v1/root", &mut okm);
     let r = split64(&okm);
     okm.zeroize();
     r
 }
 
-/// (ny kædenøgle, beskednøgle)
+/// (new chain key, message key)
 fn kdf_ck(ck: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    // Kan ikke fejle: PRK er 32 bytes, output 32 bytes.
+    // Cannot fail: the PRK is 32 bytes, output 32 bytes.
     let hk = Hkdf::<Sha256>::from_prk(ck).expect("32 bytes PRK");
     let mut next = [0u8; 32];
     let mut mk = [0u8; 32];
-    let _ = hk.expand(b"maarse/fs/v1/kaede", &mut next);
-    let _ = hk.expand(b"maarse/fs/v1/besked", &mut mk);
+    let _ = hk.expand(b"maarse/fs/v1/chain", &mut next);
+    let _ = hk.expand(b"maarse/fs/v1/message", &mut mk);
     (next, mk)
 }
 
@@ -275,7 +275,7 @@ fn mask_key(dh_out: &[u8; 32], ratchet_pub: &[u8; 32], recipient: &Address) -> [
     info[..32].copy_from_slice(ratchet_pub);
     info[32..].copy_from_slice(&recipient.0);
     let mut k = [0u8; 16];
-    let _ = Hkdf::<Sha256>::new(Some(b"maarse/fs/v1/afsender"), dh_out).expand(&info, &mut k);
+    let _ = Hkdf::<Sha256>::new(Some(b"maarse/fs/v1/sender"), dh_out).expand(&info, &mut k);
     k
 }
 
@@ -315,7 +315,7 @@ impl Session {
         }
     }
 
-    /// Starter en ny session til `peer` (vi er initiativtager).
+    /// Starts a new session to `peer` (we are the initiator).
     pub fn initiate(
         me: &Identity,
         peer: &PublicIdentity,
@@ -350,13 +350,13 @@ impl Session {
         self.peer
     }
 
-    /// Har modparten svaret i denne session (beskeder har fuld FS)?
+    /// Has the other party answered in this session (messages have full FS)?
     pub fn established(&self) -> bool {
         !self.pending
     }
 
-    /// Krypterer `msg` til `peer` (skal være sessionens kontakt). Returnerer
-    /// længden (`msg.len() + FS_OVERHEAD`). Ved fejl er sessionen uændret.
+    /// Encrypts `msg` to `peer` (must be the session's contact). Returns
+    /// the length (`msg.len() + FS_OVERHEAD`). On error the session is unchanged.
     pub fn seal(
         &mut self,
         me: &Identity,
@@ -427,8 +427,8 @@ impl Session {
         self.skipped[slot] = Skipped { used: true, fp: fpr, n, mk };
     }
 
-    /// Går modtagekæden frem til nummer `target` og gemmer de sidste
-    /// [`MAX_SKIP`] overspringede nøgler.
+    /// Advances the receive chain to number `target` and stores the last
+    /// [`MAX_SKIP`] skipped keys.
     fn skip_to(&mut self, target: u16) -> Result<(), CryptoError> {
         if target <= self.nr {
             return Ok(());
@@ -448,7 +448,7 @@ impl Session {
         Ok(())
     }
 
-    /// Dekrypterer én besked. Kaldes på en kopi; kopien gemmes kun ved succes.
+    /// Decrypts one message. Called on a copy; the copy is only stored on success.
     #[allow(clippy::too_many_arguments)]
     fn decrypt(
         &mut self,
@@ -469,7 +469,7 @@ impl Session {
             mk
         } else {
             if !(self.has_ckr && *rpub == self.dhr) {
-                // Ny ratchet-nøgle fra modparten.
+                // New ratchet key from the other party.
                 if !allow_step || !self.has_dhs || self.old_pubs.contains(&f) {
                     return Err(CryptoError::Decrypt);
                 }
@@ -487,7 +487,7 @@ impl Session {
                 self.has_ckr = true;
                 self.need_step = true;
             } else if n < self.nr {
-                // Allerede brugt (og slettet) eller for gammel.
+                // Already used (and deleted) or too old.
                 return Err(CryptoError::Decrypt);
             }
             self.skip_to(n)?;
@@ -511,7 +511,7 @@ impl Session {
         Ok(len)
     }
 
-    /// Er `rpub` en af modpartens gamle ratchet-nøgler (for sen besked)?
+    /// Is `rpub` one of the other party's old ratchet keys (late message)?
     fn knows_old(&self, rpub: &[u8; 32]) -> bool {
         let f = fp(rpub);
         self.old_pubs.contains(&f) || f == fp(&self.init_pub)
@@ -615,9 +615,9 @@ impl Reader<'_> {
     }
 }
 
-/// Krypterer en direkte besked. Bruger forward secrecy, hvis `fs_ok`
-/// (modparten kan det), og ellers - eller hvis det fejler - det statiske
-/// format. Returnerer længde og det brugte format.
+/// Encrypts a direct message. Uses forward secrecy if `fs_ok`
+/// (the other party can do it), and otherwise - or if it fails - the static
+/// format. Returns the length and the format used.
 pub fn seal(
     me: &Identity,
     peer: &PublicIdentity,
@@ -644,7 +644,7 @@ pub fn seal(
     crate::seal::seal_direct(me, peer, rng, msg, out).map(|n| (n, Format::Static))
 }
 
-/// Starter forfra med `peer`: en ny init-session erstatter den gamle.
+/// Starts over with `peer`: a new init session replaces the old one.
 pub fn reset(
     me: &Identity,
     peer: &PublicIdentity,
@@ -655,13 +655,13 @@ pub fn reset(
     Ok(())
 }
 
-/// Dekrypterer en direkte besked i begge formater.
+/// Decrypts a direct message in both formats.
 ///
-/// Fejl ud over [`crate::seal::open_direct`]s:
-/// * [`CryptoError::NoSession`]: ratchet-besked fra en kontakt, vi ikke har
-///   en session med (fx efter genstart). Svar med en ny init.
-/// * [`CryptoError::Desync`]: vi har en session, men beskeden passer ikke
-///   (sessionerne er kommet ud af trit - eller beskeden er forfalsket).
+/// Errors besides those of [`crate::seal::open_direct`]:
+/// * [`CryptoError::NoSession`]: ratchet message from a contact we do not have
+///   a session with (e.g. after a restart). Answer with a new init.
+/// * [`CryptoError::Desync`]: we have a session, but the message does not fit
+///   (the sessions have got out of step - or the message is forged).
 pub fn open(
     me: &Identity,
     payload: &[u8],
@@ -673,7 +673,7 @@ pub fn open(
         match open_fs(me, payload, store, &lookup, out) {
             Ok(o) => return Ok(o),
             Err(e) => {
-                // 1/128 af de gamle beskeder starter tilfældigvis med 0xF0/0xF1.
+                // 1/128 of the old messages happen to start with 0xF0/0xF1.
                 return match crate::seal::open_direct(me, payload, &lookup, out) {
                     Ok((from, len)) => Ok(Opened { from, len, format: Format::Static }),
                     Err(_) => Err(e),
@@ -717,7 +717,7 @@ fn open_fs(
         if peer.address() != from {
             return Err(CryptoError::Decrypt);
         }
-        // En init fra den session, vi allerede har: kun kæde eller vindue.
+        // An init from the session we already have: only chain or window.
         if let Some(sess) = store.get_mut(&from)
             && sess.init_pub == rpub
         {
@@ -738,7 +738,7 @@ fn open_fs(
         let n = fresh.decrypt(&rpub, n, pn, false, payload, out)?;
         let adopt = match store.get_mut(&from) {
             None => true,
-            // Begge startede: init fra den laveste adresse vinder.
+            // Both started: the init from the lowest address wins.
             Some(old) => !old.pending || from.0 < my_addr.0,
         };
         if adopt {
@@ -762,8 +762,8 @@ fn open_fs(
     }
 }
 
-/// Et simpelt lager med plads til `N` sessioner, uden heap (til firmware).
-/// Er det fuldt, smides den mindst brugte ud.
+/// A simple store with room for `N` sessions, without heap (for firmware).
+/// When it is full, the least used one is evicted.
 pub struct FixedStore<const N: usize> {
     slots: [Option<(u32, Session)>; N],
     clock: u32,

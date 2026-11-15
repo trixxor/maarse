@@ -1,11 +1,11 @@
 # Name,   Type, SubType, Offset,   Size
-# To app-partitioner til opdatering over luften (se src/ota.rs). ota_0 ligger
-# hvor `factory` lå, og maarse-partitionen er uændret, så indstillinger og
-# identitet bevares. Kræver 8 MB flash (bruger 4,1 MB).
+# Two app partitions for over-the-air updates (see src/ota.rs). ota_0 is
+# where `factory` was, and the maarse partition is unchanged, so settings and
+# identity are kept. Needs 8 MB flash (uses 4.1 MB).
 nvs,      data, nvs,     0x9000,   0x4000
 otadata,  data, ota,     0xd000,   0x2000
 phy_init, data, phy,     0xf000,   0x1000
 ota_0,    app,  ota_0,   0x10000,  0x200000
-# Må:rse: indstillinger (4 KB) + postkasse (8 KB) + OTA-metaside (4 KB). Se src/main.rs.
+# Må:rse: settings (4 KB) + mailbox (8 KB) + OTA meta page (4 KB). See src/main.rs.
 maarse,     data, undefined,    0x210000, 0x10000
 ota_1,    app,  ota_1,   0x220000, 0x200000

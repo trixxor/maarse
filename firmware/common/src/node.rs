@@ -367,6 +367,16 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     emit(&Event::RouteLearned { dest, hops });
                     self.flush_mail(dest);
                 }
+                Action::CarryAcked { msg_id } => {
+                    // Carrying is off in firmware for now; handled like an
+                    // acknowledgement, but the app is told "carried".
+                    if let Some(id) = self.mail_inflight.remove(&msg_id) {
+                        self.settings.mail_remove(id);
+                        self.mail_delivered += 1;
+                    } else if !self.file_on_ack(msg_id) {
+                        emit(&Event::CarryAcked { msg_id });
+                    }
+                }
                 Action::Acked { msg_id } => {
                     if let Some(id) = self.mail_inflight.remove(&msg_id) {
                         self.settings.mail_remove(id);

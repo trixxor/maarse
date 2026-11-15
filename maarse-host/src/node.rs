@@ -661,6 +661,7 @@ impl Node {
                     self.flush_mailbox(dest);
                 }
                 Action::Acked { msg_id } => self.on_acked(msg_id),
+                Action::CarryAcked { msg_id } => self.on_carry_acked(msg_id),
             }
         }
         if let Some(d) = self.router.next_deadline()
@@ -730,6 +731,19 @@ impl Node {
         self.awaiting.insert(msg_id, kind);
         self.apply(actions.into_iter().collect());
         Ok(msg_id)
+    }
+
+    /// A message delivered by carrying: like an acknowledgement, but the
+    /// app is told "delivered (carried)".
+    fn on_carry_acked(&mut self, msg_id: u64) {
+        match self.awaiting.get(&msg_id) {
+            Some(Pending::Message) | None => {
+                self.awaiting.remove(&msg_id);
+                self.outbox.remove(&msg_id);
+                self.broadcast(&Event::CarryAcked { msg_id });
+            }
+            Some(_) => self.on_acked(msg_id),
+        }
     }
 
     fn on_acked(&mut self, msg_id: u64) {

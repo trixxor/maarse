@@ -42,8 +42,22 @@
 //! naming the receiving neighbour and the payload
 //! `tokens (1) | ttl left in s (u16 BE) | from (PathId, u16 BE) | message`.
 //! The destination delivers the message as an ordinary `Data` message (it is
-//! still end-to-end encrypted, so carriers cannot read it). There is no
-//! acknowledgement back to the sender yet.
+//! still end-to-end encrypted, so carriers cannot read it).
+//!
+//! ## Delivered notice
+//! When the destination gets a carried message (also a repeated copy), it
+//! sends a "delivered" notice: a [`PacketType::Carry`] packet *without* a
+//! path, addressed to [`ack_token`] of the message id, with no payload
+//! (18 bytes on the air). Nodes from before the notice drop Carry packets
+//! without a path, so the change is backward tolerant. A carrier that hears
+//! the notice deletes its copy and stops handing out copies, passes the
+//! notice on once, and remembers it for the rest of the copy's lifetime.
+//! It repeats it when it meets a neighbour it gave a copy to (or got its
+//! copy from), and answers a handoff of a delivered message with the
+//! notice instead of storing it. So the notice walks back along the spray
+//! tree to the sender, which reports [`Action::CarryAcked`] ("delivered
+//! (carried)"). A sender that gets an ordinary acknowledgement for a
+//! message it carries does the same, so its carriers stop too.
 
 use crate::addr::{Address, PathId};
 use crate::dedup::{DedupCache, packet_id};
@@ -113,6 +127,20 @@ const CARRY_EVERY_MS: u64 = 5_000;
 const CARRY_FRESH_MS: u64 = 30_000;
 /// Wait this long before handing the same message to the destination again.
 const CARRY_RETRY_MS: u64 = 60_000;
+/// Delivered notices a node remembers (see "Delivered notice").
+const CARRY_DONE_MAX: usize = 16;
+
+/// A carried message we know has been delivered.
+#[derive(Clone)]
+struct CarryDone {
+    id: u64,
+    until_ms: u64,
+    /// Neighbours that may still hold a copy (we gave them one, or got ours
+    /// from them): they get the notice when we meet them.
+    holders: heapless::Vec<PathId, 8>,
+    /// Last time we sent the notice.
+    sent_ms: u64,
+}
 
 /// A message we carry for someone else (or for ourselves, as its sender).
 #[derive(Clone)]
@@ -228,6 +256,10 @@ pub enum Action {
     RouteLearned { dest: Address, hops: u8 },
     /// En direkte besked er kvitteret af modtageren.
     Acked { msg_id: u64 },
+    /// A message we carried has reached its destination ("delivered
+    /// (carried)"): the delivered notice came back to us. `msg_id` is the
+    /// id `send_direct` returned.
+    CarryAcked { msg_id: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -352,6 +384,8 @@ pub struct RouterStats {
     /// Carry packets sent and messages delivered to us by carrying.
     pub carry_handoffs: u32,
     pub carry_delivered: u32,
+    /// Delivered notices sent (see "Delivered notice").
+    pub carry_notices: u32,
     /// Flood-udsendelser annulleret, fordi naboer havde dækket området.
     pub floods_cancelled: u32,
     /// Announces og ruteforespørgsler smidt væk, fordi arbejdsbeviset
@@ -394,6 +428,8 @@ pub struct Router<const R: usize, const D: usize> {
     carry_seen: heapless::Vec<PathId, 32>,
     /// We heard a repeater at the previous carry step.
     carry_near_repeater: bool,
+    /// Carried messages known to be delivered.
+    carry_done: heapless::Vec<CarryDone, CARRY_DONE_MAX>,
     /// Største antal hop, en relay videresender (standard 4, højst 7).
     pub relay_hops: u8,
     /// Ventetid på kvittering fra ende til ende, før ruten repareres (ms).
@@ -465,6 +501,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             next_carry_ms: 0,
             carry_seen: heapless::Vec::new(),
             carry_near_repeater: false,
+            carry_done: heapless::Vec::new(),
             relay_hops: DEFAULT_RELAY_HOPS,
             ack_timeout_ms: DEFAULT_ACK_TIMEOUT_MS,
             mobile: false,
@@ -682,7 +719,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let t = self.ack_timeout_ms as u64;
         let ack = self.awaiting.iter().map(|a| a.sent_ms + t);
         let rep = self.replies.iter().map(|r| r.reply_at_ms);
-        let carry = (!self.carried.is_empty()).then_some(self.next_carry_ms);
+        let carry = (!self.carried.is_empty() || !self.carry_done.is_empty()).then_some(self.next_carry_ms);
         fwd.chain(req).chain(ack).chain(rep).chain(carry).min()
     }
 
@@ -690,7 +727,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
     /// blevet sendt videre, og opgiver dem efter `HOP_RETRIES` forsøg.
     pub fn tick(&mut self, now_ms: u64) -> Actions {
         let mut out = Actions::new();
-        if !self.carried.is_empty() && now_ms >= self.next_carry_ms {
+        if (!self.carried.is_empty() || !self.carry_done.is_empty()) && now_ms >= self.next_carry_ms {
             self.next_carry_ms = now_ms + CARRY_EVERY_MS;
             self.carry_step(now_ms, &mut out);
         }
@@ -993,6 +1030,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
     /// Hands carried messages to neighbours heard recently.
     fn carry_step(&mut self, now_ms: u64, out: &mut Actions) {
         self.carried.retain(|c| c.until_ms > now_ms);
+        self.carry_done.retain(|d| d.until_ms > now_ms);
         let here: heapless::Vec<PathId, 32> = self
             .neighbors
             .iter()
@@ -1034,6 +1072,21 @@ impl<const R: usize, const D: usize> Router<R, D> {
             .collect();
         self.carry_seen = here.clone();
         let mut sent = 0;
+        // Tell new encounters that may hold a copy of a delivered message.
+        for i in 0..self.carry_done.len() {
+            if sent >= 2 {
+                break;
+            }
+            let d = &self.carry_done[i];
+            if d.sent_ms != 0 && now_ms.saturating_sub(d.sent_ms) < CARRY_RETRY_MS {
+                continue;
+            }
+            if fresh.iter().any(|n| d.holders.contains(n)) {
+                let id = d.id;
+                self.emit_carry_notice(id, now_ms, out);
+                sent += 1;
+            }
+        }
         for i in 0..self.carried.len() {
             if sent >= 2 {
                 break; // a few per step: the channel is shared
@@ -1084,7 +1137,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
     /// A carried message handed to us.
     fn on_carry(&mut self, pkt: &Packet, now_ms: u64, out: &mut Actions) {
         let h = &pkt.header;
-        let Some(path) = &h.path else { return };
+        let Some(path) = &h.path else {
+            self.on_carry_notice(pkt, now_ms, out);
+            return;
+        };
         if path.first() != Some(&self.id) || pkt.payload.len() < 5 {
             return;
         }
@@ -1103,12 +1159,76 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     hops: 0,
                 });
             }
+            // Delivered (again): tell the carrier, so it stops.
+            self.emit_carry_notice(id, now_ms, out);
             return;
         }
-        if self.carry_copies == 0 || self.dedup.contains(id) {
-            return; // not carrying, or already delivered through us
+        if self.carry_copies == 0 {
+            return;
+        }
+        if self.carry_done.iter().any(|d| d.id == id) {
+            // Already delivered: answer with the notice instead of storing it.
+            self.emit_carry_notice(id, now_ms, out);
+            return;
+        }
+        if self.dedup.contains(id) {
+            return; // already delivered through us
         }
         self.add_carried(h.dest, msg, tokens, ttl_s as u64 * 1000, Some(from), now_ms);
+    }
+
+    /// Sends the delivered notice for carried message `id` (see "Delivered
+    /// notice"): a Carry packet without a path, addressed to `ack_token(id)`.
+    fn emit_carry_notice(&mut self, id: u64, now_ms: u64, out: &mut Actions) {
+        if let Some(d) = self.carry_done.iter_mut().find(|d| d.id == id) {
+            d.sent_ms = now_ms;
+        }
+        let header = Header::new(PacketType::Carry, ack_token(id));
+        let Ok(packet) = encode(&header, &[]) else { return };
+        self.stats.carry_notices += 1;
+        // Not through `emit`: the notice is repeated on purpose, so it is
+        // kept out of the duplicate filter.
+        let tx_id = packet_id(PacketType::Carry, &header.dest, &[]) ^ now_ms;
+        let _ = out.push(Action::Transmit { packet, delay_ms: SOURCE_ROUTE_DELAY_MS, id: tx_id });
+    }
+
+    /// A delivered notice heard from a neighbour.
+    fn on_carry_notice(&mut self, pkt: &Packet, now_ms: u64, out: &mut Actions) {
+        let b = pkt.header.dest.0;
+        let mut lo = [0u8; 8];
+        let mut hi = [0u8; 8];
+        lo.copy_from_slice(&b[..8]);
+        hi.copy_from_slice(&b[8..]);
+        let id = u64::from_le_bytes(lo);
+        if u64::from_le_bytes(hi) != !id || !pkt.payload.is_empty() {
+            return; // not a notice
+        }
+        self.carry_delivered_notice(id, true, now_ms, out);
+    }
+
+    /// Carried message `id` is known to be delivered: drop our copy, tell
+    /// the app if it is ours, and pass the notice on once. `relay` is false
+    /// when the sender learned it from an ordinary acknowledgement (the app
+    /// already got `Acked`).
+    fn carry_delivered_notice(&mut self, id: u64, relay: bool, now_ms: u64, out: &mut Actions) {
+        if self.carry_done.iter().any(|d| d.id == id) {
+            return;
+        }
+        let Some(i) = self.carried.iter().position(|c| c.id == id) else {
+            return; // we never carried it: nothing to stop
+        };
+        let c = self.carried.swap_remove(i);
+        if c.own && relay {
+            let _ = out.push(Action::CarryAcked { msg_id: id });
+        }
+        if self.carry_done.is_full() {
+            self.carry_done.remove(0);
+        }
+        let _ = self.carry_done.push(CarryDone { id, until_ms: c.until_ms, holders: c.given.clone(), sent_ms: 0 });
+        // Pass it on only if someone else may hold a copy.
+        if !c.given.is_empty() {
+            self.emit_carry_notice(id, now_ms, out);
+        }
     }
 
     /// Kender vi en rute til `dest`?
@@ -1281,7 +1401,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         for a in &out {
             match a {
                 Action::Deliver { .. } => self.stats.delivered += 1,
-                Action::Acked { .. } => self.stats.acked += 1,
+                Action::Acked { .. } | Action::CarryAcked { .. } => self.stats.acked += 1,
                 Action::RouteLearned { .. } => self.stats.routes_learned += 1,
                 Action::Cancel { .. } => self.stats.floods_cancelled += 1,
                 Action::Transmit { .. } => {}
@@ -1426,6 +1546,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     self.queue
                         .retain(|q| packet_id(q.ptype, &target, &q.payload) != msg_id);
                     let _ = out.push(Action::Acked { msg_id });
+                    self.carry_delivered_notice(msg_id, false, now_ms, out);
                 }
                 self.learn_route(req.target, forward, now_ms, out);
             }
@@ -1439,6 +1560,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 }
                 let msg_id = self.awaiting.remove(i).msg_id;
                 let _ = out.push(Action::Acked { msg_id });
+                self.carry_delivered_notice(msg_id, false, now_ms, out);
             }
             PacketType::Probe if h.dest == self.addr => {
                 // Trace til os: svar ad den omvendte sti til tokenet.
@@ -2375,8 +2497,8 @@ mod tests {
         let pkt = transmits(&out)[0].clone();
         let got = dest.on_receive(&pkt, 5, 20_100);
         assert!(got.iter().any(|x| matches!(x, Action::Deliver { ptype: PacketType::Data, payload, .. } if payload.as_slice() == b"sealed")));
-        // A second copy is not delivered again.
-        assert!(dest.on_receive(&pkt, 5, 20_200).is_empty());
+        // A second copy is not delivered again (but the notice is repeated).
+        assert!(!dest.on_receive(&pkt, 5, 20_200).iter().any(|x| matches!(x, Action::Deliver { .. })));
         // Copies expire.
         let _ = b.tick(20_000 + CARRY_TTL_MS + 1);
         assert_eq!(b.carried_count(), 0);
@@ -2391,6 +2513,50 @@ mod tests {
         };
         let _ = off.on_receive(&p, 5, 5_100);
         assert_eq!(off.carried_count(), 0);
+    }
+
+    #[test]
+    fn delivered_notice_stops_carriers_and_acks_the_sender() {
+        let mut a = node(1, Role::Relay);
+        let mut b = node(4, Role::Relay);
+        let mut dest = node(5, Role::Client);
+        a.carry_copies = 4;
+        b.carry_copies = 4;
+        let msg_id = packet_id(PacketType::Data, &dest.addr, b"sealed");
+        a.start_carry(dest.addr, b"sealed", 0);
+        a.neighbors.heard(b.id, None, 5, 0, 1_000);
+        let pkt = transmits(&a.tick(10_000))[0].clone();
+        b.on_receive(&pkt, 5, 10_100);
+        assert_eq!((a.carried_count(), b.carried_count()), (1, 1));
+        // B hands the message to the destination, which answers with a notice.
+        b.neighbors.heard(dest.id, None, 5, 0, 20_000);
+        let pkt = transmits(&b.tick(20_000))[0].clone();
+        let got = dest.on_receive(&pkt, 5, 20_100);
+        let notice = transmits(&got)[0].clone();
+        assert_eq!(notice.len(), crate::packet::FIXED_HEADER, "the notice is a bare header");
+        assert_eq!(dest.stats.carry_notices, 1);
+        // B drops its copy and passes the notice on (A gave it its copy).
+        let out = b.on_receive(&notice, 5, 20_200);
+        assert_eq!(b.carried_count(), 0);
+        let relayed = transmits(&out)[0].clone();
+        // A, the sender, gets "delivered (carried)" and stops.
+        let out = a.on_receive(&relayed, 5, 20_300);
+        assert!(out.contains(&Action::CarryAcked { msg_id }));
+        assert_eq!(a.carried_count(), 0);
+        // A later handoff of the same message to B is answered with the notice.
+        let mut c = node(6, Role::Relay);
+        c.carry_copies = 4;
+        c.start_carry(dest.addr, b"sealed", 0);
+        c.neighbors.heard(b.id, None, 5, 0, 30_000);
+        let pkt = transmits(&c.tick(30_000))[0].clone();
+        let out = b.on_receive(&pkt, 5, 30_100);
+        assert_eq!(b.carried_count(), 0, "B does not store a delivered message");
+        let back = transmits(&out)[0].clone();
+        assert!(c.on_receive(&back, 5, 30_200).contains(&Action::CarryAcked { msg_id }));
+        assert_eq!(c.carried_count(), 0);
+        // Old nodes (and nodes with carrying off) ignore the notice.
+        let mut off = node(7, Role::Relay);
+        assert!(off.on_receive(&notice, 5, 40_000).is_empty());
     }
 
     #[test]

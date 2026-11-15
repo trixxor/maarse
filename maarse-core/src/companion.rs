@@ -426,6 +426,10 @@ pub enum Event {
         ssid: heapless::Vec<u8, 32>,
         peer: heapless::Vec<u8, 64>,
     },
+    /// 0xa7: a message was delivered by carrying (store-carry-forward): the
+    /// destination's delivered notice came back. Shown as "delivered
+    /// (carried)"; otherwise like `Acked`.
+    CarryAcked { msg_id: u64 },
     /// 0xa3: position og/eller telemetri fra en anden nodes announce.
     /// Format: adresse (16) | hop | app-data-felter (0x03/0x04, se
     /// [`crate::appdata`]).
@@ -1084,6 +1088,7 @@ impl Event {
             Event::Sharing(s) => W::new(0xa2).b(&s.to_bytes()).done(),
             Event::Name { name } => W::new(0xa4).b(name).done(),
             Event::Call { from, data } => W::new(0xa5).b(&from.0).b(data).done(),
+            Event::CarryAcked { msg_id } => W::new(0xa7).b(&msg_id.to_le_bytes()).done(),
             Event::Wifi { enabled, modem, state, ip, ssid, peer } => W::new(0xa6)
                 .b(&[*enabled as u8 | (*modem as u8) << 1, *state])
                 .b(ip)
@@ -1257,6 +1262,7 @@ impl Event {
             }
             0xa4 => Event::Name { name: r.text()? },
             0xa5 => Event::Call { from: r.addr()?, data: r.text()? },
+            0xa7 => Event::CarryAcked { msg_id: r.u64()? },
             0xa6 => {
                 let flags = r.u8()?;
                 let (enabled, modem) = (flags & 1 != 0, flags & 2 != 0);
@@ -1508,6 +1514,7 @@ mod tests {
             text: text(b"k"),
         });
         roundtrip_ev(Event::Acked { msg_id: 42 });
+        roundtrip_ev(Event::CarryAcked { msg_id: 43 });
         roundtrip_ev(Event::RouteLearned { dest: a, hops: 3 });
         roundtrip_ev(Event::Heard { addr: a, hops: 0, identity: None });
         roundtrip_ev(Event::Heard { addr: a, hops: 2, identity: Some([5; 64]) });

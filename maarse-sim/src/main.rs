@@ -910,7 +910,7 @@ impl Sim {
                     ..
                 } => self.on_deliver(node, ptype, dest, &payload),
                 Action::RouteLearned { .. } => self.stats.routes_learned += 1,
-                Action::Acked { msg_id } => {
+                Action::Acked { msg_id } | Action::CarryAcked { msg_id } => {
                     if let Some((i, m)) = self
                         .msgs
                         .iter_mut()
@@ -1316,9 +1316,10 @@ impl Sim {
         }
         if c.carry_copies > 0 {
             println!(
-                "  Carried:        {} delivered by carrying, {} handoffs ({} copies)",
+                "  Carried:        {} delivered by carrying, {} handoffs, {} delivered notices ({} copies)",
                 self.nodes.iter().map(|n| n.router.stats.carry_delivered).sum::<u32>(),
                 self.nodes.iter().map(|n| n.router.stats.carry_handoffs).sum::<u32>(),
+                self.nodes.iter().map(|n| n.router.stats.carry_notices).sum::<u32>(),
                 c.carry_copies
             );
         }

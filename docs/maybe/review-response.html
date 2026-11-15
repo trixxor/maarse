@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>External Review Response</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1d1f;--muted:#5f6368;--card:#fff;--line:#e3e0d8;--accent:#2f6f5e;--yes:#2e7d32;--part:#b26a00;--no:#b3261e;--code:#f1efe9}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181a;--fg:#e8e6e1;--muted:#a3a7ad;--card:#202225;--line:#34373b;--accent:#6fc2a8;--yes:#81c784;--part:#ffb74d;--no:#ef9a9a;--code:#2a2c30}}
+:root[data-theme="dark"]{--bg:#17181a;--fg:#e8e6e1;--muted:#a3a7ad;--card:#202225;--line:#34373b;--accent:#6fc2a8;--yes:#81c784;--part:#ffb74d;--no:#ef9a9a;--code:#2a2c30}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:920px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:1.9rem;margin:0 0 4px}
+h2{margin-top:2.4rem;border-bottom:1px solid var(--line);padding-bottom:6px}
+h3{margin-top:1.6rem}
+.sub{color:var(--muted);margin:0 0 24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+.tldr{border-left:4px solid var(--accent)}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:.9em}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.95rem}
+th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600}
+.v{font-weight:700;white-space:nowrap}
+.yes{color:var(--yes)}.part{color:var(--part)}.no{color:var(--no)}
+ol li,ul li{margin:4px 0}
+.small{color:var(--muted);font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+<h1>Response to the external reviews</h1>
+<p class="sub">Covers <code>chatgpt.md</code> (strategic analysis) and <code>gemini.md</code> (a critique of that analysis). Each claim was checked against the code and docs (README, GUIDE.md, <code>maarse-crypto/src/ratchet.rs</code>, backlog). 15 November 2026.</p>
+
+<div class="card tldr">
+<strong>Short version.</strong>
+Both reviews get the big picture right: Må:rse is broad, untested in the field and has no outside crypto review, and those three gaps matter more than any new feature.
+ChatGPT worked from the README alone. Several of its "improvements" already exist (hop ACKs, fragmentation with NACK, resumable transfers, duty-cycle enforcement, spam stamps, regions). The rest of its list is a roadmap for a national product, not for a two-radio prototype.
+Gemini is sharper and finds two real weak spots: <b>route repair always goes back to the sender</b>, and <b>the ratchet's skip window is too small for carry and mailbox delays</b>. Two of its fixes go too far, though. Replacing path routing entirely and turning every radio into a dumb modem would take away what Må:rse does best: standalone repeaters that route on their own, without a host.
+</div>
+
+<h2>1. ChatGPT review</h2>
+<h3>Where it is right</h3>
+<ul>
+<li><b>Proof before features.</b> Its P0 list (field measurement, crypto review, failure tests, 72 h run) matches our own backlog. All the numbers we publish so far come from the simulator.</li>
+<li><b>Treat the backbone as an optimisation, not a dependency.</b> This already holds for local traffic, because LoRa routing never needs TCP. What we lack is a defined behaviour when the backbone splits and later heals.</li>
+<li><b>Traffic priorities.</b> Agreed. This is our <i>load control</i> todo (queue priorities and flood slots per SF). It has been rated low priority, and that rating should go up.</li>
+<li><b>Signed bulletins.</b> Offline-verifiable signed broadcasts from a trusted key are a good, cheap idea that fits the existing announce and channel machinery.</li>
+<li><b>Metadata.</b> It is correct that the recipient and the route are visible on air. We already document this; we should state the limit plainly and leave it at that.</li>
+<li><b>Regulatory check</b> of 869.525 MHz, ERP and duty cycle before any wider rollout, and the "supplement, not replacement for authority radio" positioning.</li>
+</ul>
+<h3>Where it is wrong or outdated</h3>
+<div class="tbl"><table>
+<tr><th>Claim / suggestion</th><th>Reality in the code</th></tr>
+<tr><td>Add hop ACKs with small ACK packets, backoff and jitter</td><td>Already there: per-hop ACKs with retransmission, end-to-end ACK, and SNR- and battery-weighted flood delays.</td></tr>
+<tr><td>Add fragmentation, selective retransmit, resume</td><td>Fragmentation with NACK of missing pieces exists. Firmware transfers resume per 4 KB block, even across restarts.</td></tr>
+<tr><td>Prevent spam and fake traffic</td><td>Proof-of-work stamps on announces and path requests. Regions keep local chats local.</td></tr>
+<tr><td>Carry must not delete before an ACK</td><td>Done: <code>CarryAcked</code> and "delivered (carried)". The only open point is turning carry on for the relay role in firmware.</td></tr>
+<tr><td>Wi-Fi node must keep working when the host goes away</td><td>Already true in <i>mesh node</i> mode. <i>Modem</i> mode is the deliberate dumb variant.</td></tr>
+<tr><td>Scores (9/10 "potential")</td><td>Flattering but not meaningful. The only honest score in its table is maturity: 3.</td></tr>
+</table></div>
+<h3>Over-scoped for now</h3>
+<p>QUIC, iOS, a mobility score with speed and heading, adaptive SF per link, dual-radio vehicles, a six-level national hierarchy, 10,000 nodes, Merkle-tree partition sync. Each is defensible on its own. Taken together, they would multiply the complexity it warns about in the same document. Adaptive SF per link is especially costly in LoRa: both ends must share the SF, so it needs a rendezvous profile and negotiation. Today a host with two modems already bridges areas that use different SF.</p>
+
+<h2>2. Gemini review</h2>
+<div class="tbl"><table>
+<tr><th>Point</th><th>Verdict</th><th>Comment</th></tr>
+<tr><td>A. Feature creep: cut voice and web pages from the core</td><td class="v part">Partly</td><td>The risk is real. But the premise is off: there are no live voice calls over LoRa. LoRa carries short Codec2 <i>messages</i>, and Opus calls run only over TCP. These features sit above the router and cost nothing on the air unless they are used. Our response is to keep them, but put them behind the priority queue as the lowest class, and leave them out of the security review scope for v1.</td></tr>
+<tr><td>B. Replace path routing with gradient routing</td><td class="v part">Problem yes, fix no</td><td><b>Valid finding:</b> repair is end-to-end. With no ACK within 20 s, the route is dropped and the <i>sender</i> floods a new path request. On a long route that is slow and expensive. <b>But</b> gradient routing needs proactive per-destination cost tables everywhere, which means periodic announces, the kind of airtime that MeshCore-style path routing avoids. Better fix: <b>local repair</b>. The hop that loses its next neighbour tries a small, scoped path request (TTL 2–3) to the rest of the route, or a known alternative neighbour, before giving up to the sender.</td></tr>
+<tr><td>C. DHT → gossip/CRDT catalogue between gateways</td><td class="v yes">Mostly agree</td><td>We use Kademlia-style XOR, K=8, α=3. With 20–50 hosts, a full replicated, signed, TTL'd reachability table is simpler and survives splits better: each side keeps a full copy and merges on reconnect. Keep the DHT code for large scale. Make "full table when small" the default and measure it in <code>dht_test.py</code>.</td></tr>
+<tr><td>D. Ratchet goes out of sync with loss and delay; use ECIES per message</td><td class="v part">Half right</td><td>The proposed ECIES/sealed-box format <i>already exists</i>: it is our static format, and the ratchet falls back to it. Loss and reordering are handled with <code>n</code>/<code>pn</code> and a skip window. <b>The real weakness:</b> <code>MAX_SKIP = 8</code>, and a message that arrives after the window can never be opened. Carry and mailbox can easily deliver a message hours late, after more than 8 newer ones. Fix: send carry and mailbox traffic in the static format (or as a new init), raise the window on the host, and show "could not decrypt" to the user instead of dropping silently.</td></tr>
+<tr><td>E. Radio as dumb modem (RNode model)</td><td class="v no">Disagree as default</td><td>We already support this: serial modem and Wi-Fi modem mode. Making it the <i>only</i> model would mean every solar repeater on a mast needs a Pi, which works against low power and against "no single host required". Keep both. Routing in firmware stays, because <code>maarse-core</code> is shared <code>no_std</code> code that the host and the sim run too, so a protocol fix is one code change and a reflash.</td></tr>
+</table></div>
+<p>Gemini's agreement points (hybrid is right for Denmark, role separation, priorities under the 10 % duty cycle, carry between islands) match our design and need no comment.</p>
+
+<h2>3. What we should actually do</h2>
+<p>Ordered by value for effort. Items that are already on the backlog are marked.</p>
+<ol>
+<li><b>Field measurement</b> with range-test mode (backlog). Without it, every comparison in the README stays unproven.</li>
+<li><b>Send-queue priorities and flood slot following SF</b> (load-control todo, <i>raise from low</i>). Order: ACKs and path replies → emergency/high → direct → channel → files and voice chunks; file transfers can be interrupted between fragments.</li>
+<li><b>Ratchet and delay fix:</b> use the static format for carried and mailbox messages, use a larger skip window on the host, and show decrypt failures to the user. Small change, closes a real loss path.</li>
+<li><b>Local route repair</b> at the failing hop before falling back to the sender. Measure it in <code>maarse-sim</code> on the E45 and hill scenarios.</li>
+<li><b>Turn on carry 4 for the relay role</b> in firmware (decision pending; the sim says +14–16 points for about +10 % airtime).</li>
+<li><b>Backbone split behaviour:</b> a replicated, signed reachability table between hosts with TTLs, and on reconnect, exchange of mailbox message IDs (a simple ID list is enough at our scale; Merkle trees can wait).</li>
+<li><b>Signed bulletins:</b> a channel type whose messages must carry a signature from a configured key, verified offline, with higher priority.</li>
+<li><b>Fault-injection test runs:</b> 72 h soak with repeaters switched off and backbone links cut, using the hardware we have.</li>
+<li><b>External crypto review</b> of the ratchet, replay handling and firmware signing. Do this after point 3, so the reviewers see the final design.</li>
+</ol>
+<h3>Deliberately not now</h3>
+<p class="small">QUIC, iOS, adaptive SF per link, mobility scoring, dual-radio vehicles, national hierarchy and node classes, full partition-recovery protocol, replacing path routing, and dumb-modem-only firmware. Revisit after field data exists. The long-range anchor and custody idea stays parked as before.</p>
+</main>
+</body>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 300" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="14">
+  <rect width="900" height="300" rx="14" fill="#ffffff"/>
+  <defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#1f6fd1"/></marker></defs>
+  <text x="450" y="32" text-anchor="middle" font-weight="700" font-size="17" fill="#1b1f24">In the forest, with no repeaters: relay role and carry</text>
+  <g fill="#cfe2c4"><circle cx="90" cy="150" r="70"/><circle cx="330" cy="140" r="64"/><circle cx="560" cy="150" r="62"/><circle cx="800" cy="150" r="70"/></g>
+  <circle cx="60" cy="150" r="9" fill="#1f6fd1"/><text x="60" y="180" text-anchor="middle" fill="#1b1f24">Anna</text>
+  <circle cx="120" cy="130" r="7" fill="#5d6673"/><circle cx="310" cy="125" r="7" fill="#5d6673"/><circle cx="350" cy="160" r="7" fill="#5d6673"/>
+  <circle cx="830" cy="150" r="9" fill="#1f6fd1"/><text x="830" y="180" text-anchor="middle" fill="#1b1f24">Ben</text>
+  <g stroke="#1f6fd1" stroke-width="3" fill="none"><path d="M70,148 L110,133" marker-end="url(#b)"/><path d="M128,130 L300,125" marker-end="url(#b)"/><path d="M318,128 L342,155" marker-end="url(#b)"/></g>
+  <text x="210" y="112" text-anchor="middle" font-size="12" fill="#1f6fd1">relays forward up to 4 hops</text>
+  <!-- carrier walking -->
+  <circle cx="560" cy="150" r="8" fill="#c9822b"/><text x="560" y="226" text-anchor="middle" font-size="12" fill="#1b1f24">a carrier walks on…</text>
+  <path d="M360,165 C440,210 500,200 552,158" stroke="#c9822b" stroke-width="2.5" stroke-dasharray="6 5" fill="none"/>
+  <path d="M570,148 C650,110 740,120 820,145" stroke="#c9822b" stroke-width="2.5" stroke-dasharray="6 5" fill="none"/>
+  <text x="690" y="108" text-anchor="middle" font-size="12" fill="#8a5a1d">…and hands it over when Ben is in range</text>
+  <rect x="190" y="236" width="520" height="44" rx="10" fill="#f6f7f9" stroke="#dde1e6"/>
+  <text x="450" y="256" text-anchor="middle" font-size="13" fill="#1b1f24">Ben sends a short "delivered" notice. Carriers delete their copies,</text>
+  <text x="450" y="273" text-anchor="middle" font-size="13" fill="#1b1f24">and Anna sees "✓ delivered (carried)".</text>
+</svg>

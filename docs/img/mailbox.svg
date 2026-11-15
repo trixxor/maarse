@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 300" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="14">
+  <rect width="900" height="300" rx="14" fill="#ffffff"/>
+  <text x="450" y="32" text-anchor="middle" font-weight="700" font-size="17" fill="#1b1f24">Anna writes to Ben while Ben's node is off</text>
+  <!-- time axis -->
+  <line x1="200" y1="62" x2="860" y2="62" stroke="#9aa3ad" stroke-width="2"/>
+  <rect x="330" y="54" width="260" height="16" rx="4" fill="#f2d4d0"/><text x="460" y="66" text-anchor="middle" font-size="12" fill="#8a2a1e">Ben offline</text>
+  <text x="280" y="52" text-anchor="middle" font-size="12" fill="#5d6673">Anna sends</text><line x1="280" y1="56" x2="280" y2="270" stroke="#9aa3ad" stroke-dasharray="3 4"/>
+  <text x="590" y="52" text-anchor="middle" font-size="12" fill="#5d6673">Ben back</text><line x1="590" y1="56" x2="590" y2="270" stroke="#9aa3ad" stroke-dasharray="3 4"/>
+  <g font-size="14">
+    <text x="20" y="104" font-weight="700" fill="#2f7d4f">Meshtastic</text><text x="20" y="122" font-size="12" fill="#5d6673">Store &amp; Forward</text>
+    <rect x="280" y="94" width="430" height="14" rx="4" fill="#d6ebdd"/><circle cx="710" cy="101" r="8" fill="#2f7d4f"/><text x="722" y="106" font-size="12" fill="#1b1f24">when Ben asks for history</text>
+    <text x="20" y="158" font-weight="700" fill="#c9822b">MeshCore</text><text x="20" y="176" font-size="12" fill="#5d6673">room server</text>
+    <rect x="280" y="148" width="60" height="14" rx="4" fill="#f6e3cb"/><text x="350" y="160" font-size="12" fill="#8a2a1e">✕ direct message given up</text><text x="600" y="160" font-size="12" fill="#5d6673">(room posts wait until Ben logs in)</text>
+    <text x="20" y="212" font-weight="700" fill="#7a4fb5">Reticulum</text><text x="20" y="230" font-size="12" fill="#5d6673">LXMF propagation node</text>
+    <rect x="280" y="202" width="380" height="14" rx="4" fill="#e7def5"/><circle cx="660" cy="209" r="8" fill="#7a4fb5"/><text x="672" y="214" font-size="12" fill="#1b1f24">at Ben's next sync</text>
+    <text x="20" y="266" font-weight="700" fill="#1f6fd1">Må:rse</text><text x="20" y="284" font-size="12" fill="#5d6673">mailbox</text>
+    <rect x="280" y="256" width="312" height="14" rx="4" fill="#d5e5f8"/><circle cx="596" cy="263" r="8" fill="#1f6fd1"/><text x="610" y="268" font-size="12" fill="#1b1f24">as soon as Ben announces again</text>
+  </g>
+</svg>

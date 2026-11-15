@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 330" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="14">
+  <rect width="900" height="330" rx="14" fill="#ffffff"/>
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#2f7d4f"/></marker>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#1f6fd1"/></marker>
+  </defs>
+  <!-- left: flood -->
+  <text x="225" y="34" text-anchor="middle" font-weight="700" font-size="17" fill="#1b1f24">Flood (Meshtastic)</text>
+  <text x="225" y="54" text-anchor="middle" fill="#5d6673">Everyone repeats everything, up to the hop limit</text>
+  <g stroke="#2f7d4f" stroke-width="2" opacity=".75" fill="none">
+    <circle cx="70" cy="180" r="70"/><circle cx="160" cy="120" r="70"/><circle cx="160" cy="240" r="70"/>
+    <circle cx="260" cy="170" r="70"/><circle cx="300" cy="260" r="62"/><circle cx="340" cy="110" r="62"/>
+  </g>
+  <g fill="#5d6673"><circle cx="70" cy="180" r="7" fill="#2f7d4f"/><circle cx="160" cy="120" r="6"/><circle cx="160" cy="240" r="6"/><circle cx="260" cy="170" r="6"/><circle cx="300" cy="260" r="6"/><circle cx="340" cy="110" r="6"/><circle cx="390" cy="190" r="7" fill="#2f7d4f"/></g>
+  <text x="70" y="206" text-anchor="middle" fill="#1b1f24">from</text><text x="392" y="216" text-anchor="middle" fill="#1b1f24">to</text>
+  <text x="225" y="312" text-anchor="middle" fill="#1b1f24"><tspan font-weight="700">6 transmissions</tspan> for one message, every time</text>
+  <line x1="450" y1="30" x2="450" y2="300" stroke="#dde1e6" stroke-width="2"/>
+  <!-- right: path -->
+  <text x="675" y="34" text-anchor="middle" font-weight="700" font-size="17" fill="#1b1f24">Path (MeshCore, Må:rse)</text>
+  <text x="675" y="54" text-anchor="middle" fill="#5d6673">Find a route once, then only the repeaters on it send</text>
+  <g fill="#5d6673"><circle cx="610" cy="120" r="6"/><circle cx="610" cy="240" r="6"/><circle cx="770" cy="236" r="6"/><circle cx="790" cy="110" r="6"/></g>
+  <g fill="#1b1f24"><path d="M610,172 l9,15 h-18z"/><path d="M710,162 l9,15 h-18z"/></g>
+  <circle cx="520" cy="180" r="7" fill="#1f6fd1"/><circle cx="840" cy="190" r="7" fill="#1f6fd1"/>
+  <text x="520" y="206" text-anchor="middle" fill="#1b1f24">from</text><text x="842" y="216" text-anchor="middle" fill="#1b1f24">to</text>
+  <g stroke="#1f6fd1" stroke-width="3.5" fill="none">
+    <path d="M530,180 L598,180" marker-end="url(#a2)"/><path d="M622,178 L698,172" marker-end="url(#a2)"/><path d="M722,172 L828,188" marker-end="url(#a2)"/>
+  </g>
+  <g fill="#1f6fd1" font-size="12"><text x="560" y="170" text-anchor="middle">✓</text><text x="660" y="165" text-anchor="middle">✓</text><text x="775" y="170" text-anchor="middle">✓</text></g>
+  <text x="675" y="282" text-anchor="middle" fill="#5d6673" font-size="13">✓ Må:rse: acknowledgement on each hop, resent on that hop only</text>
+  <text x="675" y="312" text-anchor="middle" fill="#1b1f24"><tspan font-weight="700">3 transmissions</tspan>, and the route is reused</text>
+</svg>

@@ -180,6 +180,7 @@ A maarse-host at home can work as one shared inbox that the phone, the laptop an
 
 | Part | What |
 | --- | --- |
+| `docs/protocol-spec.md` | the protocol specification (packet format, routing, cryptography, backbone, companion protocol), extracted from the code. CC-BY 4.0. See [protocol-spec.md](protocol-spec.md). |
 | `maarse-core` | packet format, routing engine, route table, duty cycle, companion protocol and content types. `no_std`, without heap. |
 | `maarse-crypto` | identities, announces, encryption of direct messages (with forward secrecy sessions, see `ratchet.rs`), channels and file chunks. `no_std`. |
 | `maarse-host` | gateway and test node: one file, no installation. |

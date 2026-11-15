@@ -240,4 +240,4 @@ The Mesh Lab is a simplified model to build intuition, and it says so on the pag
 
 ## Licence
 
-Code under MIT or Apache-2.0, at your option. The specification is under CC-BY 4.0.
+Code under MIT or Apache-2.0, at your option. The [protocol specification](docs/protocol-spec.md) is under CC-BY 4.0.

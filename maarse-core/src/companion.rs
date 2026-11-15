@@ -1,21 +1,21 @@
-//! Companion-protokollen mellem en klient (app, webside) og en node.
+//! The companion protocol between a client (app, web page) and a node.
 //!
-//! Samme rammer bruges over seriel/USB, Bluetooth (Nordic UART Service) og
-//! WebSocket. Strømmen består af rammer:
+//! The same frames are used over serial/USB, Bluetooth (Nordic UART Service)
+//! and WebSocket. The stream consists of frames:
 //!
 //! ```text
-//! længde (u16, little endian) | type (u8) | indhold
+//! length (u16, little endian) | type (u8) | content
 //! ```
 //!
-//! `længde` tæller type + indhold. Tal er little endian. Adresser er 16 bytes.
-//! Tekst er UTF-8 og fylder resten af rammen.
+//! `length` counts type + content. Numbers are little endian. Addresses are 16 bytes.
+//! Text is UTF-8 and fills the rest of the frame.
 //!
-//! Klienten sender kommandoer (type < 0x80); noden sender svar og
-//! hændelser (type >= 0x80).
+//! The client sends commands (type < 0x80); the node sends replies and
+//! events (type >= 0x80).
 //!
-//! Kommandoerne 0x30-0x33 og hændelserne 0xB0-0xB3 er reserveret til
-//! beskedhistorikken i maarse-host (se `maarse-host/src/history.rs`). De
-//! afkodes kun dér; firmware svarer med `Error` (ugyldig ramme).
+//! Commands 0x30-0x33 and events 0xB0-0xB3 are reserved for the
+//! message history in maarse-host (see `maarse-host/src/history.rs`). They
+//! are only decoded there; firmware answers with `Error` (invalid frame).
 
 use crate::addr::Address;
 
@@ -62,25 +62,25 @@ pub mod wifi_state {
 }
 pub type FrameBuf = heapless::Vec<u8, { MAX_FRAME + 2 }>;
 
-/// Kommandoer fra klient til node.
+/// Commands from client to node.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(clippy::large_enum_variant)] // tekstfelter; rammer er små og kortlivede
+#[allow(clippy::large_enum_variant)] // text fields; frames are small and short-lived
 pub enum Command {
-    /// 0x01: hvem er du?
+    /// 0x01: who are you?
     GetInfo,
-    /// 0x02: send en krypteret direkte besked.
+    /// 0x02: send an encrypted direct message.
     SendDirect { req: u16, dest: Address, text: Text },
-    /// 0x03: send til en kanal, vi er med i.
+    /// 0x03: send to a channel we are a member of.
     SendChannel {
         req: u16,
         channel: Address,
         text: Text,
     },
-    /// 0x04: deltag i en kanal. Navn som `#aarhus`, eller `offentlig`.
+    /// 0x04: join a channel. A name like `#aarhus`, or `public`.
     JoinChannel { name: Text },
-    /// 0x05: send et announce nu.
+    /// 0x05: send an announce now.
     AnnounceNow,
-    /// 0x06: start en fil til `dest`. Data følger i `FileData`.
+    /// 0x06: start a file to `dest`. The data follows in `FileData`.
     FileBegin {
         req: u16,
         dest: Address,
@@ -88,54 +88,54 @@ pub enum Command {
         mime: Text,
         name: Text,
     },
-    /// 0x07: en bid af filen (op til 240 bytes).
+    /// 0x07: a chunk of the file (up to 240 bytes).
     FileData { req: u16, offset: u32, data: Text },
-    /// 0x08: hele filen er overført til noden; send den.
+    /// 0x08: the whole file has been transferred to the node; send it.
     FileEnd { req: u16 },
-    /// 0x09: bed om status og statistik.
+    /// 0x09: ask for status and statistics.
     GetStats,
-    /// 0x0a: sæt radioindstillinger (gemmes i flash).
+    /// 0x0a: set radio settings (stored in flash).
     SetRadio(RadioConfig),
-    /// 0x0b: hvilke radioindstillinger bruges?
+    /// 0x0b: which radio settings are in use?
     GetRadio,
-    /// 0x0c: send en kommando (`GetStats`, `GetRadio`, `SetRadio`, `SetRole`) til en
-    /// fjern node, som vi er administrator for. Svaret kommer som
+    /// 0x0c: send a command (`GetStats`, `GetRadio`, `SetRadio`, `SetRole`) to a
+    /// remote node we are an administrator of. The reply comes as
     /// `RemoteReply`.
     Remote { req: u16, dest: Address, frame: Text },
-    /// 0x0d: hvem må administrere denne node (højst 4). Kun lokalt.
+    /// 0x0d: who may administer this node (at most 4). Local only.
     SetAdmins { admins: heapless::Vec<Address, 4> },
-    /// 0x0e: vis listen over administratorer.
+    /// 0x0e: show the list of administrators.
     GetAdmins,
-    /// 0x0f: klokken (Unix-sekunder). Klienten sender den ved forbindelse,
-    /// så noder uden ur kan tidsstemple announces og kontrolkommandoer.
+    /// 0x0f: the clock (Unix seconds). The client sends it on connect,
+    /// so nodes without a clock can timestamp announces and control commands.
     SetTime { unix: u32 },
-    /// 0x10: vælg nodens rolle (0 = klient, 1 = repeater, 2 = relay). Gemmes
-    /// i flash og kan også sendes via `Remote`.
+    /// 0x10: choose the node's role (0 = client, 1 = repeater, 2 = relay). Stored
+    /// in flash and can also be sent via `Remote`.
     SetRole { role: u8 },
-    /// 0x11: sæt nodens regioner (kommasepareret, fx `dk,nordjylland`, højst
-    /// 8) og `strict` (1 = med tom liste videresendes kun floods uden region).
-    /// Gemmes i flash. Se [`crate::region`].
+    /// 0x11: set the node's regions (comma separated, e.g. `dk,nordjylland`, at most
+    /// 8) and `strict` (1 = with an empty list only floods without a region are forwarded).
+    /// Stored in flash. See [`crate::region`].
     SetRegions { strict: bool, names: Text },
-    /// 0x12: vis nodens regioner.
+    /// 0x12: show the node's regions.
     GetRegions,
-    /// 0x13: deltag i en privat kanal med en tilfældig nøgle (fra en
-    /// invitation). Format: nøgle (32 bytes) | navn (UTF-8, resten). Svaret
-    /// er `ChannelJoined` som for andre kanaler.
+    /// 0x13: join a private channel with a random key (from an
+    /// invitation). Format: key (32 bytes) | name (UTF-8, the rest). The reply
+    /// is `ChannelJoined` as for other channels.
     JoinPrivateChannel { key: [u8; 32], name: Text },
-    /// 0x20: trace route til `dest`: SNR for hvert spring begge veje. Svaret
-    /// er `TraceResult` (eller `Error` med `req`). Se [`crate::diag`].
+    /// 0x20: trace route to `dest`: SNR for every hop both ways. The reply
+    /// is `TraceResult` (or `Error` with `req`). See [`crate::diag`].
     TraceRoute { req: u16, dest: Address },
-    /// 0x21: vis direkte naboer. Svaret er en eller flere `Neighbors`.
+    /// 0x21: show direct neighbours. The reply is one or more `Neighbors`.
     GetNeighbors,
-    /// 0x22: hvad noden deler i sine announces: position (præcision 0 =
-    /// slukket, standard) og telemetri. Gemmes. Svaret er `Sharing`.
+    /// 0x22: what the node shares in its announces: position (precision 0 =
+    /// off, the default) and telemetry. Stored. The reply is `Sharing`.
     SetSharing(Sharing),
-    /// 0x23: vis delingsindstillingerne.
+    /// 0x23: show the sharing settings.
     GetSharing,
-    /// 0x24: sæt nodens visningsnavn (UTF-8, højst 24 bytes; tomt = intet).
-    /// Svar: `Name`. Navnet sendes i announces og er ikke bevist.
+    /// 0x24: set the node's display name (UTF-8, at most 24 bytes; empty = none).
+    /// Reply: `Name`. The name is sent in announces and is not proven.
     SetName { name: Text },
-    /// 0x25: hent visningsnavnet. Svar: `Name`.
+    /// 0x25: get the display name. Reply: `Name`.
     GetName,
     /// 0x28: set the Wi-Fi backbone settings (local only: USB or Bluetooth,
     /// never through `Remote`, as it carries the password). Saved; the node
@@ -144,50 +144,50 @@ pub enum Command {
     SetWifi(WifiSettings),
     /// 0x29: Wi-Fi status. Reply: `Wifi` (never contains the password).
     GetWifi,
-    /// 0x26: bed `dest` om siden `path` (`maarse://<dest>/<path>`). Svar:
-    /// `Sent`; siden kommer som en fil med MIME
-    /// [`crate::content::PAGE_MIME`]. Ugyldig sti giver `Error`.
+    /// 0x26: ask `dest` for the page `path` (`maarse://<dest>/<path>`). Reply:
+    /// `Sent`; the page arrives as a file with MIME
+    /// [`crate::content::PAGE_MIME`]. An invalid path gives `Error`.
     RequestPage { req: u16, dest: Address, path: Text },
-    /// 0x27: opkaldsdata til `dest` (signalering eller Opus-lyd, formatet
-    /// er klienternes). Kun over TCP: når `dest` kun kan nås over LoRa,
-    /// svares `Error` med `NOT_OVER_TCP`. Ingen kvittering til klienten og
-    /// ingen postkasse; gamle lydpakker er værdiløse.
+    /// 0x27: call data to `dest` (signalling or Opus audio, the format
+    /// belongs to the clients). TCP only: when `dest` can only be reached over LoRa,
+    /// the reply is `Error` with `NOT_OVER_TCP`. No acknowledgement to the client and
+    /// no mailbox; old audio packets are worthless.
     SendCall { dest: Address, data: Text },
-    /// 0x18: start (eller genoptag) en firmwareopdatering. `manifest` er det
-    /// signerede manifest (112 bytes, se `maarse_crypto::ota`). Flag bit 0:
-    /// tillad ældre version (kun lokalt, ignoreres via `Remote`). Svaret er
-    /// `OtaState` med det offset, klienten skal sende fra. Kan sendes via
-    /// `Remote` (kun administratorer). 0x14-0x17 er holdt fri til andet arbejde.
+    /// 0x18: start (or resume) a firmware update. `manifest` is the
+    /// signed manifest (112 bytes, see `maarse_crypto::ota`). Flag bit 0:
+    /// allow an older version (local only, ignored via `Remote`). The reply is
+    /// `OtaState` with the offset the client should send from. Can be sent via
+    /// `Remote` (administrators only). 0x14-0x17 are kept free for other work.
     OtaBegin { req: u16, flags: u8, manifest: Text },
-    /// 0x19: en bid af imaget. Offset og længde skal være delelige med 4
-    /// (undtagen sidste bid). Svaret er `OtaState` med næste offset.
+    /// 0x19: a chunk of the image. Offset and length must be multiples of 4
+    /// (except the last chunk). The reply is `OtaState` with the next offset.
     OtaChunk { req: u16, offset: u32, data: Text },
-    /// 0x1a: afslut. Imaget skal være helt overført og verificeret; med
-    /// `apply` installeres det, og noden genstarter.
+    /// 0x1a: finish. The image must be fully transferred and verified; with
+    /// `apply` it is installed and the node restarts.
     OtaEnd { req: u16, apply: bool },
-    /// 0x1b: hvor langt er en opdatering? Svaret er `OtaState`.
+    /// 0x1b: how far along is an update? The reply is `OtaState`.
     OtaStatus,
-    /// 0x14: hvor stor en fil må sendes til `dest` ad den aktuelle rute?
-    /// Svaret er `FileLimit`. Firmware-noder kender ikke kommandoen (de
-    /// svarer med `Error`); klienten bruger så `Info.max_file`.
+    /// 0x14: how large a file may be sent to `dest` along the current route?
+    /// The reply is `FileLimit`. Firmware nodes do not know the command (they
+    /// answer with `Error`); the client then uses `Info.max_file`.
     GetFileLimit { dest: Address },
-    /// 0x34: udskift nodens identitet med `secret` (64 bytes: Ed25519-frø |
-    /// X25519-nøgle), typisk afledt af en gendannelsesfrase i klienten (se
-    /// `maarse_crypto::recovery`). Kun lokalt (USB/BLE) — afvises altid via
-    /// `Remote`. Kræver `confirm` (flag [`IDENTITY_CONFIRM`]), ellers afvises
-    /// den. Noden gemmer nøglen, glemmer ruter og forward secrecy-sessioner
-    /// og sender et nyt announce. Svaret er `IdentityChanged`.
-    /// 0x35-0x37 er holdt fri til tilknyttede enheder.
+    /// 0x34: replace the node's identity with `secret` (64 bytes: Ed25519 seed |
+    /// X25519 key), typically derived from a recovery phrase in the client (see
+    /// `maarse_crypto::recovery`). Local only (USB/BLE) — always rejected via
+    /// `Remote`. Requires `confirm` (flag [`IDENTITY_CONFIRM`]), otherwise it is
+    /// rejected. The node stores the key, forgets routes and forward secrecy sessions
+    /// and sends a new announce. The reply is `IdentityChanged`.
+    /// 0x35-0x37 are kept free for linked devices.
     SetIdentity { confirm: bool, secret: [u8; 64] },
 }
 
-/// Flag i `Command::SetIdentity`: brugeren har bekræftet udskiftningen.
+/// Flag in `Command::SetIdentity`: the user has confirmed the replacement.
 pub const IDENTITY_CONFIRM: u8 = 1;
 
-/// Delingsindstillinger (10 bytes): præcision (u8, se
-/// [`crate::appdata::Precision`]) | bredde (i32, 1e-7°) | længde (i32)
-/// | telemetri (u8, 0/1). Positionen gemmes præcist på noden, men sendes
-/// kun afrundet til den valgte præcision.
+/// Sharing settings (10 bytes): precision (u8, see
+/// [`crate::appdata::Precision`]) | latitude (i32, 1e-7°) | longitude (i32)
+/// | telemetry (u8, 0/1). The position is stored precisely on the node, but only
+/// sent rounded to the chosen precision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Sharing {
     pub precision: u8,
@@ -217,7 +217,7 @@ impl Sharing {
             telemetry: b[9] != 0,
         })
     }
-    /// Positionen, som den sendes (afrundet), eller `None` (slukket).
+    /// The position as it is sent (rounded), or `None` (off).
     pub fn position(&self) -> Option<crate::appdata::Position> {
         crate::appdata::Position {
             precision: crate::appdata::Precision::from_u8(self.precision),
@@ -228,9 +228,9 @@ impl Sharing {
     }
 }
 
-/// En nabo i `Event::Neighbors` (15 bytes): sti-ID (u16) | adresse-
-/// præfiks (4, nuller = ukendt) | SNR (i8) | RSSI (i16, 0 = ukendt) |
-/// sekunder siden (u32) | antal pakker (u16).
+/// A neighbour in `Event::Neighbors` (15 bytes): path ID (u16) | address
+/// prefix (4, zeros = unknown) | SNR (i8) | RSSI (i16, 0 = unknown) |
+/// seconds since (u32) | packet count (u16).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NeighborInfo {
     pub id: u16,
@@ -258,10 +258,10 @@ impl NeighborInfo {
     }
 }
 
-/// Højst så mange naboer pr. `Neighbors`-ramme.
+/// At most this many neighbours per `Neighbors` frame.
 pub const NEIGHBORS_PER_FRAME: usize = 16;
 
-/// Bygger `Neighbors`-rammer ud fra en nabotabel (mindst én, også tom).
+/// Builds `Neighbors` frames from a neighbour table (at least one, even if empty).
 pub fn neighbor_events<const N: usize>(
     t: &crate::diag::NeighborTable<N>,
     now_ms: u64,
@@ -282,21 +282,21 @@ pub fn neighbor_events<const N: usize>(
     out
 }
 
-/// Tilstande i `Event::OtaState`.
+/// States in `Event::OtaState`.
 pub mod ota_state {
     pub const IDLE: u8 = 0;
     pub const RECEIVING: u8 = 1;
     pub const VERIFIED: u8 = 2;
     pub const INSTALLING: u8 = 3;
     pub const ERROR: u8 = 4;
-    /// Boardet understøtter ikke opdatering over luften.
+    /// The board does not support over-the-air updates.
     pub const UNSUPPORTED: u8 = 5;
 }
 
-/// Flag i `Command::OtaBegin`.
+/// Flag in `Command::OtaBegin`.
 pub const OTA_ALLOW_DOWNGRADE: u8 = 1;
 
-/// Svar og hændelser fra node til klient.
+/// Replies and events from node to client.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     /// 0x81
@@ -306,11 +306,11 @@ pub enum Event {
         version: u8,
         max_text: u8,
         max_file: u32,
-        /// Nodens offentlige nøgler (Ed25519 | X25519), til sikkerhedsnumre.
-        /// Tilføjet bagerst; ældre noder sender dem ikke.
+        /// The node's public keys (Ed25519 | X25519), for safety numbers.
+        /// Added at the end; older nodes do not send them.
         identity: Option<[u8; 64]>,
     },
-    /// 0x82: beskeden er sendt (eller sat i kø, mens ruten findes).
+    /// 0x82: the message has been sent (or queued while the route is found).
     Sent { req: u16, msg_id: u64 },
     /// 0x83
     DirectReceived { from: Address, hops: u8, text: Text },
@@ -321,16 +321,16 @@ pub enum Event {
         hops: u8,
         text: Text,
     },
-    /// 0x85: modtageren har kvitteret.
+    /// 0x85: the recipient has acknowledged.
     Acked { msg_id: u64 },
     /// 0x86
     RouteLearned { dest: Address, hops: u8 },
-    /// 0x87: vi har hørt og verificeret et announce. `identity` er
-    /// afsenderens offentlige nøgler (64 bytes bagerst, hvis kendt).
+    /// 0x87: we heard and verified an announce. `identity` is
+    /// the sender's public keys (64 bytes at the end, if known).
     Heard { addr: Address, hops: u8, identity: Option<[u8; 64]> },
     /// 0x88
     ChannelJoined { channel: Address, name: Text },
-    /// 0x89: en fil er på vej til os.
+    /// 0x89: a file is on its way to us.
     FileIncoming {
         file_id: u64,
         from: Address,
@@ -338,7 +338,7 @@ pub enum Event {
         mime: Text,
         name: Text,
     },
-    /// 0x8a: en bid af en modtaget fil (sendes til klienten, når filen er hel).
+    /// 0x8a: a chunk of a received file (sent to the client when the file is complete).
     FileChunk {
         file_id: u64,
         offset: u32,
@@ -358,30 +358,30 @@ pub enum Event {
         outgoing: bool,
         text: Text,
     },
-    /// 0x8d: svar på `FileEnd`: filen har fået et ID og sendes nu.
+    /// 0x8d: reply to `FileEnd`: the file has got an ID and is being sent now.
     FileStarted { req: u16, file_id: u64, chunks: u16 },
-    /// 0x8e: fri tekst til fejlsøgning.
+    /// 0x8e: free text for debugging.
     Log { text: Text },
-    /// 0x90: modtageren var ikke at nå; beskeden ligger nu i dens postkasse.
+    /// 0x90: the recipient could not be reached; the message is now in its mailbox.
     Deposited { msg_id: u64 },
-    /// 0x91: status som par af (nøgle, værdi). Se [`stat`].
+    /// 0x91: status as pairs of (key, value). See [`stat`].
     Stats { items: Stats },
-    /// 0x92: de aktuelle radioindstillinger.
+    /// 0x92: the current radio settings.
     Radio(RadioConfig),
-    /// 0x93: svar fra en fjern node: en komplet hændelse uden længdefelt.
+    /// 0x93: reply from a remote node: a complete event without a length field.
     RemoteReply { from: Address, frame: Text },
-    /// 0x94: administratorer for denne node.
+    /// 0x94: administrators of this node.
     Admins { admins: heapless::Vec<Address, 4> },
-    /// 0x95: nodens regioner (kommasepareret) og `strict`.
+    /// 0x95: the node's regions (comma separated) and `strict`.
     Regions { strict: bool, names: Text },
-    /// 0x9a: firmwareopdateringens tilstand (se [`ota_state`]). `next` er
-    /// næste forventede offset, `size` og `version` fra manifestet (0 uden),
-    /// `current` den kørende version. Tekst forklarer fejl.
+    /// 0x9a: the firmware update state (see [`ota_state`]). `next` is
+    /// the next expected offset, `size` and `version` from the manifest (0 without),
+    /// `current` the running version. Text explains errors.
     OtaState { req: u16, state: u8, next: u32, size: u32, version: u32, current: u32, text: Text },
-    /// 0x96: svar på `GetFileLimit`. Format: dest (16) | max_bytes (u32) |
-    /// flag (u8: bit 0 = over LoRa eller ukendt rute, bit 1 = modtageren er
-    /// ikke at nå, filen lægges i postkasse) | est_airtime_s (u32, anslået
-    /// sendetid for `max_bytes` over LoRa; 0 over internettet).
+    /// 0x96: reply to `GetFileLimit`. Format: dest (16) | max_bytes (u32) |
+    /// flags (u8: bit 0 = over LoRa or unknown route, bit 1 = the recipient
+    /// cannot be reached, the file goes to a mailbox) | est_airtime_s (u32, estimated
+    /// time on air for `max_bytes` over LoRa; 0 over the internet).
     FileLimit {
         dest: Address,
         max_bytes: u32,
@@ -391,10 +391,10 @@ pub enum Event {
     },
     /// 0x8f
     Error { req: u16, code: u8, text: Text },
-    /// 0xa0: svar på `TraceRoute`. `path` er repeaternes sti-ID'er; `out` er
-    /// SNR for hvert spring ud (sidste = målets), `back` for hvert spring
-    /// tilbage (sidste = vores). Format: req (u16) | mål (16) | k | k × ID
-    /// (u16) | m | m × SNR (i8) | SNR tilbage (resten).
+    /// 0xa0: reply to `TraceRoute`. `path` is the repeaters' path IDs; `out` is
+    /// SNR for every hop out (last = the target's), `back` for every hop
+    /// back (last = ours). Format: req (u16) | target (16) | k | k × ID
+    /// (u16) | m | m × SNR (i8) | SNR back (the rest).
     TraceResult {
         req: u16,
         dest: Address,
@@ -402,18 +402,18 @@ pub enum Event {
         out: heapless::Vec<i8, 13>,
         back: heapless::Vec<i8, 13>,
     },
-    /// 0xa1: direkte naboer, senest hørt først. `part` tæller fra 0;
-    /// `last` er sat på sidste ramme. Format: part | last | naboer (15 B).
+    /// 0xa1: direct neighbours, most recently heard first. `part` counts from 0;
+    /// `last` is set on the last frame. Format: part | last | neighbours (15 B).
     Neighbors {
         part: u8,
         last: bool,
         items: heapless::Vec<NeighborInfo, NEIGHBORS_PER_FRAME>,
     },
-    /// 0xa2: delingsindstillinger (se [`Sharing`]).
+    /// 0xa2: sharing settings (see [`Sharing`]).
     Sharing(Sharing),
-    /// 0xa4: nodens eget visningsnavn (tomt = intet).
+    /// 0xa4: the node's own display name (empty = none).
     Name { name: Text },
-    /// 0xa5: opkaldsdata fra `from` (se `SendCall`).
+    /// 0xa5: call data from `from` (see `SendCall`).
     Call { from: Address, data: Text },
     /// 0xa6: Wi-Fi backbone status (see [`wifi_state`]). `ip` is 0.0.0.0
     /// until the node has an address.
@@ -430,8 +430,8 @@ pub enum Event {
     /// destination's delivered notice came back. Shown as "delivered
     /// (carried)"; otherwise like `Acked`.
     CarryAcked { msg_id: u64 },
-    /// 0xa3: position og/eller telemetri fra en anden nodes announce.
-    /// Format: adresse (16) | hop | app-data-felter (0x03/0x04, se
+    /// 0xa3: position and/or telemetry from another node's announce.
+    /// Format: address (16) | hops | app data fields (0x03/0x04, see
     /// [`crate::appdata`]).
     NodeInfo {
         addr: Address,
@@ -440,34 +440,34 @@ pub enum Event {
         telemetry: Option<crate::appdata::Telemetry>,
         name: Option<crate::appdata::Name>,
     },
-    /// 0xb4: nodens identitet er udskiftet (svar på `SetIdentity`).
-    /// Format: ny adresse (16) | offentlig identitet (64).
+    /// 0xb4: the node's identity has been replaced (reply to `SetIdentity`).
+    /// Format: new address (16) | public identity (64).
     IdentityChanged { addr: Address, identity: [u8; 64] },
 }
 
-/// LoRa-radioens indstillinger.
+/// The LoRa radio settings.
 ///
-/// Alle noder i et net skal bruge samme frekvens, båndbredde, spreading
-/// factor og coding rate for at kunne høre hinanden.
+/// All nodes in a net must use the same frequency, bandwidth, spreading
+/// factor and coding rate to hear each other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RadioConfig {
     pub freq_hz: u32,
-    /// Båndbredde i Hz: 7800, 10400, 15600, 20800, 31250, 41700, 62500,
-    /// 125000, 250000 eller 500000.
+    /// Bandwidth in Hz: 7800, 10400, 15600, 20800, 31250, 41700, 62500,
+    /// 125000, 250000 or 500000.
     pub bw_hz: u32,
     /// Spreading factor 5..=12.
     pub sf: u8,
-    /// Coding rate-nævner 5..=8 (4/5..4/8).
+    /// Coding rate denominator 5..=8 (4/5..4/8).
     pub cr: u8,
     pub tx_power_dbm: i8,
-    /// Duty cycle i promille (100 = 10 %).
+    /// Duty cycle in permille (100 = 10 %).
     pub duty_permille: u16,
     pub preamble: u16,
 }
 
 impl RadioConfig {
     pub const LEN: usize = 16;
-    /// Må:rse-standard i EU: 869,525 MHz (10 %-båndet), 125 kHz, SF9, 4/5, 22 dBm.
+    /// Må:rse default in the EU: 869.525 MHz (the 10 % band), 125 kHz, SF9, 4/5, 22 dBm.
     pub const EU_DEFAULT: RadioConfig = RadioConfig {
         freq_hz: 869_525_000,
         bw_hz: 125_000,
@@ -508,33 +508,33 @@ impl RadioConfig {
         })
     }
 
-    /// Tjekker, at indstillingerne kan bruges af en SX1262.
+    /// Checks that the settings can be used by an SX1262.
     pub fn validate(&self) -> Result<(), &'static str> {
         if !(150_000_000..=960_000_000).contains(&self.freq_hz) {
-            return Err("Frekvensen skal være mellem 150 og 960 MHz");
+            return Err("The frequency must be between 150 and 960 MHz");
         }
         if !Self::BANDWIDTHS.contains(&self.bw_hz) {
-            return Err("Ugyldig båndbredde");
+            return Err("Invalid bandwidth");
         }
         if !(5..=12).contains(&self.sf) {
-            return Err("Spreading factor skal være 5-12");
+            return Err("Spreading factor must be 5-12");
         }
         if !(5..=8).contains(&self.cr) {
-            return Err("Coding rate skal være 4/5-4/8");
+            return Err("Coding rate must be 4/5-4/8");
         }
         if !(-9..=22).contains(&self.tx_power_dbm) {
-            return Err("Sendestyrken skal være -9 til 22 dBm");
+            return Err("Transmit power must be -9 to 22 dBm");
         }
         if self.duty_permille == 0 || self.duty_permille > 1000 {
-            return Err("Duty cycle skal være 0,1-100 %");
+            return Err("Duty cycle must be 0.1-100 %");
         }
         if !(6..=1000).contains(&self.preamble) {
-            return Err("Præamblen skal være 6-1000 symboler");
+            return Err("The preamble must be 6-1000 symbols");
         }
         Ok(())
     }
 
-    /// Parametre til udregning af sendetid.
+    /// Parameters for computing time on air.
     pub fn airtime(&self) -> crate::airtime::LoraParams {
         crate::airtime::LoraParams {
             sf: self.sf,
@@ -545,10 +545,10 @@ impl RadioConfig {
     }
 }
 
-/// Statuspar: (nøgle, værdi). Højst 59, så rammen holder sig under 300 bytes.
+/// Status pairs: (key, value). At most 59, so the frame stays below 300 bytes.
 pub type Stats = heapless::Vec<(u8, i32), 59>;
 
-/// Nøgler i `Event::Stats`. Klienten viser dem med danske navne.
+/// Keys in `Event::Stats`. The client shows them with readable names.
 pub mod stat {
     pub const UPTIME_S: u8 = 1;
     pub const KNOWN_NODES: u8 = 2;
@@ -593,9 +593,9 @@ pub mod stat {
     pub const MIN_RSSI_DBM: u8 = 50;
     pub const MAX_RSSI_DBM: u8 = 51;
     pub const RADIO_DROPPED: u8 = 52;
-    /// Fejlsøgning: hvilket trin radioløkken står i (se firmware/common/src/radio.rs).
+    /// Debugging: which step the radio loop is in (see firmware/common/src/radio.rs).
     pub const RADIO_STAGE: u8 = 53;
-    /// Fejlsøgning: antal gennemløb af radioløkken.
+    /// Debugging: number of passes through the radio loop.
     pub const RADIO_LOOPS: u8 = 54;
     // Host
     pub const MAILBOX_RECIPIENTS: u8 = 60;
@@ -616,20 +616,20 @@ pub mod stat {
     pub const DHT_LOOKUPS: u8 = 74;
     pub const DHT_FOUND: u8 = 75;
     pub const DHT_PEERS: u8 = 76;
-    /// Announces og ruteforespørgsler smidt væk pga. manglende/forkert stempel.
+    /// Announces and path requests dropped because of a missing/wrong stamp.
     pub const BAD_STAMPS: u8 = 77;
-    // Diagnose og strøm
-    /// Anslået støjgulv (dBm) ud fra modtagne pakkers RSSI og SNR.
+    // Diagnostics and power
+    /// Estimated noise floor (dBm) from the RSSI and SNR of received packets.
     pub const NOISE_FLOOR_DBM: u8 = 80;
-    /// Energistatus (0 = kritisk, 1 = lav, 2 = ok, 3 = fuld).
+    /// Energy status (0 = critical, 1 = low, 2 = ok, 3 = full).
     pub const ENERGY: u8 = 81;
-    /// Ekstern strøm (USB): 0 = nej, 1 = ja, -1 = ukendt.
+    /// External power (USB): 0 = no, 1 = yes, -1 = unknown.
     pub const EXT_POWER: u8 = 82;
-    /// Antal direkte naboer.
+    /// Number of direct neighbours.
     pub const NEIGHBORS: u8 = 83;
-    /// Delt positionspræcision (0 = slukket ... 3 = præcis).
+    /// Shared position precision (0 = off ... 3 = precise).
     pub const POSITION_PRECISION: u8 = 84;
-    /// Batteri i procent (omtrentligt, ud fra spændingen).
+    /// Battery in percent (approximate, from the voltage).
     pub const BATTERY_PERCENT: u8 = 85;
     /// Chip-temperatur i 0,1 °C (lidt over omgivelserne).
     pub const TEMPERATURE_DC: u8 = 86;
@@ -647,7 +647,7 @@ pub mod stat {
     pub const PANIC_FILE: u8 = 92;
 }
 
-/// Fejlkoder i `Event::Error`.
+/// Error codes in `Event::Error`.
 pub mod error_code {
     pub const UNKNOWN_DEST: u8 = 1;
     pub const TOO_LARGE: u8 = 2;
@@ -657,7 +657,7 @@ pub mod error_code {
     pub const UNKNOWN_SENDER: u8 = 6;
     pub const FILE_TOO_LARGE: u8 = 7;
     pub const NO_FILE: u8 = 8;
-    /// Opkald kræver TCP hele vejen (se `SendCall`).
+    /// Calls need TCP all the way (see `SendCall`).
     pub const NOT_OVER_TCP: u8 = 9;
 }
 
@@ -730,13 +730,13 @@ impl<'a> R<'a> {
         self.0 = &[];
         Ok(t)
     }
-    /// Valgfri offentlig identitet (64 bytes) bagerst i rammen.
+    /// Optional public identity (64 bytes) at the end of the frame.
     fn identity(&mut self) -> Option<[u8; 64]> {
         let mut k = [0u8; 64];
         k.copy_from_slice(self.take(64).ok()?);
         Some(k)
     }
-    /// Op til 4 adresser, resten af rammen.
+    /// Up to 4 addresses, the rest of the frame.
     fn addrs(&mut self) -> Result<heapless::Vec<Address, 4>, FrameError> {
         let mut v = heapless::Vec::new();
         while self.0.len() >= 16 {
@@ -744,7 +744,7 @@ impl<'a> R<'a> {
         }
         Ok(v)
     }
-    /// MIME-længde (u8) + MIME + navn (resten).
+    /// MIME length (u8) + MIME + name (the rest).
     fn mime_name(&mut self) -> Result<(Text, Text), FrameError> {
         let n = self.u8()? as usize;
         let mime = Text::from_slice(self.take(n)?).map_err(|_| FrameError::TooLong)?;
@@ -752,7 +752,7 @@ impl<'a> R<'a> {
     }
 }
 
-/// Tekst, der afkortes til `MAX_TEXT` bytes.
+/// Text truncated to `MAX_TEXT` bytes.
 pub fn text(s: &[u8]) -> Text {
     Text::from_slice(&s[..s.len().min(MAX_TEXT)]).unwrap_or_default()
 }
@@ -842,7 +842,7 @@ impl Command {
         }
     }
 
-    /// Afkoder type + indhold (uden længdefeltet).
+    /// Decodes type + content (without the length field).
     pub fn decode(frame: &[u8]) -> Result<Self, FrameError> {
         let mut r = R(frame);
         Ok(match r.u8()? {
@@ -1283,7 +1283,7 @@ impl Event {
     }
 }
 
-/// Samler rammer fra en bytestrøm (seriel, BLE), der kan komme i stykker.
+/// Collects frames from a byte stream (serial, BLE) that may arrive in pieces.
 pub struct FrameDecoder {
     buf: heapless::Vec<u8, { 2 * (MAX_FRAME + 2) }>,
 }
@@ -1301,18 +1301,18 @@ impl FrameDecoder {
         }
     }
 
-    /// Tilføjer bytes. Kald derefter `next_frame` til den returnerer `None`.
+    /// Adds bytes. Then call `next_frame` until it returns `None`.
     pub fn push(&mut self, bytes: &[u8]) {
         for &b in bytes {
             if self.buf.push(b).is_err() {
-                // Bufferen er fuld af skrald: start forfra.
+                // The buffer is full of garbage: start over.
                 self.buf.clear();
                 let _ = self.buf.push(b);
             }
         }
     }
 
-    /// Næste hele ramme (type + indhold), hvis der er en.
+    /// The next complete frame (type + content), if there is one.
     pub fn next_frame(&mut self) -> Option<heapless::Vec<u8, MAX_FRAME>> {
         loop {
             if self.buf.len() < 2 {
@@ -1320,7 +1320,7 @@ impl FrameDecoder {
             }
             let len = u16::from_le_bytes([self.buf[0], self.buf[1]]) as usize;
             if len == 0 || len > MAX_FRAME {
-                // Ude af synk: smid én byte og prøv igen.
+                // Out of sync: drop one byte and try again.
                 self.buf.remove(0);
                 continue;
             }
@@ -1357,7 +1357,7 @@ mod tests {
         roundtrip_cmd(Command::SendDirect {
             req: 7,
             dest: Address([1; 16]),
-            text: text("hej æøå".as_bytes()),
+            text: text("hello æøå".as_bytes()),
         });
         roundtrip_cmd(Command::SendChannel {
             req: 8,
@@ -1373,7 +1373,7 @@ mod tests {
             dest: Address([5; 16]),
             size: 8000,
             mime: text(b"image/webp"),
-            name: text("billede æ.webp".as_bytes()),
+            name: text("picture æ.webp".as_bytes()),
         });
         roundtrip_cmd(Command::FileData {
             req: 3,
@@ -1385,7 +1385,7 @@ mod tests {
         roundtrip_cmd(Command::SetRadio(RadioConfig::EU_DEFAULT));
         roundtrip_cmd(Command::GetRadio);
         roundtrip_cmd(Command::SetRole { role: 2 });
-        roundtrip_cmd(Command::JoinPrivateChannel { key: [9; 32], name: text("hytten æ".as_bytes()) });
+        roundtrip_cmd(Command::JoinPrivateChannel { key: [9; 32], name: text("cabin æ".as_bytes()) });
         assert_eq!(&Command::JoinPrivateChannel { key: [7; 32], name: text(b"x") }.encode()[..3], &[34, 0, 0x13]);
         assert!(Command::decode(&[0x13, 1, 2]).is_err());
         assert_eq!(&Command::SetRole { role: 0 }.encode()[..], &[2, 0, 0x10, 0]);
@@ -1412,8 +1412,8 @@ mod tests {
             current: 0x000100,
             text: text(b"ok"),
         });
-        // En OTA-bid over radio: kontrolhoved (5) + ramme uden længde skal
-        // passe i en forward secrecy-besked (MAX_FS_TEXT = 143).
+        // An OTA chunk over radio: control header (5) + frame without length must
+        // fit in a forward secrecy message (MAX_FS_TEXT = 143).
         let f = Command::OtaChunk { req: 2, offset: 0, data: text(&[0; 128]) }.encode();
         assert!(5 + f.len() - 2 <= 143);
         let f = Command::OtaBegin { req: 2, flags: 0, manifest: text(&[0; 112]) }.encode();
@@ -1621,7 +1621,7 @@ mod tests {
             hops: 2,
             position: sh.position(),
             telemetry: Some(crate::appdata::Telemetry { battery_mv: 3700, energy: 2, uptime_s: 5, ..Default::default() }),
-            name: crate::appdata::clean_name("Ida på bakken".as_bytes()),
+            name: crate::appdata::clean_name("Ida on the hill".as_bytes()),
         });
         roundtrip_ev(Event::NodeInfo { addr: Address([1; 16]), hops: 0, position: None, telemetry: None, name: None });
         roundtrip_cmd(Command::GetName);
@@ -1662,7 +1662,7 @@ mod tests {
         stream.extend_from_slice(&f1);
         stream.extend_from_slice(&f2);
         let mut d = FrameDecoder::new();
-        // Leveret i stykker á 3 bytes, som over BLE.
+        // Delivered in pieces of 3 bytes, as over BLE.
         let mut got = std::vec::Vec::new();
         for chunk in stream.chunks(3) {
             d.push(chunk);

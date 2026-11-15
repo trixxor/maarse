@@ -3,7 +3,7 @@ name = "maarse-voice"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Talebeskeder: Codec2 (1200/3200 bit/s) som WebAssembly til webklienten"
+description = "Voice messages: Codec2 (1200/3200 bit/s) as WebAssembly for the web client"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

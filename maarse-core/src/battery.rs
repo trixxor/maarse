@@ -1,26 +1,26 @@
-//! Batterispænding → energistatus (se [`crate::Energy`]).
+//! Battery voltage → energy status (see [`crate::Energy`]).
 //!
-//! Tærsklerne gælder ét Li-ion/LiPo-celle målt uden stor belastning
-//! (noderne trækker 5-15 mA i RX, så spændingsfaldet er lille):
+//! The thresholds apply to one Li-ion/LiPo cell measured without heavy load
+//! (the nodes draw 5-15 mA in RX, so the voltage drop is small):
 //!
-//! | spænding     | ca. ladning | status      | hvorfor                                    |
-//! |--------------|-------------|-------------|--------------------------------------------|
-//! | ≥ 3,90 V     | > 70 %      | `Full`      | rigeligt; videresend alt                   |
-//! | 3,60-3,90 V  | 20-70 %     | `Ok`        | den flade del af afladningskurven          |
-//! | 3,40-3,60 V  | 5-20 %      | `Low`       | under "knæet" falder spændingen hurtigt    |
-//! | < 3,40 V     | < 5 %       | `Critical`  | tæt på beskyttelseskredsens afbrydning     |
+//! | voltage      | approx. charge | status   | why                                        |
+//! |--------------|----------------|----------|--------------------------------------------|
+//! | ≥ 3.90 V     | > 70 %         | `Full`   | plenty; forward everything                 |
+//! | 3.60-3.90 V  | 20-70 %        | `Ok`     | the flat part of the discharge curve       |
+//! | 3.40-3.60 V  | 5-20 %         | `Low`    | below the "knee" the voltage falls fast    |
+//! | < 3.40 V     | < 5 %          | `Critical` | close to the protection circuit cut-off  |
 //!
-//! Kurven svarer til RAK's OCV-tabel i Meshtastics `rak_wismeshtag`-variant
+//! The curve matches RAK's OCV table in Meshtastic's `rak_wismeshtag` variant
 //! (4160, 4020, 3940, 3870, 3810, 3760, 3740, 3720, 3680, 3620, 2990 mV for
-//! 100 %, 90 %, ..., 0 %): 3,9 V ≈ 75 %, 3,6 V ≈ 10-15 %.
+//! 100 %, 90 %, ..., 0 %): 3.9 V ≈ 75 %, 3.6 V ≈ 10-15 %.
 //!
-//! For at noden ikke skifter frem og tilbage, når spændingen ligger lige ved
-//! en tærskel (og stiger lidt, når belastningen falder), skal spændingen
-//! være [`HYSTERESIS_MV`] over tærsklen for at gå et trin op.
+//! So that the node does not flip back and forth when the voltage sits right
+//! at a threshold (and rises a little when the load drops), the voltage must
+//! be [`HYSTERESIS_MV`] above the threshold to go one step up.
 
 use crate::Energy;
 
-/// Grænser (mV) for `Low`, `Ok` og `Full`.
+/// Limits (mV) for `Low`, `Ok` and `Full`.
 pub const THRESHOLDS_MV: [u16; 3] = [3400, 3600, 3900];
 pub const HYSTERESIS_MV: u16 = 50;
 
@@ -37,9 +37,9 @@ fn from_level(l: u8) -> Energy {
     }
 }
 
-/// Ny energistatus ud fra en (gennemsnitlig) spænding og den forrige
-/// status. `mv == 0` betyder ukendt (ingen måling): så antages fast strøm.
-/// Kører noden på USB-strøm, er den altid `Full`.
+/// New energy status from an (average) voltage and the previous status.
+/// `mv == 0` means unknown (no measurement): mains power is then assumed.
+/// If the node runs on USB power, it is always `Full`.
 pub fn energy_for(mv: u16, ext_power: bool, prev: Energy) -> Energy {
     if ext_power || mv == 0 {
         return Energy::Full;
@@ -49,11 +49,11 @@ pub fn energy_for(mv: u16, ext_power: bool, prev: Energy) -> Energy {
     if down <= prev_l {
         return from_level(down);
     }
-    // Opad kræves hysterese.
+    // Going up requires hysteresis.
     from_level(level(mv, HYSTERESIS_MV).max(prev_l))
 }
 
-/// Omtrentlig ladning i procent (lineært mellem punkterne i OCV-tabellen).
+/// Approximate charge in percent (linear between the points of the OCV table).
 pub fn percent(mv: u16) -> u8 {
     const OCV: [u16; 11] = [4160, 4020, 3940, 3870, 3810, 3760, 3740, 3720, 3680, 3620, 2990];
     if mv >= OCV[0] {
@@ -69,8 +69,8 @@ pub fn percent(mv: u16) -> u8 {
     0
 }
 
-/// Glidende gennemsnit af målinger (mV), så enkelte udsving (fx under
-/// afsendelse) ikke flytter status.
+/// Moving average of measurements (mV), so single swings (e.g. during
+/// transmission) do not move the status.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Average {
     sum: u32,
@@ -85,7 +85,7 @@ impl Average {
         self.sum += mv as u32;
         self.n += 1;
     }
-    /// Gennemsnittet og nulstilling (0 uden målinger).
+    /// The average, and reset (0 without measurements).
     pub fn take(&mut self) -> u16 {
         let v = self.sum.checked_div(self.n).unwrap_or(0);
         *self = Self::new();
@@ -103,18 +103,18 @@ mod tests {
         assert_eq!(energy_for(3800, false, Energy::Full), Energy::Ok);
         assert_eq!(energy_for(3500, false, Energy::Ok), Energy::Low);
         assert_eq!(energy_for(3300, false, Energy::Low), Energy::Critical);
-        // Kan falde flere trin på én gang.
+        // Can drop several steps at once.
         assert_eq!(energy_for(3300, false, Energy::Full), Energy::Critical);
     }
 
     #[test]
     fn hysteresis_upwards() {
-        // Lige over tærsklen: bliv, hvor vi er.
+        // Just above the threshold: stay where we are.
         assert_eq!(energy_for(3920, false, Energy::Ok), Energy::Ok);
         assert_eq!(energy_for(3950, false, Energy::Ok), Energy::Full);
         assert_eq!(energy_for(3420, false, Energy::Critical), Energy::Critical);
         assert_eq!(energy_for(3460, false, Energy::Critical), Energy::Low);
-        // Opladning fra kritisk til fuld på én gang.
+        // Charging from critical to full in one go.
         assert_eq!(energy_for(4150, false, Energy::Critical), Energy::Full);
     }
 

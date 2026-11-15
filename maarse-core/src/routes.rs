@@ -1,24 +1,24 @@
-//! Rutetabel med fast størrelse.
+//! Route table with a fixed size.
 //!
-//! Hver rute er en kildesti til en destination. Når tabellen er fuld,
-//! smides den rute ud, der er brugt mindst for nylig (LRU).
+//! Every route is a source path to a destination. When the table is full,
+//! the least recently used route is evicted (LRU).
 
 use crate::addr::Address;
 use crate::packet::Path;
 
-/// En rute bliver betragtet som forældet efter denne tid (ms) og kan
-/// overskrives af en dårligere rute.
+/// A route is considered stale after this time (ms) and can be
+/// overwritten by a worse route.
 pub const ROUTE_STALE_MS: u64 = 30 * 60 * 1000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Route {
     pub dest: Address,
-    /// Repeatere fra os til destinationen.
+    /// Repeaters from us to the destination.
     pub path: Path,
-    /// Lavere er bedre. I v0.1 = antal hop.
+    /// Lower is better. In v0.1 = number of hops.
     pub cost: u16,
     pub last_seen_ms: u64,
-    /// Hvornår ruten blev fundet.
+    /// When the route was found.
     pub learned_ms: u64,
 }
 
@@ -43,18 +43,18 @@ impl<const N: usize> RouteTable<N> {
         self.entries.iter().find(|r| r.dest == *dest)
     }
 
-    /// Markerer en rute som brugt, så den ikke bliver smidt ud først.
+    /// Marks a route as used, so it is not evicted first.
     pub fn touch(&mut self, dest: &Address, now_ms: u64) {
         if let Some(r) = self.entries.iter_mut().find(|r| r.dest == *dest) {
             r.last_seen_ms = now_ms;
         }
     }
 
-    /// Indsætter eller opdaterer en rute.
+    /// Inserts or updates a route.
     ///
-    /// En eksisterende rute erstattes, hvis den nye er mindst lige så god,
-    /// eller hvis den gamle er forældet. Returnerer `true` hvis tabellen
-    /// blev ændret.
+    /// An existing route is replaced if the new one is at least as good,
+    /// or if the old one is stale. Returns `true` if the table
+    /// was changed.
     pub fn upsert(&mut self, route: Route) -> bool {
         if let Some(old) = self.entries.iter_mut().find(|r| r.dest == route.dest) {
             let stale = route.last_seen_ms.saturating_sub(old.last_seen_ms) > ROUTE_STALE_MS;

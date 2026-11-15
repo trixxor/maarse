@@ -1,4 +1,4 @@
-//! LoRa-opgaven til nRF52840: konkrete typer omkring den fælles radio-løkke.
+//! The LoRa task for the nRF52840: concrete types around the shared radio loop.
 
 use embassy_nrf::gpio::Output;
 use embassy_nrf::spim::Spim;

@@ -1,18 +1,18 @@
-# Laver app-ikonerne til webklienten (PWA): icon.svg, icon-192.png og icon-512.png.
+# Makes the app icons for the web client (PWA): icon.svg, icon-192.png and icon-512.png.
 #   python tools/make_icons.py
-# Kun standardbiblioteket (zlib/struct). Mærket er et stiliseret "M:" på grøn baggrund.
+# Standard library only (zlib/struct). The mark is a stylised "M:" on a green background.
 import os, struct, zlib
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "maarse-client")
 BG, FG = (0x2F, 0x7D, 0x5B), (0xFF, 0xFF, 0xFF)
-# Alt er angivet på et 512-gitter.
-R = 112                                     # hjørneradius
-STROKES = [((136, 372), (136, 140)),        # venstre ben
-           ((136, 140), (232, 284)),        # skrå ned
-           ((232, 284), (328, 140)),        # skrå op
-           ((328, 140), (328, 372))]        # højre ben
-W = 52                                      # stregtykkelse
-DOTS = [(408, 196), (408, 336)]             # kolon
+# Everything is given on a 512 grid.
+R = 112                                     # corner radius
+STROKES = [((136, 372), (136, 140)),        # left leg
+           ((136, 140), (232, 284)),        # slant down
+           ((232, 284), (328, 140)),        # slant up
+           ((328, 140), (328, 372))]        # right leg
+W = 52                                      # stroke width
+DOTS = [(408, 196), (408, 336)]             # colon
 DR = 32
 
 
@@ -79,4 +79,4 @@ if __name__ == "__main__":
     for s in (192, 512):
         with open(os.path.join(OUT, f"icon-{s}.png"), "wb") as f:
             f.write(png(s))
-    print("ikoner skrevet til", os.path.abspath(OUT))
+    print("icons written to", os.path.abspath(OUT))

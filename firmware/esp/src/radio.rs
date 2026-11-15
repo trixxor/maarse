@@ -1,4 +1,4 @@
-//! LoRa-opgaven til ESP32-S3: konkrete typer omkring den fælles radio-løkke.
+//! The LoRa task for the ESP32-S3: concrete types around the shared radio loop.
 
 use embassy_time::Delay;
 use embedded_hal_bus::spi::ExclusiveDevice;

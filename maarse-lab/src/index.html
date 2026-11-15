@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="da">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Må:rse testlaboratorium</title>
+<title>Må:rse test lab</title>
 <style>
 :root {
   --bg: #f5f6f8; --panel: #ffffff; --panel2: #eef0f4; --text: #1b1f27; --muted: #5d6675;
@@ -91,7 +91,7 @@ pre.log .err { color: var(--muted); } pre.log .info { color: var(--accent); }
 .simreport { font: 11.5px/1.4 ui-monospace, Consolas, monospace; white-space: pre-wrap; color: var(--muted); max-height: 200px; overflow: auto; margin-top: 8px; }
 .prog { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .prog .bar { flex: 1; }
-/* historik */
+/* history */
 table { border-collapse: collapse; width: 100%; font-size: 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { color: var(--muted); font-weight: 600; font-size: 12px; background: var(--panel2); }
@@ -113,18 +113,18 @@ code { font-family: ui-monospace, Consolas, monospace; background: var(--code); 
 </head>
 <body>
 <header>
-  <h1>Må:rse testlaboratorium</h1>
+  <h1>Må:rse test lab</h1>
   <nav id="nav">
-    <button data-tab="tests" class="on">Testoversigt</button>
+    <button data-tab="tests" class="on">Test overview</button>
     <button data-tab="sim">Simulator live</button>
     <button data-tab="hw">Hardware</button>
-    <button data-tab="hist">Historik</button>
+    <button data-tab="hist">History</button>
   </nav>
   <div class="spacer"></div>
-  <span class="conn"><span class="dot" id="conndot"></span><span id="conntxt">forbinder …</span></span>
-  <button class="b primary" id="runall">Kør alt</button>
+  <span class="conn"><span class="dot" id="conndot"></span><span id="conntxt">connecting …</span></span>
+  <button class="b primary" id="runall">Run all</button>
   <button class="b" id="stop">Stop</button>
-  <button class="b" id="theme" title="Skift mellem lyst og mørkt tema">Tema</button>
+  <button class="b" id="theme" title="Switch between light and dark theme">Theme</button>
 </header>
 <main>
   <section class="tab on" id="tab-tests">
@@ -134,32 +134,32 @@ code { font-family: ui-monospace, Consolas, monospace; background: var(--code); 
 
   <section class="tab" id="tab-sim">
     <div class="controls">
-      <label>Scenarie
+      <label>Scenario
         <select id="s-scen">
-          <option value="custom">Tilfældigt område</option>
-          <option value="120">120 noder, 30×30 km</option>
-          <option value="200">200 noder, 60×60 km</option>
-          <option value="hw">Motorvej 100 km, bil i 110 km/t</option>
+          <option value="custom">Random area</option>
+          <option value="120">120 nodes, 30×30 km</option>
+          <option value="200">200 nodes, 60×60 km</option>
+          <option value="hw">Motorway 100 km, car at 110 km/h</option>
         </select>
       </label>
-      <label>Noder <input type="number" id="s-nodes" value="30" min="3" max="400"></label>
-      <label>Repeatere <input type="number" id="s-rep" value="8" min="0" max="400"></label>
-      <label>Område (km) <input type="number" id="s-area" value="10" min="1" max="200"></label>
-      <label>Beskeder <input type="number" id="s-msgs" value="20" min="0" max="500"></label>
-      <label>Varighed (s) <input type="number" id="s-dur" value="300" min="30" max="3600"></label>
-      <label>Frø <input type="number" id="s-seed" value="1" min="0"></label>
-      <label>Tilstand
-        <select id="s-mode"><option value="maarse">Må:rse</option><option value="flood">flood, 7 hop</option></select>
+      <label>Nodes <input type="number" id="s-nodes" value="30" min="3" max="400"></label>
+      <label>Repeaters <input type="number" id="s-rep" value="8" min="0" max="400"></label>
+      <label>Area (km) <input type="number" id="s-area" value="10" min="1" max="200"></label>
+      <label>Messages <input type="number" id="s-msgs" value="20" min="0" max="500"></label>
+      <label>Duration (s) <input type="number" id="s-dur" value="300" min="30" max="3600"></label>
+      <label>Seed <input type="number" id="s-seed" value="1" min="0"></label>
+      <label>Mode
+        <select id="s-mode"><option value="maarse">Må:rse</option><option value="flood">flood, 7 hops</option></select>
       </label>
-      <label class="chk"><input type="checkbox" id="s-cmp"> Side om side med flood</label>
-      <button class="b primary" id="s-start">Start simulering</button>
+      <label class="chk"><input type="checkbox" id="s-cmp"> Side by side with flood</label>
+      <button class="b primary" id="s-start">Start simulation</button>
       <button class="b" id="s-pause" disabled>Pause</button>
-      <button class="b" id="s-step" disabled title="Spring frem til næste udsendelse">Trin</button>
-      <label class="speed">Hastighed: <b id="s-speedv">5×</b>
+      <button class="b" id="s-step" disabled title="Jump to the next transmission">Step</button>
+      <label class="speed">Speed: <b id="s-speedv">5×</b>
         <input type="range" id="s-speed" min="0" max="7" step="1" value="4">
       </label>
-      <label>Farve
-        <select id="s-color"><option value="role">efter rolle</option><option value="energy">efter brugt sendetid</option></select>
+      <label>Colour
+        <select id="s-color"><option value="role">by role</option><option value="energy">by airtime used</option></select>
       </label>
     </div>
     <div class="legend" id="legend"></div>
@@ -171,9 +171,9 @@ code { font-family: ui-monospace, Consolas, monospace; background: var(--code); 
   </section>
 
   <section class="tab" id="tab-hist">
-    <div style="display:flex;gap:10px;align-items:center"><h2 style="flex:1">Udvikling over kørsler</h2><button class="b" id="clearhist">Ryd historik</button></div>
+    <div style="display:flex;gap:10px;align-items:center"><h2 style="flex:1">Trend over runs</h2><button class="b" id="clearhist">Clear history</button></div>
     <div class="charts" id="charts"></div>
-    <h2>Seneste kørsler</h2>
+    <h2>Latest runs</h2>
     <div id="histtable"></div>
   </section>
 </main>
@@ -182,12 +182,12 @@ code { font-family: ui-monospace, Consolas, monospace; background: var(--code); 
 "use strict";
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const fmtMs = ms => ms < 1000 ? ms + " ms" : (ms / 1000).toLocaleString("da-DK", { maximumFractionDigits: ms < 10000 ? 2 : 1 }) + " s";
-const fmtN = (n, d = 1) => Number(n).toLocaleString("da-DK", { maximumFractionDigits: d });
-const axisN = (v, span) => Math.abs(v) >= 1e6 ? fmtN(v / 1e6, 1) + " mio." : Math.abs(v) >= 1e4 ? fmtN(v / 1e3, 0) + " t." : fmtN(v, span < 5 ? 1 : 0);
+const fmtMs = ms => ms < 1000 ? ms + " ms" : (ms / 1000).toLocaleString("en-GB", { maximumFractionDigits: ms < 10000 ? 2 : 1 }) + " s";
+const fmtN = (n, d = 1) => Number(n).toLocaleString("en-GB", { maximumFractionDigits: d });
+const axisN = (v, span) => Math.abs(v) >= 1e6 ? fmtN(v / 1e6, 1) + " M" : Math.abs(v) >= 1e4 ? fmtN(v / 1e3, 0) + " k" : fmtN(v, span < 5 ? 1 : 0);
 const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
 
-// ---------- tema og faner ----------
+// ---------- theme and tabs ----------
 const themeSaved = store.get("lab-theme");
 if (themeSaved) document.documentElement.dataset.theme = themeSaved;
 $("#theme").onclick = () => {
@@ -205,14 +205,14 @@ function showTab(t) {
 }
 document.querySelectorAll("#nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 
-// ---------- forbindelse ----------
+// ---------- connection ----------
 let ws, state = { suites: [], tests: {}, history: [], queue: [], running: null, ports: [] };
 const runs = {}; // suite -> {rows: Map, log: [], status, t0}
 function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 function connect() {
   ws = new WebSocket("ws://" + location.host + "/ws");
-  ws.onopen = () => { $("#conndot").className = "dot ok"; $("#conntxt").textContent = "forbundet"; };
-  ws.onclose = () => { $("#conndot").className = "dot fail"; $("#conntxt").textContent = "afbrudt – prøver igen"; setTimeout(connect, 1500); };
+  ws.onopen = () => { $("#conndot").className = "dot ok"; $("#conntxt").textContent = "connected"; };
+  ws.onclose = () => { $("#conndot").className = "dot fail"; $("#conntxt").textContent = "disconnected – retrying"; setTimeout(connect, 1500); };
   ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (_) { return; } handle(m); };
 }
 window.labStats = { msgs: 0, simEvents: 0, rows: 0 };
@@ -248,8 +248,8 @@ function handle(m) {
   }
 }
 
-// ---------- testoversigt ----------
-const groupOrder = ["Enhedstests (cargo test)", "Fuzzing", "Ende-til-ende", "Simulator", "Ydelse", "Hardware"];
+// ---------- test overview ----------
+const groupOrder = ["Unit tests (cargo test)", "Fuzzing", "End to end", "Simulator", "Performance", "Hardware"];
 function cardEl(id) { return document.querySelector(`.card[data-id="${CSS.escape(id)}"]`); }
 function lastRec(id) { for (let i = state.history.length - 1; i >= 0; i--) if (state.history[i].suite === id) return state.history[i]; return null; }
 function crateTests(id) {
@@ -269,12 +269,12 @@ function renderSuites() {
       const n = ct ? ct.reduce((a, t) => a + t.tests.length, 0) : 0;
       html += `<div class="card" data-id="${esc(s.id)}">
         <div class="top"><span class="dot"></span><span class="title" title="${esc(s.title)}">${esc(s.title)}</span>
-          ${s.hardware ? '<span class="tag hw">kræver boards</span>' : ""}${ct ? `<span class="tag">${n} ${n === 1 ? "test" : "tests"}</span>` : ""}
-          <button class="b run" ${s.runnable ? "" : "disabled"}>Kør</button></div>
+          ${s.hardware ? '<span class="tag hw">needs boards</span>' : ""}${ct ? `<span class="tag">${n} ${n === 1 ? "test" : "tests"}</span>` : ""}
+          <button class="b run" ${s.runnable ? "" : "disabled"}>Run</button></div>
         <div class="meta"></div><div class="bar"><div></div></div>
         <div class="desc">${esc(s.desc)}</div>
-        ${!ct && s.items.length ? `<details ${s.group === "Ende-til-ende" ? "open" : ""}><summary>Hvad testes</summary><ul class="items">${s.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul></details>` : ""}
-        <details class="dr" ${ct ? "" : "open"}><summary>${ct ? "Tests" : "Resultater"}</summary><div class="rows"></div></details>
+        ${!ct && s.items.length ? `<details ${s.group === "End to end" ? "open" : ""}><summary>What is tested</summary><ul class="items">${s.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul></details>` : ""}
+        <details class="dr" ${ct ? "" : "open"}><summary>${ct ? "Tests" : "Results"}</summary><div class="rows"></div></details>
         <details><summary>Log</summary><pre class="log"></pre></details>
       </div>`;
     }
@@ -298,7 +298,7 @@ function resetRows(id) {
     const g = groupBox(box, normGroup(t.target));
     for (const n of t.tests) g.insertAdjacentHTML("beforeend", rowHtml({ name: n, status: "pending" }));
   }
-  if (!box.children.length) box.innerHTML = `<div class="r pending"><span class="ic">·</span><span class="n">ikke kørt endnu</span></div>`;
+  if (!box.children.length) box.innerHTML = `<div class="r pending"><span class="ic">·</span><span class="n">not run yet</span></div>`;
 }
 function groupBox(box, g) {
   let el = [...box.children].find(x => x.dataset.g === g);
@@ -307,7 +307,7 @@ function groupBox(box, g) {
 }
 const icon = { ok: "✓", fail: "✗", ignored: "–", pending: "·" };
 function rowHtml(r) {
-  const t = r.ms != null ? `<span class="t">${r.cargo ? "efter " : ""}${fmtMs(r.ms)}</span>` : "";
+  const t = r.ms != null ? `<span class="t">${r.cargo ? "after " : ""}${fmtMs(r.ms)}</span>` : "";
   return `<div class="r ${r.status}" data-n="${esc(r.name)}"><span class="ic">${icon[r.status] || "·"}</span><span class="n">${esc(r.name)}</span>${t}</div>`;
 }
 function addRow(m) {
@@ -344,13 +344,13 @@ function updateMeta(id) {
   const r = runs[id], rec = (r && r.rec) || lastRec(id);
   let t = "";
   if (r && r.status === "running") {
-    t = `${r.passed || 0} ok · ${r.failed || 0} fejl · ${fmtMs(Date.now() - r.t0)}`;
+    t = `${r.passed || 0} ok · ${r.failed || 0} failed · ${fmtMs(Date.now() - r.t0)}`;
     const ct = crateTests(id), total = ct ? ct.reduce((a, x) => a + x.tests.length, 0) : 0;
     $(".bar > div", c).style.width = total ? Math.min(100, ((r.passed || 0) + (r.failed || 0)) / total * 100) + "%" : "100%";
     $(".bar > div", c).style.background = r.failed ? "var(--fail)" : "var(--warn)";
   } else if (rec) {
-    const when = new Date(rec.at * 1000).toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" });
-    t = `${rec.passed} ok · ${rec.failed} fejl · ${fmtMs(rec.ms)} · kl. ${when}`;
+    const when = new Date(rec.at * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    t = `${rec.passed} ok · ${rec.failed} failed · ${fmtMs(rec.ms)} · at ${when}`;
     $(".bar > div", c).style.width = "100%"; $(".bar > div", c).style.background = rec.ok ? "var(--ok)" : "var(--fail)";
   }
   $(".meta", c).textContent = t;
@@ -367,7 +367,7 @@ function updateStatuses() {
     $(".dot", c).className = "dot " + (st === "running" ? "run" : st);
     c.classList.toggle("running", st === "running");
     c.classList.toggle("ok", st === "ok"); c.classList.toggle("fail", st === "fail");
-    const b = $("button.run", c); b.textContent = st === "running" ? "Kører …" : st === "queued" ? "I kø" : "Kør";
+    const b = $("button.run", c); b.textContent = st === "running" ? "Running …" : st === "queued" ? "Queued" : "Run";
     b.disabled = !s.runnable || st === "running" || st === "queued";
     updateMeta(s.id);
   }
@@ -383,18 +383,18 @@ function renderSummary() {
   }
   const disc = $("#summary").dataset.disc;
   const tile = (k, v, col) => `<div class="tile"><div class="k">${k}</div><div class="v" style="${col ? "color:" + col : ""}">${v}</div></div>`;
-  $("#summary").innerHTML = tile("Suiter bestået", ok, "var(--ok)") + tile("Suiter fejlet", fail, fail ? "var(--fail)" : "") + tile("Ikke kørt", never) +
-    tile("Testtilfælde ok / fejl (seneste)", `${tests} / ${testsFail}`) +
-    tile("Kører nu", state.running ? esc((state.suites.find(s => s.id === state.running) || {}).title || state.running) : "–") +
-    tile("I kø", state.queue.length) +
-    (disc ? tile("Testliste", "henter …") : `<div class="tile"><div class="k">Testliste</div><button class="b" id="disc" style="margin-top:4px">Opdater</button></div>`);
+  $("#summary").innerHTML = tile("Suites passed", ok, "var(--ok)") + tile("Suites failed", fail, fail ? "var(--fail)" : "") + tile("Not run", never) +
+    tile("Test cases ok / failed (latest)", `${tests} / ${testsFail}`) +
+    tile("Running now", state.running ? esc((state.suites.find(s => s.id === state.running) || {}).title || state.running) : "–") +
+    tile("Queued", state.queue.length) +
+    (disc ? tile("Test list", "loading …") : `<div class="tile"><div class="k">Test list</div><button class="b" id="disc" style="margin-top:4px">Refresh</button></div>`);
   const d = $("#disc"); if (d) d.onclick = () => send({ cmd: "discover" });
 }
 $("#runall").onclick = () => send({ cmd: "runall" });
 $("#stop").onclick = () => { send({ cmd: "stop" }); send({ cmd: "simstop" }); };
 
-// ---------- historik ----------
-$("#clearhist").onclick = () => { if (confirm("Slet al historik?")) send({ cmd: "clearhist" }); };
+// ---------- history ----------
+$("#clearhist").onclick = () => { if (confirm("Delete all history?")) send({ cmd: "clearhist" }); };
 function lineChart(title, series, unit) {
   // series: [{name, color, pts: [[i, v, label]]}]
   const W = 420, H = 170, L = 40, R = 10, T = 10, B = 24;
@@ -411,7 +411,7 @@ function lineChart(title, series, unit) {
     g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-width="1"/>` +
       `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="var(--muted)">${axisN(v, hi - lo)}</text>`;
   }
-  g += `<text x="${L}" y="${H - 6}" font-size="10" fill="var(--muted)">ældst</text><text x="${W - R}" y="${H - 6}" text-anchor="end" font-size="10" fill="var(--muted)">nyest</text>`;
+  g += `<text x="${L}" y="${H - 6}" font-size="10" fill="var(--muted)">oldest</text><text x="${W - R}" y="${H - 6}" text-anchor="end" font-size="10" fill="var(--muted)">newest</text>`;
   for (const s of series) {
     if (!s.pts.length) continue;
     const off = n - s.pts.length;
@@ -424,53 +424,53 @@ function lineChart(title, series, unit) {
 }
 function renderHistory() {
   const h = state.history;
-  const when = r => new Date(r.at * 1000).toLocaleString("da-DK", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const when = r => new Date(r.at * 1000).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
   let charts = "";
   for (const s of state.suites.filter(s => s.group === "Simulator")) {
     const recs = h.filter(r => r.suite === s.id && r.metrics).slice(-30);
     if (!recs.length) continue;
     const ser = (mode, color, key) => ({ name: mode + " " + key, color, pts: recs.filter(r => r.metrics[mode] && r.metrics[mode][key] != null).map(r => [0, r.metrics[mode][key], when(r)]) });
-    charts += lineChart(`${s.title}: leveret og kvitteret (%)`, [ser("Må:rse", "var(--c-data)", "leveret"), ser("Må:rse", "var(--c-presp)", "kvitteret"), ser("flood, 7 hop", "var(--c-preq)", "leveret"), ser("flood, 7 hop", "var(--c-channel)", "kvitteret")], "%");
-    charts += lineChart(`${s.title}: sendetid i alt (s)`, [ser("Må:rse", "var(--c-data)", "sendetid_s"), ser("flood, 7 hop", "var(--c-preq)", "sendetid_s")], "s");
+    charts += lineChart(`${s.title}: delivered and acknowledged (%)`, [ser("Må:rse", "var(--c-data)", "delivered"), ser("Må:rse", "var(--c-presp)", "acked"), ser("flood, 7 hops", "var(--c-preq)", "delivered"), ser("flood, 7 hops", "var(--c-channel)", "acked")], "%");
+    charts += lineChart(`${s.title}: total airtime (s)`, [ser("Må:rse", "var(--c-data)", "airtime_s"), ser("flood, 7 hops", "var(--c-preq)", "airtime_s")], "s");
   }
-  const pow = h.filter(r => r.suite === "pow" && r.metrics && r.metrics["forsøg_pr_s"]).slice(-30);
-  if (pow.length) charts += lineChart("Arbejdsbevis: forsøg pr. sekund", [{ name: "forsøg/s", color: "var(--c-announce)", pts: pow.map(r => [0, r.metrics["forsøg_pr_s"], when(r)]) }], "/s");
+  const pow = h.filter(r => r.suite === "pow" && r.metrics && r.metrics["attempts_per_s"]).slice(-30);
+  if (pow.length) charts += lineChart("Proof of work: attempts per second", [{ name: "attempts/s", color: "var(--c-announce)", pts: pow.map(r => [0, r.metrics["attempts_per_s"], when(r)]) }], "/s");
   const dur = {};
   for (const r of h.filter(r => r.suite.startsWith("cargo:") || r.suite === "fuzz")) (dur[r.suite] = dur[r.suite] || []).push(r);
   const durSeries = Object.entries(dur).slice(0, 7).map(([k, v], i) => ({ name: k.replace("cargo:", ""), color: ["var(--c-data)", "var(--c-ack)", "var(--c-preq)", "var(--c-announce)", "var(--c-channel)", "var(--c-presp)", "var(--c-other)"][i], pts: v.slice(-30).map(r => [0, r.ms / 1000, when(r)]) }));
-  if (durSeries.length) charts += lineChart("Varighed af testsuiter (s)", durSeries, "s");
-  $("#charts").innerHTML = charts || `<div class="empty">Ingen kørsler med nøgletal endnu. Kør en simulator-suite eller benchmarket for at se udviklingen.</div>`;
+  if (durSeries.length) charts += lineChart("Duration of test suites (s)", durSeries, "s");
+  $("#charts").innerHTML = charts || `<div class="empty">No runs with key figures yet. Run a simulator suite or the benchmark to see the trend.</div>`;
   const rows = h.slice(-60).reverse().map(r => {
-    const m = r.metrics && r.metrics["Må:rse"] ? `Må:rse ${fmtN(r.metrics["Må:rse"].leveret)} % leveret` : r.metrics && r.metrics["forsøg_pr_s"] ? `${fmtN(r.metrics["forsøg_pr_s"], 0)} forsøg/s` : "";
+    const m = r.metrics && r.metrics["Må:rse"] ? `Må:rse ${fmtN(r.metrics["Må:rse"].delivered)} % delivered` : r.metrics && r.metrics["attempts_per_s"] ? `${fmtN(r.metrics["attempts_per_s"], 0)} attempts/s` : "";
     return `<tr><td>${when(r)}</td><td><span class="dot ${r.ok ? "ok" : "fail"}"></span> ${esc(r.title)}</td><td class="num">${r.passed}</td><td class="num">${r.failed}</td><td class="num">${fmtMs(r.ms)}</td><td>${esc(m)}</td></tr>`;
   }).join("");
-  $("#histtable").innerHTML = rows ? `<div style="overflow:auto"><table><tr><th>Tid</th><th>Suite</th><th style="text-align:right">OK</th><th style="text-align:right">Fejl</th><th style="text-align:right">Varighed</th><th>Nøgletal</th></tr>${rows}</table></div>` : `<div class="empty">Ingen kørsler endnu.</div>`;
+  $("#histtable").innerHTML = rows ? `<div style="overflow:auto"><table><tr><th>Time</th><th>Suite</th><th style="text-align:right">OK</th><th style="text-align:right">Failed</th><th style="text-align:right">Duration</th><th>Key figures</th></tr>${rows}</table></div>` : `<div class="empty">No runs yet.</div>`;
 }
 
 // ---------- hardware ----------
-const STAT = { 1: "oppetid (s)", 2: "kendte noder", 3: "ruter", 7: "rolle", 10: "rx pakker", 11: "rx ugyldige", 13: "videresendt", 15: "leveret", 16: "kvitteret",
-  30: "radio rx ok", 31: "radio rx fejl", 32: "radio tx ok", 33: "radio tx fejl", 34: "sidste RSSI (dBm)", 35: "sidste SNR (dB)", 36: "gns. RSSI", 37: "gns. SNR",
-  38: "CAD optaget", 39: "duty udsat", 40: "sendetid (ms)", 41: "duty brugt ‰", 44: "tx-kø", 45: "frekvens (kHz)", 46: "SF", 47: "båndbredde (kHz)", 48: "sendeeffekt (dBm)",
-  49: "batteri (mV)", 52: "radio droppet", 53: "radiotrin", 54: "radioløkker", 55: "diag syncword", 56: "diag status", 57: "diag fejl", 58: "diag busy", 77: "dårlige stempler",
-  80: "støjgulv (dBm)", 81: "energistatus", 82: "USB-strøm", 83: "naboer", 84: "positionsdeling", 85: "batteri (%)" };
+const STAT = { 1: "uptime (s)", 2: "known nodes", 3: "routes", 7: "role", 10: "rx packets", 11: "rx invalid", 13: "forwarded", 15: "delivered", 16: "acknowledged",
+  30: "radio rx ok", 31: "radio rx errors", 32: "radio tx ok", 33: "radio tx errors", 34: "last RSSI (dBm)", 35: "last SNR (dB)", 36: "avg RSSI", 37: "avg SNR",
+  38: "CAD busy", 39: "duty deferred", 40: "airtime (ms)", 41: "duty used ‰", 44: "tx queue", 45: "frequency (kHz)", 46: "SF", 47: "bandwidth (kHz)", 48: "transmit power (dBm)",
+  49: "battery (mV)", 52: "radio dropped", 53: "radio step", 54: "radio loops", 55: "diag syncword", 56: "diag status", 57: "diag errors", 58: "diag busy", 77: "bad stamps",
+  80: "noise floor (dBm)", 81: "energy status", 82: "USB power", 83: "neighbours", 84: "position sharing", 85: "battery (%)" };
 const KEY_STATS = [34, 35, 30, 31, 32, 33, 53, 7, 44, 40, 41, 2, 3, 49];
 const hwHist = {};
 function renderHw() {
   if (!state.ports || !state.ports.length) {
-    $("#hwbody").innerHTML = `<div class="empty">Ingen boards valgt. Start laboratoriet med fx <code>maarse-lab --port COM6 --port COM7</code> for at se rigtige boards live (RSSI/SNR, tx/rx, radiotrin, rolle).<br>Uden <code>--port</code> åbnes ingen serielle porte.</div>`;
+    $("#hwbody").innerHTML = `<div class="empty">No boards chosen. Start the lab with e.g. <code>maarse-lab --port COM6 --port COM7</code> to see real boards live (RSSI/SNR, tx/rx, radio step, role).<br>Without <code>--port</code> no serial ports are opened.</div>`;
     return;
   }
-  $("#hwbody").innerHTML = `<div class="panels two">` + state.ports.map(p => `<div class="panel hwp" data-port="${esc(p)}"><h3><span class="dot"></span>${esc(p)} <span class="muted st" style="font-weight:400;font-size:12px"></span></h3><div class="muted info"></div><svg class="spark" viewBox="0 0 400 80" preserveAspectRatio="none" style="width:100%;height:80px;background:var(--canvas);border-radius:6px;border:1px solid var(--line);margin-top:6px"></svg><div class="hwgrid"></div><details><summary>Øvrige værdier og log</summary><div class="hwgrid all"></div><pre class="log"></pre></details></div>`).join("") + `</div>`;
+  $("#hwbody").innerHTML = `<div class="panels two">` + state.ports.map(p => `<div class="panel hwp" data-port="${esc(p)}"><h3><span class="dot"></span>${esc(p)} <span class="muted st" style="font-weight:400;font-size:12px"></span></h3><div class="muted info"></div><svg class="spark" viewBox="0 0 400 80" preserveAspectRatio="none" style="width:100%;height:80px;background:var(--canvas);border-radius:6px;border:1px solid var(--line);margin-top:6px"></svg><div class="hwgrid"></div><details><summary>Other values and log</summary><div class="hwgrid all"></div><pre class="log"></pre></details></div>`).join("") + `</div>`;
 }
 function hwUpdate(m) {
   const el = document.querySelector(`.hwp[data-port="${CSS.escape(m.port)}"]`); if (!el) return;
   $(".st", el).textContent = m.status || "";
-  $(".dot", el).className = "dot " + (m.status === "forbundet" ? "ok" : /pause/.test(m.status) ? "queued" : "fail");
+  $(".dot", el).className = "dot " + (m.status === "connected" ? "ok" : /pause/.test(m.status) ? "queued" : "fail");
   const st = m.stats || {};
-  const role = st[7] != null ? ["klient", "repeater", "rumrepeater"][st[7]] || st[7] : (m.repeater ? "repeater" : "klient");
+  const role = st[7] != null ? ["client", "repeater", "relay", "anchor"][st[7]] || st[7] : (m.repeater ? "repeater" : "client");
   const r = m.radio;
-  $(".info", el).textContent = [m.addr ? "adresse " + m.addr.slice(0, 16) + "…" : "", "rolle " + role,
-    r ? `${(r.freq_hz / 1e6).toFixed(3)} MHz, SF${r.sf}, ${r.bw_hz / 1000} kHz, ${r.dbm} dBm, duty ${r.duty_permille / 10} %` : "", "FEM: ikke rapporteret af firmwaren"].filter(Boolean).join(" · ");
+  $(".info", el).textContent = [m.addr ? "address " + m.addr.slice(0, 16) + "…" : "", "role " + role,
+    r ? `${(r.freq_hz / 1e6).toFixed(3)} MHz, SF${r.sf}, ${r.bw_hz / 1000} kHz, ${r.dbm} dBm, duty ${r.duty_permille / 10} %` : "", "FEM: not reported by the firmware"].filter(Boolean).join(" · ");
   const cell = k => `<div><div class="k">${esc(STAT[k] || "stat " + k)}</div><div class="v">${st[k] != null ? fmtN(st[k], 0) : "–"}</div></div>`;
   $(".hwgrid", el).innerHTML = KEY_STATS.map(cell).join("");
   $(".hwgrid.all", el).innerHTML = Object.keys(st).filter(k => !KEY_STATS.includes(+k)).map(k => cell(+k)).join("");
@@ -481,16 +481,16 @@ function hwUpdate(m) {
     const pts = h.map((p, i) => p[key] == null ? null : [i / 119 * 400, 80 - (p[key] - lo) / (hi - lo) * 80]).filter(Boolean);
     return pts.length ? `<path d="${pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join("")}" fill="none" stroke="${col}" stroke-width="2"/>` : "";
   };
-  sp.innerHTML = path("rssi", -130, -20, "var(--c-data)") + path("snr", -20, 15, "var(--c-ack)") + `<text x="4" y="12" font-size="10" fill="var(--muted)">RSSI (blå, −130…−20 dBm) · SNR (grøn, −20…15 dB)</text>`;
+  sp.innerHTML = path("rssi", -130, -20, "var(--c-data)") + path("snr", -20, 15, "var(--c-ack)") + `<text x="4" y="12" font-size="10" fill="var(--muted)">RSSI (blue, −130…−20 dBm) · SNR (green, −20…15 dB)</text>`;
 }
 
 // ---------- simulator live ----------
 const PT = {
-  Announce: ["var(--c-announce)", "announce"], PathRequest: ["var(--c-preq)", "ruteforespørgsel"], PathResponse: ["var(--c-presp)", "rutesvar"],
-  Data: ["var(--c-data)", "besked"], Ack: ["var(--c-ack)", "e2e-kvittering"], Channel: ["var(--c-channel)", "kanalbesked"], other: ["var(--c-other)", "andet"],
+  Announce: ["var(--c-announce)", "announce"], PathRequest: ["var(--c-preq)", "path request"], PathResponse: ["var(--c-presp)", "path response"],
+  Data: ["var(--c-data)", "message"], Ack: ["var(--c-ack)", "e2e acknowledgement"], Channel: ["var(--c-channel)", "channel message"], other: ["var(--c-other)", "other"],
 };
 $("#legend").innerHTML = Object.values(PT).map(([c, n]) => `<span style="--c:${c}">${n}</span>`).join("") +
-  `<span style="--c:var(--fail)">kollision</span><span style="--c:var(--ok)">leveret</span><span class="muted">▪ repeater · ● klient · ▲ bil · linjer = radioforbindelser (tydeligere = bedre SNR) · hop-kvitteringer er implicitte (næste hop høres sende videre)</span>`;
+  `<span style="--c:var(--fail)">collision</span><span style="--c:var(--ok)">delivered</span><span class="muted">▪ repeater · ● client · ▲ car · lines = radio links (stronger = better SNR) · hop acknowledgements are implicit (the next hop is heard forwarding)</span>`;
 const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20, 50];
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const sim = {
@@ -507,9 +507,9 @@ const sim = {
     const tags = cmp ? [["a", "maarse"], ["b", "flood"]] : [["a", $("#s-mode").value]];
     this.panels = {}; this.simT = 0;
     $("#panels").className = "panels" + (cmp ? " two" : "");
-    $("#panels").innerHTML = tags.map(([t, mode]) => `<div class="panel" data-tag="${t}"><h3><span class="dot run"></span>${mode === "maarse" ? "Må:rse" : "flood, 7 hop"} <span class="muted st" style="font-weight:400;font-size:12px">starter …</span></h3>
+    $("#panels").innerHTML = tags.map(([t, mode]) => `<div class="panel" data-tag="${t}"><h3><span class="dot run"></span>${mode === "maarse" ? "Må:rse" : "flood, 7 hops"} <span class="muted st" style="font-weight:400;font-size:12px">starting …</span></h3>
       <div class="prog"><span class="tt">0 s</span><div class="bar"><div></div></div><span class="td"></span></div>
-      <canvas></canvas><div class="counters"></div><details><summary>Simulatorens rapport</summary><div class="simreport"></div></details></div>`).join("");
+      <canvas></canvas><div class="counters"></div><details><summary>Simulator report</summary><div class="simreport"></div></details></div>`).join("");
     for (const [t, mode] of tags) {
       const el = document.querySelector(`.panel[data-tag="${t}"]`);
       this.panels[t] = { el, cv: $("canvas", el), mode, ev: [], idx: 0, setup: null, links: null, nodes: [], pulses: [], lines: [], marks: [], report: "", done: false,
@@ -529,12 +529,12 @@ const sim = {
       else if (e.ev === "end") { }
       else P.ev.push(e);
     }
-    $(".st", P.el).textContent = P.done ? "" : `beregner … ${fmtN(P.ev.length, 0)} hændelser modtaget`;
+    $(".st", P.el).textContent = P.done ? "" : `computing … ${fmtN(P.ev.length, 0)} events received`;
   },
   text(tag, t) { const P = this.panels[tag]; if (!P) return; P.report += t + "\n"; $(".simreport", P.el).textContent = P.report; },
   done(tag, rep) {
     const P = this.panels[tag]; if (!P) return; P.done = true; P.rep = rep;
-    $(".st", P.el).textContent = `færdigberegnet: ${fmtN(P.ev.length, 0)} hændelser` + (rep && rep.leveret != null ? ` · slutresultat ${fmtN(rep.leveret)} % leveret, ${fmtN(rep.kvitteret)} % kvitteret` : "");
+    $(".st", P.el).textContent = `finished: ${fmtN(P.ev.length, 0)} events` + (rep && rep.delivered != null ? ` · final result ${fmtN(rep.delivered)} % delivered, ${fmtN(rep.acked)} % acknowledged` : "");
   },
   resize() {
     for (const P of Object.values(this.panels)) {
@@ -568,11 +568,11 @@ const sim = {
       g.beginPath(); g.moveTo(P.tx(P.nodes[a].x), P.ty(P.nodes[a].y)); g.lineTo(P.tx(P.nodes[b].x), P.ty(P.nodes[b].y)); g.stroke();
     }
     g.globalAlpha = 1;
-    // målestok
+    // scale bar
     const km = P.setup.highway ? 10 : (P.setup.w > 40000 ? 10 : P.setup.w > 12000 ? 5 : 1);
     const len = km * 1000 * (P.setup.highway ? (P.tx(1000) - P.tx(0)) / 1000 : P.scale);
     g.fillStyle = this.colors["--muted"]; g.fillRect(10 * P.dpr, c.height - 10 * P.dpr, len, 2 * P.dpr);
-    g.font = `${11 * P.dpr}px system-ui`; g.fillText(km + " km" + (P.setup.highway ? " (lodret skala forstørret)" : ""), 10 * P.dpr, c.height - 14 * P.dpr);
+    g.font = `${11 * P.dpr}px system-ui`; g.fillText(km + " km" + (P.setup.highway ? " (vertical scale magnified)" : ""), 10 * P.dpr, c.height - 14 * P.dpr);
   },
   redrawStatic() { this.readColors(); for (const P of Object.values(this.panels)) this.drawStatic(P); },
   apply(P, e) {
@@ -596,13 +596,13 @@ const sim = {
       let lim = Infinity;
       for (const P of Ps) { const dur = P.setup ? P.setup.dur : 0; lim = Math.min(lim, P.done ? dur : (P.ev.length ? P.ev[P.ev.length - 1].t : 0)); }
       this.simT = Math.min(this.simT + dt * this.speed, lim);
-      if (Ps.every(P => P.done) && this.simT >= lim) { this.playing = false; $("#s-pause").textContent = "Afspil igen"; }
+      if (Ps.every(P => P.done) && this.simT >= lim) { this.playing = false; $("#s-pause").textContent = "Play again"; }
     }
     for (const P of Ps) { while (P.idx < P.ev.length && P.ev[P.idx].t <= this.simT) this.apply(P, P.ev[P.idx++]); this.draw(P); }
     requestAnimationFrame(t => this.frame(t));
   },
   step() {
-    this.playing = false; $("#s-pause").textContent = "Fortsæt";
+    this.playing = false; $("#s-pause").textContent = "Continue";
     let next = Infinity;
     for (const P of Object.values(this.panels)) for (let i = P.idx; i < P.ev.length; i++) if (P.ev[i].ev === "tx") { next = Math.min(next, P.ev[i].t); break; }
     if (next < Infinity) this.simT = next;
@@ -611,19 +611,19 @@ const sim = {
     const cv = P.cv, g = cv.getContext("2d"), d = P.dpr || 1, T = this.simT, C = this.colors;
     if (!cv.width) return;
     g.clearRect(0, 0, cv.width, cv.height);
-    if (!P.setup) { g.fillStyle = C["--muted"]; g.font = `${14 * d}px system-ui`; g.fillText("Venter på simulatoren …", 20 * d, 30 * d); return; }
+    if (!P.setup) { g.fillStyle = C["--muted"]; g.font = `${14 * d}px system-ui`; g.fillText("Waiting for the simulator …", 20 * d, 30 * d); return; }
     if (P.static) g.drawImage(P.static, 0, 0);
     const X = n => P.tx(P.nodes[n].x), Y = n => P.ty(P.nodes[n].y);
-    // afsendte beskeder: stiplet linje fra afsender til modtager
+    // sent messages: dashed line from sender to recipient
     P.marks = P.marks.filter(m => m.t1 > T);
     g.setLineDash([4 * d, 4 * d]); g.lineWidth = 1.2 * d; g.strokeStyle = C["--text"];
     for (const m of P.marks) { if (m.t0 > T) continue; g.globalAlpha = 0.5 * (1 - (T - m.t0) / (m.t1 - m.t0)); g.beginPath(); g.moveTo(X(m.a), Y(m.a)); g.lineTo(X(m.b), Y(m.b)); g.stroke(); }
     g.setLineDash([]);
-    // modtagne pakker: linjer fra sender til modtager
+    // received packets: lines from sender to receiver
     P.lines = P.lines.filter(l => l.t1 > T);
     g.lineWidth = 2 * d;
     for (const l of P.lines) { if (l.t0 > T) continue; g.globalAlpha = 0.85 * (1 - (T - l.t0) / (l.t1 - l.t0)); g.strokeStyle = this.ptColor(l.p); g.beginPath(); g.moveTo(X(l.a), Y(l.a)); g.lineTo(X(l.b), Y(l.b)); g.stroke(); }
-    // udsendelser: ekspanderende ringe
+    // transmissions: expanding rings
     P.pulses = P.pulses.filter(p => p.t1 > T);
     for (const p of P.pulses) { if (p.t0 > T) continue; const f = (T - p.t0) / (p.t1 - p.t0); g.globalAlpha = 0.9 * (1 - f); g.strokeStyle = this.ptColor(p.p); g.lineWidth = 2.5 * d; g.beginPath(); g.arc(X(p.n), Y(p.n), (6 + 34 * f) * d, 0, 7); g.stroke(); }
     g.globalAlpha = 1;
@@ -640,13 +640,13 @@ const sim = {
       if (T - n.coll < flash) { g.strokeStyle = C["--fail"]; g.globalAlpha = 1 - (T - n.coll) / flash; g.lineWidth = 2.5 * d; const s = 7 * d; g.beginPath(); g.moveTo(x - s, y - s); g.lineTo(x + s, y + s); g.moveTo(x + s, y - s); g.lineTo(x - s, y + s); g.stroke(); g.globalAlpha = 1; }
       if (T - n.deliv < flash * 2) { g.strokeStyle = C["--ok"]; g.globalAlpha = 1 - (T - n.deliv) / (flash * 2); g.lineWidth = 3 * d; g.beginPath(); g.arc(x, y, 11 * d, 0, 7); g.stroke(); g.globalAlpha = 1; }
     });
-    // tællere og fremdrift
+    // counters and progress
     const s = P.st, dur = P.setup.dur;
-    $(".tt", P.el).textContent = fmtN(T / 1000, 0) + " s"; $(".td", P.el).textContent = "af " + fmtN(dur / 1000, 0) + " s";
+    $(".tt", P.el).textContent = fmtN(T / 1000, 0) + " s"; $(".td", P.el).textContent = "of " + fmtN(dur / 1000, 0) + " s";
     $(".prog .bar > div", P.el).style.width = Math.min(100, T / dur * 100) + "%";
     const lat = s.lat.slice().sort((a, b) => a - b), med = lat.length ? lat[lat.length >> 1] / 1000 : null;
-    const kv = [["Sendt", s.sent], ["Leveret", s.deliv + (s.sent ? ` (${fmtN(s.deliv / s.sent * 100, 0)} %)` : "")], ["Kvitteret", s.acked + (s.sent ? ` (${fmtN(s.acked / s.sent * 100, 0)} %)` : "")],
-      ["Median forsinkelse", med == null ? "–" : fmtN(med) + " s"], ["Udsendelser", s.tx], ["Sendetid", fmtN(s.air / 1e6) + " s"], ["Kollisioner", s.coll], ["Duty-udsættelser", s.duty], ["Udsat (kanal optaget)", s.busy]];
+    const kv = [["Sent", s.sent], ["Delivered", s.deliv + (s.sent ? ` (${fmtN(s.deliv / s.sent * 100, 0)} %)` : "")], ["Acknowledged", s.acked + (s.sent ? ` (${fmtN(s.acked / s.sent * 100, 0)} %)` : "")],
+      ["Median latency", med == null ? "–" : fmtN(med) + " s"], ["Transmissions", s.tx], ["Airtime", fmtN(s.air / 1e6) + " s"], ["Collisions", s.coll], ["Duty deferrals", s.duty], ["Deferred (channel busy)", s.busy]];
     const html = kv.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
     const cel = $(".counters", P.el); if (cel._h !== html) { cel.innerHTML = html; cel._h = html; }
     if (P.done && T >= dur) $(".dot", P.el).className = "dot ok";
@@ -655,11 +655,11 @@ const sim = {
 window.sim = sim;
 $("#s-start").onclick = () => sim.start();
 $("#s-pause").onclick = () => {
-  if (!sim.playing && $("#s-pause").textContent === "Afspil igen") {
+  if (!sim.playing && $("#s-pause").textContent === "Play again") {
     for (const P of Object.values(sim.panels)) { P.idx = 0; P.pulses = []; P.lines = []; P.marks = []; P.txs.clear(); P.msgs.clear(); P.st = { sent: 0, deliv: 0, acked: 0, tx: 0, air: 0, coll: 0, duty: 0, busy: 0, lat: [] }; P.nodes.forEach((n, i) => { n.air = 0; n.coll = n.deliv = n.send = -1e9; if (P.setup.nodes[i]) { n.x = P.setup.nodes[i][0]; n.y = P.setup.nodes[i][1]; } }); }
     sim.simT = 0; sim.playing = true;
   } else sim.playing = !sim.playing;
-  $("#s-pause").textContent = sim.playing ? "Pause" : "Fortsæt";
+  $("#s-pause").textContent = sim.playing ? "Pause" : "Continue";
 };
 $("#s-step").onclick = () => sim.step();
 const setSpeed = () => { sim.speed = SPEEDS[+$("#s-speed").value]; $("#s-speedv").textContent = fmtN(sim.speed, 2) + "×"; };

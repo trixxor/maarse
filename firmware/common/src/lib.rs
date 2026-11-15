@@ -1,5 +1,5 @@
-//! Fælles firmware-logik for Må:rse. Board-crates (nRF52840, ESP32-S3)
-//! leverer radio, USB/seriel, flash og eventuelt display.
+//! Shared firmware logic for Må:rse. Board crates (nRF52840, ESP32-S3)
+//! provide radio, USB/serial, flash and possibly a display.
 
 #![no_std]
 

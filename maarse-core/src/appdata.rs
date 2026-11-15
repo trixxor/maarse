@@ -1,11 +1,11 @@
-//! App-data i announces: postkasse, forward secrecy, position og telemetri.
+//! App data in announces: mailbox, forward secrecy, position and telemetry.
 //!
 //! ```text
-//! 0x01 postkasse | adresse (16)          (fast længde, ældste felt)
-//! 0x02 FS                                 (ingen data)
-//! 0x03 | længde | position               (fra og med 0x03: type | længde | data)
-//! 0x04 | længde | telemetri
-//! 0x05 | længde | visningsnavn            (UTF-8, højst 24 bytes)
+//! 0x01 mailbox | address (16)            (fixed length, oldest field)
+//! 0x02 FS                                 (no data)
+//! 0x03 | length | position               (from 0x03 on: type | length | data)
+//! 0x04 | length | telemetry
+//! 0x05 | length | display name            (UTF-8, at most 24 bytes)
 //! 0x06 | length | role | services         (see [`push_role`])
 //! ```
 //!
@@ -14,23 +14,23 @@
 //! read the bytes they know, so the field can grow. Neighbors use it for the
 //! edge bridge rule in the router.
 //!
-//! Nye felter skal stå efter `0x02`: ældre noder læser feltet `0x02` og
-//! stopper ved det første felt, de ikke kender. Fra og med `0x03` har alle
-//! felter en længde, så fremtidige felter kan springes over.
+//! New fields must come after `0x02`: older nodes read the `0x02` field and
+//! stop at the first field they do not know. From `0x03` on, every field
+//! has a length, so future fields can be skipped.
 //!
-//! Position (9 bytes): præcision (1) | bredde (i32, 1e-7 grader) | længde
-//! (i32). Positionen er allerede afrundet til præcisionens gitter, før den
-//! sendes (se [`Position::quantised`]); modtageren ser kun cellens midte.
+//! Position (9 bytes): precision (1) | latitude (i32, 1e-7 degrees) | longitude
+//! (i32). The position is already rounded to the precision's grid before it
+//! is sent (see [`Position::quantised`]); the receiver only sees the cell centre.
 //!
-//! Telemetri (10 bytes): batteri mV (u16, 0 = ukendt) | flag (bit 0 =
-//! ekstern strøm/USB, bit 1 = temperatur gyldig) | energistatus (0-3) |
-//! oppetid s (u32) | temperatur (i16, 0,1 °C).
+//! Telemetry (10 bytes): battery mV (u16, 0 = unknown) | flags (bit 0 =
+//! external power/USB, bit 1 = temperature valid) | energy status (0-3) |
+//! uptime s (u32) | temperature (i16, 0.1 °C).
 //!
-//! Visningsnavn: valgfrit, selvvalgt og ikke bevist. Det må kun bruges til
-//! visning; kontakter kendes stadig på adresse og sikkerhedsnummer.
+//! Display name: optional, self-chosen and not proven. It may only be used
+//! for display; contacts are still known by address and safety number.
 //!
-//! Alt i alt fylder det højst 17 + 1 + 11 + 12 + 26 = 67 bytes, under
-//! `MAX_APP_DATA` (99 bytes efter arbejdsbeviset).
+//! All in all it takes at most 17 + 1 + 11 + 12 + 26 = 67 bytes, below
+//! `MAX_APP_DATA` (99 bytes after the proof of work).
 
 use crate::addr::Address;
 
@@ -48,15 +48,15 @@ pub fn push_role(v: &mut AppBuf, role: u8, flags: u8) {
     let _ = v.extend_from_slice(&[APP_ROLE, 2, role, flags]);
 }
 
-/// Længste visningsnavn i bytes (UTF-8).
+/// Longest display name in bytes (UTF-8).
 pub const MAX_NAME: usize = 24;
 
 pub type AppBuf = heapless::Vec<u8, 96>;
 pub type Name = heapless::Vec<u8, MAX_NAME>;
 
-/// Renser et visningsnavn: fjerner styretegn, trimmer mellemrum og
-/// afkorter til [`MAX_NAME`] bytes uden at skære et tegn over. Tomt
-/// navn giver `None`.
+/// Cleans a display name: removes control characters, trims whitespace and
+/// truncates to [`MAX_NAME`] bytes without cutting a character in half. An
+/// empty name gives `None`.
 pub fn clean_name(raw: &[u8]) -> Option<Name> {
     let s = core::str::from_utf8(raw).ok()?;
     let mut out = Name::new();
@@ -67,24 +67,24 @@ pub fn clean_name(raw: &[u8]) -> Option<Name> {
             break;
         }
     }
-    // Afslut ikke med mellemrum, hvis afkortningen endte der.
+    // Do not end with whitespace if the truncation ended there.
     while out.last() == Some(&b' ') {
         out.pop();
     }
     (!out.is_empty()).then_some(out)
 }
 
-/// Hvor præcist positionen deles. Standard er `Off` (deles ikke).
+/// How precisely the position is shared. Default is `Off` (not shared).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum Precision {
     #[default]
     Off = 0,
-    /// 0,1° (ca. 11 km nord-syd, 6 km øst-vest i Danmark).
+    /// 0.1° (about 11 km north-south, 6 km east-west in Denmark).
     Km10 = 1,
-    /// 0,01° (ca. 1 km).
+    /// 0.01° (about 1 km).
     Km1 = 2,
-    /// 0,00001° (ca. 1 m): kun hvis brugeren udtrykkeligt vælger det.
+    /// 0.00001° (about 1 m): only if the user explicitly chooses it.
     Precise = 3,
 }
 
@@ -97,7 +97,7 @@ impl Precision {
             _ => Precision::Off,
         }
     }
-    /// Gitterets størrelse i 1e-7 grader.
+    /// Grid size in 1e-7 degrees.
     fn step(self) -> i32 {
         match self {
             Precision::Off => 0,
@@ -119,13 +119,13 @@ fn snap(v: i32, step: i32) -> i32 {
     if step <= 1 {
         return v;
     }
-    // Midten af cellen: afslører ikke mere end cellen.
+    // The centre of the cell: reveals no more than the cell.
     (v.div_euclid(step) * step).saturating_add(step / 2)
 }
 
 impl Position {
-    /// Afrundet til præcisionens gitter. `None` ved `Off` eller ugyldige
-    /// koordinater.
+    /// Rounded to the precision's grid. `None` for `Off` or invalid
+    /// coordinates.
     pub fn quantised(self) -> Option<Position> {
         let step = self.precision.step();
         if step == 0
@@ -165,13 +165,13 @@ impl Position {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Telemetry {
-    /// 0 = ukendt (ingen batterimåling på boardet).
+    /// 0 = unknown (no battery measurement on the board).
     pub battery_mv: u16,
     pub ext_power: bool,
-    /// [`crate::Energy`] som tal (0 = kritisk ... 3 = fuld).
+    /// [`crate::Energy`] as a number (0 = critical ... 3 = full).
     pub energy: u8,
     pub uptime_s: u32,
-    /// Temperatur i 0,1 °C, hvis kendt.
+    /// Temperature in 0.1 °C, if known.
     pub temp_dc: Option<i16>,
 }
 
@@ -199,7 +199,7 @@ impl Telemetry {
     }
 }
 
-/// Afkodet app-data.
+/// Decoded app data.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AppData {
     pub postbox: Option<Address>,
@@ -213,8 +213,8 @@ pub struct AppData {
     pub role_flags: Option<u8>,
 }
 
-/// Bygger app-data. Positionen afrundes her (en præcis position sendes
-/// kun med `Precision::Precise`).
+/// Builds app data. The position is rounded here (a precise position is
+/// only sent with `Precision::Precise`).
 pub fn build(
     postbox: Option<&Address>,
     fs: bool,
@@ -281,7 +281,7 @@ pub fn parse(b: &[u8]) -> AppData {
 mod tests {
     use super::*;
 
-    const AARHUS: (i32, i32) = (561_567_000, 102_107_000); // 56,1567 N, 10,2107 Ø
+    const AARHUS: (i32, i32) = (561_567_000, 102_107_000); // 56.1567 N, 10.2107 E
 
     fn pos(p: Precision) -> Position {
         Position { precision: p, lat_e7: AARHUS.0, lon_e7: AARHUS.1 }
@@ -310,7 +310,7 @@ mod tests {
         assert_eq!((q.lat_e7, q.lon_e7), (561_500_000, 102_500_000));
         let q = pos(Precision::Precise).quantised().unwrap();
         assert_eq!((q.lat_e7, q.lon_e7), (561_567_050, 102_107_050));
-        // Negative koordinater afrundes til cellen nedenunder.
+        // Negative coordinates are rounded to the cell below.
         let s = Position { precision: Precision::Km1, lat_e7: -334_567, lon_e7: -1 };
         let q = s.quantised().unwrap();
         assert_eq!((q.lat_e7, q.lon_e7), (-350_000, -50_000));
@@ -327,17 +327,17 @@ mod tests {
         assert!(a.fs);
         assert_eq!(a.position, pos(Precision::Km1).quantised());
         assert_eq!(a.telemetry, Some(t));
-        // Ældre noders FS-tjek ser stadig FS.
+        // Older nodes' FS check still sees FS.
         assert!(b.contains(&APP_FS));
-        // Uden position (standard) sendes ingen.
+        // Without a position (the default) none is sent.
         let b = build(None, true, Some(pos(Precision::Off)), None, None);
         assert_eq!(&b[..], &[APP_FS]);
-        // Ukendt fremtidigt felt springes over.
+        // An unknown future field is skipped.
         let mut b = AppBuf::new();
         b.extend_from_slice(&[APP_FS, 0x20, 2, 1, 1]).unwrap();
         t.encode(&mut b);
         assert_eq!(parse(&b).telemetry, Some(t));
-        // Afkortet felt giver ingen panik.
+        // A truncated field does not panic.
         assert_eq!(parse(&[APP_POSITION, 9, 1]).position, None);
     }
 
@@ -351,7 +351,7 @@ mod tests {
         assert!(core::str::from_utf8(&n).is_ok());
         assert!(long.starts_with(core::str::from_utf8(&n).unwrap()));
         assert!(a.position.is_some());
-        // Fuldt udfyldt app-data er under grænsen.
+        // Fully populated app data is below the limit.
         let t = Telemetry { battery_mv: 1, ..Default::default() };
         let full = build(Some(&Address([9; 16])), true, Some(pos(Precision::Km1)), Some(&t), Some(long.as_bytes()));
         assert!(full.len() <= 67);
@@ -360,7 +360,7 @@ mod tests {
  "), None);
         assert_eq!(&clean_name(b" Ida ").unwrap()[..], b"Ida");
         assert_eq!(clean_name(&[0xff, 0xfe]), None);
-        // Ældre parser (uden 0x05) springer feltet over: fremtidige felter har længde.
+        // An older parser (without 0x05) skips the field: future fields have a length.
         assert_eq!(parse(&[APP_NAME, 3, b'I', b'd', b'a', APP_FS]).name.as_deref(), Some(&b"Ida"[..]));
     }
 }

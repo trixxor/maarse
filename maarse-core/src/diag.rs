@@ -1,29 +1,29 @@
-//! Diagnose: trace route, naboliste og støjgulv.
+//! Diagnostics: trace route, neighbour list and noise floor.
 //!
 //! ## Trace route
 //!
-//! En trace er en `Probe`-pakke (type 7) med kildesti, som følger den
-//! kendte rute til målet. Hver repeater på vejen lægger den SNR, den hørte
-//! pakken med, til bagerst i payloaden. Målet svarer ad den omvendte sti med
-//! hoppenes adresse-ID'er og SNR-værdierne ud, og repeaterne på vejen tilbage
-//! lægger deres SNR til på samme måde. Afsenderen ser til sidst SNR for hvert
-//! spring begge veje (som MeshCores trace).
+//! A trace is a `Probe` packet (type 7) with a source path that follows the
+//! known route to the target. Every repeater on the way appends the SNR it heard
+//! the packet with to the end of the payload. The target answers along the reverse
+//! path with the hops' address IDs and the outbound SNR values, and the repeaters on
+//! the way back add their SNR the same way. In the end the sender sees the SNR for
+//! every hop both ways (like MeshCore's trace).
 //!
 //! ```text
-//! payload: 0x7E | flag | fast længde (n) | fast del (n bytes) | SNR (i8) ...
-//! forespørgsel (flag 0): fast del = token (16)
-//! svar         (flag 1): fast del = antal hop k | k × sti-ID (2, BE)
-//!                        | antal SNR ud m | m × SNR ud
+//! payload: 0x7E | flags | fixed length (n) | fixed part (n bytes) | SNR (i8) ...
+//! request (flags 0): fixed part = token (16)
+//! reply   (flags 1): fixed part = hop count k | k × path ID (2, BE)
+//!                        | outbound SNR count m | m × outbound SNR
 //! ```
 //!
-//! Svaret adresseres til tokenet (som en kvittering), så målet ikke lærer,
-//! hvem der spurgte. Pakke-ID'et (dublet-filter, implicitte kvitteringer)
-//! regnes kun over den faste del, så det ikke ændrer sig, når repeatere
-//! lægger SNR til. Ældre noder sender pakken uændret videre (de kender ikke
-//! formatet); så mangler deres SNR i listen.
+//! The reply is addressed to the token (like an acknowledgement), so the target
+//! does not learn who asked. The packet ID (duplicate filter, implicit acks)
+//! is only computed over the fixed part, so it does not change when repeaters
+//! add SNR. Older nodes forward the packet unchanged (they do not know the
+//! format); their SNR is then missing from the list.
 //!
-//! Med 12 hop (største kildesti) fylder svaret 3 + 1 + 24 + 1 + 13 + 13 = 55
-//! bytes; med header og sti under 100 bytes, langt under `MAX_PACKET`.
+//! With 12 hops (the largest source path) the reply takes 3 + 1 + 24 + 1 + 13 + 13 = 55
+//! bytes; with header and path below 100 bytes, far below `MAX_PACKET`.
 
 use crate::addr::{Address, PathId};
 use crate::MAX_PATH;
@@ -31,13 +31,13 @@ use crate::MAX_PATH;
 pub const TRACE_MAGIC: u8 = 0x7E;
 pub const TRACE_REQUEST: u8 = 0;
 pub const TRACE_RESPONSE: u8 = 1;
-/// Højst så mange SNR-værdier pr. retning (sti + modtageren).
+/// At most this many SNR values per direction (path + the recipient).
 pub const MAX_SNRS: usize = MAX_PATH + 1;
 
 pub type TraceBuf = heapless::Vec<u8, 96>;
 
-/// Længden af den del af en trace-payload, som pakke-ID'et regnes over.
-/// `None`, hvis det ikke er en trace.
+/// The length of the part of a trace payload that the packet ID is computed over.
+/// `None` if it is not a trace.
 pub fn trace_fixed_len(payload: &[u8]) -> Option<usize> {
     if payload.len() < 3 || payload[0] != TRACE_MAGIC {
         return None;
@@ -46,7 +46,7 @@ pub fn trace_fixed_len(payload: &[u8]) -> Option<usize> {
     (n <= payload.len()).then_some(n)
 }
 
-/// Bygger en forespørgsel.
+/// Builds a request.
 pub fn trace_request(token: &Address) -> TraceBuf {
     let mut v = TraceBuf::new();
     let _ = v.extend_from_slice(&[TRACE_MAGIC, TRACE_REQUEST, 16]);
@@ -54,7 +54,7 @@ pub fn trace_request(token: &Address) -> TraceBuf {
     v
 }
 
-/// Lægger en SNR-værdi til (repeater eller modtager). Fuld: uændret.
+/// Appends an SNR value (repeater or recipient). Full: unchanged.
 pub fn trace_append(payload: &mut TraceBuf, snr: i8) {
     if let Some(n) = trace_fixed_len(payload)
         && payload.len() - n < MAX_SNRS
@@ -63,7 +63,7 @@ pub fn trace_append(payload: &mut TraceBuf, snr: i8) {
     }
 }
 
-/// En afkodet forespørgsel: token og SNR'er indtil nu.
+/// A decoded request: token and SNRs so far.
 pub fn parse_request(payload: &[u8]) -> Option<(Address, &[u8])> {
     let n = trace_fixed_len(payload)?;
     if payload[1] != TRACE_REQUEST || n != 19 {
@@ -72,7 +72,7 @@ pub fn parse_request(payload: &[u8]) -> Option<(Address, &[u8])> {
     Some((Address::from_slice(&payload[3..19])?, &payload[19..]))
 }
 
-/// Svaret: sti (ID'er), SNR ud (inkl. målets egen) og SNR tilbage.
+/// The reply: path (IDs), outbound SNR (incl. the target's own) and SNR back.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TraceResult {
     pub path: heapless::Vec<PathId, MAX_PATH>,
@@ -80,7 +80,7 @@ pub struct TraceResult {
     pub back: heapless::Vec<i8, MAX_SNRS>,
 }
 
-/// Bygger målets svar ud fra stien og forespørgslens SNR'er (inkl. målets).
+/// Builds the target's reply from the path and the request's SNRs (incl. the target's).
 pub fn trace_response(path: &[PathId], snrs_out: &[u8]) -> TraceBuf {
     let mut v = TraceBuf::new();
     let k = path.len().min(MAX_PATH);
@@ -116,16 +116,16 @@ pub fn parse_response(payload: &[u8]) -> Option<TraceResult> {
     Some(r)
 }
 
-// ---------- naboer ----------
+// ---------- neighbours ----------
 
-/// En nabo, vi har hørt direkte (uden mellemled).
+/// A neighbour we have heard directly (with no one in between).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Neighbor {
     pub id: PathId,
-    /// Fuld adresse, hvis vi har hørt naboens eget announce direkte.
+    /// Full address, if we have heard the neighbour's own announce directly.
     pub addr: Option<Address>,
     pub snr: i8,
-    /// RSSI i dBm (0 = ukendt, fx på en host uden radio).
+    /// RSSI in dBm (0 = unknown, e.g. on a host without a radio).
     pub rssi: i16,
     pub last_ms: u64,
     pub count: u32,
@@ -141,7 +141,7 @@ pub struct Neighbor {
     pub hears_repeater: Option<bool>,
 }
 
-/// Tabel over direkte naboer. Fuld: den længst ikke hørte erstattes.
+/// Table of direct neighbours. Full: the one not heard for the longest is replaced.
 pub struct NeighborTable<const N: usize> {
     items: heapless::Vec<Neighbor, N>,
 }
@@ -218,7 +218,7 @@ impl<const N: usize> NeighborTable<N> {
         self.items.iter()
     }
 
-    /// Sorteret efter senest hørt først.
+    /// Sorted by most recently heard first.
     pub fn sorted(&self) -> heapless::Vec<Neighbor, N> {
         let mut v = self.items.clone();
         v.sort_unstable_by_key(|n| core::cmp::Reverse(n.last_ms));
@@ -234,18 +234,18 @@ impl<const N: usize> NeighborTable<N> {
     }
 }
 
-// ---------- støjgulv ----------
+// ---------- noise floor ----------
 
 /// 10·log10(1 + 10^(s/10)) i tiendedele dB for s = -10..=10.
 const SUM_DB_X10: [i16; 21] = [
     4, 5, 6, 8, 10, 12, 15, 18, 21, 25, 30, 35, 41, 48, 55, 62, 70, 78, 86, 95, 104,
 ];
 
-/// Anslår støjgulvet (dBm) ud fra en modtaget pakkes RSSI og SNR.
+/// Estimates the noise floor (dBm) from a received packet's RSSI and SNR.
 ///
-/// lora-phy giver ikke adgang til den øjeblikkelige RSSI, mens radioen
-/// lytter. Pakkens RSSI er signal + støj, og SNR er signal / støj, så
-/// støjen er N = RSSI − 10·log10(1 + 10^(SNR/10)).
+/// lora-phy gives no access to the instantaneous RSSI while the radio
+/// listens. The packet's RSSI is signal + noise, and SNR is signal / noise, so
+/// the noise is N = RSSI − 10·log10(1 + 10^(SNR/10)).
 pub fn noise_floor_dbm(rssi: i16, snr: i8) -> i16 {
     let s = snr as i16;
     let x10 = if s < -10 {
@@ -269,13 +269,13 @@ mod tests {
         let fixed = trace_fixed_len(&req).unwrap();
         trace_append(&mut req, 5);
         trace_append(&mut req, -12);
-        assert_eq!(trace_fixed_len(&req), Some(fixed), "fast del ændres ikke");
+        assert_eq!(trace_fixed_len(&req), Some(fixed), "fixed part does not change");
         let (t, snrs) = parse_request(&req).unwrap();
         assert_eq!(t, token);
         assert_eq!(snrs, &[5u8, (-12i8) as u8][..]);
 
         let mut out: heapless::Vec<u8, 16> = heapless::Vec::from_slice(snrs).unwrap();
-        out.push(3).unwrap(); // målets egen
+        out.push(3).unwrap(); // the target's own
         let mut resp = trace_response(&[0x1111, 0x2222], &out);
         trace_append(&mut resp, -1);
         trace_append(&mut resp, 2);
@@ -312,7 +312,7 @@ mod tests {
         assert_eq!(s[0].id, 1);
         assert_eq!(s[0].count, 2);
         assert_eq!(s[0].addr, Some(Address([1; 16])));
-        // Fuld: nr. 2 (ældst) erstattes.
+        // Full: no. 2 (oldest) is replaced.
         t.heard(3, None, 0, -110, 40);
         assert_eq!(t.len(), 2);
         assert!(t.sorted().iter().all(|n| n.id != 2));
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn noise() {
-        // SNR 0: signal = støj, RSSI er 3 dB over støjen.
+        // SNR 0: signal = noise, RSSI is 3 dB above the noise.
         assert_eq!(noise_floor_dbm(-117, 0), -120);
         assert_eq!(noise_floor_dbm(-100, 20), -120);
         assert_eq!(noise_floor_dbm(-120, -15), -120);

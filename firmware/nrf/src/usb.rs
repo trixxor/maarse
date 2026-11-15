@@ -1,4 +1,4 @@
-//! USB seriel (CDC ACM): companion-rammer ind og ud.
+//! USB serial (CDC ACM): companion frames in and out.
 
 use embassy_futures::join::join4;
 use embassy_nrf::Peri;
@@ -11,7 +11,7 @@ use static_cell::StaticCell;
 use maarse_core::companion::FrameDecoder;
 use maarse_fw_common::bus::{USB_IN, USB_OUT};
 
-/// Adafruit-bootloaderen starter i UF2-tilstand, når GPREGRET er 0x57.
+/// The Adafruit bootloader starts in UF2 mode when GPREGRET is 0x57.
 fn enter_uf2_bootloader() -> ! {
     const GPREGRET: *mut u32 = 0x4000_051C as *mut u32;
     unsafe { core::ptr::write_volatile(GPREGRET, 0x57) };
@@ -20,12 +20,12 @@ fn enter_uf2_bootloader() -> ! {
 
 #[embassy_executor::task]
 pub async fn usb_task(usbd: Peri<'static, USBD>, irqs: crate::Irqs) {
-    // CLOCK_POWER-afbrydelsen ejes af MPSL (Bluetooth), så USB-strøm kan
-    // ikke opdages i hardware. Vi antager, at kablet er sat i.
+    // The CLOCK_POWER interrupt is owned by MPSL (Bluetooth), so USB power cannot
+    // be detected in hardware. We assume the cable is plugged in.
     static VBUS: StaticCell<SoftwareVbusDetect> = StaticCell::new();
     let vbus = VBUS.init(SoftwareVbusDetect::new(true, true));
     let driver = Driver::new(usbd, irqs, &*vbus);
-    let mut config = Config::new(0x1209, 0x7a6e); // pid.codes testnummer
+    let mut config = Config::new(0x1209, 0x7a6e); // pid.codes test number
     config.manufacturer = Some("Maarse");
     config.product = Some("Maarse-node");
     config.serial_number = Some("maarse");
@@ -49,7 +49,7 @@ pub async fn usb_task(usbd: Peri<'static, USBD>, irqs: crate::Irqs) {
     let class = CdcAcmClass::new(&mut builder, STATE.init(State::new()), 64);
     let mut usb = builder.build();
     let (tx, mut rx, ctrl) = class.split_with_control();
-    // Deles mellem skriveren og 1200 baud-tjekket (som læser baudraten).
+    // Shared between the writer and the 1200 baud check (which reads the baud rate).
     let tx = embassy_sync::mutex::Mutex::<embassy_sync::blocking_mutex::raw::NoopRawMutex, _>::new(tx);
 
     let reader = async {
@@ -76,15 +76,15 @@ pub async fn usb_task(usbd: Peri<'static, USBD>, irqs: crate::Irqs) {
                     break;
                 }
             }
-            // En pakke på præcis 64 bytes skal afsluttes med en tom pakke.
+            // A packet of exactly 64 bytes must be terminated with an empty packet.
             if ok && frame.len() % 64 == 0 {
                 let _ = tx.write_packet(&[]).await;
             }
         }
     };
-    // "1200 baud-touch": åbner værten porten med 1200 baud og lukker den
-    // igen (DTR falder), genstarter vi i UF2-bootloaderen. Så kan
-    // scripts/flash-nrf flashe uden at man trykker på reset.
+    // "1200 baud touch": if the host opens the port at 1200 baud and closes it
+    // again (DTR drops), we restart into the UF2 bootloader. Then
+    // scripts/flash-nrf can flash without anyone pressing reset.
     let touch = async {
         loop {
             ctrl.control_changed().await;

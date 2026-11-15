@@ -3,7 +3,7 @@ name = "maarse-lab"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Testlaboratorium: kør og se alle tests, fuzzing, simulator og benchmarks live i browseren"
+description = "Test lab: run and watch all tests, fuzzing, simulator and benchmarks live in the browser"
 
 [dependencies]
 maarse-core = { version = "0.1.0", path = "../maarse-core" }

@@ -1,12 +1,12 @@
-//! Valgfrit hændelsesspor til visualisering (`--trace-json <fil|->`).
+//! Optional event trace for visualisation (`--trace-json <file|->`).
 //!
-//! Én JSON-linje pr. hændelse. Bruges af `maarse-lab` til at animere
-//! simuleringen i browseren. Når sporet er slået fra, koster kaldene kun et
-//! tjek af et flag. Formatet:
+//! One JSON line per event. Used by `maarse-lab` to animate
+//! the simulation in the browser. When the trace is off, the calls only cost a
+//! check of a flag. The format:
 //!
 //! ```text
 //! {"ev":"setup","mode":"maarse","highway":false,"w":30000,"h":30000,"dur":900000,"nodes":[[x,y,"r"|"c"|"car"],...]}
-//! {"ev":"links","l":[[a,b,snr],...]}            hørbare par (a<b), SNR i dB
+//! {"ev":"links","l":[[a,b,snr],...]}            audible pairs (a<b), SNR in dB
 //! {"t":ms,"ev":"tx","n":node,"id":tx,"end":ms,"air":µs,"p":"Announce"}
 //! {"t":ms,"ev":"rx","id":tx,"ok":[...],"coll":[...]}
 //! {"t":ms,"ev":"defer","n":node,"why":"duty"|"busy"}
@@ -25,13 +25,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 static ON: AtomicBool = AtomicBool::new(false);
 static OUT: Mutex<Option<Box<dyn Write + Send>>> = Mutex::new(None);
 
-/// Åbn sporet. `-` betyder stdout.
+/// Open the trace. `-` means stdout.
 pub fn open(path: &str) {
     let w: Box<dyn Write + Send> = if path == "-" {
         Box::new(std::io::BufWriter::new(std::io::stdout()))
     } else {
         Box::new(std::io::BufWriter::new(
-            std::fs::File::create(path).expect("--trace-json: kan ikke oprette fil"),
+            std::fs::File::create(path).expect("--trace-json: cannot create file"),
         ))
     };
     *OUT.lock().unwrap() = Some(w);
@@ -60,7 +60,7 @@ pub fn finish() {
     }
 }
 
-/// Noder: (x, y, rolle). Links: (a, b, snr).
+/// Nodes: (x, y, role). Links: (a, b, snr).
 pub fn setup(
     mode: &str,
     highway: bool,
@@ -130,7 +130,7 @@ pub fn moved(t: u64, node: usize, pos: (f64, f64)) {
     }
 }
 
-/// Samler modtagere af én udsendelse.
+/// Collects the receivers of one transmission.
 #[derive(Default)]
 pub struct Rx {
     ok: Vec<usize>,

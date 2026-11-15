@@ -1,15 +1,15 @@
-//! Batterimåling på Heltec WiFi LoRa 32 V4.
+//! Battery measurement on the Heltec WiFi LoRa 32 V4.
 //!
-//! Fra Meshtastic `variants/esp32s3/heltec_v4/variant.h`: batteriet måles
-//! på GPIO1 (ADC1, kanal 0) via en deler, som tændes ved at sætte ADC_CTRL
-//! (GPIO37) høj (`ADC_CTRL_ENABLED HIGH`). Dæmpning 2,5 dB (lav dæmpning
-//! pga. deleren med høj impedans) og faktor `ADC_MULTIPLIER 4.9 * 1.045`
-//! = 5,12. Deleren slukkes mellem målingerne, så den ikke trækker strøm.
+//! From Meshtastic `variants/esp32s3/heltec_v4/variant.h`: the battery is measured
+//! on GPIO1 (ADC1, channel 0) via a divider, which is switched on by setting ADC_CTRL
+//! (GPIO37) high (`ADC_CTRL_ENABLED HIGH`). Attenuation 2.5 dB (low attenuation
+//! because of the high-impedance divider) and factor `ADC_MULTIPLIER 4.9 * 1.045`
+//! = 5.12. The divider is switched off between measurements, so it draws no current.
 //!
-//! XIAO ESP32-S3 med Wio-SX1262-kittet har ingen batterideler til en ADC,
-//! så dér rapporteres batteriet som ukendt (status uden `BATTERY_MV`,
-//! telemetri med 0 mV). Ingen af de to boards har en USB-detektering, vi
-//! kan læse, så ekstern strøm er ukendt.
+//! The XIAO ESP32-S3 with the Wio-SX1262 kit has no battery divider to an ADC,
+//! so there the battery is reported as unknown (status without `BATTERY_MV`,
+//! telemetry with 0 mV). Neither of the two boards has USB detection we
+//! can read, so external power is unknown.
 
 use esp_hal::analog::adc::{Adc, AdcCalCurve, AdcConfig, AdcPin, Attenuation};
 use esp_hal::gpio::Output;
@@ -39,7 +39,7 @@ pub async fn battery_task(
         Timer::after_millis(10).await;
         let mut samples = [0u16; power::SAMPLES];
         for s in samples.iter_mut() {
-            // Med kurvekalibrering er resultatet i mV ved benet.
+            // With curve calibration the result is in mV at the pin.
             let mv = adc.read_blocking(&mut pin) as u32;
             *s = (mv * DIVIDER_X1000 / 1000).min(u16::MAX as u32) as u16;
             Timer::after_millis(5).await;

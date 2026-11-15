@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Må:rse Denmark Simulator</title>
+<meta name="description" content="Build and break a national Må:rse LoRa mesh across Denmark, running the real router code compiled to WebAssembly.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand"><b>Må:rse</b> Denmark Simulator <a href="../simulator/" title="The simpler JS model">Mesh Lab</a> <a href="README.md">How it works</a></div>
+  <div class="ctrl">
+    <select id="preset" title="Scenario preset"></select>
+    <button id="btn-reset" title="Rebuild the simulation from the scenario (t = 0)">⟲ Reset</button>
+    <button id="btn-play" class="primary">▶ Play</button>
+    <button id="btn-step" title="Advance 1 simulated second">Step</button>
+    <select id="speed" title="Time scale">
+      <option value="1">1×</option><option value="10" selected>10×</option><option value="60">60×</option><option value="200">200×</option><option value="1000">1000×</option>
+    </select>
+    <span id="clock">t = 0 s</span>
+    <span id="behind" class="warn hidden">CPU-bound</span>
+  </div>
+  <div class="honest">Simplified radio model (log-distance path loss, antenna height, radio horizon). Not a coverage prediction; a simulator is not a field measurement. The routing is the real <code>maarse-core</code> Router.</div>
+</header>
+
+<div id="main">
+  <aside id="side">
+    <nav id="tabs">
+      <button data-tab="build" class="on">Build</button>
+      <button data-tab="disaster">Disaster</button>
+      <button data-tab="alerts">Alerts</button>
+      <button data-tab="stats">Stats</button>
+      <button data-tab="trace">Trace</button>
+      <button data-tab="log">Log</button>
+    </nav>
+
+    <section id="tab-build" class="tab on">
+      <h3>Map tools</h3>
+      <div class="tools" id="tools">
+        <button data-tool="select" class="on">Select / move</button>
+        <button data-tool="delete">Delete</button>
+        <button data-tool="handheld">+ Handheld</button>
+        <button data-tool="relay">+ Relay</button>
+        <button data-tool="repeater">+ Repeater</button>
+        <button data-tool="anchor">+ Anchor (mast)</button>
+        <button data-tool="host">+ Host (gateway)</button>
+        <button data-tool="wifi">+ ESP32 Wi-Fi</button>
+        <button data-tool="mobile">+ Car (draw route)</button>
+        <button data-tool="link-tcp">Link: TCP</button>
+        <button data-tool="link-wifi">Link: Wi-Fi P2P</button>
+      </div>
+      <p class="hint" id="tool-hint">Click a node to inspect it; drag to move.</p>
+
+      <h3>Generate Denmark</h3>
+      <label>Users <input type="range" id="g-users" min="50" max="3000" step="50" value="600"><span></span></label>
+      <label>Repeater spacing (km) <input type="range" id="g-rep" min="8" max="40" step="1" value="18"><span></span></label>
+      <label>Hosts with internet (%) <input type="range" id="g-net" min="0" max="100" step="5" value="70"><span></span></label>
+      <label>Seed <input type="number" id="g-seed" value="1" min="1"></label>
+      <button id="btn-generate" class="primary">Generate</button>
+      <button id="btn-clear">Clear map</button>
+
+      <h3>Features</h3>
+      <div id="features"></div>
+      <label>Default SF <select id="sc-sf"><option>7</option><option>8</option><option selected>9</option><option>10</option><option>11</option><option>12</option></select></label>
+      <label>Duty cycle (‰) <input type="number" id="sc-duty" value="100" min="1" max="1000"></label>
+
+      <h3>Traffic</h3>
+      <label>Direct msgs / min <input type="number" id="tr-direct" value="6" min="0" step="1"></label>
+      <label>Channel msgs / min <input type="number" id="tr-channel" value="1" min="0" step="0.5"></label>
+      <label>Local share <input type="number" id="tr-local" value="0.8" min="0" max="1" step="0.1"></label>
+
+      <h3>Map</h3>
+      <label><input type="checkbox" id="opt-islands" checked> Colour by island (radio component)</label>
+      <label><input type="checkbox" id="opt-links"> Show radio links of the selected node</label>
+      <label><input type="checkbox" id="opt-backbone" checked> Show backbone links</label>
+
+      <h3>Scenario file</h3>
+      <button id="btn-export">Export JSON</button>
+      <label class="file">Import JSON <input type="file" id="file-import" accept=".json,application/json"></label>
+      <p class="hint" id="sc-info"></p>
+    </section>
+
+    <section id="tab-disaster" class="tab">
+      <p class="hint">Applies now while running (and is added to the timeline so a replay repeats it), or at the time below.</p>
+      <label>At t = <input type="number" id="ev-at" placeholder="now" min="0"> s</label>
+      <button data-ev="internet_down">Internet down everywhere</button>
+      <button data-ev="internet_up">Internet back</button>
+      <label>Region <select id="ev-region"><option>nordjylland</option><option>midtjylland</option><option>syddanmark</option><option>sjaelland</option><option>hovedstaden</option></select></label>
+      <button data-ev="internet_down_region">Internet down in region</button>
+      <button data-ev="power_cut">Power cut in area (draw polygon)</button>
+      <button data-ev="power_restore">Power back</button>
+      <label>N <input type="number" id="ev-n" value="10" min="1"></label>
+      <button data-ev="kill_random">Kill N random repeaters</button>
+      <button data-ev="revive">Revive killed nodes</button>
+      <p class="hint">Turn off one backbone link: pick "Select", click the link on the map.</p>
+      <h3>Timeline</h3>
+      <div id="timeline"></div>
+    </section>
+
+    <section id="tab-alerts" class="tab">
+      <p class="hint">A signed bulletin (real <code>maarse_crypto::bulletin</code>) on <code>#bulletin</code>, sent with the bulletin priority (<code>qos::priority_with</code>). The area travels inside the signed text; see AREA-ALERTS.md.</p>
+      <label>Sender <select id="al-from"></select></label>
+      <label>Type <select id="al-kind"><option value="evacuation">Evacuation</option><option value="fire">Fire</option><option value="flood">Flood</option><option value="water">Water</option><option value="info">Info</option></select></label>
+      <label>Text <input id="al-text" value="Evacuate now" maxlength="60"></label>
+      <button id="btn-al-circle">Draw circle and send</button>
+      <button id="btn-al-poly">Draw polygon and send</button>
+      <div id="alert-list"></div>
+    </section>
+
+    <section id="tab-stats" class="tab">
+      <div id="stats"></div>
+      <h3>Compare runs</h3>
+      <label>Turn off / on <select id="cmp-feature">
+        <option value="carry">carry</option><option value="local_repair" selected>local repair</option><option value="backbone">backbone</option><option value="regions">regions</option><option value="sf_slot">SF slot</option><option value="scale_timeouts">scaled timeouts</option><option value="load_control">load control</option><option value="area_scope">area scope (alerts)</option>
+      </select></label>
+      <label>Duration (s) <input type="number" id="cmp-dur" value="900" min="60" step="60"></label>
+      <button id="btn-compare" class="primary">Run both</button>
+      <div id="compare"></div>
+    </section>
+
+    <section id="tab-trace" class="tab">
+      <h3>Packet animation</h3>
+      <div id="anim-types"></div>
+      <label><input type="checkbox" id="anim-on" checked> Animate transmissions</label>
+      <h3>Messages</h3>
+      <p class="hint">Click a message to follow its whole life.</p>
+      <div id="msg-list" class="scroll"></div>
+      <div id="follow"></div>
+      <div id="reach"></div>
+    </section>
+
+    <section id="tab-log" class="tab">
+      <div class="row">
+        <input id="lg-node" placeholder="node" size="5">
+        <select id="lg-type"><option value="">any packet</option></select>
+        <input id="lg-msg" placeholder="msg" size="5">
+        <select id="lg-ev"><option value="">any event</option></select>
+      </div>
+      <div class="row"><button id="btn-log">Refresh</button><button id="btn-log-json">Export JSON</button><button id="btn-log-csv">Export CSV</button></div>
+      <div id="log" class="scroll mono"></div>
+    </section>
+
+    <section id="inspector" class="hidden"></section>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="dk-land.js"></script>
+<script src="dk-towns.js"></script>
+<script src="scenarios.js"></script>
+<script src="maarse-sim.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

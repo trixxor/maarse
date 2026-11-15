@@ -5,6 +5,7 @@
 **Text, pictures and voice between cheap LoRa radios, with no mobile network and no central server.<br>When there is internet, the same network carries on around the world.**
 
 [**▶ Open the Mesh Lab**](https://trixxor.github.io/maarse/simulator/): race Må:rse against Meshtastic, MeshCore and Reticulum in your browser
+· [Denmark simulator](https://trixxor.github.io/maarse/denmark/): build and break a national network, real router code in WebAssembly ([how it works](docs/denmark/README.md))
 · [Technical guide](docs/GUIDE.md) · [Full comparison](compare.md)
 
 ![Status: prototype](https://img.shields.io/badge/status-prototype-orange) ![Rust, no heap](https://img.shields.io/badge/firmware-Rust%2C%20no%20heap-blue) ![Licence MIT or Apache-2.0](https://img.shields.io/badge/licence-MIT%20%2F%20Apache--2.0-green)

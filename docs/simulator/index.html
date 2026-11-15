@@ -3,603 +3,135 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Må:rse Mesh Simulator</title>
-<meta name="description" content="Compare Meshtastic, MeshCore, Reticulum and Må:rse in simplified LoRa mesh scenarios, in the browser.">
-<style>
-:root {
-  --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5d6673; --line: #dde1e6;
-  --map: #eef2ea; --road: #9aa3ad; --water: #d6e6f2; --tree: #b9d3ad; --block: #d9dce1;
-  --mt: #2f7d4f; --mc: #c9822b; --rn: #7a4fb5; --ma: #1f6fd1;
-  --ok: #2f7d4f; --bad: #c0392b; --accent: #1f6fd1;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #111418; --panel: #1a1f25; --ink: #e6e9ed; --muted: #9aa4b0; --line: #2c333b;
-    --map: #1c2420; --road: #59626c; --water: #1d2c38; --tree: #2a3d2c; --block: #2c3138;
-    --mt: #5cc489; --mc: #e9a85a; --rn: #b08ae6; --ma: #5aa2ff; --ok: #5cc489; --bad: #ef6b5e; --accent: #5aa2ff;
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #111418; --panel: #1a1f25; --ink: #e6e9ed; --muted: #9aa4b0; --line: #2c333b;
-  --map: #1c2420; --road: #59626c; --water: #1d2c38; --tree: #2a3d2c; --block: #2c3138;
-  --mt: #5cc489; --mc: #e9a85a; --rn: #b08ae6; --ma: #5aa2ff; --ok: #5cc489; --bad: #ef6b5e; --accent: #5aa2ff;
-}
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-header { padding: 20px 16px 8px; max-width: 1200px; margin: 0 auto; }
-header h1 { margin: 0; font-size: 24px; }
-header p { margin: 4px 0 0; color: var(--muted); }
-main { max-width: 1200px; margin: 0 auto; padding: 8px 16px 40px; }
-.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 14px; }
-.tabs button, .btn { border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 7px 12px; border-radius: 8px; cursor: pointer; font: inherit; }
-.tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn:hover, .tabs button:hover { border-color: var(--accent); }
-.grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 14px; }
-@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
-.panel h2 { margin: 0 0 8px; font-size: 16px; }
-canvas { width: 100%; height: auto; display: block; border-radius: 8px; background: var(--map); }
-.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--muted); margin-top: 8px; }
-.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; background: currentColor; }
-.legend .rep::before { clip-path: polygon(50% 0, 100% 100%, 0 100%); }
-.legend .cli::before { border-radius: 50%; }
-.legend .gw::before { border-radius: 2px; }
-.anim { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
-.anim .btn[data-p] { border-left-width: 4px; }
-#animInfo { font-size: 13px; color: var(--muted); min-height: 1.5em; margin-top: 6px; }
-.settings { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; font-size: 14px; }
-.settings input[type=range] { width: 130px; }
-.settings output { min-width: 2.5em; display: inline-block; text-align: right; color: var(--muted); }
-.metric { margin: 12px 0 4px; font-weight: 600; font-size: 14px; }
-.metric small { font-weight: 400; color: var(--muted); }
-.bar { display: grid; grid-template-columns: 92px 1fr 70px; gap: 8px; align-items: center; font-size: 13px; margin: 3px 0; }
-.bar .track { background: var(--bg); border-radius: 4px; height: 14px; overflow: hidden; }
-.bar .fill { height: 100%; border-radius: 4px; transition: width .4s; }
-.bar .val { text-align: right; font-variant-numeric: tabular-nums; }
-.explain { margin-top: 14px; }
-.explain h3 { margin: 12px 0 4px; font-size: 15px; }
-.explain p { margin: 4px 0; }
-.who { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-top: 8px; }
-.who div { border-left: 4px solid; padding: 6px 10px; background: var(--bg); border-radius: 6px; font-size: 14px; }
-.note { font-size: 13px; color: var(--muted); margin-top: 18px; }
-.mt { color: var(--mt); border-color: var(--mt) !important; } .mc { color: var(--mc); border-color: var(--mc) !important; }
-.rn { color: var(--rn); border-color: var(--rn) !important; } .ma { color: var(--ma); border-color: var(--ma) !important; }
-.who div b { color: var(--ink); }
-</style>
+<title>Må:rse Mesh Lab</title>
+<meta name="description" content="Race Meshtastic, MeshCore, Reticulum and Må:rse on the same map: watch a message travel, break a repeater, and see why each design wins or loses.">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>Må:rse mesh simulator</h1>
-  <p>Meshtastic, MeshCore, Reticulum and Må:rse on the same map, the same people and the same messages. Pick a scenario, change the settings and watch a message travel.</p>
-</header>
-<main>
-  <div class="tabs" id="tabs"></div>
-  <div class="grid">
-    <div class="panel">
-      <canvas id="map" width="900" height="560"></canvas>
-      <div class="legend">
-        <span class="rep" style="color:var(--muted)">repeater</span>
-        <span class="cli" style="color:var(--muted)">person / client</span>
-        <span class="gw" style="color:var(--muted)">host with internet</span>
-      </div>
-      <div class="anim">
-        <span style="font-size:14px">Show one message:</span>
-        <button class="btn mt" data-p="mt">Meshtastic</button>
-        <button class="btn mc" data-p="mc">MeshCore</button>
-        <button class="btn rn" data-p="rn">Reticulum</button>
-        <button class="btn ma" data-p="ma">Må:rse</button>
-        <button class="btn" id="nextMsg" title="Pick another message">Next message ↻</button>
-      </div>
-      <div id="animInfo"></div>
+<header class="top wrap">
+  <div class="row">
+    <div>
+      <h1>Må:rse <span>Mesh Lab</span></h1>
+      <p>Four ways to run a LoRa mesh, on the same map, with the same people sending the same messages. Watch a message travel, break things, and see why each design wins or loses.</p>
     </div>
-    <div class="panel">
-      <h2>Settings</h2>
-      <div class="settings">
-        <label for="sMsgs">Messages</label><span><input type="range" id="sMsgs" min="10" max="120" step="10" value="40"><output id="oMsgs"></output></span>
-        <label for="sSeed">Random seed</label><span><input type="range" id="sSeed" min="1" max="20" value="1"><output id="oSeed"></output></span>
-        <label for="sHops">Meshtastic hop limit</label><span><input type="range" id="sHops" min="1" max="7" value="3"><output id="oHops"></output></span>
-        <label for="sGw">Internet gateways</label><span><input type="checkbox" id="sGw"></span>
-        <label for="sCarry">Må:rse carry (store-carry-forward)</label><span><input type="checkbox" id="sCarry"></span>
-      </div>
-      <div id="results"></div>
-    </div>
+    <div class="links"><a href="https://github.com/trixxor/maarse">GitHub</a><a href="#" data-view="model">How the model works</a></div>
   </div>
-  <div class="panel explain" id="explain"></div>
-  <p class="note">This is a simplified model for building intuition, not a radio simulator. Links fail more often the farther apart two nodes are. Packets sent at the same time can collide, and a busy channel loses more. Each protocol follows its main routing rule, as described under the scenario. The absolute numbers are indicative only. The project's own Rust simulator (<code>maarse-sim</code>) runs the real Må:rse router code; see the README for its results.</p>
+  <nav class="views" id="views">
+    <button data-view="play" class="on">🧪 Scenarios</button>
+    <button data-view="lab">📈 Scaling lab</button>
+    <button data-view="model">📖 How the model works</button>
+  </nav>
+</header>
+
+<main class="wrap">
+  <!-- ===== scenarios ===== -->
+  <section id="view-play">
+    <div class="scenarios" id="scenarios"></div>
+    <div class="layout">
+      <div>
+        <div class="panel story" id="story">
+          <div id="storyText"></div>
+          <div class="try"><h3>Try this</h3><div class="chips" id="chips"></div><div class="lesson" id="lesson"></div></div>
+        </div>
+
+        <div class="panel" id="sandboxPanel">
+          <h2>Build your own map</h2>
+          <p class="muted small">Pick a tool and click the map. Drag to move a node. Choose a sender and a recipient for the race, or let the simulator pick people at random.</p>
+          <div class="toolbar" id="tools">
+            <button class="btn on" data-tool="rep">▲ Repeater</button>
+            <button class="btn" data-tool="cli">● Person</button>
+            <button class="btn" data-tool="gw">■ Host with internet</button>
+            <button class="btn" data-tool="move">✥ Move</button>
+            <button class="btn" data-tool="erase">✕ Erase</button>
+            <button class="btn" data-tool="from">Set sender</button>
+            <button class="btn" data-tool="to">Set recipient</button>
+            <span style="flex:1"></span>
+            <button class="btn" id="preset-valley">Preset: valley</button>
+            <button class="btn" id="preset-islands">Preset: two villages</button>
+            <button class="btn" id="clearMap">Clear</button>
+          </div>
+          <canvas id="editCanvas" width="1000" height="600"></canvas>
+        </div>
+
+        <div class="panel">
+          <div class="subtabs" id="subtabs">
+            <button data-sub="race" class="on">🏁 Race one message</button>
+            <button data-sub="run">📊 Run the whole scenario</button>
+          </div>
+
+          <div id="sub-race">
+            <div class="racebar">
+              <button class="btn primary" id="play">▶ Play</button>
+              <button class="btn" id="step">Step ⏭</button>
+              <button class="btn" id="restart">↺ Restart</button>
+              <button class="btn" id="nextMsg">Another message →</button>
+              <label><input type="checkbox" id="knock"> 💥 Knock out a repeater on the route</label>
+              <span class="sep"></span>
+              <label>Speed <select class="sel" id="speed"><option value="1100">slow</option><option value="650" selected>normal</option><option value="300">fast</option></select></label>
+            </div>
+            <div class="lanes" id="lanes"></div>
+            <div class="legend">
+              <span><i style="background:var(--muted);clip-path:polygon(50% 0,100% 100%,0 100%)"></i>repeater</span>
+              <span><i style="background:var(--muted);border-radius:50%"></i>person</span>
+              <span><i style="background:var(--muted)"></i>host with internet</span>
+              <span><i style="border:2px solid var(--muted);border-radius:50%"></i>a transmission (radio range)</span>
+              <span><i style="background:var(--accent);height:3px;vertical-align:3px"></i>a packet along a path</span>
+              <span><i style="border-top:2px dashed var(--accent);height:0;vertical-align:3px"></i>internet (no airtime)</span>
+            </div>
+            <div class="racesum" id="raceSum"></div>
+          </div>
+
+          <div id="sub-run" class="hidden">
+            <div class="racebar"><button class="btn primary" id="runBtn">▶ Run it</button><span class="muted small" id="runInfo"></span></div>
+            <div id="runOut"><p class="busy">Press "Run it" to send every message in the scenario with all four designs.</p></div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="panel controls" id="controls">
+        <h2>Conditions</h2>
+        <div class="ctl"><label for="c-msgs">Messages</label><output id="o-msgs"></output><input type="range" id="c-msgs" min="10" max="150" step="10"></div>
+        <div class="ctl"><label for="c-noise">Interference</label><output id="o-noise"></output><input type="range" id="c-noise" min="0" max="0.6" step="0.05"><span class="help">Share of packets damaged by noise, walls, bodies and other radios.</span></div>
+        <div class="ctl"><label for="c-speed">Movement</label><output id="o-speed"></output><input type="range" id="c-speed" min="0" max="3" step="0.25"><span class="help">How fast cars and walkers move (1× = normal).</span></div>
+        <div class="ctl"><label for="c-people">People</label><output id="o-people"></output><input type="range" id="c-people" min="0.5" max="2" step="0.25"></div>
+        <div class="ctl"><label for="c-sf">Spreading factor</label><output id="o-sf"></output><input type="range" id="c-sf" min="7" max="12" step="1"><span class="help">Higher SF reaches further but every packet takes longer on the air.</span></div>
+        <div class="ctl"><label for="c-duty">Duty-cycle limit</label><select class="sel" id="c-duty"><option value="0">off</option><option value="0.1">10 % (869.4–869.65 MHz)</option><option value="0.01">1 % (most of 868 MHz)</option></select><span class="help">EU rules: each node may only transmit this share of the time.</span></div>
+        <div class="ctl"><label for="c-hops">Meshtastic hop limit</label><output id="o-hops"></output><input type="range" id="c-hops" min="1" max="7" step="1"></div>
+        <label class="toggle"><input type="checkbox" id="c-gw"><span>Internet gateways<small>Hosts with internet join the LoRa areas (Må:rse backbone, Reticulum TCP, Meshtastic MQTT).</small></span></label>
+        <label class="toggle"><input type="checkbox" id="c-server"><span>Server node<small>Store &amp; Forward router, room server or propagation node, where the scenario has one.</small></span></label>
+        <div class="ctl"><label for="c-seed">Random map / people</label><output id="o-seed"></output><input type="range" id="c-seed" min="1" max="30" step="1"></div>
+
+        <div class="feat">
+          <h3>Må:rse features</h3>
+          <p class="muted small" style="margin:0">Switch one off to see what it is worth.</p>
+          <label class="toggle"><input type="checkbox" id="f-hopAck"><span>Per-hop acknowledgement<small>A lost packet is resent on that hop, and a broken hop is noticed at once.</small></span></label>
+          <label class="toggle"><input type="checkbox" id="f-bestPath"><span>Best-signal path<small>Pick the path with the strongest links, not just the first copy to arrive.</small></span></label>
+          <label class="toggle"><input type="checkbox" id="f-relay"><span>Relay role (forest mode)<small>Handhelds forward for up to 4 hops when no repeater is around.</small></span></label>
+          <label class="toggle"><input type="checkbox" id="f-carry"><span>Carry<small>Moving people take a copy along and deliver it later.</small></span></label>
+          <label class="toggle"><input type="checkbox" id="f-mailbox"><span>Mailbox<small>Kept on a host or in a repeater's flash, delivered when the recipient is back.</small></span></label>
+          <label class="toggle"><input type="checkbox" id="f-backbone"><span>Backbone + DHT<small>Look the recipient up and send over the internet straight to the right area.</small></span></label>
+        </div>
+        <button class="btn" id="reset" style="margin-top:10px;width:100%">Reset to the scenario's defaults</button>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ===== scaling lab ===== -->
+  <section id="view-lab" class="hidden">
+    <div class="panel" style="margin-top:14px">
+      <h2>Scaling lab</h2>
+      <p class="muted">Each chart sweeps one thing and runs all four designs at every point. These are the patterns behind the scenarios. Press <b>Run</b> on a chart (it takes a few seconds).</p>
+    </div>
+    <div class="labgrid" id="labgrid" style="margin-top:14px"></div>
+  </section>
+
+  <!-- ===== model ===== -->
+  <section id="view-model" class="hidden">
+    <div class="panel model" style="margin-top:14px" id="modelText"></div>
+  </section>
 </main>
-<script>
-"use strict";
-// ---------- seeded random ----------
-function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-
-const P = {
-  mt: { name: "Meshtastic", color: "--mt" },
-  mc: { name: "MeshCore", color: "--mc" },
-  rn: { name: "Reticulum", color: "--rn" },
-  ma: { name: "Må:rse", color: "--ma" },
-};
-const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-
-// ---------- scenarios ----------
-// Units: km and seconds. range = typical reliable radio range of a node.
-const SCENARIOS = {
-  motorway: {
-    title: "Motorway",
-    w: 120, h: 40, sf: 10, duration: 3600, mobile: true, gw: true,
-    build(r) {
-      const n = [];
-      for (let x = 6; x < 120; x += 15) n.push({ x, y: 20 + (r() - .5) * 3, role: "rep", range: 30 });
-      n.push({ x: 2, y: 24, role: "cli", range: 3, gw: true, home: true });
-      n.push({ x: 118, y: 16, role: "cli", range: 3, gw: true, home: true });
-      for (let i = 0; i < 4; i++) n.push({ x: 1 + r() * 6, y: 18 + r() * 10, role: "cli", range: 3, home: true });
-      for (let i = 0; i < 4; i++) n.push({ x: 113 + r() * 6, y: 12 + r() * 10, role: "cli", range: 3, home: true });
-      for (let i = 0; i < 12; i++) n.push({ x: r() * 120, y: 20, role: "cli", range: 4, car: true, v: (r() < .5 ? 1 : -1) * 0.031 });
-      return n;
-    },
-    draw(g, sx, sy) { g.strokeStyle = css("--road"); g.lineWidth = 6; g.beginPath(); g.moveTo(sx(0), sy(20)); g.lineTo(sx(120), sy(20)); g.stroke(); town(g, sx, sy, 4, 22); town(g, sx, sy, 116, 17); },
-    text: `<h3>A 120 km motorway</h3>
-<p>Repeaters sit on masts every 15 km along the road. There is a town at each end, and twelve cars drive at 110 km/h. People write between the cars and the two towns.</p>
-<p>The road is longer than flooding can cover. With Meshtastic's default of 3 hops a message dies halfway, so try raising the hop limit to 7. MeshCore and Må:rse send only via the repeaters, so they reach the whole length.</p>
-<p>The cars keep moving. A path learned a minute ago no longer works, so MeshCore has to start over with a flood. Må:rse gets a hop-by-hop acknowledgement and repairs the route. With carry turned on, a car can also take a message along until it can be delivered. Turn on internet gateways and both towns get a host on the internet. Må:rse and Reticulum then send messages between the towns over TCP, at no airtime cost.</p>`,
-  },
-  forest: {
-    title: "Forest",
-    w: 8, h: 8, sf: 10, duration: 1800, mobile: true, gw: false, relay: true,
-    build(r) {
-      const n = [];
-      const groups = [[2.2, 2.4], [5.4, 3], [3.6, 5.6]];
-      for (let i = 0; i < 18; i++) {
-        const [gx, gy] = groups[i % 3];
-        n.push({ x: gx + (r() - .5) * 2.4, y: gy + (r() - .5) * 2.4, role: "cli", range: 2, walker: true, dir: r() * 6.28 });
-      }
-      return n;
-    },
-    draw(g, sx, sy, r) { g.fillStyle = css("--tree"); const q = rng(7); for (let i = 0; i < 260; i++) { g.beginPath(); g.arc(sx(q() * 8), sy(q() * 8), 5 + q() * 6, 0, 7); g.fill(); } },
-    text: `<h3>18 people in a forest, no repeaters</h3>
-<p>Three groups are spread over 8 × 8 km of forest. The trees cut the range to about 1.5 km. Everyone carries a handheld node, and nobody has set up a repeater.</p>
-<p>Meshtastic is in its element here: every node repeats, so a message can jump from group to group. On MeshCore only repeaters forward, and clients do not by default, so a message only reaches the people you can hear yourself. Reticulum is the same, because "transport" is off on handheld nodes by default.</p>
-<p>Må:rse has a <b>relay role</b> ("forest mode"). Handheld nodes forward for up to 4 hops when there is no repeater around, and they wait a little longer so a real repeater would win. With <b>carry</b>, people who walk on take a copy along and deliver it when they meet the recipient. A "delivered" notice then stops the other copies. Carry costs extra airtime but delivers more messages.</p>`,
-  },
-  city: {
-    title: "Dense city",
-    w: 5, h: 5, sf: 8, duration: 1800, mobile: false, gw: false, busy: true,
-    build(r) {
-      const n = [];
-      for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) n.push({ x: .6 + i * 1.25 + (r() - .5) * .4, y: .8 + j * 1.7 + (r() - .5) * .4, role: "rep", range: 2.6 });
-      for (let i = 0; i < 110; i++) n.push({ x: r() * 5, y: r() * 5, role: "cli", range: 1.2 });
-      return n;
-    },
-    draw(g, sx, sy) { g.fillStyle = css("--block"); for (let i = 0; i < 10; i++) for (let j = 0; j < 10; j++) g.fillRect(sx(i * .5 + .06), sy(j * .5 + .06), sx(.38) - sx(0), sy(.38) - sy(0)); },
-    text: `<h3>A dense city: 110 nodes, 12 rooftop repeaters, lots of traffic</h3>
-<p>Down between the buildings a node reaches less than a kilometre. Rooftop repeaters see much further. Many people send at the same time.</p>
-<p>When everyone repeats everything, the channel fills up. Meshtastic sends many copies of each message, and the copies collide with each other and with the next messages. That is why Meshtastic limits hops and lets nodes cancel when they hear a neighbour repeat.</p>
-<p>MeshCore, Reticulum and Må:rse flood only the first time (or the path request). After that they send along one path through the repeaters, which uses a fraction of the airtime. Må:rse picks the path with the best signal (SNR), not just the first copy to arrive, and gets an acknowledgement at every hop, so a lost packet is resent on that hop instead of from the start.</p>`,
-  },
-  country: {
-    title: "Countryside",
-    w: 50, h: 36, sf: 11, duration: 3600, mobile: false, gw: true,
-    build(r) {
-      const n = [];
-      [[8, 8], [25, 6], [42, 10], [12, 27], [30, 22], [44, 30]].forEach(([x, y]) => n.push({ x, y, role: "rep", range: 32 }));
-      n.push({ x: 4, y: 32, role: "cli", range: 4, gw: true });
-      n.push({ x: 47, y: 3, role: "cli", range: 4, gw: true });
-      for (let i = 0; i < 26; i++) n.push({ x: 2 + r() * 46, y: 2 + r() * 32, role: "cli", range: 4 });
-      return n;
-    },
-    draw(g, sx, sy) { g.fillStyle = css("--water"); g.beginPath(); g.ellipse(sx(22), sy(30), sx(7) - sx(0), sy(3) - sy(0), .3, 0, 7); g.fill(); g.strokeStyle = css("--road"); g.lineWidth = 2; g.beginPath(); g.moveTo(sx(0), sy(15)); g.bezierCurveTo(sx(15), sy(10), sx(30), sy(24), sx(50), sy(18)); g.stroke(); },
-    text: `<h3>Countryside: farms 5–10 km apart, 6 high repeaters</h3>
-<p>Few nodes and long distances. A farm reaches about 4 km and a high repeater 15 km. SF11 gives range but makes every packet slow, so airtime is precious.</p>
-<p>A message from one corner to the other needs 4–6 hops. Meshtastic's default hop limit of 3 is often not enough, and raising it means more copies on an already slow channel. MeshCore and Må:rse find a path through the repeaters. Må:rse chooses the path with the strongest links, so fewer packets are lost on the way.</p>
-<p>With internet gateways, two farms have internet. Må:rse looks up the recipient in the DHT and sends straight to that recipient's gateway. Reticulum can also use TCP, but it has to spread announces to learn paths, and on SF11 they take a lot of airtime.</p>`,
-  },
-  mailbox: {
-    title: "Recipient offline",
-    w: 20, h: 14, sf: 9, duration: 5400, mobile: false, gw: false, offline: true, server: true,
-    build(r) {
-      const n = [];
-      [[4, 4], [10, 7], [16, 4], [10, 12]].forEach(([x, y]) => n.push({ x, y, role: "rep", range: 10 }));
-      n.push({ x: 10, y: 7.6, role: "cli", range: 3, server: true });
-      for (let i = 0; i < 22; i++) n.push({ x: 1 + r() * 18, y: 1 + r() * 12, role: "cli", range: 4, offlineFrom: r() < .45 ? 300 + r() * 2400 : null, offlineFor: 900 + r() * 1800 });
-      return n;
-    },
-    draw(g, sx, sy) { town(g, sx, sy, 10, 7); },
-    text: `<h3>Room server, propagation node or mailbox: the recipient is offline</h3>
-<p>Almost half the people turn off their node for 15–45 minutes at a random time. One node in the middle (the square) acts as a server. On MeshCore it is a room server, on Reticulum an LXMF propagation node, and on Meshtastic a Store &amp; Forward router.</p>
-<ul>
-<li><b>Meshtastic:</b> Store &amp; Forward keeps messages, but the user has to ask for the history. The model assumes people do that once an hour.</li>
-<li><b>MeshCore:</b> a room server is like a bulletin board. Posts in the room wait for you, but a direct message to someone offline is resent for a while and then given up. This metric counts direct messages.</li>
-<li><b>Reticulum:</b> LXMF messages go to the propagation node, and the recipient's app collects them on its next sync. The model assumes a sync every 30 minutes.</li>
-<li><b>Må:rse:</b> the message waits in a <b>mailbox</b> on the host or in flash on a repeater. It is delivered by itself as soon as the recipient announces again, with nothing to log in to and no sync interval. The sender then gets "delivered from mailbox".</li>
-</ul>`,
-  },
-};
-function town(g, sx, sy, x, y) { g.fillStyle = css("--block"); const q = rng(x * 13 + y); for (let i = 0; i < 14; i++) g.fillRect(sx(x - 2 + q() * 4), sy(y - 1.5 + q() * 3), 7, 7); }
-
-// ---------- model ----------
-const AIRTIME = { 8: .1, 9: .18, 10: .33, 11: .66 }; // seconds for a ~50-byte packet at 125 kHz
-function linkP(a, b) {
-  if (a.off || b.off) return 0;
-  if (a.gw && b.gw && a.tcp && b.tcp) return 1;
-  const d = Math.hypot(a.x - b.x, a.y - b.y), R = (a.range + b.range) / 2;
-  if (d < .5 * R) return .95;
-  if (d >= R) return 0;
-  return .95 * Math.pow(1 - (d - .5 * R) / (.5 * R), 1.5);
-}
-
-class World {
-  constructor(sc, opt) {
-    this.sc = sc; this.opt = opt;
-    const r = rng(opt.seed * 7919);
-    this.nodes = sc.build(r).map((n, i) => ({ ...n, id: i, x0: n.x, y0: n.y }));
-    this.at = AIRTIME[sc.sf];
-    const clients = this.nodes.filter(n => n.role === "cli" && !n.server);
-    this.msgs = [];
-    for (let k = 0; k < opt.msgs; k++) {
-      const t = r() * sc.duration * .7;
-      let s, d;
-      do { s = clients[Math.floor(r() * clients.length)]; d = clients[Math.floor(r() * clients.length)]; }
-      while (s === d || (sc.offline && this.offlineAt(s, t)));
-      this.msgs.push({ t, s: s.id, d: d.id });
-    }
-    this.msgs.sort((a, b) => a.t - b.t);
-  }
-  offlineAt(n, t) { return n.offlineFrom != null && t >= n.offlineFrom && t < n.offlineFrom + n.offlineFor; }
-  setTime(t) {
-    for (const n of this.nodes) {
-      n.x = n.x0; n.y = n.y0;
-      if (n.car) { n.x = ((n.x0 + n.v * t) % 120 + 120) % 120; }
-      if (n.walker) { n.x = clamp(n.x0 + Math.cos(n.dir) * t * .0012, .2, 7.8); n.y = clamp(n.y0 + Math.sin(n.dir) * t * .0012, .2, 7.8); }
-      n.off = this.sc.offline && this.offlineAt(n, t);
-      n.tcp = this.opt.gw;
-    }
-    const N = this.nodes.length;
-    this.p = Array.from({ length: N }, () => new Float32Array(N));
-    for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) { const v = linkP(this.nodes[i], this.nodes[j]); this.p[i][j] = this.p[j][i] = v; }
-  }
-}
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-
-// Slot-based flood. Returns who got it, how, and the cost.
-function flood(w, src, o, R, trace) {
-  const N = w.nodes.length, got = new Map([[src, { hop: 0, parent: -1, slot: 0 }]]);
-  let tx = [src], slots = 0, count = 0;
-  while (tx.length && slots < 150) {
-    slots++; count += tx.filter(i => !o.free?.(i)).length;
-    trace?.push({ tx: tx.slice(), got: [...got.keys()] });
-    const newly = [];
-    for (let j = 0; j < N; j++) {
-      if (got.has(j)) continue;
-      let best = -1, bp = 0, heard = 0;
-      let strong = 0;
-      for (const i of tx) if (w.p[i][j] > 0) { heard++; if (w.p[i][j] > .5) strong++; }
-      if (!heard) continue;
-      // Copies sent in the same step mostly collide only when several are strong
-      // (random rebroadcast delays spread the rest out).
-      const cap = 1 / (1 + .15 * Math.max(0, strong - 1));
-      for (const i of tx) {
-        const p = w.p[i][j] * cap * o.loss;
-        if (p > 0 && R() < p && p > bp) { best = i; bp = p; }
-      }
-      if (best >= 0) { got.set(j, { hop: got.get(best).hop + 1, parent: best, slot: slots }); newly.push(j); }
-    }
-    // Backbone: a gateway that gets it hands it to all other gateways over TCP.
-    if (o.bridge) for (const j of newly.slice()) if (w.nodes[j].gw && w.opt.gw) for (const k of w.nodes) if (k.gw && !got.has(k.id)) { got.set(k.id, { hop: got.get(j).hop, parent: j, slot: slots, tcp: true }); newly.push(k.id); }
-    let cand = newly.filter(j => o.fwd(j) && got.get(j).hop < o.hopLimit && j !== o.dst);
-    if (o.suppress) {
-      cand.sort((a, b) => w.p[got.get(a).parent]?.[a] - w.p[got.get(b).parent]?.[b]);
-      const sel = [];
-      for (const j of cand) if (!sel.some(k => R() < w.p[k][j])) sel.push(j);
-      cand = sel;
-    }
-    tx = cand;
-  }
-  return { got, tx: count, slots };
-}
-function chain(got, d) { const p = []; for (let x = d; x !== -1; x = got.get(x).parent) p.unshift(x); return p; }
-
-// Best path by link quality (Dijkstra on -log p) through allowed forwarders.
-function bestPath(w, s, d, allowed, maxHops = 64) {
-  const N = w.nodes.length, dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), hops = new Int32Array(N), done = new Uint8Array(N);
-  dist[s] = 0;
-  for (;;) {
-    let u = -1, m = Infinity;
-    for (let i = 0; i < N; i++) if (!done[i] && dist[i] < m) { m = dist[i]; u = i; }
-    if (u < 0 || u === d) break;
-    done[u] = 1;
-    if (u !== s && !allowed(u)) continue;
-    if (hops[u] >= maxHops) continue;
-    for (let v = 0; v < N; v++) {
-      const p = w.p[u][v]; if (p < .05) continue;
-      const nd = dist[u] - Math.log(p) + .02;
-      if (nd < dist[v]) { dist[v] = nd; prev[v] = u; hops[v] = hops[u] + 1; }
-    }
-  }
-  if (dist[d] === Infinity) return null;
-  const path = []; for (let x = d; x !== -1; x = prev[x]) path.unshift(x); return path;
-}
-const isTcp = (w, a, b) => w.opt.gw && w.nodes[a].gw && w.nodes[b].gw;
-
-// Send along a path. acked = per-hop acknowledgement with retries (Må:rse).
-function sendPath(w, path, o, R, trace) {
-  let tx = 0, time = 0;
-  for (let h = 0; h + 1 < path.length; h++) {
-    const a = path[h], b = path[h + 1];
-    if (isTcp(w, a, b)) { time += .2; trace?.push({ tx: [a], hop: [a, b], tcp: true }); continue; }
-    const p = w.p[a][b] * o.loss;
-    let ok = false;
-    for (let t = 0; t < (o.acked ? 3 : 1); t++) {
-      tx++; time += w.at * 1.3; trace?.push({ tx: [a], hop: [a, b] });
-      if (R() < p) { ok = true; if (o.acked) { tx += .3; time += w.at * .4; } break; }
-    }
-    if (!ok) return { ok: false, tx, time, failAt: h };
-  }
-  return { ok: true, tx, time };
-}
-
-// ---------- protocols: each returns { ok, tx, time, ann } for one message ----------
-const PROTO = {
-  mt(w, m, st, R, trace) {
-    let tx = 0, time = 0, ok = false;
-    for (let a = 0; a < 3 && !ok; a++) {
-      const f = flood(w, m.s, { fwd: () => true, hopLimit: w.opt.hops, suppress: true, dst: -1, loss: st.loss, bridge: true }, R, a === 0 ? trace : null);
-      tx += f.tx; time += f.slots * w.at * 2.2;
-      if (f.got.has(m.d)) {
-        ok = true;
-        const back = flood(w, m.d, { fwd: () => true, hopLimit: w.opt.hops, suppress: true, dst: m.s, loss: st.loss, bridge: true }, R);
-        tx += back.tx * .4;
-      } else time += 8;
-    }
-    return { ok, tx, time };
-  },
-  mc(w, m, st, R, trace) {
-    const rep = j => w.nodes[j].role === "rep";
-    let tx = 0, time = 0, key = m.s + ">" + m.d;
-    // The app resends up to 3 times; a broken path falls back to a flood.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const path = st.paths.get(key);
-      if (path) {
-        const r = sendPath(w, path, { loss: st.loss }, R, attempt === 0 ? trace : null); tx += r.tx; time += r.time;
-        if (r.ok) { tx += (path.length - 1) * .4; return { ok: true, tx, time }; }
-        st.paths.delete(key); time += 10; continue;
-      }
-      const f = flood(w, m.s, { fwd: rep, hopLimit: 64, suppress: false, dst: m.d, loss: st.loss }, R, attempt === 0 ? trace : null);
-      tx += f.tx; time += f.slots * w.at * 1.6;
-      if (!f.got.has(m.d)) { time += 10; continue; }
-      const p = chain(f.got, m.d), back = sendPath(w, p.slice().reverse(), { loss: st.loss }, R);
-      tx += back.tx; if (back.ok) st.paths.set(key, p);
-      return { ok: true, tx, time };
-    }
-    return { ok: false, tx, time };
-  },
-  rn(w, m, st, R, trace) {
-    const tr = j => w.nodes[j].role === "rep";
-    let tx = 0, time = 0, key = m.s + ">" + m.d, path = st.paths.get(key);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (!path) {
-        const f = flood(w, m.s, { fwd: tr, hopLimit: 128, suppress: false, dst: m.d, loss: st.loss, bridge: true }, R, attempt === 0 ? trace : null);
-        tx += f.tx * 1.2; time += f.slots * w.at * 1.6;
-        if (!f.got.has(m.d)) { time += 15; continue; }
-        path = chain(f.got, m.d);
-        const back = sendPath(w, path.slice().reverse(), { loss: st.loss }, R); tx += back.tx;
-        if (!back.ok) { path = null; continue; }
-        st.paths.set(key, path);
-      }
-      const r = sendPath(w, path, { loss: st.loss }, R, trace); tx += r.tx; time += r.time;
-      if (r.ok) { tx += (path.length - 1) * .4; return { ok: true, tx, time }; }
-      st.paths.delete(key); path = null; time += 15;
-    }
-    return { ok: false, tx, time };
-  },
-  ma(w, m, st, R, trace) {
-    const relay = !!w.sc.relay;
-    const fwd = j => w.nodes[j].role === "rep" || relay;
-    const hopLimit = relay ? 4 : 64;
-    let tx = 0, time = 0, key = m.s + ">" + m.d, path = st.paths.get(key);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (!path) {
-        const f = flood(w, m.s, { fwd, hopLimit, suppress: relay, dst: m.d, loss: st.loss, bridge: true }, R, attempt === 0 ? trace : null);
-        tx += f.tx * .7; time += f.slots * w.at * 1.6; // a path request is smaller than a message
-        if (!f.got.has(m.d)) { if (attempt === 2) return { ok: false, tx, time, flood: f }; time += 5; continue; }
-        // The recipient answers along the best of the copies it heard (by SNR).
-        path = bestPath(w, m.s, m.d, j => f.got.has(j) && fwd(j), hopLimit + 1) || chain(f.got, m.d);
-        const back = sendPath(w, path.slice().reverse(), { loss: st.loss, acked: true }, R); tx += back.tx;
-        if (!back.ok) { path = null; continue; }
-        st.paths.set(key, path);
-      }
-      const r = sendPath(w, path, { loss: st.loss, acked: true }, R, trace); tx += r.tx; time += r.time;
-      if (r.ok) { tx += .3; return { ok: true, tx, time }; }
-      st.paths.delete(key); path = null; time += 3;
-    }
-    return { ok: false, tx, time };
-  },
-};
-
-// ---------- whole run ----------
-function runProto(w, pid, loss) {
-  const R = rng(w.opt.seed * 31 + pid.charCodeAt(0) * 7 + pid.charCodeAt(1));
-  const st = { paths: new Map(), loss };
-  let ok = 0, tx = 0, lat = [], pending = [];
-  // Reticulum: every node announces once (start-up); announces spread over transport nodes.
-  if (pid === "rn") {
-    w.setTime(0);
-    for (const n of w.nodes) { const f = flood(w, n.id, { fwd: j => w.nodes[j].role === "rep", hopLimit: 128, suppress: false, dst: -1, loss, bridge: true }, R); tx += f.tx * 1.5; }
-  }
-  const tick = 60;
-  let mi = 0;
-  for (let t = 0; t <= w.sc.duration; t += tick) {
-    w.setTime(t);
-    // Messages waiting (offline recipients, carry)
-    for (const q of pending) {
-      if (q.done || t < q.next) continue;
-      if (t > q.expire) { q.done = true; continue; }
-      const m = q.m, dn = w.nodes[m.d];
-      if (dn.off) continue;
-      let src = q.holder ?? m.s, r;
-      if (q.kind === "carry") {
-        for (const c of q.carriers) { const p = bestPath(w, c, m.d, j => w.nodes[j].role === "rep" || !!w.sc.relay, 6); if (p) { r = sendPath(w, p, { loss, acked: true }, R); tx += r.tx; if (r.ok) break; } }
-        if (!r?.ok) continue;
-        tx += .5 * q.carriers.length; // "delivered" notice reaches the carriers
-      } else {
-        r = PROTO[pid](w, { ...m, s: src }, st, R); tx += r.tx;
-        if (!r.ok) { q.next = t + q.every; continue; }
-      }
-      q.done = true; ok++; lat.push(t - m.t + (r.time || 0));
-    }
-    for (; mi < w.msgs.length && w.msgs[mi].t < t + tick; mi++) {
-      const m = w.msgs[mi], dn = w.nodes[m.d];
-      if (dn.off) { // recipient offline
-        const server = w.nodes.find(n => n.server);
-        if (pid === "ma") { const r = PROTO.ma(w, { ...m, d: server ? server.id : m.d }, st, R); tx += r.tx; pending.push({ m, kind: "box", holder: server?.id, next: t, every: 60, expire: m.t + 7 * 86400 }); }
-        else if (pid === "rn" && server) { const r = PROTO.rn(w, { ...m, d: server.id }, st, R); tx += r.tx; pending.push({ m, kind: "box", holder: server.id, next: m.t + 1800, every: 1800, expire: m.t + 86400 }); }
-        else if (pid === "mt" && server) { tx += 3; pending.push({ m, kind: "box", holder: server.id, next: m.t + 3600, every: 3600, expire: m.t + 86400 }); }
-        else tx += 3; // resent a few times, then given up
-        continue;
-      }
-      const r = PROTO[pid](w, m, st, R); tx += r.tx;
-      if (r.ok) { ok++; lat.push(r.time); continue; }
-      if (pid === "ma" && w.opt.carry && w.sc.mobile) {
-        const f = r.flood;
-        const carriers = f ? [...f.got.keys()].filter(j => w.nodes[j].role === "cli").slice(0, 4) : [m.s];
-        tx += carriers.length;
-        pending.push({ m, kind: "carry", carriers, next: t + tick, every: tick, expire: m.t + 1800 });
-      }
-    }
-  }
-  lat.sort((a, b) => a - b);
-  return { delivered: ok / w.msgs.length, airtime: tx * w.at, txPerMsg: tx / w.msgs.length, latency: lat.length ? lat[Math.floor(lat.length / 2)] : NaN };
-}
-function runAll(sc, opt) {
-  const out = {};
-  for (const pid of Object.keys(P)) {
-    let w = new World(sc, opt);
-    const first = runProto(w, pid, 1);
-    // Busy channel: more of the airtime overlaps, so more is lost (ALOHA-like).
-    // Offered load seen by one node: the share of all airtime sent within its range.
-    const nb = avgNeighbours(w), G = first.airtime / sc.duration * Math.min(1, nb / w.nodes.length) * (sc.busy ? 4 : 1);
-    w = new World(sc, opt);
-    out[pid] = runProto(w, pid, Math.exp(-2 * G));
-  }
-  return out;
-}
-function avgNeighbours(w) { w.setTime(0); let s = 0; for (let i = 0; i < w.nodes.length; i++) for (let j = 0; j < w.nodes.length; j++) if (w.p[i][j] > .3) s++; return s / w.nodes.length; }
-
-// ---------- UI ----------
-const state = { sc: "motorway", opt: {}, msgIdx: 0, anim: null };
-const $ = id => document.getElementById(id);
-const tabs = $("tabs");
-for (const [k, s] of Object.entries(SCENARIOS)) {
-  const b = document.createElement("button"); b.textContent = s.title; b.dataset.k = k;
-  b.onclick = () => { state.sc = k; $("sGw").checked = s.gw; $("sCarry").checked = !!s.mobile; state.msgIdx = 0; refresh(); };
-  tabs.append(b);
-}
-for (const id of ["sMsgs", "sSeed", "sHops"]) $(id).oninput = () => { syncOut(); clearTimeout(state.deb); state.deb = setTimeout(refresh, 150); };
-for (const id of ["sGw", "sCarry"]) $(id).onchange = refresh;
-function syncOut() { $("oMsgs").textContent = $("sMsgs").value; $("oSeed").textContent = $("sSeed").value; $("oHops").textContent = $("sHops").value; }
-
-function refresh() {
-  stopAnim();
-  const sc = SCENARIOS[state.sc];
-  for (const b of tabs.children) b.classList.toggle("on", b.dataset.k === state.sc);
-  state.opt = { msgs: +$("sMsgs").value, seed: +$("sSeed").value, hops: +$("sHops").value, gw: $("sGw").checked, carry: $("sCarry").checked };
-  $("explain").innerHTML = sc.text + whoBox();
-  const res = runAll(sc, state.opt);
-  renderResults(res);
-  state.world = new World(sc, state.opt);
-  drawMap();
-  $("animInfo").textContent = "Pick a protocol above to see how it sends one message.";
-}
-function whoBox() {
-  return `<div class="who">
-<div class="mt"><b>Meshtastic</b><br>Managed flood: every node repeats, up to the hop limit.</div>
-<div class="mc"><b>MeshCore</b><br>Only repeaters forward. The first message is flooded, then it follows the path it learned.</div>
-<div class="rn"><b>Reticulum</b><br>Announces teach transport nodes the next hop. A path request is sent when the path is unknown.</div>
-<div class="ma"><b>Må:rse</b><br>Repeaters, a best-SNR path, acknowledgement on each hop and route repair, plus a relay role, carry, mailbox and an internet backbone.</div></div>`;
-}
-function renderResults(res) {
-  const ids = Object.keys(P);
-  const rows = (label, sub, f, fmt, max, good) => {
-    const vals = ids.map(i => f(res[i]));
-    const m = max ?? Math.max(...vals.filter(isFinite), 1e-9);
-    return `<div class="metric">${label} <small>${sub}</small></div>` + ids.map((i, k) => {
-      const v = vals[k], wv = isFinite(v) ? Math.max(2, v / m * 100) : 0;
-      return `<div class="bar"><span class="${i}">${P[i].name}</span><div class="track"><div class="fill" style="width:${wv}%;background:var(${P[i].color})"></div></div><span class="val">${isFinite(v) ? fmt(v) : "–"}</span></div>`;
-    }).join("");
-  };
-  $("results").innerHTML =
-    rows("Delivered", "higher is better", r => r.delivered * 100, v => v.toFixed(0) + " %", 100) +
-    rows("Airtime used", "lower is better", r => r.airtime, v => v < 100 ? v.toFixed(1) + " s" : v.toFixed(0) + " s") +
-    rows("Transmissions per message", "lower is better", r => r.txPerMsg, v => v.toFixed(1)) +
-    rows("Median delivery time", "lower is better", r => r.latency, v => v < 60 ? v.toFixed(1) + " s" : (v / 60).toFixed(0) + " min");
-}
-
-// ---------- drawing ----------
-const cv = $("map"), g = cv.getContext("2d");
-function geom() { const sc = SCENARIOS[state.sc], pad = 24, W = cv.width - pad * 2, H = cv.height - pad * 2, k = Math.min(W / sc.w, H / sc.h); const ox = (cv.width - sc.w * k) / 2, oy = (cv.height - sc.h * k) / 2; return { sx: x => ox + x * k, sy: y => oy + y * k }; }
-function drawMap(frame) {
-  const sc = SCENARIOS[state.sc], w = state.world, { sx, sy } = geom();
-  g.clearRect(0, 0, cv.width, cv.height);
-  sc.draw(g, sx, sy);
-  const t = frame?.t ?? 0; w.setTime(t);
-  // links
-  g.lineWidth = 1;
-  for (let i = 0; i < w.nodes.length; i++) for (let j = i + 1; j < w.nodes.length; j++) {
-    const p = w.p[i][j]; if (p < .2 || isTcp(w, i, j)) continue;
-    g.strokeStyle = css("--muted"); g.globalAlpha = p * .25; g.beginPath(); g.moveTo(sx(w.nodes[i].x), sy(w.nodes[i].y)); g.lineTo(sx(w.nodes[j].x), sy(w.nodes[j].y)); g.stroke();
-  }
-  g.globalAlpha = 1;
-  if (w.opt.gw) { const gws = w.nodes.filter(n => n.gw); g.setLineDash([6, 6]); g.strokeStyle = css("--accent"); g.globalAlpha = .5; for (let i = 1; i < gws.length; i++) { g.beginPath(); g.moveTo(sx(gws[0].x), sy(gws[0].y)); g.quadraticCurveTo(sx((gws[0].x + gws[i].x) / 2), sy(0) - 10, sx(gws[i].x), sy(gws[i].y)); g.stroke(); } g.setLineDash([]); g.globalAlpha = 1; }
-  const col = frame ? css(P[frame.pid].color) : css("--accent");
-  // transmissions
-  if (frame?.step) {
-    const s = frame.step;
-    for (const i of s.got || []) { const n = w.nodes[i]; g.fillStyle = col; g.globalAlpha = .18; g.beginPath(); g.arc(sx(n.x), sy(n.y), 9, 0, 7); g.fill(); }
-    g.globalAlpha = 1;
-    for (const i of s.tx) { const n = w.nodes[i], R = (sx(n.range) - sx(0)) * .75; g.strokeStyle = col; g.lineWidth = 2; g.globalAlpha = .55; g.beginPath(); g.arc(sx(n.x), sy(n.y), Math.min(R, 400), 0, 7); g.stroke(); }
-    if (s.hop) { const [a, b] = s.hop.map(i => w.nodes[i]); g.globalAlpha = 1; g.strokeStyle = col; g.lineWidth = 4; if (s.tcp) g.setLineDash([6, 5]); g.beginPath(); g.moveTo(sx(a.x), sy(a.y)); g.lineTo(sx(b.x), sy(b.y)); g.stroke(); g.setLineDash([]); }
-    g.globalAlpha = 1;
-  }
-  // nodes
-  for (const n of w.nodes) {
-    const x = sx(n.x), y = sy(n.y);
-    g.globalAlpha = n.off ? .3 : 1;
-    g.fillStyle = n.role === "rep" ? css("--ink") : css("--muted");
-    if (frame && (n.id === frame.m.s || n.id === frame.m.d)) g.fillStyle = col;
-    g.beginPath();
-    if (n.role === "rep") { g.moveTo(x, y - 8); g.lineTo(x + 7, y + 5); g.lineTo(x - 7, y + 5); g.closePath(); }
-    else if (n.gw || n.server) g.rect(x - 6, y - 6, 12, 12);
-    else g.arc(x, y, n.car ? 5 : 4.5, 0, 7);
-    g.fill();
-  }
-  g.globalAlpha = 1;
-  if (frame) {
-    g.font = "bold 13px system-ui"; g.fillStyle = col;
-    const s = w.nodes[frame.m.s], d = w.nodes[frame.m.d];
-    g.fillText("from", sx(s.x) + 8, sy(s.y) - 8); g.fillText("to", sx(d.x) + 8, sy(d.y) - 8);
-  }
-}
-function stopAnim() { if (state.anim) clearInterval(state.anim); state.anim = null; }
-function animate(pid) {
-  stopAnim();
-  const w = new World(SCENARIOS[state.sc], state.opt); state.world = w;
-  const reach = w.msgs.filter(m => !w.offlineAt(w.nodes[m.d], m.t));
-  const m = reach[state.msgIdx % reach.length];
-  w.setTime(m.t);
-  const trace = [], R = rng(state.opt.seed * 31 + state.msgIdx);
-  const r = PROTO[pid](w, m, { paths: new Map(), loss: 1 }, R, trace);
-  let k = 0;
-  const info = `${P[pid].name}: ${trace.length} steps, ${r.tx.toFixed(0)} transmissions, ${r.ok ? "delivered" : "not delivered"}.`;
-  $("animInfo").textContent = info;
-  const step = () => { if (k >= trace.length) { stopAnim(); drawMap({ pid, m, t: m.t, step: { tx: [], got: trace.at(-1)?.got } }); return; } drawMap({ pid, m, t: m.t, step: trace[k++] }); };
-  step(); state.anim = setInterval(step, trace.length > 40 ? 160 : 420);
-}
-document.querySelectorAll(".anim .btn[data-p]").forEach(b => b.onclick = () => animate(b.dataset.p));
-$("nextMsg").onclick = () => { state.msgIdx++; $("animInfo").textContent = "Message " + (state.msgIdx + 1) + ". Pick a protocol."; stopAnim(); state.world = new World(SCENARIOS[state.sc], state.opt); drawMap(); };
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => drawMap());
-
-const q = new URLSearchParams(location.search).get("scenario");
-if (q && SCENARIOS[q]) state.sc = q;
-$("sGw").checked = SCENARIOS[state.sc].gw; $("sCarry").checked = !!SCENARIOS[state.sc].mobile;
-syncOut(); refresh();
-</script>
+<footer class="wrap">Må:rse is open source (MIT or Apache-2.0). This lab is a simplified model for building intuition; the project's own <code>maarse-sim</code> runs the real router code. <a href="https://github.com/trixxor/maarse">github.com/trixxor/maarse</a></footer>
+<script src="engine.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

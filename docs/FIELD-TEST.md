@@ -187,6 +187,7 @@ Copy this into a note and fill one table per environment.
 - **The receiver loses sync after a while.** It returns to the first SF after three cycles without a beacon (out of range). It syncs again by itself when it hears the beacon.
 - **No GPS position.** The page must be in a secure context (Android app, https, or localhost), location must be allowed for the app or site, and the page must stay in the foreground. Indoors, the position may never come.
 - **The page says to connect directly.** The range test runs on the radio node. Through maarse-host there is no radio to control, so connect to the node over USB or Bluetooth.
+- **RSSI shows 0 dBm at the desk.** The receiver is saturated: the value is at the top of the radio's scale. This happens with the Heltec V4 as receiver close to a 22 dBm XIAO (its front end amplifies the signal further). On the bench test of 2026-11-15, 30 cm apart: Heltec receiving the XIAO read 0 dBm, XIAO receiving the Heltec read −17 dBm, SNR +11 dB both ways, 0 lost on SF7–SF12. Move the boards a few metres apart, or lower the beacon's power, for a meaningful bench reading.
 - **The Heltec does not respond after opening the port.** Open it with DTR high and RTS low (`tools/range_test.py` does). The default pyserial open resets the ESP32-S3.
 - **Normal mesh traffic during the test.** A receiver that switches SF does not hear the mesh on other SFs, and both nodes keep sending their announces (every 15 minutes). Stop the range test to go back to normal: the receiver then returns to the SF in its radio settings.
 

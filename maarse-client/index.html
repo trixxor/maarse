@@ -1684,7 +1684,7 @@ const sha256 = (() => {
   };
 })();
 
-const SAFETY_CONTEXT = "maarse/sikkerhedsnummer/v0", SAFETY_ITERATIONS = 512;
+const SAFETY_CONTEXT = "maarse/safety-number/v0", SAFETY_ITERATIONS = 512;
 const concatBytes = (...a) => { const o = new Uint8Array(a.reduce((n, x) => n + x.length, 0)); let i = 0; for (const x of a) { o.set(x, i); i += x.length; } return o; };
 
 // 30 digits for one public identity (64 bytes: Ed25519 | X25519).

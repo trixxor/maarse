@@ -58,6 +58,8 @@ jobs:
         if: matrix.kind == 'esp'
       - if: matrix.kind == 'esp'
         run: cargo install espflash espup --locked && espup install --targets esp32s3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Signing key
         env:
           KEY_B64: ${{ secrets.MAARSE_SIGN_KEY_B64 }}

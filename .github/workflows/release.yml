@@ -50,14 +50,12 @@ jobs:
         if: matrix.kind == 'nrf'
         with:
           targets: thumbv7em-none-eabihf
-      - uses: esp-rs/xtensa-toolchain@v1.6
+      - name: libclang for bindgen
+        run: sudo apt-get update -q && sudo apt-get install -y -q libclang-dev clang
+      - uses: dtolnay/rust-toolchain@stable
         if: matrix.kind == 'esp'
-        with:
-          default: false
-          buildtargets: esp32s3
-          ldproxy: false
       - if: matrix.kind == 'esp'
-        run: cargo install espflash --locked
+        run: cargo install espflash espup --locked && espup install --targets esp32s3
       - name: Signing key
         env:
           KEY_B64: ${{ secrets.MAARSE_SIGN_KEY_B64 }}

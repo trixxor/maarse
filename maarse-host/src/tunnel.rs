@@ -509,13 +509,18 @@ pub fn spawn(
     tx: std::sync::mpsc::Sender<crate::In>,
 ) -> std::io::Result<std::sync::mpsc::Sender<Vec<u8>>> {
     use std::sync::Arc;
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut b = tun_rs::DeviceBuilder::new()
         .name("maarse")
         .ipv6(std::net::Ipv6Addr::from(me), 8u8)
         .mtu(MTU as u16);
+    // Wintun's DLL path exists on Windows only.
+    #[cfg(windows)]
     if let Some(w) = wintun {
         b = b.wintun_file(w);
     }
+    #[cfg(not(windows))]
+    let _ = wintun;
     let dev = Arc::new(b.build_sync()?);
     let reader = dev.clone();
     std::thread::spawn(move || {

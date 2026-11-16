@@ -60,6 +60,7 @@ impl Node {
         let mut v = appdata::build(self.my_postbox.as_ref(), true, s.position(), tel.as_ref(), name);
         let flags = if self.router.hears_repeater(self.now_ms()) { appdata::ROLE_HEARS_REPEATER } else { 0 };
         appdata::push_role(&mut v, self.router.role.as_u8(), flags);
+        appdata::push_caps(&mut v, appdata::MY_CAPS);
         v.to_vec()
     }
 
@@ -126,6 +127,9 @@ impl Node {
     /// Position and telemetry from a verified announce.
     pub(super) fn on_app_data(&mut self, from: Address, hops: u8, app_data: &[u8]) {
         let a = appdata::parse(app_data);
+        if let Some(c) = a.caps {
+            self.caps.insert(from, c);
+        }
         if hops == 0
             && let Some(role) = a.role.and_then(maarse_core::router::Role::from_u8)
         {

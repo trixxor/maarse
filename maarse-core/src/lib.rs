@@ -19,6 +19,8 @@ pub mod companion;
 pub mod content;
 pub mod dedup;
 pub mod diag;
+pub mod mail;
+pub mod bloom;
 pub mod duty;
 pub mod packet;
 pub mod qos;
@@ -27,6 +29,7 @@ pub mod region;
 pub mod router;
 pub mod routes;
 pub mod stamp;
+pub mod textz;
 
 pub use addr::{Address, PathId};
 pub use packet::{Header, Packet, PacketType, Path};

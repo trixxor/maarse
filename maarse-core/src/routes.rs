@@ -20,6 +20,9 @@ pub struct Route {
     pub last_seen_ms: u64,
     /// When the route was found.
     pub learned_ms: u64,
+    /// When an acknowledgement last came back along it (0 = never): only
+    /// confirmed routes are used to answer path requests for others.
+    pub confirmed_ms: u64,
 }
 
 pub struct RouteTable<const N: usize> {
@@ -41,6 +44,13 @@ impl<const N: usize> RouteTable<N> {
 
     pub fn get(&self, dest: &Address) -> Option<&Route> {
         self.entries.iter().find(|r| r.dest == *dest)
+    }
+
+    /// An acknowledgement came back along the route to `dest`.
+    pub fn confirm(&mut self, dest: &Address, now_ms: u64) {
+        if let Some(r) = self.entries.iter_mut().find(|r| r.dest == *dest) {
+            r.confirmed_ms = now_ms;
+        }
     }
 
     /// Marks a route as used, so it is not evicted first.
@@ -108,6 +118,7 @@ mod tests {
             cost: hops.len() as u16,
             last_seen_ms: t,
             learned_ms: t,
+            confirmed_ms: 0,
         }
     }
 

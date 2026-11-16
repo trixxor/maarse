@@ -86,6 +86,11 @@ pub enum In {
         id: ClientId,
         frame: Vec<u8>,
     },
+    /// Mail fetched from the replica hosts for `recipient` (post offices).
+    MailFetched {
+        recipient: maarse_core::Address,
+        items: Vec<Vec<u8>>,
+    },
     /// A DHT request from another backbone host; the answer is sent on `reply`.
     DhtRequest {
         data: Vec<u8>,
@@ -133,6 +138,15 @@ pub struct Config {
     /// Regions from the command line (`--region`); empty = use the saved ones.
     pub regions: Vec<String>,
     pub strict_region: bool,
+    /// Run as a plain repeater instead of an anchor (`--repeater-role`).
+    pub repeater_role: bool,
+    /// Long-distance LoRa trunks: LoRa modems with directional antennas
+    /// (`--trunk <port>[:baud]`). Used only as a backup when TCP cannot reach
+    /// the other end (see node.rs "Trunks").
+    pub trunks: Vec<(String, u32)>,
+    /// Re-flood every path request from TCP on the radio, as before
+    /// (`--no-bordercast`).
+    pub no_bordercast: bool,
     /// MeshCore gateway: serial port to a companion_radio_usb node.
     pub meshcore: Option<String>,
     pub meshcore_baud: u32,
@@ -151,6 +165,69 @@ pub struct Config {
     pub service: bool,
     /// Identities whose signed bulletins we show (`--bulletin-key`).
     pub bulletin_keys: Vec<maarse_crypto::PublicIdentity>,
+    /// Root keys whose alert issuer certificates we accept (`--alert-root`).
+    pub alert_roots: Vec<maarse_crypto::PublicIdentity>,
+    /// Our alert issuer key file (`--issuer-key`).
+    pub issuer_key: Option<PathBuf>,
+    /// Our issuer certificate file (`--issuer-cert`).
+    pub issuer_cert: Option<PathBuf>,
+}
+
+/// One-shot key tools for alerts; `Some(exit code)` if `argv` asked for one.
+fn alert_tools(argv: &[String]) -> Option<i32> {
+    use maarse_crypto::{Identity, alert};
+    use rand_core::OsRng;
+    let run = || -> Result<(), String> {
+        match argv.first().map(String::as_str) {
+            Some("--new-alert-key") => {
+                let path = argv.get(1).ok_or("--new-alert-key <file>")?;
+                if std::path::Path::new(path).exists() {
+                    return Err(format!("{path} exists; not overwritten"));
+                }
+                let id = Identity::generate(&mut OsRng);
+                std::fs::write(path, id.to_secret_bytes()).map_err(|e| e.to_string())?;
+                let hex: String = id.public().to_bytes().iter().map(|b| format!("{b:02x}")).collect();
+                println!("Wrote {path}. Keep it offline. Public key:
+{hex}");
+                Ok(())
+            }
+            Some("--sign-issuer-cert") => {
+                let [root, issuer, name, days, out] = argv.get(1..6).and_then(|v| <&[String; 5]>::try_from(v).ok()).ok_or(
+                    "--sign-issuer-cert <root key file> <issuer public key hex> <name> <days> <out file> [events mask] [max severity]",
+                )?;
+                let k: [u8; 64] = std::fs::read(root).map_err(|e| e.to_string())?.try_into().map_err(|_| "root key: expected 64 bytes")?;
+                let root = Identity::from_secret_bytes(&k);
+                let days: u32 = days.parse().map_err(|_| "days: invalid number")?;
+                let events = match argv.get(6) {
+                    Some(m) => u16::from_str_radix(m.trim_start_matches("0x"), 16).map_err(|_| "events mask: hex, e.g. 0x0013")?,
+                    None => 0xffff,
+                };
+                let max_severity = argv.get(7).map_or(Ok(3), |s| s.parse::<u8>()).map_err(|_| "max severity: 0-3")?.min(3);
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as u32);
+                let cert = alert::Cert {
+                    issuer: parse_identity(issuer)?,
+                    not_after: now + days * 86_400,
+                    events,
+                    max_severity,
+                    name: heapless::String::try_from(name.as_str()).map_err(|_| "name: at most 24 bytes")?,
+                };
+                let mut b = [0u8; 200];
+                let n = alert::sign_cert(&root, &cert, &mut b).ok_or("could not sign")?;
+                std::fs::write(out, &b[..n]).map_err(|e| e.to_string())?;
+                println!("Wrote {out}: \"{name}\", valid {days} days, events {events:#06x}, max severity {max_severity}");
+                Ok(())
+            }
+            _ => Err(String::new()),
+        }
+    };
+    match run() {
+        Ok(()) => Some(0),
+        Err(e) if e.is_empty() => None,
+        Err(e) => {
+            eprintln!("{e}");
+            Some(2)
+        }
+    }
 }
 
 /// Public backbone nodes that `--public` connects to. Empty until
@@ -231,6 +308,13 @@ Usage: maarse-host [options]
                         nordjylland (can be repeated, at most 8). Without regions
                         everything is forwarded
   --strict-region       without regions: forward only messages without a region
+  --trunk <port>[:baud] long-distance LoRa trunk: a LoRa node in modem mode with
+                        a directional antenna; used only when TCP cannot reach
+                        the other end, and only for what has to cross
+  --repeater-role       route as a repeater, not an anchor (anchors split long
+                        routes at the host, so a route may be 12 hops per side)
+  --no-bordercast       put every path request from TCP on the radio (default:
+                        only for nodes heard over our own radio, or on a retry)
   --meshcore <port>     gateway to MeshCore: a MeshCore node running the
                         companion_radio_usb firmware on this port, e.g. COM5
   --meshcore-baud <rate>
@@ -247,6 +331,16 @@ Usage: maarse-host [options]
                         digits, printed by the sender's host at start-up; can
                         be repeated). Joins the #bulletin channel, where only
                         verified bulletins are shown
+  --alert-root <hex>    accept alert issuer certificates signed by this root
+                        key (128 hex digits; can be repeated)
+  --issuer-key <file>   issue alerts with this key (kept apart from the node
+                        identity; create one with --new-alert-key)
+  --issuer-cert <file>  our issuer certificate, sent before our alerts
+                        (from --sign-issuer-cert)
+  --new-alert-key <file>
+                        create an alert root or issuer key and exit
+  --sign-issuer-cert <root key> <issuer hex> <name> <days> <out> [events] [max severity]
+                        sign an issuer certificate with a root key and exit
   --no-browser          do not open the browser automatically
   --service             run under a service manager (systemd, Task Scheduler):
                         implies --no-browser; a settings restart exits with
@@ -282,6 +376,9 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         dht_seeds: Vec::new(),
         regions: Vec::new(),
         strict_region: false,
+        repeater_role: false,
+        trunks: Vec::new(),
+        no_bordercast: false,
         meshcore: None,
         meshcore_baud: 115_200,
         meshcore_bridge: Vec::new(),
@@ -292,6 +389,9 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         tun_lora: false,
         service: false,
         bulletin_keys: Vec::new(),
+        alert_roots: Vec::new(),
+        issuer_key: None,
+        issuer_cert: None,
     };
     let mut mqtt_prefix = "maarse".to_string();
     let (mut mqtt_user, mut mqtt_pass) = (None, None);
@@ -340,9 +440,22 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             }
             "--public-addr" => c.public_addr = Some(val("--public-addr")?),
             "--bulletin-key" => c.bulletin_keys.push(parse_identity(&val("--bulletin-key")?)?),
+            "--alert-root" => c.alert_roots.push(parse_identity(&val("--alert-root")?)?),
+            "--issuer-key" => c.issuer_key = Some(PathBuf::from(val("--issuer-key")?)),
+            "--issuer-cert" => c.issuer_cert = Some(PathBuf::from(val("--issuer-cert")?)),
             "--dht" => c.dht_seeds.push(val("--dht")?),
             "--region" => c.regions.push(val("--region")?.trim().to_lowercase()),
             "--strict-region" => c.strict_region = true,
+            "--repeater-role" => c.repeater_role = true,
+            "--trunk" => {
+                let v = val("--trunk")?;
+                let (port, baud) = match v.rsplit_once(':') {
+                    Some((p, b)) if b.chars().all(|c| c.is_ascii_digit()) && !b.is_empty() => (p.to_string(), b.parse().unwrap_or(115200)),
+                    _ => (v, 115200),
+                };
+                c.trunks.push((port, baud));
+            }
+            "--no-bordercast" => c.no_bordercast = true,
             "--meshcore" => c.meshcore = Some(val("--meshcore")?),
             "--meshcore-baud" => {
                 c.meshcore_baud = val("--meshcore-baud")?
@@ -437,6 +550,9 @@ fn main() {
     // Settings from the web client (<data>/settings.txt) first, then the
     // command line, which therefore wins.
     let cli: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = alert_tools(&cli) {
+        std::process::exit(code);
+    }
     let data_dir = cli
         .iter()
         .position(|a| a == "--data")
@@ -485,6 +601,13 @@ fn main() {
     if !cfg.bulletin_keys.is_empty() {
         settings::report(format!("  Bulletins: trusting {} key(s) on #bulletin", cfg.bulletin_keys.len()), false);
     }
+    if !cfg.alert_roots.is_empty() {
+        settings::report(format!("  Alerts: accepting certificates from {} root key(s)", cfg.alert_roots.len()), false);
+    }
+    if let Some(p) = node.issuer_public() {
+        let hex: String = p.to_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        settings::report(format!("  Alert issuer key: {hex}"), false);
+    }
 
     if let Some(addr) = cfg.listen {
         match links::spawn_tcp_listener(addr, tx.clone()) {
@@ -499,6 +622,10 @@ fn main() {
     if let Some(port) = &cfg.serial {
         settings::report(format!("  Serial:   {port} @ {} baud (modem mode)", cfg.baud), false);
         links::spawn_serial(port.clone(), cfg.baud, tx.clone());
+    }
+    for (port, baud) in &cfg.trunks {
+        settings::report(format!("  Trunk:    {port} @ {baud} baud (LoRa modem, backup only)"), false);
+        links::spawn_serial_named(port.clone(), *baud, format!("trunk {port}"), tx.clone());
     }
     for (port, baud) in &cfg.serial_links {
         let class = if *baud >= extra_links::FAST_SERIAL_BAUD { "backbone" } else { "slow link" };

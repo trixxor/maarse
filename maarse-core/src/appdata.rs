@@ -40,12 +40,56 @@ pub const APP_POSITION: u8 = 0x03;
 pub const APP_TELEMETRY: u8 = 0x04;
 pub const APP_NAME: u8 = 0x05;
 pub const APP_ROLE: u8 = 0x06;
+/// Capabilities: `0x07 | 1 | bits`. Older nodes skip it by its length.
+pub const APP_CAPS: u8 = 0x07;
+/// Capability: reads compressed text (`content::TEXT_Z`).
+pub const CAP_TEXTZ: u8 = 0x01;
+/// Capability: reads mail bundles (`mail::OP_BUNDLE`).
+pub const CAP_BUNDLE: u8 = 0x02;
+/// What this firmware/host can do.
+pub const MY_CAPS: u8 = CAP_TEXTZ | CAP_BUNDLE;
+
+/// Appends the capabilities field.
+pub fn push_caps(v: &mut AppBuf, caps: u8) {
+    let _ = v.extend_from_slice(&[APP_CAPS, 1, caps]);
+}
 /// Role flag: the node hears a repeater or anchor directly.
 pub const ROLE_HEARS_REPEATER: u8 = 0x01;
+/// Role flags bits 1-2: how many edge bridges (relays that hear a repeater)
+/// the node hears, 0-3 (3 = three or more). Lets a node at the edge of
+/// coverage see whether a neighbor without coverage already has a bridge,
+/// as OLSR's multipoint relays cover two-hop neighbors. Older nodes send 0.
+pub const ROLE_BRIDGES_SHIFT: u8 = 1;
+pub const ROLE_BRIDGES_MASK: u8 = 0x06;
+/// Role flag bit 3: the node is moving (a car); routes to it go stale fast
+/// and it never acts as an edge bridge.
+pub const ROLE_MOBILE: u8 = 0x08;
+/// Role flags bits 4-5: post office class (see `mail`): 0 none, 1 small
+/// flash, 2 megabytes, 3 a host with a disk.
+pub const ROLE_MAIL_SHIFT: u8 = 4;
+pub const ROLE_MAIL_MASK: u8 = 0x30;
+
+/// Role flags for a node: hears a repeater, and the number of bridges heard.
+pub fn role_flags(hears_repeater: bool, bridges: u8) -> u8 {
+    (hears_repeater as u8) | (bridges.min(3) << ROLE_BRIDGES_SHIFT)
+}
 
 /// Appends the role field to app-data built with [`build`].
 pub fn push_role(v: &mut AppBuf, role: u8, flags: u8) {
     let _ = v.extend_from_slice(&[APP_ROLE, 2, role, flags]);
+}
+
+/// Appends the role field with the edge bridge this node has chosen (path
+/// ID, big endian) after role and flags. Older nodes read only the first
+/// two bytes.
+pub fn push_role_bridge(v: &mut AppBuf, role: u8, flags: u8, bridge: Option<u16>) {
+    match bridge {
+        Some(b) => {
+            let [hi, lo] = b.to_be_bytes();
+            let _ = v.extend_from_slice(&[APP_ROLE, 4, role, flags, hi, lo]);
+        }
+        None => push_role(v, role, flags),
+    }
 }
 
 /// Longest display name in bytes (UTF-8).
@@ -211,6 +255,10 @@ pub struct AppData {
     pub role: Option<u8>,
     /// Flags byte from the role field (`ROLE_*`), if present.
     pub role_flags: Option<u8>,
+    /// Capabilities (`CAP_*`), if present.
+    pub caps: Option<u8>,
+    /// The edge bridge the sender has chosen (role field bytes 2-3).
+    pub role_bridge: Option<u16>,
 }
 
 /// Builds app data. The position is rounded here (a precise position is
@@ -263,9 +311,11 @@ pub fn parse(b: &[u8]) -> AppData {
                     APP_POSITION => a.position = Position::decode(d),
                     APP_TELEMETRY => a.telemetry = Telemetry::decode(d),
                     APP_NAME => a.name = clean_name(d),
+                    APP_CAPS => a.caps = d.first().copied(),
                     APP_ROLE => {
                         a.role = d.first().copied();
                         a.role_flags = d.get(1).copied();
+                        a.role_bridge = d.get(2..4).map(|b| u16::from_be_bytes([b[0], b[1]]));
                     }
                     _ => {}
                 }
@@ -291,6 +341,10 @@ mod tests {
     fn role_field_round_trips_and_is_skipped_by_old_parsers() {
         let mut v = build(None, true, None, None, Some(b"Ida"));
         push_role(&mut v, 2, ROLE_HEARS_REPEATER);
+        let mut w = build(None, false, None, None, None);
+        push_role_bridge(&mut w, 0, 0, Some(0x1234));
+        let b = parse(&w);
+        assert_eq!((b.role, b.role_flags, b.role_bridge), (Some(0), Some(0), Some(0x1234)));
         let a = parse(&v);
         assert_eq!(a.role, Some(2));
         assert_eq!(a.role_flags, Some(ROLE_HEARS_REPEATER));

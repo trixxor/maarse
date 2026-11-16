@@ -17,6 +17,8 @@
 //! * clutter areas (forest) and radio degradation in an area (storm, jamming);
 //! * walkers that wander around a point;
 //! * an optional DHT-directed backbone for path requests (`dht_backbone`);
+//! * reboots (RAM lost; known contacts lost unless `persist_known`), with
+//!   messages counted as *shown* only when the recipient knows the sender;
 //! * an optional "home routing" model (`home_routing`): fixed infrastructure,
 //!   home repeaters and a location lookup at the gateway, see [`Engine::send_message`].
 
@@ -33,7 +35,13 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use serde_json::{Value, json};
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::BinaryHeap;
+// Deterministic maps: std's RandomState gives every new map other keys (and
+// each Sim in the same process a different iteration order), so results
+// depended on what ran before in the process.
+type DetHash = std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>;
+type HashMap<K, V> = std::collections::HashMap<K, V, DetHash>;
+type HashSet<K> = std::collections::HashSet<K, DetHash>;
 use std::fmt::Write as _;
 
 pub type Node = Router<128, 1024>;
@@ -233,6 +241,19 @@ struct Link {
     b: usize,
     wifi: bool,
     up: bool,
+    /// LoRa trunk (see `LinkSpec`): airtime, duty cycle and loss apply.
+    lora: bool,
+    sf: u8,
+    snr: i8,
+    loss: f64,
+    duty: u32,
+    /// The trunk channel is busy (sending or in its duty pause) until then.
+    busy_until: u64,
+    label: String,
+    group: String,
+    packets: u64,
+    airtime_ms: u64,
+    dropped: u64,
 }
 
 struct Tx {
@@ -245,6 +266,9 @@ struct Tx {
     nx: i64,
     /// A flood (no source path): copies at other nodes are redundant.
     flood: bool,
+    /// A trunk transmission on the mesh channel: it occupies the channel and
+    /// interferes, but mesh nodes do not receive it (directional antenna).
+    noise: bool,
 }
 
 /// An area with extra radio loss (clutter or degradation), in metres.
@@ -254,6 +278,9 @@ struct LossArea {
     /// Bounding box (min x, min y, max x, max y).
     bbox: (f64, f64, f64, f64),
     db: f64,
+    /// Canopy model (clutter only): height of the trees/roofs and the
+    /// saturation loss; `None` = linear model.
+    canopy: Option<(f64, f64)>,
 }
 
 impl LossArea {
@@ -263,7 +290,7 @@ impl LossArea {
         } else {
             poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, p| (b.0.min(p.0), b.1.min(p.1), b.2.max(p.0), b.3.max(p.1)))
         };
-        LossArea { poly, circle, bbox, db }
+        LossArea { poly, circle, bbox, db, canopy: None }
     }
     fn contains(&self, x: f64, y: f64) -> bool {
         if x < self.bbox.0 || y < self.bbox.1 || x > self.bbox.2 || y > self.bbox.3 {
@@ -274,8 +301,27 @@ impl LossArea {
         }
         point_in_poly(x, y, &self.poly)
     }
-    /// Length (m) of the segment a-b that runs inside the area, by sampling.
-    fn inside_len(&self, a: (f64, f64), b: (f64, f64)) -> f64 {
+    /// Loss (dB) of the link a-b with antenna heights ha, hb.
+    fn loss(&self, a: (f64, f64), b: (f64, f64), ha: f64, hb: f64) -> f64 {
+        match self.canopy {
+            None => self.inside_len(a, b, None) / 1000.0 * self.db,
+            Some((canopy, max_db)) => {
+                // Per end (ITU-R P.833 terminal loss): the signal leaves the
+                // canopy near one antenna and enters it again near the other,
+                // so each half saturates on its own.
+                let half = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+                let hm = (ha + hb) / 2.0;
+                let gamma = self.db / 1000.0;
+                let sat = |d: f64| if d > 0.0 { max_db * (1.0 - (-gamma * d / max_db).exp()) } else { 0.0 };
+                sat(self.inside_len(a, half, Some((ha, hm, canopy)))) + sat(self.inside_len(half, b, Some((hm, hb, canopy))))
+            }
+        }
+    }
+
+    /// Length (m) of the segment a-b that runs inside the area, by sampling;
+    /// with `below` = (ha, hb, canopy) only where the straight line between
+    /// the antennas is below the canopy.
+    fn inside_len(&self, a: (f64, f64), b: (f64, f64), below: Option<(f64, f64, f64)>) -> f64 {
         let (lo_x, hi_x) = (a.0.min(b.0), a.0.max(b.0));
         let (lo_y, hi_y) = (a.1.min(b.1), a.1.max(b.1));
         if hi_x < self.bbox.0 || hi_y < self.bbox.1 || lo_x > self.bbox.2 || lo_y > self.bbox.3 {
@@ -286,6 +332,11 @@ impl LossArea {
         let inside = (0..n)
             .filter(|&k| {
                 let f = (k as f64 + 0.5) / n as f64;
+                if let Some((ha, hb, canopy)) = below
+                    && ha + (hb - ha) * f >= canopy
+                {
+                    return false;
+                }
                 self.contains(a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
             })
             .count();
@@ -295,6 +346,8 @@ impl LossArea {
 
 #[allow(clippy::large_enum_variant)]
 enum Ev {
+    /// Sleepy handhelds wake or fall asleep.
+    SleepTick,
     Ready { node: usize, packet: Buf, id: u64 },
     Service { node: usize },
     TxEnd { tx: u64 },
@@ -306,6 +359,19 @@ enum Ev {
     Neighbors,
     Timeline { idx: usize },
     LookupTimeout { msg: usize },
+    Announce { node: usize },
+    /// Give up on a message whose recipient's key never came (key request).
+    KeyWait { msg: usize },
+    /// A packet arrives over a LoRa trunk (sent from `start`).
+    Trunk { link: usize, to: usize, packet: Buf, start: u64 },
+    /// 45 s after a message: drop it at a post office if not acknowledged.
+    MailCheck { msg: usize },
+    /// Post office upkeep: home office changes, hints, periodic syncs.
+    MailTick,
+    /// A node asks for its mail (after it came back).
+    MailSyncAt { node: usize },
+    /// Mail between two hosts over a direct TCP connection (never radio).
+    MailTcp { to: usize, payload: Vec<u8> },
 }
 
 pub struct Msg {
@@ -316,6 +382,15 @@ pub struct Msg {
     pub sent_ms: u64,
     pub delivered_ms: Option<u64>,
     pub acked_ms: Option<u64>,
+    /// Shown to the recipient (it knew the sender, now or after its announce).
+    pub shown_ms: Option<u64>,
+    /// Dropped by the recipient: unknown sender, nothing kept.
+    pub dropped_unknown: bool,
+    /// Never sent: the sender no longer knew the recipient's keys.
+    pub unsent: bool,
+    /// When sent, exactly one end heard a repeater (into or out of an area
+    /// without coverage: what edge bridges are for).
+    pub cross: bool,
 }
 
 pub struct Alert {
@@ -414,10 +489,35 @@ pub struct Stats {
     pub home_unreachable: u64,
     /// Lookups answered by the sender's own home (local registry).
     pub home_local: u64,
+    pub reboots: u64,
+    pub periodic_announces: u64,
+    /// Automatic forest mode: role changes.
+    pub role_switches: u64,
     pub home_fallback: std::collections::BTreeMap<String, u64>,
     /// Queue delay per priority (0..=4): sum ms, count, max.
     pub qdelay: [(u64, u64, u64); 5],
     pub by_type: std::collections::BTreeMap<String, u64>,
+    /// Airtime per packet type (ms, all transmissions).
+    pub air_by_type: std::collections::BTreeMap<String, u64>,
+    pub key_requests: u64,
+    pub key_answers: u64,
+    pub bordercast_kept: u64,
+    pub trunk_packets: u64,
+    pub trunk_dropped: u64,
+    pub trunk_jammed: u64,
+    pub dup_queued: u64,
+    pub wakeups: u64,
+    pub mail_deposits: u64,
+    pub mail_stored: u64,
+    pub mail_full: u64,
+    pub mail_ops: u64,
+    pub mail_deliveries: u64,
+    pub mail_syncs: u64,
+    pub mail_tcp: u64,
+    pub mail_deferred: u64,
+    pub mail_retries: u64,
+    pub mail_refetches: u64,
+    pub mail_consolidated: u64,
 }
 
 pub struct Engine {
@@ -471,6 +571,91 @@ pub struct Engine {
     rcomp: Vec<i32>,
     infra_dirty: bool,
     lookups: HashMap<usize, Lookup>,
+    /// Contacts after a reboot: `forgot[i]` = node i lost its contacts and
+    /// knows only those in `relearned[i]` (announces heard since). `held[i]`:
+    /// messages it keeps until their sender's announce.
+    forgot: Vec<bool>,
+    relearned: Vec<HashSet<u32>>,
+    held: Vec<Vec<usize>>,
+    /// Announce schedule as in the firmware: after a start every 15 min until
+    /// a repeater or anchor is heard (`settled`), then every `announce_s`.
+    /// `next_ann` is the one valid scheduled announce per node.
+    settled: Vec<bool>,
+    /// Sleepy handhelds: the radio is off (nothing is received).
+    asleep: Vec<bool>,
+    /// Which nodes sleep, and their phase in the cycle (s).
+    sleepy: Vec<Option<u64>>,
+    next_ann: Vec<u64>,
+    /// The first announce since the (re)start has been sent.
+    announced: Vec<bool>,
+    /// Automatic forest mode: last time a repeater was heard, and since when
+    /// it has been heard without a break (0 = not now).
+    rep_last: Vec<u64>,
+    rep_since: Vec<u64>,
+    /// Distinct nodes whose announce each node has heard (how many contacts
+    /// a node would have to keep).
+    heard_from: Vec<HashSet<u32>>,
+    /// Limited contact tables (`contact_capacity` > 0): contact -> last
+    /// heard, pinned contacts, flash writes, and circles of friends.
+    contacts: Vec<HashMap<u32, u64>>,
+    /// Bridge choice each node last announced (named bridges).
+    told_choice: Vec<Option<u16>>,
+    /// Contacts each node has written to or heard from (contact policy "used").
+    used: Vec<HashSet<u32>>,
+    /// Messages waiting for their recipient's key (key request), per sender.
+    await_key: Vec<Vec<usize>>,
+    /// Last key request per (node, wanted) and last answer per (node, about).
+    key_asked: HashMap<(usize, usize), u64>,
+    key_answered: HashMap<(usize, usize), u64>,
+    /// Nodes each host heard announcing over its own radio (bordercast).
+    local_seen: Vec<HashSet<u32>>,
+    /// Bordercast: path requests a host kept off its radio (dest, when).
+    bc_dropped: Vec<Vec<(usize, u64)>>,
+    /// True while handling a packet that came over the backbone.
+    bb_ctx: bool,
+    /// True while handling a packet that came over a LoRa trunk.
+    trunk_ctx: bool,
+    /// Neighbor roles have been handed over once (see `seed_neighbors`).
+    seeded_once: bool,
+    /// Radio islands for trunk summaries (recomputed after `move`).
+    islands: Vec<usize>,
+    /// Mail bundles in flight: bundle msg ID -> (office, recipient, messages).
+    bundles: HashMap<u64, (usize, usize, Vec<usize>)>,
+    /// When each node's next router tick is scheduled (`u64::MAX`: none).
+    tick_at: Vec<u64>,
+    /// Trunk bordercast: requests kept off a trunk (link, from, dest) -> when.
+    trunk_dropped: HashMap<(usize, usize, usize), u64>,
+    /// Post offices: stored mail per node (recipient -> message indices),
+    /// class, recipients present (until), and per user the home office, the
+    /// previous one, recently received messages and the last sync.
+    mailbox: Vec<HashMap<usize, Vec<usize>>>,
+    mail_class: Vec<u8>,
+    present: Vec<HashMap<usize, u64>>,
+    home_po: Vec<Option<usize>>,
+    prev_home: Vec<Option<usize>>,
+    got: Vec<Vec<usize>>,
+    last_sync: Vec<u64>,
+    /// "named": each user's fixed post box (its home host at the start).
+    named_box: Vec<Option<usize>>,
+    host_list: Vec<usize>,
+    id_idx: HashMap<u16, usize>,
+    /// Host-to-host mail waiting for TCP to come back (from, to, payload).
+    mail_deferred: Vec<(usize, usize, Vec<u8>)>,
+    /// Retry delivery of held mail: (office, recipient) -> (next try, step).
+    mail_retry: HashMap<(usize, usize), (u64, u32)>,
+    /// Deliveries in flight: (office, message) -> when sent.
+    mail_sent: HashMap<(usize, usize), u64>,
+    /// What each office has heard a node name as its home office (from the
+    /// node's announces that reached it): (office, node) -> home.
+    heard_home: HashMap<(usize, usize), usize>,
+    /// Hosts: nodes heard over their own radio (node -> when), whether the
+    /// host was on the backbone at the last tick, and refetches due.
+    radio_seen: Vec<HashMap<usize, u64>>,
+    was_on_backbone: Vec<bool>,
+    refetch_at: Vec<(u64, usize)>,
+    pinned: Vec<HashSet<u32>>,
+    flash_writes: Vec<u32>,
+    friends: Vec<Vec<usize>>,
 }
 
 /// A location lookup of the home routing model (one per message).
@@ -498,6 +683,10 @@ fn ptype_name(p: PacketType) -> &'static str {
         PacketType::Channel => "Channel",
         PacketType::Fragment => "Fragment",
         PacketType::Carry => "Carry",
+        PacketType::Hello => "Hello",
+        PacketType::KeyRequest => "KeyRequest",
+        PacketType::MailSync => "MailSync",
+        PacketType::Summary => "Summary",
         PacketType::Datagram => "Datagram",
         PacketType::Deposit => "Deposit",
         PacketType::Control => "Control",
@@ -525,14 +714,32 @@ impl Engine {
             let sf = if spec.sf >= 7 && spec.sf <= 12 { spec.sf } else { sc.sf.clamp(7, 12) };
             // Home routing model: hosts are anchors, so a route longer than a
             // source path can hold is split into legs at the gateways.
-            let role = if f.home_routing && kind == Kind::Host { Role::Anchor } else { kind.role() };
+            let role = if (f.home_routing || f.host_anchor) && kind == Kind::Host { Role::Anchor } else { kind.role() };
             let mut router = Box::new(Node::new(Address(addr), role));
             let _ = router.subscribe(public_channel);
             let _ = router.subscribe(bulletin_channel);
-            router.mobile = kind == Kind::Mobile;
+            router.mobile = f.mobile_mode && kind == Kind::Mobile;
+            router.hello = sc.neighbor_info == "hello";
+            router.ring = sc.path_ring;
+            if sc.announce_scope > 0 {
+                router.announce_scope = sc.announce_scope;
+            }
+            router.weak_hop_penalty = sc.weak_hop_penalty;
+            router.drop_unacked_routes = sc.drop_unacked_routes;
+            if sc.proxy_reply && kind == Kind::Host {
+                router.proxy_reply = true;
+            }
+            if sc.host_slow_timers && kind == Kind::Host {
+                router.path_retry_ms = 90_000;
+                router.anchor_ttl_ms = 300_000;
+            }
+            if sc.mobile_route_s > 0.0 {
+                router.mobile_route_ms = (sc.mobile_route_s * 1000.0) as u64;
+            }
             router.carry_copies = if f.carry { if spec.carry > 0 { spec.carry } else { 2 } } else { 0 };
             router.local_repair = f.local_repair;
             router.load_control = f.load_control;
+            router.relay_hops = sc.relay_hops.clamp(1, maarse_core::router::MAX_RELAY_HOPS);
             if f.sf_slot {
                 router.set_slot(maarse_core::qos::slot_ms(&LoraParams::new(sf)), f.scale_timeouts);
             }
@@ -580,7 +787,24 @@ impl Engine {
                 nodes[l.a].links.push(k);
                 nodes[l.b].links.push(k);
             }
-            links.push(Link { a: l.a, b: l.b, wifi: l.kind == "wifi", up: l.up });
+            let lora = l.kind == "lora";
+            links.push(Link {
+                a: l.a,
+                b: l.b,
+                wifi: l.kind == "wifi",
+                up: l.up,
+                lora,
+                sf: if (7..=12).contains(&l.sf) { l.sf } else { 9 },
+                snr: if l.snr_db != 0.0 { l.snr_db.clamp(-20.0, 20.0) as i8 } else { 5 },
+                loss: l.loss.clamp(0.0, 1.0),
+                duty: if l.duty_permille > 0 { l.duty_permille.min(1000) } else { 100 },
+                busy_until: 0,
+                label: if l.label.is_empty() && lora { format!("LoRa trunk {}-{}", l.a, l.b) } else { l.label.clone() },
+                group: l.group.clone(),
+                packets: 0,
+                airtime_ms: 0,
+                dropped: 0,
+            });
         }
         let traffic = sc.traffic.clone();
         let mut e = Engine {
@@ -589,7 +813,7 @@ impl Engine {
             nodes,
             links,
             queue: BinaryHeap::new(),
-            events: HashMap::new(),
+            events: HashMap::default(),
             seq: 0,
             now: 0,
             active: Vec::new(),
@@ -597,14 +821,14 @@ impl Engine {
             msgs: Vec::new(),
             alerts: Vec::new(),
             stats: Stats::default(),
-            tags: HashMap::new(),
-            cancelled: HashSet::new(),
+            tags: HashMap::default(),
+            cancelled: HashSet::default(),
             trace: Vec::new(),
             trace_base: 0,
-            grid: HashMap::new(),
+            grid: HashMap::default(),
             max_range: 0.0,
             internet_global: true,
-            internet_down: HashSet::new(),
+            internet_down: HashSet::default(),
             public_channel,
             bulletin_channel,
             authority,
@@ -612,19 +836,65 @@ impl Engine {
             traffic,
             announces: Vec::new(),
             timeline_done: 0,
-            ids: HashMap::new(),
-            addr_idx: HashMap::new(),
+            ids: HashMap::default(),
+            addr_idx: HashMap::default(),
             clutter: Vec::new(),
             degrade: Vec::new(),
             gw: Vec::new(),
             gw_dirty: true,
-            dyn_links: HashSet::new(),
-            token_tags: HashMap::new(),
+            dyn_links: HashSet::default(),
+            token_tags: HashMap::default(),
             infra: Vec::new(),
             home: Vec::new(),
             rcomp: Vec::new(),
             infra_dirty: true,
-            lookups: HashMap::new(),
+            lookups: HashMap::default(),
+            forgot: Vec::new(),
+            relearned: Vec::new(),
+            held: Vec::new(),
+            settled: Vec::new(),
+            asleep: Vec::new(),
+            sleepy: Vec::new(),
+            next_ann: Vec::new(),
+            announced: Vec::new(),
+            rep_last: Vec::new(),
+            rep_since: Vec::new(),
+            heard_from: Vec::new(),
+            contacts: Vec::new(),
+            told_choice: Vec::new(),
+            used: Vec::new(),
+            await_key: Vec::new(),
+            key_asked: HashMap::default(),
+            key_answered: HashMap::default(),
+            local_seen: Vec::new(),
+            bc_dropped: Vec::new(),
+            bb_ctx: false,
+            trunk_ctx: false,
+            seeded_once: false,
+            islands: Vec::new(),
+            bundles: HashMap::default(),
+            tick_at: Vec::new(),
+            trunk_dropped: HashMap::default(),
+            mailbox: Vec::new(),
+            mail_class: Vec::new(),
+            present: Vec::new(),
+            home_po: Vec::new(),
+            prev_home: Vec::new(),
+            got: Vec::new(),
+            last_sync: Vec::new(),
+            named_box: Vec::new(),
+            host_list: Vec::new(),
+            id_idx: HashMap::default(),
+            mail_deferred: Vec::new(),
+            mail_retry: HashMap::default(),
+            mail_sent: HashMap::default(),
+            heard_home: HashMap::default(),
+            radio_seen: Vec::new(),
+            was_on_backbone: Vec::new(),
+            refetch_at: Vec::new(),
+            pinned: Vec::new(),
+            flash_writes: Vec::new(),
+            friends: Vec::new(),
             sc,
         };
         for (k, n) in e.nodes.iter().enumerate() {
@@ -636,7 +906,13 @@ impl Engine {
             .clutter
             .iter()
             .filter(|c| c.polygon.len() >= 3 && c.db_per_km > 0.0)
-            .map(|c| LossArea::new(c.polygon.iter().map(|[la, lo]| to_xy(*la, *lo)).collect(), None, c.db_per_km))
+            .map(|c| {
+                let mut a = LossArea::new(c.polygon.iter().map(|[la, lo]| to_xy(*la, *lo)).collect(), None, c.db_per_km);
+                if e.sc.clutter_model != "linear" {
+                    a.canopy = Some((c.canopy_m, c.max_db));
+                }
+                a
+            })
             .collect();
         e.build_links();
         e.seed_neighbors();
@@ -646,6 +922,45 @@ impl Engine {
         for idx in order {
             let at = (e.sc.events[idx].t_s.max(0.0) * 1000.0) as u64;
             e.schedule(at, Ev::Timeline { idx });
+        }
+        let n = e.nodes.len();
+        e.forgot = vec![false; n];
+        e.relearned = vec![HashSet::default(); n];
+        e.held = vec![Vec::new(); n];
+        // The network has been running for a while: every node has settled.
+        e.settled = vec![true; n];
+        e.announced = vec![true; n];
+        e.rep_last = vec![0; n];
+        e.heard_from = vec![HashSet::default(); n];
+        e.contacts = vec![HashMap::default(); n];
+        e.told_choice = vec![None; n];
+        e.tick_at = vec![u64::MAX; n];
+        e.init_mail();
+        e.used = vec![HashSet::default(); n];
+        e.await_key = vec![Vec::new(); n];
+        e.local_seen = vec![HashSet::default(); n];
+        e.bc_dropped = vec![Vec::new(); n];
+        if e.sc.neighbor_info == "hello" {
+            // First hellos within the first 10 s, as after a start.
+            for i in 0..n {
+                let at = e.rng.gen_range(0..10_000);
+                e.schedule(at, Ev::Tick { node: i });
+            }
+        }
+        e.pinned = vec![HashSet::default(); n];
+        e.flash_writes = vec![0; n];
+        e.friends = vec![Vec::new(); n];
+        if e.sc.traffic.friends > 0 {
+            e.make_friends();
+        }
+        e.rep_since = vec![0; n];
+        e.next_ann = vec![u64::MAX; n];
+        if e.sc.announce_s > 0.0 {
+            let iv = if e.sc.announce_warmup_s > 0.0 { (e.sc.announce_warmup_s * 1000.0) as u64 } else { (e.sc.announce_s * 1000.0) as u64 };
+            for i in 0..n {
+                let at = e.rng.gen_range(0..iv.max(1));
+                e.plan_announce(i, at);
+            }
         }
         e.schedule(1000, Ev::Traffic);
         e.schedule(2000, Ev::Move);
@@ -692,7 +1007,8 @@ impl Engine {
             return 0.0;
         }
         let (pa, pb) = ((self.nodes[a].x, self.nodes[a].y), (self.nodes[b].x, self.nodes[b].y));
-        let clutter: f64 = self.clutter.iter().map(|c| c.inside_len(pa, pb) / 1000.0 * c.db).sum();
+        let (ha, hb) = (self.nodes[a].h, self.nodes[b].h);
+        let clutter: f64 = self.clutter.iter().map(|c| c.loss(pa, pb, ha, hb)).sum();
         let degrade: f64 = self.degrade.iter().filter(|g| g.contains(pa.0, pa.1) || g.contains(pb.0, pb.1)).map(|g| g.db).sum();
         clutter + degrade
     }
@@ -777,11 +1093,18 @@ impl Engine {
     /// "hears a repeater"); we do the same for audible, live pairs.
     fn seed_neighbors(&mut self) {
         let now = self.now;
+        // "announce" and "hello": the link is there (any traffic shows it),
+        // but roles come only from packets, as in the firmware.
+        // The first seeding hands over roles in every mode: the network has
+        // been running, so neighbors know each other; later changes travel
+        // only in packets.
+        let instant = self.sc.neighbor_info.is_empty() || self.sc.neighbor_info == "instant" || !self.seeded_once;
+        self.seeded_once = true;
         let n = self.nodes.len();
-        let reports: Vec<(u16, Role, bool)> = (0..n)
+        let reports: Vec<(u16, Role, bool, u8, Option<u16>)> = (0..n)
             .map(|j| {
                 let rt = &self.nodes[j].router;
-                (rt.addr.path_id(), rt.role, rt.hears_repeater(now))
+                (rt.addr.path_id(), rt.role, rt.hears_repeater(now), rt.bridges_heard(now), rt.chosen_bridge(now))
             })
             .collect();
         for i in 0..n {
@@ -795,11 +1118,15 @@ impl Engine {
                 .filter(|&(j, rx)| self.nodes[j as usize].alive() && self.audible_rx(i, rx))
                 .collect();
             for (j, rx) in list {
-                let (id, role, hears) = reports[j as usize];
+                let (id, role, hears, bridges, choice) = reports[j as usize];
                 let snr = self.radio(self.nodes[i].sf).snr(rx as f64).clamp(-30.0, 30.0) as i8;
                 let rt = &mut self.nodes[i].router;
                 rt.neighbors.heard(id, None, snr, 0, now);
-                rt.neighbors.set_role(id, role, Some(hears));
+                if instant {
+                    rt.neighbors.set_role(id, role, Some(hears));
+                    rt.neighbors.set_bridges(id, bridges);
+                    rt.neighbors.set_bridge_choice(id, choice);
+                }
             }
         }
     }
@@ -859,6 +1186,9 @@ impl Engine {
             }
             Ev::TxEnd { tx } => self.tx_end(tx),
             Ev::Tick { node } => {
+                if self.now >= self.tick_at[node] {
+                    self.tick_at[node] = u64::MAX;
+                }
                 if !self.nodes[node].alive() {
                     return;
                 }
@@ -878,7 +1208,9 @@ impl Engine {
                 let before = self.nodes[to].router.stats;
                 let actions = self.nodes[to].router.on_receive(&packet, TCP_SNR, self.now);
                 self.after_router(to, before, tag);
+                self.bb_ctx = true;
                 self.apply(to, actions.into_iter().collect(), tag);
+                self.bb_ctx = false;
             }
             Ev::Traffic => {
                 self.traffic_tick();
@@ -893,6 +1225,29 @@ impl Engine {
                 self.schedule(self.now + 10_000, Ev::Energy);
             }
             Ev::Neighbors => {
+                if self.sc.features.auto_relay {
+                    self.auto_relay_step();
+                }
+                // Nodes that started recently settle once they hear a repeater
+                // (the firmware notices at once; here within a minute).
+                for i in 0..self.nodes.len() {
+                    if !self.settled[i] && self.nodes[i].alive() && self.found(i) {
+                        self.settled[i] = true;
+                        if !self.announced[i] {
+                            continue; // the first announce goes out as planned
+                        }
+                        let at = if self.sc.announce_s > 0.0 {
+                            let iv = (self.sc.announce_s * 1000.0) as u64;
+                            self.now + iv / 10 + self.rng.gen_range(0..(iv - iv / 10).max(1))
+                        } else {
+                            u64::MAX
+                        };
+                        self.next_ann[i] = u64::MAX;
+                        if at != u64::MAX {
+                            self.plan_announce(i, at);
+                        }
+                    }
+                }
                 self.gw_dirty = true;
         self.infra_dirty = true;
                 self.seed_neighbors();
@@ -902,6 +1257,90 @@ impl Engine {
                 let ev = self.sc.events[idx].clone();
                 self.timeline_done += 1;
                 self.inject(&ev);
+            }
+            Ev::Announce { node } => {
+                if self.next_ann[node] != self.now {
+                    return; // replaced by a newer schedule
+                }
+                self.next_ann[node] = u64::MAX;
+                if !self.nodes[node].alive() {
+                    return;
+                }
+                self.stats.periodic_announces += 1;
+                self.announce(node);
+                self.announced[node] = true;
+                if !self.settled[node] && self.found(node) {
+                    self.settled[node] = true;
+                }
+                // ±10 % per interval, so nodes never fall into step.
+                let bridge = self.sc.auto_bridge == "named" && self.nodes[node].router.role == Role::Relay && self.nodes[node].router.hears_repeater(self.now);
+                let every = if bridge {
+                    maarse_core::router::BRIDGE_ANNOUNCE_S as f64
+                } else if self.settled[node] {
+                    self.sc.announce_s
+                } else {
+                    900.0
+                };
+                if every > 0.0 {
+                    let iv = every * 1000.0 * self.rng.gen_range(0.9..1.1);
+                    self.plan_announce(node, self.now + iv as u64);
+                }
+            }
+            Ev::MailCheck { msg } => self.mail_check(msg),
+            Ev::SleepTick => {
+                self.sleep_tick();
+                self.schedule(self.now + 5_000, Ev::SleepTick);
+            }
+            Ev::MailTick => {
+                self.mail_tick();
+                self.schedule(self.now + 15_000, Ev::MailTick);
+            }
+            Ev::MailTcp { to, payload } => {
+                if self.nodes[to].alive() && self.on_backbone(to) {
+                    self.on_deposit(to, &payload);
+                }
+            }
+            Ev::MailSyncAt { node } => {
+                if self.nodes[node].alive() {
+                    self.mail_sync(node);
+                }
+            }
+            Ev::Trunk { link, to, packet, start } => {
+                if !self.link_ok(link) || !self.nodes[to].alive() {
+                    return;
+                }
+                if self.sc.trunk_mesh_channel && self.trunk_jammed(link, to, start) {
+                    self.links[link].dropped += 1;
+                    self.stats.trunk_jammed += 1;
+                    return;
+                }
+                if self.links[link].loss > 0.0 && self.rng.gen_bool(self.links[link].loss) {
+                    self.links[link].dropped += 1;
+                    return;
+                }
+                let snr = self.links[link].snr;
+                let pid = Packet::decode(&packet).map(|p| packet_id(p.header.ptype, &p.header.dest, p.payload)).unwrap_or(0);
+                let tag = self.tags.get(&pid).copied();
+                let tj = self.tag_json(pid);
+                self.tr(format!("{{\"t\":{},\"ev\":\"trunk\",\"link\":{link},\"to\":{to},\"pid\":\"{pid:016x}\"{tj}}}", self.now));
+                let before = self.nodes[to].router.stats;
+                let actions = self.nodes[to].router.on_receive(&packet, snr, self.now);
+                self.after_router(to, before, tag);
+                // Not the backbone: a request that arrives over a trunk is
+                // flooded on this side's radio (it may be crossing a transit
+                // region to the next trunk), as maarse-host does (a trunk is
+                // not a backbone link there either).
+                self.trunk_ctx = true;
+                self.apply(to, actions.into_iter().collect(), tag);
+                self.trunk_ctx = false;
+            }
+            Ev::KeyWait { msg } => {
+                let from = self.msgs[msg].from;
+                if let Some(k) = self.await_key[from].iter().position(|&m| m == msg) {
+                    self.await_key[from].remove(k);
+                    self.msgs[msg].unsent = true;
+                    self.tr(format!("{{\"t\":{},\"ev\":\"drop\",\"msg\":{msg},\"n\":{from},\"why\":\"no answer to the key request\"}}", self.now));
+                }
             }
             Ev::LookupTimeout { msg } => match self.lookups.get(&msg) {
                 Some(l) if !l.done && l.tries < LOOKUP_TRIES => self.ask(msg),
@@ -974,9 +1413,15 @@ impl Engine {
                         let region = p.header.region;
                         let dht = self.sc.features.dht_backbone;
                         let directed = dht && p.header.ptype == PacketType::PathRequest;
+                        // LoRa trunks are handled apart: they cost airtime.
+                        let trunks: Vec<usize> = self.nodes[node].links.iter().copied().filter(|&k| self.links[k].lora && self.link_ok(k)).collect();
+                        for k in trunks {
+                            self.trunk_send(k, node, &p, &packet, delay_ms as u64);
+                        }
                         let mut peers: Vec<(usize, bool)> = self.nodes[node]
                             .links
                             .iter()
+                            .filter(|&&k| !self.links[k].lora)
                             .filter_map(|&k| self.link_ok(k).then(|| {
                                 let l = &self.links[k];
                                 (if l.a == node { l.b } else { l.a }, l.wifi)
@@ -1024,6 +1469,9 @@ impl Engine {
                             self.schedule(self.now + delay_ms as u64 + lat, Ev::Backbone { from: node, to: peer, packet: packet.clone() });
                         }
                     }
+                    if self.bb_ctx && self.sc.features.bordercast && self.nodes[node].kind == Kind::Host && self.keep_off_radio(node, &packet) {
+                        continue;
+                    }
                     let slot = self.nodes[node].router.slot_ms.max(1) as u64;
                     let jitter = self.rng.gen_range(0..slot);
                     self.schedule(self.now + delay_ms as u64 + jitter, Ev::Ready { node, packet, id });
@@ -1048,6 +1496,7 @@ impl Engine {
                     };
                     self.tr(format!("{{\"t\":{},\"ev\":\"route\",\"n\":{node},\"dest\":{d},\"hops\":{hops}{tj}}}", self.now));
                 }
+                Action::Acked { msg_id } | Action::CarryAcked { msg_id } if self.mail_acked(node, msg_id) => {}
                 Action::Acked { msg_id } | Action::CarryAcked { msg_id } => {
                     if let Some(i) = self.msgs.iter().position(|m| m.id == msg_id && m.from == node)
                         && self.msgs[i].acked_ms.is_none()
@@ -1059,9 +1508,19 @@ impl Engine {
             }
         }
         if let Some(d) = self.nodes[node].router.next_deadline() {
-            // Ticks are cheap to repeat; schedule one at the deadline.
-            self.schedule(d.max(self.now), Ev::Tick { node });
+            // One pending tick per node at a time (hellos give every router a
+            // deadline; scheduling one per action flooded the event queue).
+            let d = d.max(self.now);
+            if d < self.tick_at[node] || self.tick_at[node] < self.now {
+                self.tick_at[node] = d;
+                self.schedule(d, Ev::Tick { node });
+            }
         }
+    }
+
+    /// Is node `i` on the TCP backbone: internet and at least one TCP link up?
+    fn on_backbone(&self, i: usize) -> bool {
+        self.has_internet(i) && self.nodes[i].links.iter().any(|&k| !self.links[k].lora && !self.links[k].wifi && self.link_ok(k))
     }
 
     fn link_ok(&self, k: usize) -> bool {
@@ -1073,7 +1532,7 @@ impl Engine {
         if !a.alive() || !b.alive() {
             return false;
         }
-        if l.wifi {
+        if l.wifi || l.lora {
             return true;
         }
         self.has_internet(l.a) && self.has_internet(l.b)
@@ -1085,7 +1544,122 @@ impl Engine {
     }
 
     fn on_deliver(&mut self, node: usize, ptype: PacketType, dest: Address, payload: &[u8], hops: u8) {
+        if ptype == PacketType::Announce
+            && !self.mailbox.is_empty()
+            && (!self.bb_ctx || self.sc.mail == "named")
+            && let Some(&who) = self.addr_idx.get(&dest)
+            && self.mailbox[node].get(&who).is_some_and(|v| !v.is_empty())
+        {
+            // A post office hears a recipient it holds mail for.
+            self.deliver_mail(node, who, &[]);
+        }
         match ptype {
+            PacketType::Deposit => self.on_deposit(node, payload),
+            PacketType::MailSync => self.on_mail_sync(node, dest, payload),
+            PacketType::KeyRequest => {
+                let Some(&who) = self.addr_idx.get(&dest) else { return };
+                let fresh = |e: &Self, k: (usize, usize)| e.key_answered.get(&k).is_none_or(|&t| e.now >= t + 30_000);
+                if who == node {
+                    // We are asked for: announce (at most every 30 s).
+                    if fresh(self, (node, node)) {
+                        self.key_answered.insert((node, node), self.now);
+                        self.announce(node);
+                    }
+                } else if self.sc.features.key_cache
+                    && self.nodes[node].kind == Kind::Host
+                    && !self.bb_ctx
+                    && self.heard_from[node].contains(&(who as u32))
+                    && fresh(self, (node, who))
+                {
+                    self.key_answered.insert((node, who), self.now);
+                    self.reannounce(node, who);
+                }
+            }
+            PacketType::Announce => {
+                if let Some(&who) = self.addr_idx.get(&dest)
+                    && who != node
+                {
+                    self.heard_from[node].insert(who as u32);
+                    if self.mail_class.get(node).is_some_and(|&c| c > 0)
+                        && let Some(h) = self.home_po.get(who).copied().flatten()
+                    {
+                        // The announce names the sender's home office.
+                        self.heard_home.insert((node, who), h);
+                    }
+                    if !self.bb_ctx && !self.trunk_ctx && self.nodes[node].kind == Kind::Host {
+                        self.local_seen[node].insert(who as u32);
+                        if !self.radio_seen.is_empty() {
+                            self.radio_seen[node].insert(who, self.now);
+                        }
+                    }
+                    if self.sc.features.mobile_mode {
+                        let m = self.nodes[who].router.mobile;
+                        self.nodes[node].router.note_mobile(dest, m, self.now);
+                    }
+                    if hops == 0 && !(self.sc.neighbor_info.is_empty() || self.sc.neighbor_info == "instant") {
+                        // The role field of a 0-hop announce (as the firmware).
+                        let (id, role, h, choice) = {
+                            let rt = &self.nodes[who].router;
+                            (rt.id, rt.role, rt.hears_repeater(self.now), rt.chosen_bridge(self.now))
+                        };
+                        let rt = &mut self.nodes[node].router;
+                        rt.neighbors.heard(id, Some(dest), 0, 0, self.now);
+                        rt.neighbors.set_role(id, role, Some(h));
+                        rt.neighbors.set_bridge_choice(id, choice);
+                    }
+                    // The announce's role flags say whether the sender hears
+                    // a repeater (boundary mode for edge bridges).
+                    let hears = self.nodes[who].router.hears_repeater(self.now);
+                    self.nodes[node].router.note_coverage(dest, hears);
+                    if hears && self.nodes[who].router.role == Role::Relay {
+                        let id = self.nodes[who].router.id;
+                        self.nodes[node].router.note_bridge(id, hops, self.now);
+                    }
+                }
+                if self.sc.contact_capacity > 0
+                    && let Some(&who) = self.addr_idx.get(&dest)
+                    && who != node
+                {
+                    self.learn_contact(node, who);
+                }
+                // The node now knows the announcer's keys again.
+                if let Some(&who) = self.addr_idx.get(&dest)
+                    && who != node
+                    && (self.sc.contact_capacity > 0 || (self.forgot[node] && self.relearned[node].insert(who as u32)))
+                {
+                    // Messages waiting for this key go out now.
+                    let go: Vec<usize> = self.await_key[node].iter().copied().filter(|&m| self.msgs[m].to == who).collect();
+                    self.await_key[node].retain(|&m| self.msgs[m].to != who);
+                    for m in go {
+                        self.continue_send(m);
+                    }
+                    let waiting: Vec<usize> = self.held[node].iter().copied().filter(|&m| self.msgs[m].from == who).collect();
+                    self.held[node].retain(|&m| self.msgs[m].from != who);
+                    for m in waiting {
+                        self.msgs[m].shown_ms = Some(self.now);
+                        self.tr(format!("{{\"t\":{},\"ev\":\"shown\",\"msg\":{m},\"n\":{node},\"after_hold\":true}}", self.now));
+                    }
+                }
+            }
+            PacketType::Data if payload.starts_with(b"BNDL") => {
+                let n = payload.get(4).copied().unwrap_or(0) as usize;
+                for c in payload.get(5..5 + 4 * n).unwrap_or(&[]).chunks_exact(4) {
+                    let i = u32::from_be_bytes([c[0], c[1], c[2], c[3]]) as usize;
+                    if i < self.msgs.len() && self.msgs[i].to == node && self.msgs[i].delivered_ms.is_none() {
+                        self.msgs[i].delivered_ms = Some(self.now);
+                        let from = self.msgs[i].from;
+                        if self.knows(node, from) {
+                            self.msgs[i].shown_ms = Some(self.now);
+                        }
+                        if !self.got.is_empty() {
+                            self.got[node].push(i);
+                            if self.got[node].len() > 8 {
+                                self.got[node].remove(0);
+                            }
+                        }
+                    }
+                }
+            }
             PacketType::Data => {
                 let id = packet_id(PacketType::Data, &dest, payload);
                 if let Some(i) = self.msgs.iter().position(|m| m.id == id && m.to == node)
@@ -1093,6 +1667,27 @@ impl Engine {
                 {
                     self.msgs[i].delivered_ms = Some(self.now);
                     self.tr(format!("{{\"t\":{},\"ev\":\"deliver\",\"msg\":{i},\"n\":{node},\"hops\":{hops}}}", self.now));
+                    if !self.got.is_empty() {
+                        self.got[node].push(i);
+                        if self.got[node].len() > 8 {
+                            self.got[node].remove(0);
+                        }
+                    }
+                    // The app can show it only if it knows the sender's keys.
+                    let from = self.msgs[i].from;
+                    if self.knows(node, from) {
+                        self.msgs[i].shown_ms = Some(self.now);
+                        self.pin(node, from);
+                    } else if self.sc.features.hold_unknown {
+                        self.held[node].push(i);
+                        if self.sc.features.key_request {
+                            self.ask_key(node, from);
+                        }
+                        self.tr(format!("{{\"t\":{},\"ev\":\"held\",\"msg\":{i},\"n\":{node},\"why\":\"unknown sender\"}}", self.now));
+                    } else {
+                        self.msgs[i].dropped_unknown = true;
+                        self.tr(format!("{{\"t\":{},\"ev\":\"drop\",\"msg\":{i},\"n\":{node},\"why\":\"unknown sender\"}}", self.now));
+                    }
                 }
             }
             PacketType::Datagram => self.on_lookup_datagram(node, payload),
@@ -1140,6 +1735,11 @@ impl Engine {
             return;
         }
         if self.cancelled.remove(&(node, id)) {
+            return;
+        }
+        // The same packet already waiting: one copy is enough (as the firmware).
+        if !self.sc.no_queue_dedup && self.nodes[node].txq.iter().any(|q| q.id == id && q.packet == packet) {
+            self.stats.dup_queued += 1;
             return;
         }
         let prio = maarse_core::qos::priority_with(&packet, &self.bulletin_channel);
@@ -1238,6 +1838,7 @@ impl Engine {
         let (path_json, nx, dst) = route;
         let pname = if pname == "Channel" && q.packet.get(2..18) == Some(&self.bulletin_channel.0[..]) { "Bulletin" } else { pname };
         *self.stats.by_type.entry(pname.to_string()).or_default() += 1;
+        *self.stats.air_by_type.entry(pname.to_string()).or_default() += (airtime as u64).div_ceil(1000);
         let tx = self.next_tx;
         self.next_tx += 1;
         let tj = self.tag_json(pid);
@@ -1246,7 +1847,7 @@ impl Engine {
             self.now, q.prio
         ));
         let flood = nx < 0 && !path_json.starts_with(",\"path\"");
-        self.active.push(Tx { id: tx, sender: node, start: self.now, end, packet: q.packet, nx, flood });
+        self.active.push(Tx { id: tx, sender: node, start: self.now, end, packet: q.packet, nx, flood, noise: false });
         self.nodes[node].busy_until = end;
         self.schedule(end, Ev::TxEnd { tx });
         if !self.nodes[node].txq.is_empty() {
@@ -1284,7 +1885,7 @@ impl Engine {
         for (r, p) in receivers {
             let r = r as usize;
             let snr = p as f64 - noise;
-            if snr < snr_min || !self.nodes[r].alive() {
+            if snr < snr_min || !self.nodes[r].alive() || self.asleep.get(r).copied().unwrap_or(false) {
                 continue;
             }
             self.nodes[r].router.note_airtime(start, ((end - start) as u32).max(1));
@@ -1378,6 +1979,13 @@ impl Engine {
     }
 
     fn pick_dest(&mut self, from: usize, users: &[usize], tr: &Traffic) -> Option<usize> {
+        if tr.friends > 0 && !self.friends[from].is_empty() && self.rng.gen_bool(tr.friend_share.clamp(0.0, 1.0)) {
+            let f = &self.friends[from];
+            let to = f[self.rng.gen_range(0..f.len())];
+            if self.nodes[to].alive() {
+                return Some(to);
+            }
+        }
         if self.rng.gen_bool(tr.local_share.clamp(0.0, 1.0)) {
             let (x, y) = (self.nodes[from].x, self.nodes[from].y);
             let lim = tr.local_km * 1000.0;
@@ -1418,21 +2026,877 @@ impl Engine {
     pub fn send_message(&mut self, from: usize, to: usize) -> usize {
         let m = self.msgs.len();
         let mut payload = format!("message {m} from {from} to {to}: ").into_bytes();
-        payload.resize(60, b'.');
+        payload.resize(self.msg_size(), b'.');
         let id = packet_id(PacketType::Data, &self.nodes[to].router.addr, &payload);
-        self.msgs.push(Msg { from, to, payload: payload.clone(), id, sent_ms: self.now, delivered_ms: None, acked_ms: None });
+        let cross = self.nodes[from].router.hears_repeater(self.now) != self.nodes[to].router.hears_repeater(self.now);
+        self.msgs.push(Msg { from, to, payload: payload.clone(), id, sent_ms: self.now, delivered_ms: None, acked_ms: None, shown_ms: None, dropped_unknown: false, unsent: false, cross });
         self.tags.insert(id, m as u32);
         self.tr(format!("{{\"t\":{},\"ev\":\"send\",\"msg\":{m},\"from\":{from},\"to\":{to},\"pid\":\"{id:016x}\"}}", self.now));
         if !self.nodes[from].alive() {
             return m;
         }
+        if !self.sc.mail.is_empty() {
+            self.schedule(self.now + maarse_core::mail::DEPOSIT_AFTER_MS, Ev::MailCheck { msg: m });
+        }
+        if !self.knows(from, to) {
+            if self.sc.features.key_request {
+                // Ask for the key; the message goes once the announce comes.
+                self.await_key[from].push(m);
+                self.schedule(self.now + 60_000, Ev::KeyWait { msg: m });
+                self.ask_key(from, to);
+                return m;
+            }
+            // The app cannot encrypt to a contact whose keys it lost.
+            self.msgs[m].unsent = true;
+            self.tr(format!("{{\"t\":{},\"ev\":\"drop\",\"msg\":{m},\"n\":{from},\"why\":\"recipient unknown to the sender\"}}", self.now));
+            return m;
+        }
+        if self.sc.sleepy_mail_first && self.sc.mail == "post" && self.sleepy.get(to).is_some_and(Option::is_some) {
+            // A sleepy recipient: straight to the post office.
+            self.schedule(self.now + 500, Ev::MailCheck { msg: m });
+            return m;
+        }
+        self.continue_send(m);
+        m
+    }
+
+    /// The sender knows the recipient's key: route the message.
+    fn continue_send(&mut self, m: usize) {
+        let (from, to) = (self.msgs[m].from, self.msgs[m].to);
+        self.pin(from, to);
         let dest = self.nodes[to].router.addr;
         if self.sc.features.home_routing && !self.nodes[from].router.has_route(&dest) {
             self.start_lookup(m);
-            return m;
+            return;
         }
         self.send_real(m);
-        m
+    }
+
+    /// Sends a packet over LoRa trunk `k` from `node`, if the policy wants
+    /// it: floods only when the other end cannot be reached over TCP
+    /// ("backup", like a floating static route), routed packets only when
+    /// the trunk is their next hop. One packet at a time, each taking its
+    /// airtime, then a pause for the duty cycle; a queue over 30 s drops.
+    fn trunk_send(&mut self, k: usize, node: usize, p: &Packet, packet: &Buf, delay_ms: u64) {
+        let peer = if self.links[k].a == node { self.links[k].b } else { self.links[k].a };
+        let routed = p.header.path.is_some() && p.header.ptype != PacketType::PathRequest;
+        let own = p.header.dest == self.nodes[node].router.addr;
+        let want = if routed {
+            // Its next hop is the trunk's far end, or its path is used up: then
+            // it is for the anchor at the far end (two anchors facing each
+            // other across a trunk have an empty leg between them).
+            match p.header.path.as_ref().and_then(|path| path.get(p.header.hops as usize)).copied() {
+                Some(next) => next == self.nodes[peer].router.id,
+                None => self.nodes[peer].router.role == Role::Anchor,
+            }
+        } else if self.sc.trunk_policy == "always" {
+            true
+        } else if p.header.ptype == PacketType::Channel && p.header.dest == self.bulletin_channel {
+            // Alerts and bulletins always cross.
+            true
+        } else if matches!(p.header.ptype, PacketType::Hello | PacketType::Announce) {
+            // Only the endpoint's own: keys for nodes behind the trunk come
+            // from key requests answered on the other side.
+            own
+        } else if self.on_backbone(node) && self.on_backbone(peer) {
+            // TCP reaches the other end: the trunk is only a backup.
+            false
+        } else if matches!(p.header.ptype, PacketType::PathRequest | PacketType::KeyRequest) {
+            if self.sc.trunk_hash || self.sc.trunk_summary {
+                self.trunk_choose(k, node, peer, &p.header.dest)
+            } else {
+                // Bordercast over the trunk: a request stays on this side when its
+                // destination is known to be here (or until a second request).
+                self.sc.trunk_policy == "backup-all" || self.trunk_behind(k, node, peer, &p.header.dest)
+            }
+        } else {
+            false
+        };
+        if !want {
+            return;
+        }
+        let air = maarse_core::airtime::LoraParams::new(self.links[k].sf).airtime_ms(packet.len()) as u64;
+        // One frequency: trunks with a common endpoint share the channel there.
+        let group: Vec<usize> = if self.sc.trunk_same_channel {
+            let (a, b) = (self.links[k].a, self.links[k].b);
+            (0..self.links.len()).filter(|&j| self.links[j].lora && (self.links[j].a == a || self.links[j].b == a || self.links[j].a == b || self.links[j].b == b)).collect()
+        } else {
+            vec![k]
+        };
+        let busy = group.iter().map(|&j| self.links[j].busy_until).max().unwrap_or(0);
+        let start = (self.now + delay_ms).max(busy);
+        let flood = matches!(p.header.ptype, PacketType::PathRequest | PacketType::KeyRequest);
+        let limit = if self.sc.trunk_priority && flood { 5_000 } else { 30_000 };
+        if start > self.now + limit {
+            self.links[k].dropped += 1;
+            self.stats.trunk_dropped += 1;
+            return;
+        }
+        let duty = self.links[k].duty.max(1) as u64;
+        // This radio's duty pause; the shared channel is busy while it sends.
+        self.links[k].busy_until = start + air + air * (1000 - duty.min(1000)) / duty;
+        for &j in &group {
+            if j != k {
+                self.links[j].busy_until = self.links[j].busy_until.max(start + air);
+            }
+        }
+        self.links[k].packets += 1;
+        self.links[k].airtime_ms += air;
+        self.stats.trunk_packets += 1;
+        if self.sc.trunk_mesh_channel {
+            // On the mesh channel: the sending end's area hears a carrier.
+            let tx = self.next_tx;
+            self.next_tx += 1;
+            self.active.push(Tx { id: tx, sender: node, start, end: start + air, packet: packet.clone(), nx: -1, flood: false, noise: true });
+        }
+        self.schedule(start + air, Ev::Trunk { link: k, to: peer, packet: packet.clone(), start });
+    }
+
+    /// Is a trunk packet arriving at `to` (sent from `start`) jammed by a
+    /// mesh transmission there within 6 dB (after the antenna's rejection)?
+    fn trunk_jammed(&self, link: usize, to: usize, start: u64) -> bool {
+        let end = self.now;
+        let r = self.radio(self.nodes[to].sf);
+        let trunk_dbm = r.noise_dbm + self.links[link].snr as f64;
+        self.active.iter().any(|t| {
+            !t.noise
+                && t.start < end
+                && t.end > start
+                && (t.sender == to || self.nodes[to].gain_to(t.sender as u32).is_some_and(|rx| rx as f64 - self.sc.trunk_rejection_db > trunk_dbm - 6.0))
+        })
+    }
+
+    /// Radio islands (nodes connected by audible mesh links, no trunks or
+    /// TCP), for the trunk summaries.
+    fn radio_islands(&self) -> Vec<usize> {
+        let n = self.nodes.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(p: &mut [usize], mut i: usize) -> usize {
+            while p[i] != i {
+                p[i] = p[p[i]];
+                i = p[i];
+            }
+            i
+        }
+        for i in 0..n {
+            for &(j, rx) in &self.nodes[i].nbrs {
+                if self.audible_rx(i, rx) {
+                    let (a, b) = (find(&mut parent, i), find(&mut parent, j as usize));
+                    parent[a] = b;
+                }
+            }
+        }
+        (0..n).map(|i| find(&mut parent, i)).collect()
+    }
+
+    /// Trunk choice for a request for `dest` arriving at trunk end `node`:
+    /// with summaries, only trunks whose far end is on `dest`'s side; with
+    /// hashing, only the one with the highest rendezvous score among the
+    /// group's (live) trunks. Unknown destinations and second requests go
+    /// over every trunk the summary allows.
+    fn trunk_choose(&mut self, k: usize, node: usize, peer: usize, dest: &Address) -> bool {
+        let Some(&d) = self.addr_idx.get(dest) else { return true };
+        if self.islands.len() != self.nodes.len() {
+            self.islands = self.radio_islands();
+        }
+        let now = self.now;
+        let key = (k, node, d);
+        let repeat = self.trunk_dropped.get(&key).is_some_and(|&t| now < t + 120_000);
+        if self.sc.trunk_summary {
+            // The far side has the destination?
+            if self.islands[d] != self.islands[peer] {
+                // Not behind this trunk; on the second request only if it is
+                // not known on this side either.
+                if self.islands[d] == self.islands[node] {
+                    return false;
+                }
+                if !repeat {
+                    self.trunk_dropped.insert(key, now);
+                    return false;
+                }
+                self.trunk_dropped.remove(&key);
+                return true;
+            }
+        }
+        if self.sc.trunk_hash && !repeat {
+            let group = self.links[k].group.clone();
+            let addr = self.nodes[d].router.addr;
+            let mut best = (0u64, k);
+            for j in 0..self.links.len() {
+                let l = &self.links[j];
+                if !l.lora || l.group != group || group.is_empty() || !self.link_ok(j) {
+                    continue;
+                }
+                let far = if self.islands[l.a] == self.islands[node] { l.b } else { l.a };
+                if self.sc.trunk_summary && self.islands[d] != self.islands[far] {
+                    continue;
+                }
+                let s = maarse_core::mail::score(&addr, &self.nodes[l.a].router.addr) ^ (j as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                if s >= best.0 {
+                    best = (s, j);
+                }
+            }
+            if best.1 != k {
+                self.trunk_dropped.insert(key, now);
+                return false;
+            }
+        }
+        self.trunk_dropped.remove(&key);
+        true
+    }
+
+    /// May a request for `dest` cross trunk `k` from `node`? Yes unless
+    /// `dest` is known to be on this side (heard announcing over this end's
+    /// own radio) - then it goes over only on a second request. The end
+    /// knows its own side already; nothing has to be exchanged.
+    fn trunk_behind(&mut self, k: usize, node: usize, _peer: usize, dest: &Address) -> bool {
+        let Some(&d) = self.addr_idx.get(dest) else { return true };
+        if !self.local_seen[node].contains(&(d as u32)) {
+            return true;
+        }
+        let now = self.now;
+        let key = (k, node, d);
+        if self.trunk_dropped.get(&key).is_some_and(|&t| now < t + 120_000) {
+            self.trunk_dropped.remove(&key);
+            return true;
+        }
+        self.trunk_dropped.insert(key, now);
+        false
+    }
+
+    /// Size of a text message on the air (compressed or not).
+    fn msg_size(&self) -> usize {
+        if self.sc.text_compress { 34 } else { 60 }
+    }
+
+    // ---------- post offices ----------
+
+    fn init_mail(&mut self) {
+        let n = self.nodes.len();
+        self.mailbox = vec![HashMap::default(); n];
+        self.radio_seen = vec![HashMap::default(); n];
+        self.was_on_backbone = vec![true; n];
+        self.present = vec![HashMap::default(); n];
+        self.home_po = vec![None; n];
+        self.prev_home = vec![None; n];
+        self.got = vec![Vec::new(); n];
+        self.last_sync = vec![0; n];
+        self.mail_class = (0..n)
+            .map(|i| match self.nodes[i].kind {
+                Kind::Host if !self.sc.mail.is_empty() => maarse_core::mail::CLASS_LARGE,
+                Kind::Repeater | Kind::Anchor if self.sc.mail == "post" && self.sc.repeater_mail => maarse_core::mail::CLASS_SMALL,
+                _ => 0,
+            })
+            .collect();
+        for i in 0..n {
+            self.nodes[i].router.mail_class = self.mail_class[i];
+            self.id_idx.insert(self.nodes[i].router.id, i);
+        }
+        // Replicas only on hosts with internet (the ones in the host DHT).
+        self.host_list = (0..n).filter(|&i| self.nodes[i].kind == Kind::Host && self.nodes[i].internet).collect();
+        self.named_box = (0..n).map(|i| if self.nodes[i].kind.is_user() { self.nearest_office(i, 3) } else { None }).collect();
+        if self.sc.mail == "post" {
+            self.schedule(15_000, Ev::MailTick);
+        }
+        // Sleepy handhelds: chosen by index (no draw from the random stream,
+        // so other runs are unchanged), each with its own phase.
+        self.asleep = vec![false; n];
+        self.sleepy = (0..n)
+            .map(|i| {
+                let h = (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 40;
+                let pick = (h % 1000) as f64 / 1000.0 < self.sc.sleepy_share;
+                (self.nodes[i].kind == Kind::Handheld && pick).then_some(h % 100_000)
+            })
+            .collect();
+        if self.sleepy.iter().any(Option::is_some) {
+            self.schedule(5_000, Ev::SleepTick);
+        }
+    }
+
+    /// Sleepy handhelds: radio on for `wake_s` of every cycle; a node that
+    /// wakes asks its post office for waiting mail.
+    fn sleep_tick(&mut self) {
+        let cycle = ((self.sc.sleep_s + self.sc.wake_s) * 1000.0) as u64;
+        let wake = (self.sc.wake_s * 1000.0) as u64;
+        if cycle == 0 {
+            return;
+        }
+        for i in 0..self.nodes.len() {
+            let Some(phase) = self.sleepy[i] else { continue };
+            let asleep = (self.now + phase * 37) % cycle >= wake;
+            if self.asleep[i] && !asleep {
+                self.stats.wakeups += 1;
+                if self.sc.mail == "post" && self.nodes[i].alive() {
+                    self.mail_sync(i);
+                }
+            }
+            self.asleep[i] = asleep;
+        }
+    }
+
+    /// The nearest post office of at least `class` to node `i` (by distance).
+    fn nearest_office(&self, i: usize, class: u8) -> Option<usize> {
+        let (x, y) = (self.nodes[i].x, self.nodes[i].y);
+        (0..self.nodes.len())
+            .filter(|&j| j != i && self.mail_class.get(j).is_some_and(|&c| c >= class) && self.nodes[j].alive())
+            .min_by(|&a, &b| {
+                let da = (self.nodes[a].x - x).hypot(self.nodes[a].y - y);
+                let db = (self.nodes[b].x - x).hypot(self.nodes[b].y - y);
+                da.total_cmp(&db)
+            })
+    }
+
+    /// A user's post office now: the best one its hellos told it about,
+    /// else the nearest within 20 km.
+    fn current_office(&mut self, i: usize) -> Option<usize> {
+        if let Some((id, _, _)) = self.nodes[i].router.best_post_office(self.now)
+            && let Some(&j) = self.id_idx.get(&id)
+        {
+            return Some(j);
+        }
+        let j = self.nearest_office(i, 1)?;
+        let d = (self.nodes[j].x - self.nodes[i].x).hypot(self.nodes[j].y - self.nodes[i].y);
+        (d < 20_000.0).then_some(j)
+    }
+
+    /// Sends a `Deposit` with `op` about `recipient` from `node` to `office`.
+    fn send_deposit(&mut self, node: usize, office: usize, recipient: usize, op: u8, body: &[u8]) {
+        if node == office || !self.nodes[node].alive() {
+            return;
+        }
+        let mut p: heapless::Vec<u8, 160> = heapless::Vec::new();
+        let rec = self.nodes[recipient].router.addr;
+        if !maarse_core::mail::build(&mut p, &rec, op, body) {
+            return;
+        }
+        if self.nodes[node].kind == Kind::Host && self.nodes[office].kind == Kind::Host {
+            // Host to host: only over a direct TCP connection (as the DHT
+            // uses), never radio. Without TCP it waits until TCP is back
+            // (hinted handoff).
+            if self.on_backbone(node) && self.on_backbone(office) {
+                self.stats.mail_tcp += 1;
+                self.schedule(self.now + 50, Ev::MailTcp { to: office, payload: p.to_vec() });
+            } else if self.mail_deferred.len() < 10_000 {
+                self.stats.mail_deferred += 1;
+                self.mail_deferred.push((node, office, p.to_vec()));
+            }
+            return;
+        }
+        let dest = self.nodes[office].router.addr;
+        let mut token = [0u8; 16];
+        self.rng.fill(&mut token[..]);
+        self.stats.mail_ops += 1;
+        self.tr(format!("{{\"t\":{},\"ev\":\"mail_send\",\"n\":{node},\"to\":{office},\"op\":{op},\"rec\":{recipient}}}", self.now));
+        let before = self.nodes[node].router.stats;
+        if let Ok((_, actions)) = self.nodes[node].router.send_typed(PacketType::Deposit, dest, &p, token, self.now) {
+            self.after_router(node, before, None);
+            self.apply(node, actions.into_iter().collect(), None);
+        }
+    }
+
+    /// A `Deposit` over the radio (routed), also between hosts: for
+    /// consolidation when the backbone is down.
+    fn send_deposit_lora(&mut self, node: usize, office: usize, recipient: usize, op: u8, body: &[u8]) {
+        if node == office || !self.nodes[node].alive() {
+            return;
+        }
+        let mut p: heapless::Vec<u8, 160> = heapless::Vec::new();
+        let rec = self.nodes[recipient].router.addr;
+        if !maarse_core::mail::build(&mut p, &rec, op, body) {
+            return;
+        }
+        let dest = self.nodes[office].router.addr;
+        let mut token = [0u8; 16];
+        self.rng.fill(&mut token[..]);
+        self.stats.mail_ops += 1;
+        let before = self.nodes[node].router.stats;
+        if let Ok((_, actions)) = self.nodes[node].router.send_typed(PacketType::Deposit, dest, &p, token, self.now) {
+            self.after_router(node, before, None);
+            self.apply(node, actions.into_iter().collect(), None);
+        }
+    }
+
+    /// A STORE body: copy flag (0 = from the sender, 1 = a copy), the
+    /// message index, padded to the size of a sealed message.
+    fn store_body(m: usize, copy: bool) -> heapless::Vec<u8, 64> {
+        let mut b: heapless::Vec<u8, 64> = heapless::Vec::new();
+        let _ = b.push(copy as u8);
+        let _ = b.extend_from_slice(&(m as u32).to_be_bytes());
+        while b.len() < 60 {
+            let _ = b.push(0);
+        }
+        b
+    }
+
+    fn id_list(ids: &[usize]) -> heapless::Vec<u8, 64> {
+        let mut b: heapless::Vec<u8, 64> = heapless::Vec::new();
+        for &m in ids.iter().take(8) {
+            let _ = b.extend_from_slice(&(m as u32).to_be_bytes());
+        }
+        b
+    }
+
+    /// 45 s after message `m`: no ack, so drop it at a post office.
+    fn mail_check(&mut self, m: usize) {
+        if self.msgs[m].delivered_ms.is_some() || self.msgs[m].acked_ms.is_some() || self.msgs[m].unsent {
+            return;
+        }
+        let (from, to) = (self.msgs[m].from, self.msgs[m].to);
+        if !self.nodes[from].alive() {
+            return;
+        }
+        let office = if self.sc.mail == "named" { self.named_box[to] } else { self.current_office(from) };
+        let Some(office) = office else { return };
+        self.stats.mail_deposits += 1;
+        let body = Self::store_body(m, false);
+        if office == from {
+            self.store(from, to, m, false);
+        } else {
+            self.send_deposit(from, office, to, maarse_core::mail::OP_STORE, &body);
+        }
+    }
+
+    /// The replica hosts of `recipient` (rendezvous hashing over all hosts).
+    fn replica_hosts(&self, recipient: usize) -> Vec<usize> {
+        let addrs: Vec<Address> = self.host_list.iter().map(|&h| self.nodes[h].router.addr).collect();
+        let r: heapless::Vec<Address, { maarse_core::mail::REPLICAS }> = maarse_core::mail::replicas(&self.nodes[recipient].router.addr, &addrs);
+        r.iter().filter_map(|a| self.addr_idx.get(a).copied()).collect()
+    }
+
+    /// Stores message `m` for `recipient` at post office `node` (quotas: a
+    /// small office keeps 4 per recipient and 30 in all, a host 100 per
+    /// recipient) and passes copies on.
+    fn store(&mut self, node: usize, recipient: usize, m: usize, copy: bool) {
+        let class = self.mail_class[node];
+        if class == 0 {
+            return;
+        }
+        let total: usize = self.mailbox[node].values().map(|v| v.len()).sum();
+        let list = self.mailbox[node].entry(recipient).or_default();
+        if list.contains(&m) {
+            return;
+        }
+        let (per, all) = if class >= 3 { (100, usize::MAX) } else { (4, 30) };
+        if list.len() >= per || total >= all {
+            self.stats.mail_full += 1;
+            return;
+        }
+        list.push(m);
+        self.stats.mail_stored += 1;
+        self.update_tim(node);
+        if !copy && self.sc.mail == "post" {
+            // The office that took the message tries to deliver it itself
+            // now and then (5, 10, 20, 40 ... min), like a mail server.
+            self.mail_retry.entry((node, recipient)).or_insert((self.now + 300_000, 0));
+        }
+        if self.sc.mail == "post" && !copy {
+            let body = Self::store_body(m, true);
+            if class >= 3 {
+                // Three host copies, over TCP.
+                for r in self.replica_hosts(recipient) {
+                    if r != node {
+                        self.send_deposit(node, r, recipient, maarse_core::mail::OP_STORE, &body);
+                    }
+                }
+                // Off the backbone: a copy to the recipient's home office over
+                // LoRa, so one sync there (or to it) gets everything.
+                if self.sc.mail_consolidate
+                    && !self.on_backbone(node)
+                    && let Some(h) = self.heard_home.get(&(node, recipient)).copied()
+                    && h != node
+                {
+                    self.stats.mail_consolidated += 1;
+                    self.send_deposit_lora(node, h, recipient, maarse_core::mail::OP_STORE, &body);
+                }
+            } else if let Some(h) = self.nearest_office(node, 3) {
+                // A small office passes a copy to the nearest host.
+                self.send_deposit(node, h, recipient, maarse_core::mail::OP_STORE, &body);
+            }
+        }
+        if self.present[node].get(&recipient).is_some_and(|&t| self.now < t) {
+            // Only the new one: the rest is on its way already.
+            let others: Vec<usize> = self.mailbox[node].get(&recipient).map(|v| v.iter().copied().filter(|&x| x != m).collect()).unwrap_or_default();
+            self.deliver_mail(node, recipient, &others);
+        }
+    }
+
+    /// The recipients with mail waiting, told in the office's hello.
+    fn update_tim(&mut self, node: usize) {
+        let ids: Vec<u16> = self.mailbox[node].iter().filter(|(_, v)| !v.is_empty()).map(|(&r, _)| self.nodes[r].router.id).take(4).collect();
+        let w = &mut self.nodes[node].router.mail_waiting;
+        w.clear();
+        for id in ids {
+            let _ = w.push(id);
+        }
+    }
+
+    /// Office `node` sends what it holds for `recipient` (except `have`).
+    fn deliver_mail(&mut self, node: usize, recipient: usize, have: &[usize]) {
+        // Not what the recipient has, and not what was sent in the last minute.
+        let now = self.now;
+        let sent = &self.mail_sent;
+        let mut list: Vec<usize> = self.mailbox[node]
+            .get(&recipient)
+            .map(|v| v.iter().copied().filter(|m| !have.contains(m) && sent.get(&(node, *m)).is_none_or(|&t| now >= t + 60_000)).collect())
+            .unwrap_or_default();
+        if self.sc.mail_paced {
+            // One at a time over a long route (the next when this one is
+            // acknowledged): a burst would overflow the LoRa trunks.
+            let local = self.on_backbone(node) && self.radio_seen.get(node).is_some_and(|m| m.get(&recipient).is_some_and(|&t| now < t + 3_600_000));
+            let inflight = self.mailbox[node].get(&recipient).is_some_and(|v| v.iter().any(|m| sent.get(&(node, *m)).is_some_and(|&t| now < t + 60_000)));
+            if !local {
+                if inflight {
+                    return;
+                }
+                list.truncate(1);
+            }
+        }
+        if list.is_empty() || !self.nodes[node].alive() {
+            return;
+        }
+        for &m in &list {
+            self.mail_sent.insert((node, m), now);
+            self.tr(format!("{{\"t\":{now},\"ev\":\"mail_deliver\",\"n\":{node},\"rec\":{recipient},\"msg\":{m}}}"));
+        }
+        let dest = self.nodes[recipient].router.addr;
+        if self.sc.mail_bundle && list.len() >= 2 {
+            // Up to three messages per packet: "BNDL" | count | indices,
+            // padded to the size the messages would take.
+            for chunk in list.chunks(3) {
+                let mut payload = b"BNDL".to_vec();
+                payload.push(chunk.len() as u8);
+                for &m in chunk {
+                    payload.extend_from_slice(&(m as u32).to_be_bytes());
+                }
+                payload.resize((self.msg_size() * chunk.len()).min(maarse_core::router::MAX_DIRECT_PAYLOAD), 0);
+                let mut token = [0u8; 16];
+                self.rng.fill(&mut token[..]);
+                self.stats.mail_deliveries += 1;
+                let before = self.nodes[node].router.stats;
+                if let Ok((msg_id, actions)) = self.nodes[node].router.send_direct(dest, &payload, token, self.now) {
+                    self.bundles.insert(msg_id, (node, recipient, chunk.to_vec()));
+                    self.after_router(node, before, Some(chunk[0] as u32));
+                    self.apply(node, actions.into_iter().collect(), Some(chunk[0] as u32));
+                }
+            }
+            return;
+        }
+        for m in list {
+            let payload = self.msgs[m].payload.clone();
+            let mut token = [0u8; 16];
+            self.rng.fill(&mut token[..]);
+            self.stats.mail_deliveries += 1;
+            let before = self.nodes[node].router.stats;
+            if let Ok((_, actions)) = self.nodes[node].router.send_direct(dest, &payload, token, self.now) {
+                self.after_router(node, before, Some(m as u32));
+                self.apply(node, actions.into_iter().collect(), Some(m as u32));
+            }
+        }
+    }
+
+    /// An ack for mail an office delivered: delete it everywhere.
+    fn mail_acked(&mut self, node: usize, msg_id: u64) -> bool {
+        if let Some((office, r, ms)) = self.bundles.remove(&msg_id) {
+            if let Some(v) = self.mailbox[office].get_mut(&r) {
+                v.retain(|x| !ms.contains(x));
+            }
+            for m in &ms {
+                self.mail_sent.remove(&(office, *m));
+            }
+            self.update_tim(office);
+            if self.sc.mail == "post" {
+                let body = Self::id_list(&ms);
+                let others: Vec<usize> = if self.mail_class[office] >= 3 { self.replica_hosts(r) } else { self.nearest_office(office, 3).into_iter().collect() };
+                for o in others {
+                    if o != office {
+                        self.send_deposit(office, o, r, maarse_core::mail::OP_DELIVERED, &body);
+                    }
+                }
+            }
+            return true;
+        }
+        if self.mailbox.is_empty() || self.mailbox[node].is_empty() {
+            return false;
+        }
+        let hit = self.mailbox[node].iter().find_map(|(&r, v)| v.iter().copied().find(|&m| self.msgs[m].id == msg_id).map(|m| (r, m)));
+        let Some((r, m)) = hit else { return false };
+        if let Some(v) = self.mailbox[node].get_mut(&r) {
+            v.retain(|&x| x != m);
+        }
+        self.update_tim(node);
+        self.mail_sent.remove(&(node, m));
+        if self.sc.mail_paced {
+            // Paced: the next message now.
+            self.deliver_mail(node, r, &[]);
+        }
+        if self.sc.mail == "post" {
+            let body = Self::id_list(&[m]);
+            let others: Vec<usize> = if self.mail_class[node] >= 3 { self.replica_hosts(r) } else { self.nearest_office(node, 3).into_iter().collect() };
+            for o in others {
+                if o != node {
+                    self.send_deposit(node, o, r, maarse_core::mail::OP_DELIVERED, &body);
+                }
+            }
+        }
+        true
+    }
+
+    fn on_deposit(&mut self, node: usize, payload: &[u8]) {
+        let Some(d) = maarse_core::mail::Deposit::parse(payload) else { return };
+        let Some(&rec) = self.addr_idx.get(&d.recipient) else { return };
+        let op = d.op;
+        self.tr(format!("{{\"t\":{},\"ev\":\"mail_op\",\"n\":{node},\"op\":{op},\"rec\":{rec}}}", self.now));
+        match d.op {
+            maarse_core::mail::OP_STORE => {
+                let copy = d.body.first().copied() == Some(1);
+                let m = d.body.get(1..5).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
+                if let Some(m) = m.filter(|&m| m < self.msgs.len()) {
+                    self.store(node, rec, m, copy);
+                }
+            }
+            maarse_core::mail::OP_SYNC => {
+                // Deliver to the recipient (wherever it is); a host also
+                // fetches the copies.
+                let have: Vec<usize> = d.ids().map(|x| x as usize).collect();
+                self.present[node].insert(rec, self.now + 600_000);
+                self.deliver_mail(node, rec, &have);
+                if self.mail_class[node] >= 3 {
+                    self.fetch_copies(node, rec, &have);
+                }
+            }
+            maarse_core::mail::OP_FETCH => {
+                let have: Vec<usize> = d.ids().map(|x| x as usize).collect();
+                let Some(&asker) = d.asker().as_ref().and_then(|a| self.addr_idx.get(a)) else { return };
+                let list: Vec<usize> = self.mailbox[node].get(&rec).map(|v| v.iter().copied().filter(|m| !have.contains(m)).collect()).unwrap_or_default();
+                for m in list {
+                    let body = Self::store_body(m, true);
+                    self.send_deposit(node, asker, rec, maarse_core::mail::OP_STORE, &body);
+                }
+            }
+            maarse_core::mail::OP_DELIVERED => {
+                let ids: Vec<usize> = d.ids().map(|x| x as usize).collect();
+                if let Some(v) = self.mailbox[node].get_mut(&rec) {
+                    v.retain(|m| !ids.contains(m));
+                }
+                self.update_tim(node);
+            }
+            _ => {}
+        }
+    }
+
+    /// Host `node` asks the replicas for `rec`'s mail (they send copies).
+    fn fetch_copies(&mut self, node: usize, rec: usize, have: &[usize]) {
+        let mut body: heapless::Vec<u8, 64> = heapless::Vec::new();
+        let _ = body.extend_from_slice(&self.nodes[node].router.addr.0);
+        for &m in have.iter().take(8) {
+            let _ = body.extend_from_slice(&(m as u32).to_be_bytes());
+        }
+        for r in self.replica_hosts(rec) {
+            if r != node {
+                self.send_deposit(node, r, rec, maarse_core::mail::OP_FETCH, &body);
+            }
+        }
+    }
+
+    /// A `MailSync` from `dest` heard by `node`.
+    fn on_mail_sync(&mut self, node: usize, dest: Address, payload: &[u8]) {
+        if self.mail_class.get(node).is_none_or(|&c| c == 0) {
+            return;
+        }
+        let Some(&rec) = self.addr_idx.get(&dest) else { return };
+        if !self.bb_ctx && self.nodes[node].kind == Kind::Host {
+            self.radio_seen[node].insert(rec, self.now);
+        }
+        let (home, have) = maarse_core::mail::parse_sync(payload);
+        let have: Vec<usize> = have.iter().map(|&x| x as usize).collect();
+        let holds = self.mailbox[node].get(&rec).is_some_and(|v| !v.is_empty());
+        let named = home == Some(self.nodes[node].router.id);
+        if !holds && !named {
+            return;
+        }
+        self.present[node].insert(rec, self.now + 600_000);
+        self.deliver_mail(node, rec, &have);
+        if named {
+            if self.mail_class[node] >= 3 {
+                self.fetch_copies(node, rec, &have);
+            } else if let Some(h) = self.nearest_office(node, 3) {
+                // A small office asks its host to deliver (and fetch).
+                let body = Self::id_list(&have);
+                self.send_deposit(node, h, rec, maarse_core::mail::OP_SYNC, &body);
+            }
+        }
+    }
+
+    /// User `i` asks for its mail (a `MailSync` naming its home office).
+    fn mail_sync(&mut self, i: usize) {
+        let home = self.current_office(i);
+        self.home_po[i] = home.or(self.home_po[i]);
+        let home_id = home.map(|h| self.nodes[h].router.id);
+        let have: Vec<u32> = self.got[i].iter().map(|&m| m as u32).collect();
+        self.last_sync[i] = self.now;
+        self.stats.mail_syncs += 1;
+        let actions = self.nodes[i].router.request_mail(home_id, &have);
+        self.apply(i, actions.into_iter().collect(), None);
+    }
+
+    /// Every 15 s: users notice a new home office (then sync here and ask
+    /// the previous one too), act on "mail waiting" hints, and sync every
+    /// 6 hours anyway.
+    fn mail_tick(&mut self) {
+        // Host-to-host mail that waited for TCP.
+        if !self.mail_deferred.is_empty() {
+            let all = std::mem::take(&mut self.mail_deferred);
+            let (ready, wait): (Vec<_>, Vec<_>) = all.into_iter().partition(|(a, b, _)| self.on_backbone(*a) && self.on_backbone(*b) && self.nodes[*b].alive());
+            self.mail_deferred = wait;
+            if !ready.is_empty() {
+                for (_, to, payload) in ready {
+                    self.stats.mail_tcp += 1;
+                    self.schedule(self.now + 50, Ev::MailTcp { to, payload });
+                }
+            }
+        }
+        // Backbone back: fetch the mail of the nodes heard over our radio in
+        // the last 24 h (now + 1 min, and again after 5 min).
+        if self.sc.mail_refetch {
+            for &h in &self.host_list.clone() {
+                let on = self.on_backbone(h);
+                if on && !self.was_on_backbone[h] {
+                    self.refetch_at.push((self.now + 60_000, h));
+                    self.refetch_at.push((self.now + 300_000, h));
+                }
+                self.was_on_backbone[h] = on;
+            }
+            let now = self.now;
+            let due: Vec<usize> = self.refetch_at.iter().filter(|(t, _)| *t <= now).map(|(_, h)| *h).collect();
+            self.refetch_at.retain(|(t, _)| *t > now);
+            for h in due {
+                let seen: Vec<usize> = self.radio_seen[h].iter().filter(|(_, t)| now < **t + 86_400_000).map(|(&r, _)| r).collect();
+                for r in seen {
+                    self.present[h].insert(r, now + 600_000);
+                    self.deliver_mail(h, r, &[]);
+                    self.fetch_copies(h, r, &[]);
+                    self.stats.mail_refetches += 1;
+                }
+            }
+        }
+        // Offices retry delivering what they took in.
+        let due: Vec<(usize, usize)> = self.mail_retry.iter().filter(|(_, (t, _))| *t <= self.now).map(|(&k, _)| k).collect();
+        for (office, rec) in due {
+            let holds = self.mailbox[office].get(&rec).is_some_and(|v| !v.is_empty());
+            if !holds || !self.nodes[office].alive() {
+                self.mail_retry.remove(&(office, rec));
+                continue;
+            }
+            // With the backbone, presence and syncs deliver more cheaply;
+            // without it, at most three tries (5, 15, 35 min), then the mail
+            // waits for the recipient to ask.
+            let step = self.mail_retry[&(office, rec)].1 + 1;
+            let max = if self.sc.mail_long_retry { 6 } else { 3 };
+            if step > max || self.on_backbone(office) {
+                self.mail_retry.remove(&(office, rec));
+            } else {
+                // 5, 15, 35 min, then (long retries) 1, 2 and 4 hours after that.
+                let wait = match step {
+                    1 => 600_000,
+                    2 => 1_200_000,
+                    3 => 1_500_000,
+                    4 => 3_600_000,
+                    _ => 7_200_000,
+                };
+                self.mail_retry.insert((office, rec), (self.now + wait, step));
+            }
+            if !self.on_backbone(office) {
+                self.stats.mail_retries += 1;
+                self.deliver_mail(office, rec, &[]);
+            }
+        }
+        for i in 0..self.nodes.len() {
+            if !self.nodes[i].kind.is_user() || !self.nodes[i].alive() {
+                continue;
+            }
+            let now = self.now;
+            let hint = self.nodes[i].router.take_mail_hint();
+            let office = self.current_office(i);
+            if office.is_some() && office != self.home_po[i] {
+                let prev = self.home_po[i];
+                self.prev_home[i] = prev;
+                self.home_po[i] = office;
+                if now > self.last_sync[i] + 60_000 {
+                    self.mail_sync(i);
+                }
+                if let Some(p) = prev
+                    && Some(p) != office
+                {
+                    // Moved: ask the previous home office too (it delivers
+                    // over whatever route reaches us, LoRa trunks included).
+                    let have: Vec<usize> = self.got[i].clone();
+                    let body = Self::id_list(&have);
+                    self.send_deposit(i, p, i, maarse_core::mail::OP_SYNC, &body);
+                }
+            } else if (hint && now > self.last_sync[i] + 600_000) || now > self.last_sync[i] + 6 * 3600_000 {
+                self.mail_sync(i);
+            }
+        }
+    }
+
+    /// Node `node` asks "who is `wanted`?" (at most every 30 s per pair).
+    fn ask_key(&mut self, node: usize, wanted: usize) {
+        if self.key_asked.get(&(node, wanted)).is_some_and(|&t| self.now < t + 30_000) {
+            return;
+        }
+        self.key_asked.insert((node, wanted), self.now);
+        let addr = self.nodes[wanted].router.addr;
+        self.stats.key_requests += 1;
+        let actions = self.nodes[node].router.request_key(addr);
+        self.apply(node, actions.into_iter().collect(), None);
+    }
+
+    /// Bordercast: should host `node` keep this TCP-borne packet off its
+    /// radio? Path and key requests go out only for a destination heard
+    /// announcing in the host's own region, or on a second request.
+    fn keep_off_radio(&mut self, node: usize, packet: &[u8]) -> bool {
+        let Ok(p) = Packet::decode(packet) else { return false };
+        if !matches!(p.header.ptype, PacketType::PathRequest | PacketType::KeyRequest) {
+            return false;
+        }
+        let Some(&dest) = self.addr_idx.get(&p.header.dest) else { return true };
+        if self.local_seen[node].contains(&(dest as u32)) {
+            return false;
+        }
+        let now = self.now;
+        self.bc_dropped[node].retain(|&(_, t)| now < t + 120_000);
+        if let Some(k) = self.bc_dropped[node].iter().position(|&(d, _)| d == dest) {
+            self.bc_dropped[node].remove(k);
+            return false;
+        }
+        self.bc_dropped[node].push((dest, now));
+        self.stats.bordercast_kept += 1;
+        true
+    }
+
+    /// Host `host` answers a key request with `who`'s announce it keeps.
+    fn reannounce(&mut self, host: usize, who: usize) {
+        let addr = self.nodes[who].router.addr;
+        let mut body: heapless::Vec<u8, { maarse_core::MAX_PACKET }> = heapless::Vec::new();
+        let mut keys = [0u8; 64];
+        self.rng.fill(&mut keys[..]);
+        let _ = body.extend_from_slice(&keys);
+        let _ = body.extend_from_slice(&((self.now / 1000) as u32 + 1_700_000_000).to_be_bytes());
+        // App data: the role field, as the firmware sends it (forwarders read
+        // the mobile flag from it to give a moving node's announce full scope).
+        let mut app = maarse_core::appdata::AppBuf::new();
+        let rt = &self.nodes[who].router;
+        let flags = if rt.mobile { maarse_core::appdata::ROLE_MOBILE } else { 0 };
+        maarse_core::appdata::push_role(&mut app, rt.role.as_u8(), flags);
+        let _ = body.push(app.len() as u8);
+        let _ = body.extend_from_slice(&app);
+        let _ = body.extend_from_slice(&[0u8; 64]);
+        maarse_core::stamp::append(PacketType::Announce, &addr, &mut body);
+        let header = Header::new(PacketType::Announce, addr);
+        let Ok(packet) = encode(&header, &body) else { return };
+        let pid = packet_id(PacketType::Announce, &addr, &body);
+        self.stats.key_answers += 1;
+        self.apply(host, vec![Action::Transmit { packet, delay_ms: 0, id: pid }], None);
     }
 
     /// Hands message `m` to its sender's router (route or path request).
@@ -1776,7 +3240,14 @@ impl Engine {
         self.rng.fill(&mut keys[..]);
         let _ = body.extend_from_slice(&keys);
         let _ = body.extend_from_slice(&((self.now / 1000) as u32 + 1_700_000_000).to_be_bytes());
-        let _ = body.push(0);
+        // App data: the role field, as the firmware sends it (forwarders read
+        // the mobile flag from it to give a moving node's announce full scope).
+        let mut app = maarse_core::appdata::AppBuf::new();
+        let rt = &self.nodes[node].router;
+        let flags = if rt.mobile { maarse_core::appdata::ROLE_MOBILE } else { 0 };
+        maarse_core::appdata::push_role(&mut app, rt.role.as_u8(), flags);
+        let _ = body.push(app.len() as u8);
+        let _ = body.extend_from_slice(&app);
         let _ = body.extend_from_slice(&[0u8; 64]);
         maarse_core::stamp::append(PacketType::Announce, &addr, &mut body);
         let header = Header::new(PacketType::Announce, addr);
@@ -1844,7 +3315,7 @@ impl Engine {
             poly,
             circle,
             pid,
-            recv: HashMap::new(),
+            recv: HashMap::default(),
             inside,
         });
         self.tags.insert(pid, idx as u32 | ALERT_TAG);
@@ -1887,7 +3358,299 @@ impl Engine {
         if self.nodes[i].dead == DeadWhy::Killed {
             self.nodes[i].dead = DeadWhy::Alive;
             self.tr(format!("{{\"t\":{},\"ev\":\"revive\",\"n\":{i}}}", self.now));
+            self.reboot(i);
+            if self.sc.mail == "post" && self.nodes[i].kind.is_user() {
+                // Ask for mail once hellos have told us the post offices.
+                let at = self.now + 30_000 + self.rng.gen_range(0..20_000);
+                self.schedule(at, Ev::MailSyncAt { node: i });
+            }
         }
+    }
+
+    /// Does node `i`'s app know node `j`'s keys?
+    fn knows(&self, i: usize, j: usize) -> bool {
+        if self.sc.contact_capacity > 0 {
+            return self.pinned[i].contains(&(j as u32)) || self.contacts[i].contains_key(&(j as u32));
+        }
+        !self.forgot[i] || self.relearned[i].contains(&(j as u32))
+    }
+
+    /// Node `i` heard `j`'s announce: into the contact table (evicting the
+    /// one heard longest ago when full). Without pinning, every new entry is
+    /// a flash write (the firmware stores every new contact).
+    fn learn_contact(&mut self, i: usize, j: usize) {
+        let j = j as u32;
+        if self.pinned[i].contains(&j) {
+            return;
+        }
+        let fresh = self.contacts[i].insert(j, self.now).is_none();
+        if fresh && !self.sc.features.pin_contacts {
+            self.flash_writes[i] += 1;
+        }
+        if self.contacts[i].len() > self.sc.contact_capacity {
+            let used = &self.used[i];
+            let pick = if self.sc.contact_policy == "used" {
+                // Strangers (never written to or heard from) go first.
+                self.contacts[i].iter().filter(|e| !used.contains(e.0)).min_by_key(|e| *e.1).or_else(|| self.contacts[i].iter().min_by_key(|e| *e.1))
+            } else {
+                self.contacts[i].iter().min_by_key(|e| *e.1)
+            };
+            if let Some((&old, _)) = pick {
+                self.contacts[i].remove(&old);
+            }
+        }
+    }
+
+    /// With `pin_contacts`: node `i` talked with `j` (or `j` is a saved
+    /// contact), so it is kept for good and written to flash once.
+    fn pin(&mut self, i: usize, j: usize) {
+        self.used[i].insert(j as u32);
+        if !self.sc.features.pin_contacts || self.sc.contact_capacity == 0 {
+            return;
+        }
+        let j = j as u32;
+        if self.pinned[i].len() < self.sc.pinned_capacity && self.pinned[i].insert(j) {
+            self.contacts[i].remove(&j);
+            self.flash_writes[i] += 1;
+        }
+    }
+
+    /// Circles of friends: `traffic.friends` random users within `local_km`.
+    fn make_friends(&mut self) {
+        let users: Vec<usize> = (0..self.nodes.len()).filter(|&i| self.nodes[i].kind.is_user()).collect();
+        let lim = self.sc.traffic.local_km * 1000.0;
+        for &u in &users {
+            let mut near: Vec<usize> = users
+                .iter()
+                .copied()
+                .filter(|&v| v != u && (self.nodes[v].x - self.nodes[u].x).hypot(self.nodes[v].y - self.nodes[u].y) <= lim)
+                .collect();
+            let mut pick = Vec::new();
+            for _ in 0..self.sc.traffic.friends.min(near.len()) {
+                let k = self.rng.gen_range(0..near.len());
+                pick.push(near.swap_remove(k));
+            }
+            self.friends[u] = pick;
+        }
+        // Friends are saved contacts: pinned from the start (if pinning).
+        if self.sc.features.pin_contacts && self.sc.contact_capacity > 0 {
+            for u in 0..self.nodes.len() {
+                let f = self.friends[u].clone();
+                for v in f {
+                    self.pin(u, v);
+                    self.pin(v, u);
+                }
+            }
+            self.flash_writes.iter_mut().for_each(|w| *w = 0);
+        }
+    }
+
+    /// A fresh router for node `i`, as after a reboot: same address, role and
+    /// settings, but no routes, neighbours, sessions or queues.
+    fn fresh_router(&self, i: usize) -> Box<Node> {
+        let f = &self.sc.features;
+        let spec = &self.sc.nodes[i];
+        let old = &self.nodes[i].router;
+        let mut r = Box::new(Node::new(old.addr, old.role));
+        let _ = r.subscribe(self.public_channel);
+        let _ = r.subscribe(self.bulletin_channel);
+        r.mobile = old.mobile;
+        r.hello = old.hello;
+        r.path_retry_ms = old.path_retry_ms;
+        r.proxy_reply = old.proxy_reply;
+        r.ring = old.ring;
+        r.weak_hop_penalty = old.weak_hop_penalty;
+        r.drop_unacked_routes = old.drop_unacked_routes;
+        r.anchor_ttl_ms = old.anchor_ttl_ms;
+        r.boundary = old.boundary;
+        r.carry_copies = old.carry_copies;
+        r.local_repair = f.local_repair;
+        r.load_control = f.load_control;
+        r.relay_hops = old.relay_hops;
+        if f.sf_slot {
+            r.set_slot(maarse_core::qos::slot_ms(&LoraParams::new(self.nodes[i].sf)), f.scale_timeouts);
+        }
+        if f.regions && !spec.region.is_empty() {
+            r.regions = maarse_core::region::parse_list(&format!("dk,{}", spec.region));
+        }
+        r
+    }
+
+    /// Off and on again: everything in RAM is lost (routes, neighbours,
+    /// queue, kept messages); the contacts too unless `persist_known`. The
+    /// node announces 5 s after starting, as the firmware does.
+    fn reboot(&mut self, i: usize) {
+        if !self.nodes[i].alive() {
+            return;
+        }
+        self.stats.reboots += 1;
+        let kept: Vec<maarse_core::routes::Route> = if self.sc.features.persist_routes {
+            let mut v: Vec<_> = self.nodes[i].router.routes().iter().filter(|r| r.confirmed_ms > 0).cloned().collect();
+            v.sort_unstable_by_key(|r| Reverse(r.confirmed_ms));
+            v.truncate(32);
+            v
+        } else {
+            Vec::new()
+        };
+        self.nodes[i].router = self.fresh_router(i);
+        for r in kept {
+            self.nodes[i].router.add_route(r.dest, r.path, self.now);
+        }
+        self.nodes[i].txq.clear();
+        for m in std::mem::take(&mut self.held[i]) {
+            self.msgs[m].dropped_unknown = true;
+        }
+        if !self.sc.features.persist_known {
+            self.forgot[i] = true;
+            self.relearned[i].clear();
+            self.contacts[i].clear();
+            self.pinned[i].clear();
+        } else if self.sc.contact_capacity > 0 && !self.sc.features.pin_contacts {
+            // The flash holds the 63 most recently learned contacts.
+            let mut v: Vec<(u32, u64)> = self.contacts[i].iter().map(|(&k, &t)| (k, t)).collect();
+            v.sort_unstable_by_key(|&(_, t)| Reverse(t));
+            v.truncate(63);
+            self.contacts[i] = v.into_iter().collect();
+        } else if self.sc.contact_capacity > 0 {
+            // Only pinned contacts are in flash.
+            self.contacts[i].clear();
+        }
+        self.gw_dirty = true;
+        self.infra_dirty = true;
+        self.tr(format!("{{\"t\":{},\"ev\":\"reboot\",\"n\":{i},\"kept_contacts\":{}}}", self.now, self.sc.features.persist_known));
+        // Announce 5-35 s after the start (at random, as the firmware does),
+        // then every 15 min until a repeater is heard.
+        self.settled[i] = false;
+        self.announced[i] = false;
+        let first = self.now + 5000 + self.rng.gen_range(0..30_000);
+        self.plan_announce(i, first);
+    }
+
+    /// Automatic forest mode (checked every minute): a handheld without a
+    /// repeater or anchor in range for `auto_relay_after_s` becomes a relay; one that has
+    /// heard one for 2 min without a break becomes a client again.
+    fn auto_relay_step(&mut self) {
+        let to_relay_ms = (self.sc.auto_relay_after_s.max(0.0) * 1000.0) as u64;
+        const TO_CLIENT_MS: u64 = 120_000;
+        let hold_ms = if self.sc.bridge_hold_s > 0.0 { (self.sc.bridge_hold_s * 1000.0) as u64 } else { TO_CLIENT_MS };
+        let carry = if self.sc.features.carry { 4 } else { 0 };
+        for i in 0..self.nodes.len() {
+            if self.nodes[i].kind != Kind::Handheld || !self.nodes[i].alive() {
+                continue;
+            }
+            let hears = self.nodes[i].router.hears_repeater(self.now);
+            if hears {
+                self.rep_last[i] = self.now;
+                if self.rep_since[i] == 0 {
+                    self.rep_since[i] = self.now.max(1);
+                }
+            } else {
+                self.rep_since[i] = 0;
+            }
+            let role = self.nodes[i].router.role;
+            let rt = &self.nodes[i].router;
+            let mpr = self.sc.auto_bridge == "mpr";
+            let named = self.sc.auto_bridge == "named";
+            let fwd_n = rt.forwarding_neighbors(self.now);
+            let mut edge = false;
+            // A client steps in only after 2 min of steady coverage, when it
+            // knows its neighbors (after a mass restart every neighbor first
+            // looks uncovered).
+            let steady = role == Role::Relay || (self.rep_since[i] > 0 && self.now.saturating_sub(self.rep_since[i]) >= TO_CLIENT_MS);
+            if self.sc.features.auto_edge && hears && steady {
+                if named {
+                    // OLSR selectors: stay while a neighbor has chosen us;
+                    // step in for a neighbor without coverage that has no
+                    // bridge yet.
+                    edge = rt.unserved_neighbor(self.now) || (role == Role::Relay && rt.bridge_named(self.now));
+                } else if mpr {
+                    // OLSR-style: only for a neighbor without coverage that
+                    // has no bridge yet; a bridge stays while one has fewer
+                    // than two.
+                    edge = rt.needs_bridge(self.now, if role == Role::Relay { 2 } else { 1 });
+                } else {
+                    edge = rt.has_uncovered_neighbor(self.now);
+                    if edge
+                        && let Some(other) = rt.bridge_neighbor(self.now)
+                        && (role == Role::Client || other < rt.id)
+                    {
+                        edge = false;
+                    }
+                }
+                let p = if self.sc.bridge_p < 0.0 {
+                    // Adaptive (Trickle-like): the more neighbors that are
+                    // candidates too, the longer each waits.
+                    let floor = if self.sc.bridge_p > -1.0 { -self.sc.bridge_p } else { 0.05 };
+                    (1.0 / (1.0 + rt.covered_neighbors(self.now) as f64)).max(floor)
+                } else if self.sc.bridge_p > 0.0 {
+                    self.sc.bridge_p.min(1.0)
+                } else {
+                    0.25
+                };
+                if edge && role == Role::Client && !self.rng.gen_bool(p) {
+                    // Spread the switches so neighbors do not all become
+                    // bridges in the same round.
+                    edge = false;
+                }
+            }
+            if edge {
+                // A bridge stays a relay; the 2 min towards client start
+                // again once it is no longer needed.
+                self.rep_since[i] = self.now.max(1);
+            }
+            let dense = self.sc.auto_max_fwd > 0 && fwd_n >= self.sc.auto_max_fwd;
+            let crowded = self.sc.auto_drop_fwd > 0 && fwd_n >= self.sc.auto_drop_fwd;
+            let to = if role == Role::Client && (edge || (!hears && !dense && self.now.saturating_sub(self.rep_last[i]) >= to_relay_ms)) {
+                Some(Role::Relay)
+            } else if role == Role::Relay && hears && !edge && self.now.saturating_sub(self.rep_since[i]) >= hold_ms {
+                Some(Role::Client)
+            } else if role == Role::Relay && !hears && crowded && self.rng.gen_bool(0.25) {
+                // Thread-style: enough forwarders around, step back.
+                Some(Role::Client)
+            } else {
+                None
+            };
+            self.nodes[i].router.boundary = self.sc.bridge_boundary;
+            if named && self.sc.announce_s > 0.0 {
+                // As the firmware: a new bridge choice goes out in an
+                // announce soon, so the chosen bridge knows it is needed.
+                let c = self.nodes[i].router.chosen_bridge(self.now);
+                if c != self.told_choice[i] {
+                    self.told_choice[i] = c;
+                    let soon = self.now + 5_000 + self.rng.gen_range(0..30_000);
+                    if soon < self.next_ann[i] {
+                        self.plan_announce(i, soon);
+                    }
+                }
+            }
+            if let Some(r) = to {
+                self.nodes[i].router.set_role(r);
+                self.nodes[i].router.carry_copies = if r == Role::Relay { carry } else { 0 };
+                self.stats.role_switches += 1;
+                self.tr(format!("{{\"t\":{},\"ev\":\"role\",\"n\":{i},\"role\":\"{:?}\"}}", self.now, r));
+                if self.sc.announce_s > 0.0 {
+                    // As the firmware: neighbors learn the new role from an
+                    // announce soon after the switch.
+                    let soon = self.now + 5_000 + self.rng.gen_range(0..30_000);
+                    if soon < self.next_ann[i] {
+                        self.plan_announce(i, soon);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Found by the network: hears a repeater, or (named bridges) has a
+    /// bridge to rely on, so it can announce at the long interval.
+    fn found(&self, i: usize) -> bool {
+        let rt = &self.nodes[i].router;
+        rt.hears_repeater(self.now) || (self.sc.auto_bridge == "named" && rt.chosen_bridge(self.now).is_some())
+    }
+
+    /// Schedules node `i`'s next announce (replacing any earlier one).
+    fn plan_announce(&mut self, i: usize, at: u64) {
+        self.next_ann[i] = at;
+        self.schedule(at, Ev::Announce { node: i });
     }
 
     pub fn inject(&mut self, ev: &TimedEvent) {
@@ -1928,6 +3691,8 @@ impl Engine {
                         self.nodes[i].powered = true;
                         if matches!(self.nodes[i].dead, DeadWhy::Power | DeadWhy::Battery) {
                             self.nodes[i].dead = DeadWhy::Alive;
+                            // It was off: it starts again from scratch.
+                            self.reboot(i);
                         }
                     }
                 }
@@ -1967,6 +3732,32 @@ impl Engine {
                 }
                 self.seed_neighbors();
             }
+            "reboot" => {
+                let want = ev.node_kind.as_str();
+                let ok_kind = |e: &Engine, i: usize| want.is_empty() || want == "any" || e.nodes[i].kind.name() == want;
+                let mut list: Vec<usize> = if !ev.nodes.is_empty() {
+                    ev.nodes.clone()
+                } else if ev.area.circle.is_some() || ev.area.polygon.len() >= 3 {
+                    self.nodes_in(&ev.area)
+                } else {
+                    (0..self.nodes.len()).collect()
+                };
+                let n_nodes = self.nodes.len();
+                list.retain(|&i| i < n_nodes && self.nodes[i].alive() && ok_kind(self, i));
+                if ev.n > 0 && ev.nodes.is_empty() {
+                    // `n` random ones of those.
+                    let mut pick = Vec::new();
+                    for _ in 0..ev.n.min(list.len()) {
+                        let k = self.rng.gen_range(0..list.len());
+                        pick.push(list.swap_remove(k));
+                    }
+                    list = pick;
+                }
+                for i in list {
+                    self.reboot(i);
+                }
+                self.seed_neighbors();
+            }
             "host_internet" => {
                 if ev.node < self.nodes.len() {
                     self.nodes[ev.node].internet = ev.up;
@@ -1982,6 +3773,24 @@ impl Engine {
             "degrade_clear" => {
                 self.degrade.clear();
                 self.build_links();
+            }
+            "move" => {
+                // Teleport a node (a journey): to the centre of `area.circle`.
+                if ev.node < self.nodes.len()
+                    && let Some([la, lo, _]) = ev.area.circle
+                {
+                    let (x, y) = to_xy(la, lo);
+                    self.nodes[ev.node].x = x;
+                    self.nodes[ev.node].y = y;
+                    self.build_links();
+                    self.seed_neighbors();
+                    self.islands.clear();
+                }
+            }
+            "message" => {
+                if ev.from < self.nodes.len() && ev.node < self.nodes.len() {
+                    self.send_message(ev.from, ev.node);
+                }
             }
             "link" => {
                 if let Some(l) = self.links.get_mut(ev.index) {
@@ -2172,6 +3981,41 @@ impl Engine {
             "home_routed": self.stats.home_routed,
             "home_unreachable": self.stats.home_unreachable,
             "home_local": self.stats.home_local,
+            "reboots": self.stats.reboots,
+            "role_switches": self.stats.role_switches,
+            "contacts_heard": self.contacts_heard(),
+            "mail_deposits": self.stats.mail_deposits,
+            "mail_stored": self.stats.mail_stored,
+            "mail_full": self.stats.mail_full,
+            "mail_ops": self.stats.mail_ops,
+            "mail_deliveries": self.stats.mail_deliveries,
+            "mail_syncs": self.stats.mail_syncs,
+            "mail_tcp": self.stats.mail_tcp,
+            "mail_deferred": self.stats.mail_deferred,
+            "mail_retries": self.stats.mail_retries,
+            "mail_refetches": self.stats.mail_refetches,
+            "mail_consolidated": self.stats.mail_consolidated,
+            "trunk_packets": self.stats.trunk_packets,
+            "trunk_dropped": self.stats.trunk_dropped,
+            "trunk_jammed": self.stats.trunk_jammed,
+            "proxy_replies": self.nodes.iter().map(|x| x.router.stats.proxy_replies as u64).sum::<u64>(),
+            "trunks": self.links.iter().filter(|l| l.lora).map(|l| json!({"label": l.label, "packets": l.packets, "airtime_s": l.airtime_ms as f64 / 1000.0, "dropped": l.dropped})).collect::<Vec<_>>(),
+            "hellos": self.nodes.iter().map(|x| x.router.stats.hellos as u64).sum::<u64>(),
+            "key_requests": self.stats.key_requests,
+            "key_answers": self.stats.key_answers,
+            "bordercast_kept": self.stats.bordercast_kept,
+            "cross_msgs": self.msgs.iter().filter(|m| m.cross).count(),
+            "cross_delivered_pct": self.cross_delivered_pct(),
+            "flash_writes_mean": self.flash_writes.iter().map(|&w| w as f64).sum::<f64>() / self.nodes.len().max(1) as f64,
+            "flash_writes_max": self.flash_writes.iter().copied().max().unwrap_or(0),
+            "relays_now": self.nodes.iter().filter(|n| n.alive() && n.router.role == Role::Relay).count(),
+            "periodic_announces": self.stats.periodic_announces,
+            "shown_pct": pct(self.msgs.iter().filter(|m| m.shown_ms.is_some()).count()),
+            "false_acks": self.msgs.iter().filter(|m| m.acked_ms.is_some() && m.shown_ms.is_none()).count(),
+            "dropped_unknown": self.msgs.iter().filter(|m| m.dropped_unknown).count(),
+            "held_waiting": self.held.iter().map(|h| h.len()).sum::<usize>(),
+            "shown_after_hold": self.msgs.iter().filter(|m| m.shown_ms.is_some() && m.delivered_ms.is_some_and(|d| m.shown_ms.unwrap() > d)).count(),
+            "unsent_unknown": self.msgs.iter().filter(|m| m.unsent).count(),
             "home_fallback": self.stats.home_fallback,
             "degraded_areas": self.degrade.len(),
             "duty_drops": self.stats.duty_drops,
@@ -2191,11 +4035,29 @@ impl Engine {
             "quota_dropped": sum(|s| s.quota_dropped),
             "queue_delay": qd,
             "by_type": self.stats.by_type,
+            "air_by_type": self.stats.air_by_type,
             "internet": self.internet_global,
             "internet_down": self.internet_down.iter().collect::<Vec<_>>(),
             "alerts": (0..self.alerts.len()).map(|i| self.alert_summary(i, false)).collect::<Vec<_>>(),
             "trace_end": self.trace_base + self.trace.len() as u64,
         })
+    }
+
+    /// Delivered share of messages into or out of an area without coverage.
+    fn cross_delivered_pct(&self) -> f64 {
+        let c = self.msgs.iter().filter(|m| m.cross).count().max(1);
+        100.0 * self.msgs.iter().filter(|m| m.cross && m.delivered_ms.is_some()).count() as f64 / c as f64
+    }
+
+    /// How many distinct announcers the nodes have heard (mean, median, p90,
+    /// max, and how many nodes heard more than the 63 contacts kept in flash).
+    fn contacts_heard(&self) -> Value {
+        let mut v: Vec<usize> = self.heard_from.iter().map(|h| h.len()).collect();
+        v.sort_unstable();
+        let n = v.len().max(1);
+        let mean = v.iter().sum::<usize>() as f64 / n as f64;
+        let over = v.iter().filter(|&&x| x > 63).count();
+        json!({"mean": mean, "median": v.get(v.len() / 2).copied().unwrap_or(0), "p90": v.get(v.len() * 9 / 10).copied().unwrap_or(0), "max": v.last().copied().unwrap_or(0), "over_63": over})
     }
 
     pub fn alert_summary(&self, i: usize, per_node: bool) -> Value {
@@ -2231,7 +4093,17 @@ impl Engine {
         let mut batt = Vec::with_capacity(self.nodes.len());
         let mut air = Vec::with_capacity(self.nodes.len());
         let mut q = Vec::with_capacity(self.nodes.len());
+        // Role now: c client, r relay, b relay that hears a repeater (edge
+        // bridge), R repeater, A anchor.
+        let mut role = String::with_capacity(self.nodes.len());
         for (i, n) in self.nodes.iter().enumerate() {
+            role.push(match n.router.role {
+                Role::Client => 'c',
+                Role::Relay if n.router.hears_repeater(self.now) => 'b',
+                Role::Relay => 'r',
+                Role::Repeater => 'R',
+                Role::Anchor => 'A',
+            });
             alive.push(match n.dead {
                 DeadWhy::Alive if self.on_battery(i) && n.mains => 'b',
                 DeadWhy::Alive => 'a',
@@ -2247,7 +4119,8 @@ impl Engine {
             q.push(n.txq.len());
         }
         let links: Vec<bool> = (0..self.links.len()).map(|k| self.link_ok(k)).collect();
-        json!({"state": alive, "lat": x, "lon": y, "battery": batt, "airtime_ms": air, "queue": q, "comp": comp, "links_ok": links})
+        let trunks: Vec<Value> = self.links.iter().filter(|l| l.lora).map(|l| json!({"label": l.label, "packets": l.packets, "airtime_s": l.airtime_ms as f64 / 1000.0, "dropped": l.dropped})).collect();
+        json!({"state": alive, "role": role, "lat": x, "lon": y, "battery": batt, "airtime_ms": air, "queue": q, "comp": comp, "links_ok": links, "trunks": trunks})
     }
 
     /// DHT backbone: the host with internet that can reach node `t` by radio
@@ -2397,12 +4270,12 @@ impl Engine {
     /// fewest hops, whether it forwarded, and why it stopped if not.
     pub fn reach(&self, pid: &str) -> Value {
         let key = format!("\"pid\":\"{pid}\"");
-        let mut hops: HashMap<usize, u8> = HashMap::new();
-        let mut first: HashMap<usize, u64> = HashMap::new();
-        let mut forwarded: HashSet<usize> = HashSet::new();
-        let mut cancelled: HashSet<usize> = HashSet::new();
-        let mut dropped: HashMap<usize, String> = HashMap::new();
-        let mut tx_hops: HashMap<u64, (usize, u8)> = HashMap::new();
+        let mut hops: HashMap<usize, u8> = HashMap::default();
+        let mut first: HashMap<usize, u64> = HashMap::default();
+        let mut forwarded: HashSet<usize> = HashSet::default();
+        let mut cancelled: HashSet<usize> = HashSet::default();
+        let mut dropped: HashMap<usize, String> = HashMap::default();
+        let mut tx_hops: HashMap<u64, (usize, u8)> = HashMap::default();
         let mut origin = None;
         let mut region = 0u16;
         let mut collisions = 0usize;

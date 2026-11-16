@@ -1,0 +1,165 @@
+{
+ "when": "2026-11-16T17:04:21.068Z",
+ "results": {
+  "national": {
+   "boards before": {
+    "delivered": 3.7297957158427613,
+    "airtime": 19778.619392,
+    "latency": 0.9112
+   },
+   "chain fixes": {
+    "delivered": 91.10600309987534,
+    "airtime": 37294.6612224,
+    "latency": 2.3602
+   },
+   "+ queue fix": {
+    "delivered": 93.25239622715254,
+    "airtime": 37833.179136,
+    "latency": 2.2308
+   },
+   "+ ring search": {
+    "delivered": 95.16237956676784,
+    "airtime": 32901.0313216,
+    "latency": 1.9548
+   },
+   "+ compression": {
+    "delivered": 96.11665329520801,
+    "airtime": 31747.4349056,
+    "latency": 1.7272
+   },
+   "+ announce 3": {
+    "delivered": 95.95526653300237,
+    "airtime": 24483.8449152,
+    "latency": 1.7596
+   }
+  },
+  "forest": {
+   "boards before": {
+    "delivered": 49.11018515271849,
+    "airtime": 424.44612266666667,
+    "latency": 0.9715
+   },
+   "chain fixes": {
+    "delivered": 99.7246022031824,
+    "airtime": 760.4918613333333,
+    "latency": 1.5883333333333334
+   },
+   "+ queue fix": {
+    "delivered": 99.7246022031824,
+    "airtime": 762.7219626666666,
+    "latency": 1.568
+   },
+   "+ ring search": {
+    "delivered": 98.82075547383184,
+    "airtime": 747.1107413333333,
+    "latency": 1.312
+   },
+   "+ compression": {
+    "delivered": 99.46791525650586,
+    "airtime": 599.3494186666667,
+    "latency": 1.05
+   },
+   "+ announce 3": {
+    "delivered": 99.14285714285714,
+    "airtime": 630.3354879999999,
+    "latency": 1.1503333333333334
+   }
+  },
+  "town": {
+   "boards before": {
+    "delivered": 10.749410900101983,
+    "airtime": 1542.5355093333335,
+    "latency": 0.7109999999999999
+   },
+   "chain fixes": {
+    "delivered": 58.565679091627445,
+    "airtime": 7531.715413333333,
+    "latency": 3.767166666666667
+   },
+   "+ queue fix": {
+    "delivered": 59.768939445966694,
+    "airtime": 7756.709376,
+    "latency": 3.772833333333333
+   },
+   "+ ring search": {
+    "delivered": 58.136460600541966,
+    "airtime": 7653.649237333335,
+    "latency": 3.827333333333333
+   },
+   "+ compression": {
+    "delivered": 61.64179509333115,
+    "airtime": 7601.400661333333,
+    "latency": 3.5653333333333337
+   },
+   "+ announce 3": {
+    "delivered": 61.28543645025273,
+    "airtime": 7740.048895999999,
+    "latency": 3.364333333333333
+   }
+  },
+  "car": {
+   "boards before": {
+    "delivered": 67.3083617504973,
+    "airtime": 880.1542400000001,
+    "latency": 2.9471249999999998
+   },
+   "chain fixes": {
+    "delivered": 70.06747076329248,
+    "airtime": 2238.195072,
+    "latency": 2.7968750000000004
+   },
+   "+ queue fix": {
+    "delivered": 96.33976891287446,
+    "airtime": 1485.920896,
+    "latency": 3.40225
+   },
+   "+ ring search": {
+    "delivered": 96.33976891287446,
+    "airtime": 1485.920896,
+    "latency": 3.40225
+   },
+   "+ compression": {
+    "delivered": 96.63306768320746,
+    "airtime": 1205.028352,
+    "latency": 2.56775
+   },
+   "+ announce 3": {
+    "delivered": 97.06207902788167,
+    "airtime": 953.8580480000002,
+    "latency": 2.7428749999999997
+   }
+  },
+  "outage": {
+   "boards before": {
+    "delivered": 1.3333333333333333,
+    "airtime": 20067.397802666666,
+    "latency": 12.764166666666668
+   },
+   "chain fixes": {
+    "delivered": 83.33333333333334,
+    "airtime": 54970.10431999999,
+    "latency": 209.97516666666667
+   },
+   "+ queue fix": {
+    "delivered": 80,
+    "airtime": 58663.607296,
+    "latency": 303.7074999999999
+   },
+   "+ ring search": {
+    "delivered": 93.33333333333334,
+    "airtime": 51341.926058666664,
+    "latency": 498.0276666666666
+   },
+   "+ compression": {
+    "delivered": 98.00000000000001,
+    "airtime": 48668.89147733334,
+    "latency": 368.38783333333333
+   },
+   "+ announce 3": {
+    "delivered": 98.00000000000001,
+    "airtime": 37424.61610666667,
+    "latency": 138.3175
+   }
+  }
+ }
+}

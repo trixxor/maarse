@@ -14,6 +14,7 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+pub mod alert;
 pub mod bulletin;
 pub mod files;
 pub mod ota;

@@ -9,6 +9,7 @@ license.workspace = true
 # hotspot, a restart) is noticed and its link closed.
 socket2 = { version = "0.6", features = ["all"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+heapless = "0.8"
 serialport = { version = "4", default-features = false }
 sha2 = "0.10"
 chacha20poly1305 = "0.10"

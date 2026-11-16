@@ -414,6 +414,20 @@
     .nbr { grid-template-columns: minmax(0, 1fr) 70px 56px 36px; }
     .messages { padding: 12px; }
   }
+  /* Alerts: drawn from Event::Alert only, never from message text. */
+  .alert-bar { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 0; }
+  .alert-card { border: 2px solid var(--warn); background: var(--warn-soft); color: var(--ink); border-radius: 10px; padding: 10px 12px; max-width: 760px; }
+  .alert-card.quiet { border: 1px solid var(--line); background: var(--raised); }
+  .alert-card.drill { border-color: var(--signal); background: repeating-linear-gradient(135deg, var(--signal-soft) 0 14px, var(--raised) 14px 28px); }
+  .alert-card.over { opacity: .55; }
+  .alert-card .ah { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 700; }
+  .alert-card .tag { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; background: var(--warn); color: var(--raised); }
+  .alert-card.drill .tag, .alert-card.quiet .tag { background: var(--signal); }
+  .alert-card .at { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .alert-card .who { font-size: 12px; color: var(--muted); }
+  .alert-card .row { margin-top: 6px; }
+  .alert-form { display: grid; grid-template-columns: max-content 1fr; gap: 8px 10px; align-items: center; max-width: 640px; margin-top: 10px; }
+  @media (max-width: 560px) { .alert-form { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -483,6 +497,7 @@
       <button id="btn-disconnect" hidden title="Disconnect"><svg class="i"><use href="#i-x"/></svg><span class="lbl">Disconnect</span></button>
     </div>
   </header>
+  <div id="alerts-bar" class="alert-bar" hidden></div>
   <div class="warnbar" id="backup-warn" hidden>
     <svg class="i"><use href="#i-key"/></svg>
     <span><b>Your recovery phrase is not backed up.</b> If this node is lost, so is your identity.</span>
@@ -528,6 +543,7 @@
         <div class="pane-head"><h2>Network</h2></div>
         <nav class="tools list" aria-label="Network">
           <button id="btn-net" data-view="network"><svg class="i"><use href="#i-net"/></svg><span>Overview<small>Health, airtime, neighbours</small></span></button>
+          <button id="btn-alerts" data-view="alerts"><svg class="i"><use href="#i-bell"/></svg><span>Alerts<small>Verified public warnings; issue one</small></span></button>
           <button id="btn-activity" data-view="activity"><svg class="i"><use href="#i-log"/></svg><span>Activity<small>Everything that happens, live</small></span></button>
           <button id="btn-diag" data-view="diag" disabled><svg class="i"><use href="#i-diag"/></svg><span>Neighbours and trace route<small>Who you hear, how far a route reaches</small></span></button>
           <button id="btn-status" data-view="status" disabled><svg class="i"><use href="#i-status"/></svg><span>All counters<small>Every number the node keeps</small></span></button>
@@ -631,6 +647,8 @@ const Cmd = {
   getInfo: () => frame(0x01),
   sendDirect: (req, destHex, text) => frame(0x02, u16(req), unhex(destHex), enc.encode(text)),
   sendChannel: (req, chHex, text) => frame(0x03, u16(req), unhex(chHex), enc.encode(text)),
+  sendAlert: (req, m, text) => frame(0x2c, u16(req), [m.status, m.kind, m.event, m.severity], u16(m.expires), u32(m.reference),
+    m.area ? [1, ...u32(m.area[0]), ...u32(m.area[1]), ...u16(m.area[2])] : [0], enc.encode(text)),
   join: name => frame(0x04, enc.encode(name)),
   announce: () => frame(0x05),
   fileBegin: (req, destHex, size, mime, name) => {
@@ -640,7 +658,7 @@ const Cmd = {
   fileData: (req, offset, data) => frame(0x07, u16(req), u32(offset), data),
   fileEnd: req => frame(0x08, u16(req)),
   getStats: () => frame(0x09),
-  setRadio: c => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [0]),
+  setRadio: c => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [c.announce & 0xff]),
   getRadio: () => frame(0x0b),
   setRole: r => frame(0x10, [r]),
   joinPrivate: (key, name) => frame(0x13, key, enc.encode(name)),
@@ -723,7 +741,7 @@ function decodeEvent(f) {
       return { type: "stats", items };
     }
     case 0x92: return { type: "radio", cfg: { freq: rd32(f, 1), bw: rd32(f, 5), sf: f[9], cr: f[10],
-                 power: (f[11] << 24) >> 24, duty: f[12] | f[13] << 8, preamble: f[14] | f[15] << 8 } };
+                 power: (f[11] << 24) >> 24, duty: f[12] | f[13] << 8, preamble: f[14] | f[15] << 8, announce: f[16] || 0 } };
     case 0xa0: {
       const k = f[19], ids = []; for (let i = 0; i < k; i++) ids.push(f[20 + 2 * i] | f[21 + 2 * i] << 8);
       const m = f[20 + 2 * k], o = 21 + 2 * k;
@@ -751,6 +769,7 @@ function decodeEvent(f) {
     case 0x8e: return { type: "log", text: txt(1) };
     case 0x8f: return { type: "error", req: f[1] | f[2] << 8, code: f[3], text: txt(4) };
     case 0xa8: case 0xa9: case 0xaa: case 0xab: return rtDecodeEvent(f);
+    case 0xac: return alertDecode(f);
     default: return histDecode(f, t) ?? { type: "unknown", kind: t };
   }
 }
@@ -983,6 +1002,7 @@ function renderChat() {
   box.classList.remove("mapmode");
   if (renderShellView(box)) return;
   if (state.view === "status") return renderStatus(box);
+  if (state.view === "alerts") return renderAlerts(box);
   if (state.view === "radio") return renderRadio(box);
   if (state.view === "diag") return renderDiag(box);
   if (state.view === "range") return renderRange(box);
@@ -1092,6 +1112,7 @@ function onEvent(ev) {
       break;
     case "sent": {
       if (pages.reqs.delete(ev.req)) { log("Page request sent to the node"); break; }
+      if (alerts.reqs.delete(ev.req)) { alerts.mine.add(ev.msgId); alerts.status = "Alert " + ev.msgId + " issued"; if (state.view === "alerts") renderChat(); break; }
       const m = state.pending.get(ev.req);
       if (m) {
         state.pending.delete(ev.req);
@@ -1110,6 +1131,7 @@ function onEvent(ev) {
       addMessage("dm:" + ev.from, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
       pwaIncoming("dm:" + ev.from, label(ev.from), ev.text);
       break;
+    case "alert": alertOn(ev); break;
     case "channel":
       addMessage("ch:" + ev.channel, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
       pwaIncoming("ch:" + ev.channel, (state.channels.get(ev.channel) || "channel") + " · " + label(ev.from), ev.text);
@@ -1197,6 +1219,7 @@ function onEvent(ev) {
       break;
     case "fileLimit": limitAnswer(ev); break;
     case "error": {
+      if (alerts.reqs.delete(ev.req)) { alerts.status = "Not issued: " + ev.text; if (state.view === "alerts") renderChat(); break; }
       if (ev.req === 0 && limitWaiters.length) limitAnswer(null); // the firmware does not know 0x14
       const m = state.pending.get(ev.req);
       if (m) { m.status = "error: " + ev.text; state.pending.delete(ev.req); renderChat(); }
@@ -1415,7 +1438,7 @@ const PRECISION = ["Off", "about 10 km", "about 1 km", "Precise"];
 
 function fmt(v, unit) {
   if (unit === "time") { const h = Math.floor(v / 3600), m = Math.floor(v % 3600 / 60); return h ? `${h} h ${m} min` : `${m} min ${v % 60} s`; }
-  if (unit === "role") return ["Client", "Repeater", "Relay", "Anchor"][v] || v;
+  if (unit === "role") return ["Client", "Repeater", "Relay", "Anchor", "Auto"][v] || v;
   if (unit === "energy") return ENERGY[v] ?? v;
   if (unit === "temp") return (v / 10).toFixed(1) + " °C";
   if (unit === "usb") return v < 0 ? "Unknown" : v ? "Yes" : "No";
@@ -1500,6 +1523,9 @@ function renderRadio(box) {
   const power = row("Transmit power (dBm)", num(c.power));
   const duty = row("Duty cycle (%)", num((c.duty / 10).toFixed(1), "0.1"));
   const pre = row("Preamble (symbols)", num(c.preamble));
+  // Announce interval once a repeater is heard (0 on the wire = 12 h); every 15 min until then.
+  const ann = row("Announce every (hours)", num(((c.announce || 48) / 4).toString(), "0.25"));
+  ann.title = "After a start the node announces every 15 minutes until it hears a repeater, then at this interval. Default 12 h.";
   preset.onchange = () => {
     const p = PRESETS[preset.value]; if (!p) return;
     freq.value = (p.freq / 1e6).toFixed(3); bw.value = p.bw; sf.value = p.sf; cr.value = p.cr;
@@ -1508,7 +1534,8 @@ function renderRadio(box) {
   const save = document.createElement("button"); save.className = "primary"; save.textContent = "Save on the node";
   save.onclick = () => {
     const cfg = { freq: Math.round(parseFloat(freq.value) * 1e6), bw: +bw.value, sf: +sf.value, cr: +cr.value,
-                  power: +power.value, duty: Math.round(parseFloat(duty.value) * 10), preamble: +pre.value };
+                  power: +power.value, duty: Math.round(parseFloat(duty.value) * 10), preamble: +pre.value,
+                  announce: (() => { const q = Math.round(parseFloat(ann.value) * 4); return q === 48 ? 0 : Math.max(1, Math.min(255, q || 48)); })() };
     if (state.target) {
       if (!confirm("The remote node changes radio settings immediately. If it does not have the same settings as the rest of the network, you lose the connection to it. Continue?")) return;
       transport?.send(Cmd.remote(state.nextReq++ & 0xffff, state.target, Cmd.setRadio(cfg)));
@@ -1519,7 +1546,7 @@ function renderRadio(box) {
   const items = state.target ? state.remoteStats : state.stats;
   const cur = items && items.find(([k]) => k === 7);
   const role = row("Role", document.createElement("select"));
-  role.append(new Option("Client (does not forward)", 0), new Option("Repeater", 1), new Option("Relay (forest mode)", 2), new Option("Anchor (shares long paths)", 3));
+  role.append(new Option("Client (does not forward)", 0), new Option("Repeater", 1), new Option("Relay (forest mode)", 2), new Option("Anchor (shares long paths)", 3), new Option("Auto (handheld: relays when no repeater is in range)", 4));
   role.value = cur ? cur[1] : 1;
   const saveRole = document.createElement("button"); saveRole.textContent = "Save role";
   saveRole.onclick = () => {
@@ -4319,7 +4346,7 @@ function pwaTitle() {
 // so the navigation always shows where you are. See docs/mockups/README.md.
 
 Object.assign(state, { tab: "chats", activity: [], airHist: [], nodeSel: null, chatFilter: "all", nodeFilter: "all", stripTimer: null });
-var VIEW_TAB = { chat: "chats", mc: "chats", remote: "chats", node: "nodes", map: "map", network: "network", activity: "network",
+var VIEW_TAB = { chat: "chats", mc: "chats", remote: "chats", node: "nodes", map: "map", network: "network", activity: "network", alerts: "network",
   status: "network", range: "network", pages: "network", radio: "settings", firmware: "settings", settings: "settings",
   service: "settings", backup: "settings", myqr: "settings" };
 
@@ -4723,6 +4750,7 @@ function drawMap(div) {
 }
 
 $("btn-net").onclick = () => setView("network");
+$("btn-alerts").onclick = () => { state.target = null; setView("alerts"); };
 $("btn-activity").onclick = () => setView("activity");
 $("btn-diag2").onclick = () => { markTab("settings"); setView("diag"); };
 function renderShellView(box) {
@@ -4735,6 +4763,147 @@ function renderShellView(box) {
 
 function mobileSide(open) { document.body.classList.toggle("side-closed", !open); }
 $("btn-side").onclick = () => mobileSide(document.body.classList.contains("side-closed"));
+
+// ---------- Alerts (Event::Alert, 0xac) ----------
+// Alerts are verified by maarse-host (signature, trust, replay) and arrive as
+// their own event; the badge and banner are drawn here only, so no chat
+// message can look like an alert.
+const ALERT_EVENTS = ["Information", "Evacuate", "Take shelter", "Fire", "Flood", "Drinking water", "Chemical release", "Power outage", "Severe weather", "Missing person"];
+const ALERT_SEVERITY = ["Minor", "Moderate", "Severe", "Extreme"];
+const ALERT_STATUS = ["", "Exercise", "Test", "System"];
+const alerts = { list: [], dismissed: new Set(), reqs: new Set(), mine: new Set(), status: "",
+  form: { status: 1, kind: 0, event: 0, severity: 1, expires: 120, reference: "", text: "", confirmed: false } };
+
+function alertDecode(f) {
+  const sgn = o => rd32(f, o) | 0;
+  const ev = { type: "alert", issuer: hex(f.slice(1, 17)), serial: rd32(f, 17), issued: rd32(f, 21),
+    status: f[25], kind: f[26], event: f[27], severity: f[28], expires: f[29] | f[30] << 8, reference: rd32(f, 31), area: null };
+  let o = 36;
+  if (f[35] === 1) { ev.area = [sgn(36) / 1e5, sgn(40) / 1e5, (f[44] | f[45] << 8) / 10]; o = 46; }
+  ev.hops = f[o]; ev.trust = f[o + 1];
+  const n = f[o + 2];
+  ev.name = dec.decode(f.slice(o + 3, o + 3 + n));
+  ev.text = dec.decode(f.slice(o + 3 + n));
+  return ev;
+}
+
+const alertKey = a => a.issuer + ":" + a.serial;
+const alertEnds = a => (a.issued + Math.max(1, a.expires) * 60) * 1000;
+
+function alertOn(ev) {
+  ev.at = Date.now();
+  if (ev.kind !== 0) {
+    const ref = alerts.list.find(a => a.issuer === ev.issuer && a.serial === ev.reference);
+    if (ref) ref[ev.kind === 2 ? "cancelled" : "updated"] = ev;
+  }
+  alerts.list.push(ev);
+  const what = (ALERT_STATUS[ev.status] ? ALERT_STATUS[ev.status] + ": " : "") + (ev.kind === 2 ? "Cancelled" : ALERT_EVENTS[ev.event] || "Alert");
+  log("Alert – " + what + ": " + ev.text.slice(0, 80));
+  pwaIncoming("alerts", what, ev.text);
+  renderAlertBar();
+  if (state.view === "alerts") renderChat();
+}
+
+/// Loud only for an actual, severe or extreme, still valid alert.
+const alertLoud = a => a.kind !== 2 && a.status === 0 && a.severity >= 2 && !a.cancelled && !a.updated && Date.now() < alertEnds(a);
+
+function alertCard(a, withActions) {
+  const over = a.cancelled || a.updated || Date.now() >= alertEnds(a);
+  const cls = "alert-card" + (a.status === 1 || a.status === 2 ? " drill" : alertLoud(a) ? "" : " quiet") + (over ? " over" : "");
+  const c = el("div", { className: cls });
+  const head = el("div", { className: "ah" });
+  if (ALERT_STATUS[a.status]) head.append(el("span", { className: "tag" }, ALERT_STATUS[a.status]));
+  head.append(el("span", {}, a.kind === 2 ? "Cancelled: alert " + a.reference : (ALERT_EVENTS[a.event] || "Alert") + (a.kind === 1 ? " (update)" : "")));
+  head.append(el("span", { className: "muted" }, ALERT_SEVERITY[a.severity] || ""));
+  c.append(head);
+  if (a.text) c.append(el("div", { className: "at" }, a.text));
+  const t = d => new Date(d).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
+  const from = a.name ? a.name : "trusted key " + short(a.issuer);
+  const how = a.trust === 1 ? "verified by certificate" : a.trust === 2 ? "verified (old format, no expiry)" : "verified by key";
+  let who = `From ${from} · ${how} · issued ${t(a.issued * 1000)} · valid until ${t(alertEnds(a))} · ${a.hops} hops · no. ${a.serial}`;
+  if (a.area) who += ` · area ${a.area[0].toFixed(3)}, ${a.area[1].toFixed(3)} (${a.area[2]} km)`;
+  if (a.cancelled) who += " · CANCELLED";
+  else if (a.updated) who += " · replaced by an update";
+  c.append(el("div", { className: "who" }, who));
+  if (withActions) {
+    const row = el("div", { className: "row" });
+    const x = el("button", { textContent: "Hide" });
+    x.onclick = () => { alerts.dismissed.add(alertKey(a)); renderAlertBar(); };
+    const more = el("button", { textContent: "All alerts" });
+    more.onclick = () => { state.target = null; setView("alerts"); };
+    row.append(x, more);
+    c.append(row);
+  }
+  return c;
+}
+
+function renderAlertBar() {
+  const bar = $("alerts-bar");
+  const live = alerts.list.filter(a => alertLoud(a) && !alerts.dismissed.has(alertKey(a))).slice(-3).reverse();
+  bar.replaceChildren(...live.map(a => alertCard(a, true)));
+  bar.hidden = !live.length;
+}
+setInterval(() => { if (alerts.list.length) renderAlertBar(); }, 60000);
+
+function renderAlerts(box) {
+  $("chat-title").textContent = "Alerts"; $("chat-sub").textContent = "Signed public warnings, verified by maarse-host";
+  const wrap = el("div"); wrap.style.maxWidth = "760px";
+  wrap.append(el("div", { className: "muted" },
+    "Only alerts signed by a trusted issuer are shown here, each once. Messages typed on #bulletin are never alerts. " +
+    "Exercise and test alerts are striped and never shown as a banner."));
+  const list = el("div"); list.style.cssText = "display:flex;flex-direction:column;gap:8px;margin:12px 0";
+  const rows = alerts.list.slice().reverse();
+  if (!rows.length) list.append(el("div", { className: "muted" }, "No alerts received since the page was opened."));
+  for (const a of rows) list.append(alertCard(a, false));
+  wrap.append(list);
+
+  // Issuing: only a host with an issuer key accepts it (the reply says so).
+  const f = alerts.form;
+  wrap.append(el("h3", {}, "Issue an alert"));
+  wrap.append(el("div", { className: "muted" }, "Needs maarse-host started with --issuer-key. Practise with status Exercise."));
+  const form = el("div", { className: "alert-form" });
+  const sel = (opts, val, set) => {
+    const s = el("select");
+    opts.forEach((o, i) => s.append(el("option", { value: i, textContent: o, selected: i === val })));
+    s.onchange = () => { set(+s.value); renderChat(); };
+    return s;
+  };
+  form.append(el("label", {}, "Status"), sel(["Actual", "Exercise", "Test"], f.status, v => { f.status = v; f.confirmed = false; }));
+  form.append(el("label", {}, "Kind"), sel(["Alert", "Update", "Cancel"], f.kind, v => f.kind = v));
+  if (f.kind !== 0) {
+    const r = el("input", { value: f.reference, placeholder: "number of the alert to update or cancel", inputMode: "numeric" });
+    r.oninput = () => { f.reference = r.value.trim(); go.disabled = !ready(); };
+    form.append(el("label", {}, "Refers to no."), r);
+  }
+  form.append(el("label", {}, "Event"), sel(ALERT_EVENTS, f.event, v => f.event = v));
+  form.append(el("label", {}, "Severity"), sel(ALERT_SEVERITY, f.severity, v => f.severity = v));
+  const ex = el("input", { type: "number", min: 1, max: 10080, value: f.expires });
+  ex.oninput = () => f.expires = Math.max(1, Math.min(10080, +ex.value || 1));
+  form.append(el("label", {}, "Valid (minutes)"), ex);
+  const tx = el("textarea", { value: f.text, rows: 3, maxLength: 110, placeholder: "Short and plain: what, where, what to do" });
+  tx.oninput = () => { f.text = tx.value; go.disabled = !ready(); };
+  form.append(el("label", {}, "Text"), tx);
+  if (f.status === 0) {
+    const cb = el("input", { type: "checkbox", checked: f.confirmed });
+    cb.onchange = () => { f.confirmed = cb.checked; go.disabled = !ready(); };
+    form.append(el("span"), el("label", {}, cb, " A second person has checked the text, status and area"));
+  }
+  const ready = () => !!transport && !state.target && (f.status !== 0 || f.confirmed) && (f.kind === 2 || !!f.text.trim()) && (f.kind === 0 || /^\d+$/.test(f.reference));
+  const go = el("button", { className: "primary", textContent: f.status === 0 ? "Issue ACTUAL alert" : "Issue " + ALERT_STATUS[f.status].toLowerCase() + " alert" });
+  go.disabled = !ready();
+  go.onclick = () => {
+    const req = state.nextReq++ & 0xffff;
+    alerts.reqs.add(req);
+    alerts.status = "Sending…";
+    transport.send(Cmd.sendAlert(req, { status: f.status, kind: f.kind, event: f.event, severity: f.severity, expires: f.expires, reference: f.kind ? +f.reference : 0, area: null }, f.text.trim()));
+    f.confirmed = false;
+    renderChat();
+  };
+  form.append(el("span"), go);
+  wrap.append(form);
+  if (alerts.status) wrap.append(el("div", { className: "muted" }, alerts.status));
+  box.append(wrap);
+}
 
 function pwaIncoming(key, title, text) {
   if (!document.hidden) return;

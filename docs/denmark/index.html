@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Må:rse Denmark Simulator</title>
 <meta name="description" content="Build and break a national Må:rse LoRa mesh across Denmark, running the real router code compiled to WebAssembly.">
-<link rel="stylesheet" href="vendor/leaflet-lite.css?v=9">
-<link rel="stylesheet" href="style.css?v=9">
+<link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
+<link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
 <header id="top">
@@ -91,6 +91,8 @@
       <div id="features"></div>
       <label>Default SF <select id="sc-sf"><option>7</option><option>8</option><option selected>9</option><option>10</option><option>11</option><option>12</option></select></label>
       <label>Duty cycle (‰) <input type="number" id="sc-duty" value="100" min="1" max="1000"></label>
+      <label>Relays forward <input type="number" id="sc-rh" value="4" min="1" max="12" style="width:55px"> hops; automatic forest mode after <input type="number" id="sc-ar" value="10" min="0" step="0.5" style="width:55px"> min without a repeater</label>
+      <label>Announce every <input type="number" id="sc-ann" value="0" min="0" step="0.25" style="width:70px"> h <span class="hint">(0 = off; random moment per node, ±10 %)</span></label>
 
       <h3>Traffic</h3>
       <label>Direct msgs / min <input type="number" id="tr-direct" value="6" min="0" step="1"></label>
@@ -130,6 +132,9 @@
       <label>Region <select id="ev-region"><option>nordjylland</option><option>midtjylland</option><option>syddanmark</option><option>sjaelland</option><option>hovedstaden</option></select> <button data-ev="internet_down_region">Internet down</button></label>
       <h3>Random failures</h3>
       <label>N <input type="number" id="ev-n" value="10" min="1" style="width:60px"> <button data-ev="kill_random">Kill N random repeaters</button> <button data-ev="revive">Revive all</button> <button data-ev="degrade_clear">Clear radio loss</button></label>
+      <h3>Reboots</h3>
+      <p class="hint">Off and on again: routes, neighbours and kept messages are lost; contacts too, unless "contacts survive a reboot" is on (Build, Features). Uses the node kind chosen under Areas.</p>
+      <div class="row"><button data-ev="reboot_random">Reboot N random nodes</button><button data-ev="reboot_area">Reboot nodes in an area</button></div>
       <h3>Timeline</h3>
       <div id="timeline"></div>
     </section>
@@ -216,9 +221,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="scenarios.js?v=9"></script>
-<script src="maarse-sim.js?v=9"></script>
-<script src="app.js?v=9"></script>
-<script src="ask.js?v=9"></script>
+<script src="scenarios.js?v=13"></script>
+<script src="maarse-sim.js?v=13"></script>
+<script src="app.js?v=13"></script>
+<script src="ask.js?v=12"></script>
 </body>
 </html>

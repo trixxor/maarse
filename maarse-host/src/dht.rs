@@ -235,6 +235,13 @@ pub enum Req {
     FindNode(Address),
     FindValue(Address),
     Store(Record),
+    /// Post offices (see `maarse_core::mail`): keep this copy of a sealed
+    /// message for `recipient`.
+    MailStore { recipient: Address, sealed: Vec<u8> },
+    /// Send me `recipient`'s mail, except these IDs.
+    MailFetch { recipient: Address, have: Vec<u32> },
+    /// These messages for `recipient` have been delivered: delete them.
+    MailDelivered { recipient: Address, ids: Vec<u32> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -243,6 +250,21 @@ pub enum Resp {
     Nodes(Vec<Contact>),
     Value(Record),
     Stored(bool),
+    /// Sealed messages (answer to `MailFetch`).
+    Mail(Vec<Vec<u8>>),
+}
+
+fn put_ids(out: &mut Vec<u8>, ids: &[u32]) {
+    let n = ids.len().min(64);
+    out.push(n as u8);
+    for id in &ids[..n] {
+        out.extend_from_slice(&id.to_be_bytes());
+    }
+}
+
+fn get_ids(rd: &mut Rd) -> Option<Vec<u32>> {
+    let n = rd.u8()? as usize;
+    (0..n).map(|_| rd.take(4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))).collect()
 }
 
 fn put_str(out: &mut Vec<u8>, s: &str) {
@@ -310,6 +332,9 @@ pub fn encode_req(from: &Address, from_ep: Option<&str>, req: &Req) -> Vec<u8> {
         Req::FindNode(_) => 2,
         Req::FindValue(_) => 3,
         Req::Store(_) => 4,
+        Req::MailStore { .. } => 5,
+        Req::MailFetch { .. } => 6,
+        Req::MailDelivered { .. } => 7,
     });
     out.extend_from_slice(&from.0);
     put_str(&mut out, from_ep.unwrap_or(""));
@@ -317,6 +342,19 @@ pub fn encode_req(from: &Address, from_ep: Option<&str>, req: &Req) -> Vec<u8> {
         Req::Ping => {}
         Req::FindNode(a) | Req::FindValue(a) => out.extend_from_slice(&a.0),
         Req::Store(r) => put_record(&mut out, r),
+        Req::MailStore { recipient, sealed } => {
+            out.extend_from_slice(&recipient.0);
+            out.extend_from_slice(&(sealed.len().min(1024) as u16).to_le_bytes());
+            out.extend_from_slice(&sealed[..sealed.len().min(1024)]);
+        }
+        Req::MailFetch { recipient, have } => {
+            out.extend_from_slice(&recipient.0);
+            put_ids(&mut out, have);
+        }
+        Req::MailDelivered { recipient, ids } => {
+            out.extend_from_slice(&recipient.0);
+            put_ids(&mut out, ids);
+        }
     }
     out
 }
@@ -331,6 +369,13 @@ pub fn decode_req(b: &[u8]) -> Option<(Address, Option<String>, Req)> {
         2 => Req::FindNode(rd.addr()?),
         3 => Req::FindValue(rd.addr()?),
         4 => Req::Store(get_record(&mut rd)?),
+        5 => {
+            let recipient = rd.addr()?;
+            let n = u16::from_le_bytes(rd.take(2)?.try_into().ok()?) as usize;
+            Req::MailStore { recipient, sealed: rd.take(n)?.to_vec() }
+        }
+        6 => Req::MailFetch { recipient: rd.addr()?, have: get_ids(&mut rd)? },
+        7 => Req::MailDelivered { recipient: rd.addr()?, ids: get_ids(&mut rd)? },
         _ => return None,
     };
     Some((from, (!ep.is_empty()).then_some(ep), req))
@@ -344,6 +389,7 @@ pub fn encode_resp(me: &Address, resp: &Resp) -> Vec<u8> {
         Resp::Nodes(_) => 0x82,
         Resp::Value(_) => 0x83,
         Resp::Stored(_) => 0x84,
+        Resp::Mail(_) => 0x85,
     });
     out.extend_from_slice(&me.0);
     match resp {
@@ -357,6 +403,23 @@ pub fn encode_resp(me: &Address, resp: &Resp) -> Vec<u8> {
         }
         Resp::Value(r) => put_record(&mut out, r),
         Resp::Stored(ok) => out.push(*ok as u8),
+        Resp::Mail(items) => {
+            // As many as fit in one response.
+            let mut v: Vec<&Vec<u8>> = Vec::new();
+            let mut size = 0;
+            for m in items {
+                if size + 2 + m.len() > MAX_MSG - 64 || v.len() == 255 {
+                    break;
+                }
+                size += 2 + m.len();
+                v.push(m);
+            }
+            out.push(v.len() as u8);
+            for m in v {
+                out.extend_from_slice(&(m.len() as u16).to_le_bytes());
+                out.extend_from_slice(m);
+            }
+        }
     }
     out
 }
@@ -379,6 +442,15 @@ pub fn decode_resp(b: &[u8]) -> Option<(Address, Resp)> {
         }
         0x83 => Resp::Value(get_record(&mut rd)?),
         0x84 => Resp::Stored(rd.u8()? != 0),
+        0x85 => {
+            let n = rd.u8()? as usize;
+            let mut items = Vec::with_capacity(n);
+            for _ in 0..n {
+                let len = u16::from_le_bytes(rd.take(2)?.try_into().ok()?) as usize;
+                items.push(rd.take(len)?.to_vec());
+            }
+            Resp::Mail(items)
+        }
         _ => return None,
     };
     Some((from, resp))
@@ -520,6 +592,21 @@ pub fn lookup(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mail_requests_roundtrip() {
+        let me = Address([1; 16]);
+        let r = Address([2; 16]);
+        for req in [
+            Req::MailStore { recipient: r, sealed: vec![9; 100] },
+            Req::MailFetch { recipient: r, have: vec![1, 2, 3] },
+            Req::MailDelivered { recipient: r, ids: vec![7] },
+        ] {
+            let b = encode_req(&me, Some("h:1"), &req);
+            assert_eq!(decode_req(&b), Some((me, Some("h:1".to_string()), req)));
+        }
+        let resp = Resp::Mail(vec![vec![1; 50], vec![2; 60]]);
+        assert_eq!(decode_resp(&encode_resp(&me, &resp)), Some((me, resp)));
+    }
     use super::*;
     use rand_core::OsRng;
     use maarse_crypto::Identity;

@@ -7,7 +7,7 @@
 //!   0x000: "MRS1" + secret key (64; replaced by `SetIdentity`)
 //!   0x080: "RCF1" + radio settings (16)
 //!   0x100: "ADM1" + count (1) + administrators (4 × 16)
-//!   0x180: "ROL1" + role (1: 0 = client, 1 = repeater, 2 = relay)
+//!   0x180: "ROL1" + role (1: 0 = client, 1 = repeater, 2 = relay, 3 = anchor, 4 = auto)
 //!   0x200: "REG1" + strict (1) + length (1) + region names (≤ 120, comma separated)
 //!   0x300: "SHR1" + sharing settings (10, see `companion::Sharing`)
 //!   0x320: "NAM1" + length (1) + display name (≤ 24)
@@ -18,6 +18,13 @@
 //!   Only written the first time and when radio/administrators/role/regions change.
 //!   Older flash without "ROL1" (erased = 0xFF) gives repeater; without "REG1"
 //!   no regions (forward everything).
+//!
+//! * Known contacts (one sector, 4 KB, optional: [`FlashSettings::with_known`]):
+//!   `"KNW1"` at 0x000, then 63 slots of 64 bytes from 0x040, each a public
+//!   identity (signing key | DH key) or erased (0xFF). A new contact goes into
+//!   the first erased slot without erasing the sector; only when it is full is
+//!   the sector erased and rewritten with the contacts known now. So a reboot
+//!   does not forget who the node can decrypt messages from.
 //!
 //! * The mailbox (two sectors, 8 KB): entries are written one after another — a
 //!   header word `[0xA5, status, length lo, length hi]`, recipient (16) and the
@@ -61,6 +68,12 @@ const _: () = assert!(WIFI_OFF + WIFI_LEN <= RANGE_OFF);
 const USED: usize = (RANGE_OFF + RANGE_LEN).div_ceil(4) * 4;
 const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
 
+const KNOWN_MAGIC: &[u8; 4] = b"KNW1";
+const KNOWN_FIRST: u32 = 0x40;
+const KNOWN_SLOT: u32 = 64;
+/// Contacts kept in flash.
+pub const KNOWN_SLOTS: u32 = (PAGE - KNOWN_FIRST) / KNOWN_SLOT;
+
 const MAIL_MAGIC: u8 = 0xA5;
 /// Largest message in the mailbox.
 pub const MAIL_MAX: usize = 256;
@@ -81,6 +94,8 @@ pub struct FlashSettings<F: NorFlash + 'static> {
     mail: u32,
     buf: &'static mut [u8; MAIL_AREA],
     ota: Option<OtaConfig<F>>,
+    /// The known contacts sector (4 KB, aligned), if the board has one.
+    known: Option<u32>,
 }
 
 /// Firmware update: where the staging area and the meta page are (absolute
@@ -103,7 +118,27 @@ impl<F: NorFlash> FlashSettings<F> {
             mail,
             buf,
             ota: None,
+            known: None,
         }
+    }
+
+    /// Keeps known contacts in the 4 KB sector at `addr` (see the module docs).
+    pub fn with_known(mut self, addr: u32) -> Self {
+        self.known = Some(addr);
+        self
+    }
+
+    fn known_start(&mut self) -> Option<u32> {
+        let a = self.known?;
+        let mut m = [0u8; 4];
+        if self.flash.read(a, &mut m).is_err() {
+            return None;
+        }
+        if &m != KNOWN_MAGIC {
+            let _ = self.flash.erase(a, a + PAGE);
+            self.flash.write(a, KNOWN_MAGIC).ok()?;
+        }
+        Some(a)
     }
 
     /// Enables firmware updates (see [`OtaConfig`]).
@@ -289,21 +324,19 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         self.write_page(&buf);
     }
 
-    fn save_role(&mut self, role: Role) {
+    fn save_role(&mut self, role: u8) {
         let mut buf = self.read_page();
         buf[ROLE_OFF..ROLE_OFF + 4].copy_from_slice(ROLE_MAGIC);
-        buf[ROLE_OFF + 4] = role.as_u8();
+        buf[ROLE_OFF + 4] = role;
         self.write_page(&buf);
     }
 
-    fn load_role(&mut self) -> Role {
+    fn load_role(&mut self) -> u8 {
         let buf = self.read_page();
-        if &buf[ROLE_OFF..ROLE_OFF + 4] == ROLE_MAGIC
-            && let Some(r) = Role::from_u8(buf[ROLE_OFF + 4])
-        {
-            return r;
+        if &buf[ROLE_OFF..ROLE_OFF + 4] == ROLE_MAGIC && buf[ROLE_OFF + 4] <= crate::node::ROLE_AUTO {
+            return buf[ROLE_OFF + 4];
         }
-        Role::Repeater
+        Role::Repeater.as_u8()
     }
 
     fn save_regions(&mut self, strict: bool, names: &[u8]) {
@@ -436,6 +469,48 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
             }
         }
         v
+    }
+
+    fn known_load(&mut self, f: &mut dyn FnMut(&[u8; 64])) {
+        let Some(a) = self.known else { return };
+        let mut m = [0u8; 4];
+        if self.flash.read(a, &mut m).is_err() || &m != KNOWN_MAGIC {
+            return;
+        }
+        let mut slot = [0u8; 64];
+        for k in 0..KNOWN_SLOTS {
+            if self.flash.read(a + KNOWN_FIRST + k * KNOWN_SLOT, &mut slot).is_ok() && slot.iter().any(|&b| b != 0xFF) {
+                f(&slot);
+            }
+        }
+    }
+
+    fn known_add(&mut self, id: &[u8; 64]) -> bool {
+        let Some(a) = self.known_start() else { return false };
+        let mut slot = [0u8; 64];
+        for k in 0..KNOWN_SLOTS {
+            let at = a + KNOWN_FIRST + k * KNOWN_SLOT;
+            if self.flash.read(at, &mut slot).is_err() {
+                return false;
+            }
+            if slot == *id {
+                return true;
+            }
+            if slot.iter().all(|&b| b == 0xFF) {
+                return self.flash.write(at, id).is_ok();
+            }
+        }
+        false
+    }
+
+    fn known_reset(&mut self, ids: &mut dyn Iterator<Item = [u8; 64]>) {
+        let Some(a) = self.known else { return };
+        if self.flash.erase(a, a + PAGE).is_err() || self.flash.write(a, KNOWN_MAGIC).is_err() {
+            return;
+        }
+        for (k, id) in ids.take(KNOWN_SLOTS as usize).enumerate() {
+            let _ = self.flash.write(a + KNOWN_FIRST + k as u32 * KNOWN_SLOT, &id);
+        }
     }
 
     fn mail_add(&mut self, recipient: &Address, sealed: &[u8]) -> Option<u32> {

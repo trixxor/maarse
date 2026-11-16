@@ -96,6 +96,8 @@ pub const HOP_RETRIES: u8 = 4;
 
 /// Default hop limit for relays in group mode.
 pub const DEFAULT_RELAY_HOPS: u8 = 4;
+/// The most hops a relay may forward a flood to, whatever `relay_hops` says.
+pub const MAX_RELAY_HOPS: u8 = 12;
 
 const MAX_PENDING: usize = 8;
 /// The destination waits this many time slots before it answers a
@@ -107,7 +109,10 @@ pub const DEFAULT_ACK_TIMEOUT_MS: u32 = 20_000;
 /// Number of times the sender sends a message again.
 pub const E2E_RETRIES: u8 = 2;
 /// A mobile node does not trust routes older than this (ms).
-pub const MOBILE_ROUTE_MS: u64 = 30_000;
+/// Routes to or from a moving node are looked up afresh after this long.
+/// maarse-sim (E45 car, 8 seeds): 30 s gave 71 % delivered (a path request
+/// for nearly every message), no refresh 80 %, 2 min 84 %, 5 min 93 %.
+pub const MOBILE_ROUTE_MS: u64 = 300_000;
 /// Wait before an unanswered path request is repeated (ms).
 ///
 /// The reply can take a long time: over many hops, where every hop can
@@ -125,6 +130,31 @@ const MAX_QUEUE: usize = 8;
 const MAX_AWAIT: usize = 32;
 const MAX_CHANNELS: usize = 8;
 const MAX_NEIGHBORS: usize = 32;
+/// Destinations without coverage an edge bridge remembers (boundary mode).
+const MAX_UNCOVERED: usize = 64;
+/// Edge bridges a node remembers from their announces.
+const MAX_BRIDGES: usize = 8;
+/// Trickle timer for hellos (RFC 6206): the shortest interval, used right
+/// after something changed, and the longest per kind of node. Repeaters stay
+/// within `EDGE_WINDOW_MS` so "hears a repeater" stays true between hellos;
+/// covered clients, most nodes in a town, say hello least often.
+pub const HELLO_MIN_MS: u64 = 10_000;
+pub const HELLO_MAX_REPEATER_MS: u64 = 4 * 60_000;
+pub const HELLO_MAX_MS: u64 = 10 * 60_000;
+pub const HELLO_MAX_CLIENT_MS: u64 = 30 * 60_000;
+/// How long a neighbor's hello information (role, bridge choice) counts
+/// for the bridge rules: a little over the longest hello interval.
+pub const INFO_WINDOW_MS: u64 = 35 * 60_000;
+/// Mobile destinations a node remembers (routes to them go stale fast).
+const MAX_MOBILE: usize = 16;
+/// How long a dropped inward path request is remembered: a second request
+/// for the same destination within this time is let through.
+const INWARD_REPEAT_MS: u64 = 120_000;
+/// How long a bridge's announce keeps it a candidate for our choice (ms);
+/// bridges announce every 10 minutes (see `BRIDGE_ANNOUNCE_S`).
+pub const BRIDGE_WINDOW_MS: u64 = 30 * 60_000;
+/// Announce interval of a node while it is an edge bridge (s).
+pub const BRIDGE_ANNOUNCE_S: u32 = 600;
 /// How long role, forwarding and coverage observations stay valid for the
 /// edge bridge rule (ms).
 pub const EDGE_WINDOW_MS: u64 = 300_000;
@@ -180,7 +210,22 @@ const MAX_TRACES: usize = 4;
 const MAX_ANCHORED: usize = 16;
 /// How long a leg is remembered by the anchor (ms): long enough for reply and
 /// acknowledgement, even over many hops.
-const ANCHOR_TTL_MS: u64 = 120_000;
+pub const ANCHOR_TTL_MS: u64 = 120_000;
+/// How fresh a route's last acknowledgement must be for an anchor to answer
+/// a path request with it.
+pub const PROXY_ROUTE_MS: u64 = 300_000;
+/// How far announces are forwarded by default. Nodes further away get a key
+/// with a key request (answered by hosts' caches too) when they need it.
+/// maarse-sim (regression suite): against 8 hops, 20 % less airtime in the
+/// national scenario and 22 % on the outage journey, 5-8 points more
+/// delivered in the town and on the journey, the car unchanged (8 seeds).
+/// Announces from mobile nodes keep `LOCAL_SCOPE`.
+pub const ANNOUNCE_SCOPE: u8 = 3;
+/// Expanding ring search: the first path request goes at most `ring` hops
+/// (marked in its reply token: byte 12 = ring, bytes 13-14 = "RG"; older
+/// nodes ignore it) and is repeated without a limit after this long.
+pub const RING_RETRY_MS: u64 = 10_000;
+const RING_MARK: [u8; 2] = *b"RG";
 /// Next hops we remember as dead (see "Local repair").
 const MAX_DEAD_HOPS: usize = 8;
 /// How long a next hop counts as dead, unless we hear it again.
@@ -297,6 +342,9 @@ struct PendingRequest {
     /// Message that was sent along in the request (like MeshCore: the first
     /// message is flooded, and the reply is both route and acknowledgement).
     carried: Option<u64>,
+    /// This attempt was a ring-limited search (the next is not, and does not
+    /// count as a retry).
+    ringed: bool,
     /// When the request is repeated if there is no reply.
     retry_at_ms: u64,
     tries: u8,
@@ -316,6 +364,8 @@ struct PendingReply {
     token: Address,
     best: Path,
     best_snr: i8,
+    /// Hops of the best copy (with weak-hop penalties).
+    best_hops: u8,
     reply_at_ms: u64,
 }
 
@@ -327,6 +377,9 @@ struct Anchored {
     target: Address,
     back: Path,
     until_ms: u64,
+    /// A message we forwarded along our own route (not a request leg): if
+    /// no ack comes back before `until_ms`, that route is dropped.
+    forward: bool,
 }
 
 struct AwaitAck {
@@ -418,6 +471,12 @@ pub struct RouterStats {
     pub quota_dropped: u32,
     /// Own path requests held back to the next minute by the quota.
     pub quota_held: u32,
+    /// Hellos sent.
+    pub hellos: u32,
+    /// Key requests sent.
+    pub key_requests: u32,
+    /// Path requests an anchor answered for the target (`proxy_reply`).
+    pub proxy_replies: u32,
 }
 
 /// Routing engine with `R` routes and a duplicate filter of `D` packets.
@@ -459,6 +518,42 @@ pub struct Router<const R: usize, const D: usize> {
     carry_done: heapless::Vec<CarryDone, CARRY_DONE_MAX>,
     /// Largest number of hops a relay forwards (default 4, at most 7).
     pub relay_hops: u8,
+    /// Boundary forwarding for edge bridges (after Reticulum's boundary
+    /// interfaces): a relay that hears a repeater forwards a path request
+    /// only when it comes from a neighbor without coverage or from a
+    /// repeater, i.e. across the edge of coverage, not around the covered
+    /// side. Off by default; automatic forest mode turns it on.
+    pub boundary: bool,
+    /// How old a route to or from a moving node may be before a fresh one is
+    /// looked for (`MOBILE_ROUTE_MS` by default).
+    pub mobile_route_ms: u64,
+    /// Nodes that announced they hear no repeater (role flags), newest
+    /// last: in boundary mode a bridge forwards a path request from the
+    /// repeater side into the uncovered side only for one of these, as
+    /// Reticulum forwards onto a boundary interface only what belongs there.
+    uncovered: heapless::Vec<Address, MAX_UNCOVERED>,
+    /// Edge bridges heard announcing (ID, last heard, hops), for our own
+    /// choice.
+    bridges_known: heapless::Vec<(PathId, u64, u8), MAX_BRIDGES>,
+    /// Send hellos (Trickle timer). Off by default.
+    pub hello: bool,
+    hello_iv_ms: u64,
+    hello_at_ms: u64,
+    hello_sig: u32,
+    hello_seed: u32,
+    /// Destinations that said they move (hello or announce flag), with when.
+    mobile_dests: heapless::Vec<(Address, u64), MAX_MOBILE>,
+    /// Boundary mode: inward path requests dropped for an unknown
+    /// destination; a repeat within `INWARD_REPEAT_MS` goes through.
+    inward_dropped: heapless::Vec<(Address, u64), 8>,
+    key_nonce: u16,
+    /// Our post office class (role flags bits 4-5; 0 = not a post office).
+    pub mail_class: u8,
+    /// Post office: recipients (path IDs) with mail waiting, told in our
+    /// hello so they ask for it ("mail waiting", like a Wi-Fi beacon's TIM).
+    pub mail_waiting: heapless::Vec<PathId, 4>,
+    /// A post office's hello named us: we have mail waiting.
+    mail_hint: bool,
     /// Wait for the end-to-end acknowledgement before the route is repaired (ms).
     pub ack_timeout_ms: u32,
     /// The node moves (e.g. in a car): routes go stale quickly.
@@ -488,6 +583,33 @@ pub struct Router<const R: usize, const D: usize> {
     pub local_repair: bool,
     /// Wait before an unanswered path request is repeated (ms).
     pub path_retry_ms: u32,
+    /// How long an anchor remembers a leg (default `ANCHOR_TTL_MS`). Hosts
+    /// use longer: their legs may cross LoRa trunks with queues.
+    pub anchor_ttl_ms: u64,
+    /// An anchor answers a path request itself when it has a fresh route to
+    /// the target (younger than `PROXY_ROUTE_MS`), instead of flooding it on
+    /// (as AODV lets an intermediate node with a fresh route reply). The
+    /// requester then sends to us and we forward along our route. Off by
+    /// default; hosts at trunk ends use it, so a request does not cross the
+    /// water again for a node we reached a moment ago.
+    pub proxy_reply: bool,
+    /// Expanding ring search (as in AODV): the first path request for a
+    /// target goes at most this many hops; 0 = off.
+    pub ring: u8,
+    /// How far announces are forwarded (hops). Nodes further away ask for a
+    /// key with a key request when they need it.
+    pub announce_scope: u8,
+    /// A hop heard with a weak signal counts as two when the destination
+    /// picks among trails (a cheap stand-in for ETX: weak links cost
+    /// retransmissions and lost acks).
+    pub weak_hop_penalty: bool,
+    /// How far away nodes were heard lately (announces, hellos): the ring
+    /// search is used only for a target heard within the ring, the way AODV
+    /// starts from the last known hop count.
+    heard_hops: heapless::Vec<(Address, u8, u64), 64>,
+    /// An anchor drops its route to a target when a message it forwarded
+    /// there was not acknowledged (the target moved or went away).
+    pub drop_unacked_routes: bool,
     /// Load control: path request quota and longer flood delays when the
     /// measured channel load is high (see [`crate::qos::ChannelLoad`]).
     pub load_control: bool,
@@ -544,6 +666,21 @@ impl<const R: usize, const D: usize> Router<R, D> {
             carry_near_repeater: false,
             carry_done: heapless::Vec::new(),
             relay_hops: DEFAULT_RELAY_HOPS,
+            boundary: false,
+            mobile_route_ms: MOBILE_ROUTE_MS,
+            uncovered: heapless::Vec::new(),
+            bridges_known: heapless::Vec::new(),
+            hello: false,
+            hello_iv_ms: HELLO_MIN_MS,
+            hello_at_ms: 0,
+            hello_sig: u32::MAX,
+            hello_seed: 0,
+            mobile_dests: heapless::Vec::new(),
+            inward_dropped: heapless::Vec::new(),
+            key_nonce: 0,
+            mail_class: 0,
+            mail_waiting: heapless::Vec::new(),
+            mail_hint: false,
             ack_timeout_ms: DEFAULT_ACK_TIMEOUT_MS,
             mobile: false,
             weak_snr_db: weak_snr_for_sf(9),
@@ -554,6 +691,13 @@ impl<const R: usize, const D: usize> Router<R, D> {
             dead_hops: heapless::Vec::new(),
             local_repair: true,
             path_retry_ms: PATH_RETRY_MS as u32,
+            anchor_ttl_ms: ANCHOR_TTL_MS,
+            proxy_reply: false,
+            ring: 0,
+            announce_scope: ANNOUNCE_SCOPE,
+            weak_hop_penalty: false,
+            heard_hops: heapless::Vec::new(),
+            drop_unacked_routes: false,
             load_control: false,
             load: crate::qos::ChannelLoad::new(),
             load_high: false,
@@ -638,7 +782,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         match self.role {
             Role::Client => false,
             Role::Repeater | Role::Anchor => self.energy != Energy::Critical,
-            Role::Relay => self.energy != Energy::Critical && hops < self.relay_hops.min(7),
+            Role::Relay => self.energy != Energy::Critical && hops < self.relay_hops.min(MAX_RELAY_HOPS),
         }
     }
 
@@ -841,9 +985,311 @@ impl<const R: usize, const D: usize> Router<R, D> {
     /// not (older firmware), we guess: it forwards floods, and no repeater
     /// has been heard echoing it or being echoed by it.
     pub fn is_edge_bridge(&self, now_ms: u64) -> bool {
-        if self.role != Role::Relay || !self.hears_repeater(now_ms) {
-            return false;
+        self.role == Role::Relay && self.hears_repeater(now_ms) && self.has_uncovered_neighbor(now_ms)
+    }
+
+    /// Is a recent neighbor already an edge bridge (a relay that reports it
+    /// hears a repeater)? Returns the lowest such neighbor ID, so automatic
+    /// forest mode can leave the bridging to one node per stretch of the
+    /// coverage edge.
+    pub fn bridge_neighbor(&self, now_ms: u64) -> Option<PathId> {
+        self.neighbors
+            .iter()
+            .filter(|n| n.role == Some(Role::Relay) && n.hears_repeater == Some(true) && now_ms.saturating_sub(n.last_ms) < INFO_WINDOW_MS)
+            .map(|n| n.id)
+            .min()
+    }
+
+    /// An announce said whether its sender hears a repeater (role flags):
+    /// remember the ones without coverage for boundary mode.
+    pub fn note_coverage(&mut self, addr: Address, hears_repeater: bool) {
+        if let Some(i) = self.uncovered.iter().position(|a| *a == addr) {
+            self.uncovered.remove(i);
         }
+        if !hears_repeater {
+            if self.uncovered.is_full() {
+                self.uncovered.remove(0);
+            }
+            let _ = self.uncovered.push(addr);
+        }
+    }
+
+    /// Our hello payload: role, flags, chosen bridge (0xFFFF = none). The
+    /// bridge count (flag bits 1-2) is left out: it changes whenever a
+    /// bridge nearby comes or goes and would keep resetting every
+    /// neighbor's Trickle timer, and the named-bridge rule does not use it.
+    pub fn hello_payload(&self, now_ms: u64) -> heapless::Vec<u8, 12> {
+        let flags = crate::appdata::role_flags(self.hears_repeater(now_ms), 0)
+            | if self.mobile { crate::appdata::ROLE_MOBILE } else { 0 }
+            | ((self.mail_class.min(3) << crate::appdata::ROLE_MAIL_SHIFT) & crate::appdata::ROLE_MAIL_MASK);
+        let [hi, lo] = self.chosen_bridge(now_ms).unwrap_or(0xFFFF).to_be_bytes();
+        let mut v: heapless::Vec<u8, 12> = heapless::Vec::new();
+        let _ = v.extend_from_slice(&[self.role.as_u8(), flags, hi, lo]);
+        // A post office names up to 4 recipients with mail waiting.
+        for id in &self.mail_waiting {
+            let _ = v.extend_from_slice(&id.to_be_bytes());
+        }
+        v
+    }
+
+    /// What our hello says, in one number: a change resets the Trickle
+    /// timer. A mobile node also counts the repeater it hears, so moving
+    /// into another repeater's area is told at once (a Mobile IP binding
+    /// update, in effect).
+    fn hello_signature(&self, now_ms: u64) -> u32 {
+        let p = self.hello_payload(now_ms);
+        let p = crate::dedup::packet_id(PacketType::Hello, &self.addr, &p).to_be_bytes();
+        let p = [p[0], p[1], p[2], p[3]];
+        let rep = if self.mobile {
+            self.neighbors.iter().filter(|n| self.is_repeater_neighbor(n.id, now_ms)).map(|n| n.id).min().unwrap_or(0)
+        } else {
+            0
+        };
+        u32::from_be_bytes(p) ^ ((rep as u32) << 7)
+    }
+
+    fn hello_max_ms(&self, now_ms: u64) -> u64 {
+        match self.role {
+            Role::Repeater | Role::Anchor => HELLO_MAX_REPEATER_MS,
+            Role::Relay => HELLO_MAX_MS,
+            Role::Client if !self.hears_repeater(now_ms) || self.mobile => HELLO_MAX_MS,
+            Role::Client => HELLO_MAX_CLIENT_MS,
+        }
+    }
+
+    /// Random point in [iv/2, iv) (a small LCG; good enough for spreading).
+    fn hello_jitter(&mut self, iv: u64) -> u64 {
+        self.hello_seed = self.hello_seed.wrapping_mul(1_103_515_245).wrapping_add(12_345 ^ self.id as u32);
+        iv / 2 + (self.hello_seed >> 8) as u64 % (iv / 2).max(1)
+    }
+
+    /// Trickle: reset to the shortest interval when what we would say has
+    /// changed; send when the timer is due, then double the interval.
+    fn hello_step(&mut self, now_ms: u64, out: &mut Actions) {
+        let sig = self.hello_signature(now_ms);
+        if sig != self.hello_sig {
+            self.hello_sig = sig;
+            self.hello_iv_ms = HELLO_MIN_MS;
+            let at = now_ms + self.hello_jitter(HELLO_MIN_MS);
+            if self.hello_at_ms == 0 || self.hello_at_ms > at {
+                self.hello_at_ms = at;
+            }
+        }
+        if now_ms < self.hello_at_ms {
+            return;
+        }
+        let payload = self.hello_payload(now_ms);
+        let header = Header::new(PacketType::Hello, self.addr);
+        if let Ok(packet) = encode(&header, &payload) {
+            let id = packet_id(PacketType::Hello, &self.addr, &payload) ^ now_ms;
+            self.stats.hellos += 1;
+            let _ = out.push(Action::Transmit { packet, delay_ms: 0, id });
+        }
+        self.hello_iv_ms = (self.hello_iv_ms * 2).min(self.hello_max_ms(now_ms));
+        let j = self.hello_jitter(self.hello_iv_ms);
+        self.hello_at_ms = now_ms + j;
+    }
+
+    /// A neighbor's hello: its role, coverage, bridge choice and motion.
+    fn on_hello(&mut self, pkt: &Packet, snr_db: i8, now_ms: u64) {
+        let h = &pkt.header;
+        let p = pkt.payload;
+        if h.hops != 0 || p.len() < 4 || h.dest == self.addr {
+            return;
+        }
+        let id = h.dest.path_id();
+        self.neighbors.heard(id, Some(h.dest), snr_db, self.rx_rssi, now_ms);
+        self.dead_hops.retain(|(d, _)| *d != id);
+        let Some(role) = Role::from_u8(p[0]) else { return };
+        let hears = p[1] & crate::appdata::ROLE_HEARS_REPEATER != 0;
+        self.neighbors.set_role(id, role, Some(hears));
+        self.neighbors.set_bridges(id, (p[1] & crate::appdata::ROLE_BRIDGES_MASK) >> crate::appdata::ROLE_BRIDGES_SHIFT);
+        let choice = u16::from_be_bytes([p[2], p[3]]);
+        self.neighbors.set_bridge_choice(id, (choice != 0xFFFF).then_some(choice));
+        self.note_coverage(h.dest, hears);
+        self.note_heard_hops(h.dest, 0, now_ms);
+        self.note_mobile(h.dest, p[1] & crate::appdata::ROLE_MOBILE != 0, now_ms);
+        self.neighbors.set_mail_class(id, (p[1] & crate::appdata::ROLE_MAIL_MASK) >> crate::appdata::ROLE_MAIL_SHIFT);
+        if p[4..].chunks_exact(2).any(|c| u16::from_be_bytes([c[0], c[1]]) == self.id) {
+            self.mail_hint = true;
+        }
+        if hears && role == Role::Relay {
+            self.note_bridge(id, 0, now_ms);
+        }
+    }
+
+    /// The best post office among our neighbors: highest class, then best
+    /// SNR (its path ID, address if known, class).
+    pub fn best_post_office(&self, now_ms: u64) -> Option<(PathId, Option<Address>, u8)> {
+        self.neighbors
+            .iter()
+            .filter(|n| n.mail_class > 0 && now_ms.saturating_sub(n.last_ms) < INFO_WINDOW_MS)
+            .max_by_key(|n| (n.mail_class, n.snr))
+            .map(|n| (n.id, n.addr, n.mail_class))
+    }
+
+    /// Did a post office's hello name us since the last call?
+    pub fn take_mail_hint(&mut self) -> bool {
+        core::mem::take(&mut self.mail_hint)
+    }
+
+    /// "I am here; do you have mail for me?" (a `MailSync`, 2-hop flood)
+    /// naming our home post office (it fetches our copies) and the IDs of
+    /// messages we already have.
+    pub fn request_mail(&mut self, home: Option<PathId>, have: &[u32]) -> Actions {
+        let mut out = Actions::new();
+        self.key_nonce = self.key_nonce.wrapping_add(1);
+        let mut p: heapless::Vec<u8, 40> = heapless::Vec::new();
+        let _ = p.extend_from_slice(&home.unwrap_or(0xFFFF).to_be_bytes());
+        for id in have.iter().take(8) {
+            let _ = p.extend_from_slice(&id.to_be_bytes());
+        }
+        let _ = p.extend_from_slice(&self.key_nonce.to_be_bytes());
+        let mut p = Buf::from_slice(&p).unwrap_or_default();
+        stamp::append(PacketType::MailSync, &self.addr, &mut p);
+        let header = Header::new(PacketType::MailSync, self.addr);
+        self.emit(&header, &p, 0, &mut out);
+        out
+    }
+
+    /// `addr` was heard `hops` away (announce or hello).
+    fn note_heard_hops(&mut self, addr: Address, hops: u8, now_ms: u64) {
+        if let Some(e) = self.heard_hops.iter_mut().find(|e| e.0 == addr) {
+            e.1 = hops;
+            e.2 = now_ms;
+            return;
+        }
+        if self.heard_hops.is_full() {
+            let oldest = (0..self.heard_hops.len()).min_by_key(|&i| self.heard_hops[i].2).unwrap_or(0);
+            self.heard_hops.remove(oldest);
+        }
+        let _ = self.heard_hops.push((addr, hops, now_ms));
+    }
+
+    /// A destination said whether it moves (hello or announce flag).
+    pub fn note_mobile(&mut self, addr: Address, mobile: bool, now_ms: u64) {
+        if let Some(i) = self.mobile_dests.iter().position(|(a, _)| *a == addr) {
+            self.mobile_dests.remove(i);
+        }
+        if mobile {
+            if self.mobile_dests.is_full() {
+                self.mobile_dests.remove(0);
+            }
+            let _ = self.mobile_dests.push((addr, now_ms));
+        }
+    }
+
+    fn is_mobile_dest(&self, addr: &Address, now_ms: u64) -> bool {
+        self.mobile_dests.iter().any(|(a, t)| a == addr && now_ms.saturating_sub(*t) < INFO_WINDOW_MS)
+    }
+
+    /// Asks "who is `wanted`?" (a key request, local flood). The answer is
+    /// an announce, handled like any other.
+    pub fn request_key(&mut self, wanted: Address) -> Actions {
+        let mut out = Actions::new();
+        self.key_nonce = self.key_nonce.wrapping_add(1);
+        let [a, b] = self.id.to_be_bytes();
+        let [c, d] = self.key_nonce.to_be_bytes();
+        let header = Header::new(PacketType::KeyRequest, wanted);
+        self.stats.key_requests += 1;
+        let mut p = Buf::from_slice(&[a, b, c, d]).unwrap_or_default();
+        stamp::append(PacketType::KeyRequest, &wanted, &mut p);
+        self.emit(&header, &p, 0, &mut out);
+        out
+    }
+
+    /// An edge bridge (a relay that hears a repeater) announced itself,
+    /// heard `hops` away. Only bridges within the relay hop limit count:
+    /// one further away serves another group.
+    pub fn note_bridge(&mut self, id: PathId, hops: u8, now_ms: u64) {
+        if id == self.id || hops > self.relay_hops.min(MAX_RELAY_HOPS) {
+            return;
+        }
+        if let Some(b) = self.bridges_known.iter_mut().find(|b| b.0 == id) {
+            b.1 = now_ms;
+            b.2 = hops;
+            return;
+        }
+        if self.bridges_known.is_full() {
+            let oldest = (0..self.bridges_known.len()).min_by_key(|&i| self.bridges_known[i].1).unwrap_or(0);
+            self.bridges_known.remove(oldest);
+        }
+        let _ = self.bridges_known.push((id, now_ms, hops));
+    }
+
+    /// The edge bridge this node relies on: the nearest bridge heard
+    /// announcing recently, the lowest ID among equally near ones, so
+    /// neighbors in a group without coverage tend to pick the same one.
+    /// Sent in the role field; `None` if we hear a repeater.
+    pub fn chosen_bridge(&self, now_ms: u64) -> Option<PathId> {
+        if self.hears_repeater(now_ms) {
+            return None;
+        }
+        self.bridges_known.iter().filter(|b| now_ms.saturating_sub(b.1) < BRIDGE_WINDOW_MS).min_by_key(|b| (b.2, b.0)).map(|b| b.0)
+    }
+
+    /// Recent neighbors (not repeaters or anchors) that hear a repeater
+    /// themselves: the other candidates for edge bridge around us.
+    pub fn covered_neighbors(&self, now_ms: u64) -> usize {
+        self.neighbors
+            .iter()
+            .filter(|n| !matches!(n.role, Some(Role::Repeater | Role::Anchor)) && n.hears_repeater == Some(true) && now_ms.saturating_sub(n.last_ms) < INFO_WINDOW_MS)
+            .count()
+    }
+
+    /// Has a recent neighbor chosen us as its edge bridge?
+    pub fn bridge_named(&self, now_ms: u64) -> bool {
+        self.neighbors.iter().any(|n| n.bridge_choice == Some(self.id) && now_ms.saturating_sub(n.last_ms) < INFO_WINDOW_MS)
+    }
+
+    /// Is there a recent neighbor without coverage that has no bridge yet?
+    pub fn unserved_neighbor(&self, now_ms: u64) -> bool {
+        self.neighbors.iter().any(|n| {
+            !matches!(n.role, Some(Role::Repeater | Role::Anchor))
+                && now_ms.saturating_sub(n.last_ms) < INFO_WINDOW_MS
+                && n.hears_repeater == Some(false)
+                && n.bridge_choice.is_none()
+        })
+    }
+
+    /// How many edge bridges (relays that report hearing a repeater) we hear,
+    /// sent in our role flags.
+    pub fn bridges_heard(&self, now_ms: u64) -> u8 {
+        self.neighbors
+            .iter()
+            .filter(|n| n.role == Some(Role::Relay) && n.hears_repeater == Some(true) && now_ms.saturating_sub(n.last_ms) < INFO_WINDOW_MS)
+            .count()
+            .min(3) as u8
+    }
+
+    /// Does a neighbor without coverage need us as its bridge? With
+    /// `counted`, only a neighbor that reports fewer than `enough` bridges
+    /// (a client asks for 1: none yet; a bridge for 2: it is the only one).
+    pub fn needs_bridge(&self, now_ms: u64, enough: u8) -> bool {
+        let fresh = |t: u64| t != 0 && now_ms.saturating_sub(t) < INFO_WINDOW_MS;
+        self.neighbors.iter().any(|n| {
+            !matches!(n.role, Some(Role::Repeater | Role::Anchor))
+                && fresh(n.last_ms)
+                && n.hears_repeater == Some(false)
+                && n.bridges.is_none_or(|b| b < enough)
+        })
+    }
+
+    /// Recent neighbors that forward (relays, repeaters, anchors): the
+    /// density check for automatic forest mode (after Thread's
+    /// router-eligible end devices, which become routers only where few
+    /// routers are around).
+    pub fn forwarding_neighbors(&self, now_ms: u64) -> usize {
+        self.neighbors
+            .iter()
+            .filter(|n| matches!(n.role, Some(Role::Relay | Role::Repeater | Role::Anchor)) && now_ms.saturating_sub(n.last_ms) < EDGE_WINDOW_MS)
+            .count()
+    }
+
+    /// Is there a recent neighbor (not a repeater or anchor) that does not
+    /// hear a repeater itself? Independent of our own role, so automatic
+    /// forest mode can keep a node at the edge of coverage a relay.
+    pub fn has_uncovered_neighbor(&self, now_ms: u64) -> bool {
         let fresh = |t: u64| t != 0 && now_ms.saturating_sub(t) < EDGE_WINDOW_MS;
         self.neighbors.iter().any(|n| {
             if matches!(n.role, Some(Role::Repeater | Role::Anchor)) || !fresh(n.last_ms) {
@@ -869,13 +1315,17 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let ack = self.awaiting.iter().map(|a| a.sent_ms + t);
         let rep = self.replies.iter().map(|r| r.reply_at_ms);
         let carry = (!self.carried.is_empty() || !self.carry_done.is_empty()).then_some(self.next_carry_ms);
-        fwd.chain(req).chain(ack).chain(rep).chain(carry).min()
+        let hello = self.hello.then_some(self.hello_at_ms);
+        fwd.chain(req).chain(ack).chain(rep).chain(carry).chain(hello).min()
     }
 
     /// Called when `next_deadline` is reached: retransmits hops that have not
     /// been forwarded, and gives up on them after `HOP_RETRIES` attempts.
     pub fn tick(&mut self, now_ms: u64) -> Actions {
         let mut out = Actions::new();
+        if self.hello {
+            self.hello_step(now_ms, &mut out);
+        }
         if (!self.carried.is_empty() || !self.carry_done.is_empty()) && now_ms >= self.next_carry_ms {
             self.next_carry_ms = now_ms + CARRY_EVERY_MS;
             self.carry_step(now_ms, &mut out);
@@ -960,7 +1410,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 old.remove(0);
             }
             let _ = old.push(p.token);
-            self.emit_request(p.target, token, old, now_ms, p.tries + 1, &mut out);
+            // A ring search that found nothing: now everywhere, and it does
+            // not count as one of the retries.
+            let tries = if p.ringed { p.tries } else { p.tries + 1 };
+            self.emit_request(p.target, token, old, now_ms, tries, &mut out);
         }
         let mut i = 0;
         while i < self.forwards.len() {
@@ -1017,18 +1470,30 @@ impl<const R: usize, const D: usize> Router<R, D> {
         req_token: [u8; 16],
         now_ms: u64,
     ) -> Result<(u64, Actions), SendError> {
+        // Deposits carry a proof of work (post offices must not be filled for
+        // free); the stamp is part of the payload the ack is computed over.
+        let mut stamped = Buf::new();
+        let payload = if stamp::required(ptype) {
+            stamped.extend_from_slice(payload).map_err(|_| SendError::TooLarge)?;
+            if !stamp::append(ptype, &dest, &mut stamped) {
+                return Err(SendError::TooLarge);
+            }
+            &stamped[..]
+        } else {
+            payload
+        };
         if payload.len() > MAX_DIRECT_PAYLOAD {
             return Err(SendError::TooLarge);
         }
         let msg_id = packet_id(ptype, &dest, payload);
         let mut out = Actions::new();
-        if self.mobile
+        if (self.mobile || self.is_mobile_dest(&dest, now_ms))
             && self
                 .routes
                 .get(&dest)
-                .is_some_and(|r| r.learned_ms + MOBILE_ROUTE_MS < now_ms)
+                .is_some_and(|r| r.learned_ms + self.mobile_route_ms < now_ms)
         {
-            // A mobile node has moved: find a fresh route.
+            // We or the destination move: find a fresh route.
             self.routes.remove(&dest);
         }
         if let Some(route) = self.routes.get(&dest) {
@@ -1426,11 +1891,29 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 old_tokens,
                 target: dest,
                 carried: None,
+                ringed: false,
                 retry_at_ms: (now_ms / 60_000 + 1) * 60_000,
                 tries,
                 sent: false,
             });
             return;
+        }
+        // Expanding ring: the very first attempt only goes a few hops, when
+        // the target was heard within the ring lately (else everywhere).
+        let mut token = token;
+        let near = self
+            .heard_hops
+            .iter()
+            .find(|(a, _, t)| *a == dest && now_ms.saturating_sub(*t) < 600_000)
+            .map(|(_, h, _)| *h)
+            .filter(|&h| h < self.ring && !self.mobile && !self.is_mobile_dest(&dest, now_ms));
+        let ringed = tries == 0 && self.ring > 0 && old_tokens.is_empty() && near.is_some();
+        if ringed {
+            // One hop of margin beyond where it was heard.
+            token.0[12] = (near.unwrap_or(0) + 2).min(self.ring);
+            token.0[13..15].copy_from_slice(&RING_MARK);
+        } else if token.0[13..15] == RING_MARK {
+            token.0[13] = 0;
         }
         self.stats.path_requests += 1;
         self.stats.originated += 1;
@@ -1448,12 +1931,14 @@ impl<const R: usize, const D: usize> Router<R, D> {
         {
             carried = Some(packet_id(PacketType::Data, &dest, &q.payload));
         }
+        let wait = if ringed { RING_RETRY_MS } else { self.path_retry_ms as u64 * if self.load_control && self.load_high { 2 } else { 1 } };
         let _ = self.pending.push(PendingRequest {
             token,
             old_tokens,
             target: dest,
             carried,
-            retry_at_ms: now_ms + self.path_retry_ms as u64 * if self.load_control && self.load_high { 2 } else { 1 },
+            ringed,
+            retry_at_ms: now_ms + wait,
             tries,
             sent: true,
         });
@@ -1541,6 +2026,19 @@ impl<const R: usize, const D: usize> Router<R, D> {
             self.on_carry(&pkt, now_ms, &mut out);
             return out;
         }
+        if pkt.header.ptype == PacketType::Summary {
+            if pkt.header.hops == 0 {
+                deliver(&pkt, &mut out);
+            }
+            return out;
+        }
+        if pkt.header.ptype == PacketType::Hello {
+            self.on_hello(&pkt, snr_db, now_ms);
+            if self.hello {
+                self.hello_step(now_ms, &mut out);
+            }
+            return out;
+        }
         let id = packet_id(pkt.header.ptype, &pkt.header.dest, pkt.payload);
         match (&pkt.header.ptype, &pkt.header.path) {
             (PacketType::PathRequest, _) => {
@@ -1564,7 +2062,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             }
             (_, None) => {
                 if self.dedup.insert(id) {
-                    self.on_flood(&pkt, snr_db, &mut out);
+                    self.on_flood(&pkt, snr_db, now_ms, &mut out);
                 } else {
                     self.stats.rx_duplicates += 1;
                     self.on_duplicate_flood(id, snr_db, None, now_ms, &mut out);
@@ -1594,7 +2092,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let Some(r) = self.replies.iter_mut().find(|r| r.token == token) else { return };
         let path = pkt.header.path.clone().unwrap_or_default();
         let score = |snr: i8, hops: usize| ((snr < weak) as u8, hops, -(snr as i16));
-        if score(snr_db, path.len()) < score(r.best_snr, r.best.len()) {
+        // With weak-hop penalties the header's hop count carries them.
+        let (mine, theirs) = if self.weak_hop_penalty { (pkt.header.hops as usize, r.best_hops as usize) } else { (path.len(), r.best.len()) };
+        if score(snr_db, mine) < score(r.best_snr, theirs) {
+            r.best_hops = pkt.header.hops;
             r.best = path;
             r.best_snr = snr_db;
         }
@@ -1636,12 +2137,67 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 token,
                 best: record,
                 best_snr: snr_db,
+                best_hops: h.hops,
                 reply_at_ms: now_ms + (RESPONSE_WAIT_SLOTS * self.slot_ms) as u64,
             });
             return;
         }
         if !self.may_forward(h.hops) || h.hops >= MAX_HOPS {
             return;
+        }
+        if let Some(t) = pkt.payload.get(..16)
+            && t[13..15] == RING_MARK
+            && t[12] > 0
+            && h.hops + 1 >= t[12]
+        {
+            // Ring search: nodes `ring` hops away hear it; it goes no further.
+            return;
+        }
+        if self.proxy_reply
+            && self.role == Role::Anchor
+            && h.dest != self.addr
+            && self.routes.get(&h.dest).is_some_and(|r| r.confirmed_ms > 0 && now_ms.saturating_sub(r.confirmed_ms) < PROXY_ROUTE_MS)
+            && let Some(token) = Address::from_slice(pkt.payload)
+        {
+            // Answer for the target: the requester's route ends at us, and
+            // we forward along our own route (anchor_forward).
+            let back = reversed(&record);
+            let mut payload = Buf::new();
+            let _ = payload.push(record.len() as u8);
+            for pid in &record {
+                let _ = payload.extend_from_slice(&pid.to_be_bytes());
+            }
+            let header = Header::new(PacketType::PathResponse, token).with_path(back);
+            self.stats.proxy_replies += 1;
+            self.emit_routed(&header, &payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
+            return;
+        }
+        if self.boundary
+            && self.role == Role::Relay
+            && self.hears_repeater(now_ms)
+            && let Some(&prev) = record.last()
+        {
+            if self.is_repeater_neighbor(prev, now_ms) {
+                // From the repeater side: into the uncovered side only for
+                // a destination known to be there, or on the second request
+                // for it (an Ethernet bridge floods unknown destinations;
+                // we do so only when the first try found nothing).
+                if !self.uncovered.contains(&h.dest) {
+                    self.inward_dropped.retain(|(_, t)| now_ms.saturating_sub(*t) < INWARD_REPEAT_MS);
+                    if let Some(i) = self.inward_dropped.iter().position(|(a, _)| *a == h.dest) {
+                        self.inward_dropped.remove(i);
+                    } else {
+                        if self.inward_dropped.is_full() {
+                            self.inward_dropped.remove(0);
+                        }
+                        let _ = self.inward_dropped.push((h.dest, now_ms));
+                        return;
+                    }
+                }
+            } else if self.neighbors.get(prev).is_some_and(|n| n.hears_repeater == Some(true)) {
+                // From a covered neighbor: the repeater side has it already.
+                return;
+            }
         }
         let mut record = record;
         if self.role == Role::Anchor && !record.is_empty() {
@@ -1659,7 +2215,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             return;
         }
         let mut header = Header::new(PacketType::PathRequest, h.dest).with_path(record);
-        header.hops = h.hops + 1;
+        header.hops = h.hops + 1 + (self.weak_hop_penalty && snr_db < self.weak_snr_db) as u8;
         let delay = self.flood_delay_ms(snr_db);
         self.stats.forwarded += 1;
         self.emit_flood(&header, pkt.payload, delay, out);
@@ -1743,7 +2299,9 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 if !self.dedup.insert(id) {
                     return;
                 }
-                let msg_id = self.awaiting.remove(i).msg_id;
+                let a = self.awaiting.remove(i);
+                let msg_id = a.msg_id;
+                self.routes.confirm(&a.dest, now_ms);
                 let _ = out.push(Action::Acked { msg_id });
                 self.carry_delivered_notice(msg_id, false, now_ms, out);
             }
@@ -1801,11 +2359,25 @@ impl<const R: usize, const D: usize> Router<R, D> {
     }
 
     fn remember_anchor(&mut self, key: Address, target: Address, back: Path, now_ms: u64) {
+        self.remember_anchor_as(key, target, back, now_ms, false);
+    }
+
+    fn remember_anchor_as(&mut self, key: Address, target: Address, back: Path, now_ms: u64, forward: bool) {
+        // Forwards that were never acknowledged: our route to their target
+        // is suspect (it is looked for again next time).
+        // Only with `drop_unacked_routes` (or when we answer from routes).
+        let dead: heapless::Vec<Address, MAX_ANCHORED> =
+            if self.proxy_reply || self.drop_unacked_routes { self.anchored.iter().filter(|a| a.forward && a.until_ms <= now_ms).map(|a| a.target).collect() } else { heapless::Vec::new() };
+        for t in dead {
+            if self.routes.get(&t).is_some_and(|r| r.confirmed_ms < now_ms.saturating_sub(self.anchor_ttl_ms)) {
+                self.routes.remove(&t);
+            }
+        }
         self.anchored.retain(|a| a.until_ms > now_ms && a.key != key);
         if self.anchored.is_full() {
             self.anchored.remove(0);
         }
-        let _ = self.anchored.push(Anchored { key, target, back, until_ms: now_ms + ANCHOR_TTL_MS });
+        let _ = self.anchored.push(Anchored { key, target, back, until_ms: now_ms + self.anchor_ttl_ms, forward });
     }
 
     /// Reply to a request we split: learn the onward route to the target and send
@@ -1826,6 +2398,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             path: onward,
             last_seen_ms: now_ms,
             learned_ms: now_ms,
+            confirmed_ms: 0,
         });
         let first = reversed(&a.back);
         let mut payload = Buf::new();
@@ -1848,6 +2421,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
             return;
         }
         let a = self.anchored.swap_remove(i);
+        if a.forward {
+            // The message we forwarded got through: the route works.
+            self.routes.confirm(&a.target, now_ms);
+        }
         let header = Header::new(h.ptype, a.key).with_path(a.back);
         self.stats.forwarded += 1;
         self.emit_routed(&header, pkt.payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
@@ -1864,7 +2441,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         if !self.dedup.insert(id) {
             return;
         }
-        self.remember_anchor(ack_token(id), h.dest, reversed(path), now_ms);
+        self.remember_anchor_as(ack_token(id), h.dest, reversed(path), now_ms, true);
         let header = Header::new(h.ptype, h.dest).with_path(route);
         self.stats.forwarded += 1;
         self.emit_routed(&header, pkt.payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
@@ -1880,6 +2457,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             path,
             last_seen_ms: now_ms,
             learned_ms: now_ms,
+            confirmed_ms: 0,
         });
     }
 
@@ -1891,6 +2469,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             path: path.clone(),
             last_seen_ms: now_ms,
             learned_ms: now_ms,
+            confirmed_ms: 0,
         });
         let _ = out.push(Action::RouteLearned { dest: target, hops });
         // Trace routes that were waiting for the route.
@@ -1913,10 +2492,16 @@ impl<const R: usize, const D: usize> Router<R, D> {
         }
     }
 
-    fn on_flood(&mut self, pkt: &Packet, snr_db: i8, out: &mut Actions) {
+    fn on_flood(&mut self, pkt: &Packet, snr_db: i8, now_ms: u64, out: &mut Actions) {
         let h = &pkt.header;
         // Announces always go to the app, so it can verify and remember the key.
-        if h.dest == self.addr || self.channels.contains(&h.dest) || h.ptype == PacketType::Announce
+        if h.ptype == PacketType::Announce {
+            self.note_heard_hops(h.dest, h.hops, now_ms);
+        }
+        // Key requests too: the app knows whether it can answer.
+        if h.dest == self.addr
+            || self.channels.contains(&h.dest)
+            || matches!(h.ptype, PacketType::Announce | PacketType::KeyRequest | PacketType::MailSync)
         {
             deliver(pkt, out);
         }
@@ -1925,7 +2510,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         }
         let local = matches!(
             h.ptype,
-            PacketType::Channel | PacketType::Announce | PacketType::Probe
+            PacketType::Channel | PacketType::Announce | PacketType::Probe | PacketType::KeyRequest | PacketType::MailSync
         );
         // On low battery only the most important things are forwarded.
         let allowed = match self.energy {
@@ -1933,7 +2518,17 @@ impl<const R: usize, const D: usize> Router<R, D> {
             Energy::Low => !local,
             Energy::Critical => false,
         };
-        let scope = if local { LOCAL_SCOPE } else { MAX_HOPS };
+        let scope = if h.ptype == PacketType::MailSync {
+            crate::mail::MAIL_SCOPE
+        } else if h.ptype == PacketType::Announce {
+            // A moving node's key is needed far ahead of it: its announces
+            // keep the full local scope.
+            if announce_is_mobile(pkt.payload) { LOCAL_SCOPE } else { self.announce_scope }
+        } else if local {
+            LOCAL_SCOPE
+        } else {
+            MAX_HOPS
+        };
         if !allowed || h.hops >= scope || !self.forwards_region(h.region) {
             return;
         }
@@ -1943,6 +2538,16 @@ impl<const R: usize, const D: usize> Router<R, D> {
         self.stats.forwarded += 1;
         self.emit_flood(&header, pkt.payload, delay, out);
     }
+}
+
+/// Does an announce say its sender is mobile (role flags in the app data,
+/// which starts at byte 69: keys (64) | timestamp (4) | length (1))?
+fn announce_is_mobile(payload: &[u8]) -> bool {
+    let Some(&n) = payload.get(68) else { return false };
+    payload
+        .get(69..69 + n as usize)
+        .and_then(|d| crate::appdata::parse(d).role_flags)
+        .is_some_and(|f| f & crate::appdata::ROLE_MOBILE != 0)
 }
 
 /// Delivers the packet to the app. A stamp is removed first, so the app sees the same
@@ -2736,6 +3341,136 @@ mod tests {
     }
 
     const REP: u16 = 0x0303;
+
+    #[test]
+    fn hello_tells_neighbors_role_coverage_and_bridge_choice() {
+        let mut a = node(2, Role::Relay);
+        a.hello = true;
+        a.mobile = true;
+        a.note_role(REP, Role::Repeater, None, 0, 5, 0);
+        // The first tick plans the first hello within the shortest interval.
+        let _ = a.tick(0);
+        let first = a.next_deadline().unwrap();
+        assert!(first <= HELLO_MIN_MS);
+        let out = a.tick(first);
+        let sent = transmits(&out);
+        assert_eq!(sent.len(), 1, "one hello");
+        let mut b = node(3, Role::Client);
+        b.on_receive(&sent[0], 5, 100);
+        let n = b.neighbors.get(2).expect("a is a neighbor now");
+        assert_eq!(n.role, Some(Role::Relay));
+        assert_eq!(n.hears_repeater, Some(true));
+        assert!(b.bridges_heard(100) == 1, "a relay that hears a repeater is a bridge");
+        // Hellos are never forwarded.
+        let mut r = node(4, Role::Repeater);
+        assert!(transmits(&r.on_receive(&sent[0], 5, 100)).is_empty());
+    }
+
+    #[test]
+    fn hello_trickle_doubles_and_resets_on_change() {
+        let mut a = node(2, Role::Client);
+        a.hello = true;
+        let mut t = 0;
+        let mut gaps = Vec::new();
+        let mut last = 0;
+        for _ in 0..6 {
+            t = a.next_deadline().unwrap().max(t);
+            if !transmits(&a.tick(t)).is_empty() {
+                gaps.push(t - last);
+                last = t;
+            }
+        }
+        assert!(gaps.len() >= 4);
+        assert!(gaps[3] > gaps[1], "intervals grow: {gaps:?}");
+        // A role change brings the next hello forward to within HELLO_MIN_MS.
+        a.set_role(Role::Relay);
+        let _ = a.tick(t + 1);
+        assert!(a.next_deadline().unwrap() <= t + 1 + HELLO_MIN_MS);
+    }
+
+    #[test]
+    fn ring_search_stops_at_the_ring_and_the_retry_goes_everywhere() {
+        let mut a = node(2, Role::Client);
+        a.ring = 3;
+        // Heard right next to us: ring = 0 + 2 hops of margin = 2.
+        a.note_heard_hops(Address([0x66; 16]), 0, 0);
+        let out = a.send_direct(Address([0x66; 16]), b"hi", [5; 16], 0).unwrap().1;
+        let first = transmits(&out);
+        assert_eq!(first.len(), 1);
+        // Hop 1 forwards (hops 0 -> 1), hop 2 must not.
+        let mut r1 = node(3, Role::Repeater);
+        let f1 = transmits(&r1.on_receive(&first[0], 5, 10));
+        assert_eq!(f1.len(), 1, "hop 1 forwards");
+        let mut r1b = node(7, Role::Repeater);
+        assert!(transmits(&r1b.on_receive(&f1[0], 5, 20)).is_empty(), "ring 2: hop 2 is the edge");
+        // A target never heard: no ring at all.
+        let mut c = node(8, Role::Client);
+        c.ring = 3;
+        let far = transmits(&c.send_direct(Address([0x67; 16]), b"x", [6; 16], 0).unwrap().1);
+        let mut q = node(9, Role::Repeater);
+        let q1 = transmits(&q.on_receive(&far[0], 5, 10));
+        let mut q2 = node(10, Role::Repeater);
+        assert_eq!(transmits(&q2.on_receive(&q1[0], 5, 20)).len(), 1, "unknown target: no ring");
+        // After RING_RETRY_MS the request is repeated without a limit.
+        let retry = transmits(&a.tick(RING_RETRY_MS + 1));
+        assert_eq!(retry.len(), 1);
+        let mut r2 = node(4, Role::Repeater);
+        assert_eq!(transmits(&r2.on_receive(&retry[0], 5, RING_RETRY_MS + 10)).len(), 1, "the retry is not ring-limited");
+    }
+
+    #[test]
+    fn mail_sync_travels_two_hops_and_hello_names_recipients() {
+        let mut a = node(2, Role::Client);
+        let sent = transmits(&a.request_mail(Some(6), &[1, 2]));
+        let mut r1 = node(3, Role::Repeater);
+        let out = r1.on_receive(&sent[0], 5, 10);
+        assert!(out.iter().any(|x| matches!(x, Action::Deliver { ptype: PacketType::MailSync, .. })));
+        let fwd = transmits(&out);
+        assert_eq!(fwd.len(), 1, "first hop forwards");
+        let mut r2 = node(4, Role::Repeater);
+        let out2 = r2.on_receive(&fwd[0], 5, 20);
+        let fwd2 = transmits(&out2);
+        assert_eq!(fwd2.len(), 1, "second hop forwards");
+        let mut r3 = node(5, Role::Repeater);
+        assert!(transmits(&r3.on_receive(&fwd2[0], 5, 30)).is_empty(), "not past MAIL_SCOPE");
+        // A post office names node 2 in its hello: node 2 gets the hint.
+        let mut po = node(6, Role::Repeater);
+        po.hello = true;
+        po.mail_class = crate::mail::CLASS_LARGE;
+        let _ = po.mail_waiting.push(2);
+        let _ = po.tick(0);
+        let t = po.next_deadline().unwrap();
+        let hello = transmits(&po.tick(t));
+        assert_eq!(hello.len(), 1);
+        a.on_receive(&hello[0], 5, t + 1);
+        assert!(a.take_mail_hint());
+        assert!(!a.take_mail_hint(), "taken once");
+        assert_eq!(a.best_post_office(t + 1).map(|(id, _, c)| (id, c)), Some((6, crate::mail::CLASS_LARGE)));
+    }
+
+    #[test]
+    fn key_request_is_delivered_and_forwarded_locally() {
+        let mut a = node(2, Role::Client);
+        let want = Address([0x77; 16]);
+        let out = a.request_key(want);
+        let sent = transmits(&out);
+        assert_eq!(sent.len(), 1);
+        let mut r = node(3, Role::Repeater);
+        let out = r.on_receive(&sent[0], 5, 10);
+        assert!(out.iter().any(|x| matches!(x, Action::Deliver { ptype: PacketType::KeyRequest, .. })));
+        assert_eq!(transmits(&out).len(), 1, "a repeater forwards it");
+    }
+
+    #[test]
+    fn boundary_lets_a_repeated_inward_request_through() {
+        let mut b = node(2, Role::Relay);
+        b.boundary = true;
+        b.note_role(REP, Role::Repeater, None, 0, 5, 0);
+        // First inward request for an unknown destination: dropped.
+        assert!(transmits(&b.on_receive(&forwarded_request(1, &[REP]), 5, 10)).is_empty());
+        // The originator tries again (new token): let through.
+        assert_eq!(transmits(&b.on_receive(&forwarded_request(2, &[REP]), 5, 20)).len(), 1);
+    }
 
     #[test]
     fn edge_bridge_needs_a_repeater_and_an_uncovered_forwarder() {

@@ -19,6 +19,33 @@ const QUEUE: usize = 16;
 struct Planned {
     due: Instant,
     req: TxReq,
+    /// Priority, fixed when queued (`maarse_core::qos`).
+    prio: u8,
+}
+
+/// Packets on the bulletin channel jump the queue, but only this many per
+/// minute: the channel key is public, so anyone can post junk there, and a
+/// flood of it must not push everything else aside. Real alerts are a few
+/// packets; the rest goes at normal channel priority.
+const BOOSTS_PER_MIN: u8 = 8;
+
+struct BoostQuota {
+    window: Instant,
+    used: u8,
+}
+
+impl BoostQuota {
+    fn take(&mut self) -> bool {
+        let now = Instant::now();
+        if now >= self.window + Duration::from_secs(60) {
+            self.window = now;
+            self.used = 0;
+        }
+        self.used < BOOSTS_PER_MIN && {
+            self.used += 1;
+            true
+        }
+    }
 }
 
 /// Small xorshift for backoff (does not need to be cryptographic).
@@ -110,6 +137,7 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
     let mut queue: heapless::Vec<Planned, QUEUE> = heapless::Vec::new();
     // Signed bulletins go before other channel traffic (see maarse_core::qos).
     let urgent = maarse_crypto::bulletin::channel();
+    let mut boost = BoostQuota { window: Instant::now(), used: 0 };
     let mut buf = [0u8; 255];
 
     loop {
@@ -118,7 +146,7 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             queue.retain(|q| q.req.id != id);
         }
         while let Ok(req) = RADIO_TX.try_receive() {
-            plan(&mut queue, req, &urgent);
+            plan(&mut queue, req, &urgent, &mut boost);
         }
         RSTATS.tx_queue.store(queue.len() as u32, Relaxed);
         RSTATS
@@ -133,7 +161,7 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             .iter()
             .enumerate()
             .filter(|(_, q)| q.due <= now)
-            .min_by_key(|(_, q)| (maarse_core::qos::priority_with(&q.req.packet, &urgent), q.due))
+            .min_by_key(|(_, q)| (q.prio, q.due))
             .map(|(i, _)| i)
         {
             let q = queue.swap_remove(i);
@@ -167,6 +195,7 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                 let _ = queue.push(Planned {
                     due: Instant::now() + Duration::from_millis(back),
                     req: q.req,
+                    prio: q.prio,
                 });
             } else if !duty.try_consume(now_ms, air) {
                 RSTATS.duty_deferred.fetch_add(1, Relaxed);
@@ -174,6 +203,7 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                 let _ = queue.push(Planned {
                     due: Instant::now() + Duration::from_millis(wait),
                     req: q.req,
+                    prio: q.prio,
                 });
             } else {
                 led(true);
@@ -251,7 +281,7 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             Either4::First(Err(_)) => {
                 RSTATS.rx_err.fetch_add(1, Relaxed);
             }
-            Either4::Second(req) => plan(&mut queue, req, &urgent),
+            Either4::Second(req) => plan(&mut queue, req, &urgent, &mut boost),
             Either4::Third(cfg) => {
                 let _ = lora.enter_standby().await;
                 if let Some(np) = params(lora, cfg) {
@@ -275,7 +305,21 @@ fn stage(n: u32) {
     RSTATS.stage.store(n, Relaxed);
 }
 
-fn plan(queue: &mut heapless::Vec<Planned, QUEUE>, req: TxReq, urgent: &maarse_core::Address) {
+fn plan(queue: &mut heapless::Vec<Planned, QUEUE>, req: TxReq, urgent: &maarse_core::Address, boost: &mut BoostQuota) {
+    let plain = maarse_core::qos::priority(&req.packet);
+    let mut prio = maarse_core::qos::priority_with(&req.packet, urgent);
+    if prio != plain && !boost.take() {
+        prio = plain;
+    }
+    // The same packet already waiting (a retransmission while the first copy
+    // is still queued, e.g. behind the duty cycle): one copy is enough. Each
+    // extra copy delayed the queue further and made the previous hop
+    // retransmit again (maarse-sim: thousands of copies of one message on a
+    // repeater that was out of duty cycle).
+    if req.id != 0 && queue.iter().any(|q| q.req.id == req.id && q.req.packet == req.packet) {
+        RSTATS.dropped.fetch_add(1, Relaxed);
+        return;
+    }
     let due = Instant::now() + Duration::from_millis(req.delay_ms as u64);
     if queue.is_full() {
         // Full queue: drop the least urgent packet, the latest of those. If the
@@ -285,14 +329,14 @@ fn plan(queue: &mut heapless::Vec<Planned, QUEUE>, req: TxReq, urgent: &maarse_c
         let worst = queue
             .iter()
             .enumerate()
-            .max_by_key(|(_, q)| key(maarse_core::qos::priority_with(&q.req.packet, urgent), q.due))
-            .map(|(i, q)| (i, key(maarse_core::qos::priority_with(&q.req.packet, urgent), q.due)));
+            .max_by_key(|(_, q)| key(q.prio, q.due))
+            .map(|(i, q)| (i, key(q.prio, q.due)));
         match worst {
-            Some((i, k)) if k >= key(maarse_core::qos::priority_with(&req.packet, urgent), due) => {
+            Some((i, k)) if k >= key(prio, due) => {
                 queue.swap_remove(i);
             }
             _ => return,
         }
     }
-    let _ = queue.push(Planned { due, req });
+    let _ = queue.push(Planned { due, req, prio });
 }

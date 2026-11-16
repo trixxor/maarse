@@ -206,6 +206,8 @@ const CFG_ADDR: u32 = MAARSE_PART;
 const MAIL_START: u32 = MAARSE_PART + 0x1000;
 /// Meta page for firmware updates (manifest + progress), see ota.rs.
 const OTA_META: u32 = MAARSE_PART + 0x3000;
+/// Known contacts (4 KB), kept across reboots.
+const KNOWN_ADDR: u32 = MAARSE_PART + 0x4000;
 
 /// Restarts the board when the node asks (new Wi-Fi settings), after a
 /// short pause so the reply reaches the client.
@@ -341,7 +343,7 @@ async fn main(spawner: Spawner) {
     static MAIL_BUF: StaticCell<[u8; MAIL_AREA]> = StaticCell::new();
     let mut storage = FlashStorage::new(p.FLASH);
     let ota_cfg = ota::config(&mut storage, OTA_META);
-    let mut flash = FlashSettings::new(storage, CFG_ADDR, MAIL_START, MAIL_BUF.init([0xFF; MAIL_AREA]));
+    let mut flash = FlashSettings::new(storage, CFG_ADDR, MAIL_START, MAIL_BUF.init([0xFF; MAIL_AREA])).with_known(KNOWN_ADDR);
     if let Some(c) = ota_cfg {
         flash = flash.with_ota(c);
     }
@@ -478,7 +480,8 @@ async fn node_task(
     wifi_on: bool,
 ) {
     static NODE: StaticCell<Node> = StaticCell::new();
-    let node = NODE.init_with(|| Node::new(identity, rng, flash, radio_cfg, radio_ok));
+    // Built in place: built on the stack and copied, it left 4.5 KB of stack.
+    let node = Node::new_in(NODE.uninit(), identity, rng, flash, radio_cfg, radio_ok);
     esp_println::println!(
         "\r\nboot: node ready; stack never used {} B, heap free {} B, wifi {}\r",
         stack_never_used(),

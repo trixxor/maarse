@@ -140,8 +140,37 @@ Fixed header length `FIXED_HEADER = 18`. The full header length is
 | 9 | `Deposit` | source path | recipient address (16) \| sealed message | to a mailbox; acknowledged end to end |
 | 10 | `Datagram` | source path | IP tunnel datagram | per-hop acks only, no end-to-end ack |
 | 11 | `Carry` | one-element path, or none | carry handoff or delivered notice (section 5.10) | never flooded |
+| 12 | `Hello` | none, `dest` = sender | `role (1) \| flags (1) \| chosen bridge (PathId u16 BE, 0xFFFF = none)` | never forwarded (`hops` 0) |
+| 13 | `KeyRequest` | none, `dest` = the node asked for | `requester (PathId u16 BE) \| nonce (u16 BE)` | local flood (`LOCAL_SCOPE`) |
+| 14 | `MailSync` | none, `dest` = the asker | `home post office (PathId u16 BE) \| have IDs (u32 BE, at most 8) \| nonce (u16 BE)` \| stamp (5) | flood of `MAIL_SCOPE` = 2 hops (section 8.1) |
+| 15 | `Summary` | none, `dest` = the sender | Bloom filter (128 bytes, `bloom::BYTES`) | trunk summary; never forwarded (`hops` 0) |
 
-Types 12–15 are unassigned; a decoder rejects them (`DecodeError::UnknownType`).
+**Hello** is sent on a Trickle timer (RFC 6206): 10 s after something it
+says changed (role, "hears a repeater", chosen bridge, motion, or for a moving
+node the repeater it hears), then at doubling intervals up to 4 min for
+repeaters and anchors, 10 min for relays and nodes without coverage, and
+30 min for covered clients. Receivers update the neighbor table (role,
+coverage, bridge choice, mobile flag); bridge rules count a neighbor's hello
+information for 35 min (`INFO_WINDOW_MS`). It carries no identity and no
+proof of work, so neighbors learn about role changes in seconds instead of
+from announces 12 h apart.
+
+**KeyRequest** asks "who is `dest`?". Every node delivers it to its app: the
+node asked for announces (at most every 30 s), and a host answers with the
+announce it keeps for `dest` when the request came over its radio, sending it
+on the radio only. Repeaters and relays forward it like a channel message.
+
+**Summary** is sent by a host every 10 minutes on each long-distance LoRa
+trunk (`--trunk`): a Bloom filter (`maarse-core/src/bloom.rs`, 1024 bits,
+3 hashes from a mixed FNV-1a of the address) of the nodes heard on its side
+by radio. The far end lets a path or key request across the trunk only for a
+destination in the filter (or on a second request within the repeat window),
+so requests for nodes on the near side stay off the trunk. A summary older
+than 30 minutes is ignored. About 2 % false positives at 100 addresses; a
+false positive only lets one request cross.
+
+All 16 packet types (0–15) are now assigned. A `KeyRequest` payload now ends
+with a stamp too (section 4.3).
 
 ### 3.3 Limits
 
@@ -212,9 +241,13 @@ destination; the signature must verify.
 | `ANNOUNCE_FIXED` | 69 (keys + timestamp + length byte) | same |
 | `MAX_APP_DATA` | 255 − 18 − 69 − 64 − 5 = **99** | same |
 
-Announce intervals are implementation choices: `maarse-host` every 600 s
-(`ANNOUNCE_EVERY`, `maarse-host/src/node.rs`), firmware every 900 s
-(`ANNOUNCE_EVERY`, `firmware/common/src/node.rs`).
+Announce intervals are implementation choices. `maarse-host` announces every
+600 s (`ANNOUNCE_EVERY`, `maarse-host/src/node.rs`). The firmware announces
+5-35 s after a start (at random), then every 15 minutes
+(`RadioConfig::BOOT_ANNOUNCE_S`) until it hears a repeater or an anchor, and
+from then on at the interval in the radio settings
+(`RadioConfig::announce_interval_s`, default 12 h), each time ±10 % at
+random (`firmware/common/src/node.rs`).
 
 ### 4.2 App data fields
 
@@ -227,8 +260,23 @@ Source: `maarse-core/src/appdata.rs`.
 0x04 | len | battery mV (u16 LE) | flags (1) | energy (1) | uptime s (u32 LE) | temp (i16 LE, 0.1 °C)
                                                                          telemetry (len 10)
 0x05 | len | UTF-8 name (at most MAX_NAME = 24 bytes)                    display name
-0x06 | len | role (1) | flags (1)                                        role (len 2)
+0x06 | len | role (1) | flags (1) [| bridge (PathId, u16 BE)]          role (len 2, or 4 with the chosen edge bridge)
+0x07 | len | capabilities (1)                                           capabilities (len 1)
 ```
+
+Capabilities (`APP_CAPS`): bit 0 `CAP_TEXTZ` (reads compressed text, content
+type `TEXT_Z`, section 7.1), bit 1 `CAP_BUNDLE` (reads mail bundles,
+`OP_BUNDLE`, section 8.1). A sender compresses text and bundles mail only for
+a recipient whose announce has the bit; older nodes skip the field by its
+length.
+
+**Announce scope.** Forwarders pass an announce on at most
+`ANNOUNCE_SCOPE` = 3 hops (`Router::announce_scope`), except an announce
+whose role flags carry `ROLE_MOBILE` (read from the app data at byte 69 of
+the payload), which keeps `LOCAL_SCOPE` = 8. Nodes further away ask for a
+key with a `KeyRequest` when they need it, answered by the node or a host's
+announce cache. In maarse-sim this cut airtime by 16–32 % in every scenario
+with the same or better delivery (docs/denmark/README.md).
 
 | Constant | Value |
 | --- | --- |
@@ -238,7 +286,17 @@ Source: `maarse-core/src/appdata.rs`.
 | `APP_TELEMETRY` | 0x04 |
 | `APP_NAME` | 0x05 |
 | `APP_ROLE` | 0x06 |
+| `APP_CAPS` | 0x07 |
 | `ROLE_HEARS_REPEATER` | 0x01 (role flags bit 0: "I hear a repeater or anchor directly") |
+
+Role flags: bit 0 `ROLE_HEARS_REPEATER` (the sender hears a repeater or
+anchor directly), bits 1-2 the number of edge bridges heard (0-3; hellos send
+0), bit 3 `ROLE_MOBILE` (the sender is moving: routes to it are looked up
+afresh after `MOBILE_ROUTE_MS`, 5 minutes, and it never acts as an edge
+bridge). The optional bytes 2-3 name the edge bridge the sender has
+chosen (a node without coverage relies on the nearest relay that hears a
+repeater, see GUIDE "Edge bridges in role auto"); receivers that read only
+role and flags are unaffected.
 
 Parsing rules (`appdata::parse`):
 
@@ -266,7 +324,8 @@ and truncates at a character boundary.
 
 Source: `maarse-core/src/stamp.rs`.
 
-Announces and path requests must end with a stamp:
+Announces, path requests, key requests, mail syncs and deposits must end
+with a stamp:
 
 ```text
 ... payload ... | stamp version (1) | nonce (u32 BE)
@@ -282,13 +341,18 @@ has at least `D` leading zero bits. Binding:
 
 * `Announce`: payload bytes 64..68 (the timestamp).
 * `PathRequest`: payload bytes 0..16 (the reply token).
+* `KeyRequest`, `MailSync`, `Deposit`: the whole payload before the stamp
+  (all small), so a stamp cannot be moved to another request. A deposit is
+  stamped before its message ID is computed, so the end-to-end ack covers
+  the stamp. Difficulty 8 bits, as a path request: nothing for one message,
+  costly for someone flooding requests or filling post offices.
 
 | Constant | Value |
 | --- | --- |
 | `STAMP_VERSION` | 1 |
 | `STAMP_LEN` | 5 |
 | `ANNOUNCE_BITS` | 12 (version 1) |
-| `PATH_REQUEST_BITS` | 8 (version 1) |
+| `PATH_REQUEST_BITS` | 8 (version 1; also key requests, mail syncs, deposits) |
 
 The difficulty is looked up by `(version, type)` in `difficulty()`; an
 unknown version is rejected. Nodes drop announces and path requests with a
@@ -695,6 +759,59 @@ configured trusted identities and the signature is that identity's. Everything
 else on the channel must not be shown as a bulletin. Room for text: 128 bytes
 (126 with a region).
 
+v1 bulletins have no serial and no expiry, so an old one can be sent again;
+hosts now treat a v1 bulletin as an alert valid for 24 hours from its
+timestamp, shown once (section 6.6.1). New senders use alerts v2.
+
+#### 6.6.1 Alerts v2
+
+Source: `maarse-crypto/src/alert.rs`, host side `maarse-host/src/node/alerts.rs`.
+Design and threat model: `docs/maybe/alerting-review.html`. Still a channel
+message on `#bulletin` (old repeaters forward it unchanged). The seal's
+sender field is the **issuer key**'s address: a separate Ed25519 key used
+only for alerts, never the node identity.
+
+```text
+alert:  0xB2 | flags | serial (u32 BE) | issued (u32 BE, Unix s) | expires (u16 BE, minutes)
+        | event (1) | severity (1) | [reference serial (u32 BE), update and cancel only]
+        | [area: lat (i32 BE) | lon (i32 BE), 1e-5 degrees | radius (u16 BE, 100 m)]
+        | text (UTF-8) | Ed25519 signature (64)
+flags:  bits 0-1 status (0 actual, 1 exercise, 2 test, 3 system)
+        bits 2-3 kind (0 alert, 1 update, 2 cancel); bit 4 area present
+signed: "maarse/alert/v2" | bulletin channel address (16) | issuer address (16) | all bytes before the signature
+
+cert:   0xC1 | issuer public identity (64) | not_after (u32 BE) | events (u16 BE, bit per event)
+        | max severity (1) | flags (1, 0) | name length (1) | name (UTF-8, <= 24) | Ed25519 signature (64)
+signed: "maarse/alert-cert/v1" | all bytes before the signature, by a root key
+```
+
+Events: 0 info, 1 evacuate, 2 shelter, 3 fire, 4 flood, 5 drinking water,
+6 chemical, 7 power, 8 weather, 9 missing person. Severity: 0 minor,
+1 moderate, 2 severe, 3 extreme.
+
+Trust: an issuer key configured on the receiver (`--bulletin-key`), or an
+issuer whose certificate (sent on the same channel and cached) is signed by a
+configured root key (`--alert-root`). A certificate limits the issuer to its
+events, a highest severity and a last valid moment (checked against the
+alert's issue time). Update and cancel refer to a serial of the same issuer,
+so an issuer can only cancel its own alerts.
+
+Replay (`ReplayGuard`): every alert expires (`issued + expires`); each
+(issuer, serial) is shown once (256 kept, stored on disk); an issue time more
+than 10 minutes ahead of a known clock is refused; a node without a clock
+uses the newest verified issue time as a lower bound on the time. Serials
+are `max(last + 1, now)`, so they grow even after the state file is lost.
+
+Showing: the host sends `Event::Alert` (companion 0xac), never a channel
+line, and the client draws the alert apart from all chat text, so no message
+can look like a verified alert. Typing on `#bulletin` is refused; alerts are
+issued with `Command::SendAlert` (0x2c) on a host with `--issuer-key`.
+
+Radio priority: packets on `#bulletin` go before other channel traffic, but
+the firmware boosts at most 8 per minute (`BOOSTS_PER_MIN`); the channel key
+is public, so junk there must not push other traffic aside. Repeaters do not
+yet verify alerts before boosting them (they have no trust anchors).
+
 ### 6.7 Firmware update signing
 
 Source: `maarse-crypto/src/ota.rs`. Manifest (`MANIFEST_LEN` = 112):
@@ -755,6 +872,14 @@ The decrypted plaintext of a `Data` message starts with a content type byte:
 | 0x05 | `PAGE_REQUEST` | page path (UTF-8, at most `MAX_PAGE_PATH` = 60 bytes) |
 | 0x06 | `CALL` | call signalling or Opus audio; format belongs to the clients; TCP only |
 | 0x07 | `IP` | IP tunnel session setup (see `maarse-host/src/tunnel.rs`); TCP, or LoRa with `--tun-lora` |
+| 0x08 | `TEXT_Z` | text compressed with `maarse-core/src/textz.rs`; only to a recipient announcing `CAP_TEXTZ` |
+
+`TEXT_Z` is a static codebook of about 230 common Danish and English
+fragments (after SMAZ): each byte is a codebook index, `ESC` (254) + one
+literal byte, or `RUN` (255) + length + literal bytes. Text is compressed
+only when that makes it shorter; the receiver expands it to `TEXT` before
+anything else looks at it. Short chat messages shrink to about 56 % of their
+size (`textz` test).
 
 Unknown types are reported as `Content::Unknown` and ignored.
 
@@ -792,27 +917,80 @@ its own values (`FILE_WINDOW` = 8, `CHUNK_TIMEOUT` = 20 s, `FILE_TIMEOUT` =
 
 ## 8. Mailboxes and the backbone
 
-### 8.1 Mailboxes (Deposit)
+### 8.1 Post offices (Deposit, MailSync)
 
-A node may name a mailbox in its announce (app-data field `0x01`). When a
-sender gets no end-to-end ack for a direct message within `DEPOSIT_AFTER` =
-45 s (`maarse-host/src/node.rs`), it sends a `Deposit` packet to the mailbox:
+Source: `maarse-core/src/mail.rs`, `maarse-host/src/node.rs` (post office),
+`firmware/common/src/node.rs` (`mail_step`).
+
+**Who keeps mail.** Post offices say so in their hellos and announces: role
+flags bits 4-5 = class (0 none, 1 small flash, 2 megabytes, 3 a host with a
+disk). Hosts are class 3. Radio nodes are class 0 today: repeaters carry mail
+but do not keep it (8 KB of flash holds 30-40 messages for everyone in range).
+
+**Home post office.** Every node picks the best post office among its
+neighbors (`Router::best_post_office`: highest class, then best SNR) and names
+it in its announce (app-data field `0x01`).
+
+**Dropping mail.** When a direct message has no end-to-end ack within
+`DEPOSIT_AFTER_MS` = 45 s, the sender hands it to **its own** home post office
+(a host keeps it itself), sealed without forward secrecy (static format: a
+ratchet message delivered days later may fall outside the skipped-key window).
 
 ```text
-Deposit payload = recipient address (16) | sealed message (static seal, section 6.2)
+Deposit payload = recipient (16) | op (1) | body
 ```
 
-The static format is always used for mail, because a ratchet message delivered
-days later may fall outside the skipped-key window. The deposit is skipped when
-the mailbox is the recipient itself or `16 + sealed > MAX_DIRECT_PAYLOAD`.
+| op | body | meaning |
+| --- | --- | --- |
+| 0 `STORE` | sealed message | keep it for the recipient |
+| 1 `SYNC` | have IDs (u32 BE each) | deliver the recipient's mail to it, wherever it is |
+| 2 `FETCH` | asker (16) \| have IDs | send the rest to the asker as `STORE` |
+| 3 `DELIVERED` | IDs | delete them |
+| 4 `BUNDLE` | n × (length (1) \| sealed message) | several stored messages, sent to the recipient itself |
 
-The mailbox stores the message keyed by `packet_id(Data, recipient, sealed)`
-and tries to deliver it as an ordinary `Data` message (`send_direct`) when the
-recipient's announce is heard or a route exists. The recipient's duplicate
-filter drops double deliveries. Host limits: `MAILBOX_PER_RECIPIENT` = 100
-messages, `MAILBOX_TTL` = 7 days. Firmware nodes keep a small flash mailbox.
-Files are never deposited this way; `maarse-host` has a separate file mailbox
-at the sender's host.
+`BUNDLE` goes only to a recipient announcing `CAP_BUNDLE`: a host with two
+or more messages waiting packs as many as fit in one packet, and one
+end-to-end ack covers them all (then `DELIVERED` goes to the replicas). The
+recipient opens each sealed message as if it had arrived as `Data`.
+Deposits carry a stamp (section 4.3).
+
+A mail ID is the top 32 bits of `packet_id(Data, recipient, sealed)`. A
+payload without a valid op byte is taken as the old format `recipient |
+sealed` and stored.
+
+**Copies.** A host that takes a message keeps it and sends copies to the
+recipient's **three replica hosts**: the `REPLICAS` = 3 highest rendezvous
+scores `packet_id(Deposit, host, recipient)` over the hosts in its DHT table
+(and itself if it is public), over the DHT's TCP requests (section 8.4), never
+over radio. Every host computes the same three hosts for a recipient; when a
+host joins or leaves, only the recipients it ranked first move.
+
+**Asking for mail.** A node sends a `MailSync` (packet type 14, scope
+`MAIL_SCOPE` = 2 hops; payload `home (PathId u16 BE, 0xFFFF none) | have IDs
+(at most 8) | nonce (u16)`) when it starts, when its home post office changes,
+when a post office's hello names it, and every 6 hours. A post office that
+holds its mail delivers; the one it named as home also fetches the copies from
+the replicas first. A node whose home post office changed also sends `SYNC`
+to the previous one, which delivers over whatever route reaches the node now
+(LoRa trunks included).
+
+**Mail waiting.** A post office's hello carries up to 4 path IDs of recipients
+with mail waiting (`role | flags | bridge | ids...`), like the traffic
+indication map in a Wi-Fi beacon.
+
+**Presence.** A host that hears a node's announce over its own radio asks the
+node's replicas for mail (at most every 10 minutes per node), as a mobile
+network delivers SMS when a phone registers.
+
+**Delivery and retries.** A post office delivers stored mail as ordinary
+`Data` (`send_direct`); the recipient's duplicate filter drops copies. When
+the delivery is acknowledged, the office tells the replicas `DELIVERED`. An
+office without the backbone retries delivering what it holds after 5, 15 and
+35 minutes, then waits for the recipient to ask; with the backbone, presence
+and syncs deliver (in maarse-sim unlimited retries cost 40 % more airtime). An
+office delivers a message at most once a minute, and a copy that arrives for a
+present recipient is delivered on its own. Limits: 100 messages per
+recipient, 7 days.
 
 ### 8.2 TCP packet links
 
@@ -905,10 +1083,16 @@ response = type (1) | responder ID (16) | body
 | 0x02 | FindNode | target (16) |
 | 0x03 | FindValue | target (16) |
 | 0x04 | Store | record |
+| 0x05 | MailStore | recipient (16) \| length (u16 LE) \| sealed message |
+| 0x06 | MailFetch | recipient (16) \| count (1) \| count × have ID (u32 BE) |
+| 0x07 | MailDelivered | recipient (16) \| count (1) \| count × ID (u32 BE) |
 | 0x81 | Pong | – |
 | 0x82 | Nodes | count (1, at most 16) \| count × (ID (16) \| endpoint (str)) |
 | 0x83 | Value | record |
 | 0x84 | Stored | ok (1) |
+| 0x85 | Mail | count (1) \| count × (length (u16 LE) \| sealed message) |
+
+The three mail requests carry post office copies between hosts (section 8.1).
 
 `FindValue` returns `Value` if the record is stored, otherwise `Nodes`.
 Lookups are iterative (at most 20 rounds, `ALPHA` new contacts per round).
@@ -989,6 +1173,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x29 | GetWifi | – | reply `Wifi` |
 | 0x2a | SetRangeTest | range test config (15) | local only; reply `RangeState` |
 | 0x2b | GetRangeTest | – | reply `RangeState` then `Power` |
+| 0x2c | SendAlert | req (u16) \| AlertMeta \| text | issue a signed alert (host with `--issuer-key`); reply `Sent` with msg_id = serial, firmware replies an error |
 | 0x30 | GetHistory | req (2) \| conv (16) \| before id (u64) \| count (1) | host only |
 | 0x31 | MarkRead | conv (16) \| id (u64) | host only |
 | 0x32 | GetReadState | – | host only |
@@ -1035,6 +1220,12 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0xa9 | RangeRx | see `RangeRx` in `companion.rs` |
 | 0xaa | RangeTx | see `RangeTx` in `companion.rs` |
 | 0xab | Power | see `PowerReport` in `companion.rs` |
+| 0xac | Alert | issuer (16) \| serial (u32) \| issued (u32) \| AlertMeta \| hops (1) \| trust (1) \| name length (1) \| name \| text | a verified alert, shown once (section 6.6.1); trust 0 key, 1 certificate, 2 old v1 bulletin |
+
+`AlertMeta` (little-endian like the rest of the companion protocol):
+status (1) | kind (1) | event (1) | severity (1) | expires minutes (u16) |
+reference serial (u32) | area present (1) [| lat (i32) | lon (i32) |
+radius (u16, 100 m)].
 | 0xb0 | HistoryItem | host only, see `history.rs` |
 | 0xb1 | HistoryEnd | host only |
 | 0xb2 | ReadMark | host only |
@@ -1061,8 +1252,9 @@ Wi-Fi states (`wifi_state`): 0 off, 1 joining, 2 online, 3 linked,
 
 ```text
 radio config (16): freq Hz (u32) | bandwidth Hz (u32) | sf (1) | cr denominator (1)
-                   | tx power dBm (i8) | duty permille (u16) | preamble (u16) | reserved (1)
-EU default: 869 525 000 Hz, 125 kHz, SF9, 4/5, 22 dBm, 100 ‰, preamble 16
+                   | tx power dBm (i8) | duty permille (u16) | preamble (u16)
+                   | announce interval (1, quarter hours; 0 = default 12 h)
+EU default: 869 525 000 Hz, 125 kHz, SF9, 4/5, 22 dBm, 100 ‰, preamble 16, announce 0
 
 sharing (10):      precision (1) | lat (i32, 1e-7°) | lon (i32) | telemetry (1)
 neighbour (15):    path ID (u16) | address prefix (4, zeros = unknown) | SNR (i8)
@@ -1105,7 +1297,7 @@ ignored).
 | Mechanism | What an older node does |
 | --- | --- |
 | Packet version (flags bits 7–6) | Rejects any version ≠ 0. Version `11` is used on purpose for non-Må:rse frames (region hello `0xFF`, range-test beacons `0xD7 'R' 'T'`) so that nodes never forward them. |
-| New packet types | Rejected as unknown (types 12–15 are free). Type 11 (`Carry`) is rejected by nodes from before it existed. |
+| New packet types | Rejected as unknown (type 15 is free; 14 is `MailSync`). Types 11 (`Carry`), 12 (`Hello`) and 13 (`KeyRequest`) are rejected by nodes from before they existed: older nodes simply do not learn from hellos and do not answer key requests. |
 | Region flag (bit 0) | Nodes from before regions reject the packet, so region floods are not forwarded through them; floods without a region are bit-for-bit unchanged. |
 | Delivered notice (`Carry` without path) | Nodes without the notice drop `Carry` packets without a path. |
 | App-data TLVs (type ≥ 0x03) | Skipped by length; receivers read only the bytes they know inside a field. New fields must come after `0x02`. Nodes that predate TLVs stop at the first unknown byte, which is harmless because `0x01`/`0x02` come first. |
@@ -1146,8 +1338,9 @@ Discrepancies found while writing this document. The spec follows the code.
    an encrypted `Data` message.
 6. **Packet type 7 `Probe`.** Documented in `packet.rs` as "coverage
    measurement for the map"; the code uses it only for trace route.
-7. **`RadioConfig::LEN` is 16**, but only 15 bytes are written; byte 15 is
-   always 0. Treat it as reserved.
+7. **`RadioConfig` byte 15** was always 0 (reserved); since 2026-11-15 it is
+   the announce interval in quarter hours, where 0 keeps the default (12 h),
+   so older clients and nodes stay compatible.
 8. **GUIDE Wi-Fi formats.** GUIDE ("Wi-Fi backbone") describes the first
    byte of `SetWifi` and `Wifi` as `enabled`; in the code it is a flags byte
    (bit 0 enabled, bit 1 modem). GUIDE does mention bit 1 elsewhere.

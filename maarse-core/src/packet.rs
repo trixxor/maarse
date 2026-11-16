@@ -66,6 +66,30 @@ pub enum PacketType {
     /// (or to its destination), see `Router` "Carry". Addressed with a
     /// one-element path naming the receiving neighbour; never flooded.
     Carry = 11,
+    /// Neighbor hello (never forwarded, `hops` 0): `dest` is the sender's
+    /// address, payload `role (1) | flags (1) | chosen bridge (PathId, u16
+    /// BE, 0xFFFF = none)`. Sent on a Trickle timer (RFC 6206): soon after
+    /// something changes, then at doubling intervals. Tells neighbors our
+    /// role, whether we hear a repeater, our edge bridge and whether we move,
+    /// without the identity and proof of work of an announce.
+    Hello = 12,
+    /// Key request: "who is `dest`?". A local flood (scope `LOCAL_SCOPE`)
+    /// with payload `requester (PathId, u16 BE) | nonce (u16 BE)`. The
+    /// destination answers with its announce; a node that keeps announces
+    /// (a host) may answer with the stored one.
+    KeyRequest = 13,
+    /// Mail sync: "I am here; do you have mail for me?" A flood of at most
+    /// `mail::MAIL_SCOPE` hops; `dest` is the asker's address, payload its
+    /// home post office (PathId u16 BE, 0xFFFF = none), the IDs of messages
+    /// it already has (u32 BE each, at most 8) and a nonce (u16 BE). Post
+    /// offices that hear it and hold its mail deliver; the home post office
+    /// also fetches the copies (see `mail`).
+    MailSync = 14,
+    /// Trunk summary (never forwarded, `hops` 0): `dest` is the sender, the
+    /// payload a Bloom filter (`bloom::BYTES`) of the nodes heard on its side
+    /// of a long-distance trunk, so the far end sends a request across only
+    /// for a node behind it.
+    Summary = 15,
 }
 
 impl TryFrom<u8> for PacketType {
@@ -85,6 +109,10 @@ impl TryFrom<u8> for PacketType {
             9 => Deposit,
             10 => Datagram,
             11 => Carry,
+            12 => Hello,
+            13 => KeyRequest,
+            14 => MailSync,
+            15 => Summary,
             _ => return Err(DecodeError::UnknownType(v)),
         })
     }
@@ -325,9 +353,10 @@ mod tests {
         buf[0] |= 1 << 6;
         assert_eq!(Packet::decode(&buf), Err(DecodeError::BadVersion(1)));
 
+        // All 16 packet types are in use (15 = Summary); there is no unknown one left.
         let mut buf = encode(&h, b"x").unwrap();
         buf[0] = 15 << 2;
-        assert_eq!(Packet::decode(&buf), Err(DecodeError::UnknownType(15)));
+        assert_eq!(Packet::decode(&buf).map(|p| p.header.ptype), Ok(PacketType::Summary));
 
         let mut buf = encode(&h, b"x").unwrap();
         buf[1] = MAX_HOPS + 1;

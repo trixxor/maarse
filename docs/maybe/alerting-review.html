@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alerting Security Review</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1d1f;--muted:#5f6368;--card:#fff;--line:#e3e0d8;--accent:#2f6f5e;--yes:#2e7d32;--part:#b26a00;--no:#b3261e;--code:#f1efe9}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181a;--fg:#e8e6e1;--muted:#a3a7ad;--card:#202225;--line:#34373b;--accent:#6fc2a8;--yes:#81c784;--part:#ffb74d;--no:#ef9a9a;--code:#2a2c30}}
+:root[data-theme="dark"]{--bg:#17181a;--fg:#e8e6e1;--muted:#a3a7ad;--card:#202225;--line:#34373b;--accent:#6fc2a8;--yes:#81c784;--part:#ffb74d;--no:#ef9a9a;--code:#2a2c30}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:920px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:1.9rem;margin:0 0 4px}
+h2{margin-top:2.4rem;border-bottom:1px solid var(--line);padding-bottom:6px}
+h3{margin-top:1.6rem}
+.sub{color:var(--muted);margin:0 0 24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+.tldr{border-left:4px solid var(--accent)}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:.9em}
+pre{background:var(--code);padding:10px 12px;border-radius:8px;overflow-x:auto;font-size:.85rem;line-height:1.45}
+pre code{background:none;padding:0}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.95rem}
+th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600}
+td.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.v{font-weight:700;white-space:nowrap}
+.yes{color:var(--yes)}.part{color:var(--part)}.no{color:var(--no)}
+.tag{display:inline-block;font-size:.75rem;font-weight:700;padding:0 6px;border-radius:4px;border:1px solid currentColor;white-space:nowrap;vertical-align:1px}
+.ver{color:var(--yes)}.inf{color:var(--part)}.ext{color:var(--muted)}
+ol li,ul li{margin:4px 0}
+.small{color:var(--muted);font-size:.9rem}
+nav ol{columns:2;column-gap:28px;padding-left:20px}
+@media (max-width:600px){nav ol{columns:1}}
+</style>
+</head>
+<body>
+<main>
+<h1>Alerting in Må:rse: what exists, what others do, and how to make it unforgeable</h1>
+<p class="sub">A research review of signed bulletins and area alerts, compared with cell broadcast (EU-Alert, S!RENEN, WEA, ETWS), IPAWS/CAP and mesh systems, with a threat model and ranked recommendations. Written 16 November 2026. No code was changed.</p>
+
+<div class="card">
+<b>How to read the evidence marks.</b>
+<span class="tag ver">Verified</span> means I read it in the repository (file and function named).
+<span class="tag inf">Inferred</span> means a conclusion drawn from the code that I did not run or test.
+<span class="tag ext">External</span> means a claim about another system, with a source link. Some external sources are secondary (news, Wikipedia); this is noted where it matters.
+Byte counts are from constants in the code. Airtime numbers come from the Semtech formula with the firmware defaults (<code>RadioConfig::EU_DEFAULT</code>: 125 kHz, CR 4/5, 16-symbol preamble, explicit header, CRC on).
+</div>
+
+<div class="card tldr">
+<strong>Short version.</strong>
+Må:rse already has the hardest piece that cell broadcast never got: <b>every bulletin carries an Ed25519 signature that any receiver can check offline</b>. Cell broadcast alerts (EU-Alert, S!RENEN, WEA) are not authenticated end to end, and researchers have spoofed them with cheap radios. That is a real advantage.
+<br><br>
+Around that signature, though, almost everything else is missing. There is <b>no replay protection</b> (the signed timestamp is never checked), <b>no expiry, no alert ID, no cancel</b>, and <b>no status flag</b> to tell a real alert from a test or exercise. Trust is a flat list of keys typed on the command line, with <b>no hierarchy, scope or revocation</b>. The <b>signing key is the node's everyday identity</b>, and the host signs <i>anything</i> typed into the <code>#bulletin</code> chat with no confirmation. The "verified" mark is <b>plain text in the message</b> (<code>[Verified bulletin] …</code>), so anyone can type the same thing on another channel. Firmware, Android and the web client do not verify at all. Repeaters give <code>#bulletin</code> packets top priority <b>without verifying them</b>, so a forger gets the fast lane.
+<br><br>
+The fix fits LoRa. A compact alert v2 format (ID, expiry, status, event, severity, area and signature) leaves about 105–109 bytes of text in one 255-byte packet. Add a two-level key hierarchy with short-lived issuer certificates (about 156 bytes, sent once and cached), self-revocation, verify-before-prioritise on repeaters, and a two-person rule for the most severe alerts. Hawaii in 2018 shows that operator error is a bigger risk than crypto.
+</div>
+
+<nav class="card"><b>Contents</b>
+<ol>
+<li><a href="#today">What exists today</a></li>
+<li><a href="#gaps">Gaps found in the code</a></li>
+<li><a href="#world">Real-world systems</a></li>
+<li><a href="#attacks">Known attacks and incidents</a></li>
+<li><a href="#best">What works best</a></li>
+<li><a href="#threats">Threat model for Må:rse</a></li>
+<li><a href="#design">Proposed design: alert v2</a></li>
+<li><a href="#budget">Packet and airtime budget</a></li>
+<li><a href="#recs">Ranked recommendations</a></li>
+<li><a href="#scope">Out of scope</a></li>
+<li><a href="#open">Open questions for the owner</a></li>
+<li><a href="#sources">Sources</a></li>
+</ol></nav>
+
+<!-- ============================================================ -->
+<h2 id="today">1. What exists today</h2>
+
+<h3>1.1 Wire format <span class="tag ver">Verified</span></h3>
+<p>Source: <code>maarse-crypto/src/bulletin.rs</code>, protocol spec section 6.6, GUIDE "Signed bulletins". A bulletin is an ordinary channel message on the hashtag channel <code>#bulletin</code>. Its key is derived from the name (<code>hashtag_key</code>), so the key is public and anyone can read or post. The decrypted plaintext is:</p>
+<pre><code>0xB1 | timestamp (u32 BE, Unix s) | Ed25519 signature (64) | text
+signed: SHA-256("maarse/bulletin/v1" | channel address (16) | timestamp | text)</code></pre>
+<ul>
+<li><code>OVERHEAD</code> = 69 bytes. The first byte, <code>0xB1</code>, can never start valid UTF-8, so a bulletin is never confused with ordinary text.</li>
+<li>Around it sit the channel seal (<code>seal::CHANNEL_OVERHEAD</code> = 40: 8-byte nonce, 16-byte sender address, 16-byte Poly1305 tag) and the packet header (<code>FIXED_HEADER</code> = 18, plus 2 with a region). With <code>MAX_PACKET</code> = 255 (<code>maarse-core/src/lib.rs</code>), that leaves <b>128 bytes of text, or 126 with a region</b>.</li>
+<li>The signature covers the channel address (good: domain separation), the timestamp and the text. It does <b>not</b> cover the region tag in the header, and there are no fields for kind, severity, expiry, ID or status.</li>
+</ul>
+
+<h3>1.2 Who can send <span class="tag ver">Verified</span></h3>
+<ul>
+<li><b>Anyone can send</b> to <code>#bulletin</code>. Trust is decided only by the receiver.</li>
+<li>In <code>maarse-host</code>, <code>Command::SendChannel</code> (node.rs, about line 1938) signs <b>every</b> message sent to the bulletin channel, using the host's own node identity (<code>self.identity</code>) and the system clock as the timestamp. There is no separate issuing step, no confirmation and no flags. If the text is too long, the send fails with "The message is too long".</li>
+<li>The signing key is the <b>same Ed25519 identity</b> the node uses for announces, direct messages and its address. At start-up the host prints it as the "Bulletin key (for --bulletin-key on receivers)" (main.rs, about line 497).</li>
+<li>The host joins <code>#bulletin</code> by itself only when it has trusted keys. A user can also join it by hand from the web client's hashtag dialog. After that, everything they type on that channel is signed. <span class="tag inf">Inferred</span></li>
+<li>Access to the host's web client needs an access token (<code>web::access_token</code>), which is the only gate in front of signing. <span class="tag ver">Verified</span></li>
+</ul>
+
+<h3>1.3 How receivers verify and trust <span class="tag ver">Verified</span></h3>
+<ul>
+<li><code>maarse-host --bulletin-key &lt;128 hex&gt;</code> (repeatable) adds a <code>PublicIdentity</code> (32-byte signing key plus 32-byte DH key) to <code>bulletin_keys</code> and joins <code>#bulletin</code>.</li>
+<li><code>Node::on_bulletin</code> calls <code>bulletin::verify(from, plain, trusted)</code>. That function requires the channel sender address to be one of the trusted identities and the signature to match that identity's key. On success the host shows the text as <code>"[Verified bulletin] " + text</code> through the normal <code>Event::ChannelReceived</code>, and forwards the same string to MQTT. On failure it logs "dropped an unverified message".</li>
+<li>Tests: <code>bulletin::tests::round_trip_and_rejections</code> (untrusted key, impersonation, tampering, wrong signer) and <code>node.rs bulletin_tests::only_trusted_bulletins_are_shown</code> and <code>no_bulletin_channel_without_keys</code>.</li>
+<li><b>Key distribution:</b> by hand, as a hex string on the command line. There is no hierarchy, certificate, expiry, scope, revocation or name. Trust is flat: any trusted key can say anything about anywhere.</li>
+</ul>
+
+<h3>1.4 Replay, expiry, duplicates <span class="tag ver">Verified</span></h3>
+<ul>
+<li><code>Verified.timestamp</code> is returned but <b>never used</b> by <code>on_bulletin</code>. No age limit, no future limit, and no memory of bulletins already shown.</li>
+<li>The only duplicate filter is the router's flood <code>DedupCache</code> (<code>maarse-core/src/dedup.rs</code>): an FNV-1a hash of type, destination and payload, kept in a ring buffer. It catches the same packet bytes while they are still in the ring. <b>Re-sealing the same signed plaintext with a new 8-byte nonce</b> gives a new packet ID, which receivers show again. Anyone can re-seal, because the channel key is public. <span class="tag inf">Inferred</span></li>
+</ul>
+
+<h3>1.5 Priority on the air <span class="tag ver">Verified</span></h3>
+<ul>
+<li><code>qos::priority_with(packet, bulletin::channel())</code> raises any <code>Channel</code> packet whose destination is the bulletin channel from <code>PRIO_CHANNEL</code> to <code>PRIO_DIRECT</code>. The firmware radio loop does this (<code>firmware/common/src/radio.rs</code>, <code>let urgent = maarse_crypto::bulletin::channel()</code>), and so does the simulator.</li>
+<li>The boost is based only on the destination address in the clear header. <b>Repeaters do not verify</b>, so unsigned junk sent to <code>#bulletin</code> gets the same priority as a real alert. <span class="tag inf">Inferred</span></li>
+<li>Duty-cycle limits apply as usual (<code>duty.rs</code>, 10 % per hour by default).</li>
+</ul>
+
+<h3>1.6 Area targeting <span class="tag ver">Verified (simulator only)</span></h3>
+<ul>
+<li><code>docs/denmark/AREA-ALERTS.md</code> is a <b>proposal</b>. It puts <code>'A' | id (u16) | kind (u8) | area | text</code> <i>inside</i> the signed text, so the area is authenticated with the message. Kinds are 0 info, 1 evacuation, 2 fire, 3 flood, 4 water. The area is a circle (13 bytes) or a polygon of 3–12 corners.</li>
+<li><code>maarse-sim-wasm/src/engine.rs send_alert</code> builds exactly that layout and signs it with the real <code>bulletin::sign</code>, using one simulated authority. Receivers run the real <code>bulletin::verify</code> and test whether they are inside the area. The simulator sends the signed plaintext <b>without the channel seal</b>, a simplification that saves 40 bytes compared with the real system.</li>
+<li>Flood limiting: either the existing regions (<code>send_channel_in</code> with the region that contains the area, else <code>dk</code>), or a simulator-only "area scope" in which forwarders more than <code>AREA_MARGIN_M</code> = 15 km outside the area drop the alert. Over backbone trunks, "alerts and bulletins always cross".</li>
+<li>Nothing of this is in <code>maarse-core</code>, the host, the firmware or the clients.</li>
+</ul>
+
+<h3>1.7 How clients show it <span class="tag ver">Verified</span></h3>
+<ul>
+<li><b>Web client</b> (<code>maarse-client/index.html</code>): no bulletin-specific code. A verified bulletin from a host is an ordinary channel line that starts with the text <code>[Verified bulletin]</code>. There is no sound, banner, issuer name, severity or area. (The ✓ "verified" mark in the client is for contact key fingerprints, not bulletins.)</li>
+<li><b>Firmware companion</b> (<code>firmware/common/src/node.rs</code>, <code>PacketType::Channel</code>): decrypts any joined channel and emits <code>ChannelReceived</code> with no bulletin check. If a phone user joins <code>#bulletin</code> while connected directly to a radio, <b>forged plain text is shown as-is under "#bulletin"</b>, and real signed bulletins show as binary junk. <span class="tag inf">Inferred</span></li>
+<li><b>Android</b>: the GUIDE lists verification "without a host" as not done yet.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="gaps">2. Gaps found in the code</h2>
+<div class="tbl"><table>
+<tr><th>#</th><th>Gap</th><th>Why it matters</th></tr>
+<tr><td>G1</td><td>Signed timestamp never checked; no alert ID; dedup only by packet bytes</td><td>Any old bulletin can be replayed forever by re-sealing it ("Evacuate zone 3", months later).</td></tr>
+<tr><td>G2</td><td>No expiry, no update/cancel, no reference to an earlier alert</td><td>No safe "all clear"; an alert never ends; a correction can't be tied to what it corrects (Hawaii took 38 minutes to correct).</td></tr>
+<tr><td>G3</td><td>No status field (actual / exercise / test)</td><td>Tests and drills look identical to real alerts. Hawaii's root cause was confusion about exactly this.</td></tr>
+<tr><td>G4</td><td>"Verified" is in-band text <code>[Verified bulletin]</code></td><td>Anyone can type that prefix on <code>public</code> or any other channel, and the client will show it the same way. The trust mark must come from the UI, never from the message.</td></tr>
+<tr><td>G5</td><td>Signing key = node identity; host auto-signs everything typed on <code>#bulletin</code></td><td>Compromising an always-on PC or its web token gives full alert power. An operator who types into the wrong chat sends a signed alert. No confirmation, no second person.</td></tr>
+<tr><td>G6</td><td>Flat trust list, no scope, no names, no expiry, no revocation</td><td>A local volunteer's key can issue a nationwide evacuation. A stolen key stays valid until every receiver edits its command line.</td></tr>
+<tr><td>G7</td><td>Priority boost without verification</td><td>A LoRa attacker can flood <code>#bulletin</code> with junk at <code>PRIO_DIRECT</code>, pushing out direct messages and real alerts within the 10 % duty budget.</td></tr>
+<tr><td>G8</td><td>Firmware, Android and web client do not verify</td><td>Only host users are protected. Direct-to-radio users either see nothing or see forgeries.</td></tr>
+<tr><td>G9</td><td>Region tag and (proposed) area scope are outside the signature</td><td>A relay can rewrite the header region to stop or widen the flood. That does not forge content, but it lets a relay suppress the alert.</td></tr>
+<tr><td>G10</td><td>No severity or event type → no presentation rules</td><td>Either every bulletin is loud (alert fatigue) or none is.</td></tr>
+<tr><td>G11</td><td>No audit trail of what was issued</td><td>After an incident nobody can show who sent what and when.</td></tr>
+<tr><td>G12</td><td>Nodes without a clock (firmware gets time only from the client, <code>SetTime</code>; <code>boot_unix</code> is <code>None</code> until then)</td><td>Expiry and certificate validity can't be checked on standalone repeaters. The design has to work without wall-clock time.</td></tr>
+</table></div>
+
+<!-- ============================================================ -->
+<h2 id="world">3. Real-world systems <span class="tag ext">External</span></h2>
+
+<h3>3.1 Cell broadcast: 3GPP PWS, EU-Alert, ETWS, CMAS/WEA</h3>
+<ul>
+<li><b>Mechanism.</b> 3GPP TS 23.041 defines the Cell Broadcast Service and the Public Warning System. An alerting authority sends to a Cell Broadcast Centre (CBC), which tells the radio network to broadcast in chosen cells. Phones don't need to be registered or subscribed, and the network learns nothing about recipients. That gives fast, privacy-preserving mass reach without congestion (<a href="https://www.3gpp.org/DynaReport/23041.htm">TS 23.041</a>; <a href="https://www.brs.dk/en/sirenen/">BRS on S!RENEN</a>: "the authorities do not receive data about recipients' mobile phones and location").</li>
+<li><b>EU-Alert.</b> ETSI TS 102 900 is the European profile of cell broadcast; "EU" is replaced by a country code (NL-Alert, DE-Alert, and so on) (<a href="https://www.etsi.org/deliver/etsi_ts/102900_102999/102900/01.03.01_60/ts_102900v010301p.pdf">ETSI TS 102 900 V1.3.1</a>, latest V1.4.1, 2023-06; <a href="https://en.wikipedia.org/wiki/EU-Alert">overview</a>). Article 110 of the European Electronic Communications Code (Directive (EU) 2018/1972) obliged member states to have mobile public warning by June 2022 (<a href="https://eur-lex.europa.eu/eli/dir/2018/1972/oj">EECC</a>).</li>
+<li><b>ETWS (Japan).</b> A two-stage design: a tiny <i>primary notification</i> (warning type only, delivered within seconds through paging) and a <i>secondary notification</i> with text over cell broadcast. TS 23.041 even defines a <b>Warning-Security-Information</b> field (timestamp plus digital signature) for the primary notification, but the spec now says the CBC <i>should not</i> include it. <b>In practice, cell broadcast has no end-to-end authentication</b> (<a href="https://www.3gpp.org/ftp/email_discussions/CT1/CT107/draft-23041-j00.doc">TS 23.041 draft V19, clauses 9.3.25 and 9.4.1.3.6</a>). 3GPP studied signatures again in TR 33.969 (Rel-17), where signature size and key distribution were central obstacles (<a href="https://www.3gpp.org/DynaReport/33969.htm">TR 33.969</a>; <a href="https://www.etsi.org/deliver/etsi_tr/133900_133999/133969/17.01.00_60/tr_133969v170100p.pdf">ETSI copy</a>).</li>
+<li><b>WEA (US).</b> Categories are National (formerly Presidential, cannot be switched off), Imminent Threat (Extreme/Severe), AMBER, Public Safety, and tests. Since 2019 messages may be 360 characters (90 for older phones), and geotargeting must reach 100 % of the target area with at most 0.1 mile overshoot, which relies on phone-side geofencing (<a href="https://www.weather.gov/news/201806-wireless-emergency-alerts">NWS summary of the FCC rules</a>; <a href="https://public-inspection.federalregister.gov/2018-03990.pdf">FCC order 2018</a>).</li>
+</ul>
+
+<h3>3.2 Denmark: S!RENEN and sirens</h3>
+<ul>
+<li>S!RENEN is Denmark's EU-Alert implementation over <b>cell broadcast</b>. It was launched and tested nationally on Wednesday 3 May 2023 at noon (<a href="https://um.dk/en/About-us/the-protocol-department/news/Circular-notes/SIRENEN-Denmarks-new-mobile-based-public-warning-system">Ministry of Foreign Affairs circular</a>). It works on all compatible phones in the area, including foreign SIMs, with no app, in Danish and English, with a distinct sound. It is "a supplement to other warning systems" (<a href="https://www.brs.dk/en/sirenen/">BRS</a>).</li>
+<li>Beredskabsstyrelsen (DEMA) runs it with the National Police, which is reported to be its <b>only sender</b> (<a href="https://en.wikipedia.org/wiki/S!REN">Wikipedia, secondary</a>). That is a narrow, well-defined issuer set, the same property the 2019 spoofing paper recommends for signatures.</li>
+<li>Denmark also has outdoor sirens and broadcast radio (DR) as warning channels. Må:rse should present itself as a <b>supplement</b> for when mobile networks and power are down, not as a replacement.</li>
+</ul>
+
+<h3>3.3 Germany: MoWaS, NINA, KATWARN, DE-Alert, Warntag</h3>
+<ul>
+<li>MoWaS (since 2001, run by the BBK) is the hub: authorities issue once, and MoWaS feeds apps (NINA, KATWARN), broadcasters and, since 23 February 2023, cell broadcast as DE-Alert (<a href="https://en.wikipedia.org/wiki/Wireless_Emergency_Alerts_in_Germany">overview</a>; <a href="https://www.berlin.de/katastrophenschutz/warnung-und-information/englisch/public-safety-warnings-and-infos/artikel.1470288.en.php">Berlin.de</a>; <a href="https://www.telekom.de/hilfe/cell-broadcast-en">Telekom</a>). BBK describes cell broadcast as one part of a "warning mix".</li>
+<li><b>Warntag 2020 failed.</b> The ministry attributed it to "an unplanned simultaneous triggering of a large number of warnings through MoWaS". Many warnings arrived very late (widely reported as around half an hour for NINA) or not at all (<a href="https://netzpolitik.org/2020/der-warntag-ist-ausgefallen/">netzpolitik.org</a>). The lessons are to test end to end under realistic load, to keep one message from one issuer instead of many parallel copies, and that apps alone are too slow. The 2021 Ahr valley flood then drove the move to cell broadcast.</li>
+</ul>
+
+<h3>3.4 Netherlands: NL-Alert</h3>
+<ul>
+<li>Cell broadcast, decided in 2008 after population trials in 2005–2006, tested twice a year (<a href="https://www.nl-alert.nl/english">NL-Alert</a>). In the December 2025 national test, 92 % of residents aged 12 and over reported receiving it (secondary source citing the ministry's reach measurement). Regular, announced tests build both reach and recognition.</li>
+</ul>
+
+<h3>3.5 Japan: J-Alert</h3>
+<ul>
+<li>A satellite-linked system (since 2007) from national agencies to municipal receivers, which trigger loudspeakers and community radio automatically. JMA earthquake and tsunami alerts reach phones through ETWS (<a href="https://en.wikipedia.org/wiki/J-Alert">overview</a>; <a href="https://www.preventionweb.net/quick/99966">PreventionWeb</a>). The lessons are a dedicated channel that doesn't depend on terrestrial networks, automatic local re-broadcast, and fixed, pre-defined message types.</li>
+</ul>
+
+<h3>3.6 US IPAWS and CAP signatures</h3>
+<ul>
+<li>Only approved alerting authorities can send. They sign a Memorandum of Agreement, complete mandatory training, receive a <b>COG ID and a digital certificate</b>, and their alert software signs every CAP message. The signature travels with the message so that downstream systems can verify the signing official and that the content is unaltered. Certificates must not be shared and are renewed (reported three-year cycle, with a monthly test requirement in some state guidance) (<a href="https://www.fema.gov/emergency-managers/practitioners/integrated-public-alert-warning-system/public-safety-officials/sign-up">FEMA sign-up</a>; <a href="https://webarchive.library.unt.edu/web/20161130111439/https://www.fema.gov/media-library-data/1463678175749-fbf9b880bb57e25dc3e6adcc3ce4c249/IPAWSToolkitforAlertingAuthorities_FINAL_05192016.pdf">IPAWS toolkit 2016, archived</a>).</li>
+<li><b>CAP 1.2</b> (OASIS, 2010) is the common alert vocabulary: <code>identifier</code>, <code>sender</code>, <code>sent</code>, <code>status</code> (Actual / Exercise / System / Test / Draft), <code>msgType</code> (Alert / Update / Cancel / Ack / Error), <code>references</code>, <code>scope</code>, and per <code>info</code>: <code>category</code>, <code>event</code>, <code>urgency</code>, <code>severity</code>, <code>certainty</code>, <code>expires</code>, <code>senderName</code>, <code>headline</code>, and <code>area</code> (polygon, circle, geocode). It allows an enveloped XML-Signature on the alert (<a href="https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2.html">CAP 1.2</a>). The vocabulary is excellent. XML-DSig is far too large for LoRa, so Må:rse should map the <i>fields</i>, not the encoding.</li>
+<li>The weakness: once a CAP message is turned into a broadcast (EAS audio, WEA, cell broadcast), the signature is dropped and the last mile is unauthenticated again.</li>
+</ul>
+
+<h3>3.7 Mesh and off-grid systems</h3>
+<ul>
+<li><b>Meshtastic.</b> Since 2.5, nodes have public keys (PKC for direct messages). Admin commands are accepted only from up to three configured admin keys, with short-lived session IDs against replay (<a href="https://meshtastic.org/docs/configuration/radio/security/">security docs</a>; <a href="https://meshtastic.org/blog/introducing-new-public-key-cryptography-in-v2_5/">PKC blog</a>). Keys are trust-on-first-use, and channel messages were unauthenticated. The docs describe optional XEdDSA-signed broadcasts with a default policy that still accepts unsigned packets. An advisory shows that someone who knows a channel key could inject direct messages that were <i>displayed</i> as PKC-encrypted (<a href="https://github.com/meshtastic/firmware/security/advisories/GHSA-377p-prwp-4hwf">GHSA-377p-prwp-4hwf / CVE-2025-53627</a>). That is the same UI-trust problem as our G4. I found no authority-based alert mechanism.</li>
+<li><b>MeshCore.</b> Adverts are Ed25519-signed over the public key and a timestamp (<a href="https://wiki.eastmesh.au/meshcore/encryption/">eastmesh wiki</a>). Room servers are store-and-forward boards with a password-based admin ACL. I found no signed authority bulletin.</li>
+<li><b>Reticulum / LXMF.</b> Announces are self-authenticating (they carry the key and an Ed25519 signature). LXMF messages carry a 64-byte Ed25519 signature over destination, source, payload and ID, with a total overhead of about 99 bytes (<a href="https://github.com/markqvist/lxmf">LXMF</a>). There's no authority hierarchy, but it shows that a signature per message is affordable on LoRa.</li>
+<li><b>goTenna.</b> I found no public technical documentation of an authenticated alert feature in the time available, so it is left out.</li>
+</ul>
+<p class="small">Conclusion for this section: none of the hobby LoRa meshes has authority-signed, scoped alerts. Må:rse's signed bulletin is already ahead of them. The gap is in lifecycle and governance, not in the basic crypto.</p>
+
+<!-- ============================================================ -->
+<h2 id="attacks">4. Known attacks and incidents <span class="tag ext">External</span></h2>
+<div class="tbl"><table>
+<tr><th>Incident</th><th>What happened</th><th>Lesson for Må:rse</th></tr>
+<tr><td>Spoofed LTE Presidential Alerts, MobiSys 2019</td><td>Commercial SDR and open-source software broadcast fake Presidential Alerts to phones within range. 9 phones from 5 vendors were vulnerable, because alerts are neither authenticated nor encrypted. The authors proposed signed alerts from a small set of sources (<a href="https://systems.cs.colorado.edu/projects/securing-wea.html">CU Boulder project</a>; <a href="https://par.nsf.gov/biblio/10150578">paper</a>).</td><td>Signatures checked on the receiving device are the right answer. We have them; keep them mandatory.</td></tr>
+<tr><td>5G PWS spoofing and suppression, ACSAC 2022</td><td>Five practical attacks on 5G ETWS/CMAS: two spoofing and three <i>suppression</i> (<a href="https://arxiv.org/abs/2207.02506">Bitsikas &amp; Pöpper</a>). A 2026 preprint reports a fully open-source 5G SA spoofing setup (<a href="https://arxiv.org/html/2604.24404v1">arXiv 2604.24404</a>, not reviewed in depth).</td><td>Suppression (blocking real alerts) matters as much as forgery. Flood redundancy, repetition and multiple paths are the defence.</td></tr>
+<tr><td>SMS blasters, Europe 2025–2026</td><td>Car-borne fake base stations sent mass phishing SMS in Greece, Austria, the UK, Serbia and Switzerland, among others, bypassing operator filters (<a href="https://therecord.media/greek-police-arrest-scammers-using-hidden-cell-towers">The Record</a>; <a href="https://www.ncsc.admin.ch/ncsc/en/home/aktuell/im-fokus/2025/wochenrueckblick_36.html">Swiss NCSC</a>).</td><td>Cheap rogue transmitters are no longer theoretical. A LoRa attacker is even cheaper (a 20 euro board).</td></tr>
+<tr><td>Hawaii false missile alert, 13 Jan 2018</td><td>A warning officer sent a real ballistic missile alert during a drill, believing the threat was real. No second person had to confirm, there was no prepared correction, and the correction took 38 minutes. The drill script itself said "this is not a drill". The FCC recommended two-person approval and false-alert procedures (<a href="https://www.npr.org/sections/thetwo-way/2018/04/11/601394064/federal-communications-commission-dont-say-this-is-not-a-drill-during-drills">NPR</a>; <a href="https://blog.npstc.org/?p=6859">NPSTC on the final report</a>).</td><td>Operator error is the most likely failure. We need a signed status flag (actual vs exercise), confirmation, a two-person rule for the worst cases, and a ready-made, fast cancel.</td></tr>
+<tr><td>"Zombie apocalypse" EAS hijack, Feb 2013</td><td>Several US TV stations aired a fake EAS alert. The widely reported cause was internet-reachable encoders with default passwords (<a href="https://www.theregister.com/2013/02/18/eas_vulns/">The Register</a>; <a href="https://ioactive.com/tag/eas">IOActive</a>).</td><td>The issuing station is the weak point. Don't leave the signing key on an always-online box behind a reused token.</td></tr>
+<tr><td>EAS device vulnerabilities, 2022</td><td>FEMA advisory after Ken Pyle's research: compromising one EAS encoder could inject alerts that other stations relay. Some flaws remained unpatched (<a href="https://www.theregister.com/2022/08/05/eas_vulnerabilities_dhs/">The Register</a>; <a href="https://www.securityweek.com/fema-urges-patching-emergency-alert-systems-some-flaws-remain-unfixed">SecurityWeek</a>).</td><td>A relay must never add authority. Only end-to-end signatures count, never "it came from a trusted relay".</td></tr>
+<tr><td>Germany Warntag 2020</td><td>Many simultaneous triggers overloaded MoWaS, and alerts were late or missing (<a href="https://netzpolitik.org/2020/der-warntag-ist-ausgefallen/">netzpolitik.org</a>).</td><td>Design for one authoritative message per event, deduplicated by ID, not many parallel copies. Load-test the alert path.</td></tr>
+<tr><td>Meshtastic CVE-2025-53627</td><td>Spoofed DMs shown as PKC-encrypted (<a href="https://github.com/meshtastic/firmware/security/advisories/GHSA-377p-prwp-4hwf">advisory</a>).</td><td>The trust indicator must come from verification state, never from content or channel. Same issue as our G4.</td></tr>
+</table></div>
+
+<!-- ============================================================ -->
+<h2 id="best">5. What works best</h2>
+<div class="tbl"><table>
+<tr><th>Goal</th><th>Best practice seen</th><th>Where Må:rse stands</th></tr>
+<tr><td>Reach</td><td>Cell broadcast to every phone with no app (NL-Alert 92 %), plus sirens and radio as a mix (Germany, Denmark).</td><td>Only people with a Må:rse node. That is fine for a supplement that works when the cellular network is down, but say so plainly.</td></tr>
+<tr><td>Speed</td><td>ETWS primary notification in seconds; a short fixed first message, details later.</td><td>A flood at <code>PRIO_DIRECT</code>; one 255-byte packet is about 1.3 s per hop at SF9. Good. Pre-defined event codes would allow a tiny first packet.</td></tr>
+<tr><td>Trust and authenticity</td><td>IPAWS: vetted issuers, certificates, signed CAP. Cell broadcast: none on the last mile.</td><td>Signatures on the last mile already. Missing: issuer vetting, hierarchy, scope, revocation.</td></tr>
+<tr><td>Targeting</td><td>WEA: 0.1 mile overshoot with device geofencing. Cell broadcast: per cell.</td><td>Proposal only (area in the signed text, device decides). Device-side checking is the right model.</td></tr>
+<tr><td>Avoiding alert fatigue</td><td>Severity classes, user opt-out except for the top class, area precision, announced tests.</td><td>No severity, so no rules.</td></tr>
+<tr><td>Avoiding false alerts and operator error</td><td>Two-person approval (FCC after Hawaii), status flags (CAP), templates, a prepared cancel.</td><td>None. An operator can send a signed alert by typing in a chat.</td></tr>
+<tr><td>Interoperability</td><td>CAP 1.2 as the hub format (MoWaS, IPAWS).</td><td>None. A host-side CAP bridge is the natural place.</td></tr>
+</table></div>
+
+<!-- ============================================================ -->
+<h2 id="threats">6. Threat model for Må:rse</h2>
+<p>Assets: the public's belief that a "verified" alert is real; the ability to deliver real alerts quickly; and airtime. Assumptions: Ed25519 and SHA-256 are sound; a radio attacker can transmit and receive any LoRa packet on our settings; the channel key for <code>#bulletin</code> is public, by design.</p>
+<div class="tbl"><table>
+<tr><th>Threat</th><th>Today</th><th>After the recommendations</th></tr>
+<tr><td><b>Radio attacker forges an alert</b></td><td class="yes">Blocked on hosts (signature). <span class="no">Not blocked</span> on firmware-only users who joined <code>#bulletin</code>, and the in-band "[Verified bulletin]" prefix can be faked on any other channel.</td><td>Blocked everywhere; the verified state is drawn by the UI only (R1).</td></tr>
+<tr><td><b>Replay of an old real alert</b></td><td class="no">Works (re-seal with a new nonce).</td><td>Rejected: per-issuer serial high-water mark, expiry, ID-based dedup (R2).</td></tr>
+<tr><td><b>Flooding / DoS of the alert channel</b></td><td class="no">Junk on <code>#bulletin</code> gets <code>PRIO_DIRECT</code>.</td><td>Only verified alerts are boosted; unverified traffic is demoted and rate-limited; per-issuer rate cap (R6). Jamming remains possible (out of scope; mitigated by repetition and backbone).</td></tr>
+<tr><td><b>Fake "all clear"</b></td><td>No cancel exists; a forged text "all clear" is blocked by the signature, but a trusted key can say anything.</td><td>Cancel must be signed by the same issuer (or one whose certificate grants cancel), must reference the alert ID, and needs the same approval level as the original (R5, R8).</td></tr>
+<tr><td><b>Forged or confused test alerts</b></td><td class="no">No status; tests look real.</td><td>Signed status: Actual / Exercise / Test / System. Exercise and Test never ring loudly and carry a banner (R3).</td></tr>
+<tr><td><b>Compromised repeater</b></td><td>Can drop, delay, replay, rewrite the region header; cannot forge content.</td><td>Replay fixed; drops mitigated by flood redundancy and scheduled repeats; area scope inside the signature (R9).</td></tr>
+<tr><td><b>Stolen sender device / key</b></td><td class="no">Unlimited power, unlimited time; revocation means editing every receiver.</td><td>Separate issuer key, short-lived scoped certificate, self-revocation packet, root revocation list (R3, R4, R7).</td></tr>
+<tr><td><b>Insider (authorised but malicious or careless)</b></td><td class="no">Nothing stops a trusted key from issuing anything anywhere.</td><td>Scope limits blast radius (area, event types, max severity); two-person for Extreme or large areas; signed audit log (R4, R8, R11).</td></tr>
+<tr><td><b>Root key compromise</b></td><td>No root exists.</td><td>Root kept offline, split (2 of 3 custodians); firmware ships 2 root keys (current and backup) so a root can be rotated by a signed firmware update (R4).</td></tr>
+<tr><td><b>Key distribution in an offline disaster</b></td><td>Hex strings on the command line.</td><td>Root keys pre-installed in firmware, app and host; issuer certificates pre-issued in peacetime and carried in the mesh (one packet, cached by every node) (R4).</td></tr>
+<tr><td><b>Clockless nodes</b></td><td>Not addressed.</td><td>Serial numbers as the primary replay defence; a "trusted time floor" raised by verified timestamps; expiry is checked when time is known (R2).</td></tr>
+<tr><td><b>Impersonating an official system</b></td><td>No concept.</td><td>Må:rse alerts are always labelled with the issuer's certificate name and never as "S!RENEN"; a bridge from an official CAP feed is labelled "relayed from …" (R10).</td></tr>
+</table></div>
+
+<!-- ============================================================ -->
+<h2 id="design">7. Proposed design: alert v2</h2>
+<p>Principles: <b>end-to-end signatures only</b> (relays never add trust), <b>one small packet per alert</b>, <b>certificates sent once and cached</b>, <b>works without a clock</b>, and <b>keeps the router unchanged</b> where possible (still a channel message on <code>#bulletin</code>, so old repeaters forward it). Everything below is a proposal <span class="tag inf">Inferred design</span>.</p>
+
+<h3>7.1 Key hierarchy (at most two levels below the root)</h3>
+<pre><code>Root key  (offline; 2-of-3 custodians; public key built into firmware/app/host,
+ |         like the OTA release key in maarse-crypto/src/ota.rs)
+ +-- Regional intermediate (optional; offline laptop; e.g. per region / beredskab)
+      +-- Issuer certificate (short-lived, scoped; one per person or console)
+           +-- Alert (signed by the issuer key, one packet)</code></pre>
+<ul>
+<li><b>Issuer key ≠ node identity.</b> A separate Ed25519 key, ideally on a hardware token or at least a passphrase-protected file, used only for alerts. This closes G5 and keeps the node's everyday identity out of the blast radius.</li>
+<li><b>Validity:</b> 30–90 days for issuer certificates (short enough that revocation lists stay small), with "standby" certificates pre-issued to municipalities and kept offline for disasters. Intermediates are valid for 1–2 years.</li>
+<li><b>Scope bound in the certificate:</b> allowed event types (bitmask), highest severity, allowed status values, area bound (circle, or a list of region IDs), "may cancel others in scope", and "needs co-signature above severity X". The receiver checks that the alert lies inside the certificate's scope, and the intermediate's scope must contain the issuer's.</li>
+<li><b>A short display name</b> is part of the signed certificate (for example "Beredskab Østjylland"), so the UI can say who sent the alert. Names come from the root, not from the sender.</li>
+</ul>
+
+<h3>7.2 Certificate packet (about 156 bytes plaintext, sent once and cached)</h3>
+<pre><code>0xC1 | ver (1) | subject Ed25519 key (32) | parent key id (8) | serial (4)
+     | not_before (u32) | not_after (u32)
+     | events bitmask (u16) | max severity (1) | flags (1: may-cancel, needs-cosign, status mask)
+     | area bound: circle lat/lon i32 1e-5 deg + radius u16 x 100 m (10)
+     | name length (1) + name UTF-8 (up to 24)
+     | Ed25519 signature by parent (64)</code></pre>
+<p>Repeaters and clients store certificates they have verified (a few dozen at about 160 bytes each fits in flash). An alert whose issuer certificate is unknown triggers a small "certificate request" (issuer key ID, 8 bytes) that any node holding it answers, the same way key requests work today.</p>
+
+<h3>7.3 Alert packet (fits in one 255-byte packet with about 105–109 bytes of text)</h3>
+<pre><code>0xB2 | flags (1): status 2b (Actual/Exercise/Test/System) | msgType 2b (Alert/Update/Cancel)
+     |            area type 2b (none/circle/polygon/region) | has_ref 1b | lang 1b
+     | serial (u32, per issuer, strictly increasing)
+     | issued (u32 Unix s) | expires (u16 minutes after issued)
+     | event (1: evacuation, fire, flood, water, chemical, shelter, info, ...)
+     | severity 4b | urgency 4b   (CAP vocabulary)
+     | [ref serial (u32) if has_ref]
+     | area (circle 10 / polygon 1 + 8n / regions 1 + 2n)
+     | text (UTF-8, or template id + parameters)
+     | Ed25519 signature (64) over "maarse/alert/v2" | channel | issuer key id | all of the above</code></pre>
+<ul>
+<li><b>The issuer is identified by the seal's existing 16-byte sender field</b>, set to the issuer key's address, so no extra bytes are needed for a key ID.</li>
+<li><b>Replay:</b> receivers keep, per issuer, the highest serial seen (persisted). Older serials are accepted only if not yet expired and not already shown (a small set). When time is known, reject <code>issued</code> more than 10 minutes in the future and anything past <code>expires</code>.</li>
+<li><b>Trusted time floor</b> for clockless repeaters: the newest <code>issued</code> of any verified alert or certificate is a lower bound on "now". Time never goes backwards, which is enough to reject expired certificates and very old replays.</li>
+<li><b>Dedup by (issuer, serial)</b> instead of packet bytes. Scheduled repeats (for example at T+0, +2, +10 and +30 minutes) are new packets but show once.</li>
+<li><b>Cancel/Update</b> carry <code>ref serial</code>. A cancel is valid only from the same issuer or from a certificate with "may cancel" and the area in scope. The UI shows "Cancelled by …" on the original and stops any repeating alarm.</li>
+<li><b>Templates:</b> a 1-byte template ID (for example "Evacuate the area now", "Stay indoors, close windows", "Boil drinking water") rendered in the phone's language, plus a short free-text tail. This saves airtime, supports Danish and English like S!RENEN, and makes typos and panic wording less likely.</li>
+</ul>
+
+<h3>7.4 Two-person rule (Hawaii lesson)</h3>
+<ul>
+<li><b>Step 1 (procedural, cheap):</b> the issuing console requires a second operator to approve an alert with status Actual and severity Extreme, or with an area above a threshold. The console shows a preview and the area on a map. Exercise is a separate mode with a different colour, and in that mode the console refuses to send Actual.</li>
+<li><b>Step 2 (cryptographic, optional):</b> the certificate flag "needs co-signature" makes receivers require a second, small <i>endorsement</i> packet. It holds the alert issuer key ID (8), serial (4), alert hash (8) and the co-signer's signature (64): about 85 bytes plaintext, or 143 bytes on air. The alert is shown as "awaiting confirmation" or held until both arrive (policy choice).</li>
+<li><b>Step 2b (no extra airtime):</b> FROST threshold signatures (<a href="https://www.rfc-editor.org/rfc/rfc9591">RFC 9591</a>) produce one ordinary 64-byte Ed25519 signature from 2-of-n key shares. Receivers verify it exactly like today, and only the issuing consoles change. This is the cleanest long-term option, but it needs an interactive round between the two operators' devices and careful implementation, so use it only for the top class.</li>
+</ul>
+
+<h3>7.5 Revocation in the mesh</h3>
+<ul>
+<li><b>Self-revocation:</b> at issuance, the issuer also signs a "revoke me" packet (key ID, serial, signature: about 70 bytes) and stores it offline. Anyone holding it can kill the key at once without the root. An attacker who steals the key gains nothing by revoking it.</li>
+<li><b>Root or intermediate revocation list:</b> signed list of revoked certificate serials (4 bytes each, about 31 per packet), with a list number. Repeaters store the newest list and re-flood it rarely (for example with their announce interval) and on request.</li>
+<li><b>Short validity</b> keeps lists short. Every list or revocation packet is itself signed, so a forged revocation is impossible.</li>
+</ul>
+
+<h3>7.6 Priority and rate limits on the radio</h3>
+<ul>
+<li>Repeaters already link <code>maarse_crypto</code>. They can derive the public <code>#bulletin</code> key, open the seal, and verify the alert and certificate chain before giving <code>PRIO_DIRECT</code>.</li>
+<li><b>Verified</b> alerts are forwarded first. <b>Unverified</b> traffic on <code>#bulletin</code> is forwarded at <code>PRIO_BULK</code> with a small per-minute quota, or not at all once the repeater has a root key. Keep a fallback so that a repeater with an old revocation list doesn't drop valid alerts.</li>
+<li><b>Per-issuer cap</b> (for example 6 alerts per hour forwarded per issuer, cancels exempt), so a stolen key can't drain the duty budget.</li>
+<li>CPU cost: Ed25519 verification on the nRF52840 (64 MHz Cortex-M4) with the pure-Rust crate is estimated at tens of milliseconds, perhaps up to about 100 ms per signature (not measured). The firmware already verifies OTA manifests with <code>ed25519-dalek</code>. Cache verified certificates so that an alert costs one verification.</li>
+</ul>
+
+<h3>7.7 Area</h3>
+<ul>
+<li>Keep the AREA-ALERTS part 1 idea: the exact area goes <b>inside the signed alert</b>. The receiver decides loud (inside), quiet (nearby, for example within the 15 km margin) or not shown.</li>
+<li>For flood limiting (AREA-ALERTS part 2), the bounding circle in a clear-text TLV must equal the signed area, and receivers must check that. A relay that edits it can only hurt reach, not content. Prefer verify-on-repeater (7.6) so repeaters can use the <i>signed</i> area directly and the TLV is only a hint for old nodes.</li>
+<li>Receivers check <code>alert area ⊆ certificate area</code>. An approximation is enough: the alert's bounding circle inside the certificate circle.</li>
+</ul>
+
+<h3>7.8 Client display</h3>
+<ul>
+<li>A dedicated event (for example <code>Event::AlertReceived</code>, carrying issuer name, event, severity, status, area, expiry, cancel state and verification result) instead of a channel line. The UI draws the badge, so <b>no text in any message can produce it</b>.</li>
+<li>Full-screen banner and sound only for Actual + Severe/Extreme + inside area. Quiet entry for outside area, Minor, Exercise and Test. Exercise and Test have a striped "EXERCISE" / "TEST" banner. Expired and cancelled alerts are greyed out.</li>
+<li>Shows "From: Beredskab Østjylland (certificate valid until …), verified", hop count, time sent, and "time unknown" when the device has no clock.</li>
+<li>Never render raw <code>#bulletin</code> traffic. Hide the hashtag join for <code>#bulletin</code>, or route it to the alert view with "UNVERIFIED, ignored".</li>
+</ul>
+
+<h3>7.9 CAP 1.2 mapping (host-side bridge)</h3>
+<div class="tbl"><table>
+<tr><th>CAP 1.2</th><th>Alert v2</th></tr>
+<tr><td><code>identifier</code></td><td>issuer key ID + serial</td></tr>
+<tr><td><code>sender</code>, <code>senderName</code></td><td>issuer address; certificate name</td></tr>
+<tr><td><code>sent</code> / <code>expires</code></td><td><code>issued</code> / <code>issued + expires</code></td></tr>
+<tr><td><code>status</code></td><td>2-bit status (Draft is never transmitted)</td></tr>
+<tr><td><code>msgType</code> + <code>references</code></td><td>2-bit msgType + <code>ref serial</code> (Ack and Error not used on air)</td></tr>
+<tr><td><code>event</code>, <code>category</code></td><td>event code (1 byte, table maintained in the spec)</td></tr>
+<tr><td><code>severity</code>, <code>urgency</code></td><td>two nibbles (<code>certainty</code> dropped or fixed to Observed/Likely)</td></tr>
+<tr><td><code>area/circle</code>, <code>area/polygon</code>, <code>geocode</code></td><td>circle, polygon (up to 12 corners), region IDs</td></tr>
+<tr><td><code>headline</code> / <code>description</code> / <code>instruction</code></td><td>template ID + short text; full text could follow as a file on demand over TCP</td></tr>
+<tr><td>XML-Signature</td><td>replaced by the Ed25519 chain (outbound CAP can be XML-signed by the host)</td></tr>
+</table></div>
+<ul>
+<li><b>Outbound</b> (mesh to CAP/MQTT/Home Assistant): easy and useful. The host already bridges to MQTT.</li>
+<li><b>Inbound</b> (official CAP feed to mesh): only if an official feed is available and agreed. Re-signed by a dedicated <i>bridge</i> issuer certificate whose name says "Relayed from [source]". Never present it as if the authority itself had signed.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="budget">8. Packet and airtime budget</h2>
+<p>Constants verified in code: <code>MAX_PACKET</code> 255, <code>FIXED_HEADER</code> 18 (+2 region), <code>CHANNEL_OVERHEAD</code> 40, <code>bulletin::OVERHEAD</code> 69. That leaves 197 bytes of channel plaintext (195 with a region).</p>
+<div class="tbl"><table>
+<tr><th>Item</th><th class="n">Plaintext bytes</th><th>Text room</th></tr>
+<tr><td>Today's bulletin v1</td><td class="n">69 + text</td><td>128 (126 with region)</td></tr>
+<tr><td>Alert v2 fixed fields (tag, flags, serial, issued, expires, event, sev/urg, signature)</td><td class="n">78</td><td>—</td></tr>
+<tr><td>+ circle area</td><td class="n">88</td><td><b>109</b> (107 with region)</td></tr>
+<tr><td>+ circle + ref (update/cancel)</td><td class="n">92</td><td><b>105</b> (103 with region)</td></tr>
+<tr><td>+ 6-corner polygon</td><td class="n">127</td><td>70</td></tr>
+<tr><td>Issuer certificate</td><td class="n">≈156</td><td>— (one packet)</td></tr>
+<tr><td>Co-sign endorsement</td><td class="n">≈85</td><td>—</td></tr>
+<tr><td>Self-revocation</td><td class="n">≈70</td><td>—</td></tr>
+</table></div>
+<p>Airtime per transmission (one hop), from the Semtech formula with 125 kHz, CR 4/5, 16-symbol preamble:</p>
+<div class="tbl"><table>
+<tr><th>Packet on air</th><th class="n">Bytes</th><th class="n">SF7</th><th class="n">SF9 (default)</th><th class="n">SF10</th><th class="n">SF11</th><th class="n">SF12</th></tr>
+<tr><td>Self-revocation</td><td class="n">128</td><td class="n">223 ms</td><td class="n">710 ms</td><td class="n">1.30 s</td><td class="n">2.84 s</td><td class="n">5.19 s</td></tr>
+<tr><td>Endorsement</td><td class="n">143</td><td class="n">244 ms</td><td class="n">771 ms</td><td class="n">1.42 s</td><td class="n">3.08 s</td><td class="n">5.68 s</td></tr>
+<tr><td>Short alert (40-byte text, v1)</td><td class="n">167</td><td class="n">280 ms</td><td class="n">894 ms</td><td class="n">1.62 s</td><td class="n">3.58 s</td><td class="n">6.50 s</td></tr>
+<tr><td>Certificate</td><td class="n">214</td><td class="n">346 ms</td><td class="n">1.10 s</td><td class="n">1.99 s</td><td class="n">4.40 s</td><td class="n">7.97 s</td></tr>
+<tr><td>Full alert (v1 or v2)</td><td class="n">255</td><td class="n">408 ms</td><td class="n">1.28 s</td><td class="n">2.36 s</td><td class="n">5.13 s</td><td class="n">9.28 s</td></tr>
+</table></div>
+<ul>
+<li>With a 10 % duty cycle (360 s per hour per node), one full alert plus its certificate costs about 2.4 s per repeater at SF9. Four scheduled repeats are about 5 s. That is affordable even at SF12 (about 37 s for four repeats).</li>
+<li>The certificate is sent only when the alert's issuer is new to the area. Pre-loading certificates in peacetime (an "announce" of active issuers, or flashed at install) means the alert usually travels alone.</li>
+<li>The alert channel's AEAD (24 bytes of nonce and tag) adds no security, because the key is public and the signature covers the content. A future dedicated packet type could reclaim those bytes, but it is not worth breaking compatibility for now.</li>
+<li>Template IDs keep most real alerts well under 255 bytes. A 60-byte v2 alert body with a template is about 0.9 s per hop at SF9.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="recs">9. Ranked recommendations</h2>
+<p>Ordered by value for effort. Effort: S = days, M = 1–3 weeks, L = more. Priorities favour stability, small packets and speed.</p>
+<div class="tbl"><table>
+<tr><th>#</th><th>Recommendation</th><th>Closes</th><th>Value</th><th>Effort</th></tr>
+<tr><td>1</td><td><b>UI-drawn verified state.</b> Add <code>Event::AlertReceived</code>; stop putting "[Verified bulletin]" in text; never show raw <code>#bulletin</code> traffic in firmware, web or Android (hide or ignore that hashtag).</td><td>G4, G8 (partly)</td><td class="v yes">High</td><td>S</td></tr>
+<tr><td>2</td><td><b>Explicit issuing flow and separate issuer key.</b> No auto-signing of chat text. An "Issue alert" dialog with event, severity, area, status (Actual / Exercise / Test), preview and confirmation. Issuer key stored apart from the node identity, behind a passphrase.</td><td>G3, G5</td><td class="v yes">High</td><td>S–M</td></tr>
+<tr><td>3</td><td><b>Alert v2 format with serial, expiry, status, event, severity, area and references.</b> Receivers keep a per-issuer high-water mark, dedup by (issuer, serial), and check expiry when time is known (trusted time floor otherwise). Keep v1 verification for a transition period.</td><td>G1, G2, G10, G12</td><td class="v yes">High</td><td>M</td></tr>
+<tr><td>4</td><td><b>Signed cancel and update</b>, with the same or higher approval than the original, and a prepared one-click cancel in the console (Hawaii: 38 minutes).</td><td>G2</td><td class="v yes">High</td><td>S (on top of 3)</td></tr>
+<tr><td>5</td><td><b>Root → (intermediate) → issuer certificates</b> with scope (area, events, max severity), short validity, names. Root public keys built into firmware, app and host (two keys, for rotation); certificates cached in the mesh with a certificate request.</td><td>G6</td><td class="v yes">High</td><td>M</td></tr>
+<tr><td>6</td><td><b>Verify before prioritise on repeaters</b>, demote unverified <code>#bulletin</code> traffic, per-issuer rate cap.</td><td>G7</td><td class="v yes">High</td><td>M</td></tr>
+<tr><td>7</td><td><b>Revocation:</b> pre-signed self-revocation at issuance; signed revocation lists stored and re-flooded by repeaters.</td><td>G6</td><td class="v part">Medium</td><td>M</td></tr>
+<tr><td>8</td><td><b>Two-person rule</b> for Actual + Extreme or large areas: console approval first, endorsement packet next, FROST (RFC 9591) later if wanted.</td><td>G5 (insider, error)</td><td class="v part">Medium–High</td><td>S (procedural) / M / L</td></tr>
+<tr><td>9</td><td><b>Signed area</b> in the alert; device decides loud, quiet or hidden; repeaters use the signed area for scope; alert area must lie inside the certificate area.</td><td>G9</td><td class="v part">Medium</td><td>M</td></tr>
+<tr><td>10</td><td><b>Presentation rules against alert fatigue:</b> loud only for Actual + Severe/Extreme + inside; Exercise and Test silent with a banner; bounded repeat schedule.</td><td>G10</td><td class="v part">Medium</td><td>S</td></tr>
+<tr><td>11</td><td><b>Signed audit log</b> at the issuing host (hash-chained list of everything issued, approved, cancelled).</td><td>G11</td><td class="v part">Medium</td><td>S</td></tr>
+<tr><td>12</td><td><b>Template messages</b> (1-byte ID, rendered in Danish or English) plus a short free-text tail.</td><td>airtime, errors</td><td class="v part">Medium</td><td>M</td></tr>
+<tr><td>13</td><td><b>CAP 1.2 export</b> (mesh → MQTT/CAP); inbound bridge only with an agreed official feed and a clearly labelled bridge certificate.</td><td>interop</td><td class="v part">Medium</td><td>M</td></tr>
+<tr><td>14</td><td><b>Attack scenarios in the Denmark simulator:</b> forged flood on <code>#bulletin</code>, replay, stolen key, to measure item 6 and repeat schedules.</td><td>proof</td><td class="v part">Medium</td><td>S–M</td></tr>
+<tr><td>15</td><td><b>Governance before code:</b> who holds the root, who may get certificates, training, regular announced test alerts (NL-Alert twice a year, IPAWS monthly).</td><td>all</td><td class="v yes">High</td><td>not code</td></tr>
+</table></div>
+<p class="small">A sensible first release is items 1, 2, 3 and 4 together (one format change, mostly host and client work), then 5 and 6 (firmware), then 7 to 9.</p>
+
+<!-- ============================================================ -->
+<h2 id="scope">10. Out of scope</h2>
+<ul>
+<li><b>Being an official public warning system</b> or claiming the legal status of S!RENEN. Må:rse is a supplement for when cellular networks and power fail. Any official use needs an agreement with Beredskabsstyrelsen and the police.</li>
+<li><b>Preventing jamming</b> or physical radio suppression. We can only mitigate it with repetition, multiple paths (backbone, carry) and fast recovery.</li>
+<li><b>Confidentiality of alerts.</b> They are public on purpose. Encrypting them would only hurt reach.</li>
+<li><b>Tracking recipients.</b> Like cell broadcast, delivery should be one-way. Don't add read receipts for alerts.</li>
+<li><b>X.509 and XML signatures on air.</b> Far too large for LoRa. Use them only on the host's CAP side.</li>
+<li><b>Post-quantum signatures.</b> Even the smallest standardised ones (Falcon, about 666 bytes) do not fit in a packet. Revisit if needed, for example with hash-based certificates verified on the host side only.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="open">11. Open questions for the owner</h2>
+<ol>
+<li>Who should hold the root key: the project, a foundation, or a public authority? This decides whether alerts are "community" or "official".</li>
+<li>Should an alert whose co-signature has not yet arrived be shown (labelled) or held back? Holding back is safer; showing is faster.</li>
+<li>When a certificate has expired during a long outage, should receivers reject it, or show the alert with a warning? I suggest showing it with a warning for a short grace period, and only for issuers seen before.</li>
+<li>Should repeaters drop unverified <code>#bulletin</code> traffic completely, or only demote it?</li>
+<li>Which event types and templates do Danish users need first (evacuation, shelter in place, flood, water, fire, chemical, power, information)?</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="sources">12. Sources</h2>
+<h3>Code read <span class="tag ver">Verified</span></h3>
+<ul class="small">
+<li><code>maarse-crypto/src/bulletin.rs</code> (format, <code>sign</code>, <code>verify</code>, tests)</li>
+<li><code>maarse-host/src/node.rs</code> (<code>bulletin_keys</code>, <code>on_deliver</code>, <code>on_bulletin</code>, <code>Command::SendChannel</code>, <code>bulletin_tests</code>); <code>maarse-host/src/main.rs</code> (<code>--bulletin-key</code>, start-up output, web token, <code>--http</code> default 127.0.0.1:8080)</li>
+<li><code>maarse-core/src/qos.rs</code> (<code>priority_with</code>); <code>maarse-core/src/dedup.rs</code>; <code>maarse-core/src/packet.rs</code> (<code>FIXED_HEADER</code>, region); <code>maarse-core/src/lib.rs</code> (<code>MAX_PACKET</code>); <code>maarse-core/src/router.rs</code> (<code>send_channel_in</code>); <code>maarse-core/src/companion.rs</code> (<code>RadioConfig::EU_DEFAULT</code>, <code>SetTime</code>); <code>maarse-core/src/airtime.rs</code></li>
+<li><code>maarse-crypto/src/seal.rs</code> (<code>CHANNEL_OVERHEAD</code>, <code>seal_channel</code>, <code>open_channel</code>); <code>maarse-crypto/src/ota.rs</code> (built-in release key precedent)</li>
+<li><code>firmware/common/src/radio.rs</code> (urgent channel); <code>firmware/common/src/node.rs</code> (<code>PacketType::Channel</code>, <code>boot_unix</code>)</li>
+<li><code>maarse-client/index.html</code> (channel event 0x84, hashtag join, contact verification only)</li>
+<li><code>maarse-sim-wasm/src/engine.rs</code> (<code>send_alert</code>, <code>Alert</code>, area scope, <code>AREA_MARGIN_M</code>, trunk rule); <code>docs/denmark/AREA-ALERTS.md</code>; <code>docs/protocol-spec.md</code> 5.11 and 6.6; <code>docs/GUIDE.md</code> "Signed bulletins"</li>
+</ul>
+<h3>External <span class="tag ext">External</span></h3>
+<ul class="small">
+<li>EECC Directive (EU) 2018/1972, Art. 110: <a href="https://eur-lex.europa.eu/eli/dir/2018/1972/oj">eur-lex.europa.eu/eli/dir/2018/1972/oj</a></li>
+<li>ETSI TS 102 900 (EU-Alert): <a href="https://www.etsi.org/deliver/etsi_ts/102900_102999/102900/01.03.01_60/ts_102900v010301p.pdf">V1.3.1 PDF</a>; <a href="https://en.wikipedia.org/wiki/EU-Alert">EU-Alert (Wikipedia)</a></li>
+<li>3GPP TS 23.041: <a href="https://www.3gpp.org/DynaReport/23041.htm">spec page</a>; <a href="https://www.3gpp.org/ftp/email_discussions/CT1/CT107/draft-23041-j00.doc">V19 draft</a>; TR 33.969: <a href="https://www.3gpp.org/DynaReport/33969.htm">spec page</a>, <a href="https://www.etsi.org/deliver/etsi_tr/133900_133999/133969/17.01.00_60/tr_133969v170100p.pdf">ETSI TR 133 969 V17.1.0</a></li>
+<li>S!RENEN: <a href="https://www.brs.dk/en/sirenen/">brs.dk/en/sirenen</a>; <a href="https://um.dk/en/About-us/the-protocol-department/news/Circular-notes/SIRENEN-Denmarks-new-mobile-based-public-warning-system">um.dk circular note</a>; <a href="https://en.wikipedia.org/wiki/S!REN">Wikipedia (secondary)</a></li>
+<li>Germany: <a href="https://en.wikipedia.org/wiki/Wireless_Emergency_Alerts_in_Germany">Wireless Emergency Alerts in Germany</a>; <a href="https://www.berlin.de/katastrophenschutz/warnung-und-information/englisch/public-safety-warnings-and-infos/artikel.1470288.en.php">Berlin.de</a>; <a href="https://netzpolitik.org/2020/der-warntag-ist-ausgefallen/">netzpolitik.org on Warntag 2020</a>; <a href="https://www.telekom.de/hilfe/cell-broadcast-en">Telekom cell broadcast</a></li>
+<li>NL-Alert: <a href="https://www.nl-alert.nl/english">nl-alert.nl/english</a></li>
+<li>J-Alert: <a href="https://en.wikipedia.org/wiki/J-Alert">Wikipedia</a>; <a href="https://www.preventionweb.net/quick/99966">PreventionWeb</a></li>
+<li>US WEA/IPAWS: <a href="https://www.weather.gov/news/201806-wireless-emergency-alerts">NWS on WEA rules</a>; <a href="https://public-inspection.federalregister.gov/2018-03990.pdf">FCC 2018 order</a>; <a href="https://www.fema.gov/emergency-managers/practitioners/integrated-public-alert-warning-system/public-safety-officials/sign-up">FEMA IPAWS sign-up</a>; <a href="https://webarchive.library.unt.edu/web/20161130111439/https://www.fema.gov/media-library-data/1463678175749-fbf9b880bb57e25dc3e6adcc3ce4c249/IPAWSToolkitforAlertingAuthorities_FINAL_05192016.pdf">IPAWS toolkit (archived)</a></li>
+<li>CAP 1.2: <a href="https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2.html">docs.oasis-open.org</a></li>
+<li>Attacks: <a href="https://systems.cs.colorado.edu/projects/securing-wea.html">Securing LTE Emergency Alerts (MobiSys 2019)</a>; <a href="https://par.nsf.gov/biblio/10150578">paper record</a>; <a href="https://arxiv.org/abs/2207.02506">"You have been warned" (ACSAC 2022)</a>; <a href="https://arxiv.org/html/2604.24404v1">open-source 5G SA spoofing (2026 preprint)</a>; <a href="https://therecord.media/greek-police-arrest-scammers-using-hidden-cell-towers">SMS blaster arrests</a>; <a href="https://www.ncsc.admin.ch/ncsc/en/home/aktuell/im-fokus/2025/wochenrueckblick_36.html">Swiss NCSC on SMS blasters</a></li>
+<li>Hawaii 2018: <a href="https://www.npr.org/sections/thetwo-way/2018/04/11/601394064/federal-communications-commission-dont-say-this-is-not-a-drill-during-drills">NPR</a>; <a href="https://blog.npstc.org/?p=6859">NPSTC on the FCC final report</a></li>
+<li>EAS: <a href="https://www.theregister.com/2013/02/18/eas_vulns/">2013 zombie hijack</a>; <a href="https://ioactive.com/tag/eas">IOActive</a>; <a href="https://www.theregister.com/2022/08/05/eas_vulnerabilities_dhs/">2022 FEMA advisory</a>; <a href="https://www.securityweek.com/fema-urges-patching-emergency-alert-systems-some-flaws-remain-unfixed">SecurityWeek</a></li>
+<li>Mesh: <a href="https://meshtastic.org/docs/configuration/radio/security/">Meshtastic security</a>; <a href="https://meshtastic.org/blog/introducing-new-public-key-cryptography-in-v2_5/">Meshtastic PKC</a>; <a href="https://github.com/meshtastic/firmware/security/advisories/GHSA-377p-prwp-4hwf">GHSA-377p-prwp-4hwf</a>; <a href="https://wiki.eastmesh.au/meshcore/encryption/">MeshCore encryption (eastmesh wiki)</a>; <a href="https://github.com/markqvist/lxmf">LXMF</a></li>
+<li>Crypto: <a href="https://www.rfc-editor.org/rfc/rfc8032">RFC 8032 (Ed25519)</a>; <a href="https://www.rfc-editor.org/rfc/rfc9591">RFC 9591 (FROST)</a></li>
+</ul>
+<p class="small">Not verified: exact Ed25519 verification time on the nRF52840 (estimate only); details of goTenna; the exact NINA delay on Warntag 2020 (secondary reporting); the S!RENEN sole-sender claim (Wikipedia). The design in section 7 is a proposal and has not been implemented or simulated.</p>
+</main>
+</body>
+</html>

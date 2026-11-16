@@ -79,7 +79,7 @@ pub enum StampError {
 
 /// Does the packet type require a stamp?
 pub fn required(ptype: PacketType) -> bool {
-    matches!(ptype, PacketType::Announce | PacketType::PathRequest)
+    matches!(ptype, PacketType::Announce | PacketType::PathRequest | PacketType::KeyRequest | PacketType::MailSync | PacketType::Deposit)
 }
 
 /// Required zero bits for `ptype` in stamp version `version`.
@@ -87,6 +87,10 @@ pub fn difficulty(version: u8, ptype: PacketType) -> Option<u32> {
     match (version, ptype) {
         (1, PacketType::Announce) => Some(ANNOUNCE_BITS),
         (1, PacketType::PathRequest) => Some(PATH_REQUEST_BITS),
+        // The same cost as a path request: a few hundred hashes, nothing for
+        // one message, a lot for someone flooding requests or filling post
+        // offices.
+        (1, PacketType::KeyRequest | PacketType::MailSync | PacketType::Deposit) => Some(PATH_REQUEST_BITS),
         _ => None,
     }
 }
@@ -96,6 +100,9 @@ fn binding(ptype: PacketType, body: &[u8]) -> Option<&[u8]> {
     match ptype {
         PacketType::Announce => body.get(64..68),
         PacketType::PathRequest => body.get(..16),
+        // The whole (small) request or deposit: the stamp cannot be moved
+        // to another one.
+        PacketType::KeyRequest | PacketType::MailSync | PacketType::Deposit => Some(body),
         _ => None,
     }
 }

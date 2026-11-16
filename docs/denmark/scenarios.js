@@ -56,10 +56,10 @@
     return [lat + dyKm / 110.574, lon + dxKm / (111.32 * Math.cos(lat * Math.PI / 180))];
   }
 
-  const DEFAULT_FEATURES = { carry: false, local_repair: true, backbone: true, regions: false, sf_slot: false, scale_timeouts: false, load_control: false, area_scope: false, dht_backbone: false, home_routing: false };
+  const DEFAULT_FEATURES = { carry: false, local_repair: true, backbone: true, regions: false, sf_slot: false, scale_timeouts: false, load_control: false, area_scope: false, dht_backbone: false, home_routing: false, persist_known: true, hold_unknown: true, auto_relay: false };
 
   function base(name, seed) {
-    return { name, seed, sf: 9, duty_permille: 100, tx_dbm: 20, duration_s: 1800, features: Object.assign({}, DEFAULT_FEATURES), nodes: [], links: [], traffic: { direct_per_min: 6, channel_per_min: 1, local_share: 0.8, local_km: 25, start_s: 5, stop_s: 0, spammers: [], spam_per_min: 0 }, events: [], clutter: [], trace: true };
+    return { name, seed, sf: 9, duty_permille: 100, tx_dbm: 20, duration_s: 1800, features: Object.assign({}, DEFAULT_FEATURES), nodes: [], links: [], traffic: { direct_per_min: 6, channel_per_min: 1, local_share: 0.8, local_km: 25, start_s: 5, stop_s: 0, spammers: [], spam_per_min: 0 }, events: [], clutter: [], announce_s: 0, relay_hops: 4, auto_relay_after_s: 600, trace: true };
   }
 
   // ---------- Denmark generator ----------
@@ -105,6 +105,65 @@
       let best = hubs[0], bd = 1e9;
       for (const u of hubs) { const d = km([sc.nodes[h].lat, sc.nodes[h].lon], [sc.nodes[u].lat, sc.nodes[u].lon]); if (d < bd) { bd = d; best = u; } }
       if (best !== undefined) sc.links.push({ a: h, b: best, kind: "tcp", up: true });
+    }
+    // Long-distance LoRa trunks (masts with directional antennas, no
+    // internet needed): Aarhus - Zealand across the Kattegat (about 65 km to
+    // Sjaellands Odde) and Zealand - Bornholm across the Baltic (about 145 km
+    // from Stevns). Each joins the hosts nearest its two ends.
+    if (o.trunks !== false && hosts.length) {
+      const nearestHost = (lat, lon, not) => {
+        let best = -1, bd = 1e9;
+        for (const h of hosts) { if (h === not) continue; const d = km([sc.nodes[h].lat, sc.nodes[h].lon], [lat, lon]); if (d < bd) { bd = d; best = h; } }
+        return best;
+      };
+      const trunk = (a, b, extra) => { if (a >= 0 && b >= 0 && a !== b) sc.links.push(Object.assign({ a, b, kind: "lora", up: true }, extra)); };
+      // Every trunk on the mesh's own frequency and SF (SF9): every node must
+      // be able to talk to every other.
+      const aarhus = nearestHost(56.15, 10.20), odde = nearestHost(55.97, 11.37, aarhus);
+      trunk(aarhus, odde, { sf: 9, snr_db: 6, loss: 0.02, group: "west", label: "LoRa trunk Aarhus - Zealand" });
+      const stevns = nearestHost(55.30, 12.40), roenne = nearestHost(55.10, 14.70, stevns);
+      trunk(stevns, roenne, { sf: 9, snr_db: 3, loss: 0.05, group: "east", label: "LoRa trunk Zealand - Bornholm" });
+      if (o.trunks === "multi") {
+        // Three crossings to Zealand from the west: Skagen (Frederikshavn) -
+        // North Zealand (about 120-150 km over the Kattegat), Aarhus - Holbaek
+        // (above) and the Great Belt (Nyborg - Korsoer, about 18 km).
+        const nh = (lat, lon, not) => {
+          let best = -1, bd = 1e9;
+          for (const h of hosts) { if (not.includes(h)) continue; const d = km([sc.nodes[h].lat, sc.nodes[h].lon], [lat, lon]); if (d < bd) { bd = d; best = h; } }
+          return best;
+        };
+        const skagen = nh(57.44, 10.53, [aarhus, odde, stevns, roenne]);
+        const nzeal = nh(56.03, 12.6, [aarhus, odde, stevns, roenne, skagen]);
+        trunk(skagen, nzeal, { sf: 9, snr_db: 3, loss: 0.05, group: "west", label: "LoRa trunk Skagen - North Zealand" });
+        const nyborg = nh(55.31, 10.79, [aarhus, odde, stevns, roenne, skagen, nzeal]);
+        const korsoer = nh(55.33, 11.14, [aarhus, odde, stevns, roenne, skagen, nzeal, nyborg]);
+        trunk(nyborg, korsoer, { sf: 9, snr_db: 10, loss: 0.01, group: "west", label: "LoRa trunk Great Belt" });
+      }
+      if (o.trunks === 2) {
+        // A second trunk on each crossing, between other hosts and on its
+        // own channel: Djursland (Grenaa) - Zealand, and Copenhagen - Roenne.
+        const nearestNot = (lat, lon, not) => {
+          let best = -1, bd = 1e9;
+          for (const h of hosts) { if (not.includes(h)) continue; const d = km([sc.nodes[h].lat, sc.nodes[h].lon], [lat, lon]); if (d < bd) { bd = d; best = h; } }
+          return best;
+        };
+        const grenaa = nearestNot(56.41, 10.88, [aarhus, odde]);
+        const odde2 = nearestNot(55.97, 11.37, [aarhus, odde, grenaa]);
+        trunk(grenaa, odde2, { sf: 8, snr_db: 6, loss: 0.02, label: "LoRa trunk Djursland - Zealand" });
+        const cph = nearestNot(55.68, 12.57, [stevns, roenne]);
+        trunk(cph, roenne, { sf: 9, snr_db: 3, loss: 0.05, label: "LoRa trunk Copenhagen - Bornholm" });
+      }
+    }
+    // Optional twin hosts: a second host next to every host with the same
+    // TCP links (redundancy when one PC or its internet fails).
+    if (o.hostPairs) {
+      const links = sc.links.slice();
+      for (const h of hosts) {
+        const n = sc.nodes[h];
+        const t = add({ kind: "host", lat: n.lat + 0.008, lon: n.lon + 0.008, region: n.region, internet: n.internet, label: n.label + " (twin)" });
+        sc.links.push({ a: h, b: t, kind: "tcp", up: true });
+        for (const l of links) if (l.a === h || l.b === h) sc.links.push({ a: t, b: l.a === h ? l.b : l.a, kind: "tcp", up: true });
+      }
     }
     // Users, weighted by population^0.8, scattered around their town on land.
     const w = towns.map(t => Math.pow(t[3], 0.8));
@@ -214,6 +273,18 @@
         return s;
       },
     },
+    reboot: {
+      title: "Restart: 40 % of handhelds reboot",
+      text: "Normal day; every node announces every 12 h (at random moments). Rebooted nodes announce after 5 s. At 3 min 40 % of the handhelds restart (battery swap, power back). Turn off \"contacts survive reboot\" and \"keep messages from unknown senders\" to see the firmware before 2026-11-15: messages acknowledged but never shown.",
+      build: (land, towns, seed) => {
+        const s = generateDenmark({ seed }, land, towns); s.name = "Restart after a reboot";
+        s.announce_s = 12 * 3600;
+        const hh = s.nodes.filter(n => n.kind === "handheld").length;
+        s.events.push({ t_s: 180, type: "reboot", n: Math.round(hh * 0.4), node_kind: "handheld" });
+        s.duration_s = 1200;
+        return s;
+      },
+    },
     spam: {
       title: "Spam / flood attack",
       text: "Normal day; from 2 min three handhelds in Odense flood the public channel at 30 messages/min each. See queue delays and what happens to direct messages.",
@@ -256,7 +327,44 @@
     return s;
   }
 
-  const api = { rng, landIndex, generateDenmark, PRESETS, km, offset, nearestTown, DEFAULT_FEATURES, FOREST_DEFAULTS, forest, base };
+  // A town with patchy coverage (Aarhus): handhelds spread over the town,
+  // town clutter at street level, and repeaters on one side only, so part
+  // of the town has no repeater in range.
+  // opts: users, radiusKm, repeaters, dbPerKm, role (handheld|relay), seed.
+  const CITY_DEFAULTS = { users: 300, radiusKm: 6, repeaters: 3, dbPerKm: 6, role: "handheld", seed: 1 };
+  function city(opts) {
+    const o = Object.assign({}, CITY_DEFAULTS, opts || {});
+    const s = base("Town with patchy coverage", o.seed);
+    const c = [56.157, 10.211];
+    const R = rng(o.seed), ring = [];
+    for (let k = 0; k < 16; k++) {
+      const ang = k / 16 * Math.PI * 2, r = (o.radiusKm + 1) * (0.9 + R() * 0.2);
+      ring.push(offset(c[0], c[1], Math.cos(ang) * r, Math.sin(ang) * r));
+    }
+    s.clutter = [{ label: "Aarhus (buildings)", polygon: ring, db_per_km: o.dbPerKm, canopy_m: 12 }];
+    // Repeaters only in the western half.
+    for (let k = 0; k < o.repeaters; k++) {
+      const ang = Math.PI * (0.6 + 0.8 * k / Math.max(1, o.repeaters - 1)), r = o.radiusKm * 0.5;
+      const [la, lo] = offset(c[0], c[1], Math.cos(ang) * r, Math.sin(ang) * r);
+      s.nodes.push({ kind: "repeater", lat: +la.toFixed(5), lon: +lo.toFixed(5), label: "Repeater " + (k + 1) });
+    }
+    s.nodes.push({ kind: "host", lat: c[0] + 0.01, lon: c[1] - 0.03, internet: false, label: "Aarhus host" });
+    for (let k = 0; k < o.users; k++) {
+      const ang = R() * Math.PI * 2, d = Math.sqrt(R()) * o.radiusKm;
+      const [la, lo] = offset(c[0], c[1], Math.cos(ang) * d, Math.sin(ang) * d);
+      s.nodes.push({ kind: o.role, lat: +la.toFixed(5), lon: +lo.toFixed(5) });
+    }
+    s.traffic = { direct_per_min: 20, channel_per_min: 2, local_share: 1, local_km: 4, start_s: 5, stop_s: 0, spammers: [], spam_per_min: 0 };
+    s.duration_s = 2700;
+    return s;
+  }
+  PRESETS.city = {
+    title: "Town with patchy coverage (Aarhus)",
+    text: "300 handhelds in Aarhus, town clutter at street level, three repeaters in the western half only. Try automatic forest mode (Build, Features) and the relay hop limit.",
+    build: (land, towns, seed) => city({ seed }),
+  };
+
+  const api = { rng, landIndex, generateDenmark, PRESETS, km, offset, nearestTown, DEFAULT_FEATURES, FOREST_DEFAULTS, forest, CITY_DEFAULTS, city, base };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.DkScenarios = api;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -345,13 +345,19 @@ mod tests {
 
 pub fn spawn_serial(
 port: String, baud: u32, tx: Sender<In>) {
+    let name = format!("serial {port}");
+    spawn_serial_named(port, baud, name, tx);
+}
+
+/// Like [`spawn_serial`], with the link's name (`trunk <port>` for a trunk).
+pub fn spawn_serial_named(port: String, baud: u32, name: String, tx: Sender<In>) {
     thread::spawn(move || {
         loop {
             match serialport::new(&port, baud)
                 .timeout(Duration::from_millis(10))
                 .open()
             {
-                Ok(p) => run_serial(p, format!("serial {port}"), &tx),
+                Ok(p) => run_serial(p, name.clone(), &tx),
                 Err(e) => eprintln!("[serial] could not open {port}: {e}"),
             }
             thread::sleep(Duration::from_secs(3));

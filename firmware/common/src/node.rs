@@ -19,6 +19,7 @@ use heapless::{FnvIndexMap, FnvIndexSet};
 use rand_core::{CryptoRng, RngCore};
 use maarse_core::companion::{Command, Event, PROTOCOL_VERSION, error_code, text};
 use maarse_core::companion::{RadioConfig, Stats, stat};
+use maarse_core::appdata;
 use maarse_core::content::{self, Content};
 use maarse_core::packet::{Header, encode};
 use maarse_core::stamp::StampSearch;
@@ -31,7 +32,7 @@ use maarse_crypto::{
 
 mod files;
 
-const ANNOUNCE_EVERY: Duration = Duration::from_secs(900);
+
 /// Attempts per slice when an announce stamp is computed. 256 SHA-256 blocks
 /// take about 20 ms on a 64 MHz Cortex-M4; then the executor gets a turn.
 const STAMP_CHUNK: u32 = 256;
@@ -55,6 +56,36 @@ const NET_SNR: i8 = 10;
 const UNREADABLE_NOTICE: &str =
     "[A message from this contact could not be decrypted. A new encryption session was started; ask them to send it again.]";
 
+/// Contacts kept in RAM, and how many of them are pinned (the people one
+/// writes to or hears from: never evicted, the only ones kept in flash).
+/// In maarse-sim a national net shows 1-2 % of messages with 64 contacts
+/// evicting the oldest, 93-95 % with pinning (docs/denmark/README.md).
+const PINNED_MAX: usize = 32;
+/// Post offices (see `maarse_core::mail`): unacknowledged messages kept for
+/// a deposit, how long one waits for a post office, and how often we ask
+/// for mail anyway.
+const OUTBOX: usize = 4;
+const OUTBOX_GIVE_UP: Duration = Duration::from_secs(600);
+const MAIL_SYNC_EVERY: Duration = Duration::from_secs(6 * 3600);
+const MAIL_SYNC_MIN: Duration = Duration::from_secs(60);
+
+/// How long a message waits for its recipient's key (key request).
+const KEY_WAIT: Duration = Duration::from_secs(60);
+/// Mobile mode: the best repeater changed this many times within
+/// `MOBILE_WINDOW` (a car passing repeaters); off again after `MOBILE_CALM`
+/// without a change.
+const MOBILE_HANDOVERS: usize = 3;
+const MOBILE_WINDOW: Duration = Duration::from_secs(600);
+const MOBILE_CALM: Duration = Duration::from_secs(900);
+
+/// Stored role value for automatic forest mode (beyond the router's roles 0-3).
+pub const ROLE_AUTO: u8 = 4;
+/// Automatic forest mode: relay after this long without a repeater or anchor
+/// in range, client again after hearing one this long without a break. In
+/// maarse-sim 2 min beat 10 min in the forest and in a town (see
+/// docs/denmark/README.md, "Automatic forest mode").
+const AUTO_SWITCH: Duration = Duration::from_secs(120);
+
 /// Copies per message a relay carries (see `apply_role`).
 const RELAY_CARRY_COPIES: u8 = 4;
 
@@ -64,10 +95,10 @@ pub trait Settings {
     fn save_admins(&mut self, admins: &[Address]);
     fn load_admins(&mut self) -> heapless::Vec<Address, 4>;
     /// Stores the node's role. Default: not stored.
-    fn save_role(&mut self, _role: Role) {}
+    fn save_role(&mut self, _role: u8) {}
     /// Stored role; the default (and older flash without a role) is repeater.
-    fn load_role(&mut self) -> Role {
-        Role::Repeater
+    fn load_role(&mut self) -> u8 {
+        Role::Repeater.as_u8()
     }
     /// Stores the region list and `strict`. Default: not stored.
     fn save_regions(&mut self, _strict: bool, _names: &[u8]) {}
@@ -120,6 +151,15 @@ pub trait Settings {
         (0, 0)
     }
 
+    /// Known contacts (public identities) kept across reboots. Default: not kept.
+    fn known_load(&mut self, _f: &mut dyn FnMut(&[u8; 64])) {}
+    /// Adds one contact; `false` if there is no room (then `known_reset`).
+    fn known_add(&mut self, _id: &[u8; 64]) -> bool {
+        false
+    }
+    /// Replaces the stored contacts with these.
+    fn known_reset(&mut self, _ids: &mut dyn Iterator<Item = [u8; 64]>) {}
+
     /// Staging area and installation for firmware updates (see
     /// [`crate::ota`]). Default: not supported.
     fn ota(&mut self) -> Option<&mut dyn crate::ota::OtaPort> {
@@ -133,7 +173,30 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     router: &'static mut Router<256, 1024>,
     identity: Identity,
     addr: Address,
-    known: FnvIndexMap<Address, PublicIdentity, 64>,
+    known: FnvIndexMap<Address, PublicIdentity, 128>,
+    /// Contacts we have written to or heard from (kept in flash, never
+    /// evicted from `known`).
+    pinned: heapless::Vec<Address, PINNED_MAX>,
+    /// Messages waiting for their recipient's key: (request, recipient,
+    /// plaintext, since).
+    await_key: heapless::Vec<(u16, Address, heapless::Vec<u8, 200>, Instant), 4>,
+    /// Last key request (whom, when) and last answer to one.
+    key_asked: Option<(Address, Instant)>,
+    key_answered: Option<Instant>,
+    /// Mobile mode: best repeater now, and recent changes of it.
+    best_repeater: Option<u16>,
+    handovers: heapless::Vec<Instant, MOBILE_HANDOVERS>,
+    next_mobile_check: Instant,
+    /// Sent messages not acknowledged yet: (msg ID, recipient, the message
+    /// sealed for a post office (static seal), sent, deposited).
+    outbox: heapless::Vec<(u64, Address, heapless::Vec<u8, 255>, Instant, bool), OUTBOX>,
+    /// What other nodes can read (`appdata::CAP_*`), from their announces.
+    caps: heapless::FnvIndexMap<Address, u8, 64>,
+    /// Mail IDs of messages we received lately (sent along in a MailSync).
+    got_mail: heapless::Vec<u32, 8>,
+    /// Our home post office (path ID, address) and the last mail sync.
+    home_po: Option<(u16, Option<Address>)>,
+    last_sync: Option<Instant>,
     /// Contacts that can do forward secrecy (announce or FS message).
     fs_peers: FnvIndexSet<Address, 64>,
     sessions: FixedStore<SESSIONS>,
@@ -146,6 +209,22 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     wifi_modem: bool,
     radio_ok: bool,
     next_announce: Instant,
+    /// A repeater or anchor has been heard since the start: announce at the
+    /// configured interval (`RadioConfig::announce_interval_s`, default 12 h)
+    /// instead of every 15 minutes.
+    announce_settled: bool,
+    /// The first announce since the start has been sent (it is never put
+    /// off by settling, so a new node is known at once).
+    announced: bool,
+    /// Automatic forest mode (role "auto"): the router is a client while a
+    /// repeater or anchor is in range and a relay when none has been for a while.
+    auto_role: bool,
+    /// Last time a repeater was in range, and since when without a break.
+    rep_last: Instant,
+    rep_since: Option<Instant>,
+    next_auto_check: Instant,
+    /// The edge bridge choice our last announce carried (or will carry).
+    told_choice: Option<u16>,
     settings: S,
     radio: RadioConfig,
     started: Instant,
@@ -168,7 +247,14 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     last_control: u32,
     /// Range test and power accounting (see node/range.rs).
     range: range::Range,
+    /// Direct messages from senders we do not know yet (no announce heard,
+    /// e.g. right after a reboot without stored contacts): opened when the
+    /// sender's announce arrives. (payload, hops)
+    pending_rx: heapless::Vec<(heapless::Vec<u8, 256>, u8), PENDING_RX>,
 }
+
+/// Messages from unknown senders kept until their announce.
+const PENDING_RX: usize = 4;
 
 fn now_ms() -> u64 {
     Instant::now().as_millis()
@@ -195,13 +281,28 @@ fn err(req: u16, code: u8, msg: &str) {
 }
 
 impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
-    pub fn new(
+    /// A node returned by value (it is built in place and then moved; see
+    /// [`FwNode::new_in`] where stack is short).
+    pub fn new(identity: Identity, rng: R, settings: S, radio: RadioConfig, radio_ok: bool) -> Self {
+        let mut slot = core::mem::MaybeUninit::uninit();
+        Self::new_in(&mut slot, identity, rng, settings, radio, radio_ok);
+        // SAFETY: new_in has written the node into the slot.
+        unsafe { slot.assume_init() }
+    }
+
+    /// Builds the node directly in `dest` (e.g. a `StaticCell`'s memory)
+    /// and loads its settings and contacts there. Built on the stack and
+    /// then copied, the node (about 27 KB) took about 60 KB of stack on the
+    /// ESP32-S3 at start-up and left 4.5 KB; the PHY calibration interrupt
+    /// that came then ran past the end of the stack and crashed the board.
+    pub fn new_in<'a>(
+        dest: &'a mut core::mem::MaybeUninit<Self>,
         identity: Identity,
         rng: R,
         settings: S,
         radio: RadioConfig,
         radio_ok: bool,
-    ) -> Self {
+    ) -> &'a mut Self {
         let addr = identity.address();
         crate::bus::MY_SHORT.store(
             u32::from_be_bytes([addr.0[0], addr.0[1], addr.0[2], addr.0[3]]),
@@ -211,11 +312,23 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         // the default is repeater (mains power).
         static ROUTER: static_cell::StaticCell<Router<256, 1024>> = static_cell::StaticCell::new();
         let router = ROUTER.init_with(|| Router::new(addr, Role::Repeater));
-        let mut n = FwNode {
+        let n = dest.write(FwNode {
             router,
             identity,
             addr,
             known: FnvIndexMap::new(),
+            pinned: heapless::Vec::new(),
+            await_key: heapless::Vec::new(),
+            key_asked: None,
+            key_answered: None,
+            best_repeater: None,
+            handovers: heapless::Vec::new(),
+            next_mobile_check: Instant::now() + Duration::from_secs(15),
+            outbox: heapless::Vec::new(),
+            got_mail: heapless::Vec::new(),
+            caps: heapless::FnvIndexMap::new(),
+            home_po: None,
+            last_sync: None,
             fs_peers: FnvIndexSet::new(),
             sessions: FixedStore::new(),
             resynced: FnvIndexMap::new(),
@@ -225,6 +338,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             wifi_modem: crate::bus::WIFI_MODEM.load(Relaxed),
             radio_ok,
             next_announce: Instant::now() + Duration::from_secs(5),
+            announce_settled: false,
+            announced: false,
+            auto_role: false,
+            rep_last: Instant::now(),
+            rep_since: None,
+            next_auto_check: Instant::now() + Duration::from_secs(15),
+            told_choice: None,
             settings,
             radio,
             started: Instant::now(),
@@ -240,14 +360,40 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             ota: crate::ota::OtaManager::new(),
             last_control: 0,
             range: range::Range::new(),
-        };
+            pending_rx: heapless::Vec::new(),
+        });
+        // The first announce 5-35 s after the start, at random: after a power
+        // cut many nodes start at the same moment and would collide.
+        n.next_announce = Instant::now() + Duration::from_millis(5000 + n.rng.next_u64() % 30_000);
+        // Contacts stored in flash: a reboot does not forget them.
+        {
+            let FwNode { settings, known, pinned, .. } = &mut *n;
+            settings.known_load(&mut |b| {
+                if let Some(p) = PublicIdentity::from_bytes(b) {
+                    let _ = known.insert(p.address(), p);
+                    if !pinned.contains(&p.address()) {
+                        let _ = pinned.push(p.address());
+                    }
+                }
+            });
+        }
+        // Neighbor hellos (role, coverage, bridge choice, motion) on a
+        // Trickle timer: neighbors know within seconds what announces 12 h
+        // apart would tell them only much later.
+        n.router.hello = true;
+        // Expanding ring search: a node heard within 4 hops lately is looked
+        // for there first (maarse-sim: 16 % less airtime nationally).
+        n.router.ring = 4;
+        {
+        }
+        crate::bus::KNOWN_NODES.store(n.known.len() as u32, Relaxed);
         n.ext.sharing = n.settings.load_sharing();
         n.ext.name = n.settings.load_name();
         let (strict, names) = n.settings.load_regions();
         n.apply_regions(strict, names);
         n.admins = n.settings.load_admins();
         let role = n.settings.load_role();
-        n.apply_role(role);
+        n.apply_role_value(role);
         n.apply_radio_timing();
         n.join("public");
         n.range_init();
@@ -315,6 +461,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     fn next_deadline(&self) -> Instant {
         let mut d = self.next_announce.min(self.ext.next_power);
+        if self.auto_role {
+            d = d.min(self.next_auto_check);
+        }
+        d = d.min(self.next_mobile_check);
         if let Some(t) = self.router.next_deadline() {
             let t = Instant::from_millis(t);
             if t < d {
@@ -341,11 +491,35 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         self.file_tick();
         self.power_tick();
         self.range_tick();
+        self.check_settled();
+        if Instant::now() >= self.next_mobile_check {
+            self.next_mobile_check = Instant::now() + Duration::from_secs(15);
+            self.mobile_step();
+            self.mail_step();
+            if let Some(a) = self.await_key.first().map(|e| e.1) {
+                // Also expires messages whose key never came.
+                self.release_await_key_expired(a);
+            }
+        }
+        if self.auto_role && Instant::now() >= self.next_auto_check {
+            self.next_auto_check = Instant::now() + Duration::from_secs(15);
+            self.auto_role_step();
+        }
         if Instant::now() >= self.next_announce {
             if !self.modem && !self.wifi_modem {
                 self.announce();
             }
-            self.next_announce = Instant::now() + ANNOUNCE_EVERY;
+            self.announced = true;
+            let bridge = self.router.role == Role::Relay && self.router.hears_repeater(now_ms());
+            let every = if bridge {
+                // Nodes without coverage choose among the bridges they hear.
+                maarse_core::router::BRIDGE_ANNOUNCE_S.min(self.radio.announce_interval_s())
+            } else if self.announce_settled {
+                self.radio.announce_interval_s()
+            } else {
+                RadioConfig::BOOT_ANNOUNCE_S
+            };
+            self.next_announce = Instant::now() + self.jittered(every);
         }
         if let Some(e) = self.ota.on_timer(self.settings.ota()) {
             log(e);
@@ -413,6 +587,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     }
                 }
                 Action::Acked { msg_id } => {
+                    self.outbox.retain(|e| e.0 != msg_id);
                     if let Some(id) = self.mail_inflight.remove(&msg_id) {
                         self.settings.mail_remove(id);
                         self.mail_delivered += 1;
@@ -499,21 +674,68 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             return;
         }
         self.router.rx_rssi = RSTATS.last_rssi.load(Relaxed) as i16;
+        let bad = self.router.stats.bad_stamps;
         let actions = self.router.on_receive(&pkt, snr, now_ms());
+        if self.router.stats.bad_stamps != bad {
+            log_bad_stamp(&pkt, snr);
+        }
+        // After apply: an announce's role field reaches the router there.
         self.apply(actions);
+        self.check_settled();
+    }
+
+    /// Once a repeater or anchor is in range after the start, announce at the
+    /// long interval from then on.
+    fn check_settled(&mut self) {
+        let choice = self.router.chosen_bridge(now_ms());
+        if !self.announce_settled && (self.router.hears_repeater(now_ms()) || choice.is_some()) {
+            self.announce_settled = true;
+            if self.announced {
+                self.reschedule_announce();
+            }
+            log(if choice.is_some() {
+                "An edge bridge connects us to the network: announcing at the long interval from now on"
+            } else {
+                "A repeater is in range: announcing at the long interval from now on"
+            });
+        }
+        if choice != self.told_choice {
+            // The chosen bridge learns from our announce that it is needed.
+            self.told_choice = choice;
+            if self.announced {
+                let soon = Instant::now() + Duration::from_millis(5000 + self.rng.next_u64() % 30_000);
+                self.next_announce = self.next_announce.min(soon);
+            }
+        }
     }
 
     fn on_deliver(&mut self, ptype: PacketType, dest: Address, payload: &[u8], hops: u8) {
         match ptype {
+            PacketType::KeyRequest if dest == self.addr => {
+                // Someone needs our key: announce soon (at most every 30 s).
+                if self.key_answered.is_none_or(|t| t.elapsed() >= Duration::from_secs(30)) {
+                    self.key_answered = Some(Instant::now());
+                    let soon = Instant::now() + Duration::from_millis(500 + self.rng.next_u64() % 2500);
+                    self.next_announce = self.next_announce.min(soon);
+                    log("Asked for our key: announcing");
+                }
+            }
             PacketType::Announce if dest != self.addr => {
                 if let Ok(a) = verify_announce(&dest, payload) {
+                    let new = !self.known.contains_key(&dest);
                     if self.known.insert(dest, a.identity).is_err() {
-                        // Full: forget the oldest.
-                        if let Some(k) = self.known.keys().next().copied() {
+                        // Full: forget the oldest contact that is not pinned
+                        // (strangers go first; the people we talk to stay).
+                        let pinned = &self.pinned;
+                        if let Some(k) = self.known.keys().find(|k| !pinned.contains(k)).copied() {
                             self.known.remove(&k);
                         }
                         let _ = self.known.insert(dest, a.identity);
                     }
+                    if new {
+                        self.open_pending();
+                    }
+                    self.release_await_key(dest);
                     if ratchet::announces_fs(a.app_data) {
                         self.mark_fs(dest);
                     }
@@ -523,65 +745,42 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     self.flush_mail(dest);
                 }
             }
-            PacketType::Data => {
-                let mut out = [0u8; 256];
-                let known = &self.known;
-                let res = ratchet::open(
-                    &self.identity,
-                    payload,
-                    &mut self.sessions,
-                    |a| known.get(a).copied(),
-                    &mut out,
-                );
-                if let Ok(o) = &res
-                    && o.format != Format::Static
-                {
-                    self.mark_fs(o.from);
-                }
-                match res.map(|o| (o.from, o.len)) {
-                    Ok((from, n)) => match content::parse(&out[..n]) {
-                        Some(Content::Resync) => log("The contact started a new encryption session"),
-                        Some(Content::Text(t)) => {
-                            crate::bus::note_message(&from, t);
-                            emit(&Event::DirectReceived {
-                                from,
-                                hops,
-                                text: text(t),
-                            })
-                        }
-                        Some(Content::FileOffer(offer)) => self.file_offer(from, offer),
-                        Some(Content::Control(counter, frame)) => {
-                            let mut f: heapless::Vec<u8, 256> = heapless::Vec::new();
-                            let _ = f.extend_from_slice(frame);
-                            self.on_control(from, counter, &f);
-                        }
-                        Some(Content::ControlReply(_, frame)) => {
-                            emit(&Event::RemoteReply { from, frame: text(frame) })
-                        }
-                        Some(Content::PageRequest(_)) => log("Page request: this node has no pages"),
-                        _ => {}
-                    },
-                    Err(CryptoError::UnknownSender(_)) => {
-                        log("Message from an unknown sender (no announce yet)")
-                    }
-                    Err(CryptoError::NoSession(a) | CryptoError::Desync(a)) => {
-                        log("Message could not be read (the encryption session is lost)");
-                        // Show it in the conversation too, so the loss is not silent.
-                        emit(&Event::DirectReceived { from: a, hops, text: text(UNREADABLE_NOTICE.as_bytes()) });
-                        self.resync(a);
-                    }
-                    Err(_) => {}
-                }
-            }
+            PacketType::Data => self.on_data(payload, hops),
             PacketType::Fragment => self.file_chunk(payload),
             PacketType::Probe => self.on_trace(dest, payload),
             PacketType::Deposit => {
-                // We are a mailbox for someone else: store the message for the recipient.
-                if let Some(recipient) = Address::from_slice(payload) {
-                    if self.settings.mail_add(&recipient, &payload[16..]).is_some() {
-                        self.flush_mail(recipient);
-                    } else {
-                        log("The mailbox is full");
+                // We are a post office for someone else. Radio nodes do not
+                // offer it (mail class 0: hosts keep mail, repeaters only
+                // carry it), but a STORE sent to us is kept in the small
+                // flash mailbox, and SYNC delivers it.
+                use maarse_core::mail::{self, Deposit};
+                match Deposit::parse(payload) {
+                    Some(d) if d.op == mail::OP_STORE => {
+                        if self.settings.mail_add(&d.recipient, d.body).is_some() {
+                            self.flush_mail(d.recipient);
+                        } else {
+                            log("The mailbox is full");
+                        }
+                    }
+                    Some(d) if d.op == mail::OP_SYNC => self.flush_mail(d.recipient),
+                    Some(d) if d.op == mail::OP_BUNDLE && d.recipient == self.addr => {
+                        // Several messages for us in one packet.
+                        let items: heapless::Vec<heapless::Vec<u8, 255>, 4> =
+                            d.bundle().filter_map(|m| heapless::Vec::from_slice(m).ok()).take(4).collect();
+                        for m in items {
+                            self.on_data(&m, hops);
+                        }
+                    }
+                    Some(_) => {}
+                    None => {
+                        // Older senders: recipient | sealed.
+                        if let Some(recipient) = Address::from_slice(payload) {
+                            if self.settings.mail_add(&recipient, &payload[16..]).is_some() {
+                                self.flush_mail(recipient);
+                            } else {
+                                log("The mailbox is full");
+                            }
+                        }
                     }
                 }
             }
@@ -646,6 +845,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::SetRadio(cfg) => match cfg.validate() {
                 Ok(()) => {
                     self.radio = cfg;
+                    if self.announce_settled && self.announced {
+                        self.reschedule_announce();
+                    }
                     self.apply_radio_timing();
                     self.settings.save_radio(&cfg);
                     RADIO_CFG.signal(cfg);
@@ -705,6 +907,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 text: msg,
             } => self.send_content(req, dest, &content::text(&msg)),
             Command::SendCall { .. } => err(0, error_code::NOT_OVER_TCP, "Calls need maarse-host (TCP)"),
+            Command::SendAlert { req, .. } => err(req, error_code::NOT_OVER_TCP, "Alerts are issued by maarse-host with an issuer key"),
             Command::RequestPage { req, dest, path } => match content::page_request(&path) {
                 Some(plain) => self.send_content(req, dest, &plain),
                 None => err(req, error_code::TOO_LARGE, "Invalid path"),
@@ -848,9 +1051,29 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// Encrypts with forward secrecy if the other party can, otherwise static.
     /// Encrypts and sends a direct message (text or page request).
     fn send_content(&mut self, req: u16, dest: Address, plain: &[u8]) {
-        let Some(recipient) = self.known.get(&dest).copied() else {
-            return err(req, error_code::UNKNOWN_DEST, "The recipient has not been heard yet");
+        // Text is compressed for a node that says it can read it (about 40 %
+        // shorter for short chat messages).
+        let z;
+        let plain = if self.caps.get(&dest).is_some_and(|c| c & appdata::CAP_TEXTZ != 0) {
+            z = content::compress(plain);
+            &z[..]
+        } else {
+            plain
         };
+        let Some(recipient) = self.known.get(&dest).copied() else {
+            // Ask the network for the key; the message goes when it comes.
+            let Ok(p) = heapless::Vec::from_slice(plain) else {
+                return err(req, error_code::TOO_LARGE, "The message is too long");
+            };
+            if self.await_key.is_full() {
+                let (r, ..) = self.await_key.remove(0);
+                err(r, error_code::UNKNOWN_DEST, "The recipient's key did not come");
+            }
+            let _ = self.await_key.push((req, dest, p, Instant::now()));
+            self.ask_key(dest);
+            return log("The recipient has not been heard yet: asking the network for its key");
+        };
+        self.pin(dest);
         let mut ct = [0u8; 255];
         let Ok(n) = self.seal(&recipient, plain, &mut ct) else {
             return err(req, error_code::TOO_LARGE, "The message is too long");
@@ -861,6 +1084,15 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Ok((msg_id, actions)) => {
                 emit(&Event::Sent { req, msg_id });
                 self.apply(actions);
+                // A copy for a post office, sealed without forward secrecy
+                // (a ratchet message delivered days later may not open).
+                let mut st = [0u8; 255];
+                if let Ok((m, _)) = ratchet::seal(&self.identity, &recipient, &mut self.sessions, false, &mut self.rng, plain, &mut st) {
+                    if self.outbox.is_full() {
+                        self.outbox.remove(0);
+                    }
+                    let _ = self.outbox.push((msg_id, dest, heapless::Vec::from_slice(&st[..m]).unwrap_or_default(), Instant::now(), false));
+                }
             }
             Err(_) => err(req, error_code::QUEUE_FULL, "The queue is full"),
         }
@@ -876,6 +1108,34 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
         ratchet::seal(&self.identity, recipient, &mut self.sessions, fs_ok, &mut self.rng, plain, out)
             .map(|(n, _)| n)
+    }
+
+    /// `secs` with ±10 % randomness, so nodes do not announce in step.
+    fn jittered(&mut self, secs: u32) -> Duration {
+        let ms = secs as u64 * 1000;
+        let span = (ms / 5).max(1);
+        Duration::from_millis(ms - ms / 10 + self.rng.next_u64() % span)
+    }
+
+    /// After settling or a new interval: the next announce at a random moment
+    /// within the interval, so many nodes that settle together spread out.
+    fn reschedule_announce(&mut self) {
+        let ms = self.radio.announce_interval_s() as u64 * 1000;
+        let wait = ms / 10 + self.rng.next_u64() % (ms - ms / 10).max(1);
+        self.next_announce = Instant::now() + Duration::from_millis(wait);
+    }
+
+    /// Opens kept messages from senders that were unknown (a new contact has
+    /// just been heard). Those still unknown are kept again.
+    fn open_pending(&mut self) {
+        if self.pending_rx.is_empty() {
+            return;
+        }
+        let kept = core::mem::take(&mut self.pending_rx);
+        let addr = self.addr;
+        for (p, hops) in kept {
+            self.on_deliver(PacketType::Data, addr, &p, hops);
+        }
     }
 
     fn mark_fs(&mut self, a: Address) {
@@ -953,6 +1213,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     // can arrive; then switch.
                     reply(self, Event::Radio(cfg));
                     self.radio = cfg;
+                    if self.announce_settled && self.announced {
+                        self.reschedule_announce();
+                    }
                     self.apply_radio_timing();
                     self.settings.save_radio(&cfg);
                     RADIO_CFG.signal(cfg);
@@ -1019,16 +1282,357 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     /// Changes role and stores it in flash. Returns a log text.
+    /// A direct message (or one taken out of a mail bundle): open, expand
+    /// compressed text, and hand it to the app.
+    fn on_data(&mut self, payload: &[u8], hops: u8) {
+                let mut out = [0u8; 256];
+                let known = &self.known;
+                let res = ratchet::open(
+                    &self.identity,
+                    payload,
+                    &mut self.sessions,
+                    |a| known.get(a).copied(),
+                    &mut out,
+                );
+                if let Ok(o) = &res
+                    && o.format != Format::Static
+                {
+                    self.mark_fs(o.from);
+                }
+                if res.is_ok() {
+                    let id = maarse_core::mail::mail_id(&self.addr, payload);
+                    if self.got_mail.is_full() {
+                        self.got_mail.remove(0);
+                    }
+                    let _ = self.got_mail.push(id);
+                }
+                // Compressed text is expanded before anything else looks at it.
+                let res = match res {
+                    Ok(mut o) if out.first() == Some(&content::TEXT_Z) => {
+                        if let Some(v) = content::expand(&out[..o.len]) {
+                            let m = v.len().min(out.len());
+                            out[..m].copy_from_slice(&v[..m]);
+                            o.len = m;
+                        }
+                        Ok(o)
+                    }
+                    other => other,
+                };
+                match res.map(|o| (o.from, o.len)) {
+                    Ok((from, n)) => match content::parse(&out[..n]) {
+                        Some(Content::Resync) => log("The contact started a new encryption session"),
+                        Some(Content::Text(t)) => {
+                            self.pin(from);
+                            crate::bus::note_message(&from, t);
+                            emit(&Event::DirectReceived {
+                                from,
+                                hops,
+                                text: text(t),
+                            })
+                        }
+                        Some(Content::FileOffer(offer)) => self.file_offer(from, offer),
+                        Some(Content::Control(counter, frame)) => {
+                            let mut f: heapless::Vec<u8, 256> = heapless::Vec::new();
+                            let _ = f.extend_from_slice(frame);
+                            self.on_control(from, counter, &f);
+                        }
+                        Some(Content::ControlReply(_, frame)) => {
+                            emit(&Event::RemoteReply { from, frame: text(frame) })
+                        }
+                        Some(Content::PageRequest(_)) => log("Page request: this node has no pages"),
+                        _ => {}
+                    },
+                    Err(CryptoError::UnknownSender(sender)) => {
+                        // Keep it until the sender's announce arrives (the
+                        // router has already acknowledged it), and ask for it.
+                        if self.pending_rx.is_full() {
+                            self.pending_rx.remove(0);
+                        }
+                        if let Ok(p) = heapless::Vec::from_slice(payload) {
+                            let _ = self.pending_rx.push((p, hops));
+                        }
+                        self.ask_key(sender);
+                        log("Message from an unknown sender: kept, asking for its key")
+                    }
+                    Err(CryptoError::NoSession(a) | CryptoError::Desync(a)) => {
+                        log("Message could not be read (the encryption session is lost)");
+                        // Show it in the conversation too, so the loss is not silent.
+                        emit(&Event::DirectReceived { from: a, hops, text: text(UNREADABLE_NOTICE.as_bytes()) });
+                        self.resync(a);
+                    }
+                    Err(_) => {}
+                }
+    }
+
+    /// Pins a contact we write to or hear from: never evicted, kept in flash
+    /// (the only contacts written there, so the flash hardly wears).
+    fn pin(&mut self, a: Address) {
+        if self.pinned.contains(&a) {
+            return;
+        }
+        let Some(id) = self.known.get(&a).copied() else { return };
+        if self.pinned.is_full() {
+            // The oldest pin makes room; rewrite the sector with the rest.
+            self.pinned.remove(0);
+            let _ = self.pinned.push(a);
+            let FwNode { settings, known, pinned, .. } = self;
+            settings.known_reset(&mut pinned.iter().filter_map(|p| known.get(p)).map(|p| p.to_bytes()));
+            return;
+        }
+        let _ = self.pinned.push(a);
+        if !self.settings.known_add(&id.to_bytes()) {
+            let FwNode { settings, known, pinned, .. } = self;
+            settings.known_reset(&mut pinned.iter().filter_map(|p| known.get(p)).map(|p| p.to_bytes()));
+        }
+    }
+
+    /// Asks the network who `a` is (key request), at most every 30 s for
+    /// the same contact.
+    fn ask_key(&mut self, a: Address) {
+        if self.key_asked.is_some_and(|(w, t)| w == a && t.elapsed() < Duration::from_secs(30)) {
+            return;
+        }
+        self.key_asked = Some((a, Instant::now()));
+        let actions = self.router.request_key(a);
+        self.apply(actions);
+    }
+
+    /// Gives up on messages whose key did not come in time.
+    fn release_await_key_expired(&mut self, _a: Address) {
+        let mut i = 0;
+        while i < self.await_key.len() {
+            if self.await_key[i].3.elapsed() >= KEY_WAIT {
+                let (req, ..) = self.await_key.remove(i);
+                err(req, error_code::UNKNOWN_DEST, "The recipient's key did not come");
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// `a`'s key has come: send what waited for it; give up on old ones.
+    fn release_await_key(&mut self, a: Address) {
+        let mut i = 0;
+        while i < self.await_key.len() {
+            if self.await_key[i].1 == a {
+                let (req, dest, plain, _) = self.await_key.remove(i);
+                self.send_content(req, dest, &plain);
+            } else if self.await_key[i].3.elapsed() >= KEY_WAIT {
+                let (req, ..) = self.await_key.remove(i);
+                err(req, error_code::UNKNOWN_DEST, "The recipient's key did not come");
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Post offices, the client side (see `maarse_core::mail`): keep our home
+    /// post office up to date (the best one our neighbors' hellos name),
+    /// drop unacknowledged messages there after 45 s, and ask for our mail
+    /// when we start, when the home office changes (then also ask the
+    /// previous one), when its hello says mail is waiting, and every 6 hours.
+    fn mail_step(&mut self) {
+        let now = now_ms();
+        let best = self.router.best_post_office(now).map(|(id, a, _)| (id, a));
+        if best.is_some() && best.map(|b| b.0) != self.home_po.map(|h| h.0) {
+            let prev = self.home_po.and_then(|h| h.1);
+            self.home_po = best;
+            log("New home post office");
+            self.mail_sync();
+            if let Some(p) = prev
+                && Some(p) != best.and_then(|b| b.1)
+            {
+                // Moved: the previous office delivers what it holds, over
+                // whatever route reaches us now.
+                let mut body: heapless::Vec<u8, 32> = heapless::Vec::new();
+                maarse_core::mail::id_body(&mut body, self.got_mail.iter().copied(), 8);
+                self.send_deposit(p, self.addr, maarse_core::mail::OP_SYNC, &body);
+            }
+        }
+        let since = self.last_sync.map(|t| t.elapsed());
+        let hint = self.router.take_mail_hint();
+        if self.home_po.is_some()
+            && (since.is_none() && self.started.elapsed() > Duration::from_secs(40)
+                || hint && since.is_none_or(|s| s >= MAIL_SYNC_MIN)
+                || since.is_some_and(|s| s >= MAIL_SYNC_EVERY))
+        {
+            self.mail_sync();
+        }
+        // Unacknowledged messages go to the post office.
+        let home = self.home_po.and_then(|h| h.1);
+        let mut i = 0;
+        while i < self.outbox.len() {
+            let (_, dest, _, sent, deposited) = &self.outbox[i];
+            let age = sent.elapsed();
+            if age >= OUTBOX_GIVE_UP {
+                self.outbox.remove(i);
+                continue;
+            }
+            if !*deposited
+                && age >= Duration::from_millis(maarse_core::mail::DEPOSIT_AFTER_MS)
+                && let Some(po) = home
+                && po != *dest
+            {
+                let (dest, sealed) = (*dest, self.outbox[i].2.clone());
+                self.outbox[i].4 = true;
+                self.send_deposit(po, dest, maarse_core::mail::OP_STORE, &sealed);
+                log("Recipient not answering: message handed to our post office");
+            }
+            i += 1;
+        }
+    }
+
+    /// "Do you have mail for me?" to the post offices within 2 hops.
+    fn mail_sync(&mut self) {
+        self.last_sync = Some(Instant::now());
+        let ids: heapless::Vec<u32, 8> = self.got_mail.clone();
+        let actions = self.router.request_mail(self.home_po.map(|h| h.0), &ids);
+        self.apply(actions);
+    }
+
+    /// Sends a `Deposit` (`recipient | op | body`) to post office `po`.
+    fn send_deposit(&mut self, po: Address, recipient: Address, op: u8, body: &[u8]) {
+        let mut p: heapless::Vec<u8, 300> = heapless::Vec::new();
+        if !maarse_core::mail::build(&mut p, &recipient, op, body) {
+            return;
+        }
+        let mut token = [0u8; 16];
+        self.rng.fill_bytes(&mut token);
+        if let Ok((_, actions)) = self.router.send_typed(PacketType::Deposit, po, &p, token, now_ms()) {
+            self.apply(actions);
+        }
+    }
+
+    /// Mobile mode: a node whose best repeater keeps changing is moving (a
+    /// car). It says so in hellos and announces, so routes to it go stale
+    /// fast, refreshes its own routes, and never acts as an edge bridge.
+    fn mobile_step(&mut self) {
+        let now_ms = now_ms();
+        let best = self
+            .router
+            .neighbors
+            .iter()
+            .filter(|n| matches!(n.role, Some(Role::Repeater | Role::Anchor)) && now_ms.saturating_sub(n.last_ms) < maarse_core::router::EDGE_WINDOW_MS)
+            .max_by_key(|n| n.snr)
+            .map(|n| n.id);
+        if best.is_some() && best != self.best_repeater {
+            if self.best_repeater.is_some() {
+                if self.handovers.is_full() {
+                    self.handovers.remove(0);
+                }
+                let _ = self.handovers.push(Instant::now());
+            }
+            self.best_repeater = best;
+        }
+        let recent = self.handovers.iter().filter(|t| t.elapsed() < MOBILE_WINDOW).count();
+        let calm = self.handovers.last().is_none_or(|t| t.elapsed() >= MOBILE_CALM);
+        if !self.router.mobile && recent >= MOBILE_HANDOVERS {
+            self.router.mobile = true;
+            log("Passing repeaters quickly: mobile mode on");
+        } else if self.router.mobile && calm {
+            self.router.mobile = false;
+            log("Staying put: mobile mode off");
+        }
+    }
+
     fn set_role(&mut self, role: u8) -> Result<&'static str, &'static str> {
-        let r = Role::from_u8(role).ok_or("Unknown role (0 = client, 1 = repeater, 2 = relay)")?;
-        self.apply_role(r);
-        self.settings.save_role(r);
-        Ok(match r {
-            Role::Client => "Role saved: client",
-            Role::Repeater => "Role saved: repeater",
-            Role::Relay => "Role saved: relay",
-            Role::Anchor => "Role saved: anchor",
+        if role != ROLE_AUTO && Role::from_u8(role).is_none() {
+            return Err("Unknown role (0 = client, 1 = repeater, 2 = relay, 3 = anchor, 4 = auto)");
+        }
+        self.apply_role_value(role);
+        self.settings.save_role(role);
+        Ok(match Role::from_u8(role) {
+            Some(Role::Client) => "Role saved: client",
+            Some(Role::Repeater) => "Role saved: repeater",
+            Some(Role::Relay) => "Role saved: relay",
+            Some(Role::Anchor) => "Role saved: anchor",
+            None => "Role saved: auto (relays when no repeater is in range)",
         })
+    }
+
+    /// A stored role value: a router role, or [`ROLE_AUTO`].
+    fn apply_role_value(&mut self, role: u8) {
+        self.auto_role = role == ROLE_AUTO;
+        // Edge bridges forward path requests only across the edge.
+        self.router.boundary = self.auto_role;
+        if self.auto_role {
+            // Start as a client; forest mode only if no repeater shows up.
+            self.rep_last = Instant::now();
+            self.rep_since = None;
+            self.next_auto_check = Instant::now() + Duration::from_secs(15);
+            self.apply_role(Role::Client);
+        } else {
+            self.apply_role(Role::from_u8(role).unwrap_or(Role::Repeater));
+        }
+    }
+
+    /// Automatic forest mode: relay after [`AUTO_SWITCH`] without a repeater
+    /// or anchor in range, client again after hearing one that long.
+    fn auto_role_step(&mut self) {
+        let now = Instant::now();
+        let hears = self.router.hears_repeater(now_ms());
+        if hears {
+            self.rep_last = now;
+            if self.rep_since.is_none() {
+                self.rep_since = Some(now);
+            }
+        } else {
+            self.rep_since = None;
+        }
+        // Edge bridges, after OLSR multipoint relays: nodes without coverage
+        // choose a bridge (the nearest one heard announcing, lowest ID) and
+        // name it in their announces. We stay a bridge while a neighbor names
+        // us, and step in for a neighbor without coverage that has no bridge
+        // yet, once we have had steady coverage for 2 min (after a mass
+        // restart every neighbor first looks uncovered). A client steps in
+        // with chance 1 / (1 + neighbors that hear a repeater too), at least
+        // 1/4 per check, so the person on a hill takes the job at once while
+        // nodes along a town's coverage edge leave room for the first one.
+        // maarse-sim (canopy model, 8 seeds): forest 97 % delivered and 96 %
+        // of messages into and out of the forest (49 % without bridges);
+        // town 93 % into and out of the uncovered part (78 %) at 32 % more
+        // airtime (see docs/denmark/README.md, "Edge bridges").
+        // A moving node (car) never bridges: it would leave the group soon.
+        let steady = !self.router.mobile && (self.router.role == Role::Relay || self.rep_since.is_some_and(|s| now - s >= AUTO_SWITCH));
+        let mut edge = false;
+        if hears && steady {
+            edge = self.router.unserved_neighbor(now_ms()) || (self.router.role == Role::Relay && self.router.bridge_named(now_ms()));
+            if edge && self.router.role == Role::Client {
+                let rivals = self.router.covered_neighbors(now_ms()) as u32;
+                // Chance max(1 / (1 + rivals), 1/4).
+                edge = rivals <= 3 || self.rng.next_u32() % 4 == 0;
+                if edge && rivals > 0 && rivals <= 3 {
+                    edge = self.rng.next_u32() % (1 + rivals) == 0;
+                }
+            }
+        }
+        if edge {
+            self.rep_since = Some(now);
+        }
+        let switched = match self.router.role {
+            Role::Client if edge => {
+                self.apply_role(Role::Relay);
+                log("A neighbor without coverage has no bridge: relaying for it (edge bridge)");
+                true
+            }
+            Role::Client if !hears && now - self.rep_last >= AUTO_SWITCH => {
+                self.apply_role(Role::Relay);
+                log("No repeater in range: forest mode on (this node relays)");
+                true
+            }
+            Role::Relay if hears && !edge && self.rep_since.is_some_and(|s| now - s >= AUTO_SWITCH) => {
+                self.apply_role(Role::Client);
+                log("A repeater is in range and no neighbor needs us as a bridge: forest mode off");
+                true
+            }
+            _ => false,
+        };
+        if switched {
+            // Neighbors learn our role (and whether we bridge) only from
+            // announces, which are 12 h apart once settled: tell them soon.
+            let soon = Instant::now() + Duration::from_millis(5000 + self.rng.next_u64() % 30_000);
+            self.next_announce = self.next_announce.min(soon);
+        }
     }
 
     fn stats(&self) -> Stats {
@@ -1040,7 +1644,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             let _ = items.push((k, v));
         };
         put(stat::UPTIME_S, self.started.elapsed().as_secs() as i32);
-        put(stat::ROLE, self.router.role.as_u8() as i32);
+        put(stat::ROLE, if self.auto_role { ROLE_AUTO as i32 } else { self.router.role.as_u8() as i32 });
         put(stat::KNOWN_NODES, self.known.len() as i32);
         put(stat::ROUTES, self.router.routes().len() as i32);
         put(stat::CHANNELS, self.channels.len() as i32);
@@ -1164,4 +1768,17 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             });
         }
     }
+}
+
+/// Logs a packet the router dropped for a bad proof-of-work stamp, with what
+/// is needed to tell a wrong stamp from a damaged or padded packet.
+fn log_bad_stamp(pkt: &[u8], snr: i8) {
+    use core::fmt::Write as _;
+    let mut s: heapless::String<160> = heapless::String::new();
+    let ptype = pkt.first().map_or(0xFF, |f| (f >> 2) & 0x0F);
+    let _ = write!(s, "Dropped a packet with a bad stamp: type {ptype}, {} bytes, SNR {snr}, ends", pkt.len());
+    for b in &pkt[pkt.len().saturating_sub(8)..] {
+        let _ = write!(s, " {b:02x}");
+    }
+    log(&s);
 }

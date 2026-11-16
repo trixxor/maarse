@@ -139,6 +139,15 @@ pub struct Neighbor {
     /// The neighbor's own report (role field flag) of whether it hears a
     /// repeater directly. `None` if it has not said (older firmware).
     pub hears_repeater: Option<bool>,
+    /// The neighbor's report of how many edge bridges it hears (role flag
+    /// bits 1-2), `None` if it has not said.
+    pub bridges: Option<u8>,
+    /// The edge bridge the neighbor has chosen (role field), if any: a
+    /// bridge stays while a neighbor names it, as OLSR multipoint relays
+    /// stay while their selectors name them.
+    pub bridge_choice: Option<PathId>,
+    /// Post office class from the neighbor's hello (0 = none).
+    pub mail_class: u8,
 }
 
 /// Table of direct neighbours. Full: the one not heard for the longest is replaced.
@@ -168,7 +177,7 @@ impl<const N: usize> NeighborTable<N> {
             }
             return;
         }
-        let n = Neighbor { id, addr, snr, rssi, last_ms: now_ms, count: 1, role: None, forwarded_ms: 0, covered_ms: 0, hears_repeater: None };
+        let n = Neighbor { id, addr, snr, rssi, last_ms: now_ms, count: 1, role: None, forwarded_ms: 0, covered_ms: 0, hears_repeater: None, bridges: None, bridge_choice: None, mail_class: 0 };
         // Full: drop the neighbor heard longest ago, but keep repeaters and
         // anchors (the edge bridge rule needs them) while others can go.
         let infra = |n: &Neighbor| matches!(n.role, Some(crate::router::Role::Repeater | crate::router::Role::Anchor));
@@ -193,6 +202,27 @@ impl<const N: usize> NeighborTable<N> {
             if hears_repeater.is_some() {
                 n.hears_repeater = hears_repeater;
             }
+        }
+    }
+
+    /// How many edge bridges the neighbor says it hears.
+    pub fn set_bridges(&mut self, id: PathId, bridges: u8) {
+        if let Some(n) = self.items.iter_mut().find(|n| n.id == id) {
+            n.bridges = Some(bridges);
+        }
+    }
+
+    /// The neighbor's post office class (from its hello).
+    pub fn set_mail_class(&mut self, id: PathId, class: u8) {
+        if let Some(n) = self.items.iter_mut().find(|n| n.id == id) {
+            n.mail_class = class;
+        }
+    }
+
+    /// The edge bridge the neighbor says it has chosen (`None`: none).
+    pub fn set_bridge_choice(&mut self, id: PathId, choice: Option<PathId>) {
+        if let Some(n) = self.items.iter_mut().find(|n| n.id == id) {
+            n.bridge_choice = choice;
         }
     }
 

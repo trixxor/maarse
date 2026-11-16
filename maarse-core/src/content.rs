@@ -35,6 +35,9 @@ pub const PAGE_REQUEST: u8 = 0x05;
 pub const CALL: u8 = 0x06;
 /// IP tunnel: a piece of an IPv6 packet (see maarse-host/src/tunnel.rs).
 pub const IP: u8 = 0x07;
+/// Text compressed with `textz` (sent only to nodes whose announce says they
+/// can read it, see `appdata::CAP_TEXTZ`).
+pub const TEXT_Z: u8 = 0x08;
 
 /// MIME for a `maarse://` page: Må:rse markup (UTF-8), compressed with
 /// raw deflate (RFC 1951). Not HTML: the client only shows text, headings
@@ -185,6 +188,36 @@ pub fn page_request(path: &[u8]) -> Option<heapless::Vec<u8, 64>> {
 }
 
 /// Builds a text message.
+/// A text content compressed if that makes it shorter (`[TEXT_Z] + z`);
+/// other content is returned unchanged.
+pub fn compress(plain: &[u8]) -> heapless::Vec<u8, 256> {
+    let mut v: heapless::Vec<u8, 256> = heapless::Vec::from_slice(plain).unwrap_or_default();
+    if plain.first() == Some(&TEXT) {
+        let mut z = [0u8; 255];
+        if let Some(n) = crate::textz::compress(&plain[1..], &mut z) {
+            v.clear();
+            let _ = v.push(TEXT_Z);
+            let _ = v.extend_from_slice(&z[..n]);
+        }
+    }
+    v
+}
+
+/// Expands compressed text back to `[TEXT] + text`; other content is
+/// returned unchanged. `None` if compressed text is broken.
+pub fn expand(plain: &[u8]) -> Option<heapless::Vec<u8, 512>> {
+    let mut v: heapless::Vec<u8, 512> = heapless::Vec::new();
+    if plain.first() == Some(&TEXT_Z) {
+        let mut t = [0u8; 511];
+        let n = crate::textz::decompress(&plain[1..], &mut t)?;
+        let _ = v.push(TEXT);
+        v.extend_from_slice(&t[..n]).ok()?;
+    } else {
+        v.extend_from_slice(plain).ok()?;
+    }
+    Some(v)
+}
+
 pub fn text(t: &[u8]) -> heapless::Vec<u8, 256> {
     let mut v = heapless::Vec::new();
     let _ = v.push(TEXT);

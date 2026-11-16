@@ -189,6 +189,60 @@ pub enum Command {
     SetRangeTest(crate::rangetest::Config),
     /// 0x2b: range test status. The reply is `RangeState` followed by `Power`.
     GetRangeTest,
+    /// 0x2c: issue a signed alert (hosts with an issuer key only; see
+    /// `maarse_crypto::alert`). Alerts are never sent by typing on the
+    /// bulletin channel. The reply is `Sent` (msg_id = the alert's serial).
+    SendAlert { req: u16, meta: AlertMeta, text: Text },
+}
+
+/// The fields of an alert besides text, issuer and serial (see
+/// `maarse_crypto::alert`). 15 bytes, or 25 with an area.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct AlertMeta {
+    /// 0 actual, 1 exercise, 2 test, 3 system.
+    pub status: u8,
+    /// 0 alert, 1 update, 2 cancel.
+    pub kind: u8,
+    pub event: u8,
+    /// 0 minor .. 3 extreme.
+    pub severity: u8,
+    pub expires_min: u16,
+    /// Serial of the alert an update or cancel refers to.
+    pub reference: u32,
+    /// Latitude, longitude (1e-5 degrees) and radius (100 m).
+    pub area: Option<(i32, i32, u16)>,
+}
+
+impl AlertMeta {
+    fn put(&self, w: W) -> W {
+        let w = w
+            .b(&[self.status, self.kind, self.event, self.severity])
+            .b(&self.expires_min.to_le_bytes())
+            .b(&self.reference.to_le_bytes());
+        match self.area {
+            Some((lat, lon, r)) => w.b(&[1]).b(&lat.to_le_bytes()).b(&lon.to_le_bytes()).b(&r.to_le_bytes()),
+            None => w.b(&[0]),
+        }
+    }
+    fn take(r: &mut R) -> Result<Self, FrameError> {
+        let mut m = AlertMeta { status: r.u8()?, kind: r.u8()?, event: r.u8()?, severity: r.u8()?, ..Default::default() };
+        m.expires_min = r.u16()?;
+        m.reference = r.u32()?;
+        if r.u8()? == 1 {
+            m.area = Some((r.u32()? as i32, r.u32()? as i32, r.u16()?));
+        }
+        Ok(m)
+    }
+}
+
+/// How a shown alert was trusted (`Event::Alert`).
+pub mod alert_trust {
+    /// An issuer key configured on the host.
+    pub const KEY: u8 = 0;
+    /// A certificate from a configured root key (`name` is from it).
+    pub const CERT: u8 = 1;
+    /// An old v1 bulletin (signed, but without expiry or serial).
+    pub const LEGACY: u8 = 2;
 }
 
 /// Flag in `Command::SetIdentity`: the user has confirmed the replacement.
@@ -463,6 +517,21 @@ pub enum Event {
     /// 0xab: power use estimate and battery (every minute while a range test
     /// runs, and after `GetRangeTest`). See [`PowerReport`].
     Power(PowerReport),
+    /// 0xac: a verified alert, shown once (repeats and replays are dropped
+    /// by the host). The client draws it apart from all chat text, so no
+    /// message can look like one.
+    Alert {
+        issuer: Address,
+        serial: u32,
+        issued: u32,
+        meta: AlertMeta,
+        hops: u8,
+        /// `alert_trust::*`.
+        trust: u8,
+        /// The issuer's name from its certificate (empty when trusted by key).
+        name: heapless::Vec<u8, 24>,
+        text: Text,
+    },
 }
 
 /// Per-SF results on a range test receiver (12 bytes): sf | rx (u16) | lost
@@ -582,10 +651,27 @@ pub struct RadioConfig {
     /// Duty cycle in permille (100 = 10 %).
     pub duty_permille: u16,
     pub preamble: u16,
+    /// How often the node announces once it has heard a repeater or an
+    /// anchor, in quarter hours (0 = the default, 12 h; up to about 64 h).
+    /// Until then it announces every 15 minutes, so it is found quickly after
+    /// a start. Byte 15, which older nodes and clients leave at 0.
+    pub announce_quarters: u8,
 }
 
 impl RadioConfig {
     pub const LEN: usize = 16;
+    /// Announce interval when `announce_quarters` is 0: 12 hours.
+    pub const DEFAULT_ANNOUNCE_S: u32 = 12 * 3600;
+    /// Announce interval after a start, until a repeater or anchor is heard.
+    pub const BOOT_ANNOUNCE_S: u32 = 15 * 60;
+
+    /// The announce interval in seconds once a repeater has been heard.
+    pub fn announce_interval_s(&self) -> u32 {
+        match self.announce_quarters {
+            0 => Self::DEFAULT_ANNOUNCE_S,
+            q => q as u32 * 900,
+        }
+    }
     /// Må:rse default in the EU: 869.525 MHz (the 10 % band), 125 kHz, SF9, 4/5, 22 dBm.
     pub const EU_DEFAULT: RadioConfig = RadioConfig {
         freq_hz: 869_525_000,
@@ -595,6 +681,7 @@ impl RadioConfig {
         tx_power_dbm: 22,
         duty_permille: 100,
         preamble: 16,
+        announce_quarters: 0,
     };
     pub const BANDWIDTHS: [u32; 10] = [
         7800, 10400, 15600, 20800, 31250, 41700, 62500, 125_000, 250_000, 500_000,
@@ -609,6 +696,7 @@ impl RadioConfig {
         b[10] = self.tx_power_dbm as u8;
         b[11..13].copy_from_slice(&self.duty_permille.to_le_bytes());
         b[13..15].copy_from_slice(&self.preamble.to_le_bytes());
+        b[15] = self.announce_quarters;
         b
     }
 
@@ -624,6 +712,7 @@ impl RadioConfig {
             tx_power_dbm: b[10] as i8,
             duty_permille: u16::from_le_bytes([b[11], b[12]]),
             preamble: u16::from_le_bytes([b[13], b[14]]),
+            announce_quarters: b[15],
         })
     }
 
@@ -960,6 +1049,7 @@ impl Command {
             }
             Command::SetRangeTest(c) => W::new(0x2a).b(&c.to_bytes()).done(),
             Command::GetRangeTest => W::new(0x2b).done(),
+            Command::SendAlert { req, meta, text } => meta.put(W::new(0x2c).b(&req.to_le_bytes())).b(text).done(),
         }
     }
 
@@ -1045,6 +1135,7 @@ impl Command {
                 crate::rangetest::Config::from_bytes(r.take(crate::rangetest::Config::LEN)?).ok_or(FrameError::TooShort)?,
             ),
             0x2b => Command::GetRangeTest,
+            0x2c => Command::SendAlert { req: r.u16()?, meta: AlertMeta::take(&mut r)?, text: r.text()? },
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -1262,6 +1353,12 @@ impl Event {
                     None => w.done(),
                 }
             }
+            Event::Alert { issuer, serial, issued, meta, hops, trust, name, text } => meta
+                .put(W::new(0xac).b(&issuer.0).b(&serial.to_le_bytes()).b(&issued.to_le_bytes()))
+                .b(&[*hops, *trust, name.len() as u8])
+                .b(name)
+                .b(text)
+                .done(),
             Event::RangeTx(x) => W::new(0xaa)
                 .b(&x.uptime_ms.to_le_bytes())
                 .b(&x.seq.to_le_bytes())
@@ -1492,6 +1589,12 @@ impl Event {
                 let position = if r.0.len() >= 8 { Some((r.u32()? as i32, r.u32()? as i32)) } else { None };
                 Event::RangeRx(RangeRx { uptime_ms, sender, seq, sf, rssi, snr, len, lost, skipped, tx_power_dbm, battery_mv, position })
             }
+            0xac => {
+                let (issuer, serial, issued) = (r.addr()?, r.u32()?, r.u32()?);
+                let meta = AlertMeta::take(&mut r)?;
+                let (hops, trust) = (r.u8()?, r.u8()?);
+                Event::Alert { issuer, serial, issued, meta, hops, trust, name: r.short()?, text: r.text()? }
+            }
             0xaa => Event::RangeTx(RangeTx {
                 uptime_ms: r.u32()?,
                 seq: r.u32()?,
@@ -1695,8 +1798,11 @@ mod tests {
         roundtrip_ev(Event::RemoteReply { from: Address([3; 16]), frame: text(&[0x92, 1, 2, 3]) });
         roundtrip_ev(Event::Radio(RadioConfig {
             tx_power_dbm: -3,
+            announce_quarters: 8,
             ..RadioConfig::EU_DEFAULT
         }));
+        assert_eq!(RadioConfig::EU_DEFAULT.announce_interval_s(), 12 * 3600);
+        assert_eq!(RadioConfig { announce_quarters: 8, ..RadioConfig::EU_DEFAULT }.announce_interval_s(), 2 * 3600);
         assert!(RadioConfig::EU_DEFAULT.validate().is_ok());
         assert!(
             RadioConfig {
@@ -1908,6 +2014,19 @@ mod tests {
         roundtrip_cmd(Command::SetRangeTest(Config::default()));
         roundtrip_cmd(Command::GetRangeTest);
         assert_eq!(&Command::GetRangeTest.encode()[..], &[1, 0, 0x2b]);
+        let meta = AlertMeta { status: 1, kind: 2, event: 4, severity: 3, expires_min: 90, reference: 77, area: Some((5_615_000, -1_020_000, 50)) };
+        roundtrip_cmd(Command::SendAlert { req: 9, meta, text: Text::from_slice(b"Flood").unwrap() });
+        roundtrip_cmd(Command::SendAlert { req: 9, meta: AlertMeta { area: None, ..meta }, text: Text::new() });
+        roundtrip_ev(Event::Alert {
+            issuer: Address([3; 16]),
+            serial: 1_800_000_001,
+            issued: 1_800_000_000,
+            meta,
+            hops: 4,
+            trust: alert_trust::CERT,
+            name: heapless::Vec::from_slice(b"Beredskab Nord").unwrap(),
+            text: Text::from_slice(b"Move to higher ground").unwrap(),
+        });
         assert_eq!(Command::SetRangeTest(cfg).encode().len(), 2 + 1 + Config::LEN);
         assert!(Command::decode(&[0x2a, 1, 2, 3]).is_err());
 

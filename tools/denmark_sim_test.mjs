@@ -35,13 +35,17 @@ const t0 = Date.now();
 const sim = new Sim(sc);
 sim.step(200_000);
 const before = sim.state();
-const tcpUp = before.links_ok.filter(Boolean).length;
+// Only TCP links need the internet; LoRa trunks stay up.
+const tcpIdx = (k) => (sc.links[k] || {}).kind === "tcp";
+const tcpUp = before.links_ok.filter((ok, k) => ok && tcpIdx(k)).length;
 sim.step(280_000);
 const s = sim.summary();
 const after = sim.state();
 console.log(`ran ${s.t / 1000} s simulated in ${Date.now() - t0} ms: ${s.messages} messages, delivered ${s.delivered_pct.toFixed(1)} %, acked ${s.acked_pct.toFixed(1)} %, tx ${s.tx}, collisions ${s.collisions}`);
 check(s.delivered_pct > 0, "direct messages are delivered");
-check(tcpUp > 0 && after.links_ok.filter(Boolean).length === 0, `internet down takes the TCP links down (${tcpUp} up before, 0 after)`);
+const tcpAfter = after.links_ok.filter((ok, k) => ok && tcpIdx(k)).length;
+check(tcpUp > 0 && tcpAfter === 0, `internet down takes the TCP links down (${tcpUp} up before, ${tcpAfter} after)`);
+check(sc.links.filter(l => l.kind === "lora").length === 2 && after.links_ok.filter((ok, k) => ok && sc.links[k].kind === "lora").length === 2, "the two LoRa trunks stay up without internet");
 check(s.internet === false, "summary reports internet down");
 
 const al = sim.alert(0);
@@ -129,6 +133,34 @@ sim.free();
   console.log(`home routing: ${home.home_lookups} lookups (${home.home_local} local), ${home.home_routed} routed; path requests ${home.by_type.PathRequest || 0} vs ${today.by_type.PathRequest || 0} today; delivered ${home.delivered_pct.toFixed(0)} % vs ${today.delivered_pct.toFixed(0)} %`);
   check(home.home_routed > 0 && home.delivered_pct > 0, "home routing answers lookups with routes and delivers");
   check((home.by_type.PathRequest || 0) < (today.by_type.PathRequest || 0) / 2, "home routing floods far fewer path requests than today");
+}
+
+// 1f. Reboots: without stored contacts a rebooted node drops messages it can
+// no longer read (after the router acked them); with them nothing is lost.
+{
+  const run = (persist, hold) => {
+    const sc5 = DK.generateDenmark({ users: 200, repeaterKm: 22, seed }, window.DK_LAND, window.DK_TOWNS);
+    sc5.trace = false; sc5.announce_s = 0;
+    sc5.traffic.direct_per_min = 20; sc5.traffic.local_share = 1;
+    Object.assign(sc5.features, { persist_known: persist, hold_unknown: hold });
+    const hh = sc5.nodes.map((n, i) => n.kind === "handheld" ? i : -1).filter(i => i >= 0);
+    sc5.events.push({ t_s: 30, type: "reboot", nodes: hh.slice(0, Math.floor(hh.length / 2)) });
+    const x = new Sim(sc5); x.step(240_000); const y = x.summary(); x.free(); return y;
+  };
+  const before = run(false, false), kept = run(false, true), now = run(true, true);
+  console.log(`reboot: before the fix ${before.false_acks} acked-not-shown, ${before.dropped_unknown} dropped, ${before.unsent_unknown} unsent; keep-unknown ${kept.held_waiting} kept; stored contacts ${now.false_acks} acked-not-shown`);
+  check(before.reboots > 0 && before.dropped_unknown + before.unsent_unknown > 0, "a reboot without stored contacts loses messages");
+  check(kept.dropped_unknown === 0 && kept.held_waiting + kept.shown_after_hold > 0, "keeping messages from unknown senders drops none");
+  check(now.false_acks === 0 && now.unsent_unknown === 0, "with stored contacts a reboot shows every delivered message");
+}
+
+// 1g. Automatic forest mode: handhelds out of repeater range become relays.
+{
+  const sc6 = DK.forest({ role: "handheld", seed });
+  sc6.features.auto_relay = true; sc6.auto_relay_after_s = 120; sc6.trace = false;
+  const x = new Sim(sc6); x.step(600_000); const y = x.summary(); x.free();
+  console.log(`auto forest mode: ${y.role_switches} role changes, ${y.relays_now} relays now`);
+  check(y.role_switches > 0 && y.relays_now > 0, "automatic forest mode turns handhelds without a repeater into relays");
 }
 
 // 1d. Forest: clutter areas cut links; walkers move.

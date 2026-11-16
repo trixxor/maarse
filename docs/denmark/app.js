@@ -20,7 +20,7 @@
     Carry: "store-carry-forward handoff", Datagram: "home routing lookup (question or answer)", Fragment: "piece of a file", Backbone: "copy over TCP / Wi-Fi between hosts",
   };
   const FLOODS = new Set(["PathRequest", "Announce", "Channel", "Bulletin"]);
-  const FEATURES = [["carry", "Carry (store-carry-forward)"], ["local_repair", "Local repair"], ["backbone", "Backbone links"], ["dht_backbone", "DHT backbone: path requests only to the host that can reach the destination (experimental)"], ["home_routing", "Home routing: fixed infrastructure, home repeaters and a location lookup (model)"], ["regions", "Regions"], ["sf_slot", "SF-sized flood slot"], ["scale_timeouts", "Scaled timeouts"], ["load_control", "Load control"], ["area_scope", "Area scope for alerts (sim layer)"]];
+  const FEATURES = [["carry", "Carry (store-carry-forward)"], ["local_repair", "Local repair"], ["backbone", "Backbone links"], ["dht_backbone", "DHT backbone: path requests only to the host that can reach the destination (experimental)"], ["home_routing", "Home routing: fixed infrastructure, home repeaters and a location lookup (model)"], ["persist_known", "Contacts survive a reboot (stored in flash)"], ["hold_unknown", "Keep messages from unknown senders until their announce"], ["auto_relay", "Automatic forest mode: handhelds without a repeater in range become relays"], ["regions", "Regions"], ["sf_slot", "SF-sized flood slot"], ["scale_timeouts", "Scaled timeouts"], ["load_control", "Load control"], ["area_scope", "Area scope for alerts (sim layer)"]];
 
   let Engine = null, sim = null, scenario = null;
   let playing = false, speed = 10;
@@ -114,8 +114,15 @@
         const a = scenario.nodes[l.a], b = scenario.nodes[l.b];
         if (!a || !b) return;
         const ok = state && state.links_ok ? state.links_ok[k] : l.up;
-        const pl = L.polyline([[a.lat, a.lon], [b.lat, b.lon]], { color: l.kind === "wifi" ? "#facc15" : "#14b8a6", weight: 2, opacity: ok ? 0.55 : 0.25, dashArray: ok ? null : "4 6" });
-        pl.bindTooltip(`${l.kind.toUpperCase()} link ${k}: ${esc(name(l.a))} ↔ ${esc(name(l.b))} ${ok ? "(up)" : "(down)"}. Click to toggle.`);
+        const lora = l.kind === "lora";
+        const pl = L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {
+          color: lora ? "#c084fc" : l.kind === "wifi" ? "#facc15" : "#14b8a6",
+          weight: lora ? 3 : 2, opacity: ok ? (lora ? 0.85 : 0.55) : 0.25,
+          dashArray: ok ? (lora ? "10 6" : null) : "4 6",
+        });
+        const tr = lora && state && state.trunks ? state.trunks.find(t => t.label === l.label) : null;
+        const kindText = lora ? `${esc(l.label || "LoRa trunk")} (SF${l.sf || 9}, ${l.snr_db || 5} dB)` : `${l.kind.toUpperCase()} link ${k}`;
+        pl.bindTooltip(`${kindText}: ${esc(name(l.a))} ↔ ${esc(name(l.b))} ${ok ? "(up)" : "(down)"}${tr ? ` · ${tr.packets} packets, ${tr.airtime_s.toFixed(0)} s airtime` : ""}. Click to toggle.`);
         pl.on("click", (e) => { L.DomEvent.stopPropagation(e); toggleLink(k); });
         pl.addTo(linkLayer);
       });
@@ -630,6 +637,7 @@
     switch (a.purpose) {
       case "alert": addEvent({ type: "alert", from: +$("al-from").value, alert: $("al-kind").value, text: $("al-text").value, area }); break;
       case "power": addEvent({ type: "power_cut", area }, { type: "power_restore", area }); break;
+      case "reboot": addEvent({ type: "reboot", area, node_kind: $("ev-kind").value }); break;
       case "degrade": addEvent({ type: "degrade", area, db: +$("ev-db").value }, { type: "degrade_clear" }); break;
       case "kill_area": {
         const want = $("ev-kind").value;
@@ -676,6 +684,8 @@
       case "kill_area": return beginArea("polygon", "kill_area");
       case "degrade": return beginArea("polygon", "degrade");
       case "kill_random": return addEvent({ type: "kill_random", n: +$("ev-n").value, node_kind: "repeater" }, { type: "revive" });
+      case "reboot_random": return addEvent({ type: "reboot", n: +$("ev-n").value, node_kind: $("ev-kind").value });
+      case "reboot_area": return beginArea("polygon", "reboot");
       default: return addEvent({ type: k });
     }
   }));
@@ -690,6 +700,7 @@
       case "kill_area": return `Destroy ${ev.node_kind === "any" ? "all nodes" : ev.node_kind + "s"} in area (${(ev.nodes || []).length})`;
       case "revive": return ev.nodes && ev.nodes.length ? `Revive ${ev.nodes.length <= 3 ? ev.nodes.map(name).join(", ") : ev.nodes.length + " nodes"}` : "Revive all killed nodes";
       case "host_internet": return `${name(ev.node)}: internet ${ev.up ? "back" : "cut"}`;
+      case "reboot": return ev.nodes && ev.nodes.length ? `Reboot ${ev.nodes.length <= 3 ? ev.nodes.map(name).join(", ") : ev.nodes.length + " nodes"}` : `Reboot ${ev.n ? ev.n + " random " : "all "}${ev.node_kind && ev.node_kind !== "any" ? ev.node_kind + "s" : "nodes"}${ev.area && (ev.area.circle || (ev.area.polygon || []).length) ? " in area" : ""}`;
       case "degrade": return `Radio loss ${ev.db} dB in area`;
       case "degrade_clear": return "Radio loss cleared";
       case "link": return `Backbone link ${ev.index} ${ev.up ? "up" : "down"}`;
@@ -1062,6 +1073,15 @@
       <tr><td>of which half-duplex</td><td class="n">${s.coll_half_duplex}</td><td class="hint">receiver was transmitting (rare: listen-before-talk)</td></tr>
       <tr><td>all receptions lost</td><td class="n">${s.collisions}</td><td class="hint">one transmission heard by 40 nodes can count 40 times</td></tr>
     </table>
+    <h3>Reboots and contacts</h3>
+    <table>
+      <tr><td>reboots</td><td class="n">${s.reboots}</td><td class="hint">off and on again (also revive and power back)</td></tr>
+      <tr><td>shown to the recipient</td><td class="n">${s.shown_pct.toFixed(1)} %</td><td class="hint">delivered and readable: the recipient knows the sender</td></tr>
+      <tr><td><b>acked but not shown</b></td><td class="n"><b>${s.false_acks}</b></td><td class="hint">the sender sees "delivered", the recipient saw nothing (yet)</td></tr>
+      <tr><td>dropped: unknown sender</td><td class="n">${s.dropped_unknown}</td><td class="hint">without "keep messages from unknown senders"</td></tr>
+      <tr><td>kept, waiting for an announce</td><td class="n">${s.held_waiting}</td><td class="hint">shown when the sender announces (${s.shown_after_hold} so far)</td></tr>
+      <tr><td>not sent: recipient unknown</td><td class="n">${s.unsent_unknown}</td><td class="hint">the sender lost the recipient's keys in a reboot</td></tr>
+    </table>
     <h3>Queue delay per priority</h3>
     <table><tr><th>priority</th><th>sent</th><th>mean</th><th>max</th></tr>${s.queue_delay.map((q, i) => `<tr><td>${i} ${prio[i]}</td><td class="n">${q.count}</td><td class="n">${q.mean_ms.toFixed(0)} ms</td><td class="n">${q.max_ms} ms</td></tr>`).join("")}</table>
     <h3>Transmissions per type</h3><p class="hint">${Object.entries(s.by_type).map(([t, n]) => `<span class="chip" style="background:${PCOLOR[t] || "#666"}">${t} ${n}</span>`).join(" ")}</p>
@@ -1191,12 +1211,18 @@
   $("features").addEventListener("change", (e) => { const k2 = e.target.dataset.f; if (!k2) return; scenario.features[k2] = e.target.checked; edited(); });
   $("sc-sf").onchange = () => { scenario.sf = +$("sc-sf").value; edited(); };
   $("sc-duty").onchange = () => { scenario.duty_permille = +$("sc-duty").value; edited(); };
+  $("sc-ann").onchange = () => { scenario.announce_s = Math.max(0, +$("sc-ann").value) * 3600; edited(); };
+  $("sc-rh").onchange = () => { scenario.relay_hops = Math.max(1, Math.min(12, +$("sc-rh").value || 4)); edited(); };
+  $("sc-ar").onchange = () => { scenario.auto_relay_after_s = Math.max(0, +$("sc-ar").value) * 60; edited(); };
   const trMap = { "tr-direct": "direct_per_min", "tr-channel": "channel_per_min", "tr-local": "local_share" };
   for (const [id, key] of Object.entries(trMap)) $(id).onchange = () => { scenario.traffic[key] = +$(id).value; edited(); };
   ["opt-islands", "opt-links", "opt-backbone"].forEach(id => $(id).onchange = () => { drawLinks(); restyle(); });
   function syncForm() {
     document.querySelectorAll("#features input").forEach(i => i.checked = !!scenario.features[i.dataset.f]);
     $("sc-sf").value = scenario.sf; $("sc-duty").value = scenario.duty_permille;
+    $("sc-ann").value = +((scenario.announce_s || 0) / 3600).toFixed(2);
+    $("sc-rh").value = scenario.relay_hops || 4;
+    $("sc-ar").value = +((scenario.auto_relay_after_s ?? 600) / 60).toFixed(1);
     for (const [id, key] of Object.entries(trMap)) $(id).value = scenario.traffic[key];
     fillForestForm(scenario.forest);
   }

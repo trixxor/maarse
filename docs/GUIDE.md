@@ -38,7 +38,7 @@ Then connect with the web client via **USB / serial** (needs Chrome or Edge) or 
 | Forward secrecy for conversations (ratchet, draft) | yes, sessions stored on disk | yes, 8 sessions in RAM | yes, 8 sessions in RAM |
 | Channels (public, #hashtag) | yes | yes (at most 4) | yes (at most 4) |
 | Pictures and files (encrypted, with an acknowledgement per chunk) | yes, up to 1 MB over the internet, 8 KB over LoRa | yes, up to 8 KB (not tested on hardware yet) | yes, up to 8 KB (not tested on hardware yet) |
-| Mailbox for recipients who are offline | yes (disk, 7 days; also files up to 1 MB) | yes (8 KB flash) | yes (8 KB flash) |
+| Post office for recipients who are offline | yes (disk, 7 days, 3 copies on other hosts; also files up to 1 MB) | uses one (drops unanswered messages there, asks for its mail); keeps mail only if sent to it (8 KB flash) | the same |
 | Remote administration (status and radio on another node) | yes | yes | yes |
 | Status page (radio, routing, mailbox, traffic, DHT) | yes | yes, with RSSI/SNR, duty cycle, CAD and errors | yes, the same |
 | Radio settings (MHz, bandwidth, SF, CR, dBm, duty %) | – | yes, stored in flash | yes, stored in flash |
@@ -228,7 +228,9 @@ A maarse-host at home can work as one shared inbox that the phone, the laptop an
 - **Local repair:** a repeater whose next hop on a path stops answering (no forward after 4 tries) sends the packet straight to a node further along the path that it has heard in the last 2 minutes, or to the recipient itself, with the dead hop cut out. The dead hop is remembered for 5 minutes (or until heard again), so later packets skip it at once. The packet format is unchanged. `maarse-sim --kill N [--kill-at s]` switches N repeaters off mid-run, and `--repair off` compares with the old behaviour (120 nodes, 3 repeaters killed, 8 seeds: 99.2 % → 99.8 % acked, same airtime).
 - **Send priorities** (firmware radio queue, `maarse-core/src/qos.rs`): of the packets that are due, acks, path responses and carry notices go first, then direct messages and bulletins, then channel messages, then fragments (files, voice), and path requests and announces last. A full queue drops the least urgent packet. The flood slot follows the SF (`qos::slot_ms`, about 200 ms at SF9 and 1.3 s at SF12), and the ack timeout (20 s), path request retry interval (45 s) and hop timeout (3 s) grow with it (`qos::scale_timeout`: `base * slot / 200`, never below the base; `Router::set_slot`). The firmware applies this at startup and on every `SetRadio`. In `maarse-sim` (5 seeds each, delivered / acknowledged) the SF slot alone was worse, and only together with scaled timeouts did it help: 120 nodes on 30 km, SF11 79/48 % fixed, 77/43 % SF slot, 90/73 % SF slot + scaled timeouts; SF12 65/26, 59/18, 70/37 %. 200 nodes on 12 km, SF11 94/80, 97/93, 99/96 %; SF12 79/29, 74/47, 86/74 %. SF9 is unchanged (99.7-100 %). Try it with `--slot sf [--timeouts scaled]`.
 - **Load control** (experimental, off): `qos::ChannelLoad` measures airtime heard and sent over 60 s, and with `Router::load_control` a node at more than 25 % load originates or forwards at most 6 path requests per minute (`qos::PathQuota`; its own requests wait for the next minute), doubles its flood delay and path retry interval; `qos::announce_interval_ms` gives a longer announce interval. In `maarse-sim --load-control on` (200 nodes on 12 km, scaled timeouts) it helped under stress at SF11 (200 messages: 64 -> 75 % delivered, 36 -> 56 % acknowledged; 400 messages: 39 -> 51 %, 8 -> 22 %) but not at SF12 (43 -> 39 % and 25 -> 25 % delivered), and at normal load it cost deliveries (SF11 120 nodes 90 -> 85 %, SF12 70 -> 59 %; 200 nodes SF12 86 -> 74 %) for 10-20 % less airtime. A 40 % threshold with 10 requests per minute was no better. So the firmware does not use it.
-- Roles: `Client`, `Repeater` and `Relay` (forest mode, at most 4 hops). Relays carry messages they cannot deliver (4 copies, see *Carry*); repeaters and clients do not.
+- Roles: `Client`, `Repeater`, `Relay` (forest mode, at most 4 hops) and `Anchor`. Relays carry messages they cannot deliver (4 copies, see *Carry*); repeaters and clients do not.
+- **Role "auto"** (stored role value 4, for handhelds): automatic forest mode. The node is a client while a repeater or anchor is in range and becomes a relay when none has been in range for 2 minutes (a repeater counts as in range for 5 minutes after it was last heard); after 2 minutes of hearing one again it is a client again. The node logs each switch, and its status reports role 4. In the Denmark simulator (forest and a town with patchy coverage) this beat both "all clients" and "all relays": all relays swamp a town, while auto only turns the handhelds without coverage into relays (see `docs/denmark/README.md`, "Automatic forest mode").
+- **Edge bridges in role "auto":** a node that hears a repeater while a neighbor without coverage has no bridge yet becomes a relay for it (after 2 minutes of steady coverage, with chance max(1 / (1 + neighbors that hear a repeater too), 1/4) per 15 s check, so a person on a hill takes the job at once and nodes along a town's coverage edge do not all do it). Nodes without coverage choose one bridge, the nearest one heard announcing (lowest ID among equally near ones), and name it in their announce; a bridge stays while a neighbor names it and steps back 2 minutes after none does. Bridges announce every 10 minutes; a node with a bridge announces at the long interval and soon after its choice changes. In auto mode the router uses boundary forwarding: a bridge forwards a path request from a covered neighbor not at all, and one from a repeater only when the destination is known to have no coverage. Simulated: forest 97 % delivered (77 % without bridges), town 94 % of messages into and out of the uncovered part (78 %) at 32 % more airtime (`docs/denmark/README.md`, "Edge bridges").
 
 ### Edge bridge (relays at the edge of repeater coverage)
 
@@ -248,6 +250,52 @@ With `carry_copies > 0` (on in firmware for the relay role with 4 copies; off fo
 - A carrier that hears the notice deletes its copy, stops handing out copies, passes the notice on once and remembers it for the rest of the copy's lifetime. It repeats it when it meets a neighbour it gave a copy to (or got its copy from), and answers a handoff of a delivered message with the notice instead of storing it. The notice thus walks back along the spray tree to the sender.
 - **Sender:** the router reports `Action::CarryAcked { msg_id }`; the host and firmware send companion event `0xa7 CarryAcked` (`msg_id` u64 LE), and the web client shows "delivered (carried)" (history state 4). A sender that gets an ordinary acknowledgement for a message it still carries (the outbox retried it near a repeater) also stops and tells its carriers.
 - **Simulation** (10 seeds, 18 people in relay mode, 60 direct messages in 30 min): forest 8 km, delivered 60 → 76 % (4 copies) / 78 % (8 copies) at +9 % / +13 % airtime (+24 % / +29 % without the notice), and acks now follow delivery (74 / 77 % instead of 58 %). Forest 10 km: 30 → 44 / 45 % at +11 % / +15 %. E45, low repeaters every 15 km: 85 → 94 % at +27 % airtime (+150 % without the notice). E45 with a 100 km gap: no gain, +19–36 % airtime.
+
+## Post offices and LoRa trunks (2026-11-16)
+
+- **Post offices** (`maarse-core/src/mail.rs`, protocol-spec section 8.1): hosts keep mail for nodes that are offline; radio nodes only carry it. Every node picks the best post office it hears (hellos carry the class) as its home and names it in its announce. A message that has not been acknowledged within 45 s goes to the **sender's** home post office, which keeps it and sends copies to the recipient's three replica hosts (rendezvous hashing over the hosts in the DHT, over TCP). The recipient asks for its mail (`MailSync`, 2 hops) when it starts, regains a post office, sees its ID in a post office's hello ("mail waiting") or every 6 hours; its home post office fetches the copies and delivers. A node that has moved also asks its previous home office, which delivers over LoRa if TCP is down. An office without the backbone retries a delivery after 5, 15 and 35 minutes. In maarse-sim, a traveller who switches off in Aalborg and on again in Roenne gets all of the messages written meanwhile, 14 s after switching on (4 % before post offices); with the internet down and LoRa trunks to Zealand and Bornholm, 98 % arrive before the internet returns (`docs/denmark/README.md`, "Post offices and the journey to Bornholm").
+- **LoRa trunks:** `maarse-host --trunk <port>[:baud]` adds a LoRa modem with a directional antenna as a long-distance link (e.g. Aarhus - Zealand, Zealand - Bornholm). It is a backup: routed packets cross only when the trunk is their next hop, alerts always, the host's own hellos and announces, and path or key requests only when TCP cannot reach the other end and the destination is not known on this side (else on a second request). The modem enforces the duty cycle. It uses the same frequency, spreading factor and settings as every other node, so every node can always hear every other; trunks are improved with antennas and smarter software, not other channels. Every 10 minutes each end sends a summary of who is behind it (packet type 15, a Bloom filter), so requests cross only for nodes on the far side.
+
+## Neighbors, contacts and keys (2026-11-16)
+
+- **Hello:** every node (firmware and host) tells its neighbors its role, whether it hears a repeater, its chosen edge bridge and whether it moves, in a 22-byte packet that is never forwarded (packet type 12). It goes out on a Trickle timer: 10 s after something changed, then at doubling intervals up to 4 min (repeaters, anchors), 10 min (relays, nodes without coverage) or 30 min (covered clients). Before this, neighbors learned roles only from announces 12 h apart, so a node that had just started did not know a repeater was near and automatic forest mode could turn it into a relay in the middle of a town.
+- **Pinned contacts:** the firmware keeps 128 contacts in RAM. Everyone you write to or receive a message from is pinned (up to 32): never evicted, and the only contacts written to flash, so the flash hardly wears. When the table is full, the oldest contact that is not pinned goes. Contacts stored by older firmware are loaded as pinned.
+- **Key requests:** a message to a recipient whose key the node does not have waits up to 60 s while the node asks the network (packet type 13); it is sent as soon as the announce comes, or reported as failed. A message from an unknown sender is kept and the sender's key is asked for. A node asked for answers with its announce; a host answers from the announces it keeps.
+- **Mobile mode:** a node whose best repeater changes 3 times within 10 minutes (a car passing repeaters) says so in its hellos and announces (role flag bit 3). Routes to and from it are looked up afresh after 5 minutes, and it never acts as an edge bridge; it is off again after 15 minutes without a change.
+- **Host:** an anchor by default (`--repeater-role` for the old behaviour), so a route may be 12 hops on each side of the backbone. **Bordercast** (after ZRP): a path or key request that arrives over TCP goes out on the host's radio only when the destination was heard over that radio, or on a second request within 2 minutes (`--no-bordercast` puts every request on the air as before). The host keeps every announce it hears and answers key requests heard over its radio. The mailbox was already kept on disk.
+- Measured in maarse-sim before and after (all of it together): national 3 % of messages shown today, 96 % after; forest group 67 → 99.5 % delivered; town with patchy coverage 33 → 81 %; car on the E45 65 → 94 %. See `docs/denmark/README.md`, "The whole chain, before and after".
+
+## Smaller and fewer packets (2026-11-16)
+
+- **Announces go 3 hops** (`ANNOUNCE_SCOPE`), not 8; a moving node's announces still go 8. Further away, a node gets a key with a key request when it needs it (answered by the node or a host's cache). In maarse-sim this cut airtime by 16-32 % with the same or better delivery.
+- **Expanding ring search** (after AODV): the first path request goes at most 4 hops when the target was heard that close in the last 10 minutes, and everywhere 10 s later if nothing came back.
+- **Compressed text:** short chat messages are compressed with a codebook of common Danish and English words (about 56 % of the size), only to nodes whose announce says they can read it (capability field `0x07`).
+- **Mail bundles:** a post office with several messages for a node that can read bundles sends them in one packet with one acknowledgement.
+- **Proof of work** on key requests, mail syncs and deposits too, so post offices cannot be filled and requests not flooded for free.
+- **Radio queue fix:** the firmware no longer queues a second copy of a packet already waiting (behind the duty cycle such copies piled up, and each made the previous hop retransmit again; in maarse-sim the car on the E45 went from 70 % to 96 % delivered).
+- Measured all together, against the chain fixes before this round: national 91 → 96 % shown and 34 % less airtime; car 70 → 97 % and 57 % less; the outage journey to Bornholm 83 → 98 % of the mail and 32 % less; forest 99.7 → 99.1 % (unchanged within noise) and 17 % less; town 59 → 61 %. See `docs/denmark/README.md`, "Smaller and fewer packets".
+
+## Announces
+
+A node tells the network it exists with a signed announce (flooded up to 8
+hops). How often:
+
+- **After a start** the first announce goes out 5-35 s later (at random, so
+  many nodes that start together after a power cut do not collide), then
+  every 15 minutes, so a new or moved node is found quickly.
+- **Once it hears a repeater or an anchor** it switches to the interval in
+  the radio settings ("Announce every", default **12 hours**, in steps of
+  15 minutes up to about 64 hours; byte 15 of the radio settings, 0 = the
+  default). The first announce after a start is always sent.
+- Every interval varies by ±10 % at random, so nodes do not fall into step.
+- Contacts heard in announces are kept in flash (up to 63), so a reboot does
+  not forget them; a message from a sender not known yet is kept until its
+  announce arrives.
+
+Why so rarely: in the Denmark simulator (about 800 nodes, 20 minutes) an
+announce every 15 minutes took more airtime than all path requests and
+delivery fell from 99 % to 79 %; every 12 hours it was 98 %. See
+`docs/denmark/README.md` ("Reboots and known contacts").
 
 ## Spam protection (proof of work)
 
@@ -325,15 +373,17 @@ The firmware has a range test mode for measuring real range, loss and power use 
 
 Position is **not** shared by default. Under Diagnostics you can choose the precision (off / about 10 km / about 1 km / precise) and telemetry (battery, uptime, energy status); command `0x22`/`0x23`, reply `0xA2`. The node stores the position, but sends it rounded to the centre of a grid cell (0.1° or 0.01°); only "precise" sends the exact position (the client asks first). The fields are in the announce's app data after the FS field (`0x03` position, `0x04` telemetry, type | length | data, at most 41 of 99 bytes in total), so older nodes ignore them. Received positions and telemetry are shown as a list (event `0xA3`), without maps from outside. Temperature is part of the format, but the nRF52840's TEMP peripheral is owned by Bluetooth (MPSL), so it is not sent yet.
 
-## Signed bulletins
+## Alerts (signed public warnings)
 
-Short notices from a trusted sender (e.g. an emergency organisation) that anyone can check offline (`maarse-crypto/src/bulletin.rs`).
+Public warnings from trusted issuers, like cell broadcast (EU-Alert) but over the mesh, that anyone can check offline. Format and threat model: protocol-spec section 6.6.1 and `docs/maybe/alerting-review.html`.
 
-- They are channel messages on the fixed channel `#bulletin`. The plaintext is `0xB1 | timestamp (u32 BE) | Ed25519 signature (64) | text`, signed over `"maarse/bulletin/v1" | channel address | timestamp | text`. That leaves 128 bytes of text (126 with a region).
-- **Sending:** every message a host sends on `#bulletin` is signed with its identity. At start-up the host prints its *bulletin key* (128 hex digits, its public identity).
-- **Receiving:** `maarse-host --bulletin-key <hex>` (can be repeated) trusts that sender and joins `#bulletin`. A message is shown as `[Verified bulletin] …` only if the channel sender is a trusted identity and the signature is valid; everything else on the channel is dropped and logged. The sender's announce is not needed.
-- **On the air:** the firmware's radio queue sends `#bulletin` packets with the priority of direct messages, before other channel traffic.
-- **Not yet:** checking on the firmware and in the Android app without a host (needs a place to store trusted keys), and a setting in the web client instead of the command-line flag.
+- **Unforgeable:** an alert is signed with an **issuer key**, a separate key used only for alerts (never the node identity). A receiving host shows it only if the issuer key is trusted (`--bulletin-key <hex>`) or has a certificate signed by a trusted root key (`--alert-root <hex>`). A certificate names the issuer (e.g. "Beredskab Nord") and limits which events it may send, its highest severity and how long it is valid.
+- **Not replayable:** every alert has a serial, an issue time and an expiry. Each alert is shown once; an old alert sent again after its expiry is dropped, and so is one issued far in the future. A node without a clock uses the newest verified alert's time as a lower bound.
+- **Cannot be faked as text:** the host hands the client a separate alert event; the web client draws it as a banner and in Network → Alerts, apart from all chat. Nothing typed in a chat can look like an alert, and typing on `#bulletin` is refused.
+- **Status:** Actual, Exercise or Test. Only an actual, severe or extreme alert that is still valid becomes a banner; exercises and tests are striped and quiet. An update or a cancel refers to the alert's number and can only come from the same issuer.
+- **Issuing:** `maarse-host --new-alert-key issuer.key` creates an issuer key (and the same for a root key; keep the root offline). `maarse-host --sign-issuer-cert root.key <issuer hex> "Beredskab Nord" 90 issuer.cert [events mask] [max severity]` makes a certificate. Start the issuing host with `--issuer-key issuer.key --issuer-cert issuer.cert` and use the form in Network → Alerts; an actual alert needs a tick that a second person has checked it (the Hawaii lesson). The certificate is sent before the first alert and then at most hourly; receivers cache it.
+- **On the air:** `#bulletin` packets go before other channel traffic, at most 8 per minute per node (the channel key is public, so junk must not crowd out other traffic). Old v1 bulletins (`0xB1`) are still accepted from `--bulletin-key` senders, valid for 24 hours and shown once.
+- **Not yet:** repeaters verifying alerts before boosting them (they have no trust anchors), checking in the firmware and Android app without a host, areas drawn on a map in the form, revocation lists, and cryptographic two-person signatures.
 
 ## Backup and recovery phrase
 

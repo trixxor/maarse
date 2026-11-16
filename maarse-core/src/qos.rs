@@ -46,7 +46,9 @@ pub fn priority(packet: &[u8]) -> u8 {
         | PacketType::Control => PRIO_DIRECT,
         PacketType::Channel => PRIO_CHANNEL,
         PacketType::Fragment => PRIO_BULK,
-        PacketType::PathRequest | PacketType::Announce | PacketType::Probe => PRIO_FLOOD,
+        PacketType::PathRequest | PacketType::Announce | PacketType::Probe | PacketType::KeyRequest | PacketType::MailSync => PRIO_FLOOD,
+        // Hellos are small and keep the neighbor picture fresh.
+        PacketType::Hello | PacketType::Summary => PRIO_CHANNEL,
     }
 }
 

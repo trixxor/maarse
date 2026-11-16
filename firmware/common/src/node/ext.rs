@@ -45,9 +45,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             temp_dc: power::temperature_dc(),
         });
         let name = (!self.ext.name.is_empty()).then_some(&self.ext.name[..]);
-        let mut v = appdata::build(None, true, s.position(), tel.as_ref(), name);
-        let flags = if self.router.hears_repeater(now_ms()) { appdata::ROLE_HEARS_REPEATER } else { 0 };
-        appdata::push_role(&mut v, self.router.role.as_u8(), flags);
+        // Name our home post office, so senders' offices can find our mail.
+        let home = self.home_po.and_then(|h| h.1);
+        let mut v = appdata::build(home.as_ref(), true, s.position(), tel.as_ref(), name);
+        let flags = if self.router.hears_repeater(now_ms()) { appdata::ROLE_HEARS_REPEATER } else { 0 }
+            | if self.router.mobile { appdata::ROLE_MOBILE } else { 0 };
+        appdata::push_role_bridge(&mut v, self.router.role.as_u8(), flags, self.router.chosen_bridge(now_ms()));
+        appdata::push_caps(&mut v, appdata::MY_CAPS);
         v
     }
 
@@ -131,11 +135,32 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     pub(super) fn on_app_data(&mut self, from: Address, hops: u8, app_data: &[u8]) {
         let a = appdata::parse(app_data);
+        let role = a.role.and_then(maarse_core::router::Role::from_u8);
+        let hears = a.role_flags.map(|f| f & appdata::ROLE_HEARS_REPEATER != 0);
         if hops == 0
-            && let Some(role) = a.role.and_then(maarse_core::router::Role::from_u8)
+            && let Some(role) = role
         {
-            let hears = a.role_flags.map(|f| f & appdata::ROLE_HEARS_REPEATER != 0);
             self.router.note_role(from.path_id(), role, hears, 0, 0, now_ms());
+            self.router.neighbors.set_bridge_choice(from.path_id(), a.role_bridge);
+        }
+        if let Some(f) = a.role_flags {
+            self.router.note_mobile(from, f & appdata::ROLE_MOBILE != 0, now_ms());
+        }
+        if let Some(c) = a.caps {
+            if self.caps.insert(from, c).is_err() {
+                if let Some(k) = self.caps.keys().next().copied() {
+                    self.caps.remove(&k);
+                }
+                let _ = self.caps.insert(from, c);
+            }
+        }
+        if let Some(h) = hears {
+            // Who has no coverage (boundary mode), and which edge bridges
+            // are around (for our own choice of bridge).
+            self.router.note_coverage(from, h);
+            if h && role == Some(maarse_core::router::Role::Relay) {
+                self.router.note_bridge(from.path_id(), hops, now_ms());
+            }
         }
         if a.position.is_some() || a.telemetry.is_some() || a.name.is_some() {
             emit(&Event::NodeInfo { addr: from, hops, position: a.position, telemetry: a.telemetry, name: a.name });

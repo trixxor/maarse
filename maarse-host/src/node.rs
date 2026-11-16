@@ -6,6 +6,7 @@ mod pages;
 mod tun;
 mod hist;
 mod identity;
+mod alerts;
 
 use crate::dht::{self, Contact, Record};
 use crate::filebox::{self, Boxed, FileBox, LORA_MAX_FILE, PathKind};
@@ -61,12 +62,42 @@ const APP_POSTBOX: u8 = 0x01;
 const RESYNC_EVERY: Duration = Duration::from_secs(60);
 
 enum Timer {
-    Tx { packet: Vec<u8>, id: u64 },
+    Tx { packet: Vec<u8>, id: u64, only: Only },
     Tick,
     Announce,
     Housekeeping,
     Dht,
 }
+
+/// Which links a packet goes out on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Only {
+    All,
+    /// TCP/UDP/fast serial host links only (bordercast: a request from the
+    /// backbone for a node not heard over our radio stays off the air).
+    Backbone,
+    /// LoRa modems and slow links only (a cached announce answering a key
+    /// request heard over the radio).
+    Radio,
+    /// This one link only (a trunk summary).
+    Link(LinkId),
+}
+
+/// Bordercast: a second request for the same destination within this time
+/// goes on the radio anyway (the node may be here but unheard).
+const BORDERCAST_REPEAT: Duration = Duration::from_secs(120);
+/// Key requests are answered from the announce cache at most this often per
+/// destination.
+const KEY_ANSWER_EVERY: Duration = Duration::from_secs(30);
+/// Post office: how long a recipient counts as present after a sync, how
+/// often we ask the replicas for a recipient we hear, and the first retry
+/// of a delivery (then doubling, up to 32 times that).
+const MAIL_PRESENT: Duration = Duration::from_secs(600);
+const MAIL_FETCH_EVERY: Duration = Duration::from_secs(600);
+const MAIL_RETRY_FIRST: Duration = Duration::from_secs(300);
+/// Trunks: a request for a node heard over our own radio crosses only on a
+/// second request within this time.
+const TRUNK_REPEAT: Duration = Duration::from_secs(120);
 
 /// A file that a client is transferring to the node.
 struct Upload {
@@ -112,8 +143,9 @@ enum Pending {
     Message,
     FileOffer(u64),
     FileChunk(u64, u16),
-    Deposit(u64),
     MailDelivery(Address),
+    /// A bundle of stored messages for the recipient (their IDs).
+    MailBundle(Address, Vec<u64>),
     /// Control command to a remote node (never put in a mailbox).
     Control,
 }
@@ -154,7 +186,8 @@ struct Counters {
 pub struct Node {
     identity: Identity,
     addr: Address,
-    router: Router<1024, 4096>,
+    /// Boxed: the router is about 150 KB, too big to move around on the stack.
+    router: Box<Router<1024, 4096>>,
     known: HashMap<Address, PublicIdentity>,
     /// Contacts that advertise forward secrecy in their announce.
     fs_peers: HashSet<Address>,
@@ -197,6 +230,29 @@ pub struct Node {
     rx_link: Option<LinkId>,
     /// Where each address was last heard: link, TCP?, hops.
     heard_via: HashMap<Address, (LinkId, bool, u8)>,
+    /// Every announce we have heard (payload without stamp), to answer key
+    /// requests: a host keeps all of them, a radio node cannot.
+    announce_cache: HashMap<Address, Vec<u8>>,
+    /// Bordercast: requests from the backbone kept off the radio, by
+    /// destination, and key requests answered, by destination.
+    bc_dropped: HashMap<Address, Instant>,
+    key_answered: HashMap<Address, Instant>,
+    bordercast: bool,
+    /// Post office: recipients present (synced lately), replicas asked,
+    /// delivery retries (next try, step).
+    present: HashMap<Address, Instant>,
+    fetch_asked: HashMap<Address, Instant>,
+    mail_retry: HashMap<Address, (Instant, u32)>,
+    /// Trunks: the addresses heard at the far end of each trunk link, and
+    /// requests kept off a trunk (by destination).
+    trunk_peers: HashMap<LinkId, HashSet<Address>>,
+    trunk_dropped: HashMap<Address, Instant>,
+    /// Who is behind each trunk (the far end's Bloom filter), and when we
+    /// next send ours.
+    trunk_bloom: HashMap<LinkId, (Vec<u8>, Instant)>,
+    next_summary: Instant,
+    /// What other nodes can read (`appdata::CAP_*`).
+    caps: HashMap<Address, u8>,
     filebox: FileBox,
     /// The latest sealed message from `send_sealed`.
     last_sealed: Vec<u8>,
@@ -219,8 +275,10 @@ pub struct Node {
     ext: ext::Ext,
     /// Message history for several screens (see history.rs and node/hist.rs).
     hist: hist::Hist,
-    /// Identities whose signed bulletins we show (`--bulletin-key`).
+    /// Identities whose signed bulletins and alerts we show (`--bulletin-key`).
     bulletin_keys: Vec<PublicIdentity>,
+    /// Alerts v2: roots, certificates, replay guard, issuer key (node/alerts.rs).
+    alerts: alerts::Alerts,
 }
 
 /// The backbone DHT's state (see dht.rs).
@@ -336,14 +394,21 @@ impl Node {
             }
         };
         let addr = identity.address();
-        let mut router = Router::new(addr, Role::Repeater);
+        // An anchor by default: it splits long routes at the host, so a path
+        // can be 12 hops on each side of the backbone.
+        let mut router = Router::new(addr, if cfg.repeater_role { Role::Repeater } else { Role::Anchor });
+        // Hellos tell the radio nodes nearby that a repeater/anchor is here,
+        // and that we are a large post office.
+        router.hello = true;
+        router.mail_class = maarse_core::mail::CLASS_LARGE;
+        router.ring = 4;
         // Only fast links here: short time slots, otherwise every hop waits needlessly.
         router.slot_ms = 5;
 
         let mut node = Node {
             identity,
             addr,
-            router,
+            router: Box::new(router),
             known: HashMap::new(),
             fs_peers: HashSet::new(),
             sessions: crate::sessions::Sessions::load(cfg.data_dir.join("sessions.bin")),
@@ -374,6 +439,18 @@ impl Node {
             max_file: cfg.max_file,
             rx_link: None,
             heard_via: HashMap::new(),
+            announce_cache: HashMap::new(),
+            bc_dropped: HashMap::new(),
+            key_answered: HashMap::new(),
+            bordercast: !cfg.no_bordercast,
+            present: HashMap::new(),
+            fetch_asked: HashMap::new(),
+            mail_retry: HashMap::new(),
+            trunk_peers: HashMap::new(),
+            trunk_dropped: HashMap::new(),
+            trunk_bloom: HashMap::new(),
+            next_summary: Instant::now() + Duration::from_secs(60),
+            caps: HashMap::new(),
             filebox: FileBox::open(
                 cfg.data_dir.join("file-mailbox"),
                 cfg.max_file,
@@ -414,6 +491,7 @@ impl Node {
             ),
             hist: hist::Hist::open(&cfg.data_dir, cfg.history_days),
             bulletin_keys: cfg.bulletin_keys.clone(),
+            alerts: alerts::Alerts::load(cfg)?,
         };
         let saved = fs::read_to_string(node.data_dir.join("admins.txt")).unwrap_or_default();
         node.admins = saved.lines().filter_map(parse_addr).collect();
@@ -426,7 +504,7 @@ impl Node {
         }
         let saved = fs::read_to_string(node.data_dir.join("channels.txt")).unwrap_or_default();
         node.join_channel("public", false);
-        if !node.bulletin_keys.is_empty() {
+        if !node.bulletin_keys.is_empty() || node.alerts.active() {
             node.join_channel(bulletin::CHANNEL_NAME, false);
         }
         for line in saved.lines().filter(|l| !l.trim().is_empty()) {
@@ -456,6 +534,11 @@ impl Node {
 
     pub fn public_identity(&self) -> PublicIdentity {
         self.identity.public()
+    }
+
+    /// Our alert issuer key, if we have one.
+    pub fn issuer_public(&self) -> Option<PublicIdentity> {
+        self.alerts.issuer_public()
     }
 
     fn now_ms(&self) -> u64 {
@@ -505,9 +588,9 @@ impl Node {
             }
             self.timers.pop();
             match self.timer_items.remove(&seq) {
-                Some(Timer::Tx { packet, id }) => {
+                Some(Timer::Tx { packet, id, only }) => {
                     if !self.cancelled.remove(&id) {
-                        self.send_links(&packet);
+                        self.send_links_only(&packet, only);
                     }
                 }
                 Some(Timer::Tick) => {
@@ -581,6 +664,20 @@ impl Node {
                     let h = p.header;
                     self.dht_maybe_lookup(h.dest);
                 }
+                if self.links.get(&link).is_some_and(|(n, _)| n.starts_with("trunk "))
+                    && let Ok(p) = Packet::decode(&data)
+                    && p.header.hops == 0
+                {
+                    match p.header.ptype {
+                        PacketType::Hello | PacketType::Announce => {
+                            self.trunk_peers.entry(link).or_default().insert(p.header.dest);
+                        }
+                        PacketType::Summary if p.payload.len() >= maarse_core::bloom::BYTES => {
+                            self.trunk_bloom.insert(link, (p.payload.to_vec(), Instant::now()));
+                        }
+                        _ => {}
+                    }
+                }
                 let now = self.now_ms();
                 let actions = self.router.on_receive(&data, snr, now);
                 self.rx_link = Some(link);
@@ -599,6 +696,16 @@ impl Node {
                 let _ = reply.send(self.dht_serve(&data));
             }
             In::TunPacket(p) => self.on_tun_packet(&p),
+            In::MailFetched { recipient, items } => {
+                let n = items.len();
+                for sealed in items {
+                    self.store_mail(recipient, sealed, false);
+                }
+                if n > 0 {
+                    self.log(format!("post office: fetched {n} message(s) for {} from the replicas", short(&recipient)));
+                    self.flush_mailbox(recipient);
+                }
+            }
             In::DhtDone {
                 target,
                 publish,
@@ -624,6 +731,133 @@ impl Node {
     // ---------- transmission ----------
 
     fn send_links(&mut self, packet: &[u8]) {
+        self.send_links_only(packet, Only::All);
+    }
+
+    /// Bordercast (after ZRP): should a request that came in over the
+    /// backbone stay off our radio? Yes unless its destination was heard
+    /// over our own radio, or this is a second request for it.
+    fn backbone_only(&mut self, packet: &[u8]) -> bool {
+        if !self.bordercast {
+            return false;
+        }
+        let Some(link) = self.rx_link else { return false };
+        if !self.links.get(&link).is_some_and(|(n, _)| crate::extra_links::is_backbone(n)) {
+            return false;
+        }
+        let Ok((h, _)) = Header::decode(packet) else { return false };
+        if !matches!(h.ptype, PacketType::PathRequest | PacketType::KeyRequest) {
+            return false;
+        }
+        if self.heard_via.get(&h.dest).is_some_and(|(_, tcp, _)| !tcp) {
+            return false;
+        }
+        self.bc_dropped.retain(|_, t| t.elapsed() < BORDERCAST_REPEAT);
+        if self.bc_dropped.remove(&h.dest).is_some() {
+            return false;
+        }
+        self.bc_dropped.insert(h.dest, Instant::now());
+        true
+    }
+
+    /// A key request heard over the radio for a node whose announce we
+    /// keep: send that announce on the radio (the node itself may be far).
+    fn answer_key_request(&mut self, dest: Address) {
+        let from_radio = self
+            .rx_link
+            .and_then(|l| self.links.get(&l))
+            .is_some_and(|(n, _)| !crate::extra_links::is_backbone(n));
+        if !from_radio || self.key_answered.get(&dest).is_some_and(|t| t.elapsed() < KEY_ANSWER_EVERY) {
+            return;
+        }
+        let Some(payload) = self.announce_cache.get(&dest) else { return };
+        let mut body = maarse_core::router::Buf::from_slice(payload).unwrap_or_default();
+        if !stamp::append(PacketType::Announce, &dest, &mut body) {
+            return;
+        }
+        let Ok(packet) = maarse_core::packet::encode(&Header::new(PacketType::Announce, dest), &body) else { return };
+        self.key_answered.insert(dest, Instant::now());
+        self.log(format!("key request for {}: sent its announce", short(&dest)));
+        self.send_links_only(&packet, Only::Radio);
+    }
+
+    /// Trunks (long-distance LoRa links) are a backup, like a floating
+    /// static route: routed packets cross only when the trunk is their next
+    /// hop, alerts and bulletins always, our own hellos and announces, and
+    /// path or key requests only when TCP cannot reach the other end and
+    /// the destination is not known on this side (else on a second
+    /// request). Nothing else: a 10 % LoRa channel carries about one packet
+    /// every two seconds. maarse-sim (docs/denmark/README.md, "Long-distance
+    /// LoRa trunks"): without internet a third more messages across the
+    /// water, with losses near zero; letting every flood across saturates it.
+    fn trunk_allows(&mut self, link: LinkId, packet: &[u8]) -> bool {
+        let Ok(p) = Packet::decode(packet) else { return false };
+        let h = &p.header;
+        let peers = self.trunk_peers.get(&link).cloned().unwrap_or_default();
+        if let Some(path) = &h.path
+            && h.ptype != PacketType::PathRequest
+        {
+            // Next hop at the far end, or the path is used up: then it is for
+            // the anchor at the far end (two hosts facing each other across a
+            // trunk are anchors with an empty leg between them).
+            return match path.get(h.hops as usize) {
+                Some(next) => peers.iter().any(|a| a.path_id() == *next),
+                None => !peers.is_empty(),
+            };
+        }
+        match h.ptype {
+            PacketType::Hello | PacketType::Announce => h.dest == self.addr,
+            PacketType::Channel => h.dest == bulletin::channel(),
+            PacketType::PathRequest | PacketType::KeyRequest => {
+                // TCP reaches the other end: stay off the trunk.
+                let tcp_up = self.links.values().any(|(n, _)| crate::extra_links::is_backbone(n));
+                if tcp_up && peers.iter().any(|a| self.heard_via.get(a).is_some_and(|(_, tcp, _)| *tcp)) {
+                    return false;
+                }
+                // The far end's summary says who is behind the trunk.
+                if let Some((bits, t)) = self.trunk_bloom.get(&link)
+                    && t.elapsed() < Duration::from_secs(1800)
+                {
+                    if maarse_core::bloom::contains(bits, &h.dest) {
+                        return true;
+                    }
+                    self.trunk_dropped.retain(|_, t| t.elapsed() < TRUNK_REPEAT);
+                    if self.trunk_dropped.remove(&h.dest).is_some() {
+                        return true;
+                    }
+                    self.trunk_dropped.insert(h.dest, Instant::now());
+                    return false;
+                }
+                let here = self
+                    .heard_via
+                    .get(&h.dest)
+                    .is_some_and(|(l, tcp, _)| !*tcp && *l != link && !self.links.get(l).is_some_and(|(n, _)| n.starts_with("trunk ")));
+                if !here {
+                    return true;
+                }
+                self.trunk_dropped.retain(|_, t| t.elapsed() < TRUNK_REPEAT);
+                if self.trunk_dropped.remove(&h.dest).is_some() {
+                    return true;
+                }
+                self.trunk_dropped.insert(h.dest, Instant::now());
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn send_links_only(&mut self, packet: &[u8], only: Only) {
+        // Decide for the trunks first (needs &mut self).
+        let trunk_ids: Vec<LinkId> = self.links.iter().filter(|(_, (n, _))| n.starts_with("trunk ")).map(|(id, _)| *id).collect();
+        let mut trunk_skip: HashSet<LinkId> = HashSet::new();
+        for id in trunk_ids {
+            if only == Only::Link(id) {
+                continue;
+            }
+            if only == Only::Backbone || !self.trunk_allows(id, packet) {
+                trunk_skip.insert(id);
+            }
+        }
         let header = Header::decode(packet).ok().map(|(h, _)| h);
         let region = header.as_ref().map_or(0, |h| h.region);
         // File chunks to a recipient reached over TCP are not sent out over
@@ -632,7 +866,19 @@ impl Node {
             .as_ref()
             .is_some_and(|h| h.ptype == PacketType::Fragment && self.path_kind(&h.dest) == PathKind::Tcp);
         for (id, (name, tx)) in &self.links {
-            if tcp_only && !crate::extra_links::is_backbone(name) {
+            if trunk_skip.contains(id) {
+                continue;
+            }
+            if let Only::Link(l) = only
+                && l != *id
+            {
+                continue;
+            }
+            let backbone = crate::extra_links::is_backbone(name);
+            if (tcp_only || only == Only::Backbone) && !backbone {
+                continue;
+            }
+            if only == Only::Radio && backbone {
                 continue;
             }
             // Floods with a region only to peers that serve the region.
@@ -661,12 +907,14 @@ impl Node {
                     {
                         self.dht_maybe_lookup(h.dest);
                     }
+                    let only = if self.backbone_only(&packet) { Only::Backbone } else { Only::All };
                     if delay_ms == 0 {
-                        self.send_links(&packet);
+                        self.send_links_only(&packet, only);
                     } else {
                         let t = Timer::Tx {
                             packet: packet.to_vec(),
                             id,
+                            only,
                         };
                         self.schedule(Duration::from_millis(delay_ms as u64), t);
                     }
@@ -726,6 +974,14 @@ impl Node {
             .known
             .get(&dest)
             .ok_or("The recipient has not been heard yet (no announce)")?;
+        // Text is compressed for a node that says it can read it.
+        let z;
+        let plain = if self.caps.get(&dest).is_some_and(|c| c & maarse_core::appdata::CAP_TEXTZ != 0) {
+            z = content::compress(plain);
+            &z[..]
+        } else {
+            plain
+        };
         let mut ct = [0u8; 255];
         let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
         let (n, format) =
@@ -793,14 +1049,43 @@ impl Node {
                 self.pump_file(file_id);
             }
             Some(Pending::FileChunk(file_id, idx)) => self.chunk_acked(file_id, idx),
-            Some(Pending::Deposit(orig)) => {
-                self.counters.deposits += 1;
-                self.log("message put in mailbox");
-                self.broadcast(&Event::Deposited { msg_id: orig });
+            Some(Pending::MailBundle(recipient, ids)) => {
+                if let Some(m) = self.mailbox.get_mut(&recipient) {
+                    for id in &ids {
+                        m.remove(id);
+                    }
+                }
+                self.counters.mail_delivered += ids.len() as u32;
+                self.save_mailbox();
+                self.update_tim();
+                let replicas = self.mail_replicas(&recipient);
+                if !replicas.is_empty() {
+                    let me = self.addr;
+                    let my_ep = self.dht.public_ep.clone();
+                    let mids: Vec<u32> = ids.iter().map(|id| (*id >> 32) as u32).collect();
+                    std::thread::spawn(move || {
+                        for c in replicas {
+                            let _ = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::MailDelivered { recipient, ids: mids.clone() });
+                        }
+                    });
+                }
             }
             Some(Pending::MailDelivery(recipient)) => {
                 if let Some(m) = self.mailbox.get_mut(&recipient) {
                     m.remove(&msg_id);
+                }
+                self.update_tim();
+                // Delete the copies too.
+                let replicas = self.mail_replicas(&recipient);
+                if !replicas.is_empty() {
+                    let me = self.addr;
+                    let my_ep = self.dht.public_ep.clone();
+                    let ids = vec![(msg_id >> 32) as u32];
+                    std::thread::spawn(move || {
+                        for c in replicas {
+                            let _ = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::MailDelivered { recipient, ids: ids.clone() });
+                        }
+                    });
                 }
                 self.counters.mail_delivered += 1;
                 self.log(format!("mailbox: delivered to {}", short(&recipient)));
@@ -814,9 +1099,14 @@ impl Node {
     fn on_deliver(&mut self, ptype: PacketType, dest: Address, payload: &[u8], hops: u8) {
         match ptype {
             PacketType::Announce if dest != self.addr => self.on_announce(dest, payload, hops),
+            // Someone asks who we are: announce. Who another node is: answer
+            // from the announces we keep.
+            PacketType::KeyRequest if dest == self.addr => self.announce(),
+            PacketType::KeyRequest => self.answer_key_request(dest),
+            PacketType::MailSync => self.on_mail_sync(dest, payload),
             PacketType::Data => self.open_direct(payload.to_vec(), hops, true),
             PacketType::Fragment => self.on_chunk(payload),
-            PacketType::Deposit => self.on_deposit(payload),
+            PacketType::Deposit => self.on_deposit(payload, hops),
             PacketType::Datagram => self.on_tun_datagram(payload),
             PacketType::Probe => self.on_trace(dest, payload),
             PacketType::Channel => {
@@ -826,7 +1116,7 @@ impl Node {
                 let mut out = [0u8; 256];
                 match seal::open_channel(key, payload, &mut out) {
                     Ok((from, n)) if from != self.addr && dest == bulletin::channel() => {
-                        self.on_bulletin(dest, from, hops, &out[..n]);
+                        self.on_bulletin(from, hops, &out[..n]);
                     }
                     Ok((from, n)) if from != self.addr => {
                         self.mqtt_channel(&dest, &from, hops, &out[..n]);
@@ -855,6 +1145,7 @@ impl Node {
                 if ratchet::announces_fs(a.app_data) {
                     self.fs_peers.insert(dest);
                 }
+                self.announce_cache.insert(dest, payload.to_vec());
                 self.on_app_data(dest, hops, a.app_data);
                 if self.known.insert(dest, a.identity).is_none() {
                     self.log(format!("new node heard: {}", short(&dest)));
@@ -869,6 +1160,12 @@ impl Node {
                 if let Some(link) = self.rx_link {
                     let tcp = self.links.get(&link).is_some_and(|(n, _)| crate::extra_links::is_backbone(n));
                     self.heard_via.insert(dest, (link, tcp, hops));
+                    // Heard over our radio: maybe the replicas hold mail for
+                    // it ("X is here", like a mobile network registering a
+                    // phone).
+                    if !tcp && self.fetch_asked.get(&dest).is_none_or(|t| t.elapsed() >= MAIL_FETCH_EVERY) {
+                        self.fetch_mail(dest, Vec::new());
+                    }
                 }
                 self.broadcast(&Event::Heard { addr: dest, hops, identity: Some(a.identity.to_bytes()) });
                 if self.dht.public_ep.is_some() {
@@ -948,20 +1245,9 @@ impl Node {
 
     /// A message on the bulletin channel: shown only if it is signed by a
     /// trusted identity (`--bulletin-key`); everything else is dropped.
-    fn on_bulletin(&mut self, channel: Address, from: Address, hops: u8, plain: &[u8]) {
-        match bulletin::verify(&from, plain, &self.bulletin_keys) {
-            Some(v) => {
-                self.log(format!("verified bulletin from {}", short(&v.signer)));
-                let mut shown = b"[Verified bulletin] ".to_vec();
-                shown.extend_from_slice(v.text);
-                self.mqtt_channel(&channel, &from, hops, &shown);
-                self.broadcast(&Event::ChannelReceived { channel, from, hops, text: text(&shown) });
-            }
-            None => self.log(format!("dropped an unverified message on {} from {}", bulletin::CHANNEL_NAME, short(&from))),
-        }
-    }
-
     fn on_content(&mut self, from: Address, plain: &[u8], hops: u8, format: Format) {
+        let expanded = content::expand(plain);
+        let plain: &[u8] = expanded.as_deref().unwrap_or(plain);
         match content::parse(plain) {
             Some(Content::PageRequest(path)) => self.on_page_request(from, &path),
             Some(Content::Call(data)) => self.on_call(from, data),
@@ -1400,32 +1686,152 @@ impl Node {
 
     // ---------- mailbox ----------
 
-    fn on_deposit(&mut self, payload: &[u8]) {
-        let Some(recipient) = Address::from_slice(payload) else {
+    /// A `Deposit`: STORE (a sender or a small post office hands us a
+    /// message), SYNC (deliver a recipient's mail, wherever it is now) or
+    /// DELIVERED (delete). Older senders send `recipient | sealed` without an
+    /// op byte; that is stored as before.
+    fn on_deposit(&mut self, payload: &[u8], hops: u8) {
+        use maarse_core::mail::{self, Deposit};
+        let Some(d) = Deposit::parse(payload) else {
+            if let Some(recipient) = Address::from_slice(payload) {
+                self.store_mail(recipient, payload[16..].to_vec(), true);
+            }
             return;
         };
-        let sealed = payload[16..].to_vec();
+        match d.op {
+            mail::OP_STORE => self.store_mail(d.recipient, d.body.to_vec(), true),
+            mail::OP_SYNC => {
+                let have: Vec<u32> = d.ids().collect();
+                self.present.insert(d.recipient, Instant::now());
+                self.flush_mailbox(d.recipient);
+                self.fetch_mail(d.recipient, have);
+            }
+            mail::OP_DELIVERED => {
+                let ids: Vec<u32> = d.ids().collect();
+                self.drop_mail(d.recipient, &ids);
+            }
+            mail::OP_BUNDLE if d.recipient == self.addr => {
+                let items: Vec<Vec<u8>> = d.bundle().map(|m| m.to_vec()).collect();
+                for m in items {
+                    self.open_direct(m, hops, true);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Stores a sealed message for `recipient`; with `replicate`, copies go
+    /// to the recipient's replica hosts (rendezvous hashing over the hosts in
+    /// the DHT), over TCP only.
+    fn store_mail(&mut self, recipient: Address, sealed: Vec<u8>, replicate: bool) {
         let id = maarse_core::dedup::packet_id(PacketType::Data, &recipient, &sealed);
         let box_ = self.mailbox.entry(recipient).or_default();
+        if box_.contains_key(&id) {
+            return;
+        }
         if box_.len() >= MAILBOX_PER_RECIPIENT {
             self.log(format!("mailbox full for {}", short(&recipient)));
             return;
         }
-        box_.insert(
-            id,
-            Mail {
-                sealed,
-                stored: SystemTime::now(),
-            },
-        );
+        box_.insert(id, Mail { sealed: sealed.clone(), stored: SystemTime::now() });
         let count = box_.len();
-        self.log(format!(
-            "mailbox: stored message for {} ({count} in total)",
-            short(&recipient)
-        ));
+        self.log(format!("post office: stored message for {} ({count} in total)", short(&recipient)));
         self.save_mailbox();
+        self.update_tim();
+        self.mail_retry.entry(recipient).or_insert((Instant::now() + MAIL_RETRY_FIRST, 0));
+        if replicate {
+            let replicas = self.mail_replicas(&recipient);
+            if !replicas.is_empty() {
+                let me = self.addr;
+                let my_ep = self.dht.public_ep.clone();
+                std::thread::spawn(move || {
+                    for c in replicas {
+                        let _ = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::MailStore { recipient, sealed: sealed.clone() });
+                    }
+                });
+            }
+        }
         // Maybe the recipient is already here.
         self.flush_mailbox(recipient);
+    }
+
+    /// The hosts (other than us) that keep `recipient`'s mail.
+    fn mail_replicas(&self, recipient: &Address) -> Vec<Contact> {
+        let mut contacts = self.dht.table.all();
+        let mut addrs: Vec<Address> = contacts.iter().map(|c| c.id).collect();
+        if self.dht.public_ep.is_some() {
+            addrs.push(self.addr);
+        }
+        // Rendezvous hashing: the REPLICAS highest scores (as mail::replicas).
+        addrs.sort_by_key(|a| std::cmp::Reverse(maarse_core::mail::score(a, recipient)));
+        addrs.dedup();
+        let pick: Vec<Address> = addrs.into_iter().take(maarse_core::mail::REPLICAS).collect();
+        contacts.retain(|c| pick.contains(&c.id) && c.id != self.addr);
+        contacts
+    }
+
+    /// Asks the replicas for `recipient`'s mail (answers come back as
+    /// `In::MailFetched`), at most every `MAIL_FETCH_EVERY` per recipient
+    /// unless the recipient has just synced.
+    fn fetch_mail(&mut self, recipient: Address, have: Vec<u32>) {
+        let Some(tx) = self.tx.clone() else { return };
+        let replicas = self.mail_replicas(&recipient);
+        if replicas.is_empty() {
+            return;
+        }
+        if self.fetch_asked.get(&recipient).is_some_and(|t| t.elapsed() < Duration::from_secs(30)) {
+            return;
+        }
+        self.fetch_asked.insert(recipient, Instant::now());
+        let me = self.addr;
+        let my_ep = self.dht.public_ep.clone();
+        std::thread::spawn(move || {
+            let mut items: Vec<Vec<u8>> = Vec::new();
+            for c in replicas {
+                if let Some((_, dht::Resp::Mail(v))) = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::MailFetch { recipient, have: have.clone() }) {
+                    for m in v {
+                        if !items.contains(&m) {
+                            items.push(m);
+                        }
+                    }
+                }
+            }
+            let _ = tx.send(In::MailFetched { recipient, items });
+        });
+    }
+
+    /// Deletes delivered messages (by mail ID).
+    fn drop_mail(&mut self, recipient: Address, ids: &[u32]) {
+        if let Some(m) = self.mailbox.get_mut(&recipient) {
+            m.retain(|id, _| !ids.contains(&((*id >> 32) as u32)));
+        }
+        self.save_mailbox();
+        self.update_tim();
+    }
+
+    /// Recipients with mail waiting, told in our hellos ("mail waiting").
+    fn update_tim(&mut self) {
+        let ids: Vec<u16> = self.mailbox.iter().filter(|(_, m)| !m.is_empty()).map(|(a, _)| a.path_id()).take(4).collect();
+        self.router.mail_waiting.clear();
+        for id in ids {
+            let _ = self.router.mail_waiting.push(id);
+        }
+    }
+
+    /// A `MailSync` heard over the radio: the asker is here. Deliver what we
+    /// hold; if it named us its home post office, fetch the copies first.
+    fn on_mail_sync(&mut self, asker: Address, payload: &[u8]) {
+        let (home, have) = maarse_core::mail::parse_sync(payload);
+        let holds = self.mailbox.get(&asker).is_some_and(|m| !m.is_empty());
+        let named = home == Some(self.addr.path_id());
+        if !holds && !named {
+            return;
+        }
+        self.present.insert(asker, Instant::now());
+        self.flush_mailbox(asker);
+        if named {
+            self.fetch_mail(asker, have.to_vec());
+        }
     }
 
     /// Tries to deliver waiting mail to `recipient`.
@@ -1437,6 +1843,33 @@ impl Node {
         if mails.is_empty()
             || !self.router.has_route(&recipient) && !self.known.contains_key(&recipient)
         {
+            return;
+        }
+        // A recipient that reads bundles gets several messages per packet.
+        if self.caps.get(&recipient).is_some_and(|c| c & maarse_core::appdata::CAP_BUNDLE != 0) && mails.len() >= 2 {
+            let all: Vec<(u64, Vec<u8>)> = mails.iter().map(|(id, m)| (*id, m.sealed.clone())).collect();
+            let max = MAX_DIRECT_PAYLOAD - stamp::STAMP_LEN;
+            let mut i = 0;
+            while i < all.len() {
+                let mut body: maarse_core::router::Buf = maarse_core::router::Buf::new();
+                let mut ids = Vec::new();
+                while i < all.len() && maarse_core::mail::bundle_push(&mut body, &all[i].1, max) {
+                    ids.push(all[i].0);
+                    i += 1;
+                }
+                if ids.is_empty() {
+                    i += 1;
+                    continue;
+                }
+                let mut p: maarse_core::router::Buf = maarse_core::router::Buf::new();
+                if maarse_core::mail::build(&mut p, &recipient, maarse_core::mail::OP_BUNDLE, &body) {
+                    let now = self.now_ms();
+                    if let Ok((msg_id, actions)) = self.router.send_typed(PacketType::Deposit, recipient, &p, token(), now) {
+                        self.awaiting.insert(msg_id, Pending::MailBundle(recipient, ids));
+                        self.apply(actions.into_iter().collect());
+                    }
+                }
+            }
             return;
         }
         let items: Vec<Vec<u8>> = mails.values().map(|m| m.sealed.clone()).collect();
@@ -1456,34 +1889,22 @@ impl Node {
         }
     }
 
+    /// A message from one of our users has not been acknowledged within
+    /// `DEPOSIT_AFTER`: we are a post office, so we keep it (and copies go to
+    /// the recipient's replicas) and deliver when the recipient turns up.
     fn try_deposit(&mut self, msg_id: u64) {
         let Some(m) = self.outbox.get_mut(&msg_id) else {
             return;
         };
-        if m.deposited {
-            return;
-        }
-        let Some(postbox) = self.postboxes.get(&m.dest).copied() else {
-            return;
-        };
-        if postbox == m.dest || 16 + m.mail_sealed.len() > MAX_DIRECT_PAYLOAD {
+        if m.deposited || 16 + m.mail_sealed.len() > MAX_DIRECT_PAYLOAD {
             return;
         }
         m.deposited = true;
-        let mut payload = m.dest.0.to_vec();
-        payload.extend_from_slice(&m.mail_sealed);
-        let now = self.now_ms();
-        if let Ok((dep_id, actions)) =
-            self.router
-                .send_typed(PacketType::Deposit, postbox, &payload, token(), now)
-        {
-            self.log(format!(
-                "recipient not answering; putting message in mailbox {}",
-                short(&postbox)
-            ));
-            self.awaiting.insert(dep_id, Pending::Deposit(msg_id));
-            self.apply(actions.into_iter().collect());
-        }
+        let (dest, sealed) = (m.dest, m.mail_sealed.clone());
+        self.log(format!("recipient not answering; keeping the message in our post office for {}", short(&dest)));
+        self.store_mail(dest, sealed, true);
+        self.counters.deposits += 1;
+        self.broadcast(&Event::Deposited { msg_id });
     }
 
     fn save_mailbox(&self) {
@@ -1532,6 +1953,39 @@ impl Node {
     // ---------- maintenance ----------
 
     fn housekeeping(&mut self) {
+        // Every 10 minutes: tell each trunk's far end who is on our side.
+        if Instant::now() >= self.next_summary {
+            self.next_summary = Instant::now() + Duration::from_secs(600);
+            let trunks: Vec<LinkId> = self.links.iter().filter(|(_, (n, _))| n.starts_with("trunk ")).map(|(id, _)| *id).collect();
+            for link in trunks {
+                let mut bits = [0u8; maarse_core::bloom::BYTES];
+                for (a, (l, tcp, _)) in &self.heard_via {
+                    if !*tcp && *l != link && !self.links.get(l).is_some_and(|(n, _)| n.starts_with("trunk ")) {
+                        maarse_core::bloom::insert(&mut bits, a);
+                    }
+                }
+                maarse_core::bloom::insert(&mut bits, &self.addr);
+                if let Ok(pkt) = encode(&Header::new(PacketType::Summary, self.addr), &bits) {
+                    self.send_links_only(&pkt, Only::Link(link));
+                }
+            }
+        }
+        // Post office: without the backbone, try again to deliver what we
+        // hold after 5, 15 and 35 minutes, then wait for the recipient to ask.
+        // With the backbone, presence ("X is here") and syncs deliver more
+        // cheaply (maarse-sim: unlimited retries cost 40 % more airtime).
+        let backbone = self.links.values().any(|(n, _)| crate::extra_links::is_backbone(n));
+        let due: Vec<Address> = self.mail_retry.iter().filter(|(_, (t, _))| Instant::now() >= *t).map(|(a, _)| *a).collect();
+        for r in due {
+            let step = self.mail_retry[&r].1 + 1;
+            if backbone || step > 3 || !self.mailbox.get(&r).is_some_and(|m| !m.is_empty()) {
+                self.mail_retry.remove(&r);
+                continue;
+            }
+            self.mail_retry.insert(r, (Instant::now() + MAIL_RETRY_FIRST * (1 << step), step));
+            self.flush_mailbox(r);
+        }
+        self.present.retain(|_, t| t.elapsed() < MAIL_PRESENT);
         self.tun_tick();
         self.hist_maintain();
         let now = Instant::now();
@@ -1838,19 +2292,12 @@ impl Node {
                 let mut nonce = [0u8; 8];
                 OsRng.fill_bytes(&mut nonce);
                 let mut ct = [0u8; 255];
-                // On the bulletin channel every message is signed (see bulletin.rs).
-                let mut signed = [0u8; 255];
-                let body: &[u8] = if channel == bulletin::channel() {
-                    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as u32);
-                    match bulletin::sign(&self.identity, ts, &msg, &mut signed) {
-                        Some(n) => &signed[..n],
-                        None => {
-                            return self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "The message is too long"));
-                        }
-                    }
-                } else {
-                    &msg
-                };
+                // Nothing typed on the bulletin channel is signed: alerts are
+                // issued on purpose with SendAlert and a separate issuer key.
+                if channel == bulletin::channel() {
+                    return self.send_client(id, &err_ev(req, error_code::NOT_IN_CHANNEL, "Alerts are issued with the alert form (an issuer key is needed)"));
+                }
+                let body: &[u8] = &msg;
                 let res = seal::seal_channel(&key, &self.addr, nonce, body, &mut ct)
                     .ok()
                     .and_then(|n| self.router.send_channel_in(channel, region, &ct[..n]).ok());
@@ -2008,6 +2455,10 @@ impl Node {
             | Command::GetName
             | Command::RequestPage { .. }
             | Command::SendCall { .. } => {}
+            Command::SendAlert { req, meta, text: body } => match self.send_alert(&meta, &body) {
+                Ok(serial) => self.send_client(id, &Event::Sent { req, msg_id: serial as u64 }),
+                Err((code, e)) => self.send_client(id, &err_ev(req, code, e)),
+            },
         }
     }
 }
@@ -2069,7 +2520,7 @@ impl Node {
         let clamp = |v: u64| v.min(i32::MAX as u64) as i32;
         let mut items: Vec<(u8, i32)> = vec![
             (stat::UPTIME_S, self.start.elapsed().as_secs() as i32),
-            (stat::ROLE, 1),
+            (stat::ROLE, self.router.role.as_u8() as i32),
             (stat::KNOWN_NODES, self.known.len() as i32),
             (stat::ROUTES, self.router.routes().len() as i32),
             (stat::CHANNELS, self.channels.len() as i32),
@@ -2146,6 +2597,20 @@ impl Node {
             dht::Req::Store(r) => {
                 let ok = self.dht.store.put(r);
                 dht::Resp::Stored(ok)
+            }
+            dht::Req::MailStore { recipient, sealed } => {
+                self.store_mail(recipient, sealed, false);
+                dht::Resp::Stored(true)
+            }
+            dht::Req::MailFetch { recipient, have } => dht::Resp::Mail(
+                self.mailbox
+                    .get(&recipient)
+                    .map(|m| m.iter().filter(|(id, _)| !have.contains(&((**id >> 32) as u32))).map(|(_, v)| v.sealed.clone()).collect())
+                    .unwrap_or_default(),
+            ),
+            dht::Req::MailDelivered { recipient, ids } => {
+                self.drop_mail(recipient, &ids);
+                dht::Resp::Stored(true)
             }
         };
         dht::encode_resp(&me, &resp)
@@ -2387,6 +2852,9 @@ pub(super) mod file_interop_tests {
             dht_seeds: Vec::new(),
             regions: Vec::new(),
             strict_region: false,
+            repeater_role: false,
+            trunks: Vec::new(),
+            no_bordercast: false,
             meshcore: None,
             meshcore_baud: 115_200,
             meshcore_bridge: Vec::new(),
@@ -2397,6 +2865,9 @@ pub(super) mod file_interop_tests {
             tun_lora: false,
             service: false,
             bulletin_keys: Vec::new(),
+            alert_roots: Vec::new(),
+            issuer_key: None,
+            issuer_cert: None,
         }
     }
 
@@ -2503,6 +2974,59 @@ mod filebox_node_tests {
             n.command(1, Command::FileData { req, offset: (i * MAX_TEXT) as u32, data: text(c) });
         }
         n.command(1, Command::FileEnd { req });
+    }
+
+    #[test]
+    fn trunk_is_a_backup_and_carries_only_what_must_cross() {
+        let (mut n, _rx, dir) = node("trunk");
+        let far = Address([9; 16]);
+        heard(&mut n, far, "trunk COM9", 0);
+        let trunk = n.heard_via[&far].0;
+        n.trunk_peers.entry(trunk).or_default().insert(far);
+        let pr = |dest: Address| {
+            let mut p: maarse_core::router::Buf = maarse_core::router::Buf::from_slice(&[7; 16]).unwrap();
+            assert!(stamp::append(PacketType::PathRequest, &dest, &mut p));
+            encode(&Header::new(PacketType::PathRequest, dest), &p).unwrap()
+        };
+        let elsewhere = Address([5; 16]);
+        // No TCP: a request for a node not known here crosses.
+        assert!(n.trunk_allows(trunk, &pr(elsewhere)));
+        // A node heard over our own radio: only on the second request.
+        let local = Address([6; 16]);
+        heard(&mut n, local, "serial COM6", 0);
+        assert!(!n.trunk_allows(trunk, &pr(local)));
+        assert!(n.trunk_allows(trunk, &pr(local)));
+        // Someone else's announce never crosses; our own hello does.
+        let other_ann = encode(&Header::new(PacketType::Announce, elsewhere), &[0; 8]).unwrap();
+        assert!(!n.trunk_allows(trunk, &other_ann));
+        let hello = encode(&Header::new(PacketType::Hello, n.addr), &[0, 0, 0xFF, 0xFF]).unwrap();
+        assert!(n.trunk_allows(trunk, &hello));
+        // TCP reaches the far end: requests stay off the trunk.
+        heard(&mut n, far, "tcp out 127.0.0.1:4242", 0);
+        assert!(!n.trunk_allows(trunk, &pr(elsewhere)));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn deposit_ops_store_and_delete() {
+        use maarse_core::mail;
+        let (mut n, _rx, dir) = node("postoffice");
+        let r = Address([3; 16]);
+        let mut p: Vec<u8> = Vec::new();
+        p.extend_from_slice(&r.0);
+        p.push(mail::OP_STORE);
+        p.extend_from_slice(b"sealed message");
+        n.on_deposit(&p, 0);
+        assert_eq!(n.mailbox.get(&r).map(|m| m.len()), Some(1));
+        assert!(n.router.mail_waiting.contains(&r.path_id()), "told in our hello");
+        let id = (maarse_core::dedup::packet_id(PacketType::Data, &r, b"sealed message") >> 32) as u32;
+        let mut d: Vec<u8> = r.0.to_vec();
+        d.push(mail::OP_DELIVERED);
+        d.extend_from_slice(&id.to_be_bytes());
+        n.on_deposit(&d, 0);
+        assert_eq!(n.mailbox.get(&r).map(|m| m.len()), Some(0));
+        assert!(n.router.mail_waiting.is_empty());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -2679,10 +3203,10 @@ mod bulletin_tests {
         (n, rx)
     }
 
-    /// A channel payload on #bulletin from `from`, signed by `signer`.
+    /// A channel payload on #bulletin from `from`, signed by `signer` (v1).
     fn sealed(from: &Node, signer: &Node, text: &[u8]) -> Vec<u8> {
         let mut plain = [0u8; 255];
-        let n = bulletin::sign(&signer.identity, 1_700_000_000, text, &mut plain).unwrap();
+        let n = bulletin::sign(&signer.identity, unix_now(), text, &mut plain).unwrap();
         let mut ct = [0u8; 255];
         let m = seal::seal_channel(&bulletin::channel_key(), &from.addr, [1; 8], &plain[..n], &mut ct).unwrap();
         ct[..m].to_vec()
@@ -2692,7 +3216,10 @@ mod bulletin_tests {
         rx.try_iter()
             .filter_map(|f| Event::decode(&f[2..]).ok())
             .filter_map(|e| match e {
-                Event::ChannelReceived { text, .. } => Some(String::from_utf8_lossy(&text).into_owned()),
+                Event::Alert { text, trust, .. } if trust == maarse_core::companion::alert_trust::LEGACY => {
+                    Some(String::from_utf8_lossy(&text).into_owned())
+                }
+                Event::ChannelReceived { .. } | Event::Alert { .. } => panic!("unexpected event {e:?}"),
                 _ => None,
             })
             .collect()
@@ -2706,8 +3233,12 @@ mod bulletin_tests {
         let ch = bulletin::channel();
         assert!(b.channels.contains_key(&ch), "joined #bulletin");
 
-        b.on_deliver(PacketType::Channel, ch, &sealed(&auth, &auth, b"Bridge closed"), 2);
-        assert_eq!(shown(&rx), vec!["[Verified bulletin] Bridge closed".to_string()]);
+        // An old v1 bulletin is shown as an alert event (never as chat text),
+        // once.
+        let p = sealed(&auth, &auth, b"Bridge closed");
+        b.on_deliver(PacketType::Channel, ch, &p, 2);
+        b.on_deliver(PacketType::Channel, ch, &p, 2);
+        assert_eq!(shown(&rx), vec!["Bridge closed".to_string()]);
 
         // An untrusted sender, and a forgery under the trusted address.
         b.on_deliver(PacketType::Channel, ch, &sealed(&mallory, &mallory, b"Fake"), 2);
@@ -2721,3 +3252,4 @@ mod bulletin_tests {
         assert!(!n.channels.contains_key(&bulletin::channel()));
     }
 }
+

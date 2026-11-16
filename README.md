@@ -61,6 +61,8 @@ On a long route, some packets get lost: a truck drives past or two radios talk a
 
 LoRa is slow, a few hundred bytes per second, but it reaches kilometres without any infrastructure. The internet is fast but only exists where there is a connection. In Må:rse both are just links. A **host** (a PC or Raspberry Pi running `maarse-host`) or an **ESP32 board on Wi-Fi** connects its radio area to the backbone. To reach someone far away, the host looks them up in a **distributed hash table (DHT)** and sends straight to the host near them. There is no central server, and only the recipient's area is woken up.
 
+The design choices are tested in a [simulator of a national network](docs/denmark/README.md) running the real routing code: with today's settings 96 % of messages arrive nationally, and 98 % of a traveller's mail reaches Bornholm with the internet down.
+
 ---
 
 ## Eight situations, side by side
@@ -177,12 +179,16 @@ Someone with a radio receiver and no keys can read this from a direct message:
 
 | | |
 | --- | --- |
-| 💬 **Messages** | End-to-end encrypted direct messages with delivery receipts and forward secrecy. Public, `#hashtag`, private and regional channels. Signed bulletins from trusted senders, verified offline. |
-| 📦 **Mailbox** | For people who are offline: on the host (7 days, files too) and in repeaters' flash. |
+| 💬 **Messages** | End-to-end encrypted direct messages with delivery receipts and forward secrecy. Public, `#hashtag`, private and regional channels. Short chat messages are compressed (about 40 % smaller). |
+| 🚨 **Public alerts** | Signed warnings from trusted issuers, like cell broadcast but over the mesh: a separate issuer key, certificates from a root key that limit what an issuer may send, expiry and serial numbers against replays, exercise and test status, update and cancel. Shown as a banner that no chat message can imitate. |
+| 📦 **Post offices** | Mail for people who are offline is kept by hosts (three copies spread over the backbone) and carried by repeaters. Your node fetches it when it comes back, wherever you are, also over LoRa when the internet is down. |
 | 🖼️ **Files and voice** | Pictures and files up to 8 KB over LoRa and 1 MB over the internet; Codec2 voice messages; Opus calls over TCP. |
+| 📡 **LoRa trunks** | Long-distance LoRa links with directional antennas between hosts (e.g. Aarhus–Zealand, Zealand–Bornholm) as a backup when the internet is down, on the same frequency and settings as everyone else. |
+| 🧭 **Dedicated server** | `maarse-server` for a VPS or any Windows or Linux machine with an open port: hosts find each other through it, hosts behind NAT are relayed, it keeps mail copies, and an admin dashboard shows telemetry for everything passing through (node census with map, destinations, routes, delivery times, modem counters, live traffic). |
 | 🌐 **Backbone** | TCP and UDP links between hosts with a DHT, plus serial lines and KISS TNCs (serial or TCP, e.g. Direwolf); ESP32 boards can join over Wi-Fi (a phone hotspot on a hilltop is enough). |
 | 📄 **`maarse://` pages** | Tiny compressed pages served from a host. Not HTML, so a page can never run code on your device. |
-| 🌲 **Forest mode and carry** | Handheld relays when there are no repeaters; messages carried by people on the move. |
+| 🌲 **Forest mode and carry** | Handheld relays when there are no repeaters, and edge bridges: the person on the hill who hears a repeater relays for the group. Messages carried by people on the move. |
+| 🤝 **Neighbours and keys** | Small hello packets tell neighbours roles and coverage within seconds; a node asks the network for a key it lacks; contacts you talk to are pinned and kept in flash; cars say they move so routes to them are refreshed. |
 | 🔁 **Gateway to MeshCore** | Bridges a Må:rse channel and a MeshCore channel both ways, tried on hardware. |
 | 🏠 **Home Assistant** | MQTT bridge with auto-discovery for battery, position and telemetry. |
 | 🔐 **Identity** | 24-word recovery phrase, encrypted backup, safety numbers with QR codes. |
@@ -200,6 +206,11 @@ Someone with a radio receiver and no keys can read this from a direct message:
      Windows:  scripts\start-host.bat
      Linux:    ./scripts/start-host.sh
 3. The browser opens http://127.0.0.1:8080 and connects.
+4. To reach hosts elsewhere: --peer <a backbone node>:4242, or run your own
+   with maarse-server --public-addr <your address>:4242 (dedicated server
+   with an admin dashboard, docs/GUIDE.md).
+   On Debian/Ubuntu: sudo bash scripts/install-server.sh installs it as a
+   service and asks for the settings.
 ```
 
 To flash a radio, run `scripts/build-firmware.ps1 <board> -Flash` on Windows or `scripts/build-firmware.sh <board> flash` on Linux, with `heltec-v4`, `xiao-esp32s3`, `xiao-nrf52840` or `wismesh-tag`. Then connect from the web client over USB or Bluetooth. Everything else (host options, running it as a service, Wi-Fi backbone, Android app, protocol details, test lab, releases) is in the **[technical guide](docs/GUIDE.md)**.
@@ -237,6 +248,8 @@ The Mesh Lab is a simplified model to build intuition, and it says so on the pag
 - External review of the cryptography
 - The phone as its own node, and a gateway to Reticulum
 - Load control: flood slots per SF (tried, not yet a gain) and request quotas
+- Alerts: repeaters verifying alerts before giving them priority, revocation lists, two-person signatures
+- Sleepy handhelds (radio mostly off) with parent buffering: tried in the simulator, not yet a gain
 
 ## Licence
 

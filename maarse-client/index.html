@@ -1136,7 +1136,15 @@ function onEvent(ev) {
       addMessage("ch:" + ev.channel, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
       pwaIncoming("ch:" + ev.channel, (state.channels.get(ev.channel) || "channel") + " · " + label(ev.from), ev.text);
       break;
-    case "stats": state.stats = ev.items; noteStats(); updateStrip(); if (["status", "radio", "diag", "network"].includes(state.view)) renderChat(); break;
+    case "stats": {
+      // The firmware sends two frames (the first is full): merge by key.
+      const fresh = ev.items.some(([k]) => k === 1);
+      const m = new Map(fresh ? [] : (state.stats || []).map(([k, v]) => [k, v]));
+      if (fresh && state.stats) for (const [k, v] of state.stats) if (k >= 60 && k <= 70 || k >= 93) m.set(k, v);
+      for (const [k, v] of ev.items) m.set(k, v);
+      state.stats = [...m.entries()].sort((a, b) => a[0] - b[0]);
+    }
+    noteStats(); updateStrip(); if (["status", "radio", "diag", "network"].includes(state.view)) renderChat(); break;
     case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
     case "admins": state.admins = ev.list; if (state.view === "radio") renderChat(); break;
     case "regions": state.regions = ev; if (state.view === "radio") renderChat(); break;

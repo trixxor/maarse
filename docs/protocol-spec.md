@@ -1040,6 +1040,26 @@ Wi-Fi modem    after "MM": node -> host: length (u16 LE) | snr (i8) | packet
 Source: `maarse-host/src/dht.rs`. Kademlia-like, TCP only, never over LoRa.
 Node ID = the host's Må:rse address, distance = XOR.
 
+Table limits: at most `MAX_PER_NET` = 4 contacts whose endpoint is in the same
+IPv4 /24 or IPv6 /48 (loopback and DNS names are not limited), against one
+machine filling the table with made-up IDs. Contacts are saved to
+`dht-contacts.txt` (one `address-hex endpoint` per line) and used as seeds at
+the next start. A node with `--min-peers N` (maarse-server: 6) opens packet
+links to contacts from different buckets until it has N backbone links.
+**Capabilities** (`dht::Caps`): `version (str) | flags (bit 0 server, 1 radio,
+2 post office, 3 relay) | mail free MB (u32 LE, 0xFFFFFFFF = no limit) | n |
+n × region (u16 BE)`. Asked with DHT request type 8 (`Caps`, no body),
+answered with response type 0x86. The same bytes follow the regions in the
+backbone link's region hello (older peers ignore them). Replica post
+offices are chosen only among contacts that offer a post office (unknown =
+yes). A host with `--no-relay` publishes records only for addresses heard over
+its own radio; with `--no-post-office` it answers `MailStore` with
+`Stored(false)` and its hellos say mail class 0.
+
+`maarse-server` is this host without radio and web client; it requires
+`--public-addr`, so it publishes records for every address it reaches,
+including those behind hosts that connect out to it from behind NAT.
+
 A record says where an address can be reached:
 
 ```text
@@ -1280,8 +1300,19 @@ Keys in `Stats` (module `stat`): 1 uptime s, 2 known nodes, 3 routes,
 73 DHT records, 74 DHT lookups, 75 DHT found, 76 DHT peers, 77 bad stamps,
 80 noise floor dBm, 81 energy, 82 external power, 83 neighbours,
 84 position precision, 85 battery %, 86 temperature (0.1 °C), 87 stack free,
-88 heap free, 89 heap min free, 90 crashes, 91 panic line, 92 panic file.
+88 heap free, 89 heap min free, 90 crashes, 91 panic line, 92 panic file,
+93 hellos sent, 94 key requests sent, 95 local repairs, 96 messages carried,
+97 pinned contacts, 98 mobile mode (0/1), 99 quota dropped, 100 messages
+waiting for a key, 101 outbox (messages kept for a post office deposit).
 Clients must ignore unknown keys.
+
+A `Stats` frame holds at most 59 values (the frame limit is 300 bytes), so the
+firmware answers `GetStats` with **two** frames: the first with keys 1–92,
+the second with the post office counters (60, 61, 70) and keys 93–101.
+Receivers merge them by key (a frame containing key 1 starts a new set).
+Over remote control the values come in chunks of 25 as before. In modem mode
+the firmware answers `GetStats` and `GetRadio` without leaving modem mode;
+maarse-server asks its modem every 30 s for its telemetry.
 
 ### 9.7 Local-only commands
 

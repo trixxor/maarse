@@ -126,6 +126,59 @@ It takes `--task`, `--data` and `--install-dir` if the defaults were changed (th
 - `POST /api/service/restart` (same as the older `POST /api/restart`) answers `ok` and restarts the host: with `--service` it exits with code 75 so the service manager starts it again, otherwise it starts a new copy of itself.
 - `POST /api/service/stop` answers `ok` and exits the host cleanly with code 0. Under the systemd unit (`Restart=on-failure`) and the Windows supervisor (restarts only after a non-zero exit) the host then stays stopped until it is started again by the service manager.
 
+## Dedicated server (maarse-server)
+
+`maarse-server` is the dedicated host for a server on the internet (a VPS, a machine in a rack, a Raspberry Pi with a forwarded port). `maarse-host` stays the program for an ordinary PC with a radio and the chat client. Both are built from the same code by `cargo build --release -p maarse-host`.
+
+**What it does on the network**
+
+- **Hosts find each other through it.** It is a DHT node; hosts that point at it (`--peer server.example.org:4242`) find each other wherever they are.
+- **Relay for hosts behind NAT.** A host that cannot open a port connects out to the server; the server publishes the addresses it reaches through it, and other hosts send to them through the server. Messages stay end-to-end encrypted.
+- **Mail copies.** As a public DHT node it is one of the replica hosts that keep mail for offline nodes.
+- **Stays connected.** It keeps at least 6 backbone links (`--min-peers`), spread over the DHT, and saves the backbone nodes it has seen (`dht-contacts.txt`), so after a restart it finds the network again even if every seed is gone. First contact: `--peer <host:port>`, `--seed-dns <name>` (a DNS name with several servers behind it) or `--public`.
+- **Protection:** at most 4 DHT contacts from one network (IPv4 /24, IPv6 /48).
+- A LoRa modem can be attached as on the host (`--serial COM6`); a VPS has none.
+- **Says what it offers.** Every host and server tells the backbone what it offers: post office (and room left), relay for hosts behind NAT, radio, regions and version. Directly connected peers hear it in the link hello; others ask over the DHT every 30 minutes. Replica post offices are only picked among hosts that keep mail; an older host that does not say is treated as before (post office and relay).
+- **Choices:** `--no-post-office` (keeps no mail for others; mail from its own side still goes to the recipient's replica post offices), `--mail-quota-mb <N>` (at most N MB of mail for others; full = refused and told), `--no-relay` (publishes only the addresses it reaches over its own radio). The same options exist on `maarse-host`.
+
+**Telemetry dashboard (admin login)**
+
+`http://<server>:8080/` asks for the admin password. At the first start a random password is printed once and written to `admin-password.txt` in the data folder (delete the file once you have it); `maarse-server --set-admin-password <password>` sets another. After 5 wrong passwords from one address it is locked for 15 minutes. The dashboard is plain HTTP: over the internet put it behind HTTPS (Caddy or nginx as a reverse proxy) or use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 server`, and start with `--http 127.0.0.1:8080`).
+
+What it collects (from everything passing through; message contents stay encrypted):
+
+- **Overview:** packets in and out per minute, unique packets, packet types, nodes heard, delivery (messages seen and receipts), routes found, radio vs backbone with average SNR, work done (forwarded, delivered, DHT, mail), for the last hour, 6 hours or 24 hours.
+- **Live traffic:** every packet in and out (link, type, plain-language meaning, destination with name, hops, size, route, SNR), every router decision, DHT request and lookup, post office action, modem poll, admin login and log line.
+- **Nodes & map:** a census of every node ever heard from announces: name, role, last and first heard, announces, minimum and last hops, the link it came in on, SNR, distance in km from the server, battery, external power, energy, temperature, uptime, whether it hears a repeater, mobile flag, post office class, capabilities; on a map (Leaflet with OpenStreetMap) when nodes share a position.
+- **Destinations:** where traffic goes: per address the messages, file pieces and post office packets towards it, route searches and key requests for it, receipts, last route.
+- **Routes & repeaters:** route-length and hop histograms; every repeater path ID seen on routes with how often, how often as the first repeater after the sender, average position, and the node behind it.
+- **Delivery & latency:** for direct messages passing through, the time until their receipt passes back (median, 90 %, slowest, against hops), the share with a receipt, and route search times against route length.
+- **Radio & modem:** the attached modem's own counters every 30 s (radio rx/tx and errors, channel busy, duty cycle, airtime, RSSI, SNR, noise floor, battery, memory, queue, crashes), the radio settings, SNR and packet-size histograms, radio neighbours.
+- **Links, Backbone (DHT), Post office, Counters, Log:** per-link packet mix, DHT operations, nodes and records, mail waiting and post office operations, packets by type, router decisions and counters, regions, and the server log.
+
+Totals, histograms, the 24-hour series and the census are saved to `telemetry.json` every 5 minutes and kept across restarts.
+
+**Settings in the dashboard.** The *Settings* tab sets the public address, backbone port, peers, DNS seeds, minimum links, regions, strict regions, post office and quota, relay, LoRa modem and trunks, and the dashboard address, and changes the admin password. "Save and restart" writes `settings.txt` in the data folder (validated first) and restarts the server; the login survives the restart (sessions are kept as hashes in `sessions.txt`). Options given on the command line or in the start script win and are shown in the fields. The command line is only needed for the very first start.
+
+**Installing on Debian or Ubuntu**
+
+```text
+curl -fsSL https://raw.githubusercontent.com/trixxor/maarse/main/scripts/install-server.sh -o install-server.sh
+sudo bash install-server.sh
+```
+
+The script installs the packages and Rust, builds `maarse-server` from source (5-15 minutes the first time; on a small VPS without swap it offers a 2 GB swap file), and asks for the public address, port, peers, DNS seed, regions, post office and quota, relay, a USB LoRa modem if one is plugged in, and how to reach the dashboard (HTTPS through Caddy with Let's Encrypt, an SSH tunnel, or plain HTTP). It sets the admin password (yours or a random one, shown once), creates the system user `maarse`, installs a hardened systemd service that starts at boot, and opens the ports in ufw if it is active. Files: `/usr/local/bin/maarse-server`, options in `/etc/default/maarse-server`, data in `/var/lib/maarse-server`, source in `/opt/maarse/src`. Run it again to update; the settings are kept unless you choose to change them.
+
+**Running it**
+
+```text
+maarse-server --public-addr server.example.org:4242 [--peer other-server:4242] [--seed-dns seed.example.org]
+```
+
+Or fill in the settings at the top of `scripts/start-server.bat` (Windows) or `scripts/start-server.sh` (Linux) and run it: public address, port, peers, DNS seed, regions, dashboard address, admin password, optional modem and data folder. It uses `maarse-server.exe` next to the script, or the one built in the repository (building it the first time).
+
+`--public-addr` is required. Open TCP 4242 (backbone) and 8080 (dashboard, unless you use a proxy or tunnel). As a service: Linux `packaging/systemd/maarse-server.service` (instructions at the top; options in `/etc/default/maarse-server`); Windows from an elevated PowerShell: `.\packaging\windows\install-service.ps1 -Server -HostArgs '--public-addr server.example.org:4242'`. Test: `python tools/server_test.py` (two hosts behind "NAT" write to each other through a server, the dashboard needs the login, a second server finds the first again after a restart).
+
 ## Wi-Fi backbone on ESP32-S3 nodes
 
 A Heltec V4 or XIAO ESP32-S3 can join a Wi-Fi network (for example a phone hotspot on a hilltop) and keep a TCP backbone link to a maarse-host. Everyone who can reach the node over LoRa then reaches the rest of the network: the home host, the DHT and anyone behind it.

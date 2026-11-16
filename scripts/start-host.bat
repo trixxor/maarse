@@ -8,4 +8,4 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-cargo run --release -p maarse-host -- %*
+cargo run --release -p maarse-host --bin maarse-host -- %*

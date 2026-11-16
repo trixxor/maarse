@@ -4,3 +4,8 @@ dist/
 __pycache__/
 .claude/
 maarse-lab-data/
+
+# Server data started from scripts/ (identity, admin password, sessions)
+scripts/maarse-server-data/
+maarse-server-data/
+maarse-data/

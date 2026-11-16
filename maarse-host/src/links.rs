@@ -133,6 +133,21 @@ pub fn region_hello(strict: bool, regions: &[u16]) -> Vec<u8> {
 }
 
 /// Decodes a region hello: (strict, regions).
+/// A region hello with our capabilities after the regions (older peers
+/// ignore the extra bytes).
+pub fn region_hello_with_caps(strict: bool, regions: &[u16], caps: &crate::dht::Caps) -> Vec<u8> {
+    let mut v = region_hello(strict, regions);
+    caps.encode(&mut v);
+    v
+}
+
+/// The capabilities after a region hello's regions, if the peer sent them.
+pub fn parse_hello_caps(data: &[u8]) -> Option<crate::dht::Caps> {
+    let rest = data.strip_prefix(&REGION_HELLO)?;
+    let n = *rest.get(1)? as usize;
+    crate::dht::Caps::decode(rest.get(2 + 2 * n..)?)
+}
+
 pub fn parse_region_hello(data: &[u8]) -> Option<(bool, Vec<u16>)> {
     let rest = data.strip_prefix(&REGION_HELLO)?;
     let (&strict, rest) = rest.split_first()?;
@@ -178,6 +193,21 @@ pub fn spawn_tcp_listener(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<(
 }
 
 /// Connects to another maarse-host and retries if the connection drops.
+/// All addresses behind a seed name ("name" or "name:port", port 4242 by
+/// default), as "ip:port" endpoints.
+pub fn resolve_seeds(name: &str) -> Vec<String> {
+    use std::net::ToSocketAddrs;
+    let with_port = if name.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok()) && !name.ends_with(']') {
+        name.to_string()
+    } else {
+        format!("{name}:4242")
+    };
+    let mut v: Vec<String> = with_port.to_socket_addrs().map(|it| it.map(|a| a.to_string()).collect()).unwrap_or_default();
+    v.sort();
+    v.dedup();
+    v
+}
+
 pub fn spawn_tcp_peer(peer: String, tx: Sender<In>) {
     thread::spawn(move || {
         loop {
@@ -254,6 +284,9 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
             break;
         }
         if let Some((strict, regions)) = parse_region_hello(&data) {
+            if let Some(caps) = parse_hello_caps(&data) {
+                let _ = tx.send(In::LinkCaps { id, caps });
+            }
             if tx.send(In::LinkRegions { id, strict, regions }).is_err() {
                 break;
             }
@@ -333,6 +366,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hello_carries_caps_and_old_parsers_still_read_it() {
+        let c = crate::dht::Caps { version: "0.1.0".into(), radio: true, post_office: true, mail_free_mb: 9, ..Default::default() };
+        let h = region_hello_with_caps(false, &[5], &c);
+        assert_eq!(parse_region_hello(&h), Some((false, vec![5])));
+        assert_eq!(parse_hello_caps(&h), Some(c));
+        assert_eq!(parse_hello_caps(&region_hello(false, &[5])), None);
+    }
+
+    #[test]
     fn region_hello_roundtrip() {
         let h = region_hello(true, &[1, 0xabcd]);
         assert_eq!(parse_region_hello(&h), Some((true, vec![1, 0xabcd])));
@@ -383,6 +425,7 @@ fn run_serial(mut port: Box<dyn serialport::SerialPort>, name: String, tx: &Send
     }
     let mut dec = FrameDecoder::new();
     let mut buf = [0u8; 256];
+    let mut last_poll = std::time::Instant::now() - std::time::Duration::from_secs(25);
     'link: loop {
         match port.read(&mut buf) {
             Ok(0) => break,
@@ -397,11 +440,22 @@ fn run_serial(mut port: Box<dyn serialport::SerialPort>, name: String, tx: &Send
                             data: f[2..].to_vec(),
                             snr,
                         });
+                    } else if matches!(f.first(), Some(0x91 | 0x92)) {
+                        let _ = tx.send(In::ModemFrame { link: id, frame: f.to_vec() });
                     }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(_) => break,
+        }
+        // maarse-server: ask the modem for its own counters every 30 s (it
+        // answers in modem mode without leaving it).
+        if crate::debug::enabled() && last_poll.elapsed() >= std::time::Duration::from_secs(30) {
+            last_poll = std::time::Instant::now();
+            use maarse_core::companion::Command;
+            if port.write_all(&Command::GetStats.encode()).is_err() || port.write_all(&Command::GetRadio.encode()).is_err() {
+                break 'link;
+            }
         }
         while let Ok(pkt) = wrx.try_recv() {
             let mut out = Vec::with_capacity(pkt.len() + 3);

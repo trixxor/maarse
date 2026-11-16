@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Server telemetry</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --bg: #eef2f0; --panel: #fbfcfb; --raised: #ffffff; --ink: #14201b; --muted: #5d6d66; --line: #d8e0dc;
+    --accent: #1f6f5c; --rx: #2563a8; --tx: #b8730a; --router: #6b4fa8; --dht: #1f8a70; --mail: #b4472a; --log: #6d7a74; --modem: #8a5a00; --admin: #a8326b;
+    --bad: #b4472a; --ok: #2c7d4f;
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1513; --panel: #151d1a; --raised: #1b2521; --ink: #e3ebe7; --muted: #8fa199; --line: #26332e;
+      --accent: #5cc0a0; --rx: #6aa8ef; --tx: #f0b252; --router: #b39af0; --dht: #5cc0a0; --mail: #ec8e70; --log: #8fa199; --modem: #e0b050; --admin: #f07ab0;
+      --bad: #ec8e70; --ok: #6fd29f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1513; --panel: #151d1a; --raised: #1b2521; --ink: #e3ebe7; --muted: #8fa199; --line: #26332e;
+    --accent: #5cc0a0; --rx: #6aa8ef; --tx: #f0b252; --router: #b39af0; --dht: #5cc0a0; --mail: #ec8e70; --log: #8fa199; --modem: #e0b050; --admin: #f07ab0;
+    --bad: #ec8e70; --ok: #6fd29f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); }
+  header { position: sticky; top: 0; z-index: 1000; background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .who { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); display: inline-block; }
+  .dot.on { background: var(--ok); }
+  nav { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 44px; z-index: 999; }
+  nav button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--ink); cursor: pointer; }
+  nav button.on { background: var(--accent); color: var(--raised); }
+  main { padding: 12px 16px 40px; max-width: 1600px; margin: 0 auto; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .tile { background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .tile b { display: block; font-size: 21px; font-variant-numeric: tabular-nums; }
+  .tile span { color: var(--muted); font-size: 12px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 12px; }
+  @media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } nav { top: 0; position: static; } }
+  section { background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 12px; min-width: 0; }
+  section h2 { font-size: 14px; margin: 0 0 4px; }
+  section h3 { font-size: 13px; margin: 12px 0 4px; }
+  p.help { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+  canvas { width: 100%; height: 180px; display: block; }
+  canvas.tall { height: 260px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  button.b, .chip { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  button.b.on, .chip.on { background: var(--accent); color: var(--raised); border-color: var(--accent); }
+  input[type=search] { font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); min-width: 0; flex: 1; }
+  .tablewrap { overflow: auto; max-height: 560px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+  td.wrap { white-space: normal; }
+  th { position: sticky; top: 0; background: var(--raised); color: var(--muted); font-weight: 600; cursor: pointer; user-select: none; }
+  .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--raised); }
+  tr.ev { cursor: pointer; }
+  tr.ev:hover td { background: var(--panel); }
+  tr.detail td { background: var(--panel); white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
+  .explain { color: var(--muted); white-space: normal; min-width: 260px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .empty { color: var(--muted); padding: 10px; }
+  #map { height: 460px; border-radius: 8px; border: 1px solid var(--line); }
+  pre.log { max-height: 560px; overflow: auto; font-size: 12px; background: var(--panel); padding: 8px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .form { display: grid; grid-template-columns: minmax(180px, max-content) 1fr; gap: 8px 12px; align-items: start; max-width: 820px; }
+  .form label { padding-top: 5px; font-weight: 600; font-size: 13px; }
+  .form small { display: block; color: var(--muted); font-weight: 400; }
+  .form input[type=text], .form input[type=number], .form input[type=password], .form select, .form textarea { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); width: 100%; }
+  .form textarea { min-height: 64px; font-family: ui-monospace, monospace; font-size: 12px; }
+  @media (max-width: 640px) { .form { grid-template-columns: 1fr; } .form label { padding-top: 0; } }
+  .msg { margin-top: 8px; font-size: 13px; }
+  .msg.bad { color: var(--bad); } .msg.good { color: var(--ok); }
+  .yes { color: var(--ok); font-weight: 600; } .no { color: var(--muted); }
+  .page { display: none; }
+  .page.on { display: block; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Må:rse server</h1>
+  <span><span id="dot" class="dot"></span> <span id="conn">connecting…</span></span>
+  <span class="who" id="who"></span>
+  <span style="flex:1"></span>
+  <span class="row" style="margin:0">Range:
+    <button class="b" data-range="60">1 h</button><button class="b" data-range="360">6 h</button><button class="b on" data-range="1440">24 h</button>
+  </span>
+  <a href="/logout">Log out</a>
+</header>
+<nav id="nav"></nav>
+<main>
+  <!-- Overview -->
+  <div class="page" data-page="overview">
+    <div class="tiles" id="tiles"></div>
+    <div class="grid2">
+      <section><h2>Traffic per minute</h2><p class="help">Packets received (in) and sent (out) on all links.</p><canvas id="c-traffic"></canvas><div class="legend"><span><i style="background:var(--rx)"></i>in</span><span><i style="background:var(--tx)"></i>out</span><span><i style="background:var(--router)"></i>unique packets</span></div></section>
+      <section><h2>Packet types</h2><p class="help">What passes, per 10 minutes. Hover a name for its meaning.</p><canvas id="c-types"></canvas><div class="legend" id="l-types"></div></section>
+      <section><h2>Nodes heard</h2><p class="help">Different nodes announcing themselves per minute, and announces in all.</p><canvas id="c-nodes"></canvas><div class="legend"><span><i style="background:var(--dht)"></i>nodes</span><span><i style="background:var(--tx)"></i>announces</span></div></section>
+      <section><h2>Delivery</h2><p class="help">Direct messages seen passing here, and how many got their receipt back past this host; routes found.</p><canvas id="c-delivery"></canvas><div class="legend"><span><i style="background:var(--rx)"></i>messages seen</span><span><i style="background:var(--ok)"></i>receipts</span><span><i style="background:var(--router)"></i>routes found</span></div></section>
+      <section><h2>Radio vs backbone</h2><p class="help">Received packets per minute by where they came from, and the average radio SNR (dB, right scale).</p><canvas id="c-source"></canvas><div class="legend"><span><i style="background:var(--modem)"></i>radio</span><span><i style="background:var(--dht)"></i>backbone</span><span><i style="background:var(--bad)"></i>SNR</span></div></section>
+      <section><h2>Work done</h2><p class="help">Per minute: forwarded for others, delivered here, backbone directory (DHT) operations, post office operations.</p><canvas id="c-work"></canvas><div class="legend"><span><i style="background:var(--tx)"></i>forwarded</span><span><i style="background:var(--ok)"></i>delivered</span><span><i style="background:var(--dht)"></i>DHT</span><span><i style="background:var(--mail)"></i>mail</span></div></section>
+    </div>
+  </div>
+
+  <!-- Live -->
+  <div class="page" data-page="live">
+    <section>
+      <h2>Live traffic</h2>
+      <p class="help">Every packet in and out, every router decision, directory (DHT) request, post office action, modem poll, admin login and log line, newest first. Click a row for every field.</p>
+      <div class="row" id="filters"></div>
+      <div class="row"><input type="search" id="search" placeholder="Filter: packet type, link, address, name, text …"><button class="b" id="pause">Pause</button><button class="b" id="clear">Clear</button></div>
+      <div class="tablewrap" style="max-height:70vh"><table><thead><tr><th>Time</th><th>What</th><th>Link</th><th>Type</th><th>Meaning</th><th>To / about</th><th class="num">Hops</th><th class="num">Bytes</th><th class="num">SNR</th></tr></thead><tbody id="live"></tbody></table></div>
+    </section>
+  </div>
+
+  <!-- Nodes -->
+  <div class="page" data-page="nodes">
+    <div class="tiles" id="node-tiles"></div>
+    <section><h2>Map</h2><p class="help">Nodes that share their position (announces). Colour by role; the server is the square if it shares its own position. Positions are as precise as each node chose to share.</p><div id="map"></div></section>
+    <section>
+      <h2>Every node heard</h2>
+      <p class="help">The census from announces since the server started (kept across restarts). Distance is from this server when it shares its position. Click a column to sort.</p>
+      <div class="row"><input type="search" id="node-search" placeholder="Filter by name, address, role, via …"></div>
+      <div class="tablewrap" id="node-table"></div>
+    </section>
+  </div>
+
+  <!-- Destinations -->
+  <div class="page" data-page="dests">
+    <section><h2>Where the traffic goes</h2><p class="help">Per destination address: direct messages, file pieces and post office packets towards it, route searches and key requests for it, receipts. The contents stay encrypted; only the address on the packet is known.</p><div class="tablewrap" id="dest-table"></div></section>
+  </div>
+
+  <!-- Routes -->
+  <div class="page" data-page="routes">
+    <div class="grid2">
+      <section><h2>Route lengths</h2><p class="help">Number of repeaters on the routes of packets passing here.</p><canvas id="c-pathlen"></canvas></section>
+      <section><h2>Hops</h2><p class="help">How far packets had travelled when they reached this host (0 = sent by a direct neighbour or over the backbone).</p><canvas id="c-hops"></canvas></section>
+    </div>
+    <section><h2>Repeaters seen on routes</h2><p class="help">Every path ID that appeared on a route: how often, how often as the first repeater after the sender, its average position along the route, and the node behind it when its announce was heard.</p><div class="tablewrap" id="rep-table"></div></section>
+    <section><h2>This server's routes</h2><p class="help">Destinations the server itself knows a route to.</p><div class="tablewrap" id="route-table"></div></section>
+  </div>
+
+  <!-- Delivery -->
+  <div class="page" data-page="delivery">
+    <div class="tiles" id="del-tiles"></div>
+    <div class="grid2">
+      <section><h2>Delivery time vs hops</h2><p class="help">Each dot is a direct message that passed here and whose receipt came back past here: the time between the two (the rest of the way and back), against the hops it had made when it passed.</p><canvas id="c-lat" class="tall"></canvas></section>
+      <section><h2>Delivery time</h2><p class="help">Distribution of the times above.</p><canvas id="c-lathist" class="tall"></canvas></section>
+      <section><h2>Route search time vs route length</h2><p class="help">From a route search passing here until its answer passed back.</p><canvas id="c-route" class="tall"></canvas></section>
+    </div>
+  </div>
+
+  <!-- Radio -->
+  <div class="page" data-page="radio">
+    <div id="modems"></div>
+    <div class="grid2">
+      <section><h2>Signal of received radio packets</h2><p class="help">SNR in dB of every packet heard over the radio (above 0 is good, below −10 is weak).</p><canvas id="c-snr"></canvas></section>
+      <section><h2>Packet sizes</h2><p class="help">Received packets by size in bytes (bins of 32).</p><canvas id="c-size"></canvas></section>
+    </div>
+    <section><h2>Radio neighbours</h2><p class="help">Nodes the server's modem hears directly.</p><div class="tablewrap" id="nb-table"></div></section>
+  </div>
+
+  <!-- Links -->
+  <div class="page" data-page="links">
+    <section><h2>Links</h2><p class="help">Every link ever used: the modem, LoRa trunks and backbone connections, with their mix of packet types each way.</p><div class="tablewrap" id="link-table"></div></section>
+    <section><h2>Packet mix per link</h2><canvas id="c-linkmix" class="tall"></canvas><div class="legend" id="l-linkmix"></div></section>
+  </div>
+
+  <!-- Backbone -->
+  <div class="page" data-page="backbone">
+    <div class="tiles" id="dht-tiles"></div>
+    <div class="grid2">
+      <section><h2>Directory operations</h2><div class="tablewrap" id="dht-ops"></div></section>
+      <section><h2>Backbone nodes known</h2><div class="tablewrap" id="dht-table"></div></section>
+    </div>
+    <section><h2>This server offers</h2><div class="tiles" id="my-caps"></div></section>
+    <section><h2>Backbone servers and what they offer</h2><p class="help">Every server and public host in the directory, with what it announced: post office (keeps mail for others) and room left, relay for hosts behind NAT, radio, regions and version. Asked every 30 minutes; "?" = not answered yet or an older version (treated as post office and relay).</p><div class="tablewrap" id="caps-table"></div></section>
+    <section><h2>Directly connected</h2><p class="help">Backbone links up now and what the far end said in its link hello.</p><div class="tablewrap" id="linkcaps-table"></div></section>
+    <section><h2>Directory records kept</h2><p class="help">Which host can reach which address (records this server stores for the DHT).</p><div class="tablewrap" id="dht-records"></div></section>
+  </div>
+
+  <!-- Post -->
+  <div class="page" data-page="post">
+    <div class="grid2">
+      <section><h2>Post office operations</h2><div class="tablewrap" id="mail-ops"></div></section>
+      <section><h2>Mail waiting here</h2><div class="tablewrap" id="mail-table"></div></section>
+    </div>
+  </div>
+
+  <!-- Counters -->
+  <div class="page" data-page="counters">
+    <div class="grid2">
+      <section><h2>Packets by type</h2><div class="tablewrap" id="type-table"></div></section>
+      <section><h2>Router decisions</h2><div class="tablewrap" id="router-ev"></div></section>
+      <section><h2>Router counters</h2><div class="tablewrap" id="router-table"></div></section>
+      <section><h2>Regions</h2><p class="help">Packets with a region (regional channels and floods).</p><div class="tablewrap" id="region-table"></div></section>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="page" data-page="settings">
+    <section>
+      <h2>Settings</h2>
+      <p class="help">Saved in <span class="mono">settings.txt</span> in the data folder and used at every start. Saving restarts the server (a few seconds; you stay logged in). Options given on the command line or in the start script also apply and win over these.</p>
+      <div class="form" id="settings-form"></div>
+      <div class="row" style="margin-top:12px"><button class="b on" id="settings-save">Save and restart</button><button class="b" id="settings-reload">Reload</button></div>
+      <div class="msg" id="settings-msg"></div>
+    </section>
+    <section>
+      <h2>Admin password</h2>
+      <div class="form">
+        <label>Current password</label><input type="password" id="pw-old" autocomplete="current-password">
+        <label>New password<small>at least 10 characters</small></label><input type="password" id="pw-new" autocomplete="new-password">
+        <label>New password again</label><input type="password" id="pw-new2" autocomplete="new-password">
+      </div>
+      <div class="row" style="margin-top:12px"><button class="b on" id="pw-save">Change password</button></div>
+      <div class="msg" id="pw-msg"></div>
+    </section>
+    <section>
+      <h2>Command line and start-up</h2>
+      <p class="help">What the server was started with, and what it reported at start.</p>
+      <pre class="log" id="settings-cli" style="max-height:260px"></pre>
+    </section>
+  </div>
+
+  <!-- Log -->
+  <div class="page" data-page="log">
+    <section><h2>Server log</h2><pre class="log" id="log"></pre></section>
+  </div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const short = h => h ? String(h).slice(0, 8) : "";
+const get = async p => { const r = await fetch(p, { cache: "no-store", credentials: "same-origin" }); if (r.status === 401) { location.href = "/login"; throw 0; } return r.json(); };
+const PAL = ["#2563a8", "#b8730a", "#1f8a70", "#6b4fa8", "#b4472a", "#4a8f2a", "#a8326b", "#2a8fa8", "#8a6d1f", "#5d6d66", "#c25e00", "#3f5fbf", "#7f3fbf", "#0f7f6f", "#9f1f3f", "#4f4f4f", "#888888"];
+
+const PTYPE = {
+  Data: "A direct message, sealed end to end, following a known route.", Ack: "Delivery receipt going back to the sender.",
+  Announce: "A node says who it is (keys, name, role, position); passed on a few hops.", PathRequest: "Someone is looking for a route; each repeater it passes adds itself.",
+  PathResponse: "The answer to a route search: the route, going back to the asker.", Control: "Control packet.", Fragment: "A piece of a file.",
+  Probe: "Trace route: measures each hop.", Channel: "A channel message (group chat or #bulletin alerts), flooded to everyone in range.",
+  Deposit: "Post office traffic: storing, fetching or delivering mail for someone offline.", Datagram: "IP tunnel traffic.",
+  Carry: "A message handed to someone who will carry it, or a delivered notice.", Hello: "A neighbour tells its role and coverage (never forwarded).",
+  KeyRequest: "Someone asks the network for a node's key (\"who is X?\").", MailSync: "A node asks its post office for waiting mail.",
+  Summary: "Who is behind a long-distance LoRa trunk (every 10 minutes).", invalid: "Could not be decoded (noise, or another protocol on the frequency).",
+};
+const KIND = {
+  rx: ["IN", "--rx", "received"], tx: ["OUT", "--tx", "sent"], router: ["ROUTER", "--router", "routing decisions"], dht: ["DHT", "--dht", "backbone directory"],
+  mail: ["MAIL", "--mail", "post office"], modem: ["MODEM", "--modem", "modem polls"], admin: ["ADMIN", "--admin", "logins"], log: ["LOG", "--log", "log lines"],
+};
+const STAT = {
+  1: "uptime s", 2: "known nodes", 3: "routes", 4: "channels", 5: "links", 6: "clients", 7: "role", 10: "rx packets", 11: "rx invalid", 12: "rx duplicates",
+  13: "forwarded", 14: "originated", 15: "delivered", 16: "acked", 17: "routes learned", 18: "path requests", 19: "hop retries", 20: "floods cancelled",
+  30: "radio rx ok", 31: "radio rx errors (CRC)", 32: "radio tx ok", 33: "radio tx errors", 34: "last RSSI dBm", 35: "last SNR dB", 36: "average RSSI dBm",
+  37: "average SNR dB", 38: "channel busy (CAD)", 39: "waited for duty cycle", 40: "airtime ms", 41: "duty cycle used ‰", 42: "radio bytes rx", 43: "radio bytes tx",
+  44: "transmit queue", 45: "frequency kHz", 46: "spreading factor", 47: "bandwidth kHz", 48: "TX power dBm", 49: "battery mV", 50: "min RSSI dBm", 51: "max RSSI dBm",
+  52: "radio queue dropped", 53: "radio stage", 54: "radio loops", 55: "diag sync word", 56: "diag status", 57: "diag error", 58: "diag busy",
+  60: "mailbox recipients", 61: "mailbox messages", 62: "files out", 63: "files in", 64: "outbox waiting", 65: "link bytes in", 66: "link bytes out",
+  67: "link packets in", 68: "link packets out", 69: "deposits made", 70: "mail delivered", 71: "errors", 72: "DHT contacts", 73: "DHT records", 74: "DHT lookups",
+  75: "DHT found", 76: "DHT peers", 77: "bad proof of work", 80: "noise floor dBm", 81: "energy (0-3)", 82: "external power", 83: "neighbours",
+  84: "position precision", 85: "battery %", 86: "temperature 0.1 °C", 87: "stack never used B", 88: "heap free B", 89: "heap min free B", 90: "crashes", 91: "panic line", 92: "panic file",
+  93: "hellos sent", 94: "key requests sent", 95: "local repairs", 96: "messages carried", 97: "pinned contacts", 98: "mobile mode", 99: "quota dropped", 100: "waiting for a key", 101: "outbox (for the post office)",
+};
+const SERIES_NAMES = { 30: "rx ok", 31: "rx errors", 32: "tx ok", 33: "tx errors", 36: "avg RSSI dBm", 37: "avg SNR dB", 38: "CAD busy", 39: "duty waits", 40: "airtime ms", 41: "duty ‰", 44: "queue", 49: "battery mV", 80: "noise floor dBm", 88: "heap free B" };
+const ROLE_COLOR = { Repeater: "#2563a8", Anchor: "#6b4fa8", Relay: "#1f8a70", Client: "#b8730a" };
+
+let T = null, S = null, range = 1440, page = location.hash.slice(1) || "overview", connected = false;
+const events = [], open = new Set(), filters = new Set(Object.keys(KIND));
+let since = 0, paused = false, logSince = 0, logText = "";
+const names = () => { const m = new Map(); for (const n of T?.nodes || []) if (n.name) m.set(n.addr, n.name); return m; };
+let NAMES = new Map();
+
+// ---------- navigation ----------
+const PAGES = { overview: "Overview", live: "Live traffic", nodes: "Nodes & map", dests: "Destinations", routes: "Routes & repeaters", delivery: "Delivery & latency", radio: "Radio & modem", links: "Links", backbone: "Backbone (DHT)", post: "Post office", counters: "Counters", settings: "Settings", log: "Log" };
+$("nav").innerHTML = Object.entries(PAGES).map(([k, v]) => `<button data-p="${k}">${v}</button>`).join("");
+$("nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) show(b.dataset.p); });
+function show(p) {
+  page = PAGES[p] ? p : "overview"; history.replaceState(null, "", "#" + page);
+  if (page === "settings" && !settingsState) loadSettings();
+  for (const b of $("nav").children) b.classList.toggle("on", b.dataset.p === page);
+  for (const d of document.querySelectorAll(".page")) d.classList.toggle("on", d.dataset.page === page);
+  render();
+}
+document.querySelectorAll("[data-range]").forEach(b => b.onclick = () => {
+  range = +b.dataset.range; document.querySelectorAll("[data-range]").forEach(x => x.classList.toggle("on", x === b)); render();
+});
+function setConn(ok) { if (ok === connected) return; connected = ok; $("dot").classList.toggle("on", ok); $("conn").textContent = ok ? "live" : "no answer"; }
+
+// ---------- polling ----------
+async function pollTelemetry() { try { const t = await get("/api/telemetry"); if (t.types) { T = t; NAMES = names(); render(); } setConn(true); } catch { setConn(false); } setTimeout(pollTelemetry, 10000); }
+async function pollSnapshot() { try { const s = await get("/api/debug/snapshot"); if (s.me) { S = s; if (["overview", "routes", "radio", "backbone", "post", "counters"].includes(page)) render(); header(); } setConn(true); } catch { setConn(false); } setTimeout(pollSnapshot, 3000); }
+async function pollEvents() {
+  if (!paused) try {
+    const r = await get("/api/debug/events?since=" + since); since = r.next;
+    for (const e of r.events) { events.push(e); if (events.length > 4000) events.shift(); }
+    if (r.events.length && page === "live") renderLive();
+  } catch {}
+  setTimeout(pollEvents, 1000);
+}
+async function pollLog() {
+  if (page === "log") try {
+    const r = await get("/api/service/log?since=" + logSince);
+    for (const l of r.lines || []) { logText += (l.err ? "! " : "") + l.text + "\n"; }
+    if (r.last != null) logSince = r.last;
+    if (logText.length > 300000) logText = logText.slice(-200000);
+    const el = $("log"), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+    el.textContent = logText; if (atEnd) el.scrollTop = el.scrollHeight;
+  } catch {}
+  setTimeout(pollLog, 2000);
+}
+
+// ---------- helpers ----------
+const n = v => v == null ? "" : typeof v === "number" ? v.toLocaleString() : esc(v);
+const dur = s => s == null ? "" : s < 120 ? Math.round(s) + " s" : s < 7200 ? Math.round(s / 60) + " min" : s < 172800 ? (s / 3600).toFixed(1) + " h" : Math.round(s / 86400) + " d";
+const ago = unix => unix ? dur(Date.now() / 1000 - unix) + " ago" : "";
+const who = a => { if (!a) return ""; const nm = NAMES.get(a); return nm ? `${esc(nm)} <span class="mono">${short(a)}</span>` : `<span class="mono">${short(a)}</span>`; };
+const sum = a => (a || []).reduce((x, y) => x + y, 0);
+const tiles = (id, list) => { $(id).innerHTML = list.map(([v, l, t]) => `<div class="tile" title="${esc(t || "")}"><b>${v}</b><span>${esc(l)}</span></div>`).join(""); };
+function table(id, head, rows, opts = {}) {
+  const el = $(id); if (!el) return;
+  if (!rows.length) { el.innerHTML = `<div class="empty">${opts.empty || "Nothing yet."}</div>`; return; }
+  const st = el._sort ?? opts.sort ?? null;
+  if (st) rows.sort((a, b) => { const x = a[st.i]?.s ?? a[st.i]?.v ?? a[st.i], y = b[st.i]?.s ?? b[st.i]?.v ?? b[st.i]; return (x > y ? 1 : x < y ? -1 : 0) * (st.d ? -1 : 1); });
+  const cell = c => c && typeof c === "object" && "h" in c ? c.h : n(c);
+  el.innerHTML = `<table><thead><tr>${head.map((h, i) => `<th data-i="${i}" class="${opts.num?.includes(i) ? "num" : ""}">${esc(h)}${st && st.i === i ? (st.d ? " ▾" : " ▴") : ""}</th>`).join("")}</tr></thead><tbody>${rows.slice(0, opts.max || 2000).map(r => `<tr>${r.map((c, i) => `<td class="${opts.num?.includes(i) ? "num" : ""}${opts.wrap?.includes(i) ? " wrap" : ""}">${cell(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  el.querySelector("thead").onclick = e => { const th = e.target.closest("th"); if (!th) return; const i = +th.dataset.i; el._sort = { i, d: el._sort?.i === i ? !el._sort.d : true }; render(); };
+}
+
+// ---------- charts ----------
+function canvas(id) {
+  const c = $(id); if (!c || !c.offsetParent) return null;
+  const dpr = devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * dpr || c.height !== h * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  g.font = "11px system-ui"; return { g, w, h, L: 46, R: 8, T: 8, B: 20 };
+}
+const fmt = v => Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + "M" : Math.abs(v) >= 1000 ? (v / 1000).toFixed(1) + "k" : Math.abs(v) >= 10 || v === 0 ? Math.round(v) : v.toFixed(1);
+function yaxis(c, min, max, unit = "", right = false) {
+  const { g, w, h, L, R, T, B } = c;
+  g.strokeStyle = css("--line"); g.fillStyle = css("--muted"); g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const v = min + (max - min) * i / 4, y = T + (h - T - B) * (1 - i / 4);
+    if (!right) { g.beginPath(); g.moveTo(L, y); g.lineTo(w - R, y); g.stroke(); }
+    g.fillText(fmt(v) + unit, right ? w - R - 34 : 2, y + 4);
+  }
+}
+function timeAxis(c, t0, t1) {
+  const { g, w, h, L, R } = c; g.fillStyle = css("--muted");
+  for (let i = 0; i <= 4; i++) { const t = t0 + (t1 - t0) * i / 4; const s = new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); g.fillText(s, L + (w - L - R) * i / 4 - (i === 4 ? 30 : i ? 14 : 0), h - 4); }
+}
+function lines(id, mins, series, opts = {}) {
+  const c = canvas(id); if (!c) return;
+  const { g, w, h, L, R, T, B } = c;
+  const t1 = Math.floor(Date.now() / 60000) * 60, t0 = t1 - range * 60;
+  const pts = mins.filter(m => m.t >= t0);
+  let max = 1; for (const s of series) if (!s.right) for (const m of pts) max = Math.max(max, s.f(m) ?? 0);
+  max *= 1.1; yaxis(c, 0, max, opts.unit || ""); timeAxis(c, t0, t1);
+  const X = t => L + (w - L - R) * (t - t0) / (t1 - t0);
+  for (const s of series) {
+    let lo = 0, hi = max;
+    if (s.right) { const vals = pts.map(s.f).filter(v => v != null); if (!vals.length) continue; lo = Math.min(...vals) - 2; hi = Math.max(...vals) + 2; yaxis(c, lo, hi, s.unit || "", true); }
+    g.strokeStyle = s.color; g.lineWidth = s.width || 1.6; g.beginPath(); let first = true, last = null;
+    for (const m of pts) { const v = s.f(m); if (v == null) { first = true; continue; } const x = X(m.t), y = T + (h - T - B) * (1 - (v - lo) / (hi - lo)); if (first || (last !== null && m.t - last > 120)) g.moveTo(x, y); else g.lineTo(x, y); first = false; last = m.t; }
+    g.stroke();
+  }
+}
+function stackedTime(id, legendId, mins, keys, valueOf, bucketMin) {
+  const c = canvas(id); if (!c) return;
+  const { g, w, h, L, R, T, B } = c;
+  const t1 = Math.floor(Date.now() / 60000) * 60, t0 = t1 - range * 60, bs = bucketMin * 60;
+  const buckets = new Map();
+  for (const m of mins) { if (m.t < t0) continue; const b = Math.floor(m.t / bs) * bs; const a = buckets.get(b) || new Array(keys.length).fill(0); keys.forEach((k, i) => a[i] += valueOf(m, i)); buckets.set(b, a); }
+  let max = 1; for (const a of buckets.values()) max = Math.max(max, sum(a));
+  yaxis(c, 0, max * 1.05); timeAxis(c, t0, t1);
+  const bw = Math.max(1, (w - L - R) * bs / (t1 - t0) - 1);
+  for (const [b, a] of buckets) { let y0 = h - B; const x = L + (w - L - R) * (b - t0) / (t1 - t0); a.forEach((v, i) => { if (!v) return; const hh = (h - T - B) * v / (max * 1.05); g.fillStyle = PAL[i % PAL.length]; g.fillRect(x, y0 - hh, bw, hh); y0 -= hh; }); }
+  if (legendId) $(legendId).innerHTML = keys.map((k, i) => buckets.size && [...buckets.values()].some(a => a[i]) ? `<span title="${esc(PTYPE[k] || "")}"><i style="background:${PAL[i % PAL.length]}"></i>${esc(k)}</span>` : "").join("");
+}
+function bars(id, labels, values, color, unit = "") {
+  const c = canvas(id); if (!c) return;
+  const { g, w, h, L, R, T, B } = c;
+  const max = Math.max(1, ...values) * 1.1; yaxis(c, 0, max, unit);
+  const bw = (w - L - R) / Math.max(1, values.length);
+  values.forEach((v, i) => { const hh = (h - T - B) * v / max; g.fillStyle = color; g.fillRect(L + i * bw + 1, h - B - hh, bw - 2, hh); });
+  g.fillStyle = css("--muted"); const step = Math.ceil(labels.length / 12);
+  labels.forEach((l, i) => { if (i % step === 0) g.fillText(l, L + i * bw + 2, h - 4); });
+}
+function scatter(id, pts, xlabel, ylabel) {
+  const c = canvas(id); if (!c) return;
+  const { g, w, h, L, R, T, B } = c;
+  if (!pts.length) { g.fillStyle = css("--muted"); g.fillText("No samples yet.", L + 10, h / 2); return; }
+  const xmax = Math.max(1, ...pts.map(p => p[0])) + 1, ymax = Math.max(1, ...pts.map(p => p[1])) * 1.1;
+  yaxis(c, 0, ymax, ylabel);
+  g.fillStyle = css("--muted"); for (let i = 0; i <= xmax; i += Math.ceil(xmax / 10)) g.fillText(i + (i === 0 ? " " + xlabel : ""), L + (w - L - R) * i / xmax, h - 4);
+  g.fillStyle = css("--rx"); g.globalAlpha = 0.55;
+  for (const [x, y] of pts) { const jit = (Math.random() - 0.5) * 0.4; g.beginPath(); g.arc(L + (w - L - R) * (x + jit) / xmax, T + (h - T - B) * (1 - y / ymax), 3, 0, 7); g.fill(); }
+  g.globalAlpha = 1;
+}
+
+// ---------- render ----------
+function header() {
+  if (!S) return;
+  $("who").textContent = `${S.me.addr} · ${S.me.role}${S.me.public_ep ? " · " + S.me.public_ep : ""} · up ${dur(S.me.uptime_s)}`;
+}
+function render() {
+  if (!T) return;
+  const m = T.minutes || [];
+  try {
+    ({ overview, live: renderLive, nodes, dests, routes, delivery, radio, links, backbone, post, counters, settings: () => {}, log: () => {} })[page]?.(m);
+  } catch (e) { console.error(e); }
+}
+function lastHour(m, f) { const t0 = Date.now() / 1000 - 3600; return sum(m.filter(x => x.t >= t0).map(f)); }
+function overview(m) {
+  const d = T.delivery, active = T.nodes.filter(x => Date.now() / 1000 - x.last_seen < 3600).length;
+  const mail = S ? S.mailbox.reduce((a, b) => a + b.count, 0) : 0;
+  const modem = Object.values(T.modems)[0];
+  const ms = k => modem?.last.find(x => x[0] === k)?.[1];
+  tiles("tiles", [
+    [n(lastHour(m, x => x.rx)), "packets in (last hour)"], [n(lastHour(m, x => x.tx)), "packets out (last hour)"], [n(lastHour(m, x => x.unique)), "unique packets (last hour)"],
+    [n(T.nodes.length), "nodes ever heard"], [n(active), "nodes heard in the last hour"], [S ? n(S.links.length) : "", "links up"],
+    [d.data_seen ? Math.round(100 * d.data_acked / d.data_seen) + " %" : "–", "messages with receipt seen", "Of the direct messages passing here, the share whose receipt came back past here."],
+    [d.latency_p50 != null ? (d.latency_p50 / 1000).toFixed(1) + " s" : "–", "median delivery time"], [d.route_searches ? Math.round(100 * d.routes_found / d.route_searches) + " %" : "–", "route searches answered"],
+    [S ? n(S.dht.table.length) : "", "backbone nodes known"], [S ? n(S.dht.records.length) : "", "directory records"], [n(mail), "mail waiting here"],
+    [S ? n(S.router.forwarded) : "", "forwarded for others"], [ms(41) != null ? (ms(41) / 10).toFixed(1) + " %" : "–", "modem duty cycle used"], [ms(80) != null ? ms(80) + " dBm" : "–", "radio noise floor"],
+  ]);
+  lines("c-traffic", m, [{ f: x => x.rx, color: css("--rx") }, { f: x => x.tx, color: css("--tx") }, { f: x => x.unique, color: css("--router"), width: 1 }]);
+  stackedTime("c-types", "l-types", m, T.types, (x, i) => x.by_type?.[i] || 0, range > 360 ? 30 : range > 60 ? 10 : 2);
+  lines("c-nodes", m, [{ f: x => x.nodes, color: css("--dht") }, { f: x => x.announces, color: css("--tx"), width: 1 }]);
+  lines("c-delivery", m, [{ f: x => x.data_seen, color: css("--rx") }, { f: x => x.acks_matched, color: css("--ok") }, { f: x => x.routes_found, color: css("--router") }]);
+  lines("c-source", m, [{ f: x => x.radio_rx, color: css("--modem") }, { f: x => x.backbone_rx, color: css("--dht") }, { f: x => x.snr_n ? x.snr_sum / x.snr_n : null, color: css("--bad"), right: true, unit: " dB" }]);
+  lines("c-work", m, [{ f: x => x.forwarded, color: css("--tx") }, { f: x => x.delivered, color: css("--ok") }, { f: x => x.dht, color: css("--dht") }, { f: x => x.mail, color: css("--mail") }]);
+}
+
+// ---------- live ----------
+function meaning(e) {
+  switch (e.kind) {
+    case "rx": case "tx": { let s = PTYPE[e.ptype] || e.ptype; if (e.kind === "tx" && e.links && !e.links.length) s = "(not sent: no link takes it) " + s; if (e.flood) s += " Flood."; if (e.path?.length) s += ` Route: ${e.path.join(" → ")}.`; return s; }
+    case "router": return e.action + (e.ptype ? " – " + (PTYPE[e.ptype] || e.ptype) : "");
+    case "dht": return `${e.op}${e.req ? ": " + e.req : ""}${e.found !== undefined ? (e.found ? " – found at " + e.found : " – not found") : ""}${e.ep ? " (from " + e.ep + ")" : ""}`;
+    case "mail": return `${e.op}${e.size ? `, ${e.size} bytes` : ""}${e.waiting !== undefined ? `, ${e.waiting} waiting` : ""}${e.replicate ? ", copies to the replica hosts" : ""}`;
+    case "modem": return `modem counters read (${e.stats} values)`;
+    case "admin": return `${e.op} from ${e.ip}`;
+    case "log": return e.text;
+    default: return JSON.stringify(e);
+  }
+}
+function renderLive() {
+  const q = $("search").value.toLowerCase(), rows = [];
+  for (let i = events.length - 1; i >= 0 && rows.length < 500; i--) {
+    const e = events[i]; if (!filters.has(e.kind)) continue;
+    const dest = e.dest || e.recipient || e.target || e.from || "", link = e.link || (e.links ? e.links.join(", ") : ""), text = meaning(e);
+    if (q && !`${e.kind} ${e.ptype || ""} ${link} ${dest} ${NAMES.get(dest) || ""} ${text}`.toLowerCase().includes(q)) continue;
+    const [label, color] = KIND[e.kind] || [e.kind, "--log"];
+    rows.push(`<tr class="ev" data-seq="${e.seq}"><td class="mono">${new Date(e.wall).toLocaleTimeString([], { hour12: false })}</td><td><span class="badge" style="background:var(${color})">${label}</span></td><td>${esc(link)}</td><td>${esc(e.ptype || e.op || "")}</td><td class="explain">${esc(text)}</td><td>${who(dest)}</td><td class="num">${e.hops ?? ""}</td><td class="num">${e.size ?? ""}</td><td class="num">${e.kind === "rx" && e.snr ? e.snr : ""}</td></tr>`);
+    if (open.has(e.seq)) rows.push(`<tr class="detail"><td colspan="9">${esc(JSON.stringify(e, null, 2))}</td></tr>`);
+  }
+  $("live").innerHTML = rows.join("") || `<tr><td colspan="9" class="empty">Nothing yet.</td></tr>`;
+}
+$("live").addEventListener("click", e => { const tr = e.target.closest("tr.ev"); if (!tr) return; const s = +tr.dataset.seq; open.has(s) ? open.delete(s) : open.add(s); renderLive(); });
+$("filters").innerHTML = Object.entries(KIND).map(([k, [l, , d]]) => `<span class="chip on" data-k="${k}">${l} – ${d}</span>`).join("");
+$("filters").addEventListener("click", e => { const c = e.target.closest(".chip"); if (!c) return; const k = c.dataset.k; filters.has(k) ? filters.delete(k) : filters.add(k); c.classList.toggle("on"); renderLive(); });
+$("search").addEventListener("input", renderLive);
+$("pause").onclick = () => { paused = !paused; $("pause").textContent = paused ? "Resume" : "Pause"; $("pause").classList.toggle("on", paused); };
+$("clear").onclick = () => { events.length = 0; open.clear(); renderLive(); };
+
+// ---------- nodes ----------
+let map = null, markers = null;
+function nodes() {
+  const now = Date.now() / 1000, ns = T.nodes;
+  const roles = {}; for (const x of ns) roles[x.role || "unknown"] = (roles[x.role || "unknown"] || 0) + 1;
+  tiles("node-tiles", [
+    [n(ns.length), "nodes ever heard"], [n(ns.filter(x => now - x.last_seen < 3600).length), "heard in the last hour"], [n(ns.filter(x => now - x.last_seen < 86400).length), "heard in the last day"],
+    [n(ns.filter(x => x.lat != null).length), "share a position"], [n(ns.filter(x => x.battery_mv).length), "report a battery"], [n(ns.filter(x => x.mobile).length), "moving (mobile flag)"],
+    [n(ns.filter(x => x.mail_class > 0).length), "post offices"], ...Object.entries(roles).map(([r, c]) => [n(c), r.toLowerCase() + "s"]),
+  ]);
+  const q = $("node-search").value.toLowerCase();
+  const rows = ns.filter(x => !q || `${x.name} ${x.addr} ${x.role} ${x.via}`.toLowerCase().includes(q)).map(x => [
+    { h: `${esc(x.name || "(no name)")}`, s: (x.name || "").toLowerCase() }, { h: `<span class="mono">${short(x.addr)}</span>`, s: x.addr }, x.role || "?",
+    { h: ago(x.last_seen), s: x.last_seen }, { h: ago(x.first_seen), s: x.first_seen }, x.announces, x.min_hops === 255 ? "" : x.min_hops, x.last_hops,
+    { h: esc(x.via) + (x.via_backbone ? " (backbone)" : ""), s: x.via }, x.snr ?? "", x.km ?? "",
+    x.battery_mv ? (x.battery_mv / 1000).toFixed(2) + " V" : "", x.ext_power == null ? "" : x.ext_power ? "yes" : "no", x.energy ?? "",
+    x.temp_c != null ? x.temp_c.toFixed(1) + " °C" : "", x.uptime_s != null ? { h: dur(x.uptime_s), s: x.uptime_s } : "",
+    x.hears_repeater == null ? "" : x.hears_repeater ? "yes" : "no", x.mobile ? "yes" : "", x.mail_class || "",
+    x.caps != null ? [(x.caps & 1) && "compressed text", (x.caps & 2) && "mail bundles"].filter(Boolean).join(", ") : "", x.fs ? "yes" : "",
+  ]);
+  table("node-table", ["Name", "Address", "Role", "Last heard", "First heard", "Announces", "Min hops", "Last hops", "Heard via", "SNR", "km", "Battery", "Ext. power", "Energy", "Temp.", "Uptime", "Hears repeater", "Mobile", "Post office", "Can read", "Forward secrecy"],
+    rows, { sort: { i: 3, d: true }, num: [5, 6, 7, 9, 10, 13] });
+  if (window.L) {
+    if (!map) {
+      map = L.map("map").setView([56, 10.5], 6);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
+      markers = L.layerGroup().addTo(map);
+    }
+    markers.clearLayers(); const pts = [];
+    for (const x of ns) if (x.lat != null && x.precision > 0) {
+      pts.push([x.lat, x.lon]);
+      L.circleMarker([x.lat, x.lon], { radius: x.role === "Repeater" || x.role === "Anchor" ? 7 : 5, color: ROLE_COLOR[x.role] || "#888", fillOpacity: Date.now() / 1000 - x.last_seen < 3600 ? 0.8 : 0.25 })
+        .bindPopup(`<b>${esc(x.name || short(x.addr))}</b><br>${esc(x.role || "?")} · ${x.last_hops} hops · ${ago(x.last_seen)}${x.battery_mv ? "<br>battery " + (x.battery_mv / 1000).toFixed(2) + " V" : ""}${x.km != null ? "<br>" + x.km + " km from the server" : ""}`).addTo(markers);
+    }
+    if (T.me) L.marker(T.me, { title: "this server" }).addTo(markers);
+    if (pts.length && !map._fitted) { map.fitBounds(pts, { padding: [30, 30], maxZoom: 11 }); map._fitted = true; }
+    setTimeout(() => map.invalidateSize(), 50);
+  } else {
+    $("map").innerHTML = `<div class="empty">The map needs the Leaflet library from the internet; the table below has every position.</div>`;
+  }
+}
+$("node-search").addEventListener("input", () => nodes());
+
+// ---------- destinations, routes ----------
+function dests() {
+  const rows = Object.entries(T.dests).map(([a, d]) => [{ h: who(a), s: NAMES.get(a) || a }, d.data, d.bytes, d.path_requests, d.key_requests, d.acks, d.other, d.last_hops, { h: `<span class="mono">${esc((d.last_path || []).join(" → "))}</span>` }, { h: ago(d.last), s: d.last }]);
+  table("dest-table", ["Destination", "Messages / pieces", "Bytes", "Route searches", "Key requests", "Receipts (to it)", "Other", "Last hops", "Last route", "Last"], rows, { sort: { i: 1, d: true }, num: [1, 2, 3, 4, 5, 6, 7] });
+}
+function routes() {
+  bars("c-pathlen", T.path_len_hist.map((_, i) => i === 12 ? "12" : String(i)), T.path_len_hist, css("--router"));
+  bars("c-hops", T.hops_hist.map((_, i) => i === 16 ? "16+" : String(i)), T.hops_hist, css("--rx"));
+  const rows = Object.entries(T.repeaters).map(([id, r]) => [{ h: `<span class="mono">${(+id).toString(16).padStart(4, "0")}</span>`, s: +id }, r.addr ? { h: who(r.addr), s: NAMES.get(r.addr) || r.addr } : "", r.seen, r.first_hop, r.seen ? (r.positions / r.seen).toFixed(1) : "", { h: ago(r.last), s: r.last }]);
+  table("rep-table", ["Path ID", "Node", "Times on a route", "As first repeater", "Average position", "Last seen"], rows, { sort: { i: 2, d: true }, num: [2, 3, 4] });
+  if (S) table("route-table", ["Destination", "Path", "Hops", "Found", "Used", "Receipt"], S.routes.map(r => [{ h: who(r.dest) }, { h: `<span class="mono">${esc(r.path.join(" → ") || "direct")}</span>` }, r.cost, dur(r.age_s) + " ago", dur(r.last_used_s) + " ago", r.confirmed_s == null ? "never" : dur(r.confirmed_s) + " ago"]), { num: [2] });
+}
+function delivery() {
+  const d = T.delivery;
+  tiles("del-tiles", [
+    [n(d.data_seen), "direct messages seen passing"], [n(d.data_acked), "their receipts seen coming back"], [d.data_seen ? Math.round(100 * d.data_acked / d.data_seen) + " %" : "–", "with receipt"],
+    [d.latency_p50 != null ? (d.latency_p50 / 1000).toFixed(2) + " s" : "–", "median delivery time"], [d.latency_p90 != null ? (d.latency_p90 / 1000).toFixed(2) + " s" : "–", "90 % within"], [d.latency_max != null ? (d.latency_max / 1000).toFixed(1) + " s" : "–", "slowest"],
+    [n(d.route_searches), "route searches seen"], [n(d.routes_found), "answered past here"], [d.route_p50 != null ? (d.route_p50 / 1000).toFixed(2) + " s" : "–", "median route search time"],
+  ]);
+  scatter("c-lat", d.latency.map(s => [s[2], s[1] / 1000]), "hops", " s");
+  const bins = new Array(20).fill(0); for (const s of d.latency) bins[Math.min(19, Math.floor(s[1] / 500))]++;
+  bars("c-lathist", bins.map((_, i) => (i * 0.5).toFixed(1) + (i === 19 ? "+" : "")), bins, css("--ok"));
+  scatter("c-route", d.route.map(s => [s[2], s[1] / 1000]), "repeaters", " s");
+}
+
+// ---------- radio ----------
+function radio() {
+  const box = $("modems");
+  const ms = Object.entries(T.modems);
+  box.innerHTML = ms.length ? "" : `<section><h2>Modem</h2><div class="empty">No LoRa modem attached (or no answer yet; it is asked every 30 s). A server on a VPS usually has none: radio data then comes from announces and the hosts behind it.</div></section>`;
+  for (const [name, m] of ms) {
+    const sec = document.createElement("section");
+    const id = "m" + name.replace(/\W/g, "");
+    sec.innerHTML = `<h2>Modem ${esc(name)}</h2><p class="help">${esc(m.radio || "")} · read ${ago(m.last_t)}</p><div class="grid2"><div><canvas id="${id}-a"></canvas><div class="legend" id="${id}-al"></div></div><div><canvas id="${id}-b"></canvas><div class="legend" id="${id}-bl"></div></div></div><h3>All counters</h3><div class="tablewrap" id="${id}-t" style="max-height:300px"></div>`;
+    box.appendChild(sec);
+    table(id + "-t", ["Counter", "Value"], m.last.map(([k, v]) => [STAT[k] || "key " + k, v]), { num: [1] });
+    const keys = m.series_keys, rows = m.series.map(r => { const o = { t: r[0] }; keys.forEach((k, i) => o[k] = r[i + 1] === -9223372036854775808 ? null : r[i + 1]); return o; });
+    const deltas = rows.map((r, i) => { if (!i) return { t: r.t }; const p = rows[i - 1], o = { t: r.t }; for (const k of [30, 31, 32, 38, 39, 40]) o[k] = r[k] != null && p[k] != null ? Math.max(0, r[k] - p[k]) : null; return o; });
+    const A = [[30, "--rx"], [31, "--bad"], [32, "--tx"], [38, "--router"]], Bs = [[37, "--ok"], [36, "--rx"], [80, "--bad"]];
+    lines(id + "-a", deltas, A.map(([k, c]) => ({ f: o => o[k], color: css(c) })));
+    $(id + "-al").innerHTML = A.map(([k, c]) => `<span><i style="background:var(${c})"></i>${SERIES_NAMES[k]} per 30 s</span>`).join("");
+    const c = canvas(id + "-b");
+    if (c) { c.g.clearRect(0, 0, c.w, c.h); }
+    lines(id + "-b", rows, Bs.map(([k, cl]) => ({ f: o => o[k], color: css(cl), right: false })), { unit: "" });
+    $(id + "-bl").innerHTML = Bs.map(([k, c]) => `<span><i style="background:var(${c})"></i>${SERIES_NAMES[k]}</span>`).join("");
+  }
+  bars("c-snr", T.snr_hist.map((_, i) => String(-20 + i * 2)), T.snr_hist, css("--modem"), "");
+  bars("c-size", T.size_hist.map((_, i) => String(i * 32)), T.size_hist, css("--rx"));
+  if (S) table("nb-table", ["ID", "Node", "SNR dB", "RSSI dBm", "Heard", "Packets", "Role", "Hears repeater", "Post office"], S.neighbors.map(x => [{ h: `<span class="mono">${x.id}</span>` }, x.addr ? { h: who(x.addr) } : "", x.snr, x.rssi || "", dur(x.heard_s) + " ago", x.count, x.role || "?", x.hears_repeater == null ? "?" : x.hears_repeater ? "yes" : "no", x.mail_class || ""]), { num: [2, 3, 5] });
+}
+
+// ---------- links, backbone, post, counters ----------
+function links() {
+  const rows = Object.entries(T.links).map(([nm, l]) => [nm, l.kind, sum(l.rx), sum(l.tx), l.rx_bytes, l.tx_bytes, { h: ago(l.first), s: l.first }, { h: ago(l.last), s: l.last },
+    { h: T.types.map((t, i) => l.rx[i] ? `${t} ${l.rx[i]}` : "").filter(Boolean).join(", "), s: 0 }]);
+  table("link-table", ["Link", "Kind", "Packets in", "Packets out", "Bytes in", "Bytes out", "First", "Last", "Received by type"], rows, { sort: { i: 2, d: true }, num: [2, 3, 4, 5], wrap: [8] });
+  const c = canvas("c-linkmix"); if (!c) return;
+  const { g, w, h, L, R, T: Tp, B } = c, entries = Object.entries(T.links).slice(0, 14);
+  const bw = (w - L - R) / Math.max(1, entries.length);
+  const max = Math.max(1, ...entries.map(([, l]) => sum(l.rx) + sum(l.tx)));
+  yaxis(c, 0, max * 1.05);
+  entries.forEach(([nm, l], j) => { let y0 = h - B; T.types.forEach((_, i) => { const v = l.rx[i] + l.tx[i]; if (!v) return; const hh = (h - Tp - B) * v / (max * 1.05); g.fillStyle = PAL[i]; g.fillRect(L + j * bw + 4, y0 - hh, bw - 8, hh); y0 -= hh; }); g.fillStyle = css("--muted"); g.fillText(nm.slice(0, 16), L + j * bw + 4, h - 4); });
+  $("l-linkmix").innerHTML = T.types.map((t, i) => `<span title="${esc(PTYPE[t] || "")}"><i style="background:${PAL[i]}"></i>${t}</span>`).join("");
+}
+function backbone() {
+  if (S) {
+    tiles("dht-tiles", [[n(S.dht.table.length), "backbone nodes known"], [n(S.dht.records.length), "records kept"], [n(S.dht.reachable), "addresses this server reaches"], [n(S.dht.lookups), "lookups started"], [n(S.dht.found), "lookups found"], [n(S.dht.seeds.length), "seeds"], [n(S.dht.peers.length), "peers connected or connecting"]]);
+    table("dht-table", ["Node ID", "Endpoint"], S.dht.table.map(c => [{ h: `<span class="mono">${short(c.id)}</span>` }, c.ep]));
+    table("dht-records", ["Address", "Reached through host", "Endpoint", "Hops from that host", "Age"], S.dht.records.map(r => [{ h: who(r.dest) }, { h: `<span class="mono">${short(r.gw)}</span>` }, r.ep, r.hops, dur(r.age_s)]), { num: [3] });
+  }
+  table("dht-ops", ["Operation", "Count"], Object.entries(T.dht_ops).map(([k, v]) => [k, v]), { sort: { i: 1, d: true }, num: [1] });
+  if (!S) return;
+  const yn = v => v == null ? { h: `<span class="no">?</span>`, s: 1 } : v ? { h: `<span class="yes">yes</span>`, s: 2 } : { h: `<span class="no">no</span>`, s: 0 };
+  const mb = c => !c ? "" : c.mail_free_mb >= 4294967295 ? "no limit" : c.mail_free_mb + " MB";
+  const mc = S.me.caps;
+  if (mc) tiles("my-caps", [
+    [mc.post_office ? "yes" : "no", "post office"], [mb(mc), "room for mail"], [(S.me.mail_bytes / 1e6).toFixed(2) + " MB", "mail kept now"],
+    [mc.relay ? "yes" : "no", "relay for hosts behind NAT"], [mc.radio ? "yes" : "no", "radio"], [mc.regions.length || "all", "regions"], [esc(mc.version), "version"],
+  ]);
+  table("caps-table", ["Node", "Endpoint", "Kind", "Version", "Post office", "Room for mail", "Relay", "Radio", "Regions", "Asked"],
+    S.dht.table.map(c => { const k = c.caps; return [{ h: `<span class="mono">${short(c.id)}</span>`, s: c.id }, c.ep, k ? (k.server ? "server" : "host") : "?", k ? k.version : "?", yn(k?.post_office), mb(k), yn(k?.relay), yn(k?.radio), k ? (k.regions.length ? k.regions.map(r => r.toString(16).padStart(4, "0")).join(" ") : "all") : "?", c.caps_age_s == null ? "not yet" : dur(c.caps_age_s) + " ago"]; }),
+    { sort: { i: 1, d: false }, empty: "No other servers in the directory yet." });
+  table("linkcaps-table", ["Link", "Kind", "Version", "Post office", "Room for mail", "Relay", "Radio"],
+    S.links.filter(l => l.kind === "backbone").map(l => { const k = l.caps; return [l.name, k ? (k.server ? "server" : "host") : "?", k ? k.version : "? (older version)", yn(k?.post_office), mb(k), yn(k?.relay), yn(k?.radio)]; }),
+    { empty: "No backbone links up." });
+}
+
+// ---------- settings ----------
+// Each field is one option in settings.txt; unknown lines are kept as they are.
+const FIELDS = [
+  { f: "--public-addr", label: "Public address", help: "host:port others reach this server on (required)", kind: "text" },
+  { f: "--listen", label: "Backbone port", help: "address:port to listen on, e.g. 0.0.0.0:4242", kind: "text" },
+  { f: "--peer", label: "Peers", help: "servers or hosts to connect to, one per line", kind: "list" },
+  { f: "--seed-dns", label: "DNS seeds", help: "names with several servers behind them, one per line", kind: "list" },
+  { f: "--min-peers", label: "Minimum backbone links", help: "connect to more servers from the directory below this", kind: "number" },
+  { f: "--region", label: "Regions", help: "regions to forward channel messages for, separated by commas (empty = all)", kind: "regions" },
+  { f: "--strict-region", label: "Strict regions", help: "without regions, forward only messages without a region", kind: "flag" },
+  { f: "--no-post-office", label: "No post office", help: "do not keep mail for others (the backbone is told)", kind: "flag" },
+  { f: "--mail-quota-mb", label: "Mail quota (MB)", help: "most mail kept for others; 0 = no limit", kind: "number" },
+  { f: "--no-relay", label: "No relay", help: "do not relay for hosts behind NAT", kind: "flag" },
+  { f: "--serial", label: "LoRa modem", help: "serial port of an attached modem (empty = none)", kind: "port" },
+  { f: "--trunk", label: "LoRa trunks", help: "long-distance LoRa modems, port[:baud], one per line", kind: "list" },
+  { f: "--http", label: "Dashboard address", help: "address:port of this dashboard; after a change, open the new address", kind: "text" },
+];
+let settingsState = null;
+function parseSettings(text) {
+  const vals = {}, other = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim(); if (!line) continue;
+    if (line.startsWith("#")) { other.push(line); continue; }
+    const sp = line.search(/\s/), flag = sp < 0 ? line : line.slice(0, sp), val = sp < 0 ? "" : line.slice(sp + 1).trim();
+    const fd = FIELDS.find(x => x.f === flag);
+    if (!fd) { other.push(line); continue; }
+    if (fd.kind === "flag") vals[flag] = true;
+    else if (fd.kind === "list" || fd.kind === "regions") (vals[flag] ||= []).push(val);
+    else vals[flag] = val;
+  }
+  return { vals, other };
+}
+async function loadSettings() {
+  $("settings-msg").textContent = "";
+  try {
+    const st = await get("/api/settings");
+    settingsState = st;
+    const { vals, other } = parseSettings(st.settings || "");
+    // Values from the command line (they win): shown in the fields.
+    const cliVals = parseSettings((st.cli || []).reduce((acc, a) => acc + (a.startsWith("--") ? "\n" + a : " " + a), "")).vals;
+    const fromCli = f => cliVals[f] !== undefined;
+    const cliText = f => { const v = cliVals[f]; return v === true ? "on" : Array.isArray(v) ? v.join(", ") : v; };
+    const form = $("settings-form");
+    form.innerHTML = FIELDS.map(fd => {
+      const id = "set" + fd.f.replace(/-/g, "_"), v = vals[fd.f];
+      const ph = fromCli(fd.f) ? ` placeholder="command line: ${esc(cliText(fd.f))}"` : "";
+      const note = fromCli(fd.f) ? `<small style="color:var(--tx)">set on the command line: ${esc(cliText(fd.f))} (wins over this field)</small>` : "";
+      let input;
+      if (fd.kind === "flag") input = `<span><input type="checkbox" id="${id}" ${v ? "checked" : ""}> ${note}</span>`;
+      else if (fd.kind === "list") input = `<div><textarea id="${id}"${ph}>${esc((v || []).join("\n"))}</textarea>${note}</div>`;
+      else if (fd.kind === "regions") input = `<div><input type="text" id="${id}" value="${esc((v || []).join(", "))}"${ph}>${note}</div>`;
+      else if (fd.kind === "port") input = `<select id="${id}"><option value="">(none)</option>${[...new Set([...(st.ports || []), ...(v ? [v] : [])])].map(p => `<option ${p === v ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>`;
+      else input = `<div><input type="${fd.kind === "number" ? "number" : "text"}" id="${id}" value="${esc(v ?? "")}"${ph}>${note}</div>`;
+      return `<label for="${id}">${esc(fd.label)}<small>${esc(fd.help)}</small></label>${input}`;
+    }).join("") + `<label for="set_other">Other options<small>one per line, as on the command line (see --help)</small></label><textarea id="set_other">${esc(other.join("\n"))}</textarea>`;
+    $("settings-cli").textContent = "Command line: " + (st.cli || []).join(" ") + "\n\n" + (st.startup || []).join("\n");
+  } catch (e) { $("settings-msg").className = "msg bad"; $("settings-msg").textContent = "Could not load the settings."; }
+}
+function settingsText() {
+  const lines = [];
+  for (const fd of FIELDS) {
+    const el = $("set" + fd.f.replace(/-/g, "_")); if (!el) continue;
+    if (fd.kind === "flag") { if (el.checked) lines.push(fd.f); }
+    else if (fd.kind === "list") for (const v of el.value.split(/\n/).map(x => x.trim()).filter(Boolean)) lines.push(`${fd.f} ${v}`);
+    else if (fd.kind === "regions") for (const v of el.value.split(/[,\s]+/).map(x => x.trim()).filter(Boolean)) lines.push(`${fd.f} ${v}`);
+    else if (el.value.trim() !== "") lines.push(`${fd.f} ${el.value.trim()}`);
+  }
+  for (const l of $("set_other").value.split(/\n/).map(x => x.trim()).filter(Boolean)) lines.push(l);
+  return lines.join("\n") + "\n";
+}
+$("settings-reload").onclick = loadSettings;
+$("settings-save").onclick = async () => {
+  const msg = $("settings-msg");
+  msg.className = "msg"; msg.textContent = "Saving …";
+  try {
+    const r = await fetch("/api/settings", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "text/plain" }, body: settingsText() });
+    const t = await r.text();
+    if (!r.ok) { msg.className = "msg bad"; msg.textContent = t; return; }
+    msg.className = "msg good"; msg.textContent = "Saved. The server restarts …";
+    const t0 = Date.now();
+    const wait = async () => {
+      try { const x = await fetch("/api/telemetry", { credentials: "same-origin", cache: "no-store" }); if (x.ok && Date.now() - t0 > 2500) { msg.textContent = "Restarted with the new settings."; loadSettings(); return; } } catch {}
+      if (Date.now() - t0 < 60000) setTimeout(wait, 1500); else { msg.className = "msg bad"; msg.textContent = "The server did not come back within a minute: check its log (or the new dashboard address)."; }
+    };
+    setTimeout(wait, 1500);
+  } catch { msg.className = "msg bad"; msg.textContent = "Could not reach the server."; }
+};
+$("pw-save").onclick = async () => {
+  const msg = $("pw-msg"), o = $("pw-old").value, n1 = $("pw-new").value, n2 = $("pw-new2").value;
+  if (n1 !== n2) { msg.className = "msg bad"; msg.textContent = "The two new passwords differ."; return; }
+  const r = await fetch("/api/admin/password", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ old: o, new: n1 }) });
+  msg.className = r.ok ? "msg good" : "msg bad"; msg.textContent = await r.text();
+  if (r.ok) { $("pw-old").value = $("pw-new").value = $("pw-new2").value = ""; }
+};
+function post() {
+  table("mail-ops", ["Operation", "Count"], Object.entries(T.mail_ops).map(([k, v]) => [k, v]), { sort: { i: 1, d: true }, num: [1] });
+  if (S) table("mail-table", ["Recipient", "Messages", "Bytes", "Oldest", "Replica hosts"], S.mailbox.map(m => [{ h: who(m.recipient) }, m.count, m.bytes, dur(m.oldest_s), m.replicas.join(", ") || "none"]), { num: [1, 2], empty: "No mail waiting." });
+}
+function counters() {
+  table("type-table", ["Type", "Received", "Sent", "Bytes received", "Meaning"], T.types.map((t, i) => [t, T.rx_by_type[i], T.tx_by_type[i], T.rx_bytes_by_type[i], { h: `<span class="explain">${esc(PTYPE[t] || "")}</span>` }]), { num: [1, 2, 3], wrap: [4] });
+  table("router-ev", ["Decision", "Count"], Object.entries(T.router).map(([k, v]) => [k, v]), { sort: { i: 1, d: true }, num: [1] });
+  if (S) table("router-table", ["Counter", "Value"], [...Object.entries(S.router), ...Object.entries(S.counters)].map(([k, v]) => [k.replace(/_/g, " "), v ?? ""]), { num: [1] });
+  table("region-table", ["Region ID", "Packets"], Object.entries(T.regions).map(([k, v]) => [{ h: `<span class="mono">${(+k).toString(16).padStart(4, "0")}</span>`, s: +k }, v]), { sort: { i: 1, d: true }, num: [1], empty: "No regional traffic yet." });
+}
+
+addEventListener("resize", () => render());
+show(page);
+pollTelemetry(); pollSnapshot(); pollEvents(); pollLog();
+setInterval(() => { if (page === "overview") render(); }, 30000);
+</script>
+</body>
+</html>

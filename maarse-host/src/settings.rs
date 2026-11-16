@@ -49,7 +49,10 @@ pub fn load(data_dir: &Path) -> String {
 
 /// Saves new text if it can be parsed as options.
 pub fn save(data_dir: &Path, text: &str) -> Result<(), String> {
-    let args = to_args(text)?;
+    let mut args = to_args(text)?;
+    // Checked together with the command line, which also applies (e.g. a
+    // server's --public-addr given in its start script).
+    args.extend(std::env::args().skip(1).filter(|a| !a.starts_with("--set-")));
     crate::parse_from(args)?;
     let body: String = text.lines().map(|l| format!("{}\n", l.trim_end())).collect();
     std::fs::write(file(data_dir), body).map_err(|e| format!("could not save: {e}"))

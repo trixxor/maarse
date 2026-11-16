@@ -853,6 +853,25 @@ pub mod stat {
     pub const PANIC_LINE: u8 = 91;
     /// Hash of the last panic's file name (FNV-1a, 32 bit).
     pub const PANIC_FILE: u8 = 92;
+    // Sent by the firmware in a second `Stats` frame (the first is full).
+    /// Hello packets sent.
+    pub const HELLOS: u8 = 93;
+    /// Key requests sent ("who is X?").
+    pub const KEY_REQUESTS: u8 = 94;
+    /// Packets routed around a repeater that stopped answering.
+    pub const LOCAL_REPAIRS: u8 = 95;
+    /// Messages carried for others (store-carry-forward).
+    pub const CARRIED: u8 = 96;
+    /// Pinned contacts (the ones kept in flash).
+    pub const PINNED: u8 = 97;
+    /// 1 when the node says it is moving (mobile mode).
+    pub const MOBILE: u8 = 98;
+    /// Packets dropped by the load quota.
+    pub const QUOTA_DROPPED: u8 = 99;
+    /// Messages waiting for a recipient's key.
+    pub const AWAIT_KEY: u8 = 100;
+    /// Messages kept for a later post office deposit.
+    pub const OUTBOX: u8 = 101;
 }
 
 /// Error codes in `Event::Error`.

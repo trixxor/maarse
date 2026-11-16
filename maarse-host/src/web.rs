@@ -13,6 +13,8 @@ use tungstenite::{Error as WsError, Message};
 
 /// The web client is built into the program, so there is only one file to run.
 const INDEX_HTML: &str = include_str!("../../maarse-client/index.html");
+/// maarse-server's dashboard: telemetry and everything passing through.
+const SERVER_HTML: &str = include_str!("../../maarse-client/server.html");
 
 /// The access key for remote access: read from `<data>/access-key.txt`
 /// or created (32 hex characters) the first time.
@@ -54,6 +56,11 @@ fn is_local(stream: &TcpStream) -> bool {
 }
 
 fn handle(stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
+    if crate::server_mode() {
+        // maarse-server: only the admin dashboard, behind a login; no chat
+        // client and no WebSocket.
+        return server_http(stream, data_dir);
+    }
     let mut peek = [0u8; 2048];
     let n = stream.peek(&mut peek).unwrap_or(0);
     let head = String::from_utf8_lossy(&peek[..n]).to_ascii_lowercase();
@@ -106,6 +113,160 @@ fn http(mut stream: TcpStream, token: &str, data_dir: &Path) {
     );
     let _ = stream.write_all(resp.as_bytes());
     let _ = stream.write_all(body);
+}
+
+// ---------- maarse-server: login and dashboard ----------
+
+fn url_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => {
+                match u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz"), 16) {
+                    Ok(v) => {
+                        out.push(v);
+                        i += 2;
+                    }
+                    Err(_) => out.push(b'%'),
+                }
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn send(stream: &mut TcpStream, status: &str, ctype: &str, extra: &str, body: &[u8]) {
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin\r\n{extra}Connection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body);
+}
+
+fn server_http(mut stream: TcpStream, data_dir: &Path) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut req = Vec::new();
+    let mut buf = [0u8; 2048];
+    while !req.windows(4).any(|w| w == b"\r\n\r\n") && req.len() < 16 * 1024 {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => req.extend_from_slice(&buf[..n]),
+        }
+    }
+    let head_end = req.windows(4).position(|w| w == b"\r\n\r\n").map_or(req.len(), |p| p + 4);
+    let head = String::from_utf8_lossy(&req[..head_end]).into_owned();
+    let mut words = head.split_whitespace();
+    let method = words.next().unwrap_or("GET").to_string();
+    let target = words.next().unwrap_or("/").to_string();
+    let (path, query) = target.split_once('?').unwrap_or((target.as_str(), ""));
+    let ip = stream.peer_addr().map(|a| a.ip()).unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]));
+    let html = "text/html; charset=utf-8";
+    let jsn = "application/json; charset=utf-8";
+    if path == "/login" && method == "POST" {
+        let len: usize = header(&head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0).min(4096);
+        let mut body = req[head_end.min(req.len())..].to_vec();
+        while body.len() < len {
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => body.extend_from_slice(&buf[..n]),
+            }
+        }
+        let text = String::from_utf8_lossy(&body[..len.min(body.len())]).into_owned();
+        let pw = text.split('&').find_map(|kv| kv.strip_prefix("password=")).map(url_decode).unwrap_or_default();
+        return match crate::admin::login(data_dir, ip, &pw) {
+            Some(tok) => {
+                crate::debug::push("admin", serde_json::json!({"op": "login", "ip": ip.to_string()}));
+                send(&mut stream, "303 See Other", html, &format!("Location: /\r\nSet-Cookie: {}\r\n", crate::admin::cookie(&tok)), b"")
+            }
+            None => {
+                crate::debug::push("admin", serde_json::json!({"op": "failed login", "ip": ip.to_string()}));
+                let msg = if crate::admin::locked(ip) { "Too many wrong passwords: locked for 15 minutes." } else { "Wrong password." };
+                let page = crate::admin::LOGIN_HTML.replace("<!--ERR-->", &format!("<div class=\"err\">{msg}</div>"));
+                send(&mut stream, "401 Unauthorized", html, "", page.as_bytes())
+            }
+        };
+    }
+    if path == "/login" {
+        return send(&mut stream, "200 OK", html, "", crate::admin::LOGIN_HTML.as_bytes());
+    }
+    let Some(session) = crate::admin::session(&head) else {
+        if path.starts_with("/api/") {
+            return send(&mut stream, "401 Unauthorized", jsn, "", b"{\"error\":\"login required\"}");
+        }
+        return send(&mut stream, "303 See Other", html, "Location: /login\r\n", b"");
+    };
+    match (method.as_str(), path) {
+        ("GET", "/logout") => {
+            crate::admin::logout(&session);
+            send(&mut stream, "303 See Other", html, "Location: /login\r\nSet-Cookie: maarse_session=; Max-Age=0; Path=/\r\n", b"")
+        }
+        ("GET", "/") | ("GET", "/index.html") => send(&mut stream, "200 OK", html, "", SERVER_HTML.as_bytes()),
+        ("GET", "/icon.svg") => send(&mut stream, "200 OK", "image/svg+xml", "", ICON_SVG.as_bytes()),
+        ("GET", "/api/debug/snapshot") => send(&mut stream, "200 OK", jsn, "", crate::debug::snapshot().as_bytes()),
+        ("GET", "/api/telemetry") => send(&mut stream, "200 OK", jsn, "", crate::debug::telemetry().as_bytes()),
+        ("GET", "/api/debug/events") => {
+            let since = query.split('&').find_map(|kv| kv.strip_prefix("since=")).and_then(|v| v.parse().ok()).unwrap_or(0);
+            send(&mut stream, "200 OK", jsn, "", crate::debug::events_json(since).as_bytes())
+        }
+        ("GET", "/api/service/log") => {
+            let since = query.split('&').find_map(|kv| kv.strip_prefix("since=")).and_then(|v| v.parse().ok()).unwrap_or(0);
+            send(&mut stream, "200 OK", jsn, "", crate::service::log_json(since).as_bytes())
+        }
+        ("GET", "/api/service/status") => send(&mut stream, "200 OK", jsn, "", crate::service::status_json(data_dir).as_bytes()),
+        ("GET", "/api/settings") => send(&mut stream, "200 OK", jsn, "", crate::settings::status_json(data_dir).as_bytes()),
+        ("POST", "/api/settings") | ("POST", "/api/admin/password") => {
+            // Same-origin only (the session cookie is SameSite=Strict too).
+            let host = header(&head, "host").unwrap_or("");
+            if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
+                return send(&mut stream, "403 Forbidden", "text/plain; charset=utf-8", "", b"wrong origin");
+            }
+            let len: usize = header(&head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0).min(64 * 1024);
+            let mut body = req[head_end.min(req.len())..].to_vec();
+            while body.len() < len {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => body.extend_from_slice(&buf[..n]),
+                }
+            }
+            let text = String::from_utf8_lossy(&body[..len.min(body.len())]).into_owned();
+            if path == "/api/admin/password" {
+                let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                let (old, new) = (v["old"].as_str().unwrap_or(""), v["new"].as_str().unwrap_or(""));
+                if !crate::admin::check_password(data_dir, old) {
+                    std::thread::sleep(Duration::from_secs(1));
+                    return send(&mut stream, "403 Forbidden", "text/plain; charset=utf-8", "", b"The current password is wrong.");
+                }
+                if new.chars().count() < 10 {
+                    return send(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", "", b"The new password needs at least 10 characters.");
+                }
+                return match crate::admin::set_password(data_dir, new) {
+                    Ok(()) => {
+                        let _ = std::fs::remove_file(data_dir.join("admin-password.txt"));
+                        crate::debug::push("admin", serde_json::json!({"op": "password changed", "ip": ip.to_string()}));
+                        send(&mut stream, "200 OK", "text/plain; charset=utf-8", "", b"Password changed.")
+                    }
+                    Err(e) => send(&mut stream, "500 Internal Server Error", "text/plain; charset=utf-8", "", e.to_string().as_bytes()),
+                };
+            }
+            match crate::settings::save(data_dir, &text) {
+                Ok(()) => {
+                    crate::debug::push("admin", serde_json::json!({"op": "settings saved, restarting", "ip": ip.to_string()}));
+                    send(&mut stream, "200 OK", "text/plain; charset=utf-8", "", b"Saved. Restarting ...");
+                    drop(stream);
+                    thread::sleep(Duration::from_millis(400));
+                    crate::settings::restart();
+                }
+                Err(e) => send(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", "", e.as_bytes()),
+            }
+        }
+        _ => send(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "", b"Not found"),
+    }
 }
 
 // ---------- settings (/api/…) ----------

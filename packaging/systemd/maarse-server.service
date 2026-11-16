@@ -1,0 +1,54 @@
+# systemd unit for maarse-server (a backbone node without radio).
+#
+# Install:
+#   sudo install -m 0755 target/release/maarse-server /usr/local/bin/maarse-server
+#   sudo install -m 0644 packaging/systemd/maarse-server.service /etc/systemd/system/
+#   echo 'MAARSE_ARGS="--public-addr backbone.example.org:4242"' | sudo tee /etc/default/maarse-server
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now maarse-server
+#
+# Open TCP port 4242 in the firewall (e.g. sudo ufw allow 4242/tcp).
+# Status lines every 10 minutes: journalctl -u maarse-server -f
+
+[Unit]
+Description=Maarse backbone node
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/maarse-server
+ExecStart=/usr/local/bin/maarse-server --service --data /var/lib/maarse-server $MAARSE_ARGS
+Restart=on-failure
+RestartSec=3
+StartLimitIntervalSec=0
+
+DynamicUser=yes
+StateDirectory=maarse-server
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/maarse-server
+
+# Hardening: no devices are needed.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

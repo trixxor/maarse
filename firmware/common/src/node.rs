@@ -837,9 +837,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
         match cmd {
             Command::GetStats => {
-                let mut items = self.stats();
-                self.mail_stats(&mut items);
-                emit(&Event::Stats { items });
+                emit(&Event::Stats { items: self.stats() });
+                emit(&Event::Stats { items: self.more_stats() });
             }
             Command::GetRadio => emit(&Event::Radio(self.radio)),
             Command::SetRadio(cfg) => match cfg.validate() {
@@ -859,9 +858,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             },
             Command::SetRole { role } => match self.set_role(role) {
                 Ok(name) => {
-                    let mut items = self.stats();
-                    self.mail_stats(&mut items);
-                    emit(&Event::Stats { items });
+                    emit(&Event::Stats { items: self.stats() });
+                    emit(&Event::Stats { items: self.more_stats() });
                     log(name);
                 }
                 Err(e) => err(0, error_code::BAD_FRAME, e),
@@ -1200,9 +1198,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let _ = self.control_seen.insert(from, counter);
         match Command::decode(frame) {
             Ok(Command::GetStats) => {
-                let mut items = self.stats();
-                self.mail_stats(&mut items);
-                for chunk in items.chunks(25) {
+                let items = self.stats();
+                let more = self.more_stats();
+                for chunk in items.chunks(25).chain(more.chunks(25)) {
                     reply(self, Event::Stats { items: chunk.iter().copied().collect() });
                 }
             }
@@ -1225,9 +1223,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             },
             Ok(Command::SetRole { role }) => match self.set_role(role) {
                 Ok(_) => {
-                    let mut items = self.stats();
-                    self.mail_stats(&mut items);
-                    for chunk in items.chunks(25) {
+                    let items = self.stats();
+                    let more = self.more_stats();
+                    for chunk in items.chunks(25).chain(more.chunks(25)) {
                         reply(self, Event::Stats { items: chunk.iter().copied().collect() });
                     }
                 }
@@ -1693,11 +1691,29 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         items
     }
 
-    fn mail_stats(&mut self, items: &mut Stats) {
+    /// The second stats frame (the first one is full): post office and the
+    /// router counters added since.
+    fn more_stats(&mut self) -> Stats {
+        let mut items = Stats::new();
         let (r, m) = self.settings.mail_count();
-        let _ = items.push((stat::MAILBOX_RECIPIENTS, r as i32));
-        let _ = items.push((stat::MAILBOX_MESSAGES, m as i32));
-        let _ = items.push((stat::MAIL_DELIVERED, self.mail_delivered as i32));
+        let st = self.router.stats;
+        for (k, v) in [
+            (stat::MAILBOX_RECIPIENTS, r as i32),
+            (stat::MAILBOX_MESSAGES, m as i32),
+            (stat::MAIL_DELIVERED, self.mail_delivered as i32),
+            (stat::HELLOS, st.hellos as i32),
+            (stat::KEY_REQUESTS, st.key_requests as i32),
+            (stat::LOCAL_REPAIRS, st.local_repairs as i32),
+            (stat::CARRIED, self.router.carried_count() as i32),
+            (stat::PINNED, self.pinned.len() as i32),
+            (stat::MOBILE, self.router.mobile as i32),
+            (stat::QUOTA_DROPPED, st.quota_dropped as i32),
+            (stat::AWAIT_KEY, self.await_key.len() as i32),
+            (stat::OUTBOX, self.outbox.len() as i32),
+        ] {
+            let _ = items.push((k, v));
+        }
+        items
     }
 
     fn join(&mut self, name: &str) {

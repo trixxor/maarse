@@ -62,6 +62,60 @@ pub struct Contact {
     pub ep: String,
 }
 
+/// What a host or server offers the backbone, announced over the DHT
+/// (`Req::Caps`) and in the backbone link hello. Unknown = as before: post
+/// office and relay assumed.
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize)]
+pub struct Caps {
+    pub version: String,
+    /// maarse-server (a dedicated host).
+    pub server: bool,
+    /// Has a LoRa modem or trunk up now.
+    pub radio: bool,
+    /// Regions it forwards channel messages for.
+    pub regions: Vec<u16>,
+    /// Keeps mail for others (replica post office).
+    pub post_office: bool,
+    /// Room left for mail, MB (u32::MAX = no limit set).
+    pub mail_free_mb: u32,
+    /// Relays for hosts behind NAT (publishes the addresses it reaches
+    /// through them).
+    pub relay: bool,
+}
+
+impl Caps {
+    /// `version | flags (bit 0 server, 1 radio, 2 post office, 3 relay) |
+    /// mail free MB (u32 LE) | n | regions (u16 BE)`.
+    pub fn encode(&self, out: &mut Vec<u8>) {
+        put_str(out, &self.version);
+        out.push(self.server as u8 | (self.radio as u8) << 1 | (self.post_office as u8) << 2 | (self.relay as u8) << 3);
+        out.extend_from_slice(&self.mail_free_mb.to_le_bytes());
+        let n = self.regions.len().min(8);
+        out.push(n as u8);
+        for r in &self.regions[..n] {
+            out.extend_from_slice(&r.to_be_bytes());
+        }
+    }
+
+    pub fn decode(b: &[u8]) -> Option<Self> {
+        let mut rd = Rd(b);
+        Self::read(&mut rd)
+    }
+
+    fn read(rd: &mut Rd) -> Option<Self> {
+        let version = rd.str()?;
+        let f = rd.u8()?;
+        let mail_free_mb = u32::from_le_bytes(rd.take(4)?.try_into().ok()?);
+        let n = rd.u8()?.min(8) as usize;
+        let mut regions = Vec::new();
+        for _ in 0..n {
+            let b = rd.take(2)?;
+            regions.push(u16::from_be_bytes([b[0], b[1]]));
+        }
+        Some(Caps { version, server: f & 1 != 0, radio: f & 2 != 0, post_office: f & 4 != 0, relay: f & 8 != 0, mail_free_mb, regions })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
     pub dest: Address,
@@ -99,6 +153,52 @@ fn bucket_index(me: &Address, other: &Address) -> Option<usize> {
     (lz < 128).then_some(lz)
 }
 
+/// At most this many DHT contacts from one network (see `Table::insert`).
+pub const MAX_PER_NET: usize = 4;
+
+/// The network part of an "ip:port" endpoint: IPv4 /24 or IPv6 /48.
+fn net_of(ep: &str) -> Option<[u8; 7]> {
+    let a: std::net::SocketAddr = ep.parse().ok()?;
+    match a.ip() {
+        ip if ip.is_loopback() => None,
+        std::net::IpAddr::V4(v) => {
+            let o = v.octets();
+            Some([4, o[0], o[1], o[2], 0, 0, 0])
+        }
+        std::net::IpAddr::V6(v) => {
+            let o = v.octets();
+            Some([6, o[0], o[1], o[2], o[3], o[4], o[5]])
+        }
+    }
+}
+
+/// Saves contacts (one "address-hex endpoint" per line).
+pub fn save_contacts(path: &std::path::Path, contacts: &[Contact]) {
+    let text: String = contacts
+        .iter()
+        .map(|c| format!("{} {}\n", c.id.0.iter().map(|b| format!("{b:02x}")).collect::<String>(), c.ep))
+        .collect();
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
+/// Loads contacts saved by [`save_contacts`] (bad lines are skipped).
+pub fn load_contacts(path: &std::path::Path) -> Vec<Contact> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    text.lines()
+        .filter_map(|l| {
+            let (id, ep) = l.trim().split_once(' ')?;
+            let b: Vec<u8> = (0..id.len()).step_by(2).filter_map(|i| id.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok())).collect();
+            let id = Address::from_slice(&b).filter(|_| id.len() == 32)?;
+            let ep = ep.trim();
+            (!ep.is_empty() && ep.len() <= MAX_EP).then(|| Contact { id, ep: ep.to_string() })
+        })
+        .take(512)
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Routing table
 
@@ -123,6 +223,12 @@ impl Table {
         if c.ep.is_empty() || c.ep.len() > MAX_EP {
             return;
         }
+        let known = self.buckets[i].iter().any(|(x, _)| x.id == c.id);
+        if !known && !self.room_for_net(&c.ep) {
+            // Many identities from one network: a cheap way to take over
+            // part of the table (Sybil), so at most MAX_PER_NET of them.
+            return;
+        }
         let b = &mut self.buckets[i];
         if let Some(pos) = b.iter().position(|(x, _)| x.id == c.id) {
             b.remove(pos);
@@ -135,6 +241,20 @@ impl Table {
             }
         }
         b.push((c, Instant::now()));
+    }
+
+    /// Is there room for another contact from this endpoint's network (an
+    /// IPv4 /24 or an IPv6 /48)? Loopback and names are not limited.
+    fn room_for_net(&self, ep: &str) -> bool {
+        let Some(net) = net_of(ep) else { return true };
+        self.buckets.iter().flatten().filter(|(c, _)| net_of(&c.ep) == Some(net)).count() < MAX_PER_NET
+    }
+
+    /// One contact per non-empty bucket (the most recently heard), so a
+    /// node keeps links spread over the ID space instead of to its
+    /// nearest neighbours only.
+    pub fn spread(&self) -> Vec<Contact> {
+        self.buckets.iter().rev().filter_map(|b| b.last().map(|(c, _)| c.clone())).collect()
     }
 
     pub fn remove(&mut self, id: &Address) {
@@ -178,6 +298,14 @@ impl Default for Store {
 }
 
 impl Store {
+    /// Every record kept (for the debug view), with its current age.
+    pub fn all(&self) -> Vec<Record> {
+        self.map
+            .values()
+            .map(|(r, t)| Record { age_s: r.age_s.saturating_add(t.elapsed().as_secs() as u32), ..r.clone() })
+            .collect()
+    }
+
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
@@ -242,6 +370,8 @@ pub enum Req {
     MailFetch { recipient: Address, have: Vec<u32> },
     /// These messages for `recipient` have been delivered: delete them.
     MailDelivered { recipient: Address, ids: Vec<u32> },
+    /// What do you offer (post office, relay, radio)?
+    Caps,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -252,6 +382,8 @@ pub enum Resp {
     Stored(bool),
     /// Sealed messages (answer to `MailFetch`).
     Mail(Vec<Vec<u8>>),
+    /// Answer to `Caps`.
+    Caps(Caps),
 }
 
 fn put_ids(out: &mut Vec<u8>, ids: &[u32]) {
@@ -335,11 +467,12 @@ pub fn encode_req(from: &Address, from_ep: Option<&str>, req: &Req) -> Vec<u8> {
         Req::MailStore { .. } => 5,
         Req::MailFetch { .. } => 6,
         Req::MailDelivered { .. } => 7,
+        Req::Caps => 8,
     });
     out.extend_from_slice(&from.0);
     put_str(&mut out, from_ep.unwrap_or(""));
     match req {
-        Req::Ping => {}
+        Req::Ping | Req::Caps => {}
         Req::FindNode(a) | Req::FindValue(a) => out.extend_from_slice(&a.0),
         Req::Store(r) => put_record(&mut out, r),
         Req::MailStore { recipient, sealed } => {
@@ -376,6 +509,7 @@ pub fn decode_req(b: &[u8]) -> Option<(Address, Option<String>, Req)> {
         }
         6 => Req::MailFetch { recipient: rd.addr()?, have: get_ids(&mut rd)? },
         7 => Req::MailDelivered { recipient: rd.addr()?, ids: get_ids(&mut rd)? },
+        8 => Req::Caps,
         _ => return None,
     };
     Some((from, (!ep.is_empty()).then_some(ep), req))
@@ -390,6 +524,7 @@ pub fn encode_resp(me: &Address, resp: &Resp) -> Vec<u8> {
         Resp::Value(_) => 0x83,
         Resp::Stored(_) => 0x84,
         Resp::Mail(_) => 0x85,
+        Resp::Caps(_) => 0x86,
     });
     out.extend_from_slice(&me.0);
     match resp {
@@ -403,6 +538,7 @@ pub fn encode_resp(me: &Address, resp: &Resp) -> Vec<u8> {
         }
         Resp::Value(r) => put_record(&mut out, r),
         Resp::Stored(ok) => out.push(*ok as u8),
+        Resp::Caps(c) => c.encode(&mut out),
         Resp::Mail(items) => {
             // As many as fit in one response.
             let mut v: Vec<&Vec<u8>> = Vec::new();
@@ -451,6 +587,7 @@ pub fn decode_resp(b: &[u8]) -> Option<(Address, Resp)> {
             }
             Resp::Mail(items)
         }
+        0x86 => Resp::Caps(Caps::read(&mut rd)?),
         _ => return None,
     };
     Some((from, resp))
@@ -608,6 +745,47 @@ mod tests {
         assert_eq!(decode_resp(&encode_resp(&me, &resp)), Some((me, resp)));
     }
     use super::*;
+
+    #[test]
+    fn caps_roundtrip() {
+        let c = Caps { version: "0.1.0".into(), server: true, radio: false, regions: vec![0x1234, 7], post_office: false, mail_free_mb: 512, relay: true };
+        let me = Address([1; 16]);
+        let b = encode_resp(&me, &Resp::Caps(c.clone()));
+        assert_eq!(decode_resp(&b), Some((me, Resp::Caps(c.clone()))));
+        assert_eq!(decode_req(&encode_req(&me, None, &Req::Caps)), Some((me, None, Req::Caps)));
+        let mut raw = Vec::new();
+        c.encode(&mut raw);
+        assert_eq!(Caps::decode(&raw), Some(c));
+    }
+
+    #[test]
+    fn one_network_cannot_fill_the_table() {
+        let mut t = Table::new(Address([0; 16]));
+        for i in 0..20u8 {
+            let mut id = [0xff; 16];
+            id[15] = i;
+            id[0] = 0x80 | i;
+            t.insert(Contact { id: Address(id), ep: format!("203.0.113.{i}:4242") });
+        }
+        assert_eq!(t.len(), MAX_PER_NET);
+        t.insert(Contact { id: Address([0x40; 16]), ep: "198.51.100.7:4242".into() });
+        t.insert(Contact { id: Address([0x20; 16]), ep: "127.0.0.1:4243".into() });
+        t.insert(Contact { id: Address([0x10; 16]), ep: "127.0.0.1:4244".into() });
+        assert_eq!(t.len(), MAX_PER_NET + 3, "other networks and loopback are not limited");
+        assert_eq!(t.spread().len(), 4, "one contact per non-empty bucket");
+    }
+
+    #[test]
+    fn contacts_are_saved_and_loaded() {
+        let dir = std::env::temp_dir().join(format!("maarse-dht-contacts-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join("c.txt");
+        let cs = vec![Contact { id: Address([7; 16]), ep: "a.example:4242".into() }, Contact { id: Address([9; 16]), ep: "[2001:db8::1]:4242".into() }];
+        save_contacts(&p, &cs);
+        std::fs::write(dir.join("junk.txt"), "zz nothing\n").unwrap();
+        assert_eq!(load_contacts(&p), cs);
+        assert!(load_contacts(&dir.join("junk.txt")).is_empty());
+    }
     use rand_core::OsRng;
     use maarse_crypto::Identity;
 

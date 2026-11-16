@@ -40,8 +40,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv7em-none-eabihf
-      - name: libclang for bindgen
-        run: sudo apt-get update -q && sudo apt-get install -y -q libclang-dev clang
+      - name: libclang and ARM C headers for bindgen (nrf-sdc-sys)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q libclang-dev clang libnewlib-arm-none-eabi
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/lib/arm-none-eabi/include" >> "$GITHUB_ENV"
       - run: ./scripts/build-firmware.sh ${{ matrix.board }}
       - uses: actions/upload-artifact@v4
         with:

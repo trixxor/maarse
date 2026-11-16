@@ -204,6 +204,30 @@
     </div>
   </div>
 
+  <!-- Connections -->
+  <div class="page" data-page="conns">
+    <div class="tiles" id="conn-tiles"></div>
+    <section>
+      <h2>Connections now</h2>
+      <p class="help">Every link: backbone peers (in and out), modems and other links. Incoming links are limited per address and rate limited; a peer sending junk or flooding is banned for a while. "Close" drops a link (it may come back); "Block" closes it and keeps its address out.</p>
+      <div class="tablewrap" id="conn-table"></div>
+    </section>
+    <div class="grid2">
+      <section>
+        <h2>Block list</h2>
+        <p class="help">IP addresses, networks (e.g. 203.0.113.0/24) and node addresses (32 hex) that are never accepted. Kept in <span class="mono">blocked.txt</span>; takes effect at once.</p>
+        <div class="row"><input type="search" id="block-input" placeholder="IP address, network or node address"><button class="b on" id="block-add">Block</button></div>
+        <div class="tablewrap" id="block-table"></div>
+        <div class="msg" id="conn-msg"></div>
+      </section>
+      <section>
+        <h2>Temporary bans</h2>
+        <p class="help">Addresses that sent too many invalid packets or kept going over the rate limit.</p>
+        <div class="tablewrap" id="ban-table"></div>
+      </section>
+    </div>
+  </div>
+
   <!-- Settings -->
   <div class="page" data-page="settings">
     <section>
@@ -270,7 +294,7 @@ const STAT = {
   67: "link packets in", 68: "link packets out", 69: "deposits made", 70: "mail delivered", 71: "errors", 72: "DHT contacts", 73: "DHT records", 74: "DHT lookups",
   75: "DHT found", 76: "DHT peers", 77: "bad proof of work", 80: "noise floor dBm", 81: "energy (0-3)", 82: "external power", 83: "neighbours",
   84: "position precision", 85: "battery %", 86: "temperature 0.1 °C", 87: "stack never used B", 88: "heap free B", 89: "heap min free B", 90: "crashes", 91: "panic line", 92: "panic file",
-  93: "hellos sent", 94: "key requests sent", 95: "local repairs", 96: "messages carried", 97: "pinned contacts", 98: "mobile mode", 99: "quota dropped", 100: "waiting for a key", 101: "outbox (for the post office)",
+  93: "hellos sent", 94: "key requests sent", 95: "local repairs", 96: "messages carried", 97: "pinned contacts", 98: "mobile mode", 99: "quota dropped", 100: "waiting for a key", 101: "outbox (for the post office)", 102: "fallen back to an ordinary node (link down)",
 };
 const SERIES_NAMES = { 30: "rx ok", 31: "rx errors", 32: "tx ok", 33: "tx errors", 36: "avg RSSI dBm", 37: "avg SNR dB", 38: "CAD busy", 39: "duty waits", 40: "airtime ms", 41: "duty ‰", 44: "queue", 49: "battery mV", 80: "noise floor dBm", 88: "heap free B" };
 const ROLE_COLOR = { Repeater: "#2563a8", Anchor: "#6b4fa8", Relay: "#1f8a70", Client: "#b8730a" };
@@ -282,12 +306,13 @@ const names = () => { const m = new Map(); for (const n of T?.nodes || []) if (n
 let NAMES = new Map();
 
 // ---------- navigation ----------
-const PAGES = { overview: "Overview", live: "Live traffic", nodes: "Nodes & map", dests: "Destinations", routes: "Routes & repeaters", delivery: "Delivery & latency", radio: "Radio & modem", links: "Links", backbone: "Backbone (DHT)", post: "Post office", counters: "Counters", settings: "Settings", log: "Log" };
+const PAGES = { overview: "Overview", live: "Live traffic", nodes: "Nodes & map", dests: "Destinations", routes: "Routes & repeaters", delivery: "Delivery & latency", radio: "Radio & modem", links: "Links", backbone: "Backbone (DHT)", post: "Post office", counters: "Counters", conns: "Connections", settings: "Settings", log: "Log" };
 $("nav").innerHTML = Object.entries(PAGES).map(([k, v]) => `<button data-p="${k}">${v}</button>`).join("");
 $("nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) show(b.dataset.p); });
 function show(p) {
   page = PAGES[p] ? p : "overview"; history.replaceState(null, "", "#" + page);
   if (page === "settings" && !settingsState) loadSettings();
+  if (page === "conns") get("/api/guard").then(x => { G = x; renderConns(); }).catch(() => {});
   for (const b of $("nav").children) b.classList.toggle("on", b.dataset.p === page);
   for (const d of document.querySelectorAll(".page")) d.classList.toggle("on", d.dataset.page === page);
   render();
@@ -417,7 +442,7 @@ function render() {
   if (!T) return;
   const m = T.minutes || [];
   try {
-    ({ overview, live: renderLive, nodes, dests, routes, delivery, radio, links, backbone, post, counters, settings: () => {}, log: () => {} })[page]?.(m);
+    ({ overview, live: renderLive, nodes, dests, routes, delivery, radio, links, backbone, post, counters, conns: () => {}, settings: () => {}, log: () => {} })[page]?.(m);
   } catch (e) { console.error(e); }
 }
 function lastHour(m, f) { const t0 = Date.now() / 1000 - 3600; return sum(m.filter(x => x.t >= t0).map(f)); }
@@ -604,6 +629,43 @@ function backbone() {
     { empty: "No backbone links up." });
 }
 
+// ---------- connections ----------
+let G = null;
+async function pollGuard() {
+  if (page === "conns") try { G = await get("/api/guard"); renderConns(); } catch {}
+  setTimeout(pollGuard, 3000);
+}
+async function guardOp(body) {
+  const msg = $("conn-msg");
+  try {
+    const r = await fetch("/api/guard", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    msg.className = r.ok ? "msg good" : "msg bad"; msg.textContent = await r.text();
+    G = await get("/api/guard"); renderConns();
+  } catch { msg.className = "msg bad"; msg.textContent = "Could not reach the server."; }
+}
+function renderConns() {
+  if (!G) return;
+  const g = G.guard, links = G.links || [];
+  tiles("conn-tiles", [
+    [n(links.length), "links now"], [n(g.total), "incoming backbone links"], [n(g.refused), "connections refused"],
+    [n(g.bans.length), "addresses banned now"], [n(g.blocked.length), "on the block list"],
+    [`${g.limits.per_ip} / ${g.limits.total}`, "limit per address / in all"], [`${g.limits.packets_per_s}/s`, "packets per link"],
+  ]);
+  table("conn-table", ["Link", "Kind", "Far end", "Up", "In", "Out", "Last heard", "SNR", ""],
+    links.map(l => [l.name, l.kind, l.peer || "", { h: dur(l.up_s), s: l.up_s }, l.rx, l.tx, l.last_rx_s == null ? "" : dur(l.last_rx_s) + " ago", l.snr ?? "",
+      { h: l.can_close ? `<button class="b" data-close="${l.id}">Close</button> <button class="b" data-block="${l.id}">Block</button>` : "" }]),
+    { num: [4, 5, 7], empty: "No links." });
+  table("block-table", ["Blocked", ""], g.blocked.map(b => [{ h: `<span class="mono">${esc(b)}</span>` }, { h: `<button class="b" data-unblock="${esc(b)}">Remove</button>` }]), { empty: "Nothing blocked." });
+  table("ban-table", ["Address", "Left", "Why"], g.bans.map(b => [b.ip, dur(b.left_s), b.why]), { empty: "No bans." });
+}
+document.addEventListener("click", e => {
+  const t = e.target;
+  if (t.dataset?.close) guardOp({ op: "disconnect", id: +t.dataset.close });
+  else if (t.dataset?.block && confirm("Close this link and block its address?")) guardOp({ op: "disconnect_block", id: +t.dataset.block });
+  else if (t.dataset?.unblock) guardOp({ op: "unblock", target: t.dataset.unblock });
+});
+$("block-add").onclick = () => { const v = $("block-input").value.trim(); if (v) guardOp({ op: "block", target: v }).then(() => $("block-input").value = ""); };
+
 // ---------- settings ----------
 // Each field is one option in settings.txt; unknown lines are kept as they are.
 const FIELDS = [
@@ -617,6 +679,7 @@ const FIELDS = [
   { f: "--no-post-office", label: "No post office", help: "do not keep mail for others (the backbone is told)", kind: "flag" },
   { f: "--mail-quota-mb", label: "Mail quota (MB)", help: "most mail kept for others; 0 = no limit", kind: "number" },
   { f: "--no-relay", label: "No relay", help: "do not relay for hosts behind NAT", kind: "flag" },
+  { f: "--modem-key", label: "Wi-Fi modem key", help: "passphrase Wi-Fi LoRa modems must prove (at least 12 characters; set the same in the modem). Without it no Wi-Fi modem is accepted", kind: "text" },
   { f: "--serial", label: "LoRa modem", help: "serial port of an attached modem (empty = none)", kind: "port" },
   { f: "--trunk", label: "LoRa trunks", help: "long-distance LoRa modems, port[:baud], one per line", kind: "list" },
   { f: "--http", label: "Dashboard address", help: "address:port of this dashboard; after a change, open the new address", kind: "text" },
@@ -711,7 +774,7 @@ function counters() {
 
 addEventListener("resize", () => render());
 show(page);
-pollTelemetry(); pollSnapshot(); pollEvents(); pollLog();
+pollTelemetry(); pollSnapshot(); pollEvents(); pollLog(); pollGuard();
 setInterval(() => { if (page === "overview") render(); }, 30000);
 </script>
 </body>

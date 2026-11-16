@@ -47,6 +47,11 @@ pub static NET_RX: Channel<M, Pkt, 4> = Channel::new();
 /// Packets to send on the Wi-Fi link, with the SNR they were heard with (only
 /// used in modem mode, where the host needs it).
 pub static NET_TX: Channel<M, (Pkt, i8), 8> = Channel::new();
+/// The modem's own status frames for the host over Wi-Fi (`Stats` events,
+/// without length field), sent every 30 s in Wi-Fi modem mode.
+pub static NET_STATS: Channel<M, heapless::Vec<u8, { maarse_core::companion::MAX_FRAME }>, 3> = Channel::new();
+/// A Wi-Fi modem working as an ordinary node while its link is down (for the display).
+pub static MODEM_FALLBACK: AtomicBool = AtomicBool::new(false);
 /// The node is the host's LoRa modem over Wi-Fi (set at boot by board code).
 pub static WIFI_MODEM: AtomicBool = AtomicBool::new(false);
 /// Set by board code that has Wi-Fi (ESP32-S3).

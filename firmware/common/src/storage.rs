@@ -13,6 +13,7 @@
 //!   0x320: "NAM1" + length (1) + display name (≤ 24)
 //!   0x340: "WIF1" + flags (1: bit 0 enabled, bit 1 modem) + SSID (1 + 32) + password (1 + 64) + peer (1 + 64)
 //!   0x400: "RNG1" + range test setting (15, see `rangetest::Config`), only when it should persist
+//!   0x420: "MKY1" + Wi-Fi modem key (32, see `maarse_core::modemauth`)
 //!   ```
 //!   Without "SHR1" neither position nor telemetry is shared (the default).
 //!   Only written the first time and when radio/administrators/role/regions change.
@@ -63,9 +64,13 @@ const _: () = assert!(NAME_OFF + 5 + maarse_core::appdata::MAX_NAME <= WIFI_OFF)
 const RANGE_MAGIC: &[u8; 4] = b"RNG1";
 const RANGE_OFF: usize = 0x400;
 const RANGE_LEN: usize = 4 + maarse_core::rangetest::Config::LEN;
+const MODEM_KEY_MAGIC: &[u8; 4] = b"MKY1";
+const MODEM_KEY_OFF: usize = 0x420;
+const MODEM_KEY_LEN: usize = 4 + 32;
+const _: () = assert!(RANGE_OFF + RANGE_LEN <= MODEM_KEY_OFF);
 const _: () = assert!(WIFI_OFF + WIFI_LEN <= RANGE_OFF);
 /// Used part of the page, rounded up to whole words.
-const USED: usize = (RANGE_OFF + RANGE_LEN).div_ceil(4) * 4;
+const USED: usize = (MODEM_KEY_OFF + MODEM_KEY_LEN).div_ceil(4) * 4;
 const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
 
 const KNOWN_MAGIC: &[u8; 4] = b"KNW1";
@@ -433,7 +438,23 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
             ssid: get(b, 5),
             password: get(b, 5 + 33),
             peer: get(b, 5 + 33 + 65),
+            modem_key: self.load_modem_key(),
         }
+    }
+    fn save_modem_key(&mut self, key: Option<[u8; 32]>) {
+        let mut buf = self.read_page();
+        let b = &mut buf[MODEM_KEY_OFF..MODEM_KEY_OFF + MODEM_KEY_LEN];
+        b.fill(0xFF);
+        if let Some(k) = key {
+            b[..4].copy_from_slice(MODEM_KEY_MAGIC);
+            b[4..].copy_from_slice(&k);
+        }
+        self.write_page(&buf);
+    }
+    fn load_modem_key(&mut self) -> Option<[u8; 32]> {
+        let buf = self.read_page();
+        let b = &buf[MODEM_KEY_OFF..MODEM_KEY_OFF + MODEM_KEY_LEN];
+        (&b[..4] == MODEM_KEY_MAGIC).then(|| b[4..].try_into().unwrap())
     }
     fn load_name(&mut self) -> maarse_core::appdata::Name {
         let buf = self.read_page();

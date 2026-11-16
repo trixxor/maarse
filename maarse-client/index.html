@@ -681,6 +681,7 @@ const Cmd = {
     return frame(0x28, new Uint8Array([(enabled ? 1 : 0) | (modem ? 2 : 0), s.length]), s, new Uint8Array([p.length]), p, enc.encode(peer).slice(0, 64));
   },
   getWifi: () => frame(0x29),
+  setModemKey: (passphrase) => frame(0x2d, enc.encode(passphrase)),
   requestPage: (req, destHex, path) => frame(0x26, u16(req), unhex(destHex), enc.encode(path)),
   otaBegin: (req, flags, manifest) => frame(0x18, u16(req), [flags], manifest),
   otaChunk: (req, offset, data) => frame(0x19, u16(req), u32(offset), data),
@@ -1593,9 +1594,14 @@ function renderWifi(box) {
   pw.placeholder = wf.ssid ? "empty = keep the saved password" : "empty = open network";
   const peer = row("Host (host:port)", document.createElement("input")); peer.value = wf.peer; peer.maxLength = 64;
   peer.placeholder = "10.8.0.2:4242";
+  const mkey = row("Modem key", document.createElement("input")); mkey.type = "password"; mkey.maxLength = 64;
+  mkey.placeholder = "modem mode: the host's --modem-key (empty = unchanged)";
   const save = document.createElement("button"); save.textContent = "Save and restart";
   save.onclick = () => {
     if (on.checked && (!ssid.value.trim() || !peer.value.trim())) { log("Wi-Fi needs a network name and a host"); return; }
+    if (mkey.value && mkey.value.length < 12) { log("The modem key needs at least 12 characters"); return; }
+    // The key first: the Wi-Fi settings restart the node.
+    if (mkey.value) transport?.send(Cmd.setModemKey(mkey.value));
     transport?.send(Cmd.setWifi(on.checked, ssid.value.trim(), pw.value, peer.value.trim(), mode.value === "modem"));
     log("Wi-Fi settings sent; the node restarts");
   };

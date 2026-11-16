@@ -16,6 +16,7 @@ mod admin;
 mod debug;
 mod telemetry;
 mod dht;
+mod guard;
 mod extra_links;
 mod filebox;
 mod framing;
@@ -156,6 +157,13 @@ pub struct Config {
     pub backbone: bool,
     /// Do not keep mail for others (`--no-post-office`).
     pub no_post_office: bool,
+    /// Passphrase Wi-Fi modems must prove (`--modem-key`).
+    pub modem_key: Option<String>,
+    /// Wi-Fi LoRa modems at fixed addresses to connect to (`--modem-ip`).
+    pub modem_ips: Vec<String>,
+    /// Block list entries from the command line (`--block`): IP addresses,
+    /// networks and node addresses.
+    pub block: Vec<String>,
     /// Do not relay for hosts behind NAT (`--no-relay`).
     pub no_relay: bool,
     /// Most mail kept for others, MB (`--mail-quota-mb`; 0 = no limit).
@@ -255,9 +263,9 @@ fn alert_tools(argv: &[String]) -> Option<i32> {
     }
 }
 
-/// Public backbone nodes that `--public` connects to. Empty until
-/// someone sets up servers.
-pub const PUBLIC_PEERS: &[&str] = &[];
+/// Public backbone servers that `--public` connects to (maarse-server
+/// instances run by the project). More are found through them (DHT).
+pub const PUBLIC_PEERS: &[&str] = &["nj01.dk.eu.maarse.dk:4242"];
 
 /// Parses a public identity given as 128 hex digits (signing key, then DH key).
 fn parse_identity(s: &str) -> Result<maarse_crypto::PublicIdentity, String> {
@@ -312,7 +320,8 @@ Usage: maarse-host [options]
   --udp-broadcast <port>
                         find peers on the LAN: broadcast to this port and accept
                         packets from any sender on it
-  --public              also connect to the public backbone nodes
+  --public              also connect to the public backbone servers
+                        (nj01.dk.eu.maarse.dk:4242; more are found from there)
   --max-file <KB>       largest file sent and received (default: 1024)
   --history-days <N>    keep message history for N days, so several screens see
                         the whole conversation (default: 90). NOTE: stored
@@ -336,6 +345,15 @@ Usage: maarse-host [options]
                         maarse-server: set the dashboard's admin password and exit
   --no-post-office      do not keep mail for others (told to the backbone,
                         so no one picks this host as a replica)
+  --modem-key <passphrase>
+                        Wi-Fi LoRa modems must prove this key (set the same
+                        passphrase in the modem); maarse-server accepts no
+                        Wi-Fi modem without it (at least 12 characters)
+  --modem-ip <host:port> connect to a Wi-Fi LoRa modem that listens at this
+                        address (its host set to listen:<port>); can be repeated
+  --block <ip|net|node> never accept this IP address, network (a.b.c.d/24) or
+                        node address (32 hex); can be repeated; the dashboard
+                        keeps its own list in blocked.txt
   --no-relay            do not relay for hosts behind NAT (only addresses
                         heard over our own radio are published)
   --mail-quota-mb <N>   keep at most N MB of mail for others (0 = no limit)
@@ -431,6 +449,9 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         no_post_office: false,
         no_relay: false,
         mail_quota_mb: 0,
+        modem_key: None,
+        modem_ips: Vec::new(),
+        block: Vec::new(),
         regions: Vec::new(),
         strict_region: false,
         repeater_role: false,
@@ -509,6 +530,27 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--seed-dns" => c.seed_dns.push(val("--seed-dns")?),
             "--no-post-office" => c.no_post_office = true,
             "--no-relay" => c.no_relay = true,
+            "--modem-ip" => {
+                let v = val("--modem-ip")?;
+                if !v.contains(':') {
+                    return Err("--modem-ip: host:port, e.g. 192.168.1.50:4243".into());
+                }
+                c.modem_ips.push(v);
+            }
+            "--block" => {
+                let v = val("--block")?;
+                if guard::Net::parse(&v).is_none() && !(v.len() == 32 && v.chars().all(|c| c.is_ascii_hexdigit())) {
+                    return Err(format!("--block: not an IP address, network (a.b.c.d/24) or node address: {v}"));
+                }
+                c.block.push(v);
+            }
+            "--modem-key" => {
+                let k = val("--modem-key")?;
+                if k.len() < 12 {
+                    return Err("--modem-key: at least 12 characters".into());
+                }
+                c.modem_key = Some(k);
+            }
             "--mail-quota-mb" => c.mail_quota_mb = val("--mail-quota-mb")?.parse().map_err(|_| "--mail-quota-mb: invalid number")?,
             "--min-peers" => c.min_peers = val("--min-peers")?.parse().map_err(|_| "--min-peers: invalid number")?,
             "--region" => c.regions.push(val("--region")?.trim().to_lowercase()),
@@ -721,6 +763,9 @@ fn main() {
         settings::report(format!("  Alert issuer key: {hex}"), false);
     }
 
+    guard::init(&cfg.data_dir, &cfg.block);
+    // Wi-Fi modems must prove the key; a server takes none without one.
+    links::set_modem_auth(cfg.backbone, cfg.modem_key.as_deref().map(|k| maarse_core::modemauth::key(k.as_bytes())));
     if let Some(addr) = cfg.listen {
         match links::spawn_tcp_listener(addr, tx.clone()) {
             Ok(()) => settings::report(format!("  Backbone: listening on {addr}"), false),
@@ -730,6 +775,10 @@ fn main() {
     for p in &cfg.peers {
         settings::report(format!("  Backbone: connecting to {p}"), false);
         links::spawn_tcp_peer(p.clone(), tx.clone());
+    }
+    for m in &cfg.modem_ips {
+        settings::report(format!("  Wi-Fi modem: connecting to {m}"), false);
+        links::spawn_modem_dial(m.clone(), tx.clone());
     }
     if let Some(port) = &cfg.serial {
         settings::report(format!("  Serial:   {port} @ {} baud (modem mode)", cfg.baud), false);

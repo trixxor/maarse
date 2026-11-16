@@ -46,6 +46,9 @@ pub const MODEM_HELLO: [u8; 2] = *b"MM";
 struct LinkInfo {
     id: u32,
     name: String,
+    /// The far end of a TCP link, and a handle to close it (dashboard).
+    peer: Option<std::net::SocketAddr>,
+    kill: Option<TcpStream>,
     /// `backbone`, `usb-modem`, `wifi-modem`, `serial-link`, `kiss`, `kiss-tcp` or `udp`.
     kind: &'static str,
     since: u64,
@@ -68,8 +71,32 @@ fn with_registry<T>(f: impl FnOnce(&mut Vec<LinkInfo>) -> T) -> T {
 pub(crate) fn register(id: u32, name: &str, kind: &'static str) {
     let now = unix_now();
     with_registry(|r| {
-        r.push(LinkInfo { id, name: name.to_string(), kind, since: now, rx: 0, tx: 0, last_rx: 0, last_snr: None })
+        r.push(LinkInfo { id, name: name.to_string(), peer: None, kill: None, kind, since: now, rx: 0, tx: 0, last_rx: 0, last_snr: None })
     });
+}
+
+/// Registers a TCP link with its far end and a handle to close it.
+fn register_tcp(id: u32, name: &str, kind: &'static str, stream: &TcpStream) {
+    register(id, name, kind);
+    let peer = stream.peer_addr().ok();
+    let kill = stream.try_clone().ok();
+    with_registry(|r| {
+        if let Some(l) = r.iter_mut().find(|l| l.id == id) {
+            l.peer = peer;
+            l.kill = kill;
+        }
+    });
+}
+
+/// Closes a link (dashboard); its far end's IP address if it was TCP.
+pub fn disconnect(id: u32) -> Option<std::net::IpAddr> {
+    with_registry(|r| {
+        let l = r.iter_mut().find(|l| l.id == id)?;
+        if let Some(s) = l.kill.take() {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
+        l.peer.map(|p| p.ip())
+    })
 }
 
 pub(crate) fn unregister(id: u32) {
@@ -104,6 +131,9 @@ pub fn devices_json() -> String {
         r.iter()
             .map(|l| {
                 serde_json::json!({
+                    "id": l.id,
+                    "peer": l.peer.map(|p| p.to_string()),
+                    "can_close": l.kill.is_some(),
                     "name": l.name,
                     "kind": l.kind,
                     "up_s": now.saturating_sub(l.since),
@@ -166,7 +196,19 @@ pub fn spawn_tcp_listener(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<(
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let tx = tx.clone();
+            // Limits and the block list (guard.rs) before anything is read.
+            let ip = stream.peer_addr().map(|a| a.ip()).ok();
+            let ticket = match ip.map(crate::guard::admit) {
+                Some(Ok(t)) => Some(t),
+                Some(Err(why)) => {
+                    println!("[tcp] refused {}: {why}", ip.map(|i| i.to_string()).unwrap_or_default());
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                    continue;
+                }
+                None => None,
+            };
             thread::spawn(move || {
+                let _ticket = ticket;
                 let name = stream
                     .peer_addr()
                     .map(|a| format!("tcp in {a}"))
@@ -179,17 +221,44 @@ pub fn spawn_tcp_listener(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<(
                     return;
                 }
                 if first == crate::dht::MAGIC {
+                    if ip.is_some_and(|ip| !crate::guard::dht_allowed(ip)) {
+                        return; // too many DHT requests from this address
+                    }
                     serve_dht(s, &tx);
                 } else if first == MODEM_HELLO {
                     let name = name.replace("tcp in", "wifi-modem");
                     run_tcp_modem(s, name, tx);
                 } else {
-                    run_tcp(s, name, tx, Some(u16::from_le_bytes(first)));
+                    run_tcp(s, name, tx, Some(u16::from_le_bytes(first)), ip);
                 }
             });
         }
     });
     Ok(())
+}
+
+/// Connects to a Wi-Fi LoRa modem that listens at a fixed address
+/// (`--modem-ip`; the modem's host is set to `listen:<port>`), and again
+/// when the connection drops.
+pub fn spawn_modem_dial(addr: String, tx: Sender<In>) {
+    thread::spawn(move || {
+        loop {
+            match std::net::TcpStream::connect(&addr) {
+                Ok(mut s) => {
+                    let mut first = [0u8; 2];
+                    let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+                    if s.read_exact(&mut first).is_ok() && first == MODEM_HELLO {
+                        let _ = s.set_read_timeout(None);
+                        run_tcp_modem(s, format!("wifi-modem {addr}"), tx.clone());
+                    } else {
+                        println!("[tcp] {addr} is not a Wi-Fi modem (no MM greeting)");
+                    }
+                }
+                Err(e) => println!("[tcp] could not reach the modem at {addr}: {e}"),
+            }
+            thread::sleep(Duration::from_secs(10));
+        }
+    });
 }
 
 /// Connects to another maarse-host and retries if the connection drops.
@@ -212,7 +281,7 @@ pub fn spawn_tcp_peer(peer: String, tx: Sender<In>) {
     thread::spawn(move || {
         loop {
             match TcpStream::connect(&peer) {
-                Ok(s) => run_tcp(s, format!("tcp out {peer}"), tx.clone(), None),
+                Ok(s) => run_tcp(s, format!("tcp out {peer}"), tx.clone(), None, None),
                 Err(e) => eprintln!("[tcp] could not connect to {peer}: {e}"),
             }
             thread::sleep(Duration::from_secs(5));
@@ -238,7 +307,7 @@ fn serve_dht(mut s: TcpStream, tx: &Sender<In>) {
 const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
 const KEEPALIVE_EVERY: Duration = Duration::from_secs(10);
 
-fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u16>) {
+fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u16>, ip: Option<std::net::IpAddr>) {
     let _ = stream.set_nodelay(true);
     // Without keepalive a peer that disappears without closing (a node whose
     // hotspot dropped, a restart) leaves a dead link we keep writing to.
@@ -261,7 +330,7 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
         }
         let _ = writer.shutdown(std::net::Shutdown::Both);
     });
-    register(id, &name, "backbone");
+    register_tcp(id, &name, "backbone", &stream);
     if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
         unregister(id);
         return;
@@ -269,6 +338,8 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
     let mut reader = stream;
     let mut len = [0u8; 2];
     let mut first = first_len;
+    // Incoming links are rate limited; outgoing ones (we chose the peer) not.
+    let mut rate = ip.map(|_| crate::guard::Rate::default());
     loop {
         if let Some(f) = first.take() {
             len = f.to_le_bytes();
@@ -292,6 +363,23 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
             }
             continue;
         }
+        if let (Some(r), Some(ip)) = (rate.as_mut(), ip) {
+            if maarse_core::Packet::decode(&data).is_err() {
+                r.invalid += 1;
+                if r.invalid > crate::guard::INVALID_BEFORE_BAN {
+                    crate::guard::ban(ip, crate::guard::BAN_INVALID, "too many invalid packets");
+                    break;
+                }
+                continue;
+            }
+            if !r.allow(data.len()) {
+                if r.drops > crate::guard::DROPS_BEFORE_BAN {
+                    crate::guard::ban(ip, crate::guard::BAN_RATE, "kept sending over the rate limit");
+                    break;
+                }
+                continue;
+            }
+        }
         note_rx(id, None);
         if tx
             .send(In::Packet {
@@ -310,7 +398,56 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
 }
 
 /// An ESP32 node that is our LoRa modem over Wi-Fi (see the module docs).
-fn run_tcp_modem(stream: TcpStream, name: String, tx: Sender<In>) {
+/// Wi-Fi modems: whether a key is required, and the key (see
+/// `maarse_core::modemauth`). maarse-server always requires one.
+static MODEM_AUTH: std::sync::OnceLock<(bool, Option<[u8; 32]>)> = std::sync::OnceLock::new();
+
+pub fn set_modem_auth(required: bool, key: Option<[u8; 32]>) {
+    let _ = MODEM_AUTH.set((required || key.is_some(), key));
+}
+
+/// Asks a new Wi-Fi modem to prove the key; `Err` says why it is refused.
+fn modem_challenge(s: &mut TcpStream) -> Result<(), &'static str> {
+    use maarse_core::modemauth::{CHALLENGE, NONCE_LEN, RESPONSE, RESPONSE_MARK, check};
+    let (required, key) = MODEM_AUTH.get().copied().unwrap_or((false, None));
+    if !required {
+        return Ok(());
+    }
+    let Some(key) = key else {
+        return Err("no modem key is set on this host (--modem-key)");
+    };
+    let mut nonce = [0u8; NONCE_LEN];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut nonce);
+    let mut f = Vec::with_capacity(2 + 3 + NONCE_LEN);
+    f.extend_from_slice(&((3 + NONCE_LEN) as u16).to_le_bytes());
+    f.extend_from_slice(&CHALLENGE);
+    f.extend_from_slice(&nonce);
+    s.write_all(&f).map_err(|_| "could not send the challenge")?;
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    // The modem may send a few LoRa packets before its answer.
+    for _ in 0..16 {
+        let mut len = [0u8; 2];
+        s.read_exact(&mut len).map_err(|_| "no answer to the modem key challenge (old firmware or no key)")?;
+        let n = u16::from_le_bytes(len) as usize;
+        if n == 0 || n > MAX_PACKET + 1 {
+            return Err("not a modem stream");
+        }
+        let mut d = vec![0u8; n];
+        s.read_exact(&mut d).map_err(|_| "connection lost during the challenge")?;
+        if d[0] == RESPONSE_MARK && d[1..].starts_with(&RESPONSE) {
+            let _ = s.set_read_timeout(None);
+            return if check(&key, &nonce, &d[4..]) { Ok(()) } else { Err("wrong modem key") };
+        }
+    }
+    Err("no answer to the modem key challenge")
+}
+
+fn run_tcp_modem(mut stream: TcpStream, name: String, tx: Sender<In>) {
+    if let Err(why) = modem_challenge(&mut stream) {
+        println!("[tcp] refused a Wi-Fi modem from {}: {why}", name.trim_start_matches("wifi-modem "));
+        let _ = stream.shutdown(std::net::Shutdown::Both);
+        return;
+    }
     let _ = stream.set_nodelay(true);
     let ka = socket2::TcpKeepalive::new().with_time(KEEPALIVE_IDLE).with_interval(KEEPALIVE_EVERY);
     let _ = socket2::SockRef::from(&stream).set_tcp_keepalive(&ka);
@@ -331,7 +468,7 @@ fn run_tcp_modem(stream: TcpStream, name: String, tx: Sender<In>) {
         }
         let _ = writer.shutdown(std::net::Shutdown::Both);
     });
-    register(id, &name, "wifi-modem");
+    register_tcp(id, &name, "wifi-modem", &stream);
     if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
         unregister(id);
         return;
@@ -349,6 +486,13 @@ fn run_tcp_modem(stream: TcpStream, name: String, tx: Sender<In>) {
         let mut data = vec![0u8; n];
         if reader.read_exact(&mut data).is_err() {
             break;
+        }
+        // The modem's own counters (marker 0x7E): telemetry, not a packet.
+        if data[0] == 0x7E {
+            if tx.send(In::ModemFrame { link: id, frame: data[1..].to_vec() }).is_err() {
+                break;
+            }
+            continue;
         }
         let snr = data[0] as i8;
         note_rx(id, Some(snr));

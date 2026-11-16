@@ -12,7 +12,8 @@
 #  or from a checkout:  sudo bash scripts/install-server.sh
 #
 #  Run it again later to update to the newest version; the settings are kept
-#  unless you choose to change them.
+#  unless you choose to change them. Without questions:
+#    sudo bash /opt/maarse/src/scripts/install-server.sh --update
 #
 #  What it installs:
 #    /usr/local/bin/maarse-server          the program
@@ -61,6 +62,8 @@ ask_secret() { # ask_secret "Question" -> REPLY (not echoed)
   stty -echo <"$TTY"; IFS= read -r REPLY <"$TTY" || true; stty echo <"$TTY"; printf '\n' >"$TTY"
 }
 
+UPDATE=0
+[ "${1:-}" = "--update" ] && UPDATE=1
 [ "$(id -u)" -eq 0 ] || die "run as root, e.g.: sudo bash $0"
 command -v apt-get >/dev/null || die "this script is for Debian or Ubuntu (apt-get not found)"
 command -v systemctl >/dev/null || die "systemd is needed"
@@ -103,7 +106,7 @@ MEM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
 SWAP_MB=$(awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo)
 if [ "$MEM_MB" -lt 1500 ] && [ "$SWAP_MB" -lt 1000 ]; then
   warn "only ${MEM_MB} MB of memory and no swap: the build may run out of memory"
-  if ask_yn "Create a 2 GB swap file (/swapfile)?" y; then
+  if [ "$UPDATE" = 1 ] || ask_yn "Create a 2 GB swap file (/swapfile)?" y; then
     fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
     chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
     grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
@@ -128,7 +131,10 @@ chmod 0700 "$DATA"
 # ---------------------------------------------------------------- settings
 bold "5/6  Settings"
 CHANGE=y
-if [ -f "$CONF" ]; then
+if [ "$UPDATE" = 1 ]; then
+  [ -f "$CONF" ] || die "--update: not installed yet (no $CONF); run without --update first"
+  CHANGE=n
+elif [ -f "$CONF" ]; then
   info "Current settings: $(grep -E '^MAARSE_ARGS=' "$CONF" | cut -d= -f2-)"
   ask_yn "Keep the current settings?" y && CHANGE=n
 fi
@@ -213,7 +219,7 @@ else
 fi
 
 # ---------------------------------------------------------------- admin password
-if [ ! -f "$DATA/admin.hash" ] || { [ "$CHANGE" = y ] && ask_yn "Set a new admin password for the dashboard?" n; }; then
+if [ ! -f "$DATA/admin.hash" ] || { [ "$UPDATE" = 0 ] && [ "$CHANGE" = y ] && ask_yn "Set a new admin password for the dashboard?" n; }; then
   if ask_yn "Choose the admin password yourself (no = make a random one)?" n; then
     while true; do
       ask_secret "Admin password (at least 10 characters)"; PW1="$REPLY"
@@ -311,6 +317,7 @@ fi
 # ---------------------------------------------------------------- summary
 echo
 bold "Done."
+info "Version:     $(git -C "$SRC" log -1 --format='%h %ad %s' --date=short 2>/dev/null)"
 info "Status:      systemctl status maarse-server"
 info "Log:         journalctl -u maarse-server -f"
 info "Settings:    $CONF (or the dashboard's Settings tab), then: systemctl restart maarse-server"

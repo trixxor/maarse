@@ -30,6 +30,7 @@ pub mod router;
 pub mod routes;
 pub mod stamp;
 pub mod textz;
+pub mod modemauth;
 
 pub use addr::{Address, PathId};
 pub use packet::{Header, Packet, PacketType, Path};

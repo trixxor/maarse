@@ -14,7 +14,7 @@
 
 use core::sync::atomic::Ordering::Relaxed;
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, Ipv4Address, Runner, Stack, StackResources};
@@ -23,7 +23,7 @@ use esp_radio::wifi::sta::StationConfig;
 use esp_radio::wifi::{AuthenticationMethodConfig, Config, Interface, WifiController};
 use maarse_core::MAX_PACKET;
 use maarse_core::companion::{WifiSettings, wifi_state};
-use maarse_fw_common::bus::{NET_RX, NET_TX, Pkt, WIFI_IP, WIFI_STATE};
+use maarse_fw_common::bus::{NET_RX, NET_STATS, NET_TX, Pkt, WIFI_IP, WIFI_STATE};
 use static_cell::StaticCell;
 
 /// Port used when `peer` has none (maarse-host's default `--listen`).
@@ -71,7 +71,7 @@ pub fn start(spawner: &Spawner, wifi: esp_hal::peripherals::WIFI<'static>, setti
     );
     spawner.spawn(net_task(runner).unwrap());
     spawner.spawn(join_task(controller, station).unwrap());
-    spawner.spawn(link_task(stack, settings.peer, settings.modem).unwrap());
+    spawner.spawn(link_task(stack, settings.peer, settings.modem, settings.modem_key).unwrap());
     true
 }
 
@@ -117,12 +117,16 @@ fn split_peer(peer: &str) -> (&str, u16) {
 
 /// Keeps the TCP backbone link to the peer up.
 #[embassy_executor::task]
-async fn link_task(stack: Stack<'static>, peer: heapless::Vec<u8, 64>, modem: bool) -> ! {
+async fn link_task(stack: Stack<'static>, peer: heapless::Vec<u8, 64>, modem: bool, key: Option<[u8; 32]>) -> ! {
     static RX: StaticCell<[u8; 2048]> = StaticCell::new();
     static TX: StaticCell<[u8; 2048]> = StaticCell::new();
     let rx = RX.init([0; 2048]);
     let tx = TX.init([0; 2048]);
     let peer = core::str::from_utf8(&peer).unwrap_or("");
+    // "listen:<port>": wait for the host to connect to us (a modem at a
+    // fixed address on the LAN; the host uses --modem-ip) instead of
+    // connecting out.
+    let listen = peer.trim().strip_prefix("listen:").and_then(|p| p.trim().parse::<u16>().ok());
     let (host, port) = split_peer(peer.trim());
     loop {
         stack.wait_config_up().await;
@@ -130,13 +134,23 @@ async fn link_task(stack: Stack<'static>, peer: heapless::Vec<u8, 64>, modem: bo
             WIFI_IP.store(u32::from_be_bytes(cfg.address.address().octets()), Relaxed);
         }
         set_state(wifi_state::ONLINE);
-        if let Some(ip) = resolve(stack, host).await {
+        if let Some(lp) = listen {
+            let mut socket = TcpSocket::new(stack, rx, tx);
+            socket.set_timeout(Some(Duration::from_secs(180)));
+            socket.set_keep_alive(Some(Duration::from_secs(30)));
+            if socket.accept(lp).await.is_ok() {
+                set_state(wifi_state::LINKED);
+                run_link(&mut socket, modem, key.as_ref()).await;
+                socket.abort();
+                let _ = socket.flush().await;
+            }
+        } else if let Some(ip) = resolve(stack, host).await {
             let mut socket = TcpSocket::new(stack, rx, tx);
             socket.set_timeout(Some(Duration::from_secs(180)));
             socket.set_keep_alive(Some(Duration::from_secs(30)));
             if socket.connect((ip, port)).await.is_ok() {
                 set_state(wifi_state::LINKED);
-                run_link(&mut socket, modem).await;
+                run_link(&mut socket, modem, key.as_ref()).await;
                 socket.abort();
                 let _ = socket.flush().await;
             }
@@ -166,7 +180,13 @@ const MODEM_HELLO: [u8; 2] = *b"MM";
 /// Backbone (node mode): `length (u16 LE) | packet` both ways.
 /// Modem mode: after `MM`, to the host `length | snr (i8) | packet` (heard
 /// over LoRa), from the host `length | packet` (to send over LoRa).
-async fn run_link(socket: &mut TcpSocket<'_>, modem: bool) {
+/// The answer to a host's modem-key challenge, from the reading side to the
+/// writing side of the link.
+static ANSWER: embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, [u8; 16]> =
+    embassy_sync::signal::Signal::new();
+
+async fn run_link(socket: &mut TcpSocket<'_>, modem: bool, key: Option<&[u8; 32]>) {
+    ANSWER.reset();
     let (mut reader, mut writer) = socket.split();
     // Say something at once: the host decides what a connection is from its
     // first two bytes, and a node with nothing to send would otherwise not
@@ -194,6 +214,13 @@ async fn run_link(socket: &mut TcpSocket<'_>, modem: bool) {
             if buf[..n].starts_with(&REGION_HELLO) {
                 continue;
             }
+            // The host asks us to prove the modem key (see modemauth).
+            if modem && buf[..n].starts_with(&maarse_core::modemauth::CHALLENGE) {
+                if let Some(k) = key {
+                    ANSWER.signal(maarse_core::modemauth::tag(k, &buf[3..n]));
+                }
+                continue;
+            }
             if let Ok(p) = Pkt::from_slice(&buf[..n]) {
                 NET_RX.send(p).await;
             }
@@ -201,7 +228,33 @@ async fn run_link(socket: &mut TcpSocket<'_>, modem: bool) {
     };
     let tx = async {
         loop {
-            let (pkt, snr) = NET_TX.receive().await;
+            let (pkt, snr) = match select3(NET_TX.receive(), ANSWER.wait(), NET_STATS.receive()).await {
+                Either3::First(x) => x,
+                Either3::Third(status) => {
+                    // Our counters for the host (marker 0x7E in the snr byte).
+                    if modem {
+                        let len = (status.len() as u16 + 1).to_le_bytes();
+                        if write_all(&mut writer, &len).await.is_none()
+                            || write_all(&mut writer, &[0x7E]).await.is_none()
+                            || write_all(&mut writer, &status).await.is_none()
+                        {
+                            return;
+                        }
+                    }
+                    continue;
+                }
+                Either3::Second(tag) => {
+                    let mut f = [0u8; 2 + 1 + 3 + 16];
+                    f[..2].copy_from_slice(&20u16.to_le_bytes());
+                    f[2] = maarse_core::modemauth::RESPONSE_MARK;
+                    f[3..6].copy_from_slice(&maarse_core::modemauth::RESPONSE);
+                    f[6..].copy_from_slice(&tag);
+                    if write_all(&mut writer, &f).await.is_none() {
+                        return;
+                    }
+                    continue;
+                }
+            };
             let ok = if modem {
                 let len = (pkt.len() as u16 + 1).to_le_bytes();
                 write_all(&mut writer, &len).await.is_some()

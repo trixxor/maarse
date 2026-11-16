@@ -132,6 +132,11 @@ fn wifi_line(l: &mut Line) {
         return;
     }
     let ip = WIFI_IP.load(Relaxed).to_be_bytes();
+    if maarse_fw_common::bus::MODEM_FALLBACK.load(Relaxed) {
+        // A Wi-Fi modem whose link is down works as an ordinary node.
+        let _ = write!(l, "no host: node");
+        return;
+    }
     let _ = match WIFI_STATE.load(Relaxed) as u8 {
         wifi_state::LINKED if maarse_fw_common::bus::WIFI_MODEM.load(Relaxed) => {
             write!(l, "{}.{}.{}.{} modem", ip[0], ip[1], ip[2], ip[3])

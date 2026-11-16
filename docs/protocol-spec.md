@@ -1046,6 +1046,18 @@ machine filling the table with made-up IDs. Contacts are saved to
 `dht-contacts.txt` (one `address-hex endpoint` per line) and used as seeds at
 the next start. A node with `--min-peers N` (maarse-server: 6) opens packet
 links to contacts from different buckets until it has N backbone links.
+**Wi-Fi modem key** (`maarse_core::modemauth`). After a modem's `MM` a host
+with a key sends `length | 0xFF 'M' 'K' | nonce (16)`; the modem answers
+`length | 0x7F | 0xFF 'M' 'R' | tag (16)` with tag = the first 16 bytes of
+SHA-256("maarse/modem-auth" | key | nonce) and key = SHA-256("maarse/modem-key"
+| passphrase). No valid answer within 10 s (16 frames) closes the link.
+maarse-server requires a key; maarse-host only when `--modem-key` is set.
+
+A Wi-Fi modem also sends its status to the host every 30 s: `length | 0x7E |
+event frame without length` (`Stats` twice, then `Radio`). With its host set to
+`listen:<port>` the modem accepts the host's connection instead of connecting
+out (the host uses `--modem-ip`); the stream is the same after `MM`.
+
 **Capabilities** (`dht::Caps`): `version (str) | flags (bit 0 server, 1 radio,
 2 post office, 3 relay) | mail free MB (u32 LE, 0xFFFFFFFF = no limit) | n |
 n × region (u16 BE)`. Asked with DHT request type 8 (`Caps`, no body),
@@ -1193,6 +1205,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x29 | GetWifi | – | reply `Wifi` |
 | 0x2a | SetRangeTest | range test config (15) | local only; reply `RangeState` |
 | 0x2b | GetRangeTest | – | reply `RangeState` then `Power` |
+| 0x2d | SetModemKey | passphrase (UTF-8, empty = remove) | Wi-Fi modem key, local only; the node stores SHA-256("maarse/modem-key" \| passphrase) |
 | 0x2c | SendAlert | req (u16) \| AlertMeta \| text | issue a signed alert (host with `--issuer-key`); reply `Sent` with msg_id = serial, firmware replies an error |
 | 0x30 | GetHistory | req (2) \| conv (16) \| before id (u64) \| count (1) | host only |
 | 0x31 | MarkRead | conv (16) \| id (u64) | host only |

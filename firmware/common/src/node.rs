@@ -125,6 +125,12 @@ pub trait Settings {
     }
     /// Saves the Wi-Fi backbone settings. Default: not saved.
     fn save_wifi(&mut self, _w: &maarse_core::companion::WifiSettings) {}
+    /// Stores the Wi-Fi modem key (`None` = none). Default: not stored.
+    fn save_modem_key(&mut self, _key: Option<[u8; 32]>) {}
+    /// The stored Wi-Fi modem key.
+    fn load_modem_key(&mut self) -> Option<[u8; 32]> {
+        None
+    }
     /// Saved Wi-Fi backbone settings; default is off.
     fn load_wifi(&mut self) -> maarse_core::companion::WifiSettings {
         Default::default()
@@ -207,6 +213,13 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     /// LoRa modem for a host over Wi-Fi (fixed at boot; USB commands do not
     /// end it, unlike `modem`).
     wifi_modem: bool,
+    /// Next time the Wi-Fi modem sends its counters to the host.
+    next_net_stats: Instant,
+    /// Wi-Fi modem whose link has been down for `MODEM_FALLBACK_AFTER`:
+    /// it works as an ordinary node (routing, announces, hellos) until the
+    /// link is back, so the LoRa group around it is not left without it.
+    modem_fallback: bool,
+    link_down_since: Option<Instant>,
     radio_ok: bool,
     next_announce: Instant,
     /// A repeater or anchor has been heard since the start: announce at the
@@ -280,6 +293,9 @@ fn err(req: u16, code: u8, msg: &str) {
     });
 }
 
+/// A Wi-Fi modem works as an ordinary node after its link has been down this long.
+const MODEM_FALLBACK_AFTER: Duration = Duration::from_secs(60);
+
 impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// A node returned by value (it is built in place and then moved; see
     /// [`FwNode::new_in`] where stack is short).
@@ -336,6 +352,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             rng,
             modem: false,
             wifi_modem: crate::bus::WIFI_MODEM.load(Relaxed),
+            next_net_stats: Instant::now() + Duration::from_secs(20),
+            modem_fallback: false,
+            link_down_since: None,
             radio_ok,
             next_announce: Instant::now() + Duration::from_secs(5),
             announce_settled: false,
@@ -381,6 +400,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         // Trickle timer: neighbors know within seconds what announces 12 h
         // apart would tell them only much later.
         n.router.hello = true;
+        if n.wifi_modem {
+            // The host's antenna: the host routes and says hello, not us.
+            n.router.hello = false;
+        }
         // Expanding ring search: a node heard within 4 hops lately is looked
         // for there first (maarse-sim: 16 % less airtime nationally).
         n.router.ring = 4;
@@ -460,6 +483,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     fn next_deadline(&self) -> Instant {
+        if self.acting_modem() {
+            // Only our own timers: the router is not used as the host's modem.
+            let mut d = self.next_mobile_check.min(self.next_net_stats).min(self.ext.next_power);
+            if let Some(t) = self.ota.deadline() {
+                d = d.min(t);
+            }
+            return d;
+        }
         let mut d = self.next_announce.min(self.ext.next_power);
         if self.auto_role {
             d = d.min(self.next_auto_check);
@@ -485,7 +516,50 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         d
     }
 
+    /// Working as the host's Wi-Fi modem right now (not fallen back).
+    fn acting_modem(&self) -> bool {
+        self.wifi_modem && !self.modem_fallback
+    }
+
+    /// A Wi-Fi modem whose link has been down a while works as an ordinary
+    /// node; when the link is back, it is the host's modem again.
+    fn modem_fallback_step(&mut self) {
+        let linked = crate::bus::WIFI_STATE.load(Relaxed) == maarse_core::companion::wifi_state::LINKED as u32;
+        if linked {
+            self.link_down_since = None;
+            if self.modem_fallback {
+                self.modem_fallback = false;
+                self.router.hello = false;
+                crate::bus::MODEM_FALLBACK.store(false, Relaxed);
+                log("Wi-Fi link back: the host's modem again");
+            }
+            return;
+        }
+        let since = *self.link_down_since.get_or_insert_with(Instant::now);
+        if !self.modem_fallback && since.elapsed() >= MODEM_FALLBACK_AFTER {
+            self.modem_fallback = true;
+            self.router.hello = true;
+            crate::bus::MODEM_FALLBACK.store(true, Relaxed);
+            // Tell the neighbours soon who we are (5-35 s, as after a start).
+            self.next_announce = Instant::now() + Duration::from_millis(5000 + self.rng.next_u64() % 30_000);
+            log("Wi-Fi link down for 60 s: working as an ordinary node until it is back");
+        }
+    }
+
     fn on_timer(&mut self) {
+        if self.wifi_modem {
+            self.modem_fallback_step();
+        }
+        if self.acting_modem() {
+            // The host routes: only our counters, power and updates here.
+            self.push_net_stats();
+            self.power_tick();
+            if let Some(e) = self.ota.on_timer(self.settings.ota()) {
+                log(e);
+            }
+            self.next_mobile_check = Instant::now() + Duration::from_secs(5);
+            return;
+        }
         let actions = self.router.tick(now_ms());
         self.apply(actions);
         self.file_tick();
@@ -506,7 +580,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             self.auto_role_step();
         }
         if Instant::now() >= self.next_announce {
-            if !self.modem && !self.wifi_modem {
+            if !self.modem && !self.acting_modem() {
                 self.announce();
             }
             self.announced = true;
@@ -523,6 +597,20 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
         if let Some(e) = self.ota.on_timer(self.settings.ota()) {
             log(e);
+        }
+    }
+
+    /// Wi-Fi modem: the host gets our counters every 30 s, as over USB.
+    fn push_net_stats(&mut self) {
+        if Instant::now() < self.next_net_stats {
+            return;
+        }
+        self.next_net_stats = Instant::now() + Duration::from_secs(30);
+        let frames = [Event::Stats { items: self.stats() }.encode(), Event::Stats { items: self.more_stats() }.encode(), Event::Radio(self.radio).encode()];
+        for f in frames {
+            if let Ok(v) = heapless::Vec::from_slice(&f[2..]) {
+                let _ = crate::bus::NET_STATS.try_send(v);
+            }
         }
     }
 
@@ -653,7 +741,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     fn on_radio(&mut self, pkt: Pkt, snr: i8) {
-        if self.wifi_modem {
+        if self.acting_modem() {
             // To the host over Wi-Fi; dropped while the link is down.
             if crate::bus::WIFI_STATE.load(Relaxed) == maarse_core::companion::wifi_state::LINKED as u32 {
                 let _ = crate::bus::NET_TX.try_send((pkt, snr));
@@ -977,6 +1065,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::GetWifi => {
                 let ev = self.wifi_event();
                 emit(&ev);
+            }
+            Command::SetModemKey { passphrase } => {
+                if !crate::bus::WIFI_SUPPORTED.load(Relaxed) {
+                    return err(0, error_code::BAD_FRAME, "This board has no Wi-Fi");
+                }
+                let key = (!passphrase.is_empty()).then(|| maarse_core::modemauth::key(&passphrase));
+                self.settings.save_modem_key(key);
+                log(if key.is_some() { "Modem key saved; used after the next restart" } else { "Modem key removed" });
             }
             Command::SetWifi(w) => {
                 if !crate::bus::WIFI_SUPPORTED.load(Relaxed) {
@@ -1710,6 +1806,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             (stat::QUOTA_DROPPED, st.quota_dropped as i32),
             (stat::AWAIT_KEY, self.await_key.len() as i32),
             (stat::OUTBOX, self.outbox.len() as i32),
+            (stat::MODEM_FALLBACK, self.modem_fallback as i32),
         ] {
             let _ = items.push((k, v));
         }

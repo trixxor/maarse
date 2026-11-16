@@ -44,6 +44,8 @@ pub struct WifiSettings {
     pub ssid: heapless::Vec<u8, 32>,
     pub password: heapless::Vec<u8, 64>,
     pub peer: heapless::Vec<u8, 64>,
+    /// The modem key (see `modemauth`), from flash; never sent in a frame.
+    pub modem_key: Option<[u8; 32]>,
 }
 
 /// Wi-Fi state in [`Event::Wifi`].
@@ -145,6 +147,9 @@ pub enum Command {
     /// restarts to apply them. Reply: `Wifi`. Nodes without Wi-Fi answer
     /// `Error`.
     SetWifi(WifiSettings),
+    /// 0x2d: the Wi-Fi modem key's passphrase (empty = no key). Local only:
+    /// refused over remote control. The node keeps only the derived key.
+    SetModemKey { passphrase: Text },
     /// 0x29: Wi-Fi status. Reply: `Wifi` (never contains the password).
     GetWifi,
     /// 0x26: ask `dest` for the page `path` (`maarse://<dest>/<path>`). Reply:
@@ -872,6 +877,8 @@ pub mod stat {
     pub const AWAIT_KEY: u8 = 100;
     /// Messages kept for a later post office deposit.
     pub const OUTBOX: u8 = 101;
+    /// 1 when a Wi-Fi modem works as an ordinary node because its link is down.
+    pub const MODEM_FALLBACK: u8 = 102;
 }
 
 /// Error codes in `Event::Error`.
@@ -1050,6 +1057,7 @@ impl Command {
                 .b(&w.peer)
                 .done(),
             Command::GetWifi => W::new(0x29).done(),
+            Command::SetModemKey { passphrase } => W::new(0x2d).b(passphrase).done(),
             Command::GetName => W::new(0x25).done(),
             Command::RequestPage { req, dest, path } => W::new(0x26).b(&req.to_le_bytes()).b(&dest.0).b(path).done(),
             Command::SendCall { dest, data } => W::new(0x27).b(&dest.0).b(data).done(),
@@ -1133,9 +1141,10 @@ impl Command {
                 let ssid = r.short()?;
                 let password = r.short()?;
                 let peer = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
-                Command::SetWifi(WifiSettings { enabled: flags & 1 != 0, modem: flags & 2 != 0, ssid, password, peer })
+                Command::SetWifi(WifiSettings { enabled: flags & 1 != 0, modem: flags & 2 != 0, ssid, password, peer, modem_key: None })
             }
             0x29 => Command::GetWifi,
+            0x2d => Command::SetModemKey { passphrase: r.text()? },
             0x25 => Command::GetName,
             0x26 => Command::RequestPage { req: r.u16()?, dest: r.addr()?, path: r.text()? },
             0x27 => Command::SendCall { dest: r.addr()?, data: r.text()? },
@@ -2004,7 +2013,9 @@ mod tests {
             ssid: heapless::Vec::from_slice(b"Telefon").unwrap(),
             password: heapless::Vec::from_slice(b"hemmelig kode").unwrap(),
             peer: heapless::Vec::from_slice(b"example.org:4242").unwrap(),
+            modem_key: None,
         }));
+        roundtrip_cmd(Command::SetModemKey { passphrase: Text::from_slice(b"mast modem key").unwrap() });
         roundtrip_cmd(Command::SetWifi(WifiSettings::default()));
         roundtrip_cmd(Command::GetWifi);
         roundtrip_ev(Event::Wifi {

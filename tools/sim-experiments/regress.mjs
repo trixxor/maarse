@@ -4,6 +4,8 @@
 //   node tools/sim-experiments/regress.mjs            compare with the baseline
 //   node tools/sim-experiments/regress.mjs --update   store the results as the baseline
 //   EXTRA='{"key":value}' node ...                    extra scenario settings (try a change)
+//   FEATURES='{"key":value}' node ...                 extra feature switches (sc.features)
+//   ONLY=national,busy node ...                       run only these scenarios
 //
 // Fails (exit 1) when a scenario delivers more than 5 points less than the
 // baseline, or uses more than 15 % more airtime.
@@ -22,6 +24,7 @@ const { Sim } = await load(readFileSync(path.join(dir, "maarse_sim_wasm.wasm")))
 const BASELINE = path.join(here, "regress-baseline.json");
 const update = process.argv.includes("--update");
 const extra = process.env.EXTRA ? JSON.parse(process.env.EXTRA) : {};
+const extraFeatures = process.env.FEATURES ? JSON.parse(process.env.FEATURES) : {};
 
 /// The settings everything is measured with (the current best).
 function best(sc) {
@@ -34,6 +37,7 @@ function best(sc) {
   Object.assign(sc.features, { pin_contacts: true, key_request: true, key_cache: true, host_anchor: true, bordercast: true, mobile_mode: true, auto_edge: true });
   sc.traffic.start_s = Math.max(sc.traffic.start_s || 0, 700);
   Object.assign(sc, extra);
+  Object.assign(sc.features, extraFeatures);
   return sc;
 }
 const auto = sc => { sc.features.auto_relay = true; sc.auto_relay_after_s = 120; return sc; };
@@ -76,6 +80,13 @@ const SCENARIOS = {
     const { s } = run(best(DK.PRESETS.e45.build(window.DK_LAND, window.DK_TOWNS, seed)), 4300);
     return { delivered: s.shown_pct, airtime: s.airtime_s };
   }),
+  busy: () => avg([1, 2], seed => {
+    // National at high load: 30 messages a minute.
+    const sc = best(DK.PRESETS.normal.build(window.DK_LAND, window.DK_TOWNS, seed));
+    Object.assign(sc.traffic, { friends: 8, friend_share: 0.9, direct_per_min: 30 });
+    const { s } = run(sc, 1800);
+    return { delivered: s.shown_pct, airtime: s.airtime_s };
+  }),
   outage: () => avg([6, 7, 8], seed => {
     // The journey Aalborg -> Roenne with the internet down from 1000 s until
     // 30 min after switching on; share of mail written while off that
@@ -105,7 +116,9 @@ const SCENARIOS = {
 
 const t0 = Date.now();
 const results = {};
+const only = process.env.ONLY ? process.env.ONLY.split(",") : null;
 for (const [name, f] of Object.entries(SCENARIOS)) {
+  if (only && !only.includes(name)) continue;
   const t = Date.now();
   results[name] = f();
   console.log(`${name.padEnd(9)} delivered ${results[name].delivered.toFixed(1)}%  airtime ${results[name].airtime.toFixed(0)} s  (${((Date.now() - t) / 1000).toFixed(0)} s)`);

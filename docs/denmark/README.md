@@ -400,6 +400,12 @@ like. Hellos cost 4.5-10 %, so thinning them was not worth doing.
   devices (the repeater a sleepy node hangs on holds its packets and hands
   them over when it hears the node wake). Left in the simulator, off.
 
+* *Path request quota under high load* (`Router::load_control`, measured
+  2026-11-16 with the regression suite, `FEATURES='{"load_control":true}'`):
+  less airtime in most scenarios (national −13 %, town −23 %, car −12 %),
+  but at 30 messages a minute 11.8 points fewer delivered, the very case it
+  was meant for. Left off.
+
 **A simulator bug found on the way:** std's `HashMap` gives every new map
 other random keys, so several `Sim` runs in one process iterated maps in
 different orders, and a result depended on what ran before it in the

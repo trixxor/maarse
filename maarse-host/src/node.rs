@@ -257,6 +257,13 @@ pub struct Node {
     /// Bordercast: requests from the backbone kept off the radio, by
     /// destination, and key requests answered, by destination.
     bc_dropped: HashMap<Address, Instant>,
+    /// Which link a path ID was last heard on (its own 0-hop hello or
+    /// announce, or as the previous hop of a routed packet), so a routed
+    /// packet goes only to the link of its next hop.
+    pid_link: HashMap<u16, (LinkId, Instant)>,
+    /// Routed packets sent to one link lately: a second send of the same
+    /// packet (a hop retry) goes to every link, in case the guess was wrong.
+    targeted: HashMap<u64, Instant>,
     key_answered: HashMap<Address, Instant>,
     bordercast: bool,
     /// Post office: recipients present (synced lately), replicas asked,
@@ -485,6 +492,8 @@ impl Node {
             heard_via: HashMap::new(),
             announce_cache: HashMap::new(),
             bc_dropped: HashMap::new(),
+            pid_link: HashMap::new(),
+            targeted: HashMap::new(),
             key_answered: HashMap::new(),
             bordercast: !cfg.no_bordercast,
             present: HashMap::new(),
@@ -706,6 +715,7 @@ impl Node {
                 self.link_regions.insert(id, (strict, regions));
             }
             In::LinkDown { id } => {
+                self.pid_link.retain(|_, (l, _)| *l != id);
                 self.link_regions.remove(&id);
                 self.link_caps.remove(&id);
                 self.heard_via.retain(|_, v| v.0 != id);
@@ -715,8 +725,15 @@ impl Node {
                 }
             }
             In::Packet { data, snr, link } => {
+                // Blocked nodes (guard.rs): nothing to, from or about them.
+                if let Ok((h, _)) = Header::decode(&data)
+                    && crate::guard::node_blocked(&h.dest)
+                {
+                    return;
+                }
                 self.counters.packets_in += 1;
                 self.counters.bytes_in += data.len() as u64;
+                self.learn_pid_link(&data, link);
                 {
                     let c = self.link_stats.entry(link).or_default();
                     c[0] += 1;
@@ -854,6 +871,41 @@ impl Node {
 
     // ---------- transmission ----------
 
+    /// Notes which link a path ID is behind (see `pid_link`).
+    fn learn_pid_link(&mut self, data: &[u8], link: LinkId) {
+        let Ok((h, _)) = Header::decode(data) else { return };
+        let pid = match (&h.path, h.ptype) {
+            (None, PacketType::Hello | PacketType::Announce) if h.hops == 0 => Some(h.dest.path_id()),
+            // A route search records its forwarders: the last one sent it to us.
+            (Some(p), PacketType::PathRequest) => p.last().copied(),
+            // Source routed: `hops` is the next forwarder's index, so the
+            // previous one is just before it.
+            (Some(p), _) if h.hops > 0 => p.get(h.hops as usize - 1).copied(),
+            _ => None,
+        };
+        if let Some(pid) = pid {
+            if self.pid_link.len() > 50_000 {
+                self.pid_link.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(3600));
+            }
+            self.pid_link.insert(pid, (link, Instant::now()));
+        }
+    }
+
+    /// The one link a routed packet should go out on, if it is known: the
+    /// next forwarder's (`path[hops]`), or the destination's at the end of
+    /// the path. Floods and route searches go everywhere as before.
+    fn next_hop_link(&self, h: &Header) -> Option<LinkId> {
+        let path = h.path.as_ref()?;
+        if h.ptype == PacketType::PathRequest {
+            return None;
+        }
+        let fresh = |l: &(LinkId, Instant)| (l.1.elapsed() < Duration::from_secs(1800) && self.links.contains_key(&l.0)).then_some(l.0);
+        match path.get(h.hops as usize) {
+            Some(pid) => self.pid_link.get(pid).and_then(fresh),
+            None => self.heard_via.get(&h.dest).filter(|v| self.links.contains_key(&v.0)).map(|v| v.0),
+        }
+    }
+
     fn send_links(&mut self, packet: &[u8]) {
         self.send_links_only(packet, Only::All);
     }
@@ -983,6 +1035,16 @@ impl Node {
             }
         }
         let header = Header::decode(packet).ok().map(|(h, _)| h);
+        // A routed packet goes only to the link of its next hop, if known
+        // (before, it went out on every backbone link).
+        let mut target = header.as_ref().and_then(|h| self.next_hop_link(h));
+        if target.is_some() {
+            let pid = maarse_core::dedup::packet_id(header.as_ref().unwrap().ptype, &header.as_ref().unwrap().dest, packet);
+            self.targeted.retain(|_, t| t.elapsed() < Duration::from_secs(10));
+            if self.targeted.insert(pid, Instant::now()).is_some() {
+                target = None; // a retry: everywhere, as before
+            }
+        }
         let region = header.as_ref().map_or(0, |h| h.region);
         // File chunks to a recipient reached over TCP are not sent out over
         // a LoRa modem (they would only occupy the channel).
@@ -992,6 +1054,9 @@ impl Node {
         let mut sent_to: Vec<(LinkId, String)> = Vec::new();
         for (id, (name, tx)) in &self.links {
             if trunk_skip.contains(id) {
+                continue;
+            }
+            if target.is_some_and(|t| t != *id) && only != Only::Link(*id) {
                 continue;
             }
             if let Only::Link(l) = only
@@ -2662,7 +2727,7 @@ impl Node {
             Command::SetIdentity { confirm, secret } => self.set_identity(id, confirm, secret),
 
             Command::SetTime { .. } => {} // maarse-host has its own clock
-            Command::SetWifi(_) | Command::GetWifi => self.send_client(
+            Command::SetWifi(_) | Command::GetWifi | Command::SetModemKey { .. } => self.send_client(
                 id,
                 &err_ev(0, error_code::BAD_FRAME, "maarse-host uses the computer's network; Wi-Fi settings are for ESP32 nodes."),
             ),
@@ -2839,6 +2904,9 @@ impl Node {
         let Some((from, from_ep, req)) = dht::decode_req(data) else {
             return dht::encode_resp(&me, &dht::Resp::Stored(false));
         };
+        if crate::guard::node_blocked(&from) {
+            return dht::encode_resp(&me, &dht::Resp::Stored(false));
+        }
         if let Some(ep) = from_ep {
             self.dht.table.insert(Contact { id: from, ep });
         }
@@ -3221,6 +3289,9 @@ pub(super) mod file_interop_tests {
             no_post_office: false,
             no_relay: false,
             mail_quota_mb: 0,
+            modem_key: None,
+            modem_ips: Vec::new(),
+            block: Vec::new(),
             regions: Vec::new(),
             strict_region: false,
             repeater_role: false,
@@ -3680,5 +3751,48 @@ mod caps_tests {
         let after: Vec<Address> = n.mail_replicas(&r).iter().map(|c| c.id).collect();
         assert!(!after.contains(&banned));
         assert_eq!(after.len(), before.len());
+    }
+}
+
+#[cfg(test)]
+mod next_hop_tests {
+    //! Routed packets go only to the next hop's link (and a retry everywhere).
+    use super::*;
+    use std::sync::mpsc::{Receiver, channel};
+
+    fn node() -> (Node, Receiver<Vec<u8>>, Receiver<Vec<u8>>) {
+        let dir = std::env::temp_dir().join(format!("maarse-nexthop-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut n = Node::new(&file_interop_tests::cfg(dir)).unwrap();
+        let (ta, ra) = channel();
+        let (tb, rb) = channel();
+        n.links.insert(1, ("tcp in 10.0.0.1:1".into(), ta));
+        n.links.insert(2, ("tcp in 10.0.0.2:1".into(), tb));
+        (n, ra, rb)
+    }
+
+    #[test]
+    fn routed_packet_goes_to_one_link_and_a_retry_to_all() {
+        let (mut n, ra, rb) = node();
+        // Path ID 0x2222 was the previous hop of a packet that came in on link 2.
+        let mut h = Header::new(PacketType::Data, Address([5; 16])).with_path(heapless::Vec::from_slice(&[0x2222, 0x3333]).unwrap());
+        h.hops = 1;
+        n.learn_pid_link(&encode(&h, b"x").unwrap(), 2);
+        // Our own packet whose next hop is 0x2222.
+        let mut out = Header::new(PacketType::Data, Address([6; 16])).with_path(heapless::Vec::from_slice(&[0x2222]).unwrap());
+        out.hops = 0;
+        let pkt = encode(&out, b"hello").unwrap();
+        n.send_links(&pkt);
+        assert_eq!((ra.try_iter().count(), rb.try_iter().count()), (0, 1), "only the next hop's link");
+        n.send_links(&pkt);
+        assert_eq!((ra.try_iter().count(), rb.try_iter().count()), (1, 1), "a retry goes everywhere");
+        // A flood still goes everywhere.
+        n.send_links(&encode(&Header::new(PacketType::Announce, Address([7; 16])), b"a").unwrap());
+        assert_eq!((ra.try_iter().count(), rb.try_iter().count()), (1, 1));
+        // Unknown next hop: everywhere.
+        let mut u = Header::new(PacketType::Data, Address([8; 16])).with_path(heapless::Vec::from_slice(&[0x4444]).unwrap());
+        u.hops = 0;
+        n.send_links(&encode(&u, b"y").unwrap());
+        assert_eq!((ra.try_iter().count(), rb.try_iter().count()), (1, 1));
     }
 }

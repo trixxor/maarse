@@ -220,6 +220,44 @@ fn server_http(mut stream: TcpStream, data_dir: &Path) {
         }
         ("GET", "/api/service/status") => send(&mut stream, "200 OK", jsn, "", crate::service::status_json(data_dir).as_bytes()),
         ("GET", "/api/settings") => send(&mut stream, "200 OK", jsn, "", crate::settings::status_json(data_dir).as_bytes()),
+        ("GET", "/api/guard") => {
+            let devices: serde_json::Value = serde_json::from_str(&crate::links::devices_json()).unwrap_or_default();
+            let body = serde_json::json!({"guard": crate::guard::json(), "links": devices["devices"]});
+            send(&mut stream, "200 OK", jsn, "", body.to_string().as_bytes())
+        }
+        ("POST", "/api/guard") => {
+            let host = header(&head, "host").unwrap_or("");
+            if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
+                return send(&mut stream, "403 Forbidden", "text/plain; charset=utf-8", "", b"wrong origin");
+            }
+            let len: usize = header(&head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0).min(4096);
+            let mut body = req[head_end.min(req.len())..].to_vec();
+            while body.len() < len {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => body.extend_from_slice(&buf[..n]),
+                }
+            }
+            let v: serde_json::Value = serde_json::from_slice(&body[..len.min(body.len())]).unwrap_or_default();
+            let target = v["target"].as_str().unwrap_or("").trim().to_string();
+            let result: Result<String, String> = match v["op"].as_str().unwrap_or("") {
+                "block" => crate::guard::block(&target).map(|_| format!("{target} blocked")),
+                "unblock" => Ok(if crate::guard::unblock(&target) { format!("{target} unblocked") } else { format!("{target} was not blocked") }),
+                op @ ("disconnect" | "disconnect_block") => match v["id"].as_u64().and_then(|i| crate::links::disconnect(i as u32).map(|ip| (i, ip))) {
+                    Some((i, ip)) if op == "disconnect_block" => crate::guard::block(&ip.to_string()).map(|_| format!("link {i} closed and {ip} blocked")),
+                    Some((i, ip)) => Ok(format!("link {i} to {ip} closed")),
+                    None => Err("no such TCP link (or it cannot be closed)".into()),
+                },
+                _ => Err("unknown operation".into()),
+            };
+            match result {
+                Ok(m) => {
+                    crate::debug::push("admin", serde_json::json!({"op": m, "ip": ip.to_string()}));
+                    send(&mut stream, "200 OK", "text/plain; charset=utf-8", "", m.as_bytes())
+                }
+                Err(e) => send(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", "", e.as_bytes()),
+            }
+        }
         ("POST", "/api/settings") | ("POST", "/api/admin/password") => {
             // Same-origin only (the session cookie is SameSite=Strict too).
             let host = header(&head, "host").unwrap_or("");

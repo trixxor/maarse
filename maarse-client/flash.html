@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Må:rse flasher</title>
+<link rel="icon" href="icon.svg">
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --mute:#5c6670; --line:#d9dee3; --accent:#0b6bcb; --ok:#1a7f37; --bad:#c62828; --warn-bg:#fff6e0; }
+@media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1a1e23; --fg:#e6e9ec; --mute:#9aa4ad; --line:#2c333a; --accent:#4c9bf0; --ok:#4cc26a; --bad:#ef6b6b; --warn-bg:#2d2614; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
+main { max-width:720px; margin:0 auto; padding:24px 16px 48px; }
+h1 { font-size:22px; margin:0 0 4px; }
+.sub { color:var(--mute); margin:0 0 20px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+.card h2 { font-size:16px; margin:0 0 10px; }
+label.board { display:flex; gap:10px; align-items:flex-start; padding:8px; border-radius:8px; cursor:pointer; }
+label.board:hover { background:var(--bg); }
+label.board small { display:block; color:var(--mute); }
+button { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; margin:4px 8px 4px 0; }
+button.ghost { background:transparent; color:var(--accent); }
+button:disabled { opacity:.45; cursor:default; }
+.warn { background:var(--warn-bg); border-radius:8px; padding:10px 12px; margin:10px 0; }
+progress { width:100%; height:14px; margin-top:10px; }
+#log { font:12px/1.45 ui-monospace, monospace; white-space:pre-wrap; max-height:260px; overflow:auto; background:var(--bg); border-radius:8px; padding:10px; margin:0; }
+.ok { color:var(--ok); } .bad { color:var(--bad); }
+.hidden { display:none; }
+ol { padding-left:20px; margin:6px 0; }
+code { font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Må:rse flasher</h1>
+  <p class="sub">Install Må:rse firmware over USB from the browser. Works on blank boards and boards running other firmware. Needs Chrome or Edge on a computer.</p>
+
+  <div id="nosupport" class="warn hidden">This browser has no Web Serial. Use Chrome or Edge on Windows, macOS or Linux.</div>
+
+  <div class="card">
+    <h2>1. Board</h2>
+    <div id="boards"></div>
+  </div>
+
+  <div class="card">
+    <h2>2. Firmware file</h2>
+    <div id="release" class="hidden" style="margin:0 0 10px"></div>
+    <p id="filehint" class="sub" style="margin:0 0 8px"></p>
+    <input type="file" id="file">
+    <div id="fileinfo" class="sub" style="margin:6px 0 0"></div>
+  </div>
+
+  <div class="card" id="esp-card">
+    <h2>3. Flash</h2>
+    <ol>
+      <li>Close the Må:rse host, the web client and any other program that uses the board's port.</li>
+      <li>Plug in the board and press <b>Flash</b>. Pick its port in the list.</li>
+      <li>No port, or it fails to connect: hold <b>BOOT</b> (PRG), press and release <b>RST</b>, release <b>BOOT</b>, and try again.</li>
+    </ol>
+    <label><input type="checkbox" id="erase"> Erase the whole flash first (removes the node's identity, contacts and settings)</label><br>
+    <button id="esp-go">Flash</button>
+  </div>
+
+  <div class="card hidden" id="nrf-card">
+    <h2>3. Flash</h2>
+    <ol>
+      <li>Close the Må:rse host, the web client and any other program that uses the board's port.</li>
+      <li><b>Start the bootloader.</b> Press the button and pick the board's port. The board restarts as a USB drive (e.g. <code>XIAO-SENSOR</code>).
+        No port, or the drive does not appear: press reset twice quickly instead.</li>
+      <li><b>Flash over USB.</b> Press the button and pick the port again (the bootloader's port; it may have a new name). The firmware is sent over serial DFU, the same way the MeshCore and RNode flashers do it, and the board restarts by itself.</li>
+    </ol>
+    <button id="nrf-boot">Start bootloader</button>
+    <button id="nrf-dfu">Flash over USB</button>
+    <details style="margin-top:10px"><summary>Other ways: the USB drive</summary>
+      <p class="sub">With the bootloader started, the board is also a USB drive. Pick the drive, or save the file and drag it onto the drive yourself.</p>
+      <button id="nrf-write" class="ghost">Write to USB drive</button>
+      <button id="nrf-save" class="ghost">Save the file instead</button>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>Progress</h2>
+    <progress id="bar" max="1" value="0"></progress>
+    <pre id="log"></pre>
+  </div>
+</main>
+
+<script type="module">
+// Boards. ESP32-S3 boards take the merged image (`dist/maarse-<board>.bin`,
+// flashed from 0x0); nRF52840 boards take the UF2 file.
+const BOARDS = [
+  { id: "heltec-v4", name: "Heltec WiFi LoRa 32 V4", chip: "ESP32-S3", kind: "esp", file: "maarse-heltec-v4.bin" },
+  { id: "xiao-esp32s3", name: "Seeed XIAO ESP32-S3 + Wio-SX1262", chip: "ESP32-S3", kind: "esp", file: "maarse-xiao-esp32s3.bin" },
+  { id: "xiao-nrf52840", name: "Seeed XIAO nRF52840 + Wio-SX1262", chip: "nRF52840", kind: "nrf", file: "maarse-xiao-nrf52840.uf2" },
+  { id: "wismesh-tag", name: "RAK WisMesh Tag", chip: "nRF52840", kind: "nrf", file: "maarse-wismesh-tag.uf2" },
+];
+const ESPTOOL = "https://cdn.jsdelivr.net/npm/esptool-js@0.4.5/bundle.js";
+const UF2_MAGIC0 = 0x0A324655, UF2_MAGIC1 = 0x9E5D5157, UF2_FAMILY_FLAG = 0x2000, NRF52840_FAMILY = 0xADA52840;
+
+const $ = id => document.getElementById(id);
+const logBox = $("log");
+function log(msg, cls) {
+  const line = document.createElement("div");
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  logBox.append(line);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+let board = BOARDS[0];
+let image = null; // { name, bytes }
+let busy = false;
+
+if (!("serial" in navigator)) $("nosupport").classList.remove("hidden");
+
+for (const b of BOARDS) {
+  const l = document.createElement("label");
+  l.className = "board";
+  l.innerHTML = `<input type="radio" name="board" value="${b.id}"${b === board ? " checked" : ""}><span>${b.name}<small>${b.chip} · file <code>${b.file}</code></small></span>`;
+  l.querySelector("input").onchange = () => { board = b; image = null; $("file").value = ""; $("fileinfo").textContent = ""; refresh(); loadRelease(); };
+  $("boards").append(l);
+}
+
+function refresh() {
+  const esp = board.kind === "esp";
+  $("esp-card").classList.toggle("hidden", !esp);
+  $("nrf-card").classList.toggle("hidden", esp);
+  $("file").accept = esp ? ".bin" : ".uf2";
+  $("filehint").innerHTML = esp
+    ? `Choose the merged image <code>${board.file}</code> (from <code>dist/</code> or a release), not the <code>-app</code> or <code>-ota</code> file.`
+    : `Choose <code>${board.file}</code> (from <code>dist/</code> or a release).`;
+  for (const id of ["esp-go", "nrf-dfu", "nrf-write", "nrf-save"]) $(id).disabled = busy || !image;
+  $("nrf-boot").disabled = busy;
+}
+refresh();
+
+const rd32 = (u, o) => (u[o] | u[o + 1] << 8 | u[o + 2] << 16 | u[o + 3] << 24) >>> 0;
+
+// Checks the chosen file against the board; returns an error text or null.
+function check(name, u) {
+  if (board.kind === "esp") {
+    if (!name.endsWith(".bin")) return "an ESP32-S3 board needs a .bin file";
+    if (/-(app|ota)\.bin$/.test(name)) return "this is the app-only image; choose the merged image " + board.file;
+    if (u[0] !== 0xE9) return "not an ESP32 image (first byte is not 0xE9)";
+    if (u.length < 0x20000) return "too small for a merged image; choose " + board.file;
+    return null;
+  }
+  if (!name.endsWith(".uf2") || u.length % 512) return "not a UF2 file";
+  for (let o = 0; o < u.length; o += 512) {
+    if (rd32(u, o) !== UF2_MAGIC0 || rd32(u, o + 4) !== UF2_MAGIC1) return "invalid UF2 block at " + o;
+    if (rd32(u, o + 8) & UF2_FAMILY_FLAG && rd32(u, o + 28) !== NRF52840_FAMILY) return "this UF2 is not for the nRF52840";
+  }
+  return null;
+}
+
+$("file").onchange = async e => {
+  const f = e.target.files[0];
+  image = null;
+  if (f) {
+    const u = new Uint8Array(await f.arrayBuffer());
+    const err = check(f.name.toLowerCase(), u);
+    if (err) { $("fileinfo").innerHTML = `<span class="bad">${err}</span>`; }
+    else {
+      image = { name: f.name, bytes: u };
+      $("fileinfo").textContent = `${f.name}, ${(u.length / 1024).toFixed(0)} KB`;
+      if (f.name !== board.file) $("fileinfo").textContent += ` (expected ${board.file}; check that it is for this board)`;
+    }
+  }
+  refresh();
+};
+
+function setBusy(b) { busy = b; refresh(); }
+
+// On the published flasher (GitHub Pages, see .github/workflows/release.yml)
+// the latest release lies in firmware/ next to the page; it is loaded for the
+// chosen board, and the file picker stays as the other way. Served by
+// maarse-host there is no firmware/ folder, and only the picker is shown.
+let release = null;
+async function loadRelease() {
+  if (release === null) {
+    try {
+      const r = await fetch("firmware/index.json", { cache: "no-store" });
+      release = r.ok ? await r.json() : false;
+    } catch { release = false; }
+  }
+  if (!release) return;
+  const want = board;
+  $("release").classList.remove("hidden");
+  $("release").innerHTML = `Latest release <b>${release.version}</b> is loading for ${board.name} ...`;
+  try {
+    const r = await fetch("firmware/" + board.file, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const u = new Uint8Array(await r.arrayBuffer());
+    if (board !== want) return;
+    const err = check(board.file, u);
+    if (err) throw new Error(err);
+    image = { name: board.file, bytes: u };
+    $("release").innerHTML = `<span class="ok">Latest release <b>${release.version}</b> loaded</span> (${board.file}, ${(u.length / 1024).toFixed(0)} KB). Or choose your own file below.`;
+    $("fileinfo").textContent = "";
+    $("file").value = "";
+  } catch (e) {
+    if (board === want) $("release").innerHTML = `<span class="bad">Could not load release ${release.version} for this board (${e.message || e}).</span> Choose a file below.`;
+  }
+  refresh();
+}
+loadRelease();
+
+// The merged image is padded with 0xFF to the full flash size (16 MB on the
+// Heltec V4). Only the part up to the end of the app is written, rounded up to
+// a 4 KB sector: faster, and the Må:rse partition at 0x210000 (identity,
+// contacts, mailbox) is left alone. otadata at 0xd000 is inside the written
+// part and becomes empty, so the bootloader starts ota_0 (the new app).
+function trimmed(u) {
+  let end = u.length;
+  while (end > 0 && u[end - 1] === 0xFF) end--;
+  end = Math.min(u.length, Math.ceil(end / 4096) * 4096);
+  return u.subarray(0, end);
+}
+
+function toBinaryString(u) {
+  let s = "";
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return s;
+}
+
+$("esp-go").onclick = async () => {
+  if (!image) return;
+  setBusy(true);
+  $("bar").value = 0;
+  let transport;
+  try {
+    const port = await navigator.serial.requestPort();
+    log("Loading esptool-js ...");
+    const { ESPLoader, Transport } = await import(ESPTOOL);
+    transport = new Transport(port, false);
+    const terminal = { clean() {}, writeLine: t => log(t), write: t => { if (t.trim()) log(t); } };
+    const loader = new ESPLoader({ transport, baudrate: 921600, romBaudrate: 115200, terminal, debugLogging: false });
+    const chip = await loader.main();
+    log("Connected: " + chip, "ok");
+    if (!/ESP32-S3/i.test(chip)) throw new Error(`this is ${chip}, not an ESP32-S3`);
+    if ($("erase").checked) {
+      log("Erasing the whole flash (can take a minute) ...");
+      await loader.eraseFlash();
+    }
+    const data = trimmed(image.bytes);
+    log(`Writing ${(data.length / 1024).toFixed(0)} KB from 0x0 ...`);
+    await loader.writeFlash({
+      fileArray: [{ data: toBinaryString(data), address: 0 }],
+      flashSize: "keep", flashMode: "keep", flashFreq: "keep",
+      eraseAll: false, compress: true,
+      reportProgress: (_i, written, total) => { $("bar").value = written / total; },
+    });
+    log("Restarting the board ...");
+    await loader.hardReset();
+    $("bar").value = 1;
+    log("Done. The board runs Må:rse now. Open the web client and connect.", "ok");
+  } catch (e) {
+    log("Failed: " + (e?.message || e), "bad");
+    if (e?.name !== "NotFoundError") log("Try the BOOT + RST steps above and flash again.");
+  } finally {
+    try { await transport?.disconnect(); } catch {}
+    setBusy(false);
+  }
+};
+
+// nRF52840: the "1200 baud touch". Opening the port at 1200 baud and closing
+// it makes the Adafruit/Seeed bootloader (and Må:rse firmware) restart into
+// the UF2 drive.
+$("nrf-boot").onclick = async () => {
+  setBusy(true);
+  try {
+    const port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 1200 });
+    try { await port.setSignals({ dataTerminalReady: false }); } catch {}
+    await new Promise(r => setTimeout(r, 100));
+    await port.close();
+    log("Bootloader requested. Wait for the USB drive (a few seconds), then press Write to USB drive.", "ok");
+  } catch (e) {
+    if (e?.name !== "NotFoundError") log("Could not open the port (" + (e?.message || e) + "). Press reset twice quickly instead.", "bad");
+  } finally {
+    setBusy(false);
+  }
+};
+
+// ---------- nRF52840: serial DFU (Adafruit bootloader) ----------
+// nrfutil-web (BSD-3-Clause, github.com/takkaO/nrfutil-web) speaks the
+// bootloader's serial DFU. It wants the ZIP that `adafruit-nrfutil dfu genpkg`
+// makes; we build the same ZIP here from the UF2, so one file serves both ways.
+const NRFUTIL_WEB = "https://cdn.jsdelivr.net/npm/nrfutil-web@1.0.0/+esm";
+const JSZIP = "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm";
+
+// UF2 -> flat image from the lowest address (the app start, 0x27000 on the
+// XIAO, 0x26000 on the WisMesh Tag), gaps filled with 0xFF.
+function uf2ToBin(u) {
+  const blocks = [];
+  for (let o = 0; o < u.length; o += 512) blocks.push([rd32(u, o + 12), u.subarray(o + 32, o + 32 + rd32(u, o + 16))]);
+  const lo = Math.min(...blocks.map(b => b[0]));
+  const hi = Math.max(...blocks.map(b => b[0] + b[1].length));
+  const img = new Uint8Array(hi - lo).fill(0xFF);
+  for (const [a, d] of blocks) img.set(d, a - lo);
+  return { start: lo, bin: img };
+}
+
+// CRC16 as in adafruit-nrfutil (nordicsemi/dfu/crc16.py).
+function crc16(data) {
+  let crc = 0xFFFF;
+  for (const b of data) {
+    crc = ((crc >> 8) & 0xFF) | ((crc << 8) & 0xFF00);
+    crc ^= b;
+    crc ^= (crc & 0xFF) >> 4;
+    crc ^= (crc << 12) & 0xFFFF;
+    crc ^= ((crc & 0xFF) << 5) & 0xFFFF;
+  }
+  return crc & 0xFFFF;
+}
+
+// Init packet for DFU version 0.5, packed like adafruit-nrfutil:
+// device type, device revision, app version, softdevice list (count + IDs),
+// firmware CRC16; all little endian. 0x0052 is the device type the Adafruit
+// and Seeed nRF52 cores use; 0xFFFE = any softdevice.
+function initPacket(bin) {
+  const p = new DataView(new ArrayBuffer(14));
+  p.setUint16(0, 0x0052, true);
+  p.setUint16(2, 0xFFFF, true);
+  p.setUint32(4, 0xFFFFFFFF, true);
+  p.setUint16(8, 1, true);
+  p.setUint16(10, 0xFFFE, true);
+  p.setUint16(12, crc16(bin), true);
+  return new Uint8Array(p.buffer);
+}
+
+async function dfuZip(bin) {
+  const { default: JSZip } = await import(JSZIP);
+  const zip = new JSZip();
+  zip.file("manifest.json", JSON.stringify({ manifest: { application: {
+    bin_file: "app.bin", dat_file: "app.dat",
+    init_packet_data: { application_version: 0xFFFFFFFF, device_revision: 0xFFFF, device_type: 0x0052,
+      firmware_crc16: crc16(bin), softdevice_req: [0xFFFE] } }, dfu_version: 0.5 } }));
+  zip.file("app.bin", bin);
+  zip.file("app.dat", initPacket(bin));
+  return zip.generateAsync({ type: "arraybuffer" });
+}
+
+$("nrf-dfu").onclick = async () => {
+  if (!image) return;
+  setBusy(true);
+  $("bar").value = 0;
+  try {
+    const { start, bin } = uf2ToBin(image.bytes);
+    const port = await navigator.serial.requestPort();
+    log(`Loading nrfutil-web; image ${(bin.length / 1024).toFixed(0)} KB from 0x${start.toString(16)} ...`);
+    const [{ performDfu }, zip] = await Promise.all([import(NRFUTIL_WEB), dfuZip(bin)]);
+    let last = "";
+    await performDfu(port, zip, {
+      onProgress: ({ percent, message }) => {
+        $("bar").value = percent / 100;
+        if (message !== last) { log(message); last = message; }
+      },
+    });
+    $("bar").value = 1;
+    log("Done. The board runs Må:rse now. Open the web client and connect.", "ok");
+  } catch (e) {
+    if (e?.name === "NotFoundError") log("No port chosen.");
+    else {
+      log("Failed: " + (e?.message || e), "bad");
+      log("Is the bootloader running? Press Start bootloader first, or press reset twice quickly, then try again. The USB drive way under Other ways works too.");
+    }
+  } finally {
+    try { if (navigator.serial) for (const p of await navigator.serial.getPorts()) if (p.readable) await p.close(); } catch {}
+    setBusy(false);
+  }
+};
+
+$("nrf-write").onclick = async () => {
+  if (!image) return;
+  if (!window.showDirectoryPicker) { log("This browser cannot write to a drive. Use Save the file instead.", "bad"); return; }
+  setBusy(true);
+  try {
+    const dir = await window.showDirectoryPicker({ id: "uf2", mode: "readwrite" });
+    let info;
+    try { info = await (await (await dir.getFileHandle("INFO_UF2.TXT")).getFile()).text(); }
+    catch { throw new Error("this is not a UF2 bootloader drive (no INFO_UF2.TXT)"); }
+    log(info.trim().split(/\r?\n/).slice(0, 3).join(" | "));
+    $("bar").value = 0.1;
+    const fh = await dir.getFileHandle(board.file, { create: true });
+    const w = await fh.createWritable();
+    await w.write(image.bytes);
+    try { await w.close(); } catch {} // the board may restart while the file is closed
+    $("bar").value = 1;
+    log("Done. The board installs the firmware and restarts. If USB does not come back, press reset once.", "ok");
+  } catch (e) {
+    if (e?.name === "AbortError") log("No drive chosen.");
+    else log("Failed: " + (e?.message || e) + ". Use Save the file instead and drag it onto the drive.", "bad");
+  } finally {
+    setBusy(false);
+  }
+};
+
+$("nrf-save").onclick = () => {
+  if (!image) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([image.bytes]));
+  a.download = board.file;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  log(`Saved ${board.file}. Drag it onto the board's USB drive.`);
+};
+</script>
+</body>
+</html>

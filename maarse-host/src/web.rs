@@ -15,6 +15,8 @@ use tungstenite::{Error as WsError, Message};
 const INDEX_HTML: &str = include_str!("../../maarse-client/index.html");
 /// maarse-server's dashboard: telemetry and everything passing through.
 const SERVER_HTML: &str = include_str!("../../maarse-client/server.html");
+/// The web flasher: installs firmware over USB (Web Serial) on blank boards.
+const FLASH_HTML: &str = include_str!("../../maarse-client/flash.html");
 
 /// The access key for remote access: read from `<data>/access-key.txt`
 /// or created (32 hex characters) the first time.
@@ -97,6 +99,7 @@ fn http(mut stream: TcpStream, token: &str, data_dir: &Path) {
     let sw;
     let (status, ctype, body): (&str, &str, &[u8]) = match path {
         "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX_HTML.as_bytes()),
+        "/flash" | "/flash.html" => ("200 OK", "text/html; charset=utf-8", FLASH_HTML.as_bytes()),
         "/manifest.webmanifest" => ("200 OK", "application/manifest+json", MANIFEST.as_bytes()),
         "/sw.js" => {
             sw = service_worker();

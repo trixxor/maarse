@@ -213,7 +213,7 @@ Someone with a radio receiver and no keys can read this from a direct message:
    service and asks for the settings.
 ```
 
-To flash a radio, run `scripts/build-firmware.ps1 <board> -Flash` on Windows or `scripts/build-firmware.sh <board> flash` on Linux, with `heltec-v4`, `xiao-esp32s3`, `xiao-nrf52840` or `wismesh-tag`. Then connect from the web client over USB or Bluetooth. Everything else (host options, running it as a service, Wi-Fi backbone, Android app, protocol details, test lab, releases) is in the **[technical guide](docs/GUIDE.md)**.
+To flash a radio, run `scripts/build-firmware.ps1 <board> -Flash` on Windows or `scripts/build-firmware.sh <board> flash` on Linux, with `heltec-v4`, `xiao-esp32s3`, `xiao-nrf52840` or `wismesh-tag`. Without a toolchain, open the **web flasher** at `http://127.0.0.1:8080/flash.html` on a running maarse-host (Chrome or Edge) and pick the board and its file from `dist/` or a release. Then connect from the web client over USB or Bluetooth. Everything else (host options, running it as a service, Wi-Fi backbone, Android app, protocol details, test lab, releases) is in the **[technical guide](docs/GUIDE.md)**.
 
 ---
 

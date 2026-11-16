@@ -1869,7 +1869,8 @@ function renderFirmware(box) {
     from <code>maarse-sign</code>. The node only installs firmware that is signed with the release key, is for exactly this board
     and is newer than the running one. Over the network only administrators can update, and it takes a long time:
     about 300 KB is over 2,300 chunks. Consider switching to a fast radio setting (SF7, 250 kHz) first.
-    If the node loses power during the installation itself (about 10 sec. on nRF52840), it must be rescued over USB (double-press reset).</div>`;
+    If the node loses power during the installation itself (about 10 sec. on nRF52840), it must be rescued over USB (double-press reset).</div>
+    <p>Blank board, other firmware, or a node that will not start? Use the <a href="flash.html" target="_blank" rel="noopener">web flasher</a> over USB.</p>`;
   const f = document.createElement("div"); f.className = "form";
   const row = (lbl, el) => { const l = document.createElement("label"); l.textContent = lbl; f.append(l, el); return el; };
   const pick = row("Files", document.createElement("input"));

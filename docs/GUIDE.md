@@ -65,6 +65,17 @@ The web client (`maarse-client/index.html`) works over WebSocket (maarse-host), 
 
 Files on firmware nodes (`firmware/common/src/node/files.rs`, the logic in `maarse-crypto/src/files.rs`) use the same format as maarse-host, so the two can send files to each other. The node sends and receives one file at a time in each direction (two static buffers of 8 KB). A received file is sent to the client when it is complete and checked; if no client is connected, it stays in RAM until a client connects (it is overwritten by the next file and disappears on restart). Files are not put in the mailbox: one file would fill the 8 KB of flash completely.
 
+## Web flasher
+
+`flash.html` (served by maarse-host and maarse-server at `/flash.html`, linked from the client's Firmware page) installs firmware over USB from Chrome or Edge, also on blank boards and boards with other firmware:
+
+- **ESP32-S3** (Heltec V4, XIAO ESP32-S3): esptool-js 0.4.5 (loaded from jsDelivr) writes the merged image `dist/maarse-<board>.bin` from 0x0. Trailing 0xFF is cut off, so only bootloader, partition table, otadata (emptied, so ota_0 starts) and the app are written; the Må:rse partition at 0x210000 (identity, contacts, mailbox) is kept unless "erase the whole flash" is ticked. If it will not connect: hold BOOT, press RST.
+- **nRF52840** (XIAO nRF52840, WisMesh Tag): "Start bootloader" sends the 1200 baud touch over Web Serial; "Flash over USB" then sends the firmware over the Adafruit bootloader's serial DFU with [nrfutil-web](https://github.com/takkaO/nrfutil-web) 1.0.0 (BSD-3-Clause, from jsDelivr), the same way the MeshCore and RNode flashers do. The page builds the DFU package itself from the UF2 (flat image from the app start, init packet for DFU 0.5: device type 0x0052, any softdevice 0xFFFE, firmware CRC16, packed as `adafruit-nrfutil dfu genpkg` does), so the one UF2 file serves both ways. Fallback: write the UF2 onto the bootloader drive (File System Access API) or save it and drag it over.
+
+**Releases:** pushing a tag `v<version>` runs `.github/workflows/release.yml`: it builds all four boards (version from the tag; OTA packages signed when the secret `MAARSE_SIGN_KEY_B64` and the variable `MAARSE_RELEASE_PUBKEY` are set), attaches the files and `SHA256SUMS` to a GitHub Release, and publishes the flasher on GitHub Pages with the files in `firmware/` (merged ESP images trimmed of trailing 0xFF). There the flasher loads the latest release for the chosen board by itself. A custom domain (e.g. `flash.maarse.dk`) is set with the repository variable `PAGES_CNAME` plus a CNAME record pointing at `trixxor.github.io`. GitHub Release downloads cannot be fetched by a web page (no CORS), which is why the files go to Pages too.
+
+Signed updates of a node that already runs Må:rse still go through the Firmware page (USB, Bluetooth or the network).
+
 ## Remote access (e.g. the phone over VPN)
 
 maarse-host can be reached from other machines, e.g. the phone over a VPN home, when it listens on an address other than `127.0.0.1`:

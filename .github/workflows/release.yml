@@ -1,0 +1,124 @@
+name: Release firmware
+
+# Push a tag like v0.6.0 (or start it by hand under Actions) to build the
+# firmware for every board, attach it to a GitHub Release and publish the web
+# flasher with the same files on GitHub Pages.
+#
+# Optional signing of the over-the-air packages: repository secret
+# MAARSE_SIGN_KEY_B64 (the key file from `maarse-sign keygen`, base64) and
+# repository variable MAARSE_RELEASE_PUBKEY (64 hex). Without them the release
+# has no -ota files; USB flashing does not need them.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without v (e.g. 0.6.0)"
+        required: true
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  MAARSE_FW_VERSION: ${{ inputs.version || github.ref_name }}
+  MAARSE_RELEASE_PUBKEY: ${{ vars.MAARSE_RELEASE_PUBKEY }}
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { board: wismesh-tag, kind: nrf }
+          - { board: xiao-nrf52840, kind: nrf }
+          - { board: heltec-v4, kind: esp }
+          - { board: xiao-esp32s3, kind: esp }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version without the v
+        run: echo "MAARSE_FW_VERSION=${MAARSE_FW_VERSION#v}" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.kind == 'nrf'
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: esp-rs/xtensa-toolchain@v1.6
+        if: matrix.kind == 'esp'
+        with:
+          default: false
+          buildtargets: esp32s3
+          ldproxy: false
+      - if: matrix.kind == 'esp'
+        run: cargo install espflash --locked
+      - name: Signing key
+        env:
+          KEY_B64: ${{ secrets.MAARSE_SIGN_KEY_B64 }}
+        run: |
+          if [ -n "$KEY_B64" ]; then
+            echo "$KEY_B64" | base64 -d > "$RUNNER_TEMP/sign.key"
+            echo "MAARSE_SIGN_KEY=$RUNNER_TEMP/sign.key" >> "$GITHUB_ENV"
+          fi
+      - run: ./scripts/build-firmware.sh ${{ matrix.board }}
+      - name: Trim the merged ESP image (padded with 0xFF to the full flash)
+        if: matrix.kind == 'esp'
+        run: |
+          python3 - "dist/maarse-${{ matrix.board }}.bin" <<'EOF'
+          import sys
+          p = sys.argv[1]; d = open(p, "rb").read()
+          end = len(d.rstrip(b"\xff")); end = min(len(d), (end + 4095) // 4096 * 4096)
+          open(p, "wb").write(d[:end]); print(p, len(d), "->", end)
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fw-${{ matrix.board }}
+          path: |
+            dist/maarse-${{ matrix.board }}.uf2
+            dist/maarse-${{ matrix.board }}.bin
+            dist/maarse-${{ matrix.board }}-ota.*
+          if-no-files-found: ignore
+
+  publish:
+    needs: firmware
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: fw
+          pattern: fw-*
+          merge-multiple: true
+      - name: Checksums and site
+        run: |
+          V="${MAARSE_FW_VERSION#v}"
+          (cd fw && sha256sum * > SHA256SUMS && ls -la)
+          mkdir -p site/firmware
+          cp maarse-client/flash.html site/index.html
+          cp maarse-client/icon.svg site/
+          cp fw/* site/firmware/
+          cat > site/firmware/index.json <<EOF
+          {"version":"$V","commit":"$GITHUB_SHA","built":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+          EOF
+          [ -n "${{ vars.PAGES_CNAME }}" ] && echo "${{ vars.PAGES_CNAME }}" > site/CNAME || true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version) }}
+          name: Må:rse ${{ env.MAARSE_FW_VERSION }}
+          files: fw/*
+          generate_release_notes: true
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: pages
+        uses: actions/deploy-pages@v4

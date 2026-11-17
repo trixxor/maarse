@@ -1,67 +1,128 @@
 package dk.maarse.app.ui
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dk.maarse.app.Node
+import dk.maarse.app.NodeEntry
 import dk.maarse.app.shortAddr
 
+private fun reach(n: NodeEntry): String = buildList {
+    n.hops?.let { add(if (it == 0) "nearby" else "$it hops") }
+    if (n.lastHeard > 0) add("heard " + time(n.lastHeard))
+    n.mv?.let { add("%.1f V".format(it / 1000.0)) }
+}.joinToString(" · ")
+
+/** People and nodes heard, newest first. */
 @Composable
-fun NodesScreen(onChat: (String) -> Unit) {
+fun ContactsScreen(onContact: (String) -> Unit) {
     val nodes by Node.nodes.collectAsState()
     Node.nicknames.collectAsState().value
-    val traces by Node.traces.collectAsState()
     var filter by remember { mutableStateOf("") }
-    var open by remember { mutableStateOf<String?>(null) }
     val list = nodes.values
         .filter { filter.isBlank() || Node.label(it.addr).contains(filter, true) || it.addr.startsWith(filter.lowercase()) }
-        .sortedByDescending { it.lastHeard }
+        .sortedWith(compareByDescending<NodeEntry> { Node.nicknames.value.containsKey(it.addr) }.thenByDescending { it.lastHeard })
     Column(Modifier.fillMaxSize()) {
-        OutlinedTextField(filter, { filter = it }, Modifier.padding(8.dp), singleLine = true, label = { Text("Search by name or address") })
-        if (list.isEmpty()) Hint("No nodes heard yet. Nodes appear when they announce themselves or write to you.")
+        OutlinedTextField(
+            filter, { filter = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), singleLine = true,
+            placeholder = { Text("Search by name or address") }, leadingIcon = { Icon(Icons.Default.Search, null) },
+            shape = RoundedCornerShape(24.dp),
+        )
+        if (list.isEmpty()) Text("Nobody heard yet. People show up when they announce themselves or write to you.",
+            Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         LazyColumn {
             items(list, key = { it.addr }) { n ->
-                val details = buildList {
-                    n.hops?.let { add(if (it == 0) "direct" else "$it hops") }
-                    if (n.lastHeard > 0) add("heard " + time(n.lastHeard))
-                    n.mv?.let { add("%.2f V".format(it / 1000.0)) }
-                    if (n.usb == true) add("on USB power")
-                    if (n.lat != null && n.lon != null) add("%.3f, %.3f".format(n.lat, n.lon))
-                }
-                ListItem(
-                    headlineContent = { Text(Node.label(n.addr)) },
-                    supportingContent = { Text(shortAddr(n.addr) + " · " + details.joinToString(" · ")) },
-                    trailingContent = { TextButton(onClick = { open = if (open == n.addr) null else n.addr }) { Text(if (open == n.addr) "Less" else "More") } },
-                )
-                if (open == n.addr) Column(Modifier.padding(horizontal = 16.dp)) {
-                    Text(n.addr, style = MaterialTheme.typography.bodySmall)
-                    Row {
-                        TextButton(onClick = { onChat("dm:${n.addr}") }) { Text("Write") }
-                        TextButton(onClick = { Node.trace(n.addr) }) { Text("Trace route") }
-                    }
-                    traces.firstOrNull { it.dest == n.addr }?.let { t ->
-                        Text("Route: ${t.path.size} hops · SNR out ${t.out.joinToString()} dB · back ${t.back.joinToString()} dB", style = MaterialTheme.typography.bodySmall)
+                val title = Node.label(n.addr)
+                Row(
+                    Modifier.fillMaxWidth().clickable { onContact(n.addr) }.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Avatar(title, n.addr, 44.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text(title, fontWeight = FontWeight.SemiBold)
+                        Text(reach(n), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                HorizontalDivider()
             }
         }
     }
+}
+
+/** One contact: name, how it is reached, actions and its address. */
+@Composable
+fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
+    val nodes by Node.nodes.collectAsState()
+    Node.nicknames.collectAsState().value
+    val traces by Node.traces.collectAsState()
+    var naming by remember { mutableStateOf(false) }
+    val n = nodes[addr]
+    val title = Node.label(addr)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        IconButton(onClick = onBack, modifier = Modifier.padding(4.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+        Column(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Avatar(title, addr, 88.dp)
+            Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            n?.name?.let { Text("Announces as ~$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Text(n?.let { reach(it) }?.ifBlank { null } ?: "An account or a node not heard on the air yet",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilledTonalButton(onClick = { onChat("dm:$addr") }, Modifier.weight(1f)) { Icon(Icons.AutoMirrored.Filled.Chat, null); Text("  Message") }
+            FilledTonalButton(onClick = { Node.trace(addr) }, Modifier.weight(1f)) { Icon(Icons.Default.Route, null); Text("  Route") }
+            FilledTonalButton(onClick = { naming = true }, Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Text("  Name") }
+        }
+        traces.firstOrNull { it.dest == addr }?.let { t ->
+            GroupTitle("Route")
+            Card2 {
+                Text("${t.path.size} hops", fontWeight = FontWeight.SemiBold)
+                Text("Signal out: ${t.out.joinToString(" · ") { "$it dB" }}", style = MaterialTheme.typography.bodySmall)
+                Text("Signal back: ${t.back.joinToString(" · ") { "$it dB" }}", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        n?.let {
+            if (it.lat != null && it.lon != null) {
+                GroupTitle("Position (shared by them)")
+                Card2 { Text("%.4f, %.4f".format(it.lat, it.lon)) }
+            }
+        }
+        GroupTitle("Address")
+        Card2 {
+            SelectionContainer { Text(addr, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+            Text("Messages to this address are end-to-end encrypted. Short form: ${shortAddr(addr)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    if (naming) NicknameDialog(addr) { naming = false }
 }

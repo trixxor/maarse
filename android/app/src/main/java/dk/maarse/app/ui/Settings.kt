@@ -75,7 +75,7 @@ fun SettingsScreen() {
 // ---------- connection ----------
 
 @Composable
-private fun ConnectionSection() {
+internal fun ConnectionSection() {
     val ctx = LocalContext.current
     val conn by Node.conn.collectAsState()
     var mode by remember { mutableStateOf(Node.prefs.mode) }
@@ -143,7 +143,7 @@ private fun hasPerms(ctx: Context) = blePerms().all { ctx.checkSelfPermission(it
 
 @SuppressLint("MissingPermission")
 @Composable
-private fun BlePicker(onDone: (String?, String?) -> Unit) {
+internal fun BlePicker(onDone: (String?, String?) -> Unit) {
     val ctx = LocalContext.current
     var granted by remember { mutableStateOf(hasPerms(ctx)) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -189,7 +189,7 @@ private fun BlePicker(onDone: (String?, String?) -> Unit) {
 // ---------- the node (radio, phone host or remote host) ----------
 
 @Composable
-private fun NodeSection() {
+internal fun NodeSection() {
     val me by Node.me.collectAsState()
     val stats by Node.stats.collectAsState()
     val regions by Node.regions.collectAsState()
@@ -278,7 +278,7 @@ private fun parseSettings(t: String): List<Pair<String, String?>> = t.lines().ma
 }
 
 @Composable
-private fun HostSection(server: Boolean) {
+internal fun HostSection(server: Boolean) {
     val ctx = LocalContext.current
     val fields = if (server) SERVER_FIELDS else HOST_FIELDS
     var raw by remember { mutableStateOf(HostFiles.readSettings(ctx, server)) }
@@ -335,7 +335,7 @@ private fun HostSection(server: Boolean) {
 // ---------- the app ----------
 
 @Composable
-private fun AppSection() {
+internal fun AppSection() {
     val ctx = LocalContext.current
     var msgs by remember { mutableStateOf(Node.prefs.notifyMessages) }
     var chans by remember { mutableStateOf(Node.prefs.notifyChannels) }

@@ -144,6 +144,8 @@ class Prefs(ctx: Context) {
     /** Should the app connect at start (the user pressed Connect and not Disconnect)? */
     var running: Boolean get() = p.getBoolean("running", false); set(v) = p.edit().putBoolean("running", v).apply()
     var notifyMessages: Boolean get() = p.getBoolean("notifyMsg", true); set(v) = p.edit().putBoolean("notifyMsg", v).apply()
+    /** The first-start guide has been through. */
+    var onboarded: Boolean get() = p.getBoolean("onboarded", false); set(v) = p.edit().putBoolean("onboarded", v).apply()
     var notifyChannels: Boolean get() = p.getBoolean("notifyCh", false); set(v) = p.edit().putBoolean("notifyCh", v).apply()
 
     var nicknames: Map<String, String>

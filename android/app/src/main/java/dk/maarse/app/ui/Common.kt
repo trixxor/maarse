@@ -43,8 +43,31 @@ val Red = Color(0xFFC0392B)
 @Composable
 fun MaarseTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
-    val scheme = if (dark) darkColorScheme(primary = Color(0xFF6CC59A), secondary = Color(0xFF8FD3B0), error = Color(0xFFFF8A80))
-    else lightColorScheme(primary = Green, secondary = Color(0xFF3D6B57), error = Red)
+    // The mockup's palette: one green accent, calm grey-green grounds; amber
+    // only for warnings and mail waiting. Dark follows the system.
+    val scheme = if (dark) darkColorScheme(
+        primary = Color(0xFF7FD1A5), onPrimary = Color(0xFF00391F),
+        primaryContainer = Color(0xFF1F4D36), onPrimaryContainer = Color(0xFFBFEFD2),
+        secondaryContainer = Color(0xFF243B30), onSecondaryContainer = Color(0xFFCDE8D8),
+        background = Color(0xFF111412), onBackground = Color(0xFFE2E6E3),
+        surface = Color(0xFF111412), onSurface = Color(0xFFE2E6E3),
+        surfaceVariant = Color(0xFF1C211E), onSurfaceVariant = Color(0xFFB4BCB7),
+        surfaceContainer = Color(0xFF1A1E1C), surfaceContainerHigh = Color(0xFF222825),
+        outline = Color(0xFF3A423D), outlineVariant = Color(0xFF2C332F),
+        tertiaryContainer = Color(0xFF4A3214), onTertiaryContainer = Color(0xFFFFDDB8),
+        error = Color(0xFFFFB4A9),
+    ) else lightColorScheme(
+        primary = Green, onPrimary = Color.White,
+        primaryContainer = Color(0xFFD8EEDF), onPrimaryContainer = Color(0xFF0E3A26),
+        secondaryContainer = Color(0xFFE6F1EB), onSecondaryContainer = Color(0xFF1A3A2A),
+        background = Color(0xFFF7F8F6), onBackground = Color(0xFF1A1D1B),
+        surface = Color(0xFFF7F8F6), onSurface = Color(0xFF1A1D1B),
+        surfaceVariant = Color(0xFFFFFFFF), onSurfaceVariant = Color(0xFF5B635E),
+        surfaceContainer = Color(0xFFFFFFFF), surfaceContainerHigh = Color(0xFFEEF1EE),
+        outline = Color(0xFFC9CFCB), outlineVariant = Color(0xFFE3E7E4),
+        tertiaryContainer = Color(0xFFFDF1E6), onTertiaryContainer = Color(0xFF5A2D05),
+        error = Red,
+    )
     MaterialTheme(colorScheme = scheme, content = content)
 }
 

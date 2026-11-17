@@ -198,7 +198,8 @@ object Node : LinkListener {
         link.send(Cmd.getStats())
         link.send(Cmd.getRegions())
         link.send(Cmd.getSharing())
-        link.send(Cmd.getRadio())
+        // Only a radio has radio settings (a host answers with an error).
+        if (prefs.mode == Mode.BLE) link.send(Cmd.getRadio())
         person.value = null
         if (prefs.mode != Mode.BLE) link.send(Cmd.getPerson())
         main.removeCallbacks(poll)

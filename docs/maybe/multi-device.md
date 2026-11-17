@@ -36,7 +36,10 @@ device and starts a new inbox chain. The file goes through
 `/api/account-backup` and `/api/account-restore` (web client) or the host's
 folder (the app).
 
-Not built yet: QR linking, redirect hint and sync button, firmware devices. The simulator models
+QR linking is built: the waiting device shows `maarse:link?addr=…` as a QR code
+(web client and app); the app on the master device scans it.
+
+Not built yet: redirect hint and sync button, firmware devices. The simulator models
 the routing and mail parts (`tools/sim-experiments/linked_devices.mjs`,
 results below). Nothing is in production, so formats change without backward
 compatibility.

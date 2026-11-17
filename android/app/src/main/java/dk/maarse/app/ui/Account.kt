@@ -33,10 +33,24 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.layout.size
 import dk.maarse.app.Node
 import dk.maarse.app.PersonOp
 import dk.maarse.app.PersonState
 import dk.maarse.app.shortAddr
+
+/** A QR code as a bitmap (zxing), black on white so any camera reads it. */
+private fun qrBitmap(text: String, size: Int = 512): android.graphics.Bitmap {
+    val m = com.google.zxing.qrcode.QRCodeWriter().encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size)
+    val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.RGB_565)
+    for (x in 0 until size) for (y in 0 until size) bmp.setPixel(x, y, if (m[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+    return bmp
+}
+
+/** The address in a scanned "maarse:link?addr=…", or a typed one. */
+private fun linkAddr(s: String): String =
+    Regex("[0-9a-f]{32}").find(s.lowercase())?.value ?: s.trim().lowercase()
 
 private fun copy(ctx: Context, label: String, text: String) {
     ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(label, text))
@@ -62,6 +76,10 @@ fun AccountSection() {
             Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     SelectionContainer { Text(me?.addr ?: "", fontFamily = FontFamily.Monospace) }
+                    me?.addr?.let { a ->
+                        val bmp = remember(a) { qrBitmap("maarse:link?addr=$a") }
+                        androidx.compose.foundation.Image(bmp.asImageBitmap(), "QR code to scan on the master device", Modifier.padding(top = 8.dp).size(220.dp))
+                    }
                     Text("Check words: ${p?.words}", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
                     Text("The master device shows the same words when it has linked this device.", style = MaterialTheme.typography.bodySmall)
                 }
@@ -156,8 +174,14 @@ private fun Member() {
     if (pp.master) {
         if (!adding) OutlinedButton(onClick = { adding = true }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) { Text("Add device") }
         else Column(Modifier.padding(horizontal = 16.dp)) {
-            Hint("On the new device: Settings → Account → \"Link this device to my account\". Enter the address it shows:")
-            OutlinedTextField(addr, { addr = it.trim().lowercase() }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("The new device's address (32 characters)") })
+            Hint("On the new device: Settings → Account → \"Link this device to my account\". Scan its QR code, or enter the address it shows:")
+            val scan = rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { r ->
+                r.contents?.let { addr = linkAddr(it) }
+            }
+            OutlinedButton(onClick = {
+                scan.launch(com.journeyapps.barcodescanner.ScanOptions().setPrompt("Scan the new device's QR code").setBeepEnabled(false).setOrientationLocked(false))
+            }) { Text("Scan QR code") }
+            OutlinedTextField(addr, { addr = linkAddr(it) }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("The new device's address (32 characters)") })
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { Node.linkDevice(addr); adding = false; addr = "" }, enabled = addr.length == 32 && addr.all { it in "0123456789abcdef" }) { Text("Link") }
                 TextButton(onClick = { adding = false }) { Text("Cancel") }

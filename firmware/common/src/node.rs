@@ -1101,6 +1101,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::GetFileLimit { .. } => err(0, error_code::BAD_FRAME, "unknown command"),
             Command::SetTime { unix } => {
                 self.boot_unix = Some(unix.saturating_sub(self.started.elapsed().as_secs() as u32));
+                // Stratum 1: passed on to neighbours in our hellos.
+                self.router.clock.set(unix, now_ms(), 1);
             }
             Command::OtaBegin { .. } | Command::OtaChunk { .. } | Command::OtaEnd { .. } | Command::OtaStatus => {
                 let ev = self.ota.handle(self.settings.ota(), &cmd, false);
@@ -1144,7 +1146,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     fn unix_now(&self) -> Option<u32> {
-        self.boot_unix.map(|b| b + self.started.elapsed().as_secs() as u32)
+        // Set by a phone or PC, or else learned from neighbours' hellos.
+        self.boot_unix
+            .map(|b| b + self.started.elapsed().as_secs() as u32)
+            .or_else(|| self.router.clock.now(now_ms()).map(|(t, _)| t))
     }
 
     /// Encrypts with forward secrecy if the other party can, otherwise static.

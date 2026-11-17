@@ -1,0 +1,83 @@
+//! Sequence numbers per conversation (`content::SEQ`): the sender numbers
+//! its messages to each contact, so a gap is shown ("2 messages missing")
+//! instead of passing silently. Only between nodes that announce
+//! `appdata::CAP_SEQ` (hosts). Kept in `seq.txt`: `out|in <address> <n>`.
+
+use super::{Node, short};
+use maarse_core::Address;
+use maarse_core::companion::{Event, text};
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub(super) struct Seqs {
+    file: PathBuf,
+    out: HashMap<Address, u32>,
+    inn: HashMap<Address, u32>,
+    dirty: bool,
+}
+
+impl Seqs {
+    pub(super) fn load(dir: &Path) -> Self {
+        let mut s = Seqs { file: dir.join("seq.txt"), out: HashMap::new(), inn: HashMap::new(), dirty: false };
+        for line in fs::read_to_string(&s.file).unwrap_or_default().lines() {
+            let v: Vec<&str> = line.split_whitespace().collect();
+            if let [dir, a, n] = v[..]
+                && let (Some(a), Ok(n)) = (super::parse_addr(a), n.parse::<u32>())
+            {
+                if dir == "out" { s.out.insert(a, n) } else { s.inn.insert(a, n) };
+            }
+        }
+        s
+    }
+
+    pub(super) fn save(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        self.dirty = false;
+        let mut t = String::new();
+        for (d, m) in [("out", &self.out), ("in", &self.inn)] {
+            for (a, n) in m {
+                t.push_str(&format!("{d} {a} {n}\n"));
+            }
+        }
+        let _ = fs::write(&self.file, t);
+    }
+
+    /// The next number for a message to `dest`.
+    pub(super) fn next(&mut self, dest: &Address) -> u32 {
+        let n = self.out.entry(*dest).or_insert(0);
+        *n += 1;
+        self.dirty = true;
+        *n
+    }
+}
+
+/// What a gap looks like in the conversation.
+pub(super) fn gap_notice(missing: u32) -> String {
+    if missing == 1 {
+        "⚠ 1 earlier message from this contact has not arrived (it may still be on its way)".into()
+    } else {
+        format!("⚠ {missing} earlier messages from this contact have not arrived (they may still be on their way)")
+    }
+}
+
+impl Node {
+    /// Message number `n` from `from` (a device). Shows a gap before it.
+    pub(super) fn seq_received(&mut self, from: Address, n: u32, hops: u8) {
+        let last = self.seqs.inn.get(&from).copied().unwrap_or(0);
+        if n <= last {
+            // Late (it was counted as missing before) or a repeat.
+            return;
+        }
+        self.seqs.inn.insert(from, n);
+        self.seqs.dirty = true;
+        if last > 0 && n > last + 1 {
+            let missing = n - last - 1;
+            self.log(format!("{} message(s) from {} missing before number {n}", missing, short(&from)));
+            let peer = self.person_peer(&from);
+            self.broadcast(&Event::DirectReceived { from: peer, hops, text: text(gap_notice(missing).as_bytes()) });
+        }
+    }
+}

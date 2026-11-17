@@ -20,8 +20,16 @@ and the Android app** (not in firmware):
 
 Host code `maarse-host/src/node/person.rs`; test `tools/linked_devices_test.py`
 (link, sync, reply as the person, phone off with mail kept under the person,
-removal). Not built yet: section 6 (time, sequence numbers), 7 (backup v2), QR
-linking, redirect hint and sync button, firmware devices. The simulator models
+removal).
+
+Section 6 is built too: hellos carry the time and a stratum
+(`maarse-core/src/clock.rs`, flag `HELLO_TIME`); firmware without a phone
+learns the time from neighbours, hosts are stratum 1. Hosts number their text
+messages per contact (`content::SEQ`, capability `CAP_SEQ`) and show a gap
+("2 earlier messages have not arrived") in the conversation.
+
+Not built yet: section 7 (backup v2), QR linking, redirect hint and sync
+button, firmware devices. The simulator models
 the routing and mail parts (`tools/sim-experiments/linked_devices.mjs`,
 results below). Nothing is in production, so formats change without backward
 compatibility.

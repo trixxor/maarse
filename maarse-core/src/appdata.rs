@@ -58,6 +58,8 @@ pub const CAP_TEXTZ: u8 = 0x01;
 pub const CAP_BUNDLE: u8 = 0x02;
 /// What this firmware/host can do.
 pub const MY_CAPS: u8 = CAP_TEXTZ | CAP_BUNDLE;
+/// Reads sequence-numbered content (`content::SEQ`); maarse-host only.
+pub const CAP_SEQ: u8 = 0x04;
 
 /// Appends the capabilities field.
 pub fn push_caps(v: &mut AppBuf, caps: u8) {
@@ -78,6 +80,9 @@ pub const ROLE_MOBILE: u8 = 0x08;
 /// flash, 2 megabytes, 3 a host with a disk.
 pub const ROLE_MAIL_SHIFT: u8 = 4;
 pub const ROLE_MAIL_MASK: u8 = 0x30;
+/// In a hello: time (u32 BE, Unix s) and stratum (u8) follow the bridge
+/// field, before the "mail waiting" IDs (see `crate::clock`).
+pub const HELLO_TIME: u8 = 0x40;
 
 /// Role flags for a node: hears a repeater, and the number of bridges heard.
 pub fn role_flags(hears_repeater: bool, bridges: u8) -> u8 {

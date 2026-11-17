@@ -42,6 +42,12 @@ pub const TEXT_Z: u8 = 0x08;
 /// the `person` module below and `docs/maybe/multi-device.md`.
 pub const PERSON: u8 = 0x09;
 
+/// A sequence number in front of other content: `SEQ | n (u32 LE) | content`.
+/// The sender numbers its messages to each contact (1, 2, 3 …), so the
+/// receiver can show "messages missing" instead of a silent gap. Sent only to
+/// nodes whose announce has `appdata::CAP_SEQ`.
+pub const SEQ: u8 = 0x0A;
+
 /// Operations in [`PERSON`] content.
 pub mod person {
     /// "I am a device of this person": device certificate (129 bytes).
@@ -111,6 +117,8 @@ pub enum Content<'a> {
     Ip(&'a [u8]),
     /// Linked devices: (operation, data), see [`person`].
     Person(u8, &'a [u8]),
+    /// A sequence number and the content it numbers (see [`SEQ`]).
+    Seq(u32, &'a [u8]),
     Unknown(u8),
 }
 
@@ -167,6 +175,7 @@ pub fn parse(plain: &[u8]) -> Option<Content<'_>> {
         CALL => Some(Content::Call(&plain[1..])),
         IP => Some(Content::Ip(&plain[1..])),
         PERSON if plain.len() >= 2 => Some(Content::Person(plain[1], &plain[2..])),
+        SEQ if plain.len() >= 6 => Some(Content::Seq(u32::from_le_bytes(plain[1..5].try_into().ok()?), &plain[5..])),
         PAGE_REQUEST => Some(match page_path(&plain[1..]) {
             Some(p) => Content::PageRequest(p),
             None => Content::Unknown(PAGE_REQUEST),
@@ -292,6 +301,7 @@ mod tests {
         assert_eq!(parse(&text(b"hej")), Some(Content::Text(b"hej")));
         assert_eq!(parse(&[0x7f, 1]), Some(Content::Unknown(0x7f)));
         assert_eq!(parse(&[PERSON, person::CERT_REQUEST]), Some(Content::Person(person::CERT_REQUEST, &[])));
+        assert_eq!(parse(&[SEQ, 7, 0, 0, 0, TEXT, b'h']), Some(Content::Seq(7, &[TEXT, b'h'])));
         assert_eq!(parse(&[RESYNC]), Some(Content::Resync));
         assert_eq!(parse(&[]), None);
         assert_eq!(parse(&[FILE_OFFER, 1, 2]), None);

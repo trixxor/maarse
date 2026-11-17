@@ -574,6 +574,8 @@ pub struct Router<const R: usize, const D: usize> {
     /// Post office: recipients (path IDs) with mail waiting, told in our
     /// hello so they ask for it ("mail waiting", like a Wi-Fi beacon's TIM).
     pub mail_waiting: heapless::Vec<PathId, 4>,
+    /// The time, told and learned in hellos (see [`crate::clock`]).
+    pub clock: crate::clock::Clock,
     /// A post office's hello named us: we have mail waiting.
     mail_hint: bool,
     /// Wait for the end-to-end acknowledgement before the route is repaired (ms).
@@ -706,6 +708,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             key_nonce: 0,
             mail_class: 0,
             mail_waiting: heapless::Vec::new(),
+            clock: crate::clock::Clock::default(),
             mail_hint: false,
             ack_timeout_ms: DEFAULT_ACK_TIMEOUT_MS,
             mobile: false,
@@ -1044,13 +1047,25 @@ impl<const R: usize, const D: usize> Router<R, D> {
     /// bridge count (flag bits 1-2) is left out: it changes whenever a
     /// bridge nearby comes or goes and would keep resetting every
     /// neighbor's Trickle timer, and the named-bridge rule does not use it.
-    pub fn hello_payload(&self, now_ms: u64) -> heapless::Vec<u8, 12> {
+    pub fn hello_payload(&self, now_ms: u64) -> heapless::Vec<u8, 17> {
+        self.hello_payload_with(now_ms, true)
+    }
+
+    /// The hello, with or without the time (the time is left out of the
+    /// Trickle signature, or every second would count as a change).
+    fn hello_payload_with(&self, now_ms: u64, time: bool) -> heapless::Vec<u8, 17> {
+        let clock = time.then(|| self.clock.now(now_ms)).flatten().filter(|(_, s)| *s < crate::clock::MAX_STRATUM);
         let flags = crate::appdata::role_flags(self.hears_repeater(now_ms), 0)
             | if self.mobile { crate::appdata::ROLE_MOBILE } else { 0 }
+            | if clock.is_some() { crate::appdata::HELLO_TIME } else { 0 }
             | ((self.mail_class.min(3) << crate::appdata::ROLE_MAIL_SHIFT) & crate::appdata::ROLE_MAIL_MASK);
         let [hi, lo] = self.chosen_bridge(now_ms).unwrap_or(0xFFFF).to_be_bytes();
-        let mut v: heapless::Vec<u8, 12> = heapless::Vec::new();
+        let mut v: heapless::Vec<u8, 17> = heapless::Vec::new();
         let _ = v.extend_from_slice(&[self.role.as_u8(), flags, hi, lo]);
+        if let Some((unix, stratum)) = clock {
+            let _ = v.extend_from_slice(&unix.to_be_bytes());
+            let _ = v.push(stratum);
+        }
         // A post office names up to 4 recipients with mail waiting.
         for id in &self.mail_waiting {
             let _ = v.extend_from_slice(&id.to_be_bytes());
@@ -1063,7 +1078,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
     /// into another repeater's area is told at once (a Mobile IP binding
     /// update, in effect).
     fn hello_signature(&self, now_ms: u64) -> u32 {
-        let p = self.hello_payload(now_ms);
+        let p = self.hello_payload_with(now_ms, false);
         let p = crate::dedup::packet_id(PacketType::Hello, &self.addr, &p).to_be_bytes();
         let p = [p[0], p[1], p[2], p[3]];
         let rep = if self.mobile {
@@ -1136,7 +1151,13 @@ impl<const R: usize, const D: usize> Router<R, D> {
         self.note_heard_hops(h.dest, 0, now_ms);
         self.note_mobile(h.dest, p[1] & crate::appdata::ROLE_MOBILE != 0, now_ms);
         self.neighbors.set_mail_class(id, (p[1] & crate::appdata::ROLE_MAIL_MASK) >> crate::appdata::ROLE_MAIL_SHIFT);
-        if p[4..].chunks_exact(2).any(|c| u16::from_be_bytes([c[0], c[1]]) == self.id) {
+        let mut rest = &p[4..];
+        if p[1] & crate::appdata::HELLO_TIME != 0 && rest.len() >= 5 {
+            let unix = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]);
+            self.clock.offer(id, unix, rest[4], now_ms);
+            rest = &rest[5..];
+        }
+        if rest.chunks_exact(2).any(|c| u16::from_be_bytes([c[0], c[1]]) == self.id) {
             self.mail_hint = true;
         }
         if hears && role == Role::Relay {
@@ -2939,6 +2960,22 @@ mod tests {
         let size = core::mem::size_of::<Router<256, 1024>>();
         std::println!("size_of::<Router<256, 1024>>() = {size} bytes");
         assert!(size < 96 * 1024);
+    }
+
+    #[test]
+    fn time_is_learned_from_a_neighbours_hello() {
+        let mut a = node(1, Role::Repeater);
+        let mut b = node(2, Role::Client);
+        let t = 1_800_000_000;
+        a.clock.set(t, 0, 1);
+        a.mail_waiting.push(b.addr.path_id()).unwrap();
+        let pkt = encode(&Header::new(PacketType::Hello, a.addr), &a.hello_payload(5_000)).unwrap();
+        b.on_receive(&pkt, 0, 5_000);
+        assert_eq!(b.clock.now(5_000), Some((t + 5, 2)));
+        // The "mail waiting" ID after the time is still read.
+        assert!(b.take_mail_hint());
+        // The time does not change the Trickle signature.
+        assert_eq!(a.hello_signature(1_000), a.hello_signature(60_000));
     }
 
     #[test]

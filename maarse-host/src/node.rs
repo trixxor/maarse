@@ -6,6 +6,7 @@ mod pages;
 mod tun;
 mod hist;
 mod person;
+mod seq;
 mod identity;
 mod alerts;
 mod debugview;
@@ -326,6 +327,8 @@ pub struct Node {
     hist: hist::Hist,
     /// Linked devices: our person, other devices' certificates (node/person.rs).
     persons: person::Persons,
+    /// Sequence numbers per conversation (node/seq.rs).
+    seqs: seq::Seqs,
     /// Identities whose signed bulletins and alerts we show (`--bulletin-key`).
     bulletin_keys: Vec<PublicIdentity>,
     /// Alerts v2: roots, certificates, replay guard, issuer key (node/alerts.rs).
@@ -564,6 +567,7 @@ impl Node {
             ),
             hist: hist::Hist::open(&cfg.data_dir, cfg.history_days),
             persons: person::Persons::load(&cfg.data_dir, &addr),
+            seqs: seq::Seqs::load(&cfg.data_dir),
             bulletin_keys: cfg.bulletin_keys.clone(),
             alerts: alerts::Alerts::load(cfg)?,
         };
@@ -1225,6 +1229,21 @@ impl Node {
         } else {
             plain
         };
+        // Messages are numbered for nodes that read it, when it still fits.
+        let numbered;
+        let plain = if matches!(kind, Pending::Message)
+            && matches!(plain.first(), Some(&content::TEXT) | Some(&content::TEXT_Z))
+            && plain.len() + 5 <= MAX_FS_TEXT
+            && self.caps.get(&dest).is_some_and(|c| c & maarse_core::appdata::CAP_SEQ != 0)
+        {
+            let mut v = vec![content::SEQ];
+            v.extend_from_slice(&self.seqs.next(&dest).to_le_bytes());
+            v.extend_from_slice(plain);
+            numbered = v;
+            &numbered[..]
+        } else {
+            plain
+        };
         let mut ct = [0u8; 255];
         let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
         let (n, format) =
@@ -1552,6 +1571,11 @@ impl Node {
                 self.person_received(peer, t);
             }
             Some(Content::Person(o, data)) => self.on_person(from, o, data),
+            Some(Content::Seq(n, inner)) => {
+                self.seq_received(from, n, hops);
+                let inner = inner.to_vec();
+                self.on_content(from, &inner, hops, format);
+            }
             Some(Content::FileOffer(offer)) => self.on_file_offer(from, offer),
             Some(Content::Control(counter, frame)) => self.on_control(from, counter, frame),
             Some(Content::ControlReply(_, frame)) => {
@@ -2331,6 +2355,10 @@ impl Node {
         self.tun_tick();
         self.hist_maintain();
         self.person_maintain();
+        self.seqs.save();
+        // A host has the system clock (NTP): stratum 1 in our hellos.
+        let now = self.now_ms();
+        self.router.clock.set(unix_now(), now, 1);
         let now = Instant::now();
         // Messages without an acknowledgement: put them in the recipient's mailbox.
         // MAARSE_DEPOSIT_AFTER_S makes it possible to test the mailbox quickly.

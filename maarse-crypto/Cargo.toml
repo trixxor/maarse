@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 chacha20poly1305 = { version = "0.10", default-features = false }
-ed25519-dalek = { version = "2", default-features = false, features = ["fast", "zeroize", "rand_core"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["zeroize", "rand_core"] }
 heapless = "0.8"
 hmac = { version = "0.12", default-features = false }
 hkdf = "0.12"
@@ -18,3 +18,8 @@ zeroize = { version = "1", default-features = false }
 
 [dev-dependencies]
 rand_core = { version = "0.6", features = ["getrandom"] }
+
+[features]
+default = ["fast"]
+# Precomputed Ed25519 base point tables: faster signing, about 30 KB more flash.
+fast = ["ed25519-dalek/fast"]

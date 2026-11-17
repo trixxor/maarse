@@ -3,6 +3,7 @@
 
 mod ext;
 mod pages;
+mod calltest;
 mod tun;
 mod hist;
 mod person;
@@ -84,6 +85,7 @@ enum Timer {
     Announce,
     Housekeeping,
     Dht,
+    CallTest,
 }
 
 /// Which links a packet goes out on.
@@ -332,6 +334,8 @@ pub struct Node {
     dht_hosts: HashSet<Address>,
     /// Files whose wait for a TCP route has been logged.
     file_wait_logged: HashSet<u64>,
+    /// Answers calls by itself when `<data>/calltest/` exists.
+    call_test: calltest::CallTest,
     /// Sequence numbers per conversation (node/seq.rs).
     seqs: seq::Seqs,
     /// Identities whose signed bulletins and alerts we show (`--bulletin-key`).
@@ -574,6 +578,7 @@ impl Node {
             persons: person::Persons::load(&cfg.data_dir, &addr),
             dht_hosts: HashSet::new(),
             file_wait_logged: HashSet::new(),
+            call_test: calltest::CallTest::load(&cfg.data_dir),
             seqs: seq::Seqs::load(&cfg.data_dir),
             bulletin_keys: cfg.bulletin_keys.clone(),
             alerts: alerts::Alerts::load(cfg)?,
@@ -702,6 +707,7 @@ impl Node {
                     self.housekeeping();
                     self.schedule(HOUSEKEEPING_EVERY, Timer::Housekeeping);
                 }
+                Some(Timer::CallTest) => self.call_test_tick(),
                 Some(Timer::Dht) => {
                     self.dht_maintain();
                     self.schedule(DHT_EVERY, Timer::Dht);
@@ -1291,6 +1297,35 @@ impl Node {
         Ok(msg_id)
     }
 
+    /// Call audio: sealed like a message but sent as a datagram, without
+    /// end-to-end acknowledgement or resending. A late audio packet is
+    /// worthless, and acknowledging 17 packets a second filled the send
+    /// queue so packets were dropped (choppy calls). Falls back to an
+    /// ordinary message for a peer that does not take call datagrams.
+    fn send_call_audio(&mut self, dest: Address, plain: &[u8]) -> Result<(), &'static str> {
+        if !self.caps.get(&dest).is_some_and(|c| c & maarse_core::appdata::CAP_CALL_DG != 0) {
+            return self.send_sealed(dest, plain, Pending::Control).map(|_| ());
+        }
+        let recipient = *self.known.get(&dest).ok_or("The recipient has not been heard yet (no announce)")?;
+        let mut ct = [0u8; 255];
+        let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
+        let (n, _) = ratchet::seal(&self.identity, &recipient, &mut self.sessions, fs_ok, &mut OsRng, plain, &mut ct)
+            .map_err(|_| "The message is too long")?;
+        self.sessions.save();
+        let mut dg = maarse_core::appdata::CALL_DATAGRAM.to_vec();
+        dg.extend_from_slice(&ct[..n]);
+        let now = self.now_ms();
+        let (_, actions) = self
+            .router
+            .send_typed(PacketType::Datagram, dest, &dg, token(), now)
+            .map_err(|e| match e {
+                maarse_core::router::SendError::TooLarge => "The call packet is too large",
+                _ => "The queue is full, try again shortly",
+            })?;
+        self.apply(actions.into_iter().collect());
+        Ok(())
+    }
+
     /// A message delivered by carrying: like an acknowledgement, but the
     /// app is told "delivered (carried)".
     fn on_carry_acked(&mut self, msg_id: u64) {
@@ -1386,6 +1421,10 @@ impl Node {
             PacketType::Data => self.open_direct(payload.to_vec(), hops, true),
             PacketType::Fragment => self.on_chunk(payload),
             PacketType::Deposit => self.on_deposit(payload, hops),
+            // Call audio: opened like a direct message, but never acknowledged.
+            PacketType::Datagram if payload.starts_with(&maarse_core::appdata::CALL_DATAGRAM) => {
+                self.open_direct(payload[8..].to_vec(), hops, true)
+            }
             PacketType::Datagram => self.on_tun_datagram(payload),
             PacketType::Probe => self.on_trace(dest, payload),
             PacketType::Channel => {

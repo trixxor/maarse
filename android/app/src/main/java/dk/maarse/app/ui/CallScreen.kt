@@ -68,6 +68,12 @@ fun CallOverlay() {
                 },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (s.phase == Calls.Phase.ACTIVE) {
+                val q by Calls.quality.collectAsState()
+                val pct = if (q.got + q.lost > 0) 100.0 * q.lost / (q.got + q.lost) else 0.0
+                Text("Received ${q.got} · lost ${q.lost} (%.1f%%) · ran dry ${q.dry}×".format(pct),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+            }
             Spacer(Modifier.weight(1f))
             when (s.phase) {
                 Calls.Phase.RINGING -> Row(horizontalArrangement = Arrangement.spacedBy(64.dp)) {

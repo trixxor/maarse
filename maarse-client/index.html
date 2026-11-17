@@ -944,6 +944,25 @@ const store = {
   set(k, v) { try { localStorage.setItem("maarse:" + k, JSON.stringify(v)); } catch {} },
 };
 let nicknames = store.get("nicknames", {});
+// Nodes heard before (kept 30 days) and chats the user deleted, so a reload
+// does not forget them.
+const HEARD_DAYS = 30;
+let heardStore = store.get("heard", {});
+let hiddenChats = store.get("hiddenChats", {});
+let heardSaveTimer = null;
+function rememberHeard(addr, name) {
+  heardStore[addr] = { at: Date.now(), name: name ?? heardStore[addr]?.name };
+  clearTimeout(heardSaveTimer);
+  heardSaveTimer = setTimeout(() => store.set("heard", heardStore), 2000);
+}
+function restoreHeard() {
+  const cutoff = Date.now() - HEARD_DAYS * 86400000;
+  for (const [addr, h] of Object.entries(heardStore)) {
+    if (h.at < cutoff) { delete heardStore[addr]; continue; }
+    if (!state.contacts.has(addr)) state.contacts.set(addr, { heard: true });
+    if (!state.nodeInfo.has(addr) && h.name) state.nodeInfo.set(addr, { addr, name: h.name, at: new Date(h.at) });
+  }
+}
 
 const $ = id => document.getElementById(id);
 
@@ -1007,6 +1026,7 @@ Removes it here and from your node's history; the other person keeps their copy.
 }
 
 function forgetChat(key) {
+  hiddenChats[key] = Math.floor(Date.now() / 1000); store.set("hiddenChats", hiddenChats);
   state.convs.delete(key); state.unread.delete(key);
   const addr = key.slice(3);
   if (key.startsWith("dm:") && !nicknames[addr]) state.contacts.delete(addr);
@@ -1014,12 +1034,25 @@ function forgetChat(key) {
   renderSide(); renderChat();
 }
 
+// A deleted chat stays away until a message newer than the deletion comes.
+function chatHidden(key) {
+  const at = hiddenChats[key];
+  if (!at) return false;
+  const newer = (state.convs.get(key) || []).some(m => (m.ts || Math.floor(Date.now() / 1000)) > at);
+  if (newer) { delete hiddenChats[key]; store.set("hiddenChats", hiddenChats); }
+  return !newer;
+}
+
 function renderSide() {
   const ch = $("channels"); ch.replaceChildren();
   for (const [addr, name] of state.channels) if (chatVisible("ch:" + addr)) ch.appendChild(convRow("ch:" + addr, name, addr));
   const ct = $("contacts"); ct.replaceChildren();
-  const all = new Set([...state.contacts.keys(), ...Object.keys(nicknames),
-    ...[...state.convs.keys()].filter(k => k.startsWith("dm:")).map(k => k.slice(3))]);
+  // Chats: conversations with messages, saved contacts and the open one.
+  // Nodes only heard are under Nodes (else a deleted chat came straight back).
+  const all = new Set([...Object.keys(nicknames),
+    ...[...state.convs.keys()].filter(k => k.startsWith("dm:") && state.convs.get(k).length).map(k => k.slice(3)),
+    ...(state.active?.startsWith("dm:") ? [state.active.slice(3)] : [])]);
+  for (const addr of [...all]) if (chatHidden("dm:" + addr) && state.active !== "dm:" + addr) all.delete(addr);
   // Saved contacts (given a name) first.
   const sorted = [...all].sort((a, b) => (nicknames[b] ? 1 : 0) - (nicknames[a] ? 1 : 0));
   for (const addr of sorted) {
@@ -1165,6 +1198,7 @@ function onEvent(ev) {
         onIdentityHeard(ev);
         const isNew = !state.contacts.has(ev.addr);
         state.contacts.set(ev.addr, { heard: true });
+        rememberHeard(ev.addr);
         if (isNew) log(`Heard: ${label(ev.addr)}`);
         renderSide();
       }
@@ -1322,6 +1356,7 @@ function onEvent(ev) {
       const old = state.nodeInfo.get(ev.addr) || {};
       const nameChanged = old.name !== ev.name;
       state.nodeInfo.set(ev.addr, { ...old, ...ev, name: ev.name, at: new Date() });
+      rememberHeard(ev.addr, ev.name);
       if (nameChanged) { renderSide(); renderChat(); }
       else if (state.view === "diag") renderChat();
       break;
@@ -3117,7 +3152,7 @@ function callSend(kind, extra) {
 
 function callStart(peer) {
   if (call.state !== "idle" || !callSupported()) return;
-  Object.assign(call, { state: "calling", peer, id: crypto.getRandomValues(new Uint32Array(1))[0], seq: 0, rx: 0, tx: 0 });
+  Object.assign(call, { state: "calling", peer, id: crypto.getRandomValues(new Uint32Array(1))[0], seq: 0, rx: 0, tx: 0, lost: 0, dry: 0, lastSeq: undefined });
   callSend(CALL.RING);
   call.ringTimer = setTimeout(() => { if (call.state === "calling") { callSend(CALL.END); callStop("No answer"); } }, 45000);
   renderCallBar();
@@ -3162,7 +3197,7 @@ async function callMedia() {
       const now = call.ctx.currentTime;
       // Jitter buffer of 160 ms: restart it only when we actually ran dry
       // (or fell far behind), not every time it got short; that made gaps.
-      if (call.playAt < now || call.playAt > now + 0.6) call.playAt = now + 0.16;
+      if (call.playAt < now || call.playAt > now + 0.6) { if (call.playAt) call.dry = (call.dry || 0) + 1; call.playAt = now + 0.16; }
       src.start(call.playAt); call.playAt += b.duration;
     },
     error: (e) => log("Call, decoding: " + e.message),
@@ -3171,13 +3206,18 @@ async function callMedia() {
   call.enc = new AudioEncoder({
     output: (chunk) => {
       const b = new Uint8Array(chunk.byteLength); chunk.copyTo(b);
-      call.pending.push(b);
-      if (call.pending.length >= 3) {
+      // At most 119 bytes of (length | frame) fit one packet after sealing;
+      // Opus is variable rate, so send early instead of three frames always
+      // (too large packets were dropped: choppy calls).
+      const flush = () => {
         const parts = [call.seq & 255, call.seq >> 8 & 255];
         for (const p of call.pending) parts.push(p.length, ...p);
         call.pending = []; call.seq = (call.seq + 1) & 0xffff; call.tx++;
         callSend(CALL.AUDIO, parts);
-      }
+      };
+      if (call.pending.length && call.pending.reduce((n, p) => n + 1 + p.length, 0) + 1 + b.length > 119) flush();
+      call.pending.push(b);
+      if (call.pending.length >= 3) flush();
     },
     error: (e) => log("Call, encoding: " + e.message),
   });
@@ -3207,7 +3247,7 @@ function onCallData(from, d) {
       transport?.send(frame(0x27, unhex(from), Uint8Array.from([CALL.END, d[1], d[2], d[3], d[4]])));
       return;
     }
-    Object.assign(call, { state: "ringing", peer: from, id: id >>> 0, seq: 0, rx: 0, tx: 0 });
+    Object.assign(call, { state: "ringing", peer: from, id: id >>> 0, seq: 0, rx: 0, tx: 0, lost: 0, dry: 0, lastSeq: undefined });
     pwaIncoming("dm:" + from, `${label(from)} is calling`, "Open Må:rse to answer");
     renderCallBar();
     return;
@@ -3217,6 +3257,10 @@ function onCallData(from, d) {
   else if (kind === CALL.END) callStop(call.state === "calling" ? "Rejected or busy" : "The other side hung up");
   else if (kind === CALL.AUDIO && call.state === "active" && call.dec?.state === "configured") {
     call.rx++;
+    // Lost packets from gaps in the sequence numbers.
+    const sq = d[5] | d[6] << 8;
+    if (call.lastSeq !== undefined) { const gap = (sq - call.lastSeq - 1) & 0xffff; if (gap < 1000) call.lost = (call.lost || 0) + gap; }
+    call.lastSeq = sq;
     let o = 7;
     while (o < d.length) {
       const n = d[o]; const f = d.slice(o + 1, o + 1 + n); o += 1 + n;
@@ -3232,7 +3276,9 @@ function renderCallBar() {
   const who = label(call.peer);
   const secs = call.started ? Math.floor((Date.now() - call.started) / 1000) : 0;
   const txt = { calling: `Calling ${who} …`, ringing: `${who} is calling`,
-                active: `In a call with ${who} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}` }[call.state];
+                active: `In a call with ${who} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}` +
+                  ` · received ${call.rx} · lost ${call.lost || 0}` +
+                  (call.rx + (call.lost || 0) ? ` (${(100 * (call.lost || 0) / (call.rx + (call.lost || 0))).toFixed(1)}%)` : "") + ` · ran dry ${call.dry || 0}×` }[call.state];
   const btns = [];
   if (call.state === "ringing") {
     const a = el("button", { className: "primary", textContent: "Answer" }); a.onclick = callAnswer; btns.push(a);
@@ -4410,6 +4456,7 @@ else if (location.protocol.startsWith("http")) {
   $("btn-ws").hidden = false;
   connect("ws");
 }
+restoreHeard();
 renderSide();
 
 // ---------- <history> shared inbox on maarse-host: several screens, history and unread sync ----------

@@ -60,7 +60,7 @@ impl Node {
         let mut v = appdata::build(self.my_postbox.as_ref(), true, s.position(), tel.as_ref(), name);
         let flags = if self.router.hears_repeater(self.now_ms()) { appdata::ROLE_HEARS_REPEATER } else { 0 };
         appdata::push_role(&mut v, self.router.role.as_u8(), flags);
-        appdata::push_caps(&mut v, appdata::MY_CAPS | appdata::CAP_SEQ);
+        appdata::push_caps(&mut v, appdata::MY_CAPS | appdata::CAP_SEQ | appdata::CAP_CALL_DG);
         self.person_app_data(&mut v);
         v.to_vec()
     }

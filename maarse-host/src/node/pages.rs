@@ -123,12 +123,21 @@ impl Node {
         let mut plain = Vec::with_capacity(1 + data.len());
         plain.push(content::CALL);
         plain.extend_from_slice(data);
-        if let Err(e) = self.send_sealed(dest, &plain, super::Pending::Control) {
+        // Audio (kind 4) without acknowledgements; ring, answer, end as messages.
+        let sent = if data.first() == Some(&4) {
+            self.send_call_audio(dest, &plain)
+        } else {
+            self.send_sealed(dest, &plain, super::Pending::Control).map(|_| ())
+        };
+        if let Err(e) = sent {
             self.send_client(id, &err_ev(0, error_code::UNKNOWN_DEST, e));
         }
     }
 
     pub(super) fn on_call(&mut self, from: Address, data: &[u8]) {
+        if self.call_test_on(from, data) {
+            return;
+        }
         let ev = Event::Call { from, data: maarse_core::companion::text(data) };
         self.broadcast(&ev);
     }

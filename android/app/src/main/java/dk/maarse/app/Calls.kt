@@ -36,11 +36,18 @@ object Calls {
     const val RING = 1; const val ANSWER = 2; const val END = 3; const val AUDIO = 4
     private const val RATE = 48000
     private const val FRAME = 960 // 20 ms
+    /** Bytes of (length | frame) that fit one call packet after sealing (see maarse-host calltest.rs). */
+    private const val AUDIO_BUDGET = 119
 
     enum class Phase { IDLE, CALLING, RINGING, ACTIVE }
     data class State(val phase: Phase = Phase.IDLE, val peer: String = "", val started: Long = 0, val muted: Boolean = false, val speaker: Boolean = false, val note: String = "")
 
     val state = MutableStateFlow(State())
+
+    /** Network quality during a call: packets received and lost (from sequence gaps), times playback ran dry. */
+    data class Quality(val got: Int = 0, val lost: Int = 0, val dry: Int = 0)
+    val quality = MutableStateFlow(Quality())
+    private var lastSeq = -1
     private var id = 0
     private var seq = 0
     private var media: Media? = null
@@ -107,6 +114,7 @@ object Calls {
     }
 
     private fun begin() {
+        quality.value = Quality(); lastSeq = -1
         app.getSystemService(NotificationManager::class.java).cancel("call", 0)
         val m = runCatching { Media() }.getOrElse {
             send(END); stop("Calls need Android 10 or newer (Opus) and the microphone: ${it.message}"); return
@@ -137,6 +145,12 @@ object Calls {
             kind == ANSWER && s.phase == Phase.CALLING -> begin()
             kind == END -> stop(if (s.phase == Phase.CALLING) "Rejected or busy" else "The other side hung up")
             kind == AUDIO && s.phase == Phase.ACTIVE -> {
+                if (d.size >= 7) {
+                    val sq = (d[5].toInt() and 0xff) or ((d[6].toInt() and 0xff) shl 8)
+                    val gap = if (lastSeq < 0) 0 else ((sq - lastSeq - 1) and 0xffff).let { if (it > 1000) 0 else it }
+                    lastSeq = sq
+                    quality.value = quality.value.let { it.copy(got = it.got + 1, lost = it.lost + gap) }
+                }
                 var o = 7
                 while (o < d.size) {
                     val n = d[o].toInt() and 0xff
@@ -218,18 +232,23 @@ object Calls {
                     if (o < 0) break
                     if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 && info.size in 1..255) {
                         val b = ByteArray(info.size); enc.getOutputBuffer(o)!!.apply { position(info.offset); get(b) }
+                        // Opus is variable rate: send early rather than make a
+                        // packet too large to go through (it would be dropped).
+                        if (pending.isNotEmpty() && pending.sumOf { it.size + 1 } + 1 + b.size > AUDIO_BUDGET) flush(pending)
                         pending += b
                     }
                     enc.releaseOutputBuffer(o, false)
                 }
-                if (pending.size >= 3) {
-                    val body = java.io.ByteArrayOutputStream()
-                    body.write(seq and 0xff); body.write((seq shr 8) and 0xff)
-                    pending.forEach { body.write(it.size); body.write(it) }
-                    pending.clear(); seq = (seq + 1) and 0xffff
-                    send(AUDIO, body.toByteArray())
-                }
+                if (pending.size >= 3) flush(pending)
             }
+        }
+
+        private fun flush(pending: ArrayList<ByteArray>) {
+            val body = java.io.ByteArrayOutputStream()
+            body.write(seq and 0xff); body.write((seq shr 8) and 0xff)
+            pending.forEach { body.write(it.size); body.write(it) }
+            pending.clear(); seq = (seq + 1) and 0xffff
+            send(AUDIO, body.toByteArray())
         }
 
         private fun playLoop() {
@@ -246,7 +265,7 @@ object Calls {
                     buffering = false
                 }
                 val f = inQ.poll(50, TimeUnit.MILLISECONDS)
-                if (f == null) { buffering = true; continue }
+                if (f == null) { buffering = true; quality.value = quality.value.let { it.copy(dry = it.dry + 1) }; continue }
                 run {
                     val i = dec.dequeueInputBuffer(10_000)
                     if (i >= 0) { dec.getInputBuffer(i)!!.apply { clear(); put(f) }; dec.queueInputBuffer(i, 0, f.size, pts, 0); pts += 20_000 }

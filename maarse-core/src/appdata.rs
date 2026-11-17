@@ -60,6 +60,12 @@ pub const CAP_BUNDLE: u8 = 0x02;
 pub const MY_CAPS: u8 = CAP_TEXTZ | CAP_BUNDLE;
 /// Reads sequence-numbered content (`content::SEQ`); maarse-host only.
 pub const CAP_SEQ: u8 = 0x04;
+/// Takes call audio as datagrams (no end-to-end acknowledgement, see
+/// `CALL_DATAGRAM`); maarse-host only.
+pub const CAP_CALL_DG: u8 = 0x08;
+/// Leads a datagram that carries sealed call audio instead of IP-tunnel
+/// data (tunnel datagrams start with a random 8-byte session id).
+pub const CALL_DATAGRAM: [u8; 8] = *b"mrsCALL1";
 
 /// Appends the capabilities field.
 pub fn push_caps(v: &mut AppBuf, caps: u8) {

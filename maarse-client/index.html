@@ -658,6 +658,8 @@ const Cmd = {
   },
   fileData: (req, offset, data) => frame(0x07, u16(req), u32(offset), data),
   fileEnd: req => frame(0x08, u16(req)),
+  // Stops an outgoing file (being sent or kept in the host's file mailbox). id: decimal string.
+  cancelFile: id => { let v = BigInt(id); const b = []; for (let i = 0; i < 8; i++) { b.push(Number(v & 0xffn)); v >>= 8n; } return frame(0x38, b); },
   getStats: () => frame(0x09),
   setRadio: c => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [c.announce & 0xff]),
   getRadio: () => frame(0x0b),
@@ -1131,6 +1133,15 @@ function renderChat() {
     meta.textContent = m.time + (!m.mine && m.hops !== undefined ? ` · ${m.hops} ${m.hops === 1 ? "hop" : "hops"}` : "");
     const sw = m.mine ? statusWords(m.status, state.active.startsWith("ch:")) : null;
     if (sw) meta.append(el("span", { className: "st " + sw.cls, textContent: sw.text }));
+    // A file on its way can be stopped from both ends: outgoing (being sent
+    // or kept in the file mailbox) or incoming. The other side is told.
+    if (m.fileId !== undefined && state.files.get(m.fileId) === m && !m.page) {
+      const what = m.mine ? "Stop sending" : "Stop receiving";
+      const stop = el("a", { href: "#", className: "del", textContent: what, title: what + " this file (the other side is told)" });
+      stop.style.marginLeft = "8px";
+      stop.onclick = (e) => { e.preventDefault(); if (confirm(what + " this file?")) transport.send(Cmd.cancelFile(m.fileId)); };
+      meta.append(stop);
+    }
     if (hist.on && !m.url) {
       const del = el("a", { href: "#", className: "del", textContent: "Delete", title: "Delete from your node's history (not from the other person)" });
       del.style.marginLeft = "8px"; del.style.opacity = "0.6";
@@ -1276,13 +1287,13 @@ function onEvent(ev) {
     }
     case "fileStarted": {
       const m = state.pending.get(ev.req);
-      if (m) { state.pending.delete(ev.req); m.status = `sending 0/${ev.chunks}`; m.progress = 0; state.files.set(ev.fileId, m); renderChat(); }
+      if (m) { state.pending.delete(ev.req); m.status = `sending 0/${ev.chunks}`; m.progress = 0; m.fileId = ev.fileId; state.files.set(ev.fileId, m); renderChat(); }
       break;
     }
     case "fileIncoming": {
       if (pageIncoming(ev)) break;
       state.contacts.set(ev.from, { heard: true });
-      const m = { from: ev.from, name: ev.name, mime: ev.mime, size: ev.size, parts: [], progress: 0,
+      const m = { from: ev.from, name: ev.name, mime: ev.mime, size: ev.size, parts: [], progress: 0, fileId: ev.fileId,
                   text: `${ev.name} (${Math.ceil(ev.size / 1024)} KB) – receiving…`, time: now() };
       state.files.set(ev.fileId, m);
       addMessage("dm:" + ev.from, m);
@@ -1309,7 +1320,9 @@ function onEvent(ev) {
       if (!m) break;
       if (m.page) { pageDone(ev, m); break; }
       m.progress = 1;
-      if (ev.outgoing) m.status = !ev.ok ? "error: " + ev.text : ev.text === "put in mailbox" ? "✉ kept by your host until they are online" : "✓ delivered";
+      const kept = ev.outgoing && ev.ok && ev.text === "put in mailbox";
+      // "cancelled" (by us) or "cancelled by the recipient"
+      if (ev.outgoing) m.status = !ev.ok ? (ev.text.startsWith("cancelled") ? ev.text : "error: " + ev.text) : kept ? "✉ kept by your host until they are online" : "✓ delivered";
       else if (ev.ok) {
         const buf = new Uint8Array(m.size);
         for (const [o, d] of m.parts) buf.set(d, o);
@@ -1317,8 +1330,10 @@ function onEvent(ev) {
         m.text = m.mime?.startsWith("image/") ? "" : `${m.name} (${Math.ceil(m.size / 1024)} KB)`;
         if (m.mime === VOICE_MIME) { m.text = "Voice message – decoding…"; voiceReceived(m); }
         m.parts = [];
-      } else m.text = `${m.name}: error (${ev.text})`;
-      state.files.delete(ev.fileId);
+      } else m.text = ev.text.startsWith("cancelled") ? `${m.name}: ${ev.text}` : `${m.name}: error (${ev.text})`;
+      // Kept in the host's file mailbox: stays known, so it can be cancelled
+      // and marked delivered when the host sends it later.
+      if (!kept) state.files.delete(ev.fileId);
       renderChat();
       break;
     }
@@ -1489,7 +1504,23 @@ async function sendFile(file, voice = null) {
   const image = file.type.startsWith("image/");
   const l = await queryFileLimit(dest);
   // Pictures are made smaller like in other messengers (about 150 KB at most).
-  const limit0 = l ? Math.min(l.max, state.maxFile || l.max) : fileLimit();
+  let limit0 = l ? Math.min(l.max, state.maxFile || l.max) : fileLimit();
+  // Route not known to be internet all the way (the host answers mailbox
+  // and via LoRa both true): over 8 KB the file would only wait. Offer to
+  // compress it to fit LoRa.
+  const LORA = 8 * 1024;
+  log(l ? `File route: up to ${kb(l.max)}, via LoRa ${l.viaLora}, post office ${l.mailbox}` : "File route: no answer from the node");
+  if (l && l.mailbox && file.size > LORA) {
+    if (!image) {
+      if (!confirm(`The recipient is not reachable over the internet right now. Files over 8 KB are not sent over LoRa, so this one (${Math.ceil(file.size / 1024)} KB) waits until there is an internet route. Send it anyway?`)) return;
+    } else if (confirm(`The recipient is not reachable over the internet right now. Files over 8 KB are not sent over LoRa.
+
+Compress the picture to 8 KB and send it over LoRa now?`)) {
+      limit0 = LORA;
+    } else if (!confirm(`Send the picture full size (${Math.ceil(file.size / 1024)} KB) instead? It waits until there is an internet route.`)) {
+      return;
+    }
+  }
   const limit = image ? Math.min(limit0, 150000) : limit0;
   if (l) log(limitNotice(l, image && file.size > l.max));
   let blob = file, name = file.name;
@@ -4794,6 +4825,7 @@ function statusWords(s, channel = false) {
   // Channels go to everyone: there is no acknowledgement to wait for.
   if (channel && s === "sent") return { cls: "ok", text: "✓ Sent" };
   if (s.startsWith("error")) return { cls: "bad", text: "⚠ Not delivered: " + s.slice(6).trim() };
+  if (s.startsWith("cancelled")) return { cls: "bad", text: "✕ " + s[0].toUpperCase() + s.slice(1) };
   if (s.includes("carried")) return { cls: "ok", text: "✓ Delivered (carried)" };
   if (s.includes("from mailbox")) return { cls: "ok", text: "✓ Delivered from mailbox" };
   if (s.includes("kept by your host")) return { cls: "mbx", text: "✉ Kept by your host until they are online" };

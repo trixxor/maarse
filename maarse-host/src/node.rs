@@ -45,10 +45,56 @@ const ANNOUNCE_EVERY: Duration = Duration::from_secs(600);
 const PENDING_MAX: usize = 32;
 /// How often files and mailboxes are checked.
 const HOUSEKEEPING_EVERY: Duration = Duration::from_secs(2);
-/// Chunks of a file that may be in flight at once.
+/// Chunks of a file that may be in flight at once over the internet.
 const FILE_WINDOW: usize = 8;
+/// ... and when LoRa may be on the way: one at a time. A LoRa radio is half
+/// duplex, and a chunk takes about 1.2 s on air (SF9): a burst of 8 kept the
+/// sending radio deaf to the acks for ~10 s, the acks were lost, the route
+/// was "repaired" and everything was sent again (the phone node's modem).
+const FILE_WINDOW_LORA: usize = 1;
 /// A chunk is resent if it is not acknowledged within this time.
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(20);
+/// ... when LoRa may be on the way, where chunks go one at a time: a round
+/// trip on one hop is 2-3 s (chunk 1.2 s + ack 0.2 s on air at SF9), and a
+/// lost chunk must not stall the file for 20 s.
+const CHUNK_TIMEOUT_LORA: Duration = Duration::from_secs(8);
+
+/// The resend timeout over LoRa from the measured round trip (the idea from
+/// Reticulum's Resource: timeouts from measured speed, not fixed values):
+/// 2.5 x smoothed RTT + 0.5 s, within 2.5..20 s; 8 s before the first sample.
+fn lora_chunk_timeout(srtt: Option<Duration>) -> Duration {
+    srtt.map_or(CHUNK_TIMEOUT_LORA, |r| {
+        (r * 5 / 2 + Duration::from_millis(500)).clamp(Duration::from_millis(2500), CHUNK_TIMEOUT)
+    })
+}
+
+/// Updates a smoothed round trip with a new sample (1/4 weight).
+fn smooth_rtt(srtt: &mut Option<Duration>, sample: Duration) {
+    *srtt = Some(match *srtt {
+        None => sample,
+        Some(r) => (r * 3 + sample) / 4,
+    });
+}
+
+/// Pull transfers: first batch, largest batch direct and behind relays.
+const PULL_WINDOW_START: u8 = 4;
+const PULL_WINDOW_MAX: u8 = 8;
+const PULL_WINDOW_MAX_RELAYED: u8 = 2;
+/// Requests in a row without a chunk before the recipient gives up asking
+/// (the sender then offers again or puts the file in its mailbox).
+const PULL_MAX_RETRIES: u8 = 12;
+/// Pull requests are sealed with the file key like chunks, with an index
+/// from here up (a fresh one per request, so no nonce is used twice; chunk
+/// indices stay below it: 32768 chunks are far more than the largest file).
+const PULL_REQ_INDEX: u16 = 0x8000;
+
+/// A pull sender that hears no request for this long offers the file again
+/// (the recipient answers with a request for what it is missing).
+const PULL_STALL: Duration = Duration::from_secs(30);
+
+/// Own beacons (Hello, Announce) wait this long at most for a LoRa file
+/// transfer: they collided with chunks and acks on the half-duplex radio.
+const BEACON_DEFER_MAX: Duration = Duration::from_secs(120);
 /// A file is abandoned after this time.
 const FILE_TIMEOUT: Duration = Duration::from_secs(600);
 /// Without an acknowledgement within this time a message is put in the recipient's mailbox.
@@ -87,6 +133,10 @@ enum Timer {
     Housekeeping,
     Dht,
     CallTest,
+    /// A chunk of this file may be due for resending (LoRa timeout).
+    FileCheck(u64),
+    /// A pull request for this incoming file may be due again.
+    PullCheck(u64),
 }
 
 /// Which links a packet goes out on.
@@ -139,6 +189,12 @@ struct OutFile {
     acked: Vec<bool>,
     done: u16,
     in_flight: HashMap<u16, Instant>,
+    /// Smoothed round trip (offer or chunk -> its ack), for the resend
+    /// timeout over LoRa.
+    srtt: Option<Duration>,
+    /// Push (we send, each chunk acknowledged) or pull (the recipient asks
+    /// for batches); see `SendMode`.
+    mode: SendMode,
     created: Instant,
     /// The file's size in bytes (plaintext).
     size: u32,
@@ -150,12 +206,52 @@ struct OutFile {
     from_box: bool,
 }
 
+/// How an outgoing file is sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SendMode {
+    /// We send, one window at a time, each chunk acknowledged end to end.
+    Push,
+    /// The recipient takes files the pull way: after the offer is
+    /// acknowledged we wait until this time for its first request, then
+    /// fall back to pushing.
+    AwaitRequest(Instant),
+    /// The recipient asks for batches; the time of its latest request.
+    Pull(Instant),
+}
+
+/// The recipient's side of a pull transfer.
+struct PullRx {
+    /// Chunks asked for per request (adapts: +1 per clean batch, -1 on a timeout).
+    window: u8,
+    /// Chunks asked for in the latest request and not yet here.
+    asked: Vec<u16>,
+    /// When the latest request counts as lost (or its batch as cut short).
+    deadline: Instant,
+    /// Requests in a row without a chunk arriving.
+    retries: u8,
+    /// Estimated time per chunk on air plus gaps (from arrivals).
+    chunk_ms: u32,
+    /// Latest chunk arrival in this batch (for `chunk_ms`).
+    last_rx: Option<Instant>,
+    /// The batch had a timeout (the window then does not grow).
+    troubled: bool,
+}
+
 struct InFile {
     from: Address,
+    /// The sending device (requests and cancels go here; `from` may be its person).
+    sender: Address,
+    /// Pull transfer state (the sender takes requests and we are on LoRa).
+    pull: Option<PullRx>,
+    /// Requests sealed so far (their index is PULL_REQ_INDEX + this).
+    req_seq: u16,
     offer: FileOffer,
     parts: Vec<Option<Vec<u8>>>,
     got: u16,
-    created: Instant,
+    /// Latest offer or chunk: a half-received file is dropped after
+    /// FILE_TIMEOUT without either (not after FILE_TIMEOUT in total: over
+    /// LoRa a file from the sender's file mailbox may be resent much later).
+    active: Instant,
 }
 
 /// What an acknowledgement belongs to.
@@ -335,6 +431,12 @@ pub struct Node {
     dht_hosts: HashSet<Address>,
     /// Files whose wait for a TCP route has been logged.
     file_wait_logged: HashSet<u64>,
+    /// Since when our own beacons wait for a LoRa file transfer.
+    beacon_deferred_since: Option<Instant>,
+    /// Incoming files completed lately (a late offer is answered, not taken again).
+    files_done: HashMap<u64, Instant>,
+    /// Pull transfers over LoRa on (off only to compare in tests).
+    file_pull: bool,
     /// Answers calls by itself when `<data>/calltest/` exists.
     call_test: calltest::CallTest,
     /// When each link came up (backbone menu).
@@ -581,6 +683,9 @@ impl Node {
             persons: person::Persons::load(&cfg.data_dir, &addr),
             dht_hosts: HashSet::new(),
             file_wait_logged: HashSet::new(),
+            beacon_deferred_since: None,
+            files_done: HashMap::new(),
+            file_pull: true,
             call_test: calltest::CallTest::load(&cfg.data_dir),
             link_up: HashMap::new(),
             seqs: seq::Seqs::load(&cfg.data_dir),
@@ -694,10 +799,12 @@ impl Node {
             self.timers.pop();
             match self.timer_items.remove(&seq) {
                 Some(Timer::Tx { packet, id, only }) => {
-                    if !self.cancelled.remove(&id) {
+                    if !self.cancelled.remove(&id) && !self.defer_beacon(&packet, id, only) {
                         self.send_links_only(&packet, only);
                     }
                 }
+                Some(Timer::FileCheck(file_id)) => self.file_resend_check(file_id),
+                Some(Timer::PullCheck(file_id)) => self.pull_check(file_id),
                 Some(Timer::Tick) => {
                     self.tick_at = None;
                     let actions = self.router.tick(self.now_ms());
@@ -1175,7 +1282,9 @@ impl Node {
                         self.dht_maybe_lookup(h.dest);
                     }
                     let only = if self.backbone_only(&packet) { Only::Backbone } else { Only::All };
-                    if delay_ms == 0 {
+                    if self.defer_beacon(&packet, id, only) {
+                        // waits for the file transfer (see defer_beacon)
+                    } else if delay_ms == 0 {
                         self.send_links_only(&packet, only);
                     } else {
                         let t = Timer::Tx {
@@ -1333,6 +1442,13 @@ impl Node {
         Ok(())
     }
 
+    /// Sealed content as a datagram (no end-to-end acknowledgement; the
+    /// pull transfer resends by itself), like call audio. Falls back to an
+    /// ordinary message for a peer that does not take sealed datagrams.
+    fn send_sealed_datagram(&mut self, dest: Address, plain: &[u8]) -> Result<(), &'static str> {
+        self.send_call_audio(dest, plain)
+    }
+
     /// A message delivered by carrying: like an acknowledgement, but the
     /// app is told "delivered (carried)".
     fn on_carry_acked(&mut self, msg_id: u64) {
@@ -1354,8 +1470,23 @@ impl Node {
                 self.broadcast(&Event::Acked { msg_id });
             }
             Some(Pending::FileOffer(file_id)) => {
+                let mut wait = None;
                 if let Some(f) = self.out_files.get_mut(&file_id) {
                     f.offer_acked = true;
+                    let sample = f.offer_sent.elapsed();
+                    smooth_rtt(&mut f.srtt, sample);
+                    wait = Some((f.dest, f.srtt));
+                }
+                // The recipient takes files the pull way: wait for its request.
+                if let Some((dest, srtt)) = wait
+                    && self.pull_capable(&dest)
+                    && self.out_files.get(&file_id).is_some_and(|f| !matches!(f.mode, SendMode::Pull(_)))
+                {
+                    let until = lora_chunk_timeout(srtt) * 2 + Duration::from_secs(2);
+                    if let Some(f) = self.out_files.get_mut(&file_id) {
+                        f.mode = SendMode::AwaitRequest(Instant::now() + until);
+                    }
+                    self.schedule(until + Duration::from_millis(50), Timer::FileCheck(file_id));
                 }
                 self.pump_file(file_id);
             }
@@ -1431,6 +1562,19 @@ impl Node {
             // Call audio: opened like a direct message, but never acknowledged.
             PacketType::Datagram if payload.starts_with(&maarse_core::appdata::CALL_DATAGRAM) => {
                 self.open_direct(payload[8..].to_vec(), hops, true)
+            }
+            // A chunk of a file we pull (its id is one we are receiving).
+            PacketType::Datagram
+                if seal::chunk_header(payload).is_some_and(|(id, _)| self.in_files.contains_key(&id)) =>
+            {
+                self.on_chunk(payload)
+            }
+            // A pull request for a file we send (sealed with its key).
+            PacketType::Datagram
+                if seal::chunk_header(payload)
+                    .is_some_and(|(id, idx)| idx >= PULL_REQ_INDEX && self.out_files.contains_key(&id)) =>
+            {
+                self.on_sealed_request(payload)
             }
             PacketType::Datagram => self.on_tun_datagram(payload),
             PacketType::Probe => self.on_trace(dest, payload),
@@ -1630,6 +1774,8 @@ impl Node {
                 self.on_content(from, &inner, hops, format);
             }
             Some(Content::FileOffer(offer)) => self.on_file_offer(from, offer),
+            Some(Content::FileCancel(file_id, by_recipient)) => self.on_file_cancel(from, file_id, by_recipient),
+            Some(Content::FileRequest(file_id, base, count, missing)) => self.on_file_request(Some(from), file_id, base, count, missing),
             Some(Content::Control(counter, frame)) => self.on_control(from, counter, frame),
             Some(Content::ControlReply(_, frame)) => {
                 self.broadcast(&Event::RemoteReply { from, frame: text(frame) });
@@ -1719,6 +1865,8 @@ impl Node {
                 acked: vec![false; chunks],
                 done: 0,
                 in_flight: HashMap::new(),
+                srtt: None,
+                mode: SendMode::Push,
                 created: Instant::now(),
                 size,
                 sealed_offer: std::mem::take(&mut self.last_sealed),
@@ -1730,14 +1878,82 @@ impl Node {
         Ok((file_id, chunks as u16))
     }
 
+    /// A LoRa chunk's timer fired: resend what is overdue.
+    fn file_resend_check(&mut self, file_id: u64) {
+        let Some(f) = self.out_files.get_mut(&file_id) else {
+            return;
+        };
+        let timeout = lora_chunk_timeout(f.srtt);
+        let now = Instant::now();
+        f.in_flight.retain(|_, sent| now.duration_since(*sent) < timeout);
+        self.pump_file(file_id);
+    }
+
+    /// A file transfer over LoRa is going on (chunks out or in lately).
+    fn lora_file_busy(&self) -> bool {
+        let now = Instant::now();
+        self.out_files.values().any(|f| f.offer_acked && f.done < f.chunks && self.path_kind(&f.dest) != PathKind::Tcp)
+            || self.in_files.values().any(|f| {
+                now.duration_since(f.active) < Duration::from_secs(15) && self.path_kind(&f.from) != PathKind::Tcp
+            })
+    }
+
+    /// Our own Hello or Announce while a LoRa file transfer is going on:
+    /// put it off (checked again in 10 s, sent after BEACON_DEFER_MAX at
+    /// the latest) so it does not collide with chunks and acks.
+    fn defer_beacon(&mut self, packet: &[u8], id: u64, only: Only) -> bool {
+        let Ok((h, _)) = Header::decode(packet) else { return false };
+        if !matches!(h.ptype, PacketType::Hello | PacketType::Announce) || h.dest != self.addr || h.hops != 0 {
+            return false;
+        }
+        if !self.lora_file_busy() {
+            self.beacon_deferred_since = None;
+            return false;
+        }
+        let since = *self.beacon_deferred_since.get_or_insert_with(Instant::now);
+        if since.elapsed() >= BEACON_DEFER_MAX {
+            self.beacon_deferred_since = None;
+            return false;
+        }
+        self.schedule(Duration::from_secs(10), Timer::Tx { packet: packet.to_vec(), id, only });
+        true
+    }
+
     /// Sends more chunks as long as the window allows.
     fn pump_file(&mut self, file_id: u64) {
         loop {
             let Some(f) = self.out_files.get(&file_id) else {
                 return;
             };
-            if !f.offer_acked || f.in_flight.len() >= FILE_WINDOW {
+            let tcp = self.path_kind(&f.dest) == PathKind::Tcp;
+            let window = if tcp { FILE_WINDOW } else { FILE_WINDOW_LORA };
+            if !f.offer_acked || f.in_flight.len() >= window {
                 return;
+            }
+            // Pull: the recipient asks; we send only what it asks for.
+            match f.mode {
+                SendMode::Push => {}
+                SendMode::Pull(_) => return,
+                SendMode::AwaitRequest(until) if Instant::now() < until => return,
+                SendMode::AwaitRequest(_) => {
+                    let dest = f.dest;
+                    self.log(format!("file to {}: no request from the recipient, sending the push way", short(&dest)));
+                    if let Some(f) = self.out_files.get_mut(&file_id) {
+                        f.mode = SendMode::Push;
+                    }
+                    continue;
+                }
+            }
+            // Over LoRa one file at a time to each recipient, the oldest
+            // first: two files in parallel put two chunks on the air and the
+            // radio talks over the acks again. The rest follow (housekeeping
+            // pumps every file).
+            if !tcp {
+                let mine = (f.created, file_id);
+                let dest = f.dest;
+                if self.out_files.iter().any(|(id, o)| *id != file_id && o.dest == dest && (o.created, *id) < mine) {
+                    return;
+                }
             }
             // Over 8 KB only along a route we know is TCP all the way.
             if f.size > LORA_MAX_FILE && self.path_kind(&f.dest) != PathKind::Tcp {
@@ -1770,8 +1986,15 @@ impl Node {
                 Ok((msg_id, actions)) => {
                     self.awaiting
                         .insert(msg_id, Pending::FileChunk(file_id, idx));
+                    let mut check = None;
                     if let Some(f) = self.out_files.get_mut(&file_id) {
                         f.in_flight.insert(idx, Instant::now());
+                        check = Some((f.dest, f.srtt));
+                    }
+                    if let Some((dest, srtt)) = check
+                        && self.path_kind(&dest) != PathKind::Tcp
+                    {
+                        self.schedule(lora_chunk_timeout(srtt) + Duration::from_millis(50), Timer::FileCheck(file_id));
                     }
                     self.apply(actions.into_iter().collect());
                 }
@@ -1784,7 +2007,9 @@ impl Node {
         let Some(f) = self.out_files.get_mut(&file_id) else {
             return;
         };
-        f.in_flight.remove(&idx);
+        if let Some(sent) = f.in_flight.remove(&idx) {
+            smooth_rtt(&mut f.srtt, sent.elapsed());
+        }
         if !f.acked[idx as usize] {
             f.acked[idx as usize] = true;
             f.done += 1;
@@ -1797,7 +2022,17 @@ impl Node {
             outgoing: true,
         });
         if done == total {
-            let boxed = self.out_files.remove(&file_id).is_some_and(|f| f.from_box);
+            self.file_delivered(file_id);
+        } else {
+            self.pump_file(file_id);
+        }
+    }
+
+    /// Every chunk of an outgoing file has arrived.
+    fn file_delivered(&mut self, file_id: u64) {
+        {
+            let finished = self.out_files.remove(&file_id);
+            let boxed = finished.as_ref().is_some_and(|f| f.from_box);
             if boxed {
                 self.filebox.remove(file_id);
             }
@@ -1808,8 +2043,50 @@ impl Node {
                 outgoing: true,
                 text: text(if boxed { b"delivered from mailbox" } else { b"delivered" }),
             });
-        } else {
-            self.pump_file(file_id);
+            // The next file to the same recipient (waiting its turn over LoRa).
+            if let Some(dest) = finished.map(|f| f.dest) {
+                let next: Vec<u64> = self.out_files.iter().filter(|(_, o)| o.dest == dest).map(|(id, _)| *id).collect();
+                for id in next {
+                    self.pump_file(id);
+                }
+            }
+        }
+    }
+
+    /// The user stops a file, outgoing or incoming; the other side is told
+    /// (FILE_CANCEL), so it stops too.
+    fn cancel_file(&mut self, file_id: u64) {
+        // Outgoing: being sent, or kept in the file mailbox.
+        let dest = self.out_files.remove(&file_id).map(|f| f.dest).or_else(|| self.filebox.recipient(file_id));
+        if let Some(dest) = dest {
+            self.filebox.remove(file_id);
+            self.log(format!("file {file_id:016x} to {} cancelled by the user", short(&dest)));
+            let _ = self.send_sealed(dest, &content::file_cancel(file_id, false), Pending::Control);
+            self.broadcast(&Event::FileDone { file_id, ok: false, outgoing: true, text: text(b"cancelled") });
+            return;
+        }
+        // Incoming: drop what we have and ask the sender to stop.
+        if let Some(f) = self.in_files.remove(&file_id) {
+            self.log(format!("file {file_id:016x} from {} cancelled by the user", short(&f.from)));
+            let _ = self.send_sealed(f.from, &content::file_cancel(file_id, true), Pending::Control);
+            self.broadcast(&Event::FileDone { file_id, ok: false, outgoing: false, text: text(b"cancelled") });
+        }
+    }
+
+    /// The other side stopped a file transfer.
+    fn on_file_cancel(&mut self, from: Address, file_id: u64, by_recipient: bool) {
+        if by_recipient {
+            let ours = self.out_files.get(&file_id).map(|f| f.dest).or_else(|| self.filebox.recipient(file_id));
+            if ours.is_some_and(|d| d == from || self.person_peer(&d) == self.person_peer(&from)) {
+                self.out_files.remove(&file_id);
+                self.filebox.remove(file_id);
+                self.log(format!("file {file_id:016x} cancelled by the recipient {}", short(&from)));
+                self.broadcast(&Event::FileDone { file_id, ok: false, outgoing: true, text: text(b"cancelled by the recipient") });
+            }
+        } else if self.in_files.get(&file_id).is_some_and(|f| f.from == from || f.from == self.person_peer(&from)) {
+            self.in_files.remove(&file_id);
+            self.log(format!("file {file_id:016x} cancelled by the sender {}", short(&from)));
+            self.broadcast(&Event::FileDone { file_id, ok: false, outgoing: false, text: text(b"cancelled by the sender") });
         }
     }
 
@@ -1824,7 +2101,22 @@ impl Node {
             ));
             return;
         }
-        if self.in_files.contains_key(&offer.file_id) {
+        let sender = from;
+        let file_id = offer.file_id;
+        // Already received (the sender missed our final request): tell it again.
+        if self.files_done.contains_key(&file_id) {
+            if self.pull_capable(&sender) {
+                let _ = self.send_sealed_datagram(sender, &content::file_request(file_id, offer.chunks, 0, 0));
+            }
+            return;
+        }
+        // Offered again (resent, e.g. from the sender's file mailbox): keep
+        // the chunks we have, so only the rest has to come (pull: ask for it).
+        if let Some(f) = self.in_files.get_mut(&file_id) {
+            f.active = Instant::now();
+            let (got, total) = (f.got, f.offer.chunks);
+            self.log(format!("file offered again by {}: {got} of {total} chunks already here", short(&from)));
+            self.pull_start(file_id);
             return;
         }
         // A file from a device of a person shows in the person's conversation.
@@ -1847,10 +2139,237 @@ impl Node {
                 from,
                 parts: vec![None; offer.chunks as usize],
                 got: 0,
-                created: Instant::now(),
+                active: Instant::now(),
+                sender,
+                pull: None,
+                req_seq: 0,
                 offer,
             },
         );
+        self.pull_start(file_id);
+    }
+
+    /// The other side takes files the pull way and we reach it over LoRa.
+    fn pull_capable(&self, peer: &Address) -> bool {
+        self.file_pull
+            && self.caps.get(peer).is_some_and(|c| c & maarse_core::appdata::CAP_FILE_PULL != 0)
+            && self.path_kind(peer) != PathKind::Tcp
+    }
+
+    /// Starts (or resumes) asking for an incoming file, if its sender takes
+    /// requests. One pull at a time per sender (two would put our requests
+    /// on the air while the sender sends the other file's batch).
+    fn pull_start(&mut self, file_id: u64) {
+        let Some(f) = self.in_files.get(&file_id) else { return };
+        let sender = f.sender;
+        if !self.pull_capable(&sender) {
+            return;
+        }
+        let busy = self.in_files.iter().any(|(id, o)| *id != file_id && o.sender == sender && o.pull.is_some());
+        if busy {
+            return; // started when the other file is done (finish_incoming)
+        }
+        let relayed = self.heard_via.get(&sender).is_some_and(|(_, _, h)| *h > 0);
+        let start = if relayed { PULL_WINDOW_MAX_RELAYED } else { PULL_WINDOW_START };
+        let chunk_ms = maarse_core::companion::RadioConfig::EU_DEFAULT.airtime().airtime_us(maarse_core::MAX_PACKET) / 1000 + 150;
+        let f = self.in_files.get_mut(&file_id).unwrap();
+        if f.pull.is_none() {
+            f.pull = Some(PullRx {
+                window: start,
+                asked: Vec::new(),
+                deadline: Instant::now(),
+                retries: 0,
+                chunk_ms,
+                last_rx: None,
+                troubled: false,
+            });
+        }
+        self.pull_request(file_id);
+    }
+
+    /// Asks the sender for the next batch of missing chunks.
+    fn pull_request(&mut self, file_id: u64) {
+        let Some(f) = self.in_files.get_mut(&file_id) else { return };
+        let Some(p) = f.pull.as_mut() else { return };
+        let total = f.offer.chunks;
+        let base = (0..total).find(|i| f.parts[*i as usize].is_none()).unwrap_or(total);
+        let mut missing = 0u32;
+        let mut asked = Vec::new();
+        for i in 0..content::FILE_REQUEST_SPAN {
+            let idx = base + i;
+            if idx >= total {
+                break;
+            }
+            if f.parts[idx as usize].is_none() {
+                missing |= 1 << i;
+                if asked.len() < p.window as usize {
+                    asked.push(idx);
+                }
+            }
+        }
+        // Expect the first chunk of the batch within two chunk times plus
+        // the request's own trip (each chunk then moves the deadline on).
+        let wait = Duration::from_millis(p.chunk_ms as u64 * 2 + 1500 + p.retries as u64 * 500);
+        p.deadline = Instant::now() + wait;
+        p.asked = asked;
+        p.last_rx = None;
+        let count = p.window;
+        let sender = f.sender;
+        self.schedule(wait + Duration::from_millis(20), Timer::PullCheck(file_id));
+        self.send_pull_request(file_id, sender, base, count, missing);
+    }
+
+    /// A request sealed with the file key (about 60 bytes on air instead of
+    /// 112 as a sealed message: it is sent once per batch).
+    fn send_pull_request(&mut self, file_id: u64, sender: Address, base: u16, count: u8, missing: u32) {
+        let Some(f) = self.in_files.get_mut(&file_id) else { return };
+        if f.req_seq >= PULL_REQ_INDEX {
+            return; // 32768 requests for one file: never in practice
+        }
+        let idx = PULL_REQ_INDEX + f.req_seq;
+        f.req_seq += 1;
+        let key = f.offer.key;
+        let mut ct = [0u8; 64];
+        let Ok(n) = seal::seal_chunk(&key, file_id, idx, &content::file_request(file_id, base, count, missing), &mut ct) else {
+            return;
+        };
+        let now = self.now_ms();
+        if let Ok((_, actions)) = self.router.send_typed(PacketType::Datagram, sender, &ct[..n], token(), now) {
+            self.apply(actions.into_iter().collect());
+        }
+    }
+
+    /// A pull request's time is up: ask again (smaller batch), or give up.
+    fn pull_check(&mut self, file_id: u64) {
+        let Some(f) = self.in_files.get_mut(&file_id) else { return };
+        let Some(p) = f.pull.as_mut() else { return };
+        if Instant::now() < p.deadline {
+            return; // a newer request is under way
+        }
+        p.retries += 1;
+        p.troubled = true;
+        p.window = (p.window.saturating_sub(1)).max(2);
+        if p.retries > PULL_MAX_RETRIES {
+            // The sender offers again (or keeps the file in its mailbox);
+            // we then resume from what we have.
+            f.pull = None;
+            self.log(format!("file {file_id:016x}: no answer to our requests, waiting for the sender"));
+            return;
+        }
+        self.pull_request(file_id);
+    }
+
+    /// A chunk of a pulled file arrived.
+    fn pull_on_chunk(&mut self, file_id: u64, idx: u16) {
+        let Some(f) = self.in_files.get_mut(&file_id) else { return };
+        let Some(p) = f.pull.as_mut() else { return };
+        let now = Instant::now();
+        if let Some(prev) = p.last_rx {
+            // Gap between two chunks of one batch: airtime plus spacing.
+            let gap = now.duration_since(prev).as_millis().min(10_000) as u32;
+            p.chunk_ms = (p.chunk_ms * 3 + gap) / 4;
+        }
+        p.last_rx = Some(now);
+        p.retries = 0;
+        let last_of_batch = p.asked.last().is_some_and(|l| idx >= *l);
+        p.asked.retain(|i| *i != idx);
+        if !p.asked.is_empty() && last_of_batch {
+            // The batch is over but some of it was lost: ask for the gaps now.
+            p.troubled = true;
+            self.pull_request(file_id);
+            return;
+        }
+        if p.asked.is_empty() {
+            // The whole batch is here: next one at once, a bit bigger if clean.
+            let relayed = self.heard_via.get(&f.sender).is_some_and(|(_, _, h)| *h > 0);
+            let max = if relayed { PULL_WINDOW_MAX_RELAYED } else { PULL_WINDOW_MAX };
+            if !p.troubled {
+                p.window = (p.window + 1).min(max);
+            }
+            p.troubled = false;
+            if f.got < f.offer.chunks {
+                self.pull_request(file_id);
+            }
+        } else {
+            // More of this batch to come: the next chunk within two chunk
+            // times (one lost chunk in between is fine; the batch's last one
+            // then triggers the next request).
+            p.deadline = now + Duration::from_millis(p.chunk_ms as u64 * 2 + 500);
+            let wait = p.deadline.duration_since(now);
+            self.schedule(wait + Duration::from_millis(20), Timer::PullCheck(file_id));
+        }
+    }
+
+    /// A request sealed with the file key: only the recipient has the key.
+    fn on_sealed_request(&mut self, payload: &[u8]) {
+        let Some((file_id, _)) = seal::chunk_header(payload) else { return };
+        let Some(key) = self.out_files.get(&file_id).map(|f| f.key) else { return };
+        let mut out = [0u8; 64];
+        let Ok(n) = seal::open_chunk(&key, payload, &mut out) else { return };
+        if let Some(Content::FileRequest(id, base, count, missing)) = content::parse(&out[..n])
+            && id == file_id
+        {
+            self.on_file_request(None, file_id, base, count, missing);
+        }
+    }
+
+    /// The recipient asks for chunks (we send the pull way). `from`: the
+    /// sender of a sealed message (checked); None for a request sealed with
+    /// the file key.
+    fn on_file_request(&mut self, from: Option<Address>, file_id: u64, base: u16, count: u8, missing: u32) {
+        let Some(dest) = self.out_files.get(&file_id).map(|f| f.dest) else {
+            return;
+        };
+        if let Some(from) = from
+            && dest != from
+            && self.person_peer(&dest) != self.person_peer(&from)
+        {
+            return;
+        }
+        let f = self.out_files.get_mut(&file_id).unwrap();
+        f.mode = SendMode::Pull(Instant::now());
+        f.in_flight.clear();
+        // Everything below base, and what the request does not list as missing, has arrived.
+        for i in 0..f.chunks {
+            let here = i < base
+                || (i - base < content::FILE_REQUEST_SPAN && missing & (1 << (i - base)) == 0 && i < base + content::FILE_REQUEST_SPAN);
+            if here && !f.acked[i as usize] {
+                f.acked[i as usize] = true;
+                f.done += 1;
+            }
+        }
+        let (done, total) = (f.done, f.chunks);
+        self.broadcast(&Event::FileProgress { file_id, done, total, outgoing: true });
+        if base >= total || done >= total {
+            self.file_delivered(file_id);
+            return;
+        }
+        let want: Vec<u16> = (0..content::FILE_REQUEST_SPAN)
+            .filter(|i| missing & (1 << i) != 0)
+            .map(|i| base + i)
+            .filter(|i| *i < total)
+            .take(count.max(1) as usize)
+            .collect();
+        for idx in want {
+            let Some(ct) = self.sealed_chunk(file_id, idx) else { return };
+            let now = self.now_ms();
+            if let Ok((_, actions)) = self.router.send_typed(PacketType::Datagram, dest, &ct, token(), now) {
+                self.apply(actions.into_iter().collect());
+            }
+        }
+    }
+
+    /// A chunk sealed for sending (from the file mailbox, or sealed now).
+    fn sealed_chunk(&self, file_id: u64, idx: u16) -> Option<Vec<u8>> {
+        let f = self.out_files.get(&file_id)?;
+        if let Some(c) = f.sealed_chunks.as_ref() {
+            return c.get(idx as usize).cloned();
+        }
+        let start = idx as usize * CHUNK_DATA;
+        let end = (start + CHUNK_DATA).min(f.data.len());
+        let mut ct = [0u8; 255];
+        let n = seal::seal_chunk(&f.key, file_id, idx, f.data.get(start..end)?, &mut ct).ok()?;
+        Some(ct[..n].to_vec())
     }
 
     fn on_chunk(&mut self, payload: &[u8]) {
@@ -1869,6 +2388,7 @@ impl Node {
         };
         f.parts[idx as usize] = Some(out[..n].to_vec());
         f.got += 1;
+        f.active = Instant::now();
         let (got, total) = (f.got, f.offer.chunks);
         self.broadcast(&Event::FileProgress {
             file_id,
@@ -1878,6 +2398,8 @@ impl Node {
         });
         if got == total {
             self.finish_incoming(file_id);
+        } else {
+            self.pull_on_chunk(file_id, idx);
         }
     }
 
@@ -1885,6 +2407,25 @@ impl Node {
         let Some(f) = self.in_files.remove(&file_id) else {
             return;
         };
+        // Pull: tell the sender everything is here, remember the file (a
+        // late offer is answered without taking it again) and start the
+        // next file from the same sender.
+        let sender = f.sender;
+        self.files_done.insert(file_id, Instant::now());
+        if f.pull.is_some() {
+            let idx = PULL_REQ_INDEX + f.req_seq.min(PULL_REQ_INDEX - 1);
+            let mut ct = [0u8; 64];
+            if let Ok(n) = seal::seal_chunk(&f.offer.key, file_id, idx, &content::file_request(file_id, f.offer.chunks, 0, 0), &mut ct) {
+                let now = self.now_ms();
+                if let Ok((_, actions)) = self.router.send_typed(PacketType::Datagram, sender, &ct[..n], token(), now) {
+                    self.apply(actions.into_iter().collect());
+                }
+            }
+            let next = self.in_files.iter().filter(|(_, o)| o.sender == sender).map(|(id, _)| *id).min();
+            if let Some(id) = next {
+                self.pull_start(id);
+            }
+        }
         let mut data: Vec<u8> = f.parts.into_iter().flatten().flatten().collect();
         data.truncate(f.offer.size as usize);
         let ok = data.len() == f.offer.size as usize && Sha256::digest(&data)[..16] == f.offer.hash;
@@ -2047,6 +2588,8 @@ impl Node {
                     acked: vec![false; n],
                     done: 0,
                     in_flight: HashMap::new(),
+                    srtt: None,
+                    mode: SendMode::Push,
                     created: Instant::now(),
                     size: b.size,
                     sealed_offer: b.offer,
@@ -2471,11 +3014,24 @@ impl Node {
                 });
                 continue;
             }
+            // Pull: no request for a while (lost, or the recipient gave up
+            // asking): offer again; the recipient answers with what it lacks.
+            if let Some(f) = self.out_files.get_mut(&file_id)
+                && let SendMode::Pull(last) = f.mode
+                && now.duration_since(last) > PULL_STALL
+            {
+                f.mode = SendMode::Push;
+                f.offer_acked = false;
+                f.offer_sent = now - CHUNK_TIMEOUT - Duration::from_secs(1);
+            }
             let mut resend_offer = None;
+            let tcp = self.out_files.get(&file_id).is_some_and(|f| self.path_kind(&f.dest) == PathKind::Tcp);
+            let srtt = self.out_files.get(&file_id).and_then(|f| f.srtt);
+            let timeout = if tcp { CHUNK_TIMEOUT } else { lora_chunk_timeout(srtt) };
             if let Some(f) = self.out_files.get_mut(&file_id) {
                 f.in_flight
-                    .retain(|_, sent| now.duration_since(*sent) < CHUNK_TIMEOUT);
-                if !f.offer_acked && now.duration_since(f.offer_sent) > CHUNK_TIMEOUT {
+                    .retain(|_, sent| now.duration_since(*sent) < timeout);
+                if !f.offer_acked && now.duration_since(f.offer_sent) > timeout {
                     f.offer_sent = now;
                     resend_offer = Some((f.dest, f.offer.clone(), f.from_box, f.sealed_offer.clone()));
                 }
@@ -2504,11 +3060,12 @@ impl Node {
         for (r, id) in self.filebox.expire(SystemTime::now()) {
             self.log(format!("file mailbox: file {id:016x} for {} expired after 7 days", short(&r)));
         }
+        self.files_done.retain(|_, t| now.duration_since(*t) < Duration::from_secs(24 * 3600));
         // Half-finished incoming files.
         let stale: Vec<u64> = self
             .in_files
             .iter()
-            .filter(|(_, f)| now.duration_since(f.created) > FILE_TIMEOUT)
+            .filter(|(_, f)| now.duration_since(f.active) > FILE_TIMEOUT)
             .map(|(id, _)| *id)
             .collect();
         for file_id in stale {
@@ -2920,12 +3477,7 @@ impl Node {
             },
             // Handled in node/person.rs before we get here.
             Command::LinkDevice { .. } | Command::GetPerson | Command::PersonSetup { .. } => {}
-            Command::CancelFile { file_id } => {
-                if self.out_files.remove(&file_id).is_some() {
-                    self.log(format!("file {file_id:016x} cancelled by the user"));
-                    self.broadcast(&Event::FileDone { file_id, ok: false, outgoing: true, text: text(b"cancelled") });
-                }
-            }
+            Command::CancelFile { file_id } => self.cancel_file(file_id),
         }
     }
 }
@@ -3188,12 +3740,21 @@ impl Node {
                 short(&rec.gw),
                 rec.ep
             ));
-            // A host in the DHT is reached over TCP (through its gateway).
-            if rec.hops == 0 || self.known.contains_key(&rec.dest) {
+            // A host in the DHT is reached over TCP (through its gateway) -
+            // unless we hear it over our own radio: a DHT record can be old
+            // (a phone that was online earlier), and trusting it sent our
+            // acks to the backbone while the phone was right here on LoRa.
+            let on_our_radio = self.heard_via.get(&rec.dest).is_some_and(|(l, tcp, _)| !*tcp && self.links.contains_key(l));
+            if !on_our_radio && (rec.hops == 0 || self.known.contains_key(&rec.dest)) {
                 self.dht_hosts.insert(rec.dest);
             }
-            // The announce is genuine (checked in lookup): we now know the keys.
+            // The announce is genuine (checked in lookup): we now know the
+            // keys. It did not come in on a link: no rx_link, or on_announce
+            // would note the node as heard on whatever link the latest
+            // packet used (often the backbone).
+            let rx = self.rx_link.take();
             self.on_announce(rec.dest, &rec.announce, rec.hops.saturating_add(1));
+            self.rx_link = rx;
             self.dht_connect(&rec);
         }
         for (id, req, msg) in waiting {
@@ -3960,4 +4521,457 @@ mod next_hop_tests {
 /// `t` as unix ms (0 before 1970).
 fn unix_ms(t: SystemTime) -> u64 {
     t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+#[cfg(test)]
+mod radio_file_e2e_tests {
+    //! Two hosts on one radio-like link (as the phone node's Bluetooth modem):
+    //! a file under the LoRa limit must arrive, chunk by chunk.
+    use super::*;
+    use std::sync::mpsc::{Receiver, channel};
+
+    struct Side {
+        n: Node,
+        out: Receiver<Vec<u8>>,
+        ev: Receiver<Vec<u8>>,
+        _dir: PathBuf,
+    }
+
+    fn side(name: &str) -> Side {
+        let dir = std::env::temp_dir().join(format!("maarse-e2e-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut c = file_interop_tests::cfg(dir.clone());
+        c.data_dir = dir.clone();
+        let mut n = Node::new(&c).unwrap();
+        let (etx, ev) = channel();
+        n.clients.insert(1, etx);
+        let (ltx, out) = channel();
+        n.handle(In::LinkUp { id: 1, name: "modem 127.0.0.1:47081".into(), tx: ltx });
+        // Resends and file timeouts run in housekeeping (Node::run schedules it).
+        n.schedule(HOUSEKEEPING_EVERY, Timer::Housekeeping);
+        Side { n, out, ev, _dir: dir }
+    }
+
+    /// Moves packets both ways and fires timers for `secs` of real time;
+    /// `lose` drops every n-th packet (0 = none). Stops early when `done`.
+    fn run(a: &mut Side, b: &mut Side, secs: u64, lose: usize, done: &mut dyn FnMut(&[Event], &[Event]) -> bool) -> (Vec<Event>, Vec<Event>) {
+        let (mut ea, mut eb) = (Vec::new(), Vec::new());
+        let end = Instant::now() + Duration::from_secs(secs);
+        let mut count = 0usize;
+        while Instant::now() < end {
+            for (from, to) in [(0, 1), (1, 0)] {
+                let pkts: Vec<Vec<u8>> = if from == 0 { a.out.try_iter().collect() } else { b.out.try_iter().collect() };
+                for p in pkts {
+                    count += 1;
+                    if lose > 0 && count % lose == 0 {
+                        continue;
+                    }
+                    let dst = if to == 0 { &mut a.n } else { &mut b.n };
+                    dst.handle(In::Packet { data: p, snr: 8, link: 1 });
+                }
+            }
+            a.n.fire_timers();
+            b.n.fire_timers();
+            ea.extend(a.ev.try_iter().filter_map(|f| Event::decode(&f[2..]).ok()));
+            eb.extend(b.ev.try_iter().filter_map(|f| Event::decode(&f[2..]).ok()));
+            if done(&ea, &eb) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        (ea, eb)
+    }
+
+    fn file_arrives(lose: usize) {
+        file_arrives_with(lose, true);
+    }
+
+    /// `announces`: let the link-up announces through (routes known); else A
+    /// only knows B's key (as after a restart with stored contacts) and must
+    /// find the route first.
+    fn file_arrives_with(lose: usize, announces: bool) {
+        let mut a = side(&format!("a{lose}{announces}"));
+        let mut b = side(&format!("b{lose}{announces}"));
+        if announces {
+            run(&mut a, &mut b, 3, 0, &mut |_, _| false);
+        } else {
+            let _: Vec<_> = a.out.try_iter().collect();
+            let _: Vec<_> = b.out.try_iter().collect();
+            a.n.known.insert(b.n.addr, b.n.identity.public());
+            b.n.known.insert(a.n.addr, a.n.identity.public());
+        }
+        assert!(a.n.known.contains_key(&b.n.addr), "A does not know B");
+        let data: Vec<u8> = (0..7526u32).map(|i| (i * 31 % 251) as u8).collect();
+        let req = 5;
+        let dest = b.n.addr;
+        a.n.command(1, Command::FileBegin { req, dest, size: data.len() as u32, mime: text(b"image/webp"), name: text(b"t.webp") });
+        for (i, c) in data.chunks(MAX_TEXT).enumerate() {
+            a.n.command(1, Command::FileData { req, offset: (i * MAX_TEXT) as u32, data: text(c) });
+        }
+        a.n.command(1, Command::FileEnd { req });
+        // One chunk at a time over LoRa; a lost chunk or ack waits
+        // CHUNK_TIMEOUT_LORA, so a lossy link needs time.
+        let start = Instant::now();
+        let (ea, eb) = run(&mut a, &mut b, 150, lose, &mut |ea, _| {
+            ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: true, .. }))
+        });
+        let done_a: Vec<_> = ea.iter().filter(|e| matches!(e, Event::FileDone { .. } | Event::Error { .. })).collect();
+        let got_b = eb.iter().any(|e| matches!(e, Event::FileDone { ok: true, outgoing: false, .. }));
+        println!("lose every {lose}: {:.1} s", start.elapsed().as_secs_f64());
+        assert!(got_b, "B did not receive the file (lose every {lose}); A: {done_a:?}");
+    }
+
+    #[test]
+    fn small_file_over_radio_link() {
+        file_arrives(0);
+    }
+
+    #[test]
+    fn small_file_over_lossy_radio_link() {
+        file_arrives(10);
+    }
+
+    #[test]
+    fn small_file_over_radio_link_without_route() {
+        file_arrives_with(0, false);
+    }
+
+    /// One half-duplex LoRa radio (the modem): sends one packet at a time
+    /// with its airtime, holds at most 16 waiting (as the firmware's queue),
+    /// and hears nothing while it transmits.
+    struct Radio {
+        /// (packet, not before): USB/Bluetooth latency, then CAD backoffs.
+        queue: std::collections::VecDeque<(Vec<u8>, Instant)>,
+        cur: Option<(Vec<u8>, Instant, Instant)>,
+        sent: Vec<(Instant, Instant)>,
+        dropped: usize,
+        rng: u64,
+    }
+
+    impl Radio {
+        fn new(seed: u64) -> Self {
+            Radio { queue: Default::default(), cur: None, sent: Vec::new(), dropped: 0, rng: seed | 1 }
+        }
+        fn rand_ms(&mut self, max: u64) -> Duration {
+            self.rng ^= self.rng << 13;
+            self.rng ^= self.rng >> 7;
+            self.rng ^= self.rng << 17;
+            Duration::from_millis(self.rng % max.max(1))
+        }
+    }
+
+    /// Airtime scale in percent: 25 keeps the tests short; the benchmarks
+    /// (`cargo test -- --ignored bench_`) use 100, the real airtime.
+    static SCALE_PCT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(25);
+
+    /// Airtime at SF9 / 125 kHz / CR 4/5 / preamble 16 (the radio settings
+    /// in use), scaled by SCALE_PCT.
+    fn airtime(len: usize) -> Duration {
+        let scale = SCALE_PCT.load(std::sync::atomic::Ordering::Relaxed) as f64 / 100.0;
+        let ts = 512.0 / 125_000.0;
+        // CR 4/5, explicit header, CRC; no low data rate optimisation at
+        // SF9/125 kHz (symbol 4.1 ms < 16 ms): 4 x SF = 36 bits per block.
+        let n = 8.0 + (((8 * len) as f64 - 36.0 + 28.0 + 16.0) / 36.0).ceil().max(0.0) * 5.0;
+        Duration::from_secs_f64(((16.0 + 4.25) * ts + n * ts) * scale)
+    }
+
+    impl Radio {
+        fn push(&mut self, p: Vec<u8>) {
+            if self.queue.len() >= 16 {
+                self.dropped += 1;
+            } else {
+                // Host -> radio and back over Bluetooth/USB and the host's own
+                // handling: 80..200 ms (0.28 s per chunk round was measured on
+                // the bench for both ends together).
+                let at = Instant::now() + Duration::from_millis(80) + self.rand_ms(120);
+                self.queue.push_back((p, at));
+            }
+        }
+        /// A packet that has finished its airtime, if any; starts the next
+        /// one when it is due and the channel is free (`busy`: the other
+        /// radio is sending, which CAD hears: back off 100..600 ms).
+        fn step(&mut self, now: Instant, busy: bool) -> Option<(Vec<u8>, Instant, Instant)> {
+            let mut done = None;
+            if self.cur.as_ref().is_some_and(|c| c.2 <= now) {
+                done = self.cur.take();
+            }
+            if self.cur.is_none() && self.queue.front().is_some_and(|q| q.1 <= now) {
+                if busy {
+                    let back = Duration::from_millis(100) + self.rand_ms(500);
+                    if let Some(q) = self.queue.front_mut() {
+                        q.1 = now + back;
+                    }
+                } else if let Some((p, _)) = self.queue.pop_front() {
+                    let end = now + airtime(p.len());
+                    self.sent.push((now, end));
+                    self.cur = Some((p, now, end));
+                }
+            }
+            self.sent.retain(|s| now.duration_since(s.1) < Duration::from_secs(30));
+            done
+        }
+        /// Did we transmit at any time during `from..to` (deaf then)?
+        fn deaf(&self, from: Instant, to: Instant) -> bool {
+            self.sent.iter().any(|s| s.0 < to && from < s.1)
+        }
+    }
+
+    /// Like `run`, but packets go through two half-duplex radios.
+    fn run_radio(a: &mut Side, b: &mut Side, secs: u64, done: &mut dyn FnMut(&[Event], &[Event]) -> bool) -> (Vec<Event>, Vec<Event>, usize, usize) {
+        run_radio_lossy(a, b, secs, 0.0, done)
+    }
+
+    /// `loss`: chance that a packet is lost on air anyway (collisions with
+    /// other traffic, fading), on top of half-duplex deafness.
+    fn run_radio_lossy(a: &mut Side, b: &mut Side, secs: u64, loss: f64, done: &mut dyn FnMut(&[Event], &[Event]) -> bool) -> (Vec<Event>, Vec<Event>, usize, usize) {
+        let (mut ea, mut eb) = (Vec::new(), Vec::new());
+        let (mut ra, mut rb) = (Radio::new(0x1234_5678), Radio::new(0x8765_4321));
+        let mut lost = 0;
+        let t0 = Instant::now();
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut unlucky = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 10_000) as f64 / 10_000.0 < loss
+        };
+        let end = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < end {
+            for p in a.out.try_iter() {
+                ra.push(p);
+            }
+            for p in b.out.try_iter() {
+                rb.push(p);
+            }
+            let now = Instant::now();
+            let show = std::env::var("RADIO_DEBUG").is_ok();
+            let kind = |p: &[u8]| Header::decode(p).map(|(h, _)| format!("{:?}", h.ptype)).unwrap_or_default();
+            let (a_busy, b_busy) = (rb.cur.is_some(), ra.cur.is_some());
+            if let Some((p, s, e)) = ra.step(now, a_busy) {
+                if rb.deaf(s, e) || unlucky() {
+                    lost += 1;
+                    if show { println!("RADIO lost A->B {} ({} B){}", kind(&p), p.len(), if rb.deaf(s, e) { " B was sending" } else { "" }); }
+                } else {
+                    if std::env::var("RADIO_TRACE").is_ok() { println!("TRACE {:7.2} A->B {:?} {} B air {:.2}", t0.elapsed().as_secs_f64(), Header::decode(&p).map(|(h, _)| h.ptype).ok(), p.len(), e.duration_since(s).as_secs_f64()); }
+                    b.n.handle(In::Packet { data: p, snr: 8, link: 1 })
+                }
+            }
+            if let Some((p, s, e)) = rb.step(now, b_busy) {
+                if ra.deaf(s, e) || unlucky() {
+                    lost += 1;
+                    if show { println!("RADIO lost B->A {} ({} B){}", kind(&p), p.len(), if ra.deaf(s, e) { " A was sending" } else { "" }); }
+                } else {
+                    if std::env::var("RADIO_TRACE").is_ok() { println!("TRACE {:7.2} B->A {:?} {} B air {:.2}", t0.elapsed().as_secs_f64(), Header::decode(&p).map(|(h, _)| h.ptype).ok(), p.len(), e.duration_since(s).as_secs_f64()); }
+                    a.n.handle(In::Packet { data: p, snr: 8, link: 1 })
+                }
+            }
+            a.n.fire_timers();
+            b.n.fire_timers();
+            ea.extend(a.ev.try_iter().filter_map(|f| Event::decode(&f[2..]).ok()));
+            eb.extend(b.ev.try_iter().filter_map(|f| Event::decode(&f[2..]).ok()));
+            if done(&ea, &eb) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        (ea, eb, lost, ra.dropped + rb.dropped)
+    }
+
+    /// A, B on half-duplex radios, announced to each other in turn.
+    fn radio_pair(name: &str) -> (Side, Side) {
+        let mut a = side(&format!("{name}-a"));
+        let mut b = side(&format!("{name}-b"));
+        run_radio(&mut a, &mut b, 1, &mut |_, _| false);
+        b.n.announce();
+        run_radio(&mut a, &mut b, 2, &mut |_, _| false);
+        a.n.announce();
+        run_radio(&mut a, &mut b, 2, &mut |_, _| false);
+        assert!(a.n.known.contains_key(&b.n.addr), "A does not know B");
+        (a, b)
+    }
+
+    fn upload(n: &mut Node, req: u16, dest: Address, data: &[u8]) {
+        n.command(1, Command::FileBegin { req, dest, size: data.len() as u32, mime: text(b"image/webp"), name: text(b"t.webp") });
+        for (i, c) in data.chunks(MAX_TEXT).enumerate() {
+            n.command(1, Command::FileData { req, offset: (i * MAX_TEXT) as u32, data: text(c) });
+        }
+        n.command(1, Command::FileEnd { req });
+    }
+
+    /// Two pictures to the same recipient at once (e.g. the file mailbox
+    /// delivering while a new one is sent): one after the other over LoRa,
+    /// both arrive.
+    #[test]
+    fn two_files_over_half_duplex_radio() {
+        let (mut a, mut b) = radio_pair("hd2");
+        let dest = b.n.addr;
+        let one: Vec<u8> = (0..3000u32).map(|i| (i * 7 % 251) as u8).collect();
+        let two: Vec<u8> = (0..3000u32).map(|i| (i * 11 % 251) as u8).collect();
+        upload(&mut a.n, 1, dest, &one);
+        upload(&mut a.n, 2, dest, &two);
+        let start = Instant::now();
+        let (ea, eb, lost, dropped) = run_radio(&mut a, &mut b, 90, &mut |_, eb| {
+            eb.iter().filter(|e| matches!(e, Event::FileDone { ok: true, outgoing: false, .. })).count() >= 2
+        });
+        let got = eb.iter().filter(|e| matches!(e, Event::FileDone { ok: true, outgoing: false, .. })).count();
+        println!("two files: {:.1} s, {lost} lost while deaf, {dropped} dropped", start.elapsed().as_secs_f64());
+        let done_a: Vec<_> = ea.iter().filter(|e| matches!(e, Event::FileDone { .. })).collect();
+        assert_eq!(got, 2, "B got {got} of 2 files; A: {done_a:?}; {lost} lost while deaf");
+    }
+
+    /// A file offered again (from the sender's file mailbox) keeps the
+    /// chunks already received, and a half-received file is only dropped
+    /// after FILE_TIMEOUT without activity, not FILE_TIMEOUT after the offer.
+    #[test]
+    fn receiver_keeps_chunks_when_offered_again() {
+        let (mut a, mut b) = radio_pair("again");
+        let data: Vec<u8> = (0..3000u32).map(|i| (i * 13 % 251) as u8).collect();
+        upload(&mut a.n, 1, b.n.addr, &data);
+        // Stop halfway (B has a few chunks), as when the link breaks.
+        run_radio(&mut a, &mut b, 30, &mut |_, eb| {
+            eb.iter().any(|e| matches!(e, Event::FileProgress { outgoing: false, done, .. } if *done >= 3))
+        });
+        let id = *b.n.in_files.keys().next().expect("B has a half-received file");
+        let f = b.n.in_files.get_mut(&id).unwrap();
+        assert!(f.got >= 3 && f.got < f.offer.chunks, "not half received: {} of {}", f.got, f.offer.chunks);
+        let got_before = f.got;
+        let offer = f.offer.clone();
+        let from = f.from;
+        b.n.on_file_offer(from, offer);
+        assert_eq!(b.n.in_files[&id].got, got_before, "chunks were thrown away on the second offer");
+        b.n.housekeeping();
+        assert!(b.n.in_files.contains_key(&id), "an active half-received file was dropped");
+        b.n.in_files.get_mut(&id).unwrap().active = Instant::now() - FILE_TIMEOUT - Duration::from_secs(1);
+        b.n.housekeeping();
+        assert!(!b.n.in_files.contains_key(&id), "an idle half-received file was kept");
+    }
+
+    /// 7.5 KB over one LoRa hop with real airtime, `loss` of the packets
+    /// lost on air. Returns seconds until the receiver has the file.
+    fn bench_file(name: &str, loss: f64) -> f64 {
+        bench_file_mode(name, loss, true)
+    }
+
+    /// `pull`: the new way (recipient asks for batches) or the old push way.
+    fn bench_file_mode(name: &str, loss: f64, pull: bool) -> f64 {
+        SCALE_PCT.store(100, std::sync::atomic::Ordering::Relaxed);
+        let (mut a, mut b) = radio_pair(name);
+        a.n.file_pull = pull;
+        b.n.file_pull = pull;
+        let data: Vec<u8> = (0..7526u32).map(|i| (i * 17 % 251) as u8).collect();
+        upload(&mut a.n, 1, b.n.addr, &data);
+        let start = Instant::now();
+        let (_, eb, lost, _) = run_radio_lossy(&mut a, &mut b, 900, loss, &mut |_, eb| {
+            eb.iter().any(|e| matches!(e, Event::FileDone { ok: true, outgoing: false, .. }))
+        });
+        let secs = start.elapsed().as_secs_f64();
+        let ok = eb.iter().any(|e| matches!(e, Event::FileDone { ok: true, outgoing: false, .. }));
+        println!("BENCH {name} ({}): loss {:.0} %: {secs:.0} s (real airtime), {lost} packets lost, received {ok}", if pull { "pull" } else { "push" }, loss * 100.0);
+        assert!(ok, "not received");
+        secs
+    }
+
+    /// Benchmarks with real airtime (minutes each): run with
+    /// `cargo test -p maarse-host --lib -- --ignored --nocapture bench_`.
+    #[test]
+    #[ignore]
+    fn bench_file_no_loss() {
+        bench_file("bench0", 0.0);
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_file_12pct_loss() {
+        bench_file("bench12", 0.12);
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_file_push_no_loss() {
+        bench_file_mode("bench0push", 0.0, false);
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_file_push_12pct_loss() {
+        bench_file_mode("bench12push", 0.12, false);
+    }
+
+    /// Starts a 3 KB file from A to B and runs until B has a few chunks.
+    fn half_sent(name: &str) -> (Side, Side, u64) {
+        let (mut a, mut b) = radio_pair(name);
+        let data: Vec<u8> = (0..3000u32).map(|i| (i * 19 % 251) as u8).collect();
+        upload(&mut a.n, 1, b.n.addr, &data);
+        run_radio(&mut a, &mut b, 30, &mut |_, eb| {
+            eb.iter().any(|e| matches!(e, Event::FileProgress { outgoing: false, done, .. } if *done >= 3))
+        });
+        let id = *a.n.out_files.keys().next().expect("A is sending");
+        assert!(b.n.in_files.contains_key(&id), "B is not receiving");
+        (a, b, id)
+    }
+
+    fn file_done_text(ev: &[Event], outgoing: bool) -> Option<String> {
+        ev.iter().find_map(|e| match e {
+            Event::FileDone { outgoing: o, ok: false, text, .. } if *o == outgoing => Some(String::from_utf8_lossy(text).to_string()),
+            _ => None,
+        })
+    }
+
+    /// The sender stops: the recipient is told and drops what it has.
+    #[test]
+    fn sender_stops_a_file() {
+        let (mut a, mut b, id) = half_sent("stop-s");
+        a.n.command(1, Command::CancelFile { file_id: id });
+        let start = Instant::now();
+        let (ea, eb, _, _) = run_radio(&mut a, &mut b, 60, &mut |_, eb| file_done_text(eb, false).is_some());
+        println!("sender stop reached the recipient after {:.1} s", start.elapsed().as_secs_f64());
+        assert_eq!(file_done_text(&ea, true).as_deref(), Some("cancelled"));
+        assert_eq!(file_done_text(&eb, false).as_deref(), Some("cancelled by the sender"));
+        assert!(a.n.out_files.is_empty() && b.n.in_files.is_empty());
+    }
+
+    /// The recipient stops: the sender is told, stops sending and drops the
+    /// file from its file mailbox too.
+    #[test]
+    fn recipient_stops_a_file() {
+        let (mut a, mut b, id) = half_sent("stop-r");
+        b.n.command(1, Command::CancelFile { file_id: id });
+        let (ea, eb, _, _) = run_radio(&mut a, &mut b, 15, &mut |ea, _| file_done_text(ea, true).is_some());
+        assert_eq!(file_done_text(&eb, false).as_deref(), Some("cancelled"));
+        assert_eq!(file_done_text(&ea, true).as_deref(), Some("cancelled by the recipient"));
+        assert!(a.n.out_files.is_empty() && b.n.in_files.is_empty());
+        assert!(a.n.filebox.recipient(id).is_none(), "still in the file mailbox");
+    }
+
+    /// The phone node's case: a 7.5 KB picture over one LoRa hop through
+    /// half-duplex modems. A burst of chunks makes the sender deaf to the
+    /// acks, so chunks must go one at a time over LoRa.
+    #[test]
+    fn small_file_over_half_duplex_radio() {
+        let mut a = side("hd-a");
+        let mut b = side("hd-b");
+        // The link-up announces collide (both send at once): announce in turn.
+        run_radio(&mut a, &mut b, 1, &mut |_, _| false);
+        b.n.announce();
+        run_radio(&mut a, &mut b, 2, &mut |_, _| false);
+        a.n.announce();
+        run_radio(&mut a, &mut b, 2, &mut |_, _| false);
+        assert!(a.n.known.contains_key(&b.n.addr), "A does not know B");
+        let data: Vec<u8> = (0..7526u32).map(|i| (i * 31 % 251) as u8).collect();
+        let (req, dest) = (5, b.n.addr);
+        a.n.command(1, Command::FileBegin { req, dest, size: data.len() as u32, mime: text(b"image/webp"), name: text(b"t.webp") });
+        for (i, c) in data.chunks(MAX_TEXT).enumerate() {
+            a.n.command(1, Command::FileData { req, offset: (i * MAX_TEXT) as u32, data: text(c) });
+        }
+        a.n.command(1, Command::FileEnd { req });
+        let start = Instant::now();
+        let (ea, eb, lost, dropped) = run_radio(&mut a, &mut b, 90, &mut |ea, _| {
+            ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: true, .. }))
+        });
+        let got_b = eb.iter().any(|e| matches!(e, Event::FileDone { ok: true, outgoing: false, .. }));
+        let done_a: Vec<_> = ea.iter().filter(|e| matches!(e, Event::FileDone { .. })).collect();
+        println!("half duplex: {:.1} s (x4 for real airtime), {lost} lost while deaf, {dropped} dropped from full queues", start.elapsed().as_secs_f64());
+        assert!(got_b, "B did not receive the file; A: {done_a:?}; {lost} lost while deaf, {dropped} dropped");
+        assert!(done_a.iter().any(|e| matches!(e, Event::FileDone { ok: true, .. })), "A was not told it was delivered: {done_a:?}");
+    }
 }

@@ -369,11 +369,27 @@ object Node : LinkListener {
         return if (prefs.mode == Mode.BLE) minOf(m, 8192) else m
     }
 
+    private var fileLimitWaiter: ((Ev.FileLimit?) -> Unit)? = null
+
+    /**
+     * Asks the node how a file reaches [dest] (internet, LoRa, or unknown
+     * route / post office). A radio node does not know the command: then
+     * [cb] gets null after a short wait. Main thread.
+     */
+    fun queryFileLimit(dest: String, cb: (Ev.FileLimit?) -> Unit) {
+        if (prefs.mode == Mode.BLE) return cb(null)
+        var done = false
+        val finish = { ev: Ev.FileLimit? -> if (!done) { done = true; fileLimitWaiter = null; cb(ev) } }
+        fileLimitWaiter = { ev -> finish(ev?.takeIf { it.dest == dest }) }
+        main.postDelayed({ finish(null) }, 1500)
+        if (!send(Cmd.getFileLimit(dest))) finish(null)
+    }
+
     /** Sends a file (a picture is made smaller to fit). Returns an error or null. */
-    fun sendFile(conv: String, data0: ByteArray, mime0: String, name0: String): String? {
+    fun sendFile(conv: String, data0: ByteArray, mime0: String, name0: String, maxBytes: Int? = null): String? {
         if (!conv.startsWith("dm:")) return "Files and voice messages go to one person, not to a channel"
         if (offline.value || conn.value.state != Conn.State.ONLINE) return "Not connected — files are not queued; send it when you are online"
-        val max = fileMax()
+        val max = maxBytes?.let { minOf(it, fileMax()) } ?: fileMax()
         var (data, mime, name) = Triple(data0, mime0, name0)
         // Pictures are made smaller like in other messengers: at most about
         // 150 KB (and the node's limit, 8 KB over LoRa), so they go quickly.
@@ -419,10 +435,20 @@ object Node : LinkListener {
                 else fileIn[ev.fileId]?.let { f ->
                     db.setFile(f.row, null, f.mime, fileLabel(f.mime, f.name, null) + " — receiving ${100 * ev.done / maxOf(1, ev.total)} %"); bump()
                 }
-            is Ev.FileDone -> if (ev.outgoing) fileOut.remove(ev.fileId)?.let { row ->
-                setStatus(row, when { !ev.ok -> "error: ${ev.text}"; ev.text.contains("mailbox") -> "filebox"; else -> "delivered" })
+            // A file kept in the node's file mailbox keeps its file id (in the
+            // msgId column), so it can be cancelled and marked delivered later.
+            is Ev.FileDone -> if (ev.outgoing) (fileOut.remove(ev.fileId) ?: db.byMsgId(ev.fileId))?.let { row ->
+                when {
+                    // "cancelled" or "cancelled by the recipient"
+                    !ev.ok -> setStatus(row, if (ev.text.startsWith("cancelled")) ev.text else "error: ${ev.text}")
+                    ev.text.contains("put in mailbox") -> setStatus(row, "filebox", ev.fileId)
+                    else -> setStatus(row, "delivered")
+                }
             } else fileIn.remove(ev.fileId)?.let { f ->
-                if (!ev.ok) { db.setFile(f.row, null, f.mime, fileLabel(f.mime, f.name, null) + " — not received (${ev.text})"); bump(); return }
+                if (!ev.ok) {
+                    val why = if (ev.text.startsWith("cancelled")) ev.text else "not received (${ev.text})"
+                    db.setFile(f.row, null, f.mime, fileLabel(f.mime, f.name, null) + " — $why"); bump(); return
+                }
                 val file = java.io.File(attachDir(), "${System.currentTimeMillis()}_${f.name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
                 file.writeBytes(f.buf)
                 val label = fileLabel(f.mime, f.name, f.buf)
@@ -439,11 +465,24 @@ object Node : LinkListener {
     }
 
     /** Can this message still be stopped (a file on its way, or waiting)? */
-    fun cancellable(m: Msg) = m.mine && (m.status == "queued" || m.status.startsWith("sending") || (m.file != null && m.status == "sent"))
+    fun cancellable(m: Msg) =
+        if (m.mine) m.status == "queued" || m.status.startsWith("sending") || m.status == "filebox" || (m.file != null && m.status == "sent")
+        else fileIn.values.any { it.row == m.id } // a file on its way to us
 
     /** Stops a file on its way (the host stops sending) or a waiting message, and removes it. */
     fun cancel(m: Msg) {
+        // Incoming: the node drops what it has and asks the sender to stop.
+        if (!m.mine) {
+            fileIn.entries.firstOrNull { it.value.row == m.id }?.let { (fileId, f) ->
+                send(Cmd.cancelFile(fileId))
+                fileIn.remove(fileId)
+                db.setFile(f.row, null, f.mime, fileLabel(f.mime, f.name, null) + " — cancelled"); bump()
+            }
+            return
+        }
         fileOut.entries.firstOrNull { it.value == m.id }?.let { (fileId, _) -> send(Cmd.cancelFile(fileId)); fileOut.remove(fileId) }
+        // Kept in the node's file mailbox: its file id is in msgId.
+        if (m.status == "filebox" && m.msgId != 0L) send(Cmd.cancelFile(m.msgId))
         pendingFiles.entries.removeAll { it.value == m.id }
         pending.entries.removeAll { it.value == m.id }
         deleteMessage(m)
@@ -595,6 +634,7 @@ object Node : LinkListener {
                 lastError.value = ev.text
                 note("Error: ${ev.text}")
             }
+            is Ev.FileLimit -> fileLimitWaiter?.invoke(ev)
             is Ev.Person -> person.value = ev
             is Ev.PersonPhrase -> phrase.value = ev.phrase
             is Ev.PersonBackup -> backupCode.value = ev.code

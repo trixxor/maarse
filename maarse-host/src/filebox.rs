@@ -262,6 +262,11 @@ impl FileBox {
         self.total > 0 && self.per_recipient > 0
     }
 
+    /// The recipient of a file in the mailbox.
+    pub fn recipient(&self, file_id: u64) -> Option<Address> {
+        self.index.get(&file_id).map(|m| m.recipient)
+    }
+
     fn path(&self, recipient: &Address, file_id: u64) -> PathBuf {
         self.dir.join(format!("{recipient}-{file_id:016x}.file"))
     }

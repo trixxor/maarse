@@ -114,6 +114,7 @@ fun statusText(s: String, channel: Boolean = false): Pair<String, Color?> = when
     s == "sent" -> "Sent, waiting for receipt" to null
     s == "queued" -> "Waiting — no connection. Sent when you are back online" to Amber
     s.startsWith("error") -> s.replaceFirstChar { it.uppercase() } to Red
+    s.startsWith("cancelled") -> "✕ " + s.replaceFirstChar { it.uppercase() } to Red
     else -> s to null
 }
 

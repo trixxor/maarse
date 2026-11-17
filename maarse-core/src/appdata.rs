@@ -63,6 +63,10 @@ pub const CAP_SEQ: u8 = 0x04;
 /// Takes call audio as datagrams (no end-to-end acknowledgement, see
 /// `CALL_DATAGRAM`); maarse-host only.
 pub const CAP_CALL_DG: u8 = 0x08;
+/// Takes files the pull way over LoRa (`content::FILE_REQUEST`): the
+/// recipient asks for batches of chunks, which come as datagrams without
+/// end-to-end acknowledgement; maarse-host only.
+pub const CAP_FILE_PULL: u8 = 0x10;
 /// Leads a datagram that carries sealed call audio instead of IP-tunnel
 /// data (tunnel datagrams start with a random 8-byte session id).
 pub const CALL_DATAGRAM: [u8; 8] = *b"mrsCALL1";

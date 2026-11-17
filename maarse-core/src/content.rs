@@ -47,6 +47,21 @@ pub const PERSON: u8 = 0x09;
 /// receiver can show "messages missing" instead of a silent gap. Sent only to
 /// nodes whose announce has `appdata::CAP_SEQ`.
 pub const SEQ: u8 = 0x0A;
+/// A file transfer is stopped: file id (u64) | who stopped it
+/// ([`FILE_CANCEL_BY_SENDER`] or [`FILE_CANCEL_BY_RECIPIENT`]). The other
+/// side stops too: the sender stops sending (and drops the file from its
+/// file mailbox), the recipient drops what it has received.
+pub const FILE_CANCEL: u8 = 0x0B;
+pub const FILE_CANCEL_BY_SENDER: u8 = 1;
+pub const FILE_CANCEL_BY_RECIPIENT: u8 = 2;
+/// The recipient asks for chunks of a file (pull transfer over LoRa):
+/// file id (u64) | base (u16) | count (u8) | missing (u32 LE). Every chunk
+/// below `base` has arrived; bit i of `missing` set = chunk base+i is still
+/// missing. The sender sends up to `count` of the missing ones, back to
+/// back. `base` = the number of chunks: everything has arrived.
+pub const FILE_REQUEST: u8 = 0x0C;
+/// Chunks a request can describe after its base.
+pub const FILE_REQUEST_SPAN: u16 = 32;
 
 /// Operations in [`PERSON`] content.
 pub mod person {
@@ -133,6 +148,10 @@ pub enum Content<'a> {
     Person(u8, &'a [u8]),
     /// A sequence number and the content it numbers (see [`SEQ`]).
     Seq(u32, &'a [u8]),
+    /// A file transfer was stopped: (file id, by the recipient).
+    FileCancel(u64, bool),
+    /// The recipient asks for chunks: (file id, base, count, missing).
+    FileRequest(u64, u16, u8, u32),
     Unknown(u8),
 }
 
@@ -190,6 +209,16 @@ pub fn parse(plain: &[u8]) -> Option<Content<'_>> {
         IP => Some(Content::Ip(&plain[1..])),
         PERSON if plain.len() >= 2 => Some(Content::Person(plain[1], &plain[2..])),
         SEQ if plain.len() >= 6 => Some(Content::Seq(u32::from_le_bytes(plain[1..5].try_into().ok()?), &plain[5..])),
+        FILE_REQUEST if plain.len() >= 16 => Some(Content::FileRequest(
+            u64::from_le_bytes(plain[1..9].try_into().ok()?),
+            u16::from_le_bytes(plain[9..11].try_into().ok()?),
+            plain[11],
+            u32::from_le_bytes(plain[12..16].try_into().ok()?),
+        )),
+        FILE_CANCEL if plain.len() >= 10 => Some(Content::FileCancel(
+            u64::from_le_bytes(plain[1..9].try_into().ok()?),
+            plain[9] == FILE_CANCEL_BY_RECIPIENT,
+        )),
         PAGE_REQUEST => Some(match page_path(&plain[1..]) {
             Some(p) => Content::PageRequest(p),
             None => Content::Unknown(PAGE_REQUEST),
@@ -274,6 +303,26 @@ pub fn expand(plain: &[u8]) -> Option<heapless::Vec<u8, 512>> {
     Some(v)
 }
 
+/// The [`FILE_REQUEST`] content.
+pub fn file_request(file_id: u64, base: u16, count: u8, missing: u32) -> [u8; 16] {
+    let mut v = [0u8; 16];
+    v[0] = FILE_REQUEST;
+    v[1..9].copy_from_slice(&file_id.to_le_bytes());
+    v[9..11].copy_from_slice(&base.to_le_bytes());
+    v[11] = count;
+    v[12..16].copy_from_slice(&missing.to_le_bytes());
+    v
+}
+
+/// The [`FILE_CANCEL`] content.
+pub fn file_cancel(file_id: u64, by_recipient: bool) -> [u8; 10] {
+    let mut v = [0u8; 10];
+    v[0] = FILE_CANCEL;
+    v[1..9].copy_from_slice(&file_id.to_le_bytes());
+    v[9] = if by_recipient { FILE_CANCEL_BY_RECIPIENT } else { FILE_CANCEL_BY_SENDER };
+    v
+}
+
 pub fn text(t: &[u8]) -> heapless::Vec<u8, 256> {
     let mut v = heapless::Vec::new();
     let _ = v.push(TEXT);
@@ -284,6 +333,23 @@ pub fn text(t: &[u8]) -> heapless::Vec<u8, 256> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_request_round_trip() {
+        let c = file_request(0xAABB_CCDD_0011_2233, 300, 4, 0b1011);
+        assert_eq!(parse(&c), Some(Content::FileRequest(0xAABB_CCDD_0011_2233, 300, 4, 0b1011)));
+        assert_eq!(parse(&c[..12]), Some(Content::Unknown(FILE_REQUEST)));
+    }
+
+    #[test]
+    fn file_cancel_round_trip() {
+        let c = file_cancel(0x0102_0304_0506_0708, true);
+        assert_eq!(parse(&c), Some(Content::FileCancel(0x0102_0304_0506_0708, true)));
+        let c = file_cancel(7, false);
+        assert_eq!(parse(&c), Some(Content::FileCancel(7, false)));
+        // Too short: unknown, not a cancel.
+        assert_eq!(parse(&c[..5]), Some(Content::Unknown(FILE_CANCEL)));
+    }
 
     #[test]
     fn offer_roundtrip() {

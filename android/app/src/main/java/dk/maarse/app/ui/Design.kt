@@ -173,7 +173,7 @@ fun DeliveryIcon(status: String, channel: Boolean) {
         status == "filebox" -> Triple(Icons.Filled.MailOutline, Amber, "Kept by your node until they are reachable")
         status == "sent" -> Triple(Icons.Filled.Done, MaterialTheme.colorScheme.onSurfaceVariant, if (channel) "Sent" else "Sent, waiting for receipt")
         status == "queued" -> Triple(Icons.Filled.Schedule, Amber, "Waiting for a connection")
-        status.startsWith("error") -> Triple(Icons.Outlined.ErrorOutline, MaterialTheme.colorScheme.error, status)
+        status.startsWith("error") || status.startsWith("cancelled") -> Triple(Icons.Outlined.ErrorOutline, MaterialTheme.colorScheme.error, status)
         else -> Triple(Icons.Filled.Schedule, MaterialTheme.colorScheme.onSurfaceVariant, "Sending")
     }
     Icon(icon, label, Modifier.size(15.dp), tint = tint)

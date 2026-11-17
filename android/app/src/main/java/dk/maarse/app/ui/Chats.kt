@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -249,6 +250,7 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
         val max = Node.maxText(conv)
         val used = text.toByteArray().size
         val ctx = LocalContext.current
+        var askLora by remember { mutableStateOf<Triple<ByteArray, String, String>?>(null) }
         val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             if (uri == null) return@rememberLauncherForActivityResult
             val bytes = runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
@@ -256,7 +258,38 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
             val name = runCatching {
                 ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
             }.getOrNull() ?: "file"
-            error = if (bytes == null) "The file could not be read" else Node.sendFile(conv, bytes, mime, name)
+            if (bytes == null) { error = "The file could not be read"; return@rememberLauncherForActivityResult }
+            // Route not known to be internet all the way (the node answers
+            // mailbox = true, via LoRa = true): over 8 KB the file would only
+            // wait. Ask whether to compress it for LoRa.
+            Node.queryFileLimit(conv.substringAfter(":")) { l ->
+                Node.note(if (l == null) "File route: no answer from the node" else "File route: up to ${l.max / 1024} KB, via LoRa ${l.viaLora}, post office ${l.mailbox}")
+                if (l != null && l.mailbox && bytes.size > LORA_FILE) askLora = Triple(bytes, mime, name)
+                else error = Node.sendFile(conv, bytes, mime, name)
+            }
+        }
+        askLora?.let { (bytes, mime, name) ->
+            val image = mime.startsWith("image/")
+            AlertDialog(
+                onDismissRequest = { askLora = null },
+                title = { Text("No internet route") },
+                text = {
+                    Text(
+                        "The recipient is not reachable over the internet right now. Files over 8 KB are not sent over LoRa, " +
+                            "so this one (${(bytes.size + 1023) / 1024} KB) waits until there is an internet route." +
+                            (if (image) "\n\nCompress the picture to 8 KB and send it over LoRa now?" else "\n\nOnly pictures can be compressed.")
+                    )
+                },
+                confirmButton = {
+                    if (image) TextButton(onClick = { askLora = null; error = Node.sendFile(conv, bytes, mime, name, LORA_FILE) }) { Text("Compress and send") }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = { askLora = null }) { Text("Cancel") }
+                        TextButton(onClick = { askLora = null; error = Node.sendFile(conv, bytes, mime, name) }) { Text("Send full size") }
+                    }
+                },
+            )
         }
         var recording by remember { mutableStateOf<VoiceRecorder?>(null) }
         var recSecs by remember { mutableStateOf(0) }
@@ -331,7 +364,9 @@ private fun MessageMenu(m: Msg, onDone: () -> Unit) {
                 if (m.file == null) TextButton(onClick = {
                     ctx.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Message", m.text)); onDone()
                 }) { Text("Copy text") }
-                if (Node.cancellable(m)) TextButton(onClick = { Node.cancel(m); onDone() }) { Text("Stop sending", color = MaterialTheme.colorScheme.error) }
+                if (Node.cancellable(m)) TextButton(onClick = { Node.cancel(m); onDone() }) {
+                    Text(if (m.mine) "Stop sending" else "Stop receiving", color = MaterialTheme.colorScheme.error)
+                }
                 TextButton(onClick = { Node.deleteMessage(m); onDone() }) { Text("Delete from this phone", color = MaterialTheme.colorScheme.error) }
                 if (m.mine && !Node.cancellable(m)) Text("Already sent messages cannot be called back; this only removes your copy.", style = MaterialTheme.typography.bodySmall)
             }
@@ -425,6 +460,15 @@ private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onSender: (String) -> U
             if (!mine && !isDm) Text(Node.label(m.from), style = MaterialTheme.typography.labelMedium, color = avatarColor(m.from), fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { onSender(m.from) }.padding(vertical = 2.dp))
             Attachment(m)
+            // A file on its way (either direction): a progress bar, as in the web client.
+            fileProgress(m)?.let { p ->
+                if (p < 0f) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 4.dp))
+                else LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
+                Text(
+                    if (p < 0f) (if (mine) "Waiting for the recipient…" else "Receiving…") else "${if (mine) "Sending" else "Receiving"} ${(p * 100).toInt()} %",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             // A picture or a voice message speaks for itself.
             if (m.file == null || !(m.mime == Voice.MIME || m.mime?.startsWith("image/") == true)) Text(m.text, color = if (mine) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
             Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -452,3 +496,27 @@ fun NicknameDialog(addr: String, onDone: () -> Unit) {
         dismissButton = { TextButton(onClick = onDone) { Text("Cancel") } },
     )
 }
+
+/**
+ * How far a file on its way has come, 0..1; -1 = started, no chunk yet;
+ * null = not on its way. Outgoing: status "sending done/total"; incoming:
+ * the label ends in "receiving N %" (or "receiving…").
+ */
+private fun fileProgress(m: Msg): Float? {
+    if (m.mine) {
+        if (!m.status.startsWith("sending")) return null
+        val parts = m.status.removePrefix("sending").trim().split("/")
+        val done = parts.getOrNull(0)?.toFloatOrNull() ?: return -1f
+        val total = parts.getOrNull(1)?.toFloatOrNull()?.takeIf { it > 0f } ?: return -1f
+        return if (done <= 0f) -1f else (done / total).coerceIn(0f, 1f)
+    }
+    if (m.file != null) return null
+    val t = m.text
+    val i = t.lastIndexOf("receiving")
+    if (i < 0) return null
+    val pct = t.substring(i + 9).trim().removeSuffix("%").trim().toFloatOrNull() ?: return -1f
+    return (pct / 100f).coerceIn(0f, 1f)
+}
+
+/** Largest file sent over LoRa (maarse-host LORA_MAX_FILE). */
+private const val LORA_FILE = 8192

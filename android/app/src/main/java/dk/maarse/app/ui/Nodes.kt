@@ -97,14 +97,15 @@ fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
             Avatar(title, addr, 88.dp)
             Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             n?.name?.let { Text("Announces as ~$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            Text(n?.let { reach(it) }?.ifBlank { null } ?: "An account or a node not heard on the air yet",
+            Text(n?.let { reach(it) }?.ifBlank { null } ?: "Not heard yet",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
         }
+        // Icon above a short label, like other messengers: never cut off.
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilledTonalButton(onClick = { onChat("dm:$addr") }, Modifier.weight(1f)) { Icon(Icons.AutoMirrored.Filled.Chat, null); Text("  Message") }
-            if (dk.maarse.app.Calls.possible()) FilledTonalButton(onClick = { dk.maarse.app.Calls.start(addr) }, Modifier.weight(1f)) { Icon(Icons.Default.Call, null); Text("  Call") }
-            else FilledTonalButton(onClick = { Node.trace(addr) }, Modifier.weight(1f)) { Icon(Icons.Default.Route, null); Text("  Route") }
-            FilledTonalButton(onClick = { naming = true }, Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Text("  Name") }
+            Action(Icons.AutoMirrored.Filled.Chat, "Message", Modifier.weight(1f)) { onChat("dm:$addr") }
+            if (dk.maarse.app.Calls.possible()) Action(Icons.Default.Call, "Call", Modifier.weight(1f)) { dk.maarse.app.Calls.start(addr) }
+            else Action(Icons.Default.Route, "Route", Modifier.weight(1f)) { Node.trace(addr) }
+            Action(Icons.Default.Edit, "Name", Modifier.weight(1f)) { naming = true }
         }
         traces.firstOrNull { it.dest == addr }?.let { t ->
             GroupTitle("Route")
@@ -127,4 +128,15 @@ fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
         }
     }
     if (naming) NicknameDialog(addr) { naming = false }
+}
+
+@Composable
+private fun Action(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, modifier: Modifier, onClick: () -> Unit) {
+    androidx.compose.material3.Surface(onClick = onClick, modifier = modifier, shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer) {
+        Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(icon, null)
+            Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, modifier = Modifier.padding(top = 4.dp))
+        }
+    }
 }

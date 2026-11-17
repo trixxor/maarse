@@ -109,6 +109,30 @@ impl Node {
         self.broadcast_raw(&history::item_frame(&it, true), Some(id));
     }
 
+    /// A message from another device's history (sync): stored at its own
+    /// time and shown live, unless we have it already. Returns true if new.
+    pub(super) fn hist_import(&mut self, conv: Address, outgoing: bool, ts: u32, content: &[u8]) -> bool {
+        let from = if outgoing { self.addr } else { conv };
+        let Some(h) = self.hist.store.as_mut() else { return false };
+        if h.has_like(conv, outgoing, content, ts) {
+            return false;
+        }
+        let it = h.add(Item {
+            id: 0,
+            ts,
+            kind: history::KIND_DIRECT,
+            outgoing,
+            state: if outgoing { history::ST_SENT } else { history::ST_RECEIVED },
+            hops: 0,
+            msg_id: 0,
+            conv,
+            from,
+            content: content.to_vec(),
+        });
+        self.broadcast_raw(&history::item_frame(&it, true), None);
+        true
+    }
+
     pub(super) fn hist_command(&mut self, id: ClientId, frame: &[u8]) {
         let Some(h) = self.hist.store.as_mut() else {
             let req = if frame.first() == Some(&history::CMD_GET_HISTORY) && frame.len() >= 3 {

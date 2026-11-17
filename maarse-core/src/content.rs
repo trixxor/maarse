@@ -73,6 +73,20 @@ pub mod person {
     /// Between devices of one person (secret): the inbox chain
     /// (`maarse_crypto::person::InboxChain`, 35 bytes).
     pub const INBOX_STATE: u8 = 7;
+    /// To a sibling: "send me copies of what you have after this time"
+    /// (u32 LE, Unix s). The answer: at most 6 [`SIBLING`] copies with the
+    /// kinds below (their ID field holds the message's time), then
+    /// [`SYNC_DONE`].
+    pub const SYNC_REQUEST: u8 = 8;
+    /// The end of a sync answer: the time to ask from next (u32 LE) and
+    /// whether there is more (1 byte).
+    pub const SYNC_DONE: u8 = 9;
+    /// [`SIBLING`] kinds for history copies in a sync answer.
+    pub const SIBLING_OLD_RECEIVED: u8 = 3;
+    pub const SIBLING_OLD_SENT: u8 = 4;
+    /// From a device to a contact: "write to this sibling device of ours
+    /// next time; the user is there" (16 bytes, the sibling's address).
+    pub const REDIRECT: u8 = 10;
 }
 
 /// MIME for a `maarse://` page: Må:rse markup (UTF-8), compressed with

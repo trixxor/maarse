@@ -4076,6 +4076,9 @@ function renderAccount(box) {
       w.append(el("h3", { textContent: "Add device" }),
         el("p", { className: "hint", textContent: "On the new device: Account → \"Link this device to my account\". Enter the address it shows:" }), inp, add);
     }
+    const sync = el("button", { textContent: "Sync now" });
+    sync.onclick = () => send(Cmd.personSetup(r(), 9));
+    w.append(el("p", { className: "hint", textContent: "Fetches the account's mail and copies of what the other devices have. Also done by itself at start-up." }), sync);
     if (p.master) {
       const bk = el("button", { textContent: "Make a backup (file + 6-word code)" });
       bk.onclick = () => send(Cmd.personSetup(r(), 7));

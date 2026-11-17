@@ -39,7 +39,15 @@ folder (the app).
 QR linking is built: the waiting device shows `maarse:link?addr=…` as a QR code
 (web client and app); the app on the master device scans it.
 
-Not built yet: redirect hint and sync button, firmware devices. The simulator models
+Section 10 is built: the sync button (and an automatic sync 20 s after
+start-up) fetches the person's mail and asks each sibling for history copies
+after the last sync, 6 per answer, paced by the answers (`SYNC_REQUEST`,
+`SYNC_DONE`); copies go into the history at their own time without a
+notification. The redirect hint: a device that receives a message while the
+user last sent from a sibling (within the hour) tells the contact's device
+to write to that sibling (`REDIRECT`).
+
+Not built yet: firmware devices. The simulator models
 the routing and mail parts (`tools/sim-experiments/linked_devices.mjs`,
 results below). Nothing is in production, so formats change without backward
 compatibility.

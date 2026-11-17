@@ -1569,7 +1569,7 @@ impl Node {
                     hops,
                     text: text(t),
                 });
-                self.person_received(peer, t);
+                self.person_received(peer, from, t);
             }
             Some(Content::Person(o, data)) => self.on_person(from, o, data),
             Some(Content::Seq(n, inner)) => {

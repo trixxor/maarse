@@ -237,6 +237,9 @@ pub mod person_op {
     /// in the data folder as `account-restore.maarse`; `text` is the code.
     /// The old master device is removed and the inbox key starts a new chain.
     pub const RESTORE_BACKUP: u8 = 8;
+    /// Sync now: fetch the person's mail from its post offices and ask the
+    /// other devices for copies of what this device lacks.
+    pub const SYNC: u8 = 9;
 }
 
 /// States in `Event::Person`.

@@ -18,10 +18,10 @@ TMP = tempfile.mkdtemp(prefix="maarse-linked-test-")
 procs = {}
 
 
-def start(name, http, extra):
+def start(name, http, extra, history=False):
     d = os.path.join(TMP, name)
     os.makedirs(d, exist_ok=True)
-    args = [HOST, "--data", d, "--http", f"127.0.0.1:{http}", "--no-browser", "--no-history"] + extra
+    args = [HOST, "--data", d, "--http", f"127.0.0.1:{http}", "--no-browser"] + ([] if history else ["--no-history"]) + extra
     # The friend's host keeps unanswered mail after 3 s instead of 45 s.
     env = dict(os.environ, MAARSE_DEPOSIT_AFTER_S="3")
     procs[name] = subprocess.Popen(args, stdout=open(os.path.join(d, "log.txt"), "a"), stderr=subprocess.STDOUT, env=env)
@@ -98,7 +98,7 @@ def direct(f, text):
 
 ok = True
 try:
-    start("A", 8191, ["--listen", "127.0.0.1:4391"])
+    start("A", 8191, ["--listen", "127.0.0.1:4391"], history=True)
     time.sleep(0.5)
     start("B", 8192, ["--listen", "off", "--peer", "127.0.0.1:4391"])
     start("C", 8193, ["--listen", "off", "--peer", "127.0.0.1:4391"])
@@ -150,13 +150,51 @@ try:
     assert "copy from our device" in log and "message to" in log, "B got no sent copy"
     print("   B got the sent copy")
 
+    # 3b. A new device E (with history) is linked and syncs: it gets the
+    #     earlier messages from A's history, without notifications.
+    start("E", 8195, ["--listen", "off", "--peer", "127.0.0.1:4391"], history=True)
+    e = Client(8195)
+    E = e.addr()
+    e.send(frame(0x37, struct.pack("<H", 20), bytes([3])))
+    e.wait(lambda f: f[0] == 0xb6 and f[1] == 1, what="E awaiting")
+    a.pump(2)
+    a.send(frame(0x35, struct.pack("<H", 21), E))
+    e.wait(lambda f: f[0] == 0xb6 and f[1] == 2, what="E member")
+    e.send(frame(0x37, struct.pack("<H", 22), bytes([9])))
+    hist = lambda f, t: f[0] == 0xb0 and f[57:].decode(errors="replace") == t
+    e.wait(lambda f: hist(f, "Hello person"), secs=30, what="E got the old message by sync")
+    e.wait(lambda f: hist(f, "Hi from the PC"), secs=30, what="E got the old sent message by sync")
+    assert not any(f[0] == 0x83 for f in e.events), "a synced message must not look new"
+    print("3b. E linked and synced: it has the earlier messages from A's history")
+
+    # 3c. The user writes from E; then C writes to the person and it reaches
+    #     A: A tells C to write to E next time, and the next one goes to E.
+    c.send(frame(0x05)); e.pump(2)
+    e.send(frame(0x02, struct.pack("<H", 23), C, "Now on E".encode()))
+    c.wait(lambda f: direct(f, "Now on E"), what="C got E's message")
+    time.sleep(1)
+    a.send(frame(0x05)); time.sleep(1); c.pump(1)
+    c.send(frame(0x02, struct.pack("<H", 24), M, "To the person, lands on A".encode()))
+    a.wait(lambda f: direct(f, "To the person, lands on A"), what="A got it")
+    for _ in range(30):
+        if "for " + M.hex()[:8] + " next time" in log_of("C"):
+            break
+        time.sleep(0.5)
+    assert "write to " + E.hex()[:8] in log_of("C"), "C got no redirect hint"
+    c.send(frame(0x02, struct.pack("<H", 25), M, "Next one".encode()))
+    e.wait(lambda f: direct(f, "Next one"), what="E got the next one")
+    assert "via device " + E.hex()[:8] in log_of("C").split("To the person, lands on A")[-1] or "via device " + E.hex()[:8] in log_of("C")
+    print("3c. redirect hint: A told C the user is on E; the next message went to E")
+
     # 4. The phone is off; C writes to the person. C's host keeps it under the
     #    person (inbox key) and hands it to A when A announces.
     stop("B")
+    stop("E")
     time.sleep(1)
     b.ws.close()
+    e.ws.close()
     c.pump(1)
-    # B announced last before, so C picks B: no answer -> deposit under M.
+    # C picks E (the redirect made it the newest): no answer -> deposit under M.
     c.send(frame(0x02, struct.pack("<H", 11), M, "While the phone is off".encode()))
     c.wait(lambda f: f[0] == 0x90, secs=30, what="C Deposited")
     assert "keeping the message in our post office for " + M.hex()[:8] in log_of("C"), "not kept under the person"

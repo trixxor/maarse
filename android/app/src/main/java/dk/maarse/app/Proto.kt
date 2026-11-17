@@ -84,7 +84,7 @@ object Cmd {
 }
 
 /** `PersonSetup` operations and `Person` states (maarse-core companion.rs). */
-object PersonOp { const val CREATE = 1; const val RESTORE = 2; const val AWAIT_LINK = 3; const val LEAVE = 4; const val CANCEL = 5; const val REMOVE = 6; const val BACKUP = 7; const val RESTORE_BACKUP = 8 }
+object PersonOp { const val CREATE = 1; const val RESTORE = 2; const val AWAIT_LINK = 3; const val LEAVE = 4; const val CANCEL = 5; const val REMOVE = 6; const val BACKUP = 7; const val RESTORE_BACKUP = 8; const val SYNC = 9 }
 object PersonState { const val NONE = 0; const val AWAITING = 1; const val MEMBER = 2 }
 
 data class RadioCfg(val freq: Long, val bw: Long, val sf: Int, val cr: Int, val power: Int, val duty: Int, val preamble: Int, val announce: Int)

@@ -144,7 +144,10 @@ private fun Member() {
             Text(if (pp.master) "This is the master device (device ${pp.index})." else "This is device ${pp.index}.", style = MaterialTheme.typography.bodySmall)
         }
     }
-    OutlinedButton(onClick = { copy(ctx, "Account address", pp.person) }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("Copy account address") }
+    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { copy(ctx, "Account address", pp.person) }) { Text("Copy account address") }
+        OutlinedButton(onClick = { Node.personSetup(PersonOp.SYNC) }) { Text("Sync now") }
+    }
     Text("Devices", Modifier.padding(start = 16.dp, top = 8.dp), style = MaterialTheme.typography.labelLarge)
     var removing by remember { mutableStateOf<String?>(null) }
     pp.devices.forEach { (d, revoked) ->

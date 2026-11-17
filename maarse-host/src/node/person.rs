@@ -129,6 +129,16 @@ pub(super) struct Persons {
     /// a post office and from the replicas).
     seen_mail: HashSet<u32>,
     last_fetch: Option<Instant>,
+    /// When the user last sent from a sibling (its sent copies tell us).
+    sibling_active: HashMap<Address, Instant>,
+    /// When the user last sent from this device.
+    my_active: Option<Instant>,
+    /// Contacts told to write to a sibling, and when (at most every 10 min).
+    hinted: HashMap<Address, Instant>,
+    /// Sync: copies asked from siblings up to this time (Unix s), and when
+    /// the first automatic sync is due.
+    sync_since: u32,
+    auto_sync_at: Option<Instant>,
 }
 
 fn read_member(dir: &Path, me: &Address) -> Option<Member> {
@@ -185,6 +195,12 @@ impl Persons {
             pieces: HashMap::new(),
             seen_mail: HashSet::new(),
             last_fetch: None,
+            sibling_active: HashMap::new(),
+            my_active: None,
+            hinted: HashMap::new(),
+            sync_since: fs::read_to_string(dir.join("person-sync.txt")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0),
+            // Catch up a little after start-up, when the links are up.
+            auto_sync_at: Some(Instant::now() + Duration::from_secs(20)),
         };
         // device (16) | certificate, one after the other.
         if let Ok(b) = fs::read(dir.join("person-certs.bin")) {
@@ -411,6 +427,13 @@ impl Node {
                 self.announce();
             }
             person_op::BACKUP => self.person_backup(id, req),
+            person_op::SYNC => {
+                if self.persons.me.is_none() {
+                    return fail(self, "This device does not belong to a person");
+                }
+                self.person_sync();
+                self.send_client(id, &Event::Log { text: text(b"Syncing with the other devices and the post offices") });
+            }
             person_op::RESTORE_BACKUP => self.person_restore_backup(id, req, t),
             person_op::REMOVE => match parse_hex_addr(t) {
                 Some(d) => self.remove_device(id, req, d),
@@ -745,6 +768,10 @@ impl Node {
             self.persons.granted = None;
             self.person_changed();
         }
+        if self.persons.me.is_some() && self.persons.auto_sync_at.is_some_and(|t| Instant::now() >= t) {
+            self.persons.auto_sync_at = None;
+            self.person_sync();
+        }
         let keep_from = week_now().saturating_sub(KEEP_WEEKS);
         let mut changed = false;
         if let Some(m) = self.persons.me.as_mut() {
@@ -866,15 +893,85 @@ impl Node {
 
     // ---------- sibling sync ----------
 
-    /// We sent `msg` to `peer`: a copy for our other devices.
+    /// We sent `msg` to `peer`: a copy for our other devices. The user is
+    /// on this device.
     pub(super) fn person_sent(&mut self, peer: Address, msg: &[u8]) {
+        self.persons.my_active = Some(Instant::now());
         self.sibling_copy(op::SIBLING_SENT, peer, msg);
     }
 
-    /// We received `msg` from `peer` (a person or a device): a copy for our
-    /// other devices.
-    pub(super) fn person_received(&mut self, peer: Address, msg: &[u8]) {
+    /// We received `msg` from `peer` (a person or a device) through the
+    /// contact's device `from`: a copy for our other devices, and a hint to
+    /// write to the sibling the user is on.
+    pub(super) fn person_received(&mut self, peer: Address, from: Address, msg: &[u8]) {
         self.sibling_copy(op::SIBLING_RECEIVED, peer, msg);
+        self.redirect_hint(from);
+    }
+
+    /// The user sent from a sibling within the last hour, and later than
+    /// from here: tell the contact's device to write there next time, so
+    /// the message does not cross the network twice.
+    fn redirect_hint(&mut self, contact_device: Address) {
+        if self.persons.me.is_none() || self.persons.hinted.get(&contact_device).is_some_and(|t| t.elapsed() < Duration::from_secs(600)) {
+            return;
+        }
+        let mine = self.persons.my_active;
+        let Some((s, _)) = self
+            .persons
+            .sibling_active
+            .iter()
+            .filter(|(_, t)| t.elapsed() < Duration::from_secs(3600) && mine.is_none_or(|m| **t > m))
+            .max_by_key(|(_, t)| **t)
+            .map(|(a, t)| (*a, *t))
+        else {
+            return;
+        };
+        self.persons.hinted.insert(contact_device, Instant::now());
+        let mut c = vec![content::PERSON, op::REDIRECT];
+        c.extend_from_slice(&s.0);
+        let _ = self.send_sealed(contact_device, &c, Pending::Control);
+        self.log(format!("told {} to write to our device {} next time", short(&contact_device), short(&s)));
+    }
+
+    /// Sync now: our person's mail from the replicas, and copies of what the
+    /// siblings have after the last sync.
+    pub(super) fn person_sync(&mut self) {
+        self.persons.last_fetch = None;
+        let since = if self.persons.sync_since > 0 { self.persons.sync_since } else { unix_now().saturating_sub(7 * 86_400) };
+        let siblings: Vec<Address> = self.persons.me.as_ref().map(|m| m.siblings(&self.addr).collect()).unwrap_or_default();
+        for s in siblings {
+            let mut c = vec![content::PERSON, op::SYNC_REQUEST];
+            c.extend_from_slice(&since.to_le_bytes());
+            let _ = self.send_sealed(s, &c, Pending::Control);
+        }
+    }
+
+    /// A sibling asks for copies after `since`: at most 6, then where to go on.
+    fn on_sync_request(&mut self, from: Address, since: u32) {
+        const BATCH: usize = 6;
+        let items: Vec<(u8, Address, u32, Vec<u8>)> = self
+            .hist
+            .store
+            .as_ref()
+            .map(|h| {
+                h.since(since, BATCH)
+                    .into_iter()
+                    .map(|i| (if i.outgoing { op::SIBLING_OLD_SENT } else { op::SIBLING_OLD_RECEIVED }, i.conv, i.ts, i.content.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let next = items.last().map_or(since, |i| i.2);
+        let more = items.len() == BATCH;
+        for (kind, peer, ts, msg) in &items {
+            self.sibling_copy_to(from, *kind, *peer, *ts, msg);
+        }
+        let mut c = vec![content::PERSON, op::SYNC_DONE];
+        c.extend_from_slice(&next.to_le_bytes());
+        c.push(more as u8);
+        let _ = self.send_sealed(from, &c, Pending::Control);
+        if !items.is_empty() {
+            self.log(format!("sync: {} copies to our device {}", items.len(), short(&from)));
+        }
     }
 
     fn sibling_copy(&mut self, kind: u8, peer: Address, msg: &[u8]) {
@@ -884,18 +981,23 @@ impl Node {
             return;
         }
         let id = OsRng.next_u32();
+        for s in siblings {
+            self.sibling_copy_to(s, kind, peer, id, msg);
+        }
+    }
+
+    /// One copy, in pieces if needed. For history copies `id` is the time.
+    fn sibling_copy_to(&mut self, sibling: Address, kind: u8, peer: Address, id: u32, msg: &[u8]) {
         let pieces: Vec<&[u8]> = if msg.is_empty() { vec![&[][..]] } else { msg.chunks(PIECE).collect() };
         let count = pieces.len().min(15) as u8;
-        for s in siblings {
-            for (i, piece) in pieces.iter().take(15).enumerate() {
-                let mut c = vec![content::PERSON, op::SIBLING, kind];
-                c.extend_from_slice(&peer.0);
-                c.extend_from_slice(&id.to_le_bytes());
-                c.push(((i as u8) << 4) | count);
-                c.extend_from_slice(piece);
-                // As a message: if the sibling is away it waits in a post office.
-                let _ = self.send_sealed(s, &c, Pending::Message);
-            }
+        for (i, piece) in pieces.iter().take(15).enumerate() {
+            let mut c = vec![content::PERSON, op::SIBLING, kind];
+            c.extend_from_slice(&peer.0);
+            c.extend_from_slice(&id.to_le_bytes());
+            c.push(((i as u8) << 4) | count);
+            c.extend_from_slice(piece);
+            // As a message: if the sibling is away it waits in a post office.
+            let _ = self.send_sealed(sibling, &c, Pending::Message);
         }
     }
 
@@ -950,6 +1052,38 @@ impl Node {
             }
             op::LIST => self.on_list(from, data),
             op::SIBLING => self.on_sibling(from, data),
+            op::SYNC_REQUEST if data.len() >= 4 => {
+                if self.persons.me.as_ref().is_some_and(|m| m.list.active().any(|a| a == from) && from != self.addr) {
+                    self.on_sync_request(from, u32::from_le_bytes([data[0], data[1], data[2], data[3]]));
+                }
+            }
+            op::SYNC_DONE if data.len() >= 5 => {
+                if !self.persons.me.as_ref().is_some_and(|m| m.list.active().any(|a| a == from)) {
+                    return;
+                }
+                let next = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+                if next > self.persons.sync_since {
+                    self.persons.sync_since = next;
+                    let _ = fs::write(self.persons.dir.join("person-sync.txt"), next.to_string());
+                }
+                if data[4] != 0 {
+                    let mut c = vec![content::PERSON, op::SYNC_REQUEST];
+                    c.extend_from_slice(&next.to_le_bytes());
+                    let _ = self.send_sealed(from, &c, Pending::Control);
+                }
+            }
+            op::REDIRECT if data.len() >= 16 => {
+                // From a device of a person: its user is on another device.
+                let (Some(person), Some(s)) = (self.persons.person_of(&from), Address::from_slice(&data[..16])) else { return };
+                if s == from {
+                    return;
+                }
+                self.persons.claims.insert(s, (person, Instant::now()));
+                if self.persons.person_of(&s) != Some(person) {
+                    self.ask_cert(s);
+                }
+                self.log(format!("{} says: write to {} for {} next time", short(&from), short(&s), short(&person)));
+            }
             _ => {}
         }
     }
@@ -1051,6 +1185,12 @@ impl Node {
         let id = u32::from_le_bytes([d[17], d[18], d[19], d[20]]);
         let (i, count) = (d[21] >> 4, (d[21] & 0x0f).max(1));
         let piece = d[22..].to_vec();
+        if kind == op::SIBLING_SENT {
+            self.persons.sibling_active.insert(from, Instant::now());
+        }
+        if count == 1 {
+            return self.sibling_done(from, kind, peer, id, piece);
+        }
         let entry = self.persons.pieces.entry((from, id)).or_insert_with(|| (kind, count, peer, vec![None; count as usize]));
         if let Some(slot) = entry.3.get_mut(i as usize) {
             *slot = Some(piece);
@@ -1060,6 +1200,10 @@ impl Node {
         }
         let (kind, _, peer, parts) = self.persons.pieces.remove(&(from, id)).unwrap_or_default();
         let msg: Vec<u8> = parts.into_iter().flatten().flatten().collect();
+        self.sibling_done(from, kind, peer, id, msg);
+    }
+
+    fn sibling_done(&mut self, from: Address, kind: u8, peer: Address, id: u32, msg: Vec<u8>) {
         match kind {
             op::SIBLING_RECEIVED => {
                 self.log(format!("copy from our device {}: message from {}", short(&from), short(&peer)));
@@ -1068,6 +1212,11 @@ impl Node {
             op::SIBLING_SENT => {
                 self.log(format!("copy from our device {}: message to {}", short(&from), short(&peer)));
                 self.hist_sent(0, crate::history::KIND_DIRECT, peer, 0, &msg);
+            }
+            // From a sync: into the history at its own time, without a
+            // notification, unless we have it already.
+            op::SIBLING_OLD_RECEIVED | op::SIBLING_OLD_SENT => {
+                self.hist_import(peer, kind == op::SIBLING_OLD_SENT, id, &msg);
             }
             _ => {}
         }

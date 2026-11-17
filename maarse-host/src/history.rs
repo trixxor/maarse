@@ -395,6 +395,19 @@ impl History {
         frame(EV_INFO, &b)
     }
 
+    /// Direct messages (sent and received) newer than `ts`, oldest first.
+    pub fn since(&self, ts: u32, limit: usize) -> Vec<&Item> {
+        self.items.iter().filter(|i| i.ts > ts && i.kind == KIND_DIRECT).take(limit).collect()
+    }
+
+    /// Is there a direct message like this already (same conversation,
+    /// direction and text, within two minutes)?
+    pub fn has_like(&self, conv: Address, outgoing: bool, content: &[u8], ts: u32) -> bool {
+        self.items.iter().rev().take(2000).any(|i| {
+            i.conv == conv && i.outgoing == outgoing && i.content == content && i.ts.abs_diff(ts) <= 120
+        })
+    }
+
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.items.len()

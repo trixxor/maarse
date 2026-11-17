@@ -476,7 +476,8 @@ object Node : LinkListener {
                 note("History on the host: ${ev.count} messages (kept for ${ev.days} days)")
                 link.send(Cmd.histGet(++histReq and 0xffff, null, 0, 200))
             }
-            is Ev.HistoryItem -> onHistory(ev)
+            // A bad history item must never take the app down.
+            is Ev.HistoryItem -> runCatching { onHistory(ev) }.onFailure { note("History item skipped: ${it.message}") }
             is Ev.HistoryEnd -> if (ev.more && ev.conv.all { it == '0' }) link.send(Cmd.histGet(++histReq and 0xffff, null, ev.oldest, 200))
             is Ev.ReadMark -> unread.update { u -> u.filterKeys { !it.endsWith(ev.conv) } + (if (ev.unread > 0) mapOf(convOf(ev.conv) to ev.unread) else emptyMap()) }
             else -> {}

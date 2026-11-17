@@ -64,11 +64,13 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 1) {
 
     /** A message the app already has from a live event: give it the host's history id instead of a second row. */
     fun adopt(histId: Long, conv: String, mine: Boolean, from: String, text: String, ts: Long): Boolean {
+        // Already imported (the host sends its history again on every connect).
+        if (readableDatabase.rawQuery("SELECT 1 FROM msg WHERE hist_id = ?", arrayOf("$histId")).use { it.moveToFirst() }) return true
         val id = readableDatabase.rawQuery(
             "SELECT id FROM msg WHERE hist_id IS NULL AND conv = ? AND mine = ? AND sender = ? AND text = ? AND ABS(ts - ?) < 600000 LIMIT 1",
             arrayOf(conv, if (mine) "1" else "0", from, text, "$ts"),
         ).use { if (it.moveToFirst()) it.getLong(0) else null } ?: return false
-        writableDatabase.update("msg", ContentValues().apply { put("hist_id", histId) }, "id = ?", arrayOf("$id"))
+        writableDatabase.updateWithOnConflict("msg", ContentValues().apply { put("hist_id", histId) }, "id = ?", arrayOf("$id"), SQLiteDatabase.CONFLICT_IGNORE)
         return true
     }
 

@@ -77,6 +77,16 @@ object Cmd {
         u16(req); if (conv != null) addr(conv) else bytes(ByteArray(16)); u64(before); u8(limit)
     }
     fun histMarkRead(conv: String, upTo: Long) = frame(0x31) { addr(conv); u64(upTo) }
+    // Files (the same frames as the web client's sendFile).
+    fun fileBegin(req: Int, dest: String, size: Int, mime: String, name: String) = frame(0x06) {
+        val m = mime.toByteArray().copyOf(minOf(mime.toByteArray().size, 60))
+        u16(req); addr(dest); u32(size.toLong()); u8(m.size); bytes(m); bytes(name.toByteArray().let { it.copyOf(minOf(it.size, 60)) })
+    }
+    fun fileData(req: Int, offset: Int, data: ByteArray) = frame(0x07) { u16(req); u32(offset.toLong()); bytes(data) }
+    fun fileEnd(req: Int) = frame(0x08) { u16(req) }
+    fun getFileLimit(dest: String) = frame(0x14) { addr(dest) }
+    /** Call signalling and audio (0x27): content belongs to the clients, see Calls.kt. */
+    fun sendCall(dest: String, data: ByteArray) = frame(0x27) { addr(dest); bytes(data) }
     // Linked devices (maarse-host only).
     fun linkDevice(req: Int, device: String) = frame(0x35) { u16(req); addr(device) }
     fun getPerson() = frame(0x36)
@@ -137,6 +147,13 @@ sealed class Ev {
     data class DeviceLinked(val device: String, val index: Int, val words: String) : Ev()
     data class PersonPhrase(val phrase: String) : Ev()
     data class PersonBackup(val code: String) : Ev()
+    data class FileIncoming(val fileId: Long, val from: String, val size: Int, val mime: String, val name: String) : Ev()
+    data class FileChunk(val fileId: Long, val offset: Int, val data: ByteArray) : Ev()
+    data class FileProgress(val fileId: Long, val done: Int, val total: Int, val outgoing: Boolean) : Ev()
+    data class FileDone(val fileId: Long, val ok: Boolean, val outgoing: Boolean, val text: String) : Ev()
+    data class FileStarted(val req: Int, val fileId: Long, val chunks: Int) : Ev()
+    data class FileLimit(val dest: String, val max: Long, val viaLora: Boolean, val mailbox: Boolean) : Ev()
+    data class Call(val from: String, val data: ByteArray) : Ev()
     data class Unknown(val kind: Int) : Ev()
 }
 
@@ -187,6 +204,13 @@ fun decodeEvent(f: ByteArray): Ev {
         0xa7 -> Ev.CarryAcked(r.u64(1))
         0xac -> alert(r)
         0xb4 -> Ev.IdentityChanged(r.addr(1))
+        0x89 -> { val ml = r.u8(29); Ev.FileIncoming(r.u64(1), r.addr(9), r.u32(25).toInt(), r.txt(30, minOf(30 + ml, f.size)), r.txt(minOf(30 + ml, f.size))) }
+        0x8a -> Ev.FileChunk(r.u64(1), r.u32(9).toInt(), f.copyOfRange(minOf(13, f.size), f.size))
+        0x8b -> Ev.FileProgress(r.u64(1), r.u16(9), r.u16(11), r.u8(13) != 0)
+        0x8c -> Ev.FileDone(r.u64(1), r.u8(9) != 0, r.u8(10) != 0, r.txt(11))
+        0x8d -> Ev.FileStarted(r.u16(1), r.u64(3), r.u16(11))
+        0x96 -> Ev.FileLimit(r.addr(1), r.u32(17), r.u8(21) and 1 != 0, r.u8(21) and 2 != 0)
+        0xa5 -> Ev.Call(r.addr(1), f.copyOfRange(minOf(17, f.size), f.size))
         0xb5 -> Ev.DeviceLinked(r.addr(1), r.u8(17), r.txt(18))
         0xb6 -> {
             val n = r.u8(24)

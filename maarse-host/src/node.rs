@@ -1772,6 +1772,8 @@ impl Node {
         if self.in_files.contains_key(&offer.file_id) {
             return;
         }
+        // A file from a device of a person shows in the person's conversation.
+        let from = self.person_peer(&from);
         self.broadcast(&Event::FileIncoming {
             file_id: offer.file_id,
             from,

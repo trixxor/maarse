@@ -350,6 +350,17 @@ impl Node {
             Command::SendDirect { req, dest, text: msg } if self.persons.is_person(&dest) && !self.is_own_person(&dest) => {
                 self.send_to_person(id, req, dest, msg.to_vec());
             }
+            // Files, file limits and calls to a person go to its active device.
+            Command::FileBegin { req, dest, size, mime, name } if self.persons.is_person(&dest) && !self.is_own_person(&dest) => match self.device_for(&dest) {
+                Some(d) => { self.introduce(d); return Some(Command::FileBegin { req, dest: d, size, mime, name }) }
+                None => self.send_client(id, &err_ev(req, error_code::UNKNOWN_DEST, "No device of this person has been checked yet; send a message first")),
+            },
+            Command::GetFileLimit { dest } if self.persons.is_person(&dest) => {
+                return Some(Command::GetFileLimit { dest: self.device_for(&dest).unwrap_or(dest) });
+            }
+            Command::SendCall { dest, data } if self.persons.is_person(&dest) && !self.is_own_person(&dest) => {
+                return Some(Command::SendCall { dest: self.device_for(&dest).unwrap_or(dest), data });
+            }
             Command::SendDirect { req, dest, text: msg } => {
                 // An ordinary contact: show who we are first, so the reply
                 // and our other devices fit together.

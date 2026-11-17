@@ -25,6 +25,9 @@ data class Msg(
     val status: String,
     val msgId: Long,
     val hops: Int,
+    /** An attachment: path in the app's files, and its MIME type. */
+    val file: String? = null,
+    val mime: String? = null,
 )
 
 /** A node we have heard of. */
@@ -39,7 +42,7 @@ data class NodeEntry(
     val lon: Double? = null,
 )
 
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 1) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE msg (id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT NOT NULL, mine INTEGER NOT NULL,
             sender TEXT NOT NULL, text TEXT NOT NULL, ts INTEGER NOT NULL, status TEXT NOT NULL, msg_id INTEGER NOT NULL,
@@ -51,7 +54,24 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 1) {
         db.execSQL("CREATE TABLE channel (addr TEXT PRIMARY KEY, name TEXT NOT NULL)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
+        if (old < 2) {
+            db.execSQL("ALTER TABLE msg ADD COLUMN file TEXT")
+            db.execSQL("ALTER TABLE msg ADD COLUMN mime TEXT")
+        }
+    }
+
+    override fun onOpen(db: SQLiteDatabase) {
+        super.onOpen(db)
+        // A fresh install creates version 2 through onCreate: add the columns there too.
+        runCatching { db.execSQL("ALTER TABLE msg ADD COLUMN file TEXT") }
+        runCatching { db.execSQL("ALTER TABLE msg ADD COLUMN mime TEXT") }
+    }
+
+    fun setFile(id: Long, path: String?, mime: String?, text: String? = null) {
+        val v = ContentValues().apply { put("file", path); put("mime", mime); if (text != null) put("text", text) }
+        writableDatabase.update("msg", v, "id = ?", arrayOf("$id"))
+    }
 
     fun insert(m: Msg, histId: Long? = null): Long {
         val v = ContentValues().apply {
@@ -107,6 +127,8 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 1) {
         c.getString(c.getColumnIndexOrThrow("text")), c.getLong(c.getColumnIndexOrThrow("ts")),
         c.getString(c.getColumnIndexOrThrow("status")), c.getLong(c.getColumnIndexOrThrow("msg_id")),
         c.getInt(c.getColumnIndexOrThrow("hops")),
+        c.getColumnIndex("file").takeIf { it >= 0 && !c.isNull(it) }?.let { c.getString(it) },
+        c.getColumnIndex("mime").takeIf { it >= 0 && !c.isNull(it) }?.let { c.getString(it) },
     )
 
     fun saveNode(n: NodeEntry) {

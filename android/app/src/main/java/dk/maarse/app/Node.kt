@@ -79,6 +79,9 @@ object Node : LinkListener {
         nodes.value = db.nodes().associateBy { it.addr }
         conn.value = Conn(prefs.mode, Conn.State.OFF, "Not connected")
         Notify.channels(app)
+        Calls.init(app)
+        // Placeholders an older version imported from the host's history.
+        runCatching { db.writableDatabase.delete("msg", "text = ? AND file IS NULL", arrayOf("📎 file (not kept in the history)")) }
     }
 
     fun label(addr: String): String =
@@ -332,6 +335,93 @@ object Node : LinkListener {
         }
     }
 
+    // ---------- files and voice messages ----------
+
+    private class Incoming(val row: Long, val buf: ByteArray, val mime: String, val name: String, val from: String)
+    private val pendingFiles = HashMap<Int, Long>() // request -> row
+    private val fileOut = HashMap<Long, Long>()     // file ID -> row
+    private val fileIn = HashMap<Long, Incoming>()
+
+    private fun attachDir() = java.io.File(app.filesDir, "attachments").apply { mkdirs() }
+
+    fun fileLabel(mime: String, name: String, data: ByteArray?): String = when {
+        mime == Voice.MIME -> "Voice message" + (data?.let { " · ${Voice.seconds(it)} s" } ?: "")
+        mime.startsWith("image/") -> "Photo"
+        else -> "$name (${((data?.size ?: 0) + 1023) / 1024} KB)"
+    }
+
+    /** Largest file the node takes: over a radio 8 KB (LoRa), on a host its limit. */
+    private fun fileMax(): Int {
+        val m = me.value?.maxFile?.toInt()?.takeIf { it > 0 } ?: 8192
+        return if (prefs.mode == Mode.BLE) minOf(m, 8192) else m
+    }
+
+    /** Sends a file (a picture is made smaller to fit). Returns an error or null. */
+    fun sendFile(conv: String, data0: ByteArray, mime0: String, name0: String): String? {
+        if (!conv.startsWith("dm:")) return "Files and voice messages go to one person, not to a channel"
+        if (offline.value || conn.value.state != Conn.State.ONLINE) return "Not connected — files are not queued; send it when you are online"
+        val max = fileMax()
+        var (data, mime, name) = Triple(data0, mime0, name0)
+        if (data.size > max && mime.startsWith("image/")) {
+            data = Images.shrink(data, max) ?: return "The picture could not be made small enough (${max / 1024} KB)"
+            mime = "image/webp"; name = name.substringBeforeLast('.') + ".webp"
+        }
+        if (data.size > max) return "Too large: ${(data.size + 1023) / 1024} KB, at most ${max / 1024} KB here" +
+            (if (prefs.mode == Mode.BLE) " (over LoRa)" else "")
+        val file = java.io.File(attachDir(), "${System.currentTimeMillis()}_${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
+        file.writeBytes(data)
+        val row = db.insert(Msg(0, conv, true, me.value?.addr ?: "", fileLabel(mime, name, data), System.currentTimeMillis(), "sending…", 0, 0))
+        db.setFile(row, file.path, mime)
+        val r = req()
+        pendingFiles[r] = row
+        val dest = conv.substringAfter(":")
+        send(Cmd.fileBegin(r, dest, data.size, mime, name))
+        var o = 0
+        while (o < data.size) { send(Cmd.fileData(r, o, data.copyOfRange(o, minOf(data.size, o + 240)))); o += 240 }
+        send(Cmd.fileEnd(r))
+        bump()
+        return null
+    }
+
+    private fun onFileEvent(ev: Ev) {
+        when (ev) {
+            is Ev.FileStarted -> pendingFiles.remove(ev.req)?.let { row -> fileOut[ev.fileId] = row; setStatus(row, "sending 0/${ev.chunks}") }
+            is Ev.FileIncoming -> {
+                if (ev.size <= 0 || ev.size > 16 * 1024 * 1024) return
+                heard(ev.from) { it }
+                val conv = "dm:${ev.from}"
+                val row = db.insert(Msg(0, conv, false, ev.from, fileLabel(ev.mime, ev.name, null) + " — receiving…", System.currentTimeMillis(), "", 0, 0))
+                db.setFile(row, null, ev.mime)
+                fileIn[ev.fileId] = Incoming(row, ByteArray(ev.size), ev.mime, ev.name, ev.from)
+                bump()
+            }
+            is Ev.FileChunk -> fileIn[ev.fileId]?.let { f ->
+                val n = minOf(ev.data.size, f.buf.size - ev.offset)
+                if (ev.offset >= 0 && n > 0) System.arraycopy(ev.data, 0, f.buf, ev.offset, n)
+            }
+            is Ev.FileProgress -> if (ev.outgoing) fileOut[ev.fileId]?.let { setStatus(it, "sending ${ev.done}/${ev.total}") }
+                else fileIn[ev.fileId]?.let { f ->
+                    db.setFile(f.row, null, f.mime, fileLabel(f.mime, f.name, null) + " — receiving ${100 * ev.done / maxOf(1, ev.total)} %"); bump()
+                }
+            is Ev.FileDone -> if (ev.outgoing) fileOut.remove(ev.fileId)?.let { row ->
+                setStatus(row, when { !ev.ok -> "error: ${ev.text}"; ev.text.contains("mailbox") -> "mailbox"; else -> "delivered" })
+            } else fileIn.remove(ev.fileId)?.let { f ->
+                if (!ev.ok) { db.setFile(f.row, null, f.mime, fileLabel(f.mime, f.name, null) + " — not received (${ev.text})"); bump(); return }
+                val file = java.io.File(attachDir(), "${System.currentTimeMillis()}_${f.name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
+                file.writeBytes(f.buf)
+                val label = fileLabel(f.mime, f.name, f.buf)
+                db.setFile(f.row, file.path, f.mime, label)
+                bump()
+                val conv = "dm:${f.from}"
+                if (openConv != conv) {
+                    unread.update { it + (conv to (it[conv] ?: 0) + 1) }
+                    if (prefs.notifyMessages) Notify.message(app, conv, label(f.from), label)
+                }
+            }
+            else -> {}
+        }
+    }
+
     fun joinChannel(name: String) { send(Cmd.join(name.trim().removePrefix("#"))) }
 
     fun setNickname(addr: String, nick: String) {
@@ -441,8 +531,12 @@ object Node : LinkListener {
             is Ev.Acked -> db.byMsgId(ev.msgId)?.let { setStatus(it, "delivered") }
             is Ev.Deposited -> db.byMsgId(ev.msgId)?.let { setStatus(it, "mailbox") }
             is Ev.CarryAcked -> db.byMsgId(ev.msgId)?.let { setStatus(it, "carried") }
+            is Ev.FileStarted, is Ev.FileIncoming, is Ev.FileChunk, is Ev.FileProgress, is Ev.FileDone -> onFileEvent(ev)
+            is Ev.Call -> Calls.onData(ev.from, ev.data)
             is Ev.Error -> {
                 pending.remove(ev.req)?.let { setStatus(it, "error: ${ev.text}") }
+                pendingFiles.remove(ev.req)?.let { setStatus(it, "error: ${ev.text}") }
+                if (ev.code == 9) Calls.failed(ev.text)
                 lastError.value = ev.text
                 note("Error: ${ev.text}")
             }
@@ -490,8 +584,10 @@ object Node : LinkListener {
 
     /** The host keeps every message: import into the app's database (once, by the host's id). */
     private fun onHistory(ev: Ev.HistoryItem) {
+        // Files: the app keeps them itself; the host's history has only their names.
+        if (ev.kind == 3) return
         val conv = (if (ev.kind == 2) "ch:" else "dm:") + ev.conv
-        val text = if (ev.kind == 3) "📎 file (not kept in the history)" else String(ev.content)
+        val text = String(ev.content)
         val st = if (ev.outgoing) HIST_STATUS.getOrElse(ev.st) { "sent" } else ""
         // A message this app sent already has a row; the host's copy only updates it.
         val existing = if (ev.outgoing && ev.msgId != 0L) db.byMsgId(ev.msgId) else null

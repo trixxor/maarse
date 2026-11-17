@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Search
@@ -101,7 +102,8 @@ fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilledTonalButton(onClick = { onChat("dm:$addr") }, Modifier.weight(1f)) { Icon(Icons.AutoMirrored.Filled.Chat, null); Text("  Message") }
-            FilledTonalButton(onClick = { Node.trace(addr) }, Modifier.weight(1f)) { Icon(Icons.Default.Route, null); Text("  Route") }
+            if (dk.maarse.app.Calls.possible()) FilledTonalButton(onClick = { dk.maarse.app.Calls.start(addr) }, Modifier.weight(1f)) { Icon(Icons.Default.Call, null); Text("  Call") }
+            else FilledTonalButton(onClick = { Node.trace(addr) }, Modifier.weight(1f)) { Icon(Icons.Default.Route, null); Text("  Route") }
             FilledTonalButton(onClick = { naming = true }, Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Text("  Name") }
         }
         traces.firstOrNull { it.dest == addr }?.let { t ->

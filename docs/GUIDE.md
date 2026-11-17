@@ -250,7 +250,7 @@ maarse-host is built as a library (`maarse-host/src/lib.rs`, the same `app.rs` a
 
 `python tools/build_apk.py` builds `dist/maarse.apk` with Gradle (`android/gradlew assembleRelease`); Gradle builds the native library with cargo-ndk first. Needs the Android SDK (platform 35, NDK 27.2.12479018 in `<sdk>/ndk/`), a JDK 17+, Rust with the `aarch64-linux-android` and `x86_64-linux-android` targets, and `cargo install cargo-ndk`. The APK is signed with the debug key, or with the release key from `tools/release.py`. Install with `adb install dist/maarse.apk` or by opening the file on the phone (allow unknown sources).
 
-**Not in the app yet** (use the web client in Chrome for these): files and voice messages, calls, the map, remote administration of other nodes, the range test, firmware updates and the alert issuing form. The phone node can use a radio over Bluetooth as its LoRa modem (Settings → "Also use my radio as LoRa modem"; the app bridges it to the host with `--modem-tcp`). It has no IP tunnel yet (`--tun` needs Android's VpnService), and USB radios are not bridged yet.
+Files and pictures (pictures are made small enough for LoRa), voice messages (Codec2 through `maarse-voice` over JNI, the same `audio/x-codec2` format as the web client) and calls (Opus with Android's MediaCodec, the web client's call frames, only over the internet) work in the app. **Not in the app yet** (use the web client): the map, remote administration of other nodes, the range test, firmware updates and the alert issuing form.
 
 ## The web client as an app (PWA)
 

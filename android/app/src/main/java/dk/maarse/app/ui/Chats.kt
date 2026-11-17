@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -47,6 +48,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import dk.maarse.app.Images
+import dk.maarse.app.Voice
+import dk.maarse.app.VoicePlayer
+import dk.maarse.app.VoiceRecorder
 import dk.maarse.app.Conn
 import dk.maarse.app.Msg
 import dk.maarse.app.Node
@@ -185,6 +201,14 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
                     Text(reachText(conv), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
+            if (isDm && dk.maarse.app.Calls.possible()) {
+                val ctx = LocalContext.current
+                val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) dk.maarse.app.Calls.start(conv.substringAfter(":")) }
+                IconButton(onClick = {
+                    if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) dk.maarse.app.Calls.start(conv.substringAfter(":"))
+                    else perm.launch(android.Manifest.permission.RECORD_AUDIO)
+                }) { Icon(Icons.Default.Call, "Call (over the internet)") }
+            }
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
             var lastDay = ""
@@ -205,28 +229,112 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
         val max = Node.maxText(conv)
         val used = text.toByteArray().size
-        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextField(
-                text, { text = it; error = null }, Modifier.weight(1f),
-                placeholder = { Text(if (conn.state == Conn.State.ONLINE) "Message" else "Not connected — the message is sent when it is") },
-                suffix = { if (used > max * 3 / 4) Text("$used/$max", color = if (used > max) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) },
-                shape = RoundedCornerShape(24.dp), maxLines = 5,
-                colors = TextFieldDefaults.colors(
-                    focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent, unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                ),
-                enabled = me != null,
-            )
-            Box(
-                Modifier.size(48.dp).clip(CircleShape).background(if (me != null && text.isNotBlank() && used <= max) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
-                    .clickable(enabled = me != null && text.isNotBlank() && used <= max) {
-                        error = Node.sendText(conv, text)
-                        if (error == null) text = ""
-                    },
-                contentAlignment = Alignment.Center,
-            ) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = MaterialTheme.colorScheme.onPrimary) }
+        val ctx = LocalContext.current
+        val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+            val bytes = runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            val mime = ctx.contentResolver.getType(uri) ?: "application/octet-stream"
+            val name = runCatching {
+                ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            }.getOrNull() ?: "file"
+            error = if (bytes == null) "The file could not be read" else Node.sendFile(conv, bytes, mime, name)
+        }
+        var recording by remember { mutableStateOf<VoiceRecorder?>(null) }
+        var recSecs by remember { mutableStateOf(0) }
+        LaunchedEffect(recording) {
+            while (recording != null) {
+                recSecs = ((System.currentTimeMillis() - recording!!.startedAt) / 1000).toInt()
+                if (recSecs >= Voice.MAX_S) { val b = recording!!.stop(); recording = null; if (b != null) error = Node.sendFile(conv, b, Voice.MIME, "voice.c2") }
+                kotlinx.coroutines.delay(250)
+            }
+        }
+        val startRec = {
+            val r = VoiceRecorder()
+            if (r.start()) { recording = r; recSecs = 0 } else error = "The microphone could not be opened"
+        }
+        val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) startRec() else error = "Voice messages need the microphone" }
+        Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 10.dp, top = 6.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (recording != null) {
+                IconButton(onClick = { recording?.cancel(); recording = null }) { Icon(Icons.Default.Close, "Cancel recording") }
+                Row(Modifier.weight(1f).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.tertiaryContainer).padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(MaterialTheme.colorScheme.error))
+                    Text("  Recording  0:%02d / 0:%02d".format(recSecs, Voice.MAX_S), color = MaterialTheme.colorScheme.onTertiaryContainer)
+                }
+                Box(Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary).clickable {
+                    val b = recording?.stop(); recording = null
+                    error = if (b == null) "Too short" else Node.sendFile(conv, b, Voice.MIME, "voice.c2")
+                }, contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.Send, "Send voice message", tint = MaterialTheme.colorScheme.onPrimary) }
+            } else {
+                if (isDm) IconButton(onClick = { pick.launch("*/*") }, enabled = me != null) { Icon(Icons.Default.AttachFile, "Send a picture or file") }
+                TextField(
+                    text, { text = it; error = null }, Modifier.weight(1f),
+                    placeholder = { Text(if (conn.state == Conn.State.ONLINE) "Message" else "Not connected — the message waits") },
+                    suffix = { if (used > max * 3 / 4) Text("$used/$max", color = if (used > max) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) },
+                    shape = RoundedCornerShape(24.dp), maxLines = 5,
+                    colors = TextFieldDefaults.colors(
+                        focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent, unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ),
+                    enabled = me != null,
+                )
+                val canSend = me != null && text.isNotBlank() && used <= max
+                if (isDm && text.isBlank()) Box(
+                    Modifier.size(48.dp).clip(CircleShape).background(if (me != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                        .clickable(enabled = me != null) {
+                            if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) startRec()
+                            else micPerm.launch(android.Manifest.permission.RECORD_AUDIO)
+                        },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Default.Mic, "Record a voice message", tint = MaterialTheme.colorScheme.onPrimary) }
+                else Box(
+                    Modifier.size(48.dp).clip(CircleShape).background(if (canSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                        .clickable(enabled = canSend) {
+                            error = Node.sendText(conv, text)
+                            if (error == null) text = ""
+                        },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = MaterialTheme.colorScheme.onPrimary) }
+            }
         }
     }
+}
+
+/** A picture, a voice message or a file in a bubble. */
+@Composable
+private fun Attachment(m: Msg) {
+    val ctx = LocalContext.current
+    val path = m.file ?: return
+    val mime = m.mime ?: ""
+    when {
+        mime.startsWith("image/") -> {
+            val bmp = remember(path) { Images.thumb(path) }
+            bmp?.let {
+                androidx.compose.foundation.Image(it.asImageBitmap(), "Picture", Modifier.padding(bottom = 4.dp).width(240.dp).clip(RoundedCornerShape(12.dp))
+                    .clickable { openFile(ctx, path, mime) }, contentScale = androidx.compose.ui.layout.ContentScale.FillWidth)
+            }
+        }
+        mime == Voice.MIME -> {
+            var playing by remember { mutableStateOf(false) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = {
+                    if (playing) { VoicePlayer.stop(); playing = false } else { playing = true; VoicePlayer.play(path) { playing = false } }
+                }) { Icon(if (playing) Icons.Default.Stop else Icons.Default.PlayArrow, if (playing) "Stop" else "Play") }
+                Text(m.text, color = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+        else -> Row(Modifier.clip(RoundedCornerShape(10.dp)).clickable { openFile(ctx, path, mime) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Description, null)
+            Text("  Open", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+private fun openFile(ctx: android.content.Context, path: String, mime: String) {
+    val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "dk.maarse.app.files", java.io.File(path))
+    val i = android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mime.ifBlank { "*/*" })
+        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    runCatching { ctx.startActivity(android.content.Intent.createChooser(i, "Open with")) }
 }
 
 @Composable
@@ -242,7 +350,9 @@ private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onSender: (String) -> U
             // In a channel: tap the sender to see them and write directly.
             if (!mine && !isDm) Text(Node.label(m.from), style = MaterialTheme.typography.labelMedium, color = avatarColor(m.from), fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { onSender(m.from) }.padding(vertical = 2.dp))
-            Text(m.text, color = if (mine) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
+            Attachment(m)
+            // A picture or a voice message speaks for itself.
+            if (m.file == null || !(m.mime == Voice.MIME || m.mime?.startsWith("image/") == true)) Text(m.text, color = if (mine) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
             Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(m.ts)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (mine) DeliveryIcon(m.status, !isDm)

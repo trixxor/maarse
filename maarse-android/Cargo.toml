@@ -12,5 +12,6 @@ crate-type = ["cdylib"]
 [dependencies]
 # No TUN on Android yet: it needs the VpnService file descriptor.
 maarse-host = { path = "../maarse-host", default-features = false }
+maarse-voice = { path = "../maarse-voice" }
 jni = "0.21"
 libc = "0.2"

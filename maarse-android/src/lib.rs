@@ -33,6 +33,40 @@ pub extern "system" fn Java_dk_maarse_app_HostService_runHost(
     maarse_host::run(argv);
 }
 
+/// `Voice.encode(short[] pcm, int mode)`: 8 kHz PCM to a Codec2 voice
+/// message (`maarse_voice`, the same format as the web client's).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dk_maarse_app_Voice_encode<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    pcm: jni::objects::JShortArray,
+    mode: jni::sys::jint,
+) -> jni::sys::jbyteArray {
+    let n = env.get_array_length(&pcm).unwrap_or(0) as usize;
+    let mut buf = vec![0i16; n];
+    if env.get_short_array_region(&pcm, 0, &mut buf).is_err() {
+        return std::ptr::null_mut();
+    }
+    let Some(out) = maarse_voice::encode(&buf, mode as u8) else { return std::ptr::null_mut() };
+    env.byte_array_from_slice(&out).map(|a| a.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
+/// `Voice.decode(byte[] message)`: a Codec2 voice message to 8 kHz PCM.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dk_maarse_app_Voice_decode<'a>(
+    env: JNIEnv<'a>,
+    _class: JClass,
+    data: jni::objects::JByteArray,
+) -> jni::sys::jshortArray {
+    let Ok(bytes) = env.convert_byte_array(&data) else { return std::ptr::null_mut() };
+    let Some(pcm) = maarse_voice::decode(&bytes) else { return std::ptr::null_mut() };
+    let Ok(arr) = env.new_short_array(pcm.len() as i32) else { return std::ptr::null_mut() };
+    if env.set_short_array_region(&arr, 0, &pcm).is_err() {
+        return std::ptr::null_mut();
+    }
+    arr.into_raw()
+}
+
 #[cfg(target_os = "android")]
 mod log {
     use std::ffi::CString;

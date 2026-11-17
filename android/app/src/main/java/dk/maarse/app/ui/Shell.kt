@@ -120,6 +120,7 @@ fun AppShell(nav: Nav) {
             Screen.WelcomeAccount -> WelcomeAccount(nav)
         }
     }
+    CallOverlay()
     if (nav.sheet) ConnectionSheet(onDismiss = { nav.sheet = false }, onMore = { nav.sheet = false; nav.go(Screen.Page(MePage.CONNECTION)) })
 }
 

@@ -540,6 +540,7 @@ dependencies = [
  "jni",
  "libc",
  "maarse-host",
+ "maarse-voice",
 ]
 
 [[package]]

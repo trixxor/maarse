@@ -750,7 +750,7 @@ mod tests {
 
     #[test]
     fn caps_roundtrip() {
-        let c = Caps { version: "0.1.0".into(), server: true, radio: false, regions: vec![0x1234, 7], post_office: false, mail_free_mb: 512, relay: true };
+        let c = Caps { version: "0.1.0".into(), server: true, radio: false, regions: vec![0x1234, 7], post_office: false, call_test: true, mail_free_mb: 512, relay: true };
         let me = Address([1; 16]);
         let b = encode_resp(&me, &Resp::Caps(c.clone()));
         assert_eq!(decode_resp(&b), Some((me, Resp::Caps(c.clone()))));

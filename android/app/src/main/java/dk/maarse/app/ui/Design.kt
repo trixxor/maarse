@@ -170,6 +170,7 @@ fun DeliveryIcon(status: String, channel: Boolean) {
     val (icon, tint, label) = when {
         status == "delivered" || status == "carried" -> Triple(Icons.Filled.DoneAll, MaterialTheme.colorScheme.primary, "Delivered")
         status == "mailbox" -> Triple(Icons.Filled.MailOutline, Amber, "Waiting in a post office")
+        status == "filebox" -> Triple(Icons.Filled.MailOutline, Amber, "Kept by your node until they are reachable")
         status == "sent" -> Triple(Icons.Filled.Done, MaterialTheme.colorScheme.onSurfaceVariant, if (channel) "Sent" else "Sent, waiting for receipt")
         status == "queued" -> Triple(Icons.Filled.Schedule, Amber, "Waiting for a connection")
         status.startsWith("error") -> Triple(Icons.Outlined.ErrorOutline, MaterialTheme.colorScheme.error, status)

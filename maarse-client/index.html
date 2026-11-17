@@ -1252,7 +1252,7 @@ function onEvent(ev) {
       if (!m) break;
       if (m.page) { pageDone(ev, m); break; }
       m.progress = 1;
-      if (ev.outgoing) m.status = !ev.ok ? "error: " + ev.text : ev.text === "put in mailbox" ? "✉ put in mailbox" : "✓ delivered";
+      if (ev.outgoing) m.status = !ev.ok ? "error: " + ev.text : ev.text === "put in mailbox" ? "✉ kept by your host until they are online" : "✓ delivered";
       else if (ev.ok) {
         const buf = new Uint8Array(m.size);
         for (const [o, d] of m.parts) buf.set(d, o);
@@ -1429,7 +1429,9 @@ async function sendFile(file, voice = null) {
   const dest = state.active.slice(3);
   const image = file.type.startsWith("image/");
   const l = await queryFileLimit(dest);
-  const limit = l ? Math.min(l.max, state.maxFile || l.max) : fileLimit();
+  // Pictures are made smaller like in other messengers (about 150 KB at most).
+  const limit0 = l ? Math.min(l.max, state.maxFile || l.max) : fileLimit();
+  const limit = image ? Math.min(limit0, 150000) : limit0;
   if (l) log(limitNotice(l, image && file.size > l.max));
   let blob = file, name = file.name;
   if (image && file.size > limit) {
@@ -4688,7 +4690,8 @@ function statusWords(s) {
   if (s.startsWith("error")) return { cls: "bad", text: "⚠ Not delivered: " + s.slice(6).trim() };
   if (s.includes("carried")) return { cls: "ok", text: "✓ Delivered (carried)" };
   if (s.includes("from mailbox")) return { cls: "ok", text: "✓ Delivered from mailbox" };
-  if (s.includes("mailbox")) return { cls: "mbx", text: "✉ Waiting in mailbox" };
+  if (s.includes("kept by your host")) return { cls: "mbx", text: "✉ Kept by your host until they are online" };
+  if (s.includes("mailbox")) return { cls: "mbx", text: "✉ Waiting in a post office" };
   if (s.includes("delivered")) return { cls: "ok", text: "✓ Delivered" };
   if (s === "sent") return { cls: "", text: "Sent · waiting for acknowledgement" };
   if (s.startsWith("sending") || s.startsWith("preparing")) return { cls: "", text: "◷ Sending" };

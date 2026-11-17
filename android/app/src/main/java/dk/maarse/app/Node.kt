@@ -407,7 +407,7 @@ object Node : LinkListener {
                     db.setFile(f.row, null, f.mime, fileLabel(f.mime, f.name, null) + " — receiving ${100 * ev.done / maxOf(1, ev.total)} %"); bump()
                 }
             is Ev.FileDone -> if (ev.outgoing) fileOut.remove(ev.fileId)?.let { row ->
-                setStatus(row, when { !ev.ok -> "error: ${ev.text}"; ev.text.contains("mailbox") -> "mailbox"; else -> "delivered" })
+                setStatus(row, when { !ev.ok -> "error: ${ev.text}"; ev.text.contains("mailbox") -> "filebox"; else -> "delivered" })
             } else fileIn.remove(ev.fileId)?.let { f ->
                 if (!ev.ok) { db.setFile(f.row, null, f.mime, fileLabel(f.mime, f.name, null) + " — not received (${ev.text})"); bump(); return }
                 val file = java.io.File(attachDir(), "${System.currentTimeMillis()}_${f.name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")

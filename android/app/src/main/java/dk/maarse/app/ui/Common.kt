@@ -110,6 +110,7 @@ fun statusText(s: String, channel: Boolean = false): Pair<String, Color?> = when
     s == "delivered" -> "✓ Delivered" to Green
     s == "carried" -> "✓ Delivered (carried by others)" to Green
     s == "mailbox" -> "✉ Waiting in a post office" to Amber
+    s == "filebox" -> "✉ Kept by your node until they are reachable" to Amber
     s == "sent" -> "Sent, waiting for receipt" to null
     s == "queued" -> "Waiting — no connection. Sent when you are back online" to Amber
     s.startsWith("error") -> s.replaceFirstChar { it.uppercase() } to Red

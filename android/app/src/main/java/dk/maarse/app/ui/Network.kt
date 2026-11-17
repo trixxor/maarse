@@ -1,5 +1,9 @@
 package dk.maarse.app.ui
 
+import androidx.compose.material3.FilledTonalButton
+
+import androidx.compose.material3.TextButton
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,7 +41,7 @@ import dk.maarse.app.StatKey
 import dk.maarse.app.formatStat
 
 /** Pages behind the Network tab's "More". */
-enum class NetPage(val title: String) { ALERTS("Alerts"), NEIGHBOURS("Neighbours and routes"), NUMBERS("All numbers"), LOG("Log") }
+enum class NetPage(val title: String) { BACKBONE("Backbone"), ALERTS("Alerts"), NEIGHBOURS("Neighbours and routes"), NUMBERS("All numbers"), LOG("Log") }
 
 /** The network in plain words first, a few numbers, then the details. */
 @Composable
@@ -48,6 +52,7 @@ fun NetworkScreen(onPage: (NetPage) -> Unit) {
     DisposableEffect(Unit) {
         Node.fastPoll = true
         Node.send(Cmd.getStats()); Node.send(Cmd.getNeighbors())
+        if (dk.maarse.app.Calls.possible()) Node.send(Cmd.getBackbones())
         onDispose { Node.fastPoll = false }
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
@@ -95,6 +100,15 @@ fun NetworkScreen(onPage: (NetPage) -> Unit) {
                 }
             }
         }
+        val bbs by Node.backbones.collectAsState()
+        if (bbs.isNotEmpty()) {
+            GroupTitle("Backbones")
+            Group {
+                bbs.forEachIndexed { i, b ->
+                    GroupRow(backboneName(b), backboneSummary(b), last = i == bbs.lastIndex) { selectedBackbone = b.link; onPage(NetPage.BACKBONE) }
+                }
+            }
+        }
         GroupTitle("More")
         Group {
             GroupRow("Alerts", if (alerts.isEmpty()) "None received" else "${alerts.size} received") { onPage(NetPage.ALERTS) }
@@ -124,6 +138,7 @@ fun NetPageContent(p: NetPage) {
         NetPage.NEIGHBOURS -> NeighboursPage()
         NetPage.NUMBERS -> AllStats()
         NetPage.LOG -> LogView()
+        NetPage.BACKBONE -> BackbonePage()
     }
 }
 
@@ -192,4 +207,95 @@ private fun LogView() {
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
         l.reversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 1.dp)) }
     }
+}
+
+/** The backbone opened from the Network screen (its link id). */
+private var selectedBackbone = 0
+
+private fun backboneName(b: dk.maarse.app.Ev.Backbone) =
+    b.name.removePrefix("tcp out ").removePrefix("tcp in ").substringBeforeLast(":")
+
+private fun upFor(s: Long) = when {
+    s < 120 -> "$s s"
+    s < 7200 -> "${s / 60} min"
+    s < 172800 -> "${s / 3600} h"
+    else -> "${s / 86400} days"
+}
+
+private fun backboneSummary(b: dk.maarse.app.Ev.Backbone) = buildList {
+    add(if (b.flags and 1 != 0) "server" else "host")
+    if (b.flags and 4 != 0) add("post office")
+    if (b.flags and 8 != 0) add("relay")
+    add("up " + upFor(b.upSecs))
+}.joinToString(" · ")
+
+/** One backbone: what it is, how well we reach it, and tests. */
+@Composable
+private fun BackbonePage() {
+    val bbs by Node.backbones.collectAsState()
+    val rtt by Node.traceRtt.collectAsState()
+    val traces by Node.traces.collectAsState()
+    val speed by dk.maarse.app.Calls.speed.collectAsState()
+    DisposableEffect(Unit) { Node.send(Cmd.getBackbones()); onDispose { } }
+    val b = bbs.firstOrNull { it.link == selectedBackbone } ?: run {
+        Text("The link is down.", Modifier.padding(24.dp)); return
+    }
+    val known = b.addr.isNotEmpty() && b.addr.trim('0').isNotEmpty()
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+        Card2 {
+            Text(backboneName(b), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(b.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        GroupTitle("Info")
+        Card2 {
+            val roles = buildList {
+                add(if (b.flags and 1 != 0) "Server (dedicated backbone)" else "Host")
+                if (b.flags and 2 != 0) add("has a radio")
+                if (b.flags and 4 != 0) add("post office (keeps mail for people away)")
+                if (b.flags and 8 != 0) add("relay (for hosts behind a router)")
+            }
+            Text("Version ${b.version.ifEmpty { "unknown" }}")
+            Text(roles.joinToString(", "))
+            Text("Connected for ${upFor(b.upSecs)}")
+            Text("Regions: ${if (b.regions == 0) "none set" else b.regions}")
+            if (known) Text("Address ${b.addr.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (!known) { Text("Its address is not heard yet; tests come when it has announced itself.", Modifier.padding(16.dp)); return@Column }
+        GroupTitle("Route and response time")
+        Card2 {
+            val t = traces.firstOrNull { it.dest == b.addr }
+            Text(rtt[b.addr]?.let { "Round trip ${it} ms" + (t?.let { tr -> " · ${tr.path.size} hop${if (tr.path.size == 1) "" else "s"}" } ?: "") } ?: "Not measured yet")
+            TextButton(onClick = { Node.trace(b.addr) }) { Text("Measure") }
+        }
+        if (b.flags and 16 != 0) {
+            GroupTitle("Call test")
+            Card2 {
+                Text("Hear how calls sound through this backbone. The call screen shows lost packets.", style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = { dk.maarse.app.Calls.startTest(b.addr, 1) }, Modifier.weight(1f)) { Text("Music") }
+                    FilledTonalButton(onClick = { dk.maarse.app.Calls.startTest(b.addr, 2) }, Modifier.weight(1f)) { Text("Echo") }
+                }
+                Text("Echo: say something; it comes back after one second.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            GroupTitle("Speed test")
+            Card2 {
+                val kbs = if (speed.ms > 0) speed.bytes * 1000.0 / speed.ms / 1024 else 0.0
+                val loss = if (speed.got + speed.lost > 0) 100.0 * speed.lost / (speed.got + speed.lost) else 0.0
+                Text(when {
+                    speed.running && speed.got == 0 -> speed.note
+                    speed.got > 0 -> "%.1f KB/s · %d packets · %.1f %% lost%s".format(kbs, speed.got, loss, if (speed.running) " (measuring…)" else "")
+                    speed.note.isNotEmpty() -> speed.note
+                    else -> "Five seconds of data from the backbone, as fast as calls may send."
+                })
+                if (!speed.running && speed.got > 0) Text(verdict(loss), fontWeight = FontWeight.SemiBold)
+                TextButton(onClick = { dk.maarse.app.Calls.startTest(b.addr, 3) }, enabled = !speed.running) { Text("Start") }
+            }
+        }
+    }
+}
+
+private fun verdict(lossPct: Double) = when {
+    lossPct < 1 -> "Good connection"
+    lossPct < 5 -> "Fair: calls may crackle now and then"
+    else -> "Poor: calls will break up"
 }

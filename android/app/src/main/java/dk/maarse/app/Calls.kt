@@ -70,11 +70,47 @@ object Calls {
         Node.post { Node.send(Cmd.sendCall(peer, frame(kind, extra))) }
     }
 
-    fun start(peer: String) {
+    /** Call test on a backbone: 1 music, 2 echo (a normal call screen), 3 speed (no sound; see speed). */
+    fun startTest(peer: String, mode: Int) {
+        if (mode == 3) return speedTest(peer)
+        start(peer, mode)
+    }
+
+    /** Speed test result, shown in the backbone menu. */
+    data class Speed(val running: Boolean = false, val bytes: Long = 0, val got: Int = 0, val lost: Int = 0, val ms: Long = 0, val note: String = "")
+    val speed = MutableStateFlow(Speed())
+    private var speedId = 0; private var speedPeer = ""; private var speedT0 = 0L; private var speedSeq = -1
+
+    private fun speedTest(peer: String) {
+        if (speed.value.running) return
+        speedId = SecureRandom().nextInt(); speedPeer = peer; speedT0 = 0; speedSeq = -1
+        speed.value = Speed(running = true, note = "Calling the backbone…")
+        val ring = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN).put(RING.toByte()).putInt(speedId).put(3).array()
+        Node.post { Node.send(Cmd.sendCall(peer, ring)) }
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (speed.value.running) speed.value = speed.value.copy(running = false, note = "No answer or not finished in time")
+        }, 20_000)
+    }
+
+    private fun onSpeed(kind: Int, d: ByteArray) {
+        val now = System.currentTimeMillis()
+        when (kind) {
+            ANSWER -> { speedT0 = now; speed.value = speed.value.copy(note = "Measuring for 5 s…") }
+            AUDIO -> if (d.size >= 7) {
+                val sq = (d[5].toInt() and 0xff) or ((d[6].toInt() and 0xff) shl 8)
+                val gap = if (speedSeq < 0) 0 else ((sq - speedSeq - 1) and 0xffff).let { if (it > 1000) 0 else it }
+                speedSeq = sq
+                speed.value = speed.value.let { it.copy(bytes = it.bytes + d.size - 7, got = it.got + 1, lost = it.lost + gap, ms = now - speedT0) }
+            }
+            END -> speed.value = speed.value.copy(running = false, note = "")
+        }
+    }
+
+    fun start(peer: String, mode: Int = 0) {
         if (state.value.phase != Phase.IDLE) return
         id = SecureRandom().nextInt(); seq = 0
         state.value = State(Phase.CALLING, peer)
-        send(RING)
+        send(RING, if (mode > 0) byteArrayOf(mode.toByte()) else ByteArray(0))
         Node.post { }
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             if (state.value.phase == Phase.CALLING && state.value.peer == peer) { send(END); stop("No answer") }
@@ -129,6 +165,7 @@ object Calls {
         if (d.size < 5) return
         val b = ByteBuffer.wrap(d).order(ByteOrder.LITTLE_ENDIAN)
         val kind = b.get(0).toInt(); val cid = b.getInt(1)
+        if (speedId != 0 && cid == speedId && from == speedPeer) return onSpeed(kind, d)
         val s = state.value
         if (kind == RING) {
             if (s.phase != Phase.IDLE) { // busy

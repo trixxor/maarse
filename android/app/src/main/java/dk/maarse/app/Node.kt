@@ -59,6 +59,12 @@ object Node : LinkListener {
     /** Bumped when messages change; screens reload from the database. */
     val msgVersion = MutableStateFlow(0L)
     val unread = MutableStateFlow<Map<String, Int>>(emptyMap())
+    /** Backbones the host is linked to (backbone menu). */
+    val backbones = MutableStateFlow<List<Ev.Backbone>>(emptyList())
+    private var backbonesNext = emptyList<Ev.Backbone>()
+    /** Trace sent at (dest → ms), for the round trip time in the backbone menu. */
+    val traceSent = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    val traceRtt = MutableStateFlow<Map<String, Long>>(emptyMap())
     /** The conversation on screen (no notification for it). */
     var openConv: String? = null
     /** History kept by the host (phone node or remote host). */
@@ -475,7 +481,7 @@ object Node : LinkListener {
         prefs.dismissedAlerts = dismissed.value
     }
 
-    fun trace(dest: String) { send(Cmd.traceRoute(req(), dest)) }
+    fun trace(dest: String) { traceSent[dest] = System.currentTimeMillis(); send(Cmd.traceRoute(req(), dest)) }
 
     fun personSetup(op: Int, text: String = "") { lastError.value = null; send(Cmd.personSetup(req(), op, text)) }
     fun linkDevice(device: String) { lastError.value = null; send(Cmd.linkDevice(req(), device)) }
@@ -565,6 +571,10 @@ object Node : LinkListener {
             is Ev.CarryAcked -> db.byMsgId(ev.msgId)?.let { setStatus(it, "carried") }
             is Ev.FileStarted, is Ev.FileIncoming, is Ev.FileChunk, is Ev.FileProgress, is Ev.FileDone -> onFileEvent(ev)
             is Ev.Call -> Calls.onData(ev.from, ev.data)
+            is Ev.Backbone -> {
+                if (ev.link == 0) { backbones.value = backbonesNext; backbonesNext = emptyList() }
+                else backbonesNext = backbonesNext + ev
+            }
             is Ev.Deleted -> {
                 val conv = convOf(ev.conv)
                 if (ev.flags and 2 != 0) db.deleteConv(conv)
@@ -599,7 +609,10 @@ object Node : LinkListener {
             is Ev.Regions -> regions.value = ev
             is Ev.Sharing -> sharing.value = ev
             is Ev.Neighbors -> neighbors.update { if (ev.part == 0) ev.items else it + ev.items }
-            is Ev.Trace -> traces.update { (listOf(ev) + it).take(10) }
+            is Ev.Trace -> {
+                traceSent.remove(ev.dest)?.let { t -> traceRtt.update { m -> m + (ev.dest to (System.currentTimeMillis() - t)) } }
+                traces.update { (listOf(ev) + it).take(10) }
+            }
             is Ev.Alert -> onAlert(ev)
             is Ev.Log -> note(ev.text)
             is Ev.IdentityChanged -> note("The node's identity changed: ${shortAddr(ev.addr)}")

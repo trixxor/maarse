@@ -1,7 +1,9 @@
 //! Call test service: a node with `<data>/calltest/` answers every call by
-//! itself. With `music.bin` there it first plays that music for 30 s, then
-//! echoes what the caller says back after one second until they hang up.
-//! Without music it only echoes.
+//! itself. The ring may carry a mode byte after the call id:
+//! 1 music (default; `music.bin`, looped until the caller hangs up),
+//! 2 echo (what the caller says comes back after one second),
+//! 3 speed (full packets as fast as calls may for 5 s, then it hangs up;
+//!   the caller counts what arrives).
 //!
 //! `music.bin` is Opus (48 kHz mono, 20 ms frames, as in calls) stored as
 //! u16 LE length | frame, repeated; `tools/make_call_test.py` makes it from
@@ -23,7 +25,12 @@ const PACKET: Duration = Duration::from_millis(60);
 /// - 69 forward secrecy - 8 datagram mark - 8 call header. Opus is variable
 /// rate, so three frames often did not fit and the packet was dropped.
 pub(super) const AUDIO_BUDGET: usize = 119;
-const MUSIC_FOR: Duration = Duration::from_secs(30);
+const MUSIC: u8 = 1;
+const ECHO: u8 = 2;
+const SPEED: u8 = 3;
+const SPEED_FOR: Duration = Duration::from_secs(5);
+/// Packets per 60 ms in the speed test (about 17 KB/s of payload).
+const SPEED_PACKETS: usize = 8;
 const ECHO_DELAY: Duration = Duration::from_secs(1);
 /// A call nobody hangs up ends by itself.
 const MAX_CALL: Duration = Duration::from_secs(600);
@@ -32,6 +39,7 @@ struct Call {
     peer: Address,
     id: u32,
     started: Instant,
+    mode: u8,
     seq: u16,
     pos: usize,
     echo: VecDeque<(Instant, Vec<u8>)>,
@@ -93,8 +101,13 @@ impl Node {
                     let _ = self.send_sealed(from, &packet(END, id, &[]), super::Pending::Control);
                     return true;
                 }
-                self.log(format!("call test: answering {}", super::short(&from)));
-                self.call_test.call = Some(Call { peer: from, id, started: Instant::now(), seq: 0, pos: 0, echo: VecDeque::new() });
+                let mode = match data.get(5) {
+                    Some(&m @ (ECHO | SPEED)) => m,
+                    _ if self.call_test.music.is_none() => ECHO,
+                    _ => MUSIC,
+                };
+                self.log(format!("call test: answering {} ({})", super::short(&from), ["", "music", "echo", "speed"][mode as usize]));
+                self.call_test.call = Some(Call { peer: from, id, started: Instant::now(), mode, seq: 0, pos: 0, echo: VecDeque::new() });
                 let _ = self.send_sealed(from, &packet(ANSWER, id, &[]), super::Pending::Control);
                 self.schedule(PACKET, Timer::CallTest);
             }
@@ -128,7 +141,22 @@ impl Node {
         }
         // 60 ms of music (three frames), in as many packets as it takes.
         let mut bodies: Vec<Vec<u8>> = Vec::new();
-        match self.call_test.music.as_ref().filter(|_| c.started.elapsed() < MUSIC_FOR) {
+        if c.mode == SPEED {
+            if c.started.elapsed() > SPEED_FOR {
+                let (peer, id) = (c.peer, c.id);
+                self.call_test.call = None;
+                let _ = self.send_sealed(peer, &packet(END, id, &[]), super::Pending::Control);
+                return;
+            }
+            for _ in 0..SPEED_PACKETS {
+                // One "frame" filling the packet; the caller does not play it.
+                let mut b = vec![(AUDIO_BUDGET - 1) as u8];
+                b.resize(AUDIO_BUDGET, 0x55);
+                bodies.push(b);
+            }
+        }
+        match self.call_test.music.as_ref().filter(|_| c.mode == MUSIC) {
+            _ if c.mode == SPEED => {}
             Some(m) => {
                 let mut b = Vec::new();
                 for _ in 0..3 {

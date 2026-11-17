@@ -4,6 +4,7 @@
 mod ext;
 mod pages;
 mod calltest;
+mod backbone;
 mod tun;
 mod hist;
 mod person;
@@ -336,6 +337,8 @@ pub struct Node {
     file_wait_logged: HashSet<u64>,
     /// Answers calls by itself when `<data>/calltest/` exists.
     call_test: calltest::CallTest,
+    /// When each link came up (backbone menu).
+    link_up: HashMap<LinkId, Instant>,
     /// Sequence numbers per conversation (node/seq.rs).
     seqs: seq::Seqs,
     /// Identities whose signed bulletins and alerts we show (`--bulletin-key`).
@@ -579,6 +582,7 @@ impl Node {
             dht_hosts: HashSet::new(),
             file_wait_logged: HashSet::new(),
             call_test: calltest::CallTest::load(&cfg.data_dir),
+            link_up: HashMap::new(),
             seqs: seq::Seqs::load(&cfg.data_dir),
             bulletin_keys: cfg.bulletin_keys.clone(),
             alerts: alerts::Alerts::load(cfg)?,
@@ -721,6 +725,7 @@ impl Node {
         match msg {
             In::LinkUp { id, name, tx } => {
                 self.log(format!("link up: {name}"));
+                self.link_up.insert(id, Instant::now());
                 if crate::extra_links::is_backbone(&name) {
                     let _ = tx.send(self.region_hello());
                     // A backbone link came up (perhaps a split healed):
@@ -742,6 +747,7 @@ impl Node {
             In::LinkDown { id } => {
                 self.pid_link.retain(|_, (l, _)| *l != id);
                 self.link_regions.remove(&id);
+                self.link_up.remove(&id);
                 self.link_caps.remove(&id);
                 self.heard_via.retain(|_, v| v.0 != id);
                 if let Some((name, _)) = self.links.remove(&id) {
@@ -878,6 +884,7 @@ impl Node {
                 publish,
                 result,
             } => self.dht_done(target, publish, result),
+            In::ClientFrame { id, frame } if frame.first() == Some(&backbone::CMD_GET_BACKBONES) => self.backbones(id),
             In::ClientFrame { id, frame } if crate::history::is_history_command(&frame) => {
                 self.hist_command(id, &frame)
             }
@@ -2613,6 +2620,7 @@ impl Node {
             post_office: !self.no_post_office && (self.mail_quota == 0 || self.mail_bytes() < self.mail_quota),
             mail_free_mb: free,
             relay: !self.no_relay && self.dht.public_ep.is_some(),
+            call_test: self.call_test.enabled(),
         }
     }
 

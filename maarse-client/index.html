@@ -1339,6 +1339,7 @@ function onEvent(ev) {
     }
     case "trace": {
       const dest = state.traceReq.get(ev.req) || ev.dest; state.traceReq.delete(ev.req);
+      if (state.traceAt?.[dest]) { (state.bbRtt ||= {})[dest] = Date.now() - state.traceAt[dest]; delete state.traceAt[dest]; if (state.view === "network") renderChat(); }
       state.traces.unshift({ ...ev, dest, at: new Date() }); state.traces.length = Math.min(state.traces.length, 10);
       if (state.view === "diag") renderChat();
       break;
@@ -3150,10 +3151,32 @@ function callSend(kind, extra) {
   transport?.send(frame(0x27, unhex(call.peer), callFrame(kind, extra)));
 }
 
-function callStart(peer) {
+// Backbone speed test: the backbone sends full call packets for 5 s.
+const speed = { id: 0, peer: null, running: false, t0: 0, bytes: 0, got: 0, lost: 0, last: undefined, ms: 0, note: "" };
+function speedTest(peer) {
+  if (speed.running) return;
+  Object.assign(speed, { id: crypto.getRandomValues(new Uint32Array(1))[0], peer, running: true, t0: 0, bytes: 0, got: 0, lost: 0, last: undefined, ms: 0, note: "Calling the backbone…" });
+  const i = speed.id;
+  transport?.send(frame(0x27, unhex(peer), Uint8Array.from([CALL.RING, i & 255, i >> 8 & 255, i >> 16 & 255, i >>> 24, 3])));
+  setTimeout(() => { if (speed.running) { speed.running = false; speed.note = "No answer or not finished in time"; if (state.view === "network") renderChat(); } }, 20000);
+  if (state.view === "network") renderChat();
+}
+function onSpeed(kind, d) {
+  const now = Date.now();
+  if (kind === CALL.ANSWER) { speed.t0 = now; speed.note = "Measuring for 5 s…"; }
+  else if (kind === CALL.AUDIO && d.length >= 7) {
+    const sq = d[5] | d[6] << 8;
+    if (speed.last !== undefined) { const gap = (sq - speed.last - 1) & 0xffff; if (gap < 1000) speed.lost += gap; }
+    speed.last = sq; speed.bytes += d.length - 7; speed.got++; speed.ms = now - speed.t0;
+    return; // the page updates every 5 s and at the end
+  } else if (kind === CALL.END) { speed.running = false; speed.note = ""; }
+  if (state.view === "network") renderChat();
+}
+
+function callStart(peer, mode = 0) {
   if (call.state !== "idle" || !callSupported()) return;
   Object.assign(call, { state: "calling", peer, id: crypto.getRandomValues(new Uint32Array(1))[0], seq: 0, rx: 0, tx: 0, lost: 0, dry: 0, lastSeq: undefined });
-  callSend(CALL.RING);
+  callSend(CALL.RING, mode ? [mode] : []);
   call.ringTimer = setTimeout(() => { if (call.state === "calling") { callSend(CALL.END); callStop("No answer"); } }, 45000);
   renderCallBar();
 }
@@ -3242,6 +3265,7 @@ async function callMedia() {
 function onCallData(from, d) {
   if (d.length < 5) return;
   const kind = d[0], id = d[1] | d[2] << 8 | d[3] << 16 | d[4] << 24 >>> 0;
+  if (speed.id && (id >>> 0) === speed.id && from === speed.peer) return onSpeed(kind, d);
   if (kind === CALL.RING) {
     if (call.state !== "idle") { // busy
       transport?.send(frame(0x27, unhex(from), Uint8Array.from([CALL.END, d[1], d[2], d[3], d[4]])));
@@ -4478,6 +4502,11 @@ function histDecode(f, t) {
     case 0xb1: return { type: "historyEnd", req: f[1] | f[2] << 8, conv: a(3), count: f[19], more: !!f[20], oldest: readU64(f, 21) };
     case 0xb2: return { type: "readMark", conv: a(1), upTo: readU64(f, 17), unread: f[25] | f[26] << 8 };
     case 0xb3: return { type: "historyInfo", days: f[2] | f[3] << 8, count: rd32(f, 4) };
+    case 0xba: {
+      const vl = f[24], nl = f[25 + vl];
+      return { type: "backbone", link: f[1] | f[2] << 8, flags: f[3], up: rd32(f, 4), addr: a(8),
+        version: dec.decode(f.slice(25, 25 + vl)), name: dec.decode(f.slice(26 + vl, 26 + vl + nl)), regions: f[26 + vl + nl] || 0 };
+    }
     case 0xb9: return { type: "deleted", conv: a(1), flags: f[17], ts: rd32(f, 18), text: dec.decode(f.slice(22)) };
   }
   return null;
@@ -4559,6 +4588,10 @@ function histOnEvent(ev) {
       state.convs.clear(); state.unread.clear(); state.byMsgId.clear();
       log(`History on the host: ${ev.count} messages (kept for ${ev.days} days)`);
       histSend(histCmd.get(++hist.req & 0xffff, null, "0", 200));
+      return true;
+    case "backbone":
+      if (ev.link) (state.bbNext ||= []).push(ev);
+      else { state.backbones = state.bbNext || []; state.bbNext = []; if (state.view === "network") renderChat(); }
       return true;
     case "deleted": {
       for (const key of ["dm:" + ev.conv, "ch:" + ev.conv]) {
@@ -4858,7 +4891,49 @@ function sparkline(vals, w, h, vmax) {
   const line = "M" + pts.map(p => p.join(" ")).join(" L");
   return { line, area: line + ` L${w} ${h} L0 ${h}Z` };
 }
+// Backbones this host is linked to: info, response time, call and speed test.
+function backboneCard() {
+  const c = el("div", { className: "card" });
+  c.append(el("h4", { textContent: "Backbones" }));
+  const up = s => s < 120 ? s + " s" : s < 7200 ? Math.floor(s / 60) + " min" : s < 172800 ? Math.floor(s / 3600) + " h" : Math.floor(s / 86400) + " days";
+  for (const b of state.backbones) {
+    const name = b.name.replace(/^tcp (out|in) /, "").replace(/:\d+$/, "");
+    const roles = [b.flags & 1 ? "server" : "host", b.flags & 2 ? "radio" : "", b.flags & 4 ? "post office" : "", b.flags & 8 ? "relay" : ""].filter(Boolean);
+    const row = el("div", { style: "padding:10px 0;border-top:1px solid var(--line)" });
+    row.append(el("div", {}, el("b", { textContent: name }), el("span", { className: "muted", textContent: `  v${b.version || "?"} · ${roles.join(" · ")} · up ${up(b.up)}` + (b.regions ? ` · ${b.regions} region${b.regions > 1 ? "s" : ""}` : "") })));
+    const known = /[1-9a-f]/.test(b.addr);
+    if (!known) { row.append(el("div", { className: "muted", textContent: "Not heard yet; tests come when it has announced itself." })); c.append(row); continue; }
+    const rtt = state.bbRtt?.[b.addr];
+    const tr = state.traces.find(t => t.dest === b.addr);
+    const line = el("div", { className: "muted", textContent: (rtt != null ? `Round trip ${rtt} ms` + (tr ? ` · ${tr.path.length} hop${tr.path.length === 1 ? "" : "s"}` : "") : "Response time not measured") });
+    const btns = el("div", { style: "display:flex;gap:6px;flex-wrap:wrap;margin-top:6px" });
+    const btn = (t, f, dis) => { const x = el("button", { textContent: t }); x.disabled = !!dis; x.onclick = f; btns.append(x); };
+    btn("Measure", () => {
+      (state.traceAt ||= {})[b.addr] = Date.now();
+      const req = state.nextReq++ & 0xffff; state.traceReq.set(req, b.addr); transport?.send(Cmd.traceRoute(req, b.addr));
+    });
+    if (b.flags & 16) {
+      btn("Call test: music", () => callStart(b.addr, 1), call.state !== "idle" || !callSupported());
+      btn("Call test: echo", () => callStart(b.addr, 2), call.state !== "idle" || !callSupported());
+      btn("Speed test", () => speedTest(b.addr), speed.running);
+    }
+    row.append(line, btns);
+    if (b.flags & 16) row.append(el("div", { className: "muted", style: "font-size:12px;margin-top:4px", textContent: "Echo: say something; it comes back after one second." }));
+    if (speed.peer === b.addr && (speed.running || speed.got || speed.note)) {
+      const kbs = speed.ms ? speed.bytes / speed.ms * 1000 / 1024 : 0;
+      const loss = speed.got + speed.lost ? 100 * speed.lost / (speed.got + speed.lost) : 0;
+      const verdict = loss < 1 ? "Good connection" : loss < 5 ? "Fair: calls may crackle now and then" : "Poor: calls will break up";
+      row.append(el("div", { style: "margin-top:6px", textContent: speed.got
+        ? `Speed: ${kbs.toFixed(1)} KB/s · ${speed.got} packets · ${loss.toFixed(1)} % lost` + (speed.running ? " (measuring…)" : ` · ${verdict}`)
+        : speed.note }));
+    }
+    c.append(row);
+  }
+  return c;
+}
+
 function renderNetwork(box) {
+  if (transport instanceof WsTransport && !(Date.now() - (state.bbAsked || 0) < 5000)) { state.bbAsked = Date.now(); transport.send(frame(0x39)); }
   $("chat-title").textContent = "Network";
   $("chat-sub").textContent = transport ? "Updated every 5 seconds while this page is open" : "";
   const ov = el("div", { className: "ov" });
@@ -4886,6 +4961,7 @@ function renderNetwork(box) {
   if (statVal(2) != null) tile("Known nodes", String(statVal(2)), statVal(3) != null ? `${statVal(3)} routes` : "");
   if (statVal(1) != null) tile("Uptime", fmt(statVal(1), "time"), statVal(7) != null ? fmt(statVal(7), "role") : "");
   ov.append(tiles);
+  if (state.backbones?.length) ov.append(backboneCard());
 
   const two = el("div", { className: "two" });
   const ch = el("div", { className: "card" });

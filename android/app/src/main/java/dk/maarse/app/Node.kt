@@ -425,6 +425,24 @@ object Node : LinkListener {
         }
     }
 
+    /** Can this message still be stopped (a file on its way, or waiting)? */
+    fun cancellable(m: Msg) = m.mine && (m.status == "queued" || m.status.startsWith("sending") || (m.file != null && m.status == "sent"))
+
+    /** Stops a file on its way (the host stops sending) or a waiting message, and removes it. */
+    fun cancel(m: Msg) {
+        fileOut.entries.firstOrNull { it.value == m.id }?.let { (fileId, _) -> send(Cmd.cancelFile(fileId)); fileOut.remove(fileId) }
+        pendingFiles.entries.removeAll { it.value == m.id }
+        pending.entries.removeAll { it.value == m.id }
+        deleteMessage(m)
+    }
+
+    /** Removes a message from this phone (not from others'). */
+    fun deleteMessage(m: Msg) {
+        m.file?.let { runCatching { java.io.File(it).delete() } }
+        db.delete(m.id)
+        bump()
+    }
+
     fun joinChannel(name: String) { send(Cmd.join(name.trim().removePrefix("#"))) }
 
     fun setNickname(addr: String, nick: String) {

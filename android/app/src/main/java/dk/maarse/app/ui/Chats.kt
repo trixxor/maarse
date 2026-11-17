@@ -1,7 +1,9 @@
 package dk.maarse.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -174,6 +176,7 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var shown by remember { mutableStateOf<Long?>(null) }
+    var menu by remember { mutableStateOf<Msg?>(null) }
     val list = rememberLazyListState()
     DisposableEffect(conv) {
         Node.openConv = conv
@@ -223,9 +226,10 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
                         }
                     }
                 }
-                item(key = m.id) { Bubble(m, isDm, shown == m.id, onSender = onContact) { shown = if (shown == m.id) null else m.id } }
+                item(key = m.id) { Bubble(m, isDm, shown == m.id, onSender = onContact, onLong = { menu = m }) { shown = if (shown == m.id) null else m.id } }
             }
         }
+        menu?.let { MessageMenu(it) { menu = null } }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
         val max = Node.maxText(conv)
         val used = text.toByteArray().size
@@ -300,6 +304,27 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
     }
 }
 
+/** Long press on a message: copy, stop sending, delete. */
+@Composable
+private fun MessageMenu(m: Msg, onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text(if (m.mine) "Your message" else "Message") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (m.file == null) TextButton(onClick = {
+                    ctx.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Message", m.text)); onDone()
+                }) { Text("Copy text") }
+                if (Node.cancellable(m)) TextButton(onClick = { Node.cancel(m); onDone() }) { Text("Stop sending", color = MaterialTheme.colorScheme.error) }
+                TextButton(onClick = { Node.deleteMessage(m); onDone() }) { Text("Delete from this phone", color = MaterialTheme.colorScheme.error) }
+                if (m.mine && !Node.cancellable(m)) Text("Already sent messages cannot be called back; this only removes your copy.", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDone) { Text("Close") } },
+    )
+}
+
 /** A picture, a voice message or a file in a bubble. */
 @Composable
 private fun Attachment(m: Msg) {
@@ -337,15 +362,16 @@ private fun openFile(ctx: android.content.Context, path: String, mime: String) {
     runCatching { ctx.startActivity(android.content.Intent.createChooser(i, "Open with")) }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onSender: (String) -> Unit, onTap: () -> Unit) {
+private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onSender: (String) -> Unit, onLong: () -> Unit, onTap: () -> Unit) {
     val mine = m.mine
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
         Column(
             Modifier.widthIn(max = 300.dp)
                 .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = if (mine) 18.dp else 6.dp, bottomEnd = if (mine) 6.dp else 18.dp))
                 .background(if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer)
-                .clickable(onClick = onTap).padding(start = 12.dp, end = 10.dp, top = 7.dp, bottom = 5.dp),
+                .combinedClickable(onClick = onTap, onLongClick = onLong).padding(start = 12.dp, end = 10.dp, top = 7.dp, bottom = 5.dp),
         ) {
             // In a channel: tap the sender to see them and write directly.
             if (!mine && !isDm) Text(Node.label(m.from), style = MaterialTheme.typography.labelMedium, color = avatarColor(m.from), fontWeight = FontWeight.SemiBold,

@@ -208,6 +208,8 @@ pub enum Command {
     /// 0x37: set up linked devices on this device, see [`person_op`]. Local
     /// only. Replies: `Person` (and `PersonPhrase` after `CREATE`).
     PersonSetup { req: u16, op: u8, text: Text },
+    /// 0x38: stop sending a file (the reply is `FileDone` with ok = false).
+    CancelFile { file_id: u64 },
 }
 
 /// Operations of `Command::PersonSetup` (linked devices,
@@ -1161,6 +1163,7 @@ impl Command {
             Command::LinkDevice { req, device } => W::new(0x35).b(&req.to_le_bytes()).b(&device.0).done(),
             Command::GetPerson => W::new(0x36).done(),
             Command::PersonSetup { req, op, text } => W::new(0x37).b(&req.to_le_bytes()).b(&[*op]).b(text).done(),
+            Command::CancelFile { file_id } => W::new(0x38).b(&file_id.to_le_bytes()).done(),
         }
     }
 
@@ -1251,6 +1254,7 @@ impl Command {
             0x35 => Command::LinkDevice { req: r.u16()?, device: r.addr()? },
             0x36 => Command::GetPerson,
             0x37 => Command::PersonSetup { req: r.u16()?, op: r.u8()?, text: r.text()? },
+            0x38 => Command::CancelFile { file_id: r.u64()? },
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -1899,6 +1903,7 @@ mod tests {
         roundtrip_cmd(Command::SetIdentity { confirm: true, secret: [7; 64] });
         roundtrip_cmd(Command::LinkDevice { req: 4, device: Address([3; 16]) });
         roundtrip_cmd(Command::GetPerson);
+        roundtrip_cmd(Command::CancelFile { file_id: 0x1122334455667788 });
         roundtrip_cmd(Command::PersonSetup { req: 5, op: person_op::RESTORE, text: text(b"abandon ability") });
         roundtrip_cmd(Command::SetIdentity { confirm: false, secret: [0; 64] });
         roundtrip_ev(Event::IdentityChanged { addr: Address([5; 16]), identity: [9; 64] });

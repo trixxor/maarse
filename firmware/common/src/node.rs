@@ -1004,6 +1004,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 err(req, error_code::NOT_OVER_TCP, "Linked devices need maarse-host (phone as node or a PC)")
             }
             Command::GetPerson => err(0, error_code::NOT_OVER_TCP, "Linked devices need maarse-host"),
+            // Firmware sends a file in one go; nothing to stop.
+            Command::CancelFile { .. } => {}
             Command::SendAlert { req, .. } => err(req, error_code::NOT_OVER_TCP, "Alerts are issued by maarse-host with an issuer key"),
             Command::RequestPage { req, dest, path } => match content::page_request(&path) {
                 Some(plain) => self.send_content(req, dest, &plain),

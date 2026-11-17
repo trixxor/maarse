@@ -119,6 +119,8 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 2) {
         buildList { while (c.moveToNext()) add(row(c)) }
     }
 
+    fun delete(id: Long) { writableDatabase.delete("msg", "id = ?", arrayOf("$id")) }
+
     fun deleteConv(conv: String) { writableDatabase.delete("msg", "conv = ?", arrayOf(conv)) }
 
     private fun row(c: android.database.Cursor) = Msg(

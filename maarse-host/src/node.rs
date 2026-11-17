@@ -2867,6 +2867,12 @@ impl Node {
             },
             // Handled in node/person.rs before we get here.
             Command::LinkDevice { .. } | Command::GetPerson | Command::PersonSetup { .. } => {}
+            Command::CancelFile { file_id } => {
+                if self.out_files.remove(&file_id).is_some() {
+                    self.log(format!("file {file_id:016x} cancelled by the user"));
+                    self.broadcast(&Event::FileDone { file_id, ok: false, outgoing: true, text: text(b"cancelled") });
+                }
+            }
         }
     }
 }

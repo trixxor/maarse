@@ -84,6 +84,7 @@ object Cmd {
     }
     fun fileData(req: Int, offset: Int, data: ByteArray) = frame(0x07) { u16(req); u32(offset.toLong()); bytes(data) }
     fun fileEnd(req: Int) = frame(0x08) { u16(req) }
+    fun cancelFile(fileId: Long) = frame(0x38) { u64(fileId) }
     fun getFileLimit(dest: String) = frame(0x14) { addr(dest) }
     /** Call signalling and audio (0x27): content belongs to the clients, see Calls.kt. */
     fun sendCall(dest: String, data: ByteArray) = frame(0x27) { addr(dest); bytes(data) }

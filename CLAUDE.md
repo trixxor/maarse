@@ -23,3 +23,10 @@ Danish code is still written in English.
 Do not add `Co-Authored-By: Claude` or any other Claude attribution
 (Claude-Session line, "Generated with Claude Code") to commit messages or
 PR descriptions.
+
+## Android app and PC web client stay level
+
+Every user-facing change in the Android app must also be made in the PC
+host's web client (maarse-client, served by maarse-host), and the other way
+round, in the same piece of work, without being asked. Before reporting a
+feature as done, check both; say plainly if one side is not done.

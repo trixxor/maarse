@@ -189,7 +189,7 @@ object Calls {
                 .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
                 .setAudioFormat(AudioFormat.Builder().setSampleRate(RATE).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT), FRAME * 2 * 6)).build()
+                .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT), FRAME * 2 * 25)).build()
             enc.start(); dec.start(); rec.startRecording(); track.play()
             threads = listOf(Thread({ guard(::sendLoop) }, "call-send"), Thread({ guard(::playLoop) }, "call-play")).onEach { it.start() }
         }
@@ -235,9 +235,19 @@ object Calls {
         private fun playLoop() {
             val info = MediaCodec.BufferInfo()
             var pts = 0L
+            // Jitter buffer: packets carry 60 ms and come over the internet in
+            // bursts. Wait for 160 ms of audio before playing, and again after
+            // running dry, instead of playing each packet the moment it lands
+            // (that gave choppy, crackling sound).
+            var buffering = true
             while (on) {
+                if (buffering) {
+                    if (inQ.size < 8) { Thread.sleep(10); continue }
+                    buffering = false
+                }
                 val f = inQ.poll(50, TimeUnit.MILLISECONDS)
-                if (f != null) {
+                if (f == null) { buffering = true; continue }
+                run {
                     val i = dec.dequeueInputBuffer(10_000)
                     if (i >= 0) { dec.getInputBuffer(i)!!.apply { clear(); put(f) }; dec.queueInputBuffer(i, 0, f.size, pts, 0); pts += 20_000 }
                 }
@@ -251,7 +261,7 @@ object Calls {
                     dec.releaseOutputBuffer(o, false)
                 }
                 // Too far behind: drop old audio rather than lag.
-                while (inQ.size > 15) inQ.poll()
+                while (inQ.size > 20) inQ.poll()
             }
         }
 

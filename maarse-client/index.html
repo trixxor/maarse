@@ -3160,8 +3160,9 @@ async function callMedia() {
       const b = call.ctx.createBuffer(1, pcm.length, 48000); b.copyToChannel(pcm, 0);
       const src = call.ctx.createBufferSource(); src.buffer = b; src.connect(call.ctx.destination);
       const now = call.ctx.currentTime;
-      // Small jitter buffer: 120 ms; if we fall too far behind, skip ahead.
-      if (call.playAt < now + 0.04 || call.playAt > now + 0.6) call.playAt = now + 0.12;
+      // Jitter buffer of 160 ms: restart it only when we actually ran dry
+      // (or fell far behind), not every time it got short; that made gaps.
+      if (call.playAt < now || call.playAt > now + 0.6) call.playAt = now + 0.16;
       src.start(call.playAt); call.playAt += b.duration;
     },
     error: (e) => log("Call, decoding: " + e.message),

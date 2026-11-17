@@ -60,6 +60,13 @@ pub mod person {
     pub const SIBLING_RECEIVED: u8 = 1;
     pub const SIBLING_SENT: u8 = 2;
     pub const SIBLING_HEADER: usize = 2 + 1 + 16 + 4 + 1;
+    /// From a device to a contact: the person's inbox key this week
+    /// (`maarse_crypto::person::InboxPublic`, 35 bytes), for mail kept by
+    /// post offices under the person.
+    pub const INBOX_PUB: u8 = 6;
+    /// Between devices of one person (secret): the inbox chain
+    /// (`maarse_crypto::person::InboxChain`, 35 bytes).
+    pub const INBOX_STATE: u8 = 7;
 }
 
 /// MIME for a `maarse://` page: Må:rse markup (UTF-8), compressed with

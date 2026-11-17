@@ -1,18 +1,29 @@
 # Linked devices: one person, several devices
 
-Status (2026-11-17): **stage 1 is built in maarse-host, the web client and
-the Android app** (not in firmware): device certificates and the signed device
-list (`maarse-crypto/src/person.rs`), linking by address with check words,
-`APP_PERSON` in announces, "newest announce wins" for messages to the person
-(chosen by the sender), messages from a device shown as from the person, and
-sibling sync of received and sent messages (`maarse-host/src/node/person.rs`,
-test `tools/linked_devices_test.py`). Messages to the person are encrypted to
-the chosen device's own key, not yet to a weekly inbox key, so post offices
-still keep mail under the device. Not built yet: sections 2 (inbox key), 4
-(offices keyed on M), 6 (time, sequence numbers), 7 (backup v2), revocation
-from the client, QR linking, firmware devices. The simulator models the
-routing and mail parts (`tools/sim-experiments/linked_devices.mjs`, results
-below). Nothing is in production, so formats change without backward
+Status (2026-11-17): **stages 1-2 are built in maarse-host, the web client
+and the Android app** (not in firmware):
+
+- Device certificates and the signed device list, linking by address with
+  check words, `APP_PERSON` in announces (`maarse-crypto/src/person.rs`).
+- "Newest announce wins" for messages to the person (chosen by the sender);
+  messages from a device are shown as from the person.
+- Sibling sync of received and sent messages.
+- The weekly inbox key (section 2): the public key goes to contacts with the
+  certificate; unanswered messages are kept by post offices **under the
+  person**, encrypted to the inbox (`0xF2`), and handed to whichever device
+  turns up after its certificate is checked. Devices also fetch the person's
+  mail from its replicas every 10 minutes.
+- Removing a device from the master device: a new list with it revoked and a
+  new inbox chain for the remaining devices. Key records are not needed: the
+  new chain goes to the siblings as a message, which waits in a post office
+  for a device that is away.
+
+Host code `maarse-host/src/node/person.rs`; test `tools/linked_devices_test.py`
+(link, sync, reply as the person, phone off with mail kept under the person,
+removal). Not built yet: section 6 (time, sequence numbers), 7 (backup v2), QR
+linking, redirect hint and sync button, firmware devices. The simulator models
+the routing and mail parts (`tools/sim-experiments/linked_devices.mjs`,
+results below). Nothing is in production, so formats change without backward
 compatibility.
 
 ## Goal

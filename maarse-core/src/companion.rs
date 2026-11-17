@@ -225,6 +225,10 @@ pub mod person_op {
     pub const LEAVE: u8 = 4;
     /// Stop waiting to be linked.
     pub const CANCEL: u8 = 5;
+    /// On the master device: remove the device whose address (32 hex
+    /// characters) is in `text`. It is marked revoked in a new device list,
+    /// and the inbox key starts a new chain it does not get.
+    pub const REMOVE: u8 = 6;
 }
 
 /// States in `Event::Person`.

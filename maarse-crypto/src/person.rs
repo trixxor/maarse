@@ -194,6 +194,230 @@ impl DeviceList {
     }
 }
 
+// ---------- inbox key: a weekly hash chain ----------
+
+/// First byte of a message encrypted to a person's inbox (next to the
+/// ratchet's `0xF0`/`0xF1`).
+pub const INBOX: u8 = 0xF2;
+/// A week's inbox secret.
+pub use x25519_dalek::StaticSecret as InboxSecret;
+/// type (1) | chain (1) | week (u16 LE) | ephemeral key (32) | sender ⊕ mask (16) | … | tag (16)
+pub const INBOX_HEADER: usize = 1 + 1 + 2 + 32 + 16;
+pub const INBOX_OVERHEAD: usize = INBOX_HEADER + 16;
+const WEEK_S: u32 = 7 * 24 * 3600;
+
+/// The week number of a Unix time (weeks since 1970).
+pub fn week_of(unix: u32) -> u16 {
+    (unix / WEEK_S) as u16
+}
+
+/// The inbox chain at one week:
+///
+/// ```text
+/// K(n+1)            = HKDF-SHA256(K(n), info "maarse/inbox/next")
+/// X25519 secret (n) = HKDF-SHA256(K(n), info "maarse/inbox/x25519")
+/// ```
+///
+/// A device that knows K(n) derives every later week; nobody can go back.
+/// `chain` changes when a device is revoked (a new random root).
+#[derive(Clone, PartialEq, Eq)]
+pub struct InboxChain {
+    pub chain: u8,
+    pub week: u16,
+    pub k: [u8; 32],
+}
+
+impl core::fmt::Debug for InboxChain {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "InboxChain {{ chain: {}, week: {} }}", self.chain, self.week)
+    }
+}
+
+pub const INBOX_STATE_LEN: usize = 1 + 2 + 32;
+
+impl InboxChain {
+    pub fn new(rng: &mut impl rand_core::CryptoRngCore, chain: u8, week: u16) -> Self {
+        let mut k = [0u8; 32];
+        rng.fill_bytes(&mut k);
+        InboxChain { chain, week, k }
+    }
+
+    fn expand(k: &[u8; 32], info: &[u8]) -> [u8; 32] {
+        let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, k);
+        let mut o = [0u8; 32];
+        let _ = hk.expand(info, &mut o);
+        o
+    }
+
+    /// The chain at a later week (`None` for an earlier one).
+    pub fn at(&self, week: u16) -> Option<InboxChain> {
+        if week < self.week || week - self.week > 520 {
+            return None;
+        }
+        let mut k = self.k;
+        for _ in self.week..week {
+            k = Self::expand(&k, b"maarse/inbox/next");
+        }
+        Some(InboxChain { chain: self.chain, week, k })
+    }
+
+    pub fn secret(&self) -> x25519_dalek::StaticSecret {
+        x25519_dalek::StaticSecret::from(Self::expand(&self.k, b"maarse/inbox/x25519"))
+    }
+
+    pub fn public(&self) -> [u8; 32] {
+        x25519_dalek::PublicKey::from(&self.secret()).to_bytes()
+    }
+
+    pub fn to_bytes(&self) -> [u8; INBOX_STATE_LEN] {
+        let mut b = [0u8; INBOX_STATE_LEN];
+        b[0] = self.chain;
+        b[1..3].copy_from_slice(&self.week.to_le_bytes());
+        b[3..].copy_from_slice(&self.k);
+        b
+    }
+
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        Some(InboxChain { chain: *b.first()?, week: u16::from_le_bytes([*b.get(1)?, *b.get(2)?]), k: b.get(3..35)?.try_into().ok()? })
+    }
+}
+
+/// What a sender needs to write to a person's inbox this week.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InboxPublic {
+    pub chain: u8,
+    pub week: u16,
+    pub key: [u8; 32],
+}
+
+impl InboxPublic {
+    pub fn to_bytes(&self) -> [u8; 35] {
+        let mut b = [0u8; 35];
+        b[0] = self.chain;
+        b[1..3].copy_from_slice(&self.week.to_le_bytes());
+        b[3..].copy_from_slice(&self.key);
+        b
+    }
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        Some(InboxPublic { chain: *b.first()?, week: u16::from_le_bytes([*b.get(1)?, *b.get(2)?]), key: b.get(3..35)?.try_into().ok()? })
+    }
+}
+
+/// (mask for the sender's address, message key). The mask depends only on
+/// the ephemeral DH, the header and the person, so the receiver can undo it
+/// before it knows who the sender is.
+fn inbox_keys(es: &[u8; 32], ss: &[u8; 32], header: &[u8], person: &Address, sender: &Address) -> ([u8; 16], [u8; 32]) {
+    let mut info = [0u8; 36 + 16 + 16];
+    info[..36].copy_from_slice(&header[..36]);
+    info[36..52].copy_from_slice(&person.0);
+    let hm = hkdf::Hkdf::<sha2::Sha256>::new(Some(b"maarse/inbox/v1/sender"), es);
+    let mut mask = [0u8; 16];
+    let _ = hm.expand(&info[..52], &mut mask);
+    info[52..].copy_from_slice(&sender.0);
+    let mut ikm = [0u8; 64];
+    ikm[..32].copy_from_slice(es);
+    ikm[32..].copy_from_slice(ss);
+    let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(b"maarse/inbox/v1"), &ikm);
+    let mut k = [0u8; 32];
+    let _ = hk.expand(&info, &mut k);
+    (mask, k)
+}
+
+/// Encrypts `msg` to `person`'s inbox. Like the static direct format, but to
+/// a key every device of the person holds. Returns the length.
+pub fn seal_inbox(
+    sender: &Identity,
+    person: &Address,
+    inbox: &InboxPublic,
+    rng: &mut impl rand_core::CryptoRngCore,
+    msg: &[u8],
+    out: &mut [u8],
+) -> Result<usize, crate::seal::CryptoError> {
+    use crate::seal::CryptoError;
+    use chacha20poly1305::aead::AeadInPlace;
+    use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
+    let total = msg.len() + INBOX_OVERHEAD;
+    if out.len() < total {
+        return Err(CryptoError::BufferTooSmall);
+    }
+    let r = x25519_dalek::PublicKey::from(inbox.key);
+    let e = x25519_dalek::EphemeralSecret::random_from_rng(rng);
+    let e_pub = x25519_dalek::PublicKey::from(&e).to_bytes();
+    let es = e.diffie_hellman(&r);
+    let ss = sender.dh.diffie_hellman(&r);
+    if !es.was_contributory() || !ss.was_contributory() {
+        return Err(CryptoError::Malformed);
+    }
+    let me = sender.address();
+    out[0] = INBOX;
+    out[1] = inbox.chain;
+    out[2..4].copy_from_slice(&inbox.week.to_le_bytes());
+    out[4..36].copy_from_slice(&e_pub);
+    let (mask, key) = inbox_keys(es.as_bytes(), ss.as_bytes(), &out[..36], person, &me);
+    for i in 0..16 {
+        out[36 + i] = me.0[i] ^ mask[i];
+    }
+    let (head, rest) = out.split_at_mut(INBOX_HEADER);
+    rest[..msg.len()].copy_from_slice(msg);
+    let tag = ChaCha20Poly1305::new(Key::from_slice(&key))
+        .encrypt_in_place_detached(Nonce::from_slice(&[0u8; 12]), head, &mut rest[..msg.len()])
+        .map_err(|_| CryptoError::Malformed)?;
+    rest[msg.len()..msg.len() + 16].copy_from_slice(&tag);
+    Ok(total)
+}
+
+/// The chain and week of an inbox message, to pick the key.
+pub fn inbox_header(payload: &[u8]) -> Option<(u8, u16)> {
+    (payload.len() >= INBOX_OVERHEAD && payload[0] == INBOX).then(|| (payload[1], u16::from_le_bytes([payload[2], payload[3]])))
+}
+
+/// Opens an inbox message with the week's secret. Returns sender and length.
+pub fn open_inbox(
+    secret: &x25519_dalek::StaticSecret,
+    person: &Address,
+    payload: &[u8],
+    lookup: impl Fn(&Address) -> Option<PublicIdentity>,
+    out: &mut [u8],
+) -> Result<(Address, usize), crate::seal::CryptoError> {
+    use crate::seal::CryptoError;
+    use chacha20poly1305::aead::AeadInPlace;
+    use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce, Tag};
+    if inbox_header(payload).is_none() {
+        return Err(CryptoError::Malformed);
+    }
+    let n = payload.len() - INBOX_OVERHEAD;
+    if out.len() < n {
+        return Err(CryptoError::BufferTooSmall);
+    }
+    let e_pub: [u8; 32] = payload[4..36].try_into().map_err(|_| CryptoError::Malformed)?;
+    let es = secret.diffie_hellman(&x25519_dalek::PublicKey::from(e_pub));
+    if !es.was_contributory() {
+        return Err(CryptoError::Decrypt);
+    }
+    let (mask, _) = inbox_keys(es.as_bytes(), &[0; 32], &payload[..36], person, &Address([0; 16]));
+    let mut s = [0u8; 16];
+    for i in 0..16 {
+        s[i] = payload[36 + i] ^ mask[i];
+    }
+    let s_addr = Address(s);
+    let sender = lookup(&s_addr).ok_or(CryptoError::UnknownSender(s_addr))?;
+    if sender.address() != s_addr {
+        return Err(CryptoError::Decrypt);
+    }
+    let ss = secret.diffie_hellman(&x25519_dalek::PublicKey::from(sender.dh));
+    let (_, key) = inbox_keys(es.as_bytes(), ss.as_bytes(), &payload[..36], person, &s_addr);
+    out[..n].copy_from_slice(&payload[INBOX_HEADER..INBOX_HEADER + n]);
+    ChaCha20Poly1305::new(Key::from_slice(&key))
+        .decrypt_in_place_detached(
+            Nonce::from_slice(&[0u8; 12]),
+            &payload[..INBOX_HEADER],
+            &mut out[..n],
+            Tag::from_slice(&payload[INBOX_HEADER + n..]),
+        )
+        .map_err(|_| CryptoError::Decrypt)?;
+    Ok((s_addr, n))
+}
+
 /// Short words the user compares on both screens when linking, so a device
 /// is only added on purpose ("check that the new device shows the same").
 pub fn link_words(device: &PublicIdentity) -> [&'static str; 4] {
@@ -251,6 +475,43 @@ mod tests {
         assert!(CERT_LEN < crate::ratchet::MAX_FS_TEXT);
         let five = [DeviceEntry { addr: a, revoked: false }; 5];
         assert_eq!(DeviceList::issue(&m, 1, &five), Err(PersonError::TooManyDevices));
+    }
+
+    #[test]
+    fn inbox_chain_goes_forward_only() {
+        let c = InboxChain::new(&mut OsRng, 1, 100);
+        let later = c.at(103).unwrap();
+        // Two steps from week 101 give the same as three from 100.
+        assert_eq!(c.at(101).unwrap().at(103).unwrap().k, later.k);
+        assert!(later.at(102).is_none());
+        assert_ne!(c.public(), later.public());
+        assert_eq!(InboxChain::from_bytes(&later.to_bytes()), Some(later));
+    }
+
+    #[test]
+    fn inbox_message_opens_with_the_week_key() {
+        let sender = Identity::generate(&mut OsRng);
+        let person = Identity::generate(&mut OsRng).address();
+        let root = InboxChain::new(&mut OsRng, 2, 2900);
+        let week = root.at(2902).unwrap();
+        let p = InboxPublic { chain: 2, week: 2902, key: week.public() };
+        let mut ct = [0u8; 255];
+        let n = seal_inbox(&sender, &person, &p, &mut OsRng, b"hello person", &mut ct).unwrap();
+        assert_eq!(n, 12 + INBOX_OVERHEAD);
+        assert_eq!(inbox_header(&ct[..n]), Some((2, 2902)));
+        // A device that only knew week 2900 derives the key itself.
+        let lookup = |a: &Address| (*a == sender.address()).then(|| sender.public());
+        let mut out = [0u8; 255];
+        let (from, m) = open_inbox(&root.at(2902).unwrap().secret(), &person, &ct[..n], lookup, &mut out).unwrap();
+        assert_eq!((from, &out[..m]), (sender.address(), &b"hello person"[..]));
+        // Another week's key, or another person, fails.
+        assert!(open_inbox(&root.at(2903).unwrap().secret(), &person, &ct[..n], lookup, &mut out).is_err());
+        assert!(open_inbox(&week.secret(), &Address([1; 16]), &ct[..n], lookup, &mut out).is_err());
+        // A changed byte fails.
+        ct[60] ^= 1;
+        assert!(open_inbox(&week.secret(), &person, &ct[..n], lookup, &mut out).is_err());
+        // A full-length text fits in one packet.
+        assert!(maarse_core::router::MAX_DIRECT_PAYLOAD - INBOX_OVERHEAD >= 143);
     }
 
     #[test]

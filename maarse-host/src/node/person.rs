@@ -1,4 +1,4 @@
-//! Linked devices (one person, several devices), first stage: see
+//! Linked devices (one person, several devices): see
 //! `docs/maybe/multi-device.md`.
 //!
 //! * A person is a master identity M from 24 words. One device (the master
@@ -10,15 +10,17 @@
 //!   been checked; a device sends it before its first message to a new
 //!   contact, and answers when asked.
 //! * Writing to M: the message goes to the device of M whose announce we
-//!   heard last ("newest announce wins"), encrypted to that device as today.
+//!   heard last ("newest announce wins"), encrypted to that device.
+//! * **Inbox key**: every device of M holds a weekly hash chain. Contacts get
+//!   this week's public key with the certificate. When the chosen device does
+//!   not answer, the message is kept by post offices **under M**, encrypted
+//!   to the inbox, and handed to whichever device of M turns up. Devices of M
+//!   also fetch M's mail from M's replica post offices themselves.
 //! * Messages from any device of M are shown as from M.
 //! * **Sibling sync**: the device that receives a message for M sends a copy
-//!   to each of M's other devices, and so does the device that sends one. The
-//!   copies are ordinary encrypted messages to the sibling, so they go over
-//!   TCP or LoRa and wait in post offices like any message.
-//!
-//! Not yet (next stages): the weekly inbox key and post offices keyed on M,
-//! hello time and sequence numbers, backup v2, revocation from the client.
+//!   to each of M's other devices, and so does the device that sends one.
+//! * **Removing a device**: the master device revokes it in a new device list
+//!   and starts a new inbox chain, which the removed device never gets.
 
 use super::{Node, Pending, err_ev, short, unix_now};
 use crate::ClientId;
@@ -26,10 +28,12 @@ use maarse_core::Address;
 use maarse_core::appdata;
 use maarse_core::companion::{Command, Event, PersonInfo, error_code, person_op, person_state, text};
 use maarse_core::content::{self, person as op};
-use maarse_crypto::person::{CERT_LEN, DeviceCert, DeviceEntry, DeviceList, MAX_DEVICES, link_words};
+use maarse_crypto::person::{
+    self as pc, CERT_LEN, DeviceCert, DeviceEntry, DeviceList, INBOX_STATE_LEN, InboxChain, InboxPublic, MAX_DEVICES, link_words,
+};
 use maarse_crypto::{Identity, recovery};
 use rand_core::{OsRng, RngCore};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -40,6 +44,14 @@ const AWAIT_FOR: Duration = Duration::from_secs(600);
 const CERT_WAIT: Duration = Duration::from_secs(60);
 /// Text per sibling copy piece (FS-encrypted, with the header).
 const PIECE: usize = maarse_crypto::ratchet::MAX_FS_TEXT - content::person::SIBLING_HEADER;
+/// Weeks of inbox keys kept back (late mail, senders with an old key).
+const KEEP_WEEKS: u16 = 2;
+/// How often a device fetches its person's mail from the replicas.
+const FETCH_EVERY: Duration = Duration::from_secs(600);
+
+fn week_now() -> u16 {
+    pc::week_of(unix_now())
+}
 
 /// This device as a member of a person.
 pub(super) struct Member {
@@ -47,6 +59,10 @@ pub(super) struct Member {
     master: Option<Identity>,
     cert: DeviceCert,
     list: DeviceList,
+    /// The inbox chain from the oldest week kept.
+    inbox: Option<InboxChain>,
+    /// The previous chain after a removal, until its weeks run out.
+    old_inbox: Option<InboxChain>,
 }
 
 impl Member {
@@ -55,6 +71,18 @@ impl Member {
     }
     fn siblings<'a>(&'a self, me: &'a Address) -> impl Iterator<Item = Address> + 'a {
         self.list.active().filter(move |a| a != me)
+    }
+    fn inbox_public(&self) -> Option<InboxPublic> {
+        let w = week_now();
+        let c = self.inbox.as_ref()?.at(w)?;
+        Some(InboxPublic { chain: c.chain, week: w, key: c.public() })
+    }
+    /// The secret for an inbox message's chain and week.
+    fn inbox_secret(&self, chain: u8, week: u16) -> Option<pc::InboxSecret> {
+        if week > week_now() + 1 {
+            return None;
+        }
+        [&self.inbox, &self.old_inbox].into_iter().flatten().find(|c| c.chain == chain).and_then(|c| c.at(week)).map(|c| c.secret())
     }
 }
 
@@ -74,29 +102,41 @@ pub(super) struct Persons {
     awaiting: Option<Instant>,
     /// A certificate from a master device, waiting for the device list.
     granted: Option<DeviceCert>,
+    /// An inbox chain that came before the device list (while linking).
+    granted_inbox: Option<InboxChain>,
     /// Checked certificates of other devices: device -> certificate.
     certs: HashMap<Address, DeviceCert>,
     /// Device lists we know (our own person's, and others' sent to us).
     lists: HashMap<Address, DeviceList>,
     /// Claims from announces: device -> (person, when heard).
     claims: HashMap<Address, (Address, Instant)>,
+    /// Persons' inbox keys this week, from their devices: person -> key.
+    inboxes: HashMap<Address, InboxPublic>,
+    /// An inbox key from a device whose certificate has not come yet.
+    early_inbox: HashMap<Address, InboxPublic>,
     /// Contacts we have shown our certificate to (this run).
-    introduced: std::collections::HashSet<Address>,
+    introduced: HashSet<Address>,
     /// Devices asked for their certificate, and when.
     asked: HashMap<Address, Instant>,
     waiting: Vec<Waiting>,
     /// Sibling copies arriving in pieces: (sibling, id) -> pieces.
     pieces: HashMap<(Address, u32), (u8, u8, Address, Vec<Option<Vec<u8>>>)>,
+    /// Mail IDs of inbox messages already opened (mail may come twice: from
+    /// a post office and from the replicas).
+    seen_mail: HashSet<u32>,
+    last_fetch: Option<Instant>,
 }
 
 fn read_member(dir: &Path, me: &Address) -> Option<Member> {
     let b = fs::read(dir.join("person.bin")).ok()?;
-    // "MP1" | flags | [master secret (64)] | certificate | device list
-    if b.len() < 4 || &b[..3] != b"MP1" {
+    // "MP2" | flags (1 master, 2 inbox, 4 old inbox) | [master secret (64)]
+    // | certificate | list length (u16) | list | [inbox (35)] | [old inbox (35)]
+    if b.len() < 4 || &b[..3] != b"MP2" {
         return None;
     }
+    let flags = b[3];
     let mut o = 4;
-    let master = if b[3] & 1 != 0 {
+    let master = if flags & 1 != 0 {
         let s: [u8; 64] = b.get(o..o + 64)?.try_into().ok()?;
         o += 64;
         Some(Identity::from_secret_bytes(&s))
@@ -105,8 +145,21 @@ fn read_member(dir: &Path, me: &Address) -> Option<Member> {
     };
     let cert = DeviceCert::verify(me, b.get(o..o + CERT_LEN)?).ok()?;
     o += CERT_LEN;
-    let list = DeviceList::verify(&cert.master, b.get(o..)?).ok()?;
-    Some(Member { master, cert, list })
+    let n = u16::from_le_bytes([*b.get(o)?, *b.get(o + 1)?]) as usize;
+    o += 2;
+    let list = DeviceList::verify(&cert.master, b.get(o..o + n)?).ok()?;
+    o += n;
+    let mut chain = |on: bool| -> Option<InboxChain> {
+        if !on {
+            return None;
+        }
+        let c = InboxChain::from_bytes(b.get(o..o + INBOX_STATE_LEN)?);
+        o += INBOX_STATE_LEN;
+        c
+    };
+    let inbox = chain(flags & 2 != 0);
+    let old_inbox = chain(flags & 4 != 0);
+    Some(Member { master, cert, list, inbox, old_inbox })
 }
 
 impl Persons {
@@ -116,13 +169,18 @@ impl Persons {
             me: read_member(dir, me),
             awaiting: None,
             granted: None,
+            granted_inbox: None,
             certs: HashMap::new(),
             lists: HashMap::new(),
             claims: HashMap::new(),
-            introduced: Default::default(),
+            inboxes: HashMap::new(),
+            early_inbox: HashMap::new(),
+            introduced: HashSet::new(),
             asked: HashMap::new(),
             waiting: Vec::new(),
             pieces: HashMap::new(),
+            seen_mail: HashSet::new(),
+            last_fetch: None,
         };
         // device (16) | certificate, one after the other.
         if let Ok(b) = fs::read(dir.join("person-certs.bin")) {
@@ -134,6 +192,9 @@ impl Persons {
                 }
             }
         }
+        if let Some(m) = &p.me {
+            p.lists.insert(m.person(), m.list.clone());
+        }
         p
     }
 
@@ -143,13 +204,18 @@ impl Persons {
             let _ = fs::remove_file(path);
             return;
         };
-        let mut b = b"MP1".to_vec();
-        b.push(m.master.is_some() as u8);
+        let mut b = b"MP2".to_vec();
+        b.push(m.master.is_some() as u8 | (m.inbox.is_some() as u8) << 1 | (m.old_inbox.is_some() as u8) << 2);
         if let Some(s) = &m.master {
             b.extend_from_slice(&s.to_secret_bytes());
         }
         b.extend_from_slice(&m.cert.to_bytes());
-        b.extend_from_slice(&m.list.to_bytes());
+        let l = m.list.to_bytes();
+        b.extend_from_slice(&(l.len() as u16).to_le_bytes());
+        b.extend_from_slice(&l);
+        for c in [&m.inbox, &m.old_inbox].into_iter().flatten() {
+            b.extend_from_slice(&c.to_bytes());
+        }
         let _ = fs::write(path, b);
     }
 
@@ -181,6 +247,15 @@ impl Persons {
 /// A version that only grows: the time, or one more than before.
 fn next_version(old: u32) -> u32 {
     unix_now().max(old + 1)
+}
+
+fn parse_hex_addr(t: &[u8]) -> Option<Address> {
+    let s = String::from_utf8_lossy(t).trim().to_lowercase();
+    if s.len() != 32 {
+        return None;
+    }
+    let b: Vec<u8> = (0..32).step_by(2).filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect();
+    Address::from_slice(&b)
 }
 
 impl Node {
@@ -217,10 +292,24 @@ impl Node {
         }
     }
 
-    /// An announce heard: remember a device's claim to belong to a person.
+    /// An announce heard: remember a device's claim to belong to a person,
+    /// and hand it mail we keep for the person.
     pub(super) fn person_on_announce(&mut self, device: Address, app: &[u8]) {
-        if let Some((person, _)) = appdata::parse(app).person {
-            self.persons.claims.insert(device, (person, Instant::now()));
+        let Some((person, _)) = appdata::parse(app).person else { return };
+        self.persons.claims.insert(device, (person, Instant::now()));
+        self.person_mail_turned_up(person, device);
+    }
+
+    /// A device of `person` is here: deliver the person's mail to it (after
+    /// its certificate has been checked).
+    fn person_mail_turned_up(&mut self, person: Address, device: Address) {
+        if self.is_own_person(&person) || !self.mailbox.get(&person).is_some_and(|m| !m.is_empty()) {
+            return;
+        }
+        if self.persons.person_of(&device) == Some(person) {
+            self.flush_person_mail(person, Some(device));
+        } else {
+            self.ask_cert(device);
         }
     }
 
@@ -252,7 +341,7 @@ impl Node {
         None
     }
 
-    fn is_own_person(&self, a: &Address) -> bool {
+    pub(super) fn is_own_person(&self, a: &Address) -> bool {
         self.persons.me.as_ref().is_some_and(|m| m.person() == *a)
     }
 
@@ -280,9 +369,12 @@ impl Node {
                 let Ok(list) = DeviceList::issue(&master, next_version(0), &[DeviceEntry { addr: self.addr, revoked: false }]) else {
                     return fail(self, "Could not sign the device list");
                 };
+                // A restored person starts a new chain: the old devices are
+                // linked again (or removed) from here.
+                let inbox = InboxChain::new(&mut OsRng, (OsRng.next_u32() & 0xff) as u8, week_now());
                 self.persons.lists.insert(master.address(), list.clone());
                 self.log(format!("this device is now the master device of {}", short(&master.address())));
-                self.persons.me = Some(Member { master: Some(master), cert, list });
+                self.persons.me = Some(Member { master: Some(master), cert, list, inbox: Some(inbox), old_inbox: None });
                 self.persons.awaiting = None;
                 self.persons.save_member();
                 if let Some(p) = phrase {
@@ -297,6 +389,7 @@ impl Node {
                 }
                 self.persons.awaiting = Some(Instant::now() + AWAIT_FOR);
                 self.persons.granted = None;
+                self.persons.granted_inbox = None;
                 self.person_changed();
                 // The master device needs our keys: tell everyone who we are.
                 self.announce();
@@ -313,6 +406,10 @@ impl Node {
                 self.person_changed();
                 self.announce();
             }
+            person_op::REMOVE => match parse_hex_addr(t) {
+                Some(d) => self.remove_device(id, req, d),
+                None => fail(self, "Give the device's address (32 hex characters)"),
+            },
             _ => fail(self, "Unknown operation"),
         }
     }
@@ -328,30 +425,84 @@ impl Node {
         };
         let mut devices: Vec<DeviceEntry> = m.list.devices.iter().copied().filter(|d| d.addr != device).collect();
         if devices.len() >= MAX_DEVICES {
-            return fail(self, "The person already has 4 devices");
+            return fail(self, "The person already has 4 devices (removed ones count too)");
         }
-        let index = (0..=255u8).find(|i| !devices.iter().any(|d| self.persons.certs.get(&d.addr).is_some_and(|c| c.index == *i)) && *i != 0).unwrap_or(1);
+        let used: Vec<u8> = devices.iter().filter_map(|d| self.persons.certs.get(&d.addr).map(|c| c.index)).collect();
+        let index = (1..=255u8).find(|i| !used.contains(i)).unwrap_or(1);
         devices.push(DeviceEntry { addr: device, revoked: false });
         let cert = DeviceCert::issue(master, &device, index);
         let Ok(list) = DeviceList::issue(master, next_version(m.list.version), &devices) else {
             return fail(self, "Could not sign the device list");
         };
         let person = m.person();
+        let inbox = m.inbox.clone();
         self.persons.remember_cert(cert);
         if let Some(me) = self.persons.me.as_mut() {
             me.list = list.clone();
         }
         self.persons.lists.insert(person, list.clone());
         self.persons.save_member();
-        // The grant to the new device, then the list to every device.
+        // To the new device: the grant, the inbox chain, then the list (to every device).
         let mut g = vec![content::PERSON, op::LINK_GRANT];
         g.extend_from_slice(&cert.to_bytes());
         let _ = self.send_sealed(device, &g, Pending::Control);
+        if let Some(c) = inbox {
+            self.send_inbox_state(device, &c);
+        }
         self.send_list_to_all(&list);
         let words = link_words(&pubkey).join(" ");
         self.log(format!("linked {} as device {index} ({words})", short(&device)));
         self.broadcast(&Event::DeviceLinked { device, index, words: heapless::Vec::from_slice(words.as_bytes()).unwrap_or_default() });
         self.person_changed();
+    }
+
+    fn remove_device(&mut self, id: ClientId, req: u16, device: Address) {
+        let fail = |s: &mut Self, e: &str| s.send_client(id, &err_ev(req, error_code::UNKNOWN_DEST, e));
+        let me = self.addr;
+        let Some(m) = self.persons.me.as_ref() else { return fail(self, "This device does not belong to a person") };
+        let Some(master) = m.master.as_ref() else { return fail(self, "Only the master device can remove devices") };
+        if device == me {
+            return fail(self, "The master device cannot remove itself (use \"Remove this device\")");
+        }
+        if !m.list.devices.iter().any(|d| d.addr == device && !d.revoked) {
+            return fail(self, "That device is not one of the person's devices");
+        }
+        let devices: Vec<DeviceEntry> =
+            m.list.devices.iter().map(|d| DeviceEntry { addr: d.addr, revoked: d.revoked || d.addr == device }).collect();
+        let Ok(list) = DeviceList::issue(master, next_version(m.list.version), &devices) else {
+            return fail(self, "Could not sign the device list");
+        };
+        let person = m.person();
+        let old = m.inbox.clone();
+        let chain = old.as_ref().map_or(1, |c| c.chain.wrapping_add(1));
+        let fresh = InboxChain::new(&mut OsRng, chain, week_now());
+        if let Some(me) = self.persons.me.as_mut() {
+            me.list = list.clone();
+            me.old_inbox = old.and_then(|c| c.at(week_now().saturating_sub(KEEP_WEEKS).max(c.week)));
+            me.inbox = Some(fresh.clone());
+        }
+        self.persons.lists.insert(person, list.clone());
+        self.persons.save_member();
+        // The new chain to the remaining devices; the list to all, including
+        // the removed one, so it knows.
+        for d in list.active().filter(|d| *d != me).collect::<Vec<_>>() {
+            self.send_inbox_state(d, &fresh);
+        }
+        self.send_list_to_all(&list);
+        let mut l = vec![content::PERSON, op::LIST];
+        l.extend_from_slice(&list.to_bytes());
+        let _ = self.send_sealed(device, &l, Pending::Control);
+        // Contacts get the new list and inbox key with our next message.
+        self.persons.introduced.clear();
+        self.log(format!("removed device {} from {}; new inbox chain {chain}", short(&device), short(&person)));
+        self.person_changed();
+    }
+
+    fn send_inbox_state(&mut self, device: Address, c: &InboxChain) {
+        let mut b = vec![content::PERSON, op::INBOX_STATE];
+        b.extend_from_slice(&c.to_bytes());
+        // As a message: a sibling that is away gets it from a post office.
+        let _ = self.send_sealed(device, &b, Pending::Message);
     }
 
     fn send_list_to_all(&mut self, list: &DeviceList) {
@@ -365,7 +516,8 @@ impl Node {
 
     // ---------- sending to a person ----------
 
-    /// Our certificate to a contact, once per run.
+    /// Our certificate, inbox key and (after a removal) device list to a
+    /// contact, once per run.
     fn introduce(&mut self, peer: Address) {
         let Some(m) = &self.persons.me else { return };
         if !self.known.contains_key(&peer) || !self.persons.introduced.insert(peer) {
@@ -373,7 +525,19 @@ impl Node {
         }
         let mut c = vec![content::PERSON, op::CERT];
         c.extend_from_slice(&m.cert.to_bytes());
+        let inbox = m.inbox_public();
+        let list = m.list.devices.iter().any(|d| d.revoked).then(|| m.list.to_bytes());
         let _ = self.send_sealed(peer, &c, Pending::Control);
+        if let Some(ip) = inbox {
+            let mut b = vec![content::PERSON, op::INBOX_PUB];
+            b.extend_from_slice(&ip.to_bytes());
+            let _ = self.send_sealed(peer, &b, Pending::Control);
+        }
+        if let Some(l) = list {
+            let mut b = vec![content::PERSON, op::LIST];
+            b.extend_from_slice(&l);
+            let _ = self.send_sealed(peer, &b, Pending::Control);
+        }
     }
 
     /// The device of `person` to write to: checked certificate, newest announce.
@@ -408,7 +572,7 @@ impl Node {
     }
 
     fn ask_cert(&mut self, device: Address) {
-        if self.persons.asked.get(&device).is_some_and(|t| t.elapsed() < Duration::from_secs(20)) {
+        if !self.known.contains_key(&device) || self.persons.asked.get(&device).is_some_and(|t| t.elapsed() < Duration::from_secs(20)) {
             return;
         }
         self.persons.asked.insert(device, Instant::now());
@@ -417,8 +581,22 @@ impl Node {
 
     fn person_deliver(&mut self, id: ClientId, req: u16, person: Address, device: Address, msg: &[u8]) {
         self.introduce(device);
-        match self.send_sealed(device, &content::text(msg), Pending::Message) {
+        let plain = content::text(msg);
+        match self.send_sealed(device, &plain, Pending::Message) {
             Ok(msg_id) => {
+                // If the device does not answer, the post offices keep the
+                // message under the person, for whichever device turns up.
+                if let Some(ip) = self.persons.inboxes.get(&person).copied()
+                    && ip.week + KEEP_WEEKS >= week_now()
+                {
+                    let mut out = [0u8; 255];
+                    if let Ok(n) = pc::seal_inbox(&self.identity, &person, &ip, &mut OsRng, &plain, &mut out)
+                        && let Some(o) = self.outbox.get_mut(&msg_id)
+                    {
+                        o.dest = person;
+                        o.mail_sealed = out[..n].to_vec();
+                    }
+                }
                 self.log(format!("message to {} via device {}", short(&person), short(&device)));
                 self.send_client(id, &Event::Sent { req, msg_id });
                 self.hist_sent(id, crate::history::KIND_DIRECT, person, msg_id, msg);
@@ -443,7 +621,8 @@ impl Node {
         }
     }
 
-    /// Housekeeping: messages waiting for a certificate time out.
+    /// Housekeeping: messages waiting for a certificate time out, old inbox
+    /// weeks are forgotten, and our person's mail is fetched now and then.
     pub(super) fn person_maintain(&mut self) {
         if !self.persons.waiting.is_empty() {
             self.person_flush();
@@ -453,6 +632,123 @@ impl Node {
             self.persons.granted = None;
             self.person_changed();
         }
+        let keep_from = week_now().saturating_sub(KEEP_WEEKS);
+        let mut changed = false;
+        if let Some(m) = self.persons.me.as_mut() {
+            if let Some(c) = &m.inbox
+                && c.week < keep_from
+            {
+                // Forward secrecy, a week at a time: the old K(n) is gone.
+                m.inbox = c.at(keep_from);
+                changed = true;
+            }
+            if let Some(c) = &m.old_inbox
+                && c.week + KEEP_WEEKS < week_now()
+            {
+                m.old_inbox = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.persons.save_member();
+        }
+        if let Some(person) = self.persons.me.as_ref().map(|m| m.person())
+            && self.persons.last_fetch.is_none_or(|t| t.elapsed() >= FETCH_EVERY)
+            && self.tx.is_some()
+        {
+            self.persons.last_fetch = Some(Instant::now());
+            self.fetch_mail(person, Vec::new());
+        }
+    }
+
+    // ---------- mail for a person ----------
+
+    /// Mail for `person` that we keep: hand it to a checked device of the
+    /// person (the one that turned up, or the newest). Delivery is
+    /// acknowledged by that device; the mail ID stays the person's.
+    pub(super) fn flush_person_mail(&mut self, person: Address, device: Option<Address>) -> bool {
+        let Some(device) = device.filter(|d| self.persons.person_of(d) == Some(person)).or_else(|| self.device_for(&person)) else {
+            return false;
+        };
+        if !self.router.has_route(&device) && !self.known.contains_key(&device) {
+            return false;
+        }
+        let items: Vec<(u64, Vec<u8>)> = self.mailbox.get(&person).map(|m| m.iter().map(|(id, m)| (*id, m.sealed.clone())).collect()).unwrap_or_default();
+        if items.is_empty() {
+            return true;
+        }
+        self.log(format!("mailbox: {} message(s) for {} to its device {}", items.len(), short(&person), short(&device)));
+        for (stored, sealed) in items {
+            let now = self.now_ms();
+            if let Ok((msg_id, actions)) = self.router.send_direct(device, &sealed, super::token(), now) {
+                self.awaiting.insert(msg_id, Pending::MailDelivery(person));
+                self.mail_alias.insert(msg_id, stored);
+                self.apply(actions.into_iter().collect());
+            }
+        }
+        true
+    }
+
+    /// A `MailSync` from a device that says it belongs to a person.
+    pub(super) fn person_mail_sync(&mut self, asker: Address, named: bool) {
+        let Some((person, _)) = self.persons.claims.get(&asker).copied() else { return };
+        if named && !self.is_own_person(&person) {
+            self.fetch_mail(person, Vec::new());
+        }
+        self.person_mail_turned_up(person, asker);
+    }
+
+    /// Our person's mail, fetched from its replicas: open it here and tell
+    /// the replicas it is delivered. Returns false if it is not ours.
+    pub(super) fn person_mail_fetched(&mut self, recipient: Address, items: &[Vec<u8>]) -> bool {
+        if !self.is_own_person(&recipient) {
+            return false;
+        }
+        let mut ids = Vec::new();
+        for sealed in items {
+            ids.push(maarse_core::mail::mail_id(&recipient, sealed));
+            self.open_direct(sealed.clone(), 0, true);
+        }
+        if !ids.is_empty() {
+            self.log(format!("fetched {} message(s) for our person from its replicas", ids.len()));
+            let replicas = self.mail_replicas(&recipient);
+            let (me, ep) = (self.addr, self.dht.public_ep.clone());
+            std::thread::spawn(move || {
+                for c in replicas {
+                    let _ = crate::dht::rpc(&c.ep, &me, ep.as_deref(), &crate::dht::Req::MailDelivered { recipient, ids: ids.clone() });
+                }
+            });
+        }
+        true
+    }
+
+    /// An inbox message (first byte `0xF2`) for our person. `None` if it is
+    /// not one (the caller tries the other formats).
+    pub(super) fn try_open_inbox(&mut self, payload: &[u8], hops: u8) -> Option<Result<(), maarse_crypto::seal::CryptoError>> {
+        let (chain, week) = pc::inbox_header(payload)?;
+        let m = self.persons.me.as_ref()?;
+        let person = m.person();
+        let secret = m.inbox_secret(chain, week)?;
+        let current = m.inbox.as_ref().map(|c| c.chain);
+        let mut out = [0u8; 256];
+        let known = &self.known;
+        let (from, n) = match pc::open_inbox(&secret, &person, payload, |a| known.get(a).copied(), &mut out) {
+            Ok(r) => r,
+            Err(e) => return Some(Err(e)),
+        };
+        if !self.persons.seen_mail.insert(maarse_core::mail::mail_id(&person, payload)) {
+            return Some(Ok(()));
+        }
+        if self.persons.seen_mail.len() > 4096 {
+            self.persons.seen_mail.clear();
+        }
+        if current != Some(chain) {
+            // The sender has an old inbox key: send it the new one.
+            self.persons.introduced.remove(&from);
+            self.introduce(from);
+        }
+        self.on_content(from, &out[..n], hops, maarse_crypto::ratchet::Format::Static);
+        Some(Ok(()))
     }
 
     // ---------- sibling sync ----------
@@ -497,12 +793,19 @@ impl Node {
             op::CERT => match DeviceCert::verify(&from, data) {
                 Ok(c) => {
                     let new = !self.persons.certs.contains_key(&from);
-                    self.persons.claims.entry(from).or_insert((c.person(), std::time::Instant::now()));
+                    let person = c.person();
+                    self.persons.claims.entry(from).or_insert((person, Instant::now()));
                     self.persons.remember_cert(c);
                     if new {
-                        self.log(format!("{} is a device of {}", short(&from), short(&c.person())));
+                        self.log(format!("{} is a device of {}", short(&from), short(&person)));
+                    }
+                    if let Some(ip) = self.persons.early_inbox.remove(&from) {
+                        self.note_inbox(person, ip);
                     }
                     self.person_flush();
+                    if self.mailbox.get(&person).is_some_and(|m| !m.is_empty()) {
+                        self.flush_person_mail(person, Some(from));
+                    }
                 }
                 Err(e) => self.log(format!("certificate from {} refused: {e:?}", short(&from))),
             },
@@ -510,6 +813,16 @@ impl Node {
                 self.persons.introduced.remove(&from);
                 self.introduce(from);
             }
+            op::INBOX_PUB => {
+                let Some(ip) = InboxPublic::from_bytes(data) else { return };
+                match self.persons.person_of(&from) {
+                    Some(person) => self.note_inbox(person, ip),
+                    None => {
+                        self.persons.early_inbox.insert(from, ip);
+                    }
+                }
+            }
+            op::INBOX_STATE => self.on_inbox_state(from, data),
             op::LINK_GRANT => {
                 if !self.persons.awaiting.is_some_and(|t| Instant::now() < t) {
                     return self.log(format!("link from {} ignored: this device is not waiting to be linked", short(&from)));
@@ -528,23 +841,60 @@ impl Node {
         }
     }
 
+    fn note_inbox(&mut self, person: Address, ip: InboxPublic) {
+        let newer = self.persons.inboxes.get(&person).is_none_or(|o| o.chain != ip.chain || ip.week >= o.week);
+        if newer {
+            self.persons.inboxes.insert(person, ip);
+        }
+    }
+
+    /// The inbox chain from a sibling (when linked, or after a removal).
+    fn on_inbox_state(&mut self, from: Address, data: &[u8]) {
+        let Some(c) = InboxChain::from_bytes(data) else { return };
+        // While linking, the list may come after the chain.
+        if self.persons.me.is_none() {
+            if self.persons.granted.is_some() {
+                self.persons.granted_inbox = Some(c);
+            }
+            return;
+        }
+        let me = self.addr;
+        let Some(m) = self.persons.me.as_mut() else { return };
+        if from == me || !m.list.active().any(|a| a == from) {
+            return;
+        }
+        if m.inbox.as_ref().is_some_and(|o| o.chain == c.chain) {
+            return;
+        }
+        m.old_inbox = m.inbox.take();
+        m.inbox = Some(c);
+        self.persons.save_member();
+        self.persons.introduced.clear();
+        self.log(format!("new inbox key from our device {}", short(&from)));
+    }
+
     fn on_list(&mut self, from: Address, data: &[u8]) {
-        // A list for the person we are joining, or already belong to.
+        // Our own person's list, or the one we are joining; or a contact's
+        // list (it tells us which of their devices are removed).
         let master = match (&self.persons.me, &self.persons.granted) {
-            (Some(m), _) => m.cert.master,
+            (Some(m), _) if self.persons.person_of(&from) == Some(m.person()) || m.list.active().any(|a| a == from) => m.cert.master,
             (None, Some(g)) => g.master,
-            _ => return,
+            _ => match self.persons.certs.get(&from) {
+                Some(c) => c.master,
+                None => return,
+            },
         };
         let Ok(list) = DeviceList::verify(&master, data) else {
             return self.log(format!("device list from {} refused (bad signature)", short(&from)));
         };
         let person = master.address();
-        if let Some(g) = self.persons.granted.take() {
+        if self.persons.me.is_none() && let Some(g) = self.persons.granted.take() {
             if !list.active().any(|d| d == self.addr) {
                 return self.log("the device list does not hold this device");
             }
             self.persons.awaiting = None;
-            self.persons.me = Some(Member { master: None, cert: g, list: list.clone() });
+            let inbox = self.persons.granted_inbox.take();
+            self.persons.me = Some(Member { master: None, cert: g, list: list.clone(), inbox, old_inbox: None });
             self.persons.lists.insert(person, list);
             self.persons.save_member();
             self.log(format!("linked to {} as device {}", short(&person), g.index));
@@ -552,6 +902,13 @@ impl Node {
             self.broadcast(&Event::DeviceLinked { device: self.addr, index: g.index, words: heapless::Vec::from_slice(words.as_bytes()).unwrap_or_default() });
             self.person_changed();
             self.announce();
+            return;
+        }
+        if !self.is_own_person(&person) {
+            // A contact's list: keep the newest.
+            if self.persons.lists.get(&person).is_none_or(|l| list.version > l.version) {
+                self.persons.lists.insert(person, list);
+            }
             return;
         }
         let Some(m) = self.persons.me.as_mut() else { return };

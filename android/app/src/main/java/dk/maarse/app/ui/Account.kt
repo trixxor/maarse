@@ -111,16 +111,29 @@ private fun Member() {
     }
     OutlinedButton(onClick = { copy(ctx, "Account address", pp.person) }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("Copy account address") }
     Text("Devices", Modifier.padding(start = 16.dp, top = 8.dp), style = MaterialTheme.typography.labelLarge)
+    var removing by remember { mutableStateOf<String?>(null) }
     pp.devices.forEach { (d, revoked) ->
         val name = Node.nodes.value[d]?.name
-        Text(
-            buildString {
-                append(shortAddr(d))
-                name?.let { append(" · ~$it") }
-                if (d == me?.addr) append(" · this device")
-                if (revoked) append(" · removed")
-            },
-            Modifier.padding(horizontal = 24.dp, vertical = 2.dp),
+        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(
+                buildString {
+                    append(shortAddr(d))
+                    name?.let { append(" · ~$it") }
+                    if (d == me?.addr) append(" · this device")
+                    if (revoked) append(" · removed")
+                },
+                Modifier.weight(1f),
+            )
+            if (pp.master && !revoked && d != me?.addr) TextButton(onClick = { removing = d }) { Text("Remove") }
+        }
+    }
+    removing?.let { d ->
+        AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text("Remove ${shortAddr(d)}?") },
+            text = { Text("Messages to the account will no longer reach it, and the account gets a new inbox key it does not know. Use this for a lost or stolen device.") },
+            confirmButton = { TextButton(onClick = { Node.personSetup(PersonOp.REMOVE, d); removing = null }) { Text("Remove") } },
+            dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
         )
     }
     if (pp.master) {

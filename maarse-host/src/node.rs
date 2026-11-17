@@ -239,6 +239,9 @@ pub struct Node {
     out_files: HashMap<u64, OutFile>,
     in_files: HashMap<u64, InFile>,
     mailbox: HashMap<Address, HashMap<u64, Mail>>,
+    /// Mail for a person delivered to one of its devices: the delivery's
+    /// message ID -> the stored mail's ID (see node/person.rs).
+    mail_alias: HashMap<u64, u64>,
     max_file: u32,
     // ---------- file limits and file mailbox (see filebox.rs) ----------
     /// The link the packet we are processing came in on.
@@ -485,6 +488,7 @@ impl Node {
             out_files: HashMap::new(),
             in_files: HashMap::new(),
             mailbox: HashMap::new(),
+            mail_alias: HashMap::new(),
             max_file: cfg.max_file,
             rx_link: None,
             rx_snr: None,
@@ -836,6 +840,7 @@ impl Node {
                     _ => {}
                 }
             }
+            In::MailFetched { recipient, items } if self.person_mail_fetched(recipient, &items) => {}
             In::MailFetched { recipient, items } => {
                 let n = items.len();
                 for sealed in items {
@@ -1315,6 +1320,8 @@ impl Node {
                 }
             }
             Some(Pending::MailDelivery(recipient)) => {
+                // Mail for a person was sent to one of its devices under another ID.
+                let msg_id = self.mail_alias.remove(&msg_id).unwrap_or(msg_id);
                 if let Some(mail) = self.mailbox.get_mut(&recipient).and_then(|m| m.remove(&msg_id))
                     && let Some(t) = self.tele.as_mut()
                 {
@@ -1439,6 +1446,21 @@ impl Node {
     }
 
     fn open_direct(&mut self, payload: Vec<u8>, hops: u8, first_time: bool) {
+        // Mail for our person, encrypted to its inbox key (node/person.rs).
+        match self.try_open_inbox(&payload, hops) {
+            Some(Ok(())) => return,
+            Some(Err(CryptoError::UnknownSender(a))) => {
+                if first_time {
+                    self.log(format!("inbox message from unknown {}: waiting for announce", short(&a)));
+                }
+                if self.pending_rx.len() >= PENDING_MAX {
+                    self.pending_rx.remove(0);
+                }
+                return self.pending_rx.push((payload, hops));
+            }
+            // Not an inbox message after all: the other formats.
+            _ => {}
+        }
         let mut out = [0u8; 256];
         let known = &self.known;
         let res = ratchet::open(
@@ -2129,6 +2151,8 @@ impl Node {
         let (home, have) = maarse_core::mail::parse_sync(payload);
         let holds = self.mailbox.get(&asker).is_some_and(|m| !m.is_empty());
         let named = home == Some(self.addr.path_id());
+        // A device of a person: the person's mail too.
+        self.person_mail_sync(asker, named);
         if !holds && !named {
             return;
         }
@@ -2144,6 +2168,10 @@ impl Node {
         crate::debug::push("mail", serde_json::json!({"op": "deliver waiting mail", "recipient": crate::debug::hex(&recipient.0), "waiting": self.mailbox.get(&recipient).map_or(0, |m| m.len())}));
         if let Some(t) = self.tele.as_mut() {
             t.mail("delivery attempt");
+        }
+        // Mail kept for a person goes to one of its devices.
+        if !self.known.contains_key(&recipient) && self.flush_person_mail(recipient, None) {
+            return;
         }
         self.flush_filebox(recipient);
         let Some(mails) = self.mailbox.get(&recipient) else {

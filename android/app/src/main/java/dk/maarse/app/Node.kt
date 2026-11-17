@@ -362,8 +362,11 @@ object Node : LinkListener {
         if (offline.value || conn.value.state != Conn.State.ONLINE) return "Not connected — files are not queued; send it when you are online"
         val max = fileMax()
         var (data, mime, name) = Triple(data0, mime0, name0)
-        if (data.size > max && mime.startsWith("image/")) {
-            data = Images.shrink(data, max) ?: return "The picture could not be made small enough (${max / 1024} KB)"
+        // Pictures are made smaller like in other messengers: at most about
+        // 150 KB (and the node's limit, 8 KB over LoRa), so they go quickly.
+        val picMax = minOf(max, 150_000)
+        if (data.size > picMax && mime.startsWith("image/")) {
+            data = Images.shrink(data, picMax) ?: return "The picture could not be made small enough (${max / 1024} KB)"
             mime = "image/webp"; name = name.substringBeforeLast('.') + ".webp"
         }
         if (data.size > max) return "Too large: ${(data.size + 1023) / 1024} KB, at most ${max / 1024} KB here" +

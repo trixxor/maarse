@@ -328,6 +328,8 @@ pub struct Node {
     hist: hist::Hist,
     /// Linked devices: our person, other devices' certificates (node/person.rs).
     persons: person::Persons,
+    /// Hosts found in the DHT (reached over TCP, if through a relay).
+    dht_hosts: HashSet<Address>,
     /// Sequence numbers per conversation (node/seq.rs).
     seqs: seq::Seqs,
     /// Identities whose signed bulletins and alerts we show (`--bulletin-key`).
@@ -568,6 +570,7 @@ impl Node {
             ),
             hist: hist::Hist::open(&cfg.data_dir, cfg.history_days),
             persons: person::Persons::load(&cfg.data_dir, &addr),
+            dht_hosts: HashSet::new(),
             seqs: seq::Seqs::load(&cfg.data_dir),
             bulletin_keys: cfg.bulletin_keys.clone(),
             alerts: alerts::Alerts::load(cfg)?,
@@ -1870,6 +1873,14 @@ impl Node {
         if heard.is_none() {
             return PathKind::Unknown;
         }
+        let heard_tcp = heard.is_some_and(|h| h.1);
+        // A host found in the DHT (say behind NAT, through a relay), or any
+        // node heard over TCP when we have no radio at all (a phone node):
+        // nothing on the way can be LoRa.
+        let no_radio = !self.links.values().any(|(n, _)| !crate::extra_links::is_backbone(n));
+        if heard_tcp && (self.dht_hosts.contains(dest) || no_radio) {
+            return PathKind::Tcp;
+        }
         let in_dht = |a: &Address| self.dht.table.closest(a, 1).first().is_some_and(|c| c.id == *a);
         // Known backbone hosts: direct TCP neighbours (0 hops) and DHT contacts.
         let host_ids: HashSet<u16> = self
@@ -3118,6 +3129,10 @@ impl Node {
                 short(&rec.gw),
                 rec.ep
             ));
+            // A host itself (0 hops behind its gateway) is reached over TCP.
+            if rec.hops == 0 {
+                self.dht_hosts.insert(rec.dest);
+            }
             // The announce is genuine (checked in lookup): we now know the keys.
             self.on_announce(rec.dest, &rec.announce, rec.hops.saturating_add(1));
             self.dht_connect(&rec);

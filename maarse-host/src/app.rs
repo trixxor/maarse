@@ -163,6 +163,8 @@ pub struct Config {
     pub modem_key: Option<String>,
     /// Wi-Fi LoRa modems at fixed addresses to connect to (`--modem-ip`).
     pub modem_ips: Vec<String>,
+    /// LoRa modems as a plain byte stream over TCP (`--modem-tcp`).
+    pub modem_tcp: Vec<String>,
     /// Block list entries from the command line (`--block`): IP addresses,
     /// networks and node addresses.
     pub block: Vec<String>,
@@ -351,6 +353,9 @@ Usage: maarse-host [options]
                         Wi-Fi LoRa modems must prove this key (set the same
                         passphrase in the modem); maarse-server accepts no
                         Wi-Fi modem without it (at least 12 characters)
+  --modem-tcp <host:port> a LoRa modem as a plain byte stream over TCP (the
+                        serial modem protocol; the Android app bridges it to
+                        a radio over Bluetooth). Key in modem-tcp-key.txt.
   --modem-ip <host:port> connect to a Wi-Fi LoRa modem that listens at this
                         address (its host set to listen:<port>); can be repeated
   --block <ip|net|node> never accept this IP address, network (a.b.c.d/24) or
@@ -466,6 +471,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         mail_quota_mb: 0,
         modem_key: None,
         modem_ips: Vec::new(),
+        modem_tcp: Vec::new(),
         block: Vec::new(),
         regions: Vec::new(),
         strict_region: false,
@@ -546,6 +552,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--seed-dns" => c.seed_dns.push(val("--seed-dns")?),
             "--no-post-office" => c.no_post_office = true,
             "--no-relay" => c.no_relay = true,
+            "--modem-tcp" => c.modem_tcp.push(val("--modem-tcp")?),
             "--modem-ip" => {
                 let v = val("--modem-ip")?;
                 if !v.contains(':') {
@@ -807,6 +814,11 @@ pub fn run(cli: Vec<String>) {
     for p in &cfg.peers {
         settings::report(format!("  Backbone: connecting to {p}"), false);
         links::spawn_tcp_peer(p.clone(), tx.clone());
+    }
+    for m in &cfg.modem_tcp {
+        settings::report(format!("  LoRa modem: {m} (byte stream, e.g. the app's Bluetooth bridge)"), false);
+        let key = std::fs::read_to_string(cfg.data_dir.join("modem-tcp-key.txt")).ok().map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+        links::spawn_modem_tcp(m.clone(), key, tx.clone());
     }
     for m in &cfg.modem_ips {
         settings::report(format!("  Wi-Fi modem: connecting to {m}"), false);

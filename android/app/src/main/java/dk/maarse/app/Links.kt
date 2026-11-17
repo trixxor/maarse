@@ -38,7 +38,7 @@ interface LinkListener {
 
 /** A radio node over Bluetooth LE (Nordic UART Service). */
 @SuppressLint("MissingPermission")
-class BleLink(ctx: Context, private val address: String, private val l: LinkListener) : Link {
+class BleLink(ctx: Context, private val address: String, private val l: LinkListener, private val raw: Boolean = false) : Link {
     private val main = Handler(Looper.getMainLooper())
     private val decoder = FrameDecoder()
     private val out = ArrayDeque<ByteArray>()
@@ -82,19 +82,24 @@ class BleLink(ctx: Context, private val address: String, private val l: LinkList
             }
 
             override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
-                main.post { for (f in decoder.push(value)) l.onFrame(this@BleLink, f) }
+                main.post { deliver(value) }
             }
 
             @Deprecated("Android 12 and older")
             override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
                 @Suppress("DEPRECATION") val v = c.value ?: return
-                if (Build.VERSION.SDK_INT < 33) main.post { for (f in decoder.push(v)) l.onFrame(this@BleLink, f) }
+                if (Build.VERSION.SDK_INT < 33) main.post { deliver(v) }
             }
 
             override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
                 main.post { writing = false; pump() }
             }
         }, BluetoothDevice.TRANSPORT_LE)
+    }
+
+    /** Raw (a modem bridge): the bytes as they come; otherwise whole frames. */
+    private fun deliver(v: ByteArray) {
+        if (raw) l.onFrame(this, v) else for (f in decoder.push(v)) l.onFrame(this, f)
     }
 
     override fun send(frame: ByteArray) {

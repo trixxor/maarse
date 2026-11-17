@@ -3374,6 +3374,7 @@ pub(super) mod file_interop_tests {
             mail_quota_mb: 0,
             modem_key: None,
             modem_ips: Vec::new(),
+            modem_tcp: Vec::new(),
             block: Vec::new(),
             regions: Vec::new(),
             strict_region: false,

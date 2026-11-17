@@ -547,6 +547,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     fn on_timer(&mut self) {
+        // The phone that used us as its LoRa modem over Bluetooth is gone:
+        // route on our own again.
+        if crate::bus::BLE_LOST.swap(false, Relaxed) && self.modem && !self.wifi_modem {
+            self.modem = false;
+            log("Bluetooth client gone: an ordinary node again (not a modem)");
+        }
         if self.wifi_modem {
             self.modem_fallback_step();
         }

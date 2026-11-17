@@ -47,7 +47,13 @@ notification. The redirect hint: a device that receives a message while the
 user last sent from a sibling (within the hour) tells the contact's device
 to write to that sibling (`REDIRECT`).
 
-Not built yet: firmware devices. The simulator models
+**Radios** take part as the LoRa modem of a phone node, not as devices
+with their own account logic: the app bridges the radio over Bluetooth to
+the phone's maarse-host (`--modem-tcp`, the serial modem protocol with a key),
+so the account, post offices and sync run on the phone and the radio only
+carries packets. A radio leaves modem mode when the Bluetooth client goes. A
+radio on its own (no phone, no host) is not a device of a person; nothing in
+the design needs it, since a person reads messages on a screen. The simulator models
 the routing and mail parts (`tools/sim-experiments/linked_devices.mjs`,
 results below). Nothing is in production, so formats change without backward
 compatibility.

@@ -7,7 +7,7 @@ description = "Shared firmware logic for Må:rse: node, radio loop and channels 
 
 [dependencies]
 maarse-core = { path = "../../maarse-core" }
-maarse-crypto = { path = "../../maarse-crypto" }
+maarse-crypto = { path = "../../maarse-crypto", default-features = false }
 embassy-sync = "0.8.0"
 embassy-time = "0.5.1"
 embassy-futures = "0.1.2"

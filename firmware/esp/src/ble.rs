@@ -65,6 +65,8 @@ pub async fn ble_task(sdc: Ble, mac: [u8; 6], name: &'static str) {
                 while BLE_OUT.try_receive().is_ok() {}
                 maarse_fw_common::bus::BLE_CONNECTED.store(true, core::sync::atomic::Ordering::Relaxed);
                 select(rx_task(&server, &conn), tx_task(&server, &conn)).await;
+                // The client is gone: no longer anyone's modem.
+                maarse_fw_common::bus::BLE_LOST.store(true, core::sync::atomic::Ordering::Relaxed);
                 maarse_fw_common::bus::BLE_CONNECTED.store(false, core::sync::atomic::Ordering::Relaxed);
             }
         },

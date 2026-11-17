@@ -41,6 +41,9 @@ pub static USB_IN: Channel<M, Frame, 4> = Channel::new();
 pub static USB_OUT: Channel<M, FrameBuf, 16> = Channel::new();
 /// Finished frames for Bluetooth (with length field).
 pub static BLE_OUT: Channel<M, FrameBuf, 16> = Channel::new();
+/// Set by the Bluetooth task when a client disconnects: a node that was the
+/// phone's LoRa modem over Bluetooth goes back to being an ordinary node.
+pub static BLE_LOST: AtomicBool = AtomicBool::new(false);
 
 /// Packets received on the Wi-Fi backbone link (TCP), one Må:rse packet each.
 pub static NET_RX: Channel<M, Pkt, 4> = Channel::new();

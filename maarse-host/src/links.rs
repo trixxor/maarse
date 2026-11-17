@@ -555,14 +555,41 @@ pub fn spawn_serial_named(port: String, baud: u32, name: String, tx: Sender<In>)
 /// `try_clone` creates a handle that can be inherited (DuplicateHandle with
 /// bInheritHandle = TRUE), and then the process from a restart would keep the port
 /// locked forever ("Access denied").
-fn run_serial(mut port: Box<dyn serialport::SerialPort>, name: String, tx: &Sender<In>) {
+fn run_serial(port: Box<dyn serialport::SerialPort>, name: String, tx: &Sender<In>) {
+    run_modem(port, name, "usb-modem", tx);
+}
+
+/// A LoRa modem over a TCP byte stream with the serial modem protocol
+/// (`--modem-tcp`): the Android app bridges it to a radio over Bluetooth.
+/// If `<data>/modem-tcp-key.txt` exists, its key is sent first (a line
+/// `KEY <hex>`).
+pub fn spawn_modem_tcp(addr: String, key: Option<String>, tx: Sender<In>) {
+    thread::spawn(move || {
+        loop {
+            match TcpStream::connect(&addr) {
+                Ok(mut s) => {
+                    let _ = s.set_nodelay(true);
+                    let _ = s.set_read_timeout(Some(Duration::from_millis(10)));
+                    let ok = key.as_ref().is_none_or(|k| s.write_all(format!("KEY {k}\n").as_bytes()).is_ok());
+                    if ok {
+                        run_modem(s, format!("modem {addr}"), "ble-modem", &tx);
+                    }
+                }
+                Err(_) => {}
+            }
+            thread::sleep(Duration::from_secs(3));
+        }
+    });
+}
+
+fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind: &'static str, tx: &Sender<In>) {
     let id = next_id();
     let (wtx, wrx) = channel::<Vec<u8>>();
     // Put the node in modem mode: the host does the routing.
     if port.write_all(&[1, 0, 0x41]).is_err() {
         return;
     }
-    register(id, &name, "usb-modem");
+    register(id, &name, kind);
     if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
         unregister(id);
         return;
@@ -589,7 +616,7 @@ fn run_serial(mut port: Box<dyn serialport::SerialPort>, name: String, tx: &Send
                     }
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {}
             Err(_) => break,
         }
         // maarse-server: ask the modem for its own counters every 30 s (it

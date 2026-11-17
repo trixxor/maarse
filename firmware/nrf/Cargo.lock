@@ -1141,6 +1141,7 @@ dependencies = [
  "panic-halt",
  "rand_chacha",
  "rand_core 0.6.4",
+ "sha2",
  "static_cell",
  "trouble-host",
 ]

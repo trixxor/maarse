@@ -66,6 +66,8 @@ object Node : LinkListener {
     private val _status = MutableStateFlow("")
     val status: StateFlow<String> = _status.asStateFlow()
 
+    fun post(r: () -> Unit) { main.post(r) }
+
     fun init(ctx: Context) {
         if (::app.isInitialized) return
         app = ctx.applicationContext
@@ -103,15 +105,25 @@ object Node : LinkListener {
         NodeService.start(app)
         if (mode == Mode.PHONE || mode == Mode.SERVER) HostService.start(app, mode == Mode.SERVER)
         else HostService.stop(app)
+        val radio = prefs.bleAddress
+        if (mode == Mode.PHONE && radio != null && ModemBridge.enabled(app)) ModemBridge.start(app, radio) else ModemBridge.stop()
         connect()
     }
 
     fun stop() {
         prefs.running = false
+        ModemBridge.stop()
         stopLink()
         if (prefs.mode == Mode.PHONE || prefs.mode == Mode.SERVER) HostService.stop(app)
         NodeService.stop(app)
         conn.value = Conn(prefs.mode, Conn.State.OFF, "Not connected")
+    }
+
+    /** Use the chosen radio as the phone node's LoRa modem (or stop). */
+    fun setModemRadio(on: Boolean) {
+        ModemBridge.configure(app, on)
+        ModemBridge.stop()
+        restartHost()
     }
 
     /** Restart the phone's host, e.g. after its settings changed. */

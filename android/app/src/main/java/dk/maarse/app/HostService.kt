@@ -121,6 +121,8 @@ object HostFiles {
         // phone can reach: always ask for the key. The server keeps its own
         // dashboard (admin login) on port 8080.
         if (!server) a += listOf("--http", "127.0.0.1:$PORT", "--require-key")
+        // The radio over Bluetooth as this node's LoRa modem (ModemBridge).
+        if (!server && File(dir, "modem-bridge.txt").exists()) a += listOf("--modem-tcp", "127.0.0.1:${ModemBridge.PORT}")
         return a
     }
 

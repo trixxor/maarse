@@ -57,6 +57,8 @@ pub async fn ble_task(sdc: SoftdeviceController<'static>, mac: [u8; 6], name: &'
                 // Old frames from before the connection are thrown away.
                 while BLE_OUT.try_receive().is_ok() {}
                 select(rx_task(&server, &conn), tx_task(&server, &conn)).await;
+                // The client is gone: no longer anyone's modem.
+                maarse_fw_common::bus::BLE_LOST.store(true, core::sync::atomic::Ordering::Relaxed);
             }
         },
     )

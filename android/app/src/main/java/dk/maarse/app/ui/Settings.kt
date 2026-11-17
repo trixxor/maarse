@@ -100,7 +100,19 @@ private fun ConnectionSection() {
             OutlinedTextField(remote, { remote = it; Node.prefs.remoteAddr = it }, Modifier.fillMaxWidth(), label = { Text("Address, e.g. 10.0.0.2:8080") }, singleLine = true)
             OutlinedTextField(key, { key = it; Node.prefs.remoteKey = it }, Modifier.fillMaxWidth(), label = { Text("Access key (access-key.txt on the host)") }, singleLine = true)
         }
-        Mode.PHONE -> Hint("No radio needed: the phone reaches others over the internet. Messages for people who are offline are kept by post offices on the backbone.")
+        Mode.PHONE -> {
+            Hint("No radio needed: the phone reaches others over the internet. Messages for people who are offline are kept by post offices on the backbone.")
+            var modem by remember { mutableStateOf(dk.maarse.app.ModemBridge.enabled(ctx)) }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Also use my radio as LoRa modem")
+                    Text("The phone node sends and receives over LoRa through the radio (" + (bleName ?: "choose one under Radio over Bluetooth") + "). The radio only carries packets; the phone does the routing and the account.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(modem, { v -> modem = v; Node.setModemRadio(v) }, enabled = Node.prefs.bleAddress != null)
+            }
+            if (Node.prefs.bleAddress == null) OutlinedButton(onClick = { picking = true }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("Choose radio") }
+        }
         Mode.SERVER -> Hint("Needs Wi-Fi and a charger, a port opened in the router and a public address (below). Admin dashboard on port 8080.")
     }
     refusal?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
@@ -115,7 +127,11 @@ private fun ConnectionSection() {
     }
     if (picking) BlePicker(onDone = { addr, name ->
         picking = false
-        if (addr != null) { Node.prefs.bleAddress = addr; Node.prefs.bleName = name; bleName = name; mode = Mode.BLE; Node.start(Mode.BLE) }
+        if (addr != null) {
+            Node.prefs.bleAddress = addr; Node.prefs.bleName = name; bleName = name
+            // Chosen as the phone node's modem: stay a phone node.
+            if (mode != Mode.PHONE) { mode = Mode.BLE; Node.start(Mode.BLE) }
+        }
     })
 }
 

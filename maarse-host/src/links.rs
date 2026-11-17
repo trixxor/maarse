@@ -599,7 +599,10 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
     let mut last_poll = std::time::Instant::now() - std::time::Duration::from_secs(25);
     'link: loop {
         match port.read(&mut buf) {
-            Ok(0) => break,
+            Ok(0) => {
+                eprintln!("[modem] {kind}: the other side closed the connection");
+                break;
+            }
             Ok(n) => {
                 dec.push(&buf[..n]);
                 while let Some(f) = dec.next_frame() {
@@ -617,7 +620,10 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
                 }
             }
             Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {}
-            Err(_) => break,
+            Err(e) => {
+                eprintln!("[modem] {kind}: read error: {e}");
+                break;
+            }
         }
         // maarse-server: ask the modem for its own counters every 30 s (it
         // answers in modem mode without leaving it).
@@ -633,7 +639,8 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
             out.extend_from_slice(&((pkt.len() + 1) as u16).to_le_bytes());
             out.push(0x40);
             out.extend_from_slice(&pkt);
-            if port.write_all(&out).is_err() {
+            if let Err(e) = port.write_all(&out) {
+                eprintln!("[modem] {kind}: write error: {e}");
                 break 'link;
             }
             note_tx(id);

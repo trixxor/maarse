@@ -761,6 +761,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             let _ = f.push(0xC0);
             let _ = f.push(snr as u8);
             let _ = f.extend_from_slice(&pkt);
+            // The host may be on USB or (the phone node) on Bluetooth.
+            if crate::bus::BLE_CONNECTED.load(Relaxed) {
+                let _ = crate::bus::BLE_OUT.try_send(f.clone());
+            }
             let _ = USB_OUT.try_send(f);
             return;
         }

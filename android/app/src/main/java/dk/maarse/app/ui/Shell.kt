@@ -227,7 +227,7 @@ private fun ModeChooser(onConnected: () -> Unit) {
                     Text(radio?.let { "$it · over Bluetooth" } ?: "Choose a radio first", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (radio == null) TextButton(onClick = { picking = true }) { Text("Choose") }
-                else Switch(modem, { modem = it; ModemBridge.configure(ctx, it) })
+                else Switch(modem, { modem = it })
             }
             Mode.BLE -> Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(radio?.let { "Radio: $it" } ?: "No radio chosen yet", Modifier.weight(1f))
@@ -242,9 +242,11 @@ private fun ModeChooser(onConnected: () -> Unit) {
         val ready = when (mode) { Mode.BLE -> radio != null; Mode.REMOTE -> remote.isNotBlank(); else -> true }
         Button(
             onClick = {
-                val wasModem = ModemBridge.enabled(ctx)
+                // The host reads the modem setting at start: set it first.
+                val changed = mode == Mode.PHONE && radio != null && ModemBridge.enabled(ctx) != modem
+                if (changed) ModemBridge.configure(ctx, modem)
                 Node.start(mode)
-                if (mode == Mode.PHONE && wasModem != modem) Node.restartHost()
+                if (changed) Node.restartHost()
                 onConnected()
             },
             enabled = ready, modifier = Modifier.fillMaxWidth().height(48.dp),

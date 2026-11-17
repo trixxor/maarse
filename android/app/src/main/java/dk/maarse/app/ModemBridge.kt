@@ -41,15 +41,25 @@ object ModemBridge {
 
     fun start(ctx: Context, radio: String) {
         if (running) return
-        val key = runCatching { File(HostFiles.dataDir(ctx, false), "modem-tcp-key.txt").readText().trim() }.getOrNull() ?: return
+        val key = File(HostFiles.dataDir(ctx, false), "modem-tcp-key.txt").readTextOrNull()?.trim()
+        if (key.isNullOrEmpty()) {
+            // The host started without a key: make one and restart the host so both use it.
+            Node.note("Radio bridge: no key yet, making one and restarting the node")
+            configure(ctx, true)
+            Node.restartHost()
+            return
+        }
         running = true
         Thread({
             try {
-                ServerSocket(PORT, 1, InetAddress.getLoopbackAddress()).use { srv ->
+                // IPv4 on purpose: the host dials 127.0.0.1, and getLoopbackAddress() may be ::1.
+                ServerSocket(PORT, 1, InetAddress.getByName("127.0.0.1")).use { srv ->
                     server = srv
                     while (running) {
                         val s = runCatching { srv.accept() }.getOrNull() ?: break
-                        serve(ctx.applicationContext, s, key, radio)
+                        // One broken host connection must not end the bridge.
+                        runCatching { serve(ctx.applicationContext, s, key, radio) }
+                            .onFailure { Node.post { Node.note("Radio bridge: host connection lost (${it.message})") } }
                     }
                 }
             } catch (e: Exception) {
@@ -58,6 +68,8 @@ object ModemBridge {
             running = false
         }, "modem-bridge").start()
     }
+
+    val isRunning get() = running
 
     fun stop() {
         running = false
@@ -83,11 +95,13 @@ object ModemBridge {
             if (readLine(input).trim() != "KEY $key") return
             val out = sock.getOutputStream()
             val done = java.util.concurrent.CountDownLatch(1)
+            // Radio data arrives on the main thread, where Android forbids socket writes.
+            val writer = java.util.concurrent.Executors.newSingleThreadExecutor()
             var link: BleLink? = null
             val listener = object : LinkListener {
                 override fun onOpen(link: Link) { Node.note("Radio connected as the phone node's LoRa modem") }
                 override fun onFrame(link: Link, frame: ByteArray) {
-                    runCatching { out.write(frame); out.flush() }.onFailure { done.countDown() }
+                    writer.execute { runCatching { out.write(frame); out.flush() }.onFailure { done.countDown() } }
                 }
                 override fun onClosed(link: Link, why: String) {
                     Node.note("Radio (modem): $why")
@@ -101,7 +115,7 @@ object ModemBridge {
                     while (true) {
                         val n = input.read(buf)
                         if (n < 0) break
-                        val l = link ?: continue
+                        val l = link ?: run { Thread.sleep(20); link } ?: continue
                         l.send(buf.copyOf(n))
                     }
                 } catch (_: Exception) {
@@ -110,7 +124,10 @@ object ModemBridge {
             }, "modem-bridge-in")
             reader.start()
             done.await()
+            writer.shutdownNow()
             Node.post { link?.close() }
         }
     }
 }
+
+private fun File.readTextOrNull() = runCatching { readText() }.getOrNull()

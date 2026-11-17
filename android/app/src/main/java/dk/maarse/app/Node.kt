@@ -101,6 +101,7 @@ object Node : LinkListener {
     fun note(s: String) {
         val t = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT).format(java.util.Date())
         log.update { (it + "$t  $s").takeLast(300) }
+        android.util.Log.i("maarse-app", s)
     }
 
     // ---------- connecting ----------
@@ -115,7 +116,7 @@ object Node : LinkListener {
         if (mode == Mode.PHONE || mode == Mode.SERVER) HostService.start(app, mode == Mode.SERVER)
         else HostService.stop(app)
         val radio = prefs.bleAddress
-        if (mode == Mode.PHONE && radio != null && ModemBridge.enabled(app)) ModemBridge.start(app, radio) else ModemBridge.stop()
+        if (mode == Mode.PHONE && radio != null && ModemBridge.enabled(app)) { ModemBridge.stop(); ModemBridge.start(app, radio) } else ModemBridge.stop()
         connect()
     }
 
@@ -211,6 +212,12 @@ object Node : LinkListener {
         if (prefs.mode == Mode.BLE) link.send(Cmd.getRadio())
         person.value = null
         if (prefs.mode != Mode.BLE) link.send(Cmd.getPerson())
+        // The radio bridge may have stopped (e.g. app process restarted): bring it back.
+        val radio = prefs.bleAddress
+        if (prefs.mode == Mode.PHONE) note("Radio as modem: ${if (ModemBridge.enabled(app)) "on" else "off"}, radio ${radio ?: "none"}, bridge ${if (ModemBridge.isRunning) "running" else "stopped"}")
+        if (prefs.mode == Mode.PHONE && ModemBridge.enabled(app) && !ModemBridge.isRunning) {
+            if (radio == null) note("Radio as modem is on, but no radio is chosen") else ModemBridge.start(app, radio)
+        }
         main.removeCallbacks(poll)
         main.postDelayed(poll, 15_000)
     }

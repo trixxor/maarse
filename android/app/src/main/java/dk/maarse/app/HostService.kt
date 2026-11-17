@@ -76,7 +76,7 @@ class HostService : Service() {
 
         fun start(ctx: Context, server: Boolean) {
             val i = Intent(ctx, HostService::class.java).putExtra(EXTRA_SERVER, server)
-            ctx.startForegroundService(i)
+            runCatching { ctx.startForegroundService(i) }
         }
 
         fun stop(ctx: Context) {

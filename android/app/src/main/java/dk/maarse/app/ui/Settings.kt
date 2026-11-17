@@ -190,54 +190,126 @@ internal fun BlePicker(onDone: (String?, String?) -> Unit) {
 
 @Composable
 internal fun NodeSection() {
+    val ctx = LocalContext.current
     val me by Node.me.collectAsState()
     val stats by Node.stats.collectAsState()
     val regions by Node.regions.collectAsState()
     val sharing by Node.sharing.collectAsState()
     val radio by Node.radio.collectAsState()
     val conn by Node.conn.collectAsState()
-    SectionTitle("This node")
-    Hint("Address: " + (me?.addr ?: ""))
-    var name by remember(me?.name) { mutableStateOf(me?.name ?: "") }
-    Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(name, { name = it }, Modifier.weight(1f), label = { Text("Name others see (~name)") }, singleLine = true)
-        TextButton(onClick = { Node.send(Cmd.setName(name.trim())); Node.send(Cmd.getName()) }) { Text("Save") }
-    }
-    // Roles only mean something on a radio node; the host is an anchor by default.
-    if (conn.mode == Mode.BLE) {
-        val role = stats[7]
-        Text("Role", Modifier.padding(start = 16.dp, top = 8.dp), style = MaterialTheme.typography.labelLarge)
-        Names.ROLES.forEachIndexed { i, r ->
-            Row(Modifier.fillMaxWidth().clickable { Node.send(Cmd.setRole(i)); Node.send(Cmd.getStats()) }.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(role == i, { Node.send(Cmd.setRole(i)); Node.send(Cmd.getStats()) })
-                Column { Text(r); Text(Names.ROLE_HELP[i], style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
+
+    GroupTitle("Your name")
+    Card2 {
+        var name by remember(me?.name) { mutableStateOf(me?.name ?: "") }
+        Text("Shown to others as ~name next to your address. Anyone can pick any name, so it is a hint, not a proof.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(name, { name = it.take(24) }, Modifier.weight(1f), label = { Text("Name") }, singleLine = true)
+            TextButton(onClick = { Node.send(Cmd.setName(name.trim())); Node.send(Cmd.getName()); Node.send(Cmd.announce()) }) { Text("Save") }
         }
     }
-    var reg by remember(regions) { mutableStateOf(regions?.names ?: "") }
-    Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(reg, { reg = it }, Modifier.weight(1f), label = { Text("Regions (comma separated, e.g. dk, nordjylland)") }, singleLine = true)
-        TextButton(onClick = { Node.send(Cmd.setRegions(regions?.strict ?: false, reg.trim())); Node.send(Cmd.getRegions()) }) { Text("Save") }
+
+    GroupTitle("Role — how this node helps others")
+    Card2 {
+        when (conn.mode) {
+            Mode.BLE -> {
+                val role = stats[7]
+                Text("Your radio's role. It decides whether the radio passes on messages for others.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Names.ROLES.forEachIndexed { i, r ->
+                    Row(Modifier.fillMaxWidth().clickable { Node.send(Cmd.setRole(i)); Node.send(Cmd.getStats()) }.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
+                        RadioButton(role == i, { Node.send(Cmd.setRole(i)); Node.send(Cmd.getStats()) })
+                        Column(Modifier.padding(top = 10.dp)) {
+                            Text(r, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                            Text(Names.ROLE_HELP[i], style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                Text("Tip: a radio you carry around → Auto. A radio on a roof or mast → Repeater. In a forest or at sea with no repeaters → Relay.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            Mode.PHONE, Mode.SERVER -> {
+                val repeater = HostFiles.readSettings(ctx, conn.mode == Mode.SERVER).lines().any { it.trim() == "--repeater-role" }
+                Text("The phone node routes like a fixed node. Choose how:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                listOf(false to ("Anchor (default)" to "Passes on messages, splits long paths and answers path requests on behalf of others. Best for a node on the internet."),
+                    true to ("Repeater" to "Passes on messages, but does not split paths. Use it if your node is often offline."))
+                    .forEach { (rep, t) ->
+                        Row(Modifier.fillMaxWidth().clickable { setRepeater(ctx, conn.mode == Mode.SERVER, rep) }.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
+                            RadioButton(repeater == rep, { setRepeater(ctx, conn.mode == Mode.SERVER, rep) })
+                            Column(Modifier.padding(top = 10.dp)) {
+                                Text(t.first, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                                Text(t.second, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                Text("Client, Relay and Auto are roles for a Må:rse radio. To set your radio's role, choose \"Through my radio only\" under Connection, set it, and switch back. When the radio is the phone's LoRa modem, the phone does the routing.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            Mode.REMOTE -> Text("You follow a host on another computer. Its role is set on that computer (Host settings there); a radio's role is set when you connect to the radio over Bluetooth.",
+                style = MaterialTheme.typography.bodySmall)
+        }
     }
-    sharing?.let { sh ->
-        Text("Share my position in announces", Modifier.padding(start = 16.dp, top = 8.dp), style = MaterialTheme.typography.labelLarge)
-        Row(Modifier.padding(horizontal = 8.dp)) {
+
+    GroupTitle("Share my position")
+    Card2 {
+        val sh = sharing
+        val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+            if (r.values.any { it }) Node.updatePosition(ctx)
+        }
+        Text("Put your position in your announces, so others see you on their map. Rounded unless you choose Precise. Uses the phone's location.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (sh == null) Text("Fetching…") else {
             PRECISION.forEachIndexed { i, p ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(sh.prec == i, {
-                        Node.send(Cmd.setSharing(i, (sh.lat * 1e7).toInt(), (sh.lon * 1e7).toInt(), sh.telemetry)); Node.send(Cmd.getSharing())
-                    })
-                    Text(p, style = MaterialTheme.typography.bodySmall)
+                Row(Modifier.fillMaxWidth().clickable {
+                    Node.setPrecision(ctx, i)
+                    if (i > 0 && !Node.hasLocation(ctx)) ask.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION))
+                }, verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(sh.prec == i, null)
+                    Text(p)
                 }
             }
+            if (sh.prec > 0) Text(
+                if (sh.lat == 0.0 && sh.lon == 0.0) "No position yet" + (if (!Node.hasLocation(ctx)) " — allow location for Må:rse" else " — waiting for the phone's location")
+                else "Shared: %.3f, %.3f (updated every 10 minutes)".format(sh.lat, sh.lon),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Share battery and uptime")
+                    Text("Helps others see if a node is healthy.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(sh.telemetry, { Node.send(Cmd.setSharing(sh.prec, (sh.lat * 1e7).toInt(), (sh.lon * 1e7).toInt(), it)); Node.send(Cmd.getSharing()) })
+            }
         }
     }
+
+    GroupTitle("Regions")
+    Card2 {
+        var reg by remember(regions) { mutableStateOf(regions?.names ?: "") }
+        Text("Channel messages marked with a region (e.g. #help@nordjylland) only travel where nodes have that region. Leave empty to get everything.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(reg, { reg = it }, Modifier.weight(1f), label = { Text("e.g. dk, nordjylland") }, singleLine = true)
+            TextButton(onClick = { Node.send(Cmd.setRegions(regions?.strict ?: false, reg.trim())); Node.send(Cmd.getRegions()) }) { Text("Save") }
+        }
+    }
+
     radio?.let { r ->
-        Hint("Radio: %.3f MHz · SF%d · %.1f kHz · %d dBm. All Må:rse nodes use the same radio settings.".format(r.freq / 1e6, r.sf, r.bw / 1e3, r.power))
+        GroupTitle("Radio")
+        Card2 {
+            Text("%.3f MHz · SF%d · %.1f kHz · %d dBm".format(r.freq / 1e6, r.sf, r.bw / 1e3, r.power), fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+            Text("All Må:rse radios use the same settings, so everyone hears everyone.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
-    Row(Modifier.padding(horizontal = 16.dp)) {
-        TextButton(onClick = { Node.send(Cmd.announce()) }) { Text("Announce now") }
-    }
+    TextButton(onClick = { Node.send(Cmd.announce()) }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { Text("Announce now (tell others who you are)") }
+    Hint("Address: " + (me?.addr ?: ""))
+}
+
+/** The phone node's routing role: --repeater-role in its settings, then a restart. */
+private fun setRepeater(ctx: Context, server: Boolean, on: Boolean) {
+    val lines = HostFiles.readSettings(ctx, server).lines().filter { it.trim().isNotEmpty() && it.trim() != "--repeater-role" }
+    HostFiles.writeSettings(ctx, server, (lines + if (on) listOf("--repeater-role") else emptyList()).joinToString("\n"))
+    Node.restartHost()
 }
 
 // ---------- the phone's own maarse-host ----------

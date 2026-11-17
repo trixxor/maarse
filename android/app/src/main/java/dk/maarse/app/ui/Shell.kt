@@ -150,7 +150,7 @@ private fun Home(nav: Nav) {
             MeAvatar(40.dp) { nav.go(Screen.Me) }
             Text(nav.tab.title, Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
-        ConnectionChip { nav.sheet = true }
+        ConnectionBanner { nav.sheet = true }
         AlertBar()
         Box(Modifier.weight(1f)) {
             when (nav.tab) {
@@ -306,7 +306,7 @@ private fun MeScreen(nav: Nav) {
         }
         GroupTitle("This phone")
         Group {
-            GroupRow("Connection", modeName(conn.mode)) { nav.sheet = true }
+            GroupRow("Connection", connectionSummary()) { nav.sheet = true }
             GroupRow("Notifications and background", "Messages, channels, alerts", last = true) { nav.go(Screen.Page(MePage.APP)) }
         }
         GroupTitle("Advanced")
@@ -364,7 +364,18 @@ private fun WelcomeAccount(nav: Nav) {
         Text("Step 2 of 2 · Your account", Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text("Create an account, or link this phone to the one on your computer. You can do it later under You.",
             Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (me == null) Hint("Starting the node…") else AccountSection()
+        if (me == null) Hint("Starting the node…") else {
+            var name by remember { mutableStateOf(me?.name ?: "") }
+            GroupTitle("Your name")
+            Card2 {
+                Text("Shown to others next to your address.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(name, { name = it.take(24) }, Modifier.weight(1f), singleLine = true, label = { Text("Name") })
+                    TextButton(onClick = { Node.send(dk.maarse.app.Cmd.setName(name.trim())); Node.send(dk.maarse.app.Cmd.getName()) }) { Text("Save") }
+                }
+            }
+            AccountSection()
+        }
         OutlinedButton(onClick = { nav.home() }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Done") }
     }
 }

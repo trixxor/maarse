@@ -84,9 +84,50 @@ fun modeName(m: Mode) = when (m) {
     Mode.SERVER -> "Server on this phone"
 }
 
-/** "Phone node · online · …  Change": how we are connected, one tap from switching. */
+/**
+ * Shown only when something is wrong: not connected, connecting, or no way
+ * out (airplane mode, no internet, no radio). Everything fine: nothing.
+ */
 @Composable
-fun ConnectionChip(onClick: () -> Unit) {
+fun ConnectionBanner(onClick: () -> Unit) {
+    val c by Node.conn.collectAsState()
+    val off by Node.offline.collectAsState()
+    val (title, text) = when {
+        c.state == Conn.State.OFF -> "Not connected" to "Tap to choose how this phone connects."
+        c.state == Conn.State.CONNECTING -> "Connecting…" to c.text
+        off -> "No connection" to Node.offlineWhy.collectAsState().value
+        else -> return
+    }
+    Row(
+        Modifier.padding(horizontal = 16.dp, vertical = 4.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.tertiaryContainer).clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(10.dp).clip(CircleShape).background(Amber))
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onTertiaryContainer)
+            Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer)
+        }
+    }
+}
+
+/** How we are connected, in a few words (the You page). */
+@Composable
+fun connectionSummary(): String {
+    val c by Node.conn.collectAsState()
+    val off by Node.offline.collectAsState()
+    val stats by Node.stats.collectAsState()
+    return buildString {
+        append(modeName(c.mode))
+        append(when { c.state == Conn.State.OFF -> " · not connected"; c.state == Conn.State.CONNECTING -> " · connecting"; off -> " · no connection"; else -> " · online" })
+        if (c.state == Conn.State.ONLINE && c.mode == Mode.PHONE) stats[5]?.let { append(" · $it internet link${if (it == 1) "" else "s"}") }
+    }
+}
+
+@Composable
+private fun UnusedChip(onClick: () -> Unit) {
     val c by Node.conn.collectAsState()
     val stats by Node.stats.collectAsState()
     val (dot, state) = when (c.state) {
@@ -130,6 +171,7 @@ fun DeliveryIcon(status: String, channel: Boolean) {
         status == "delivered" || status == "carried" -> Triple(Icons.Filled.DoneAll, MaterialTheme.colorScheme.primary, "Delivered")
         status == "mailbox" -> Triple(Icons.Filled.MailOutline, Amber, "Waiting in a post office")
         status == "sent" -> Triple(Icons.Filled.Done, MaterialTheme.colorScheme.onSurfaceVariant, if (channel) "Sent" else "Sent, waiting for receipt")
+        status == "queued" -> Triple(Icons.Filled.Schedule, Amber, "Waiting for a connection")
         status.startsWith("error") -> Triple(Icons.Outlined.ErrorOutline, MaterialTheme.colorScheme.error, status)
         else -> Triple(Icons.Filled.Schedule, MaterialTheme.colorScheme.onSurfaceVariant, "Sending")
     }

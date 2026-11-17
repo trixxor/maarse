@@ -93,6 +93,10 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 1) {
             buildList { while (c.moveToNext()) add(row(c)) }
         }
 
+    fun queued(): List<Msg> = readableDatabase.rawQuery("SELECT * FROM msg WHERE mine = 1 AND status = 'queued' ORDER BY id", null).use { c ->
+        buildList { while (c.moveToNext()) add(row(c)) }
+    }
+
     fun deleteConv(conv: String) { writableDatabase.delete("msg", "conv = ?", arrayOf(conv)) }
 
     private fun row(c: android.database.Cursor) = Msg(

@@ -53,19 +53,25 @@ fun NetworkScreen(onPage: (NetPage) -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
         if (conn.mode == Mode.SERVER) { ServerPanel(); return@Column }
         val online = conn.state == Conn.State.ONLINE
-        val near = s[83] ?: 0
+        // Radios heard: only with a radio (over Bluetooth, or as the phone's modem).
+        val hasRadio = conn.mode == Mode.BLE || (conn.mode == Mode.PHONE && dk.maarse.app.ModemBridge.enabled(androidx.compose.ui.platform.LocalContext.current))
+        val near = if (hasRadio) s[83] ?: 0 else 0
+        val off by Node.offline.collectAsState()
         val links = s[5] ?: 0
         val (headline, color) = when {
             !online -> "Not connected" to MaterialTheme.colorScheme.onSurfaceVariant
+            off -> "No connection" to Amber
             near == 0 && links == 0 -> "Connected, but nobody in reach yet" to Amber
             else -> "All good" to MaterialTheme.colorScheme.primary
         }
         val story = when {
-            !online -> "Tap the line at the top of Chats to choose how this phone connects."
+            !online -> "Choose how this phone connects: tap your picture, then Connection."
+            off -> "The phone has no internet" + (if (hasRadio) "" else " and no radio") + ". Messages you write wait and go out when you are back online."
             else -> buildList {
                 if (links > 0) add("You reach others over the internet ($links link${if (links == 1) "" else "s"})")
-                if (near > 0) add("$near radio${if (near == 1) "" else "s"} heard nearby")
-                if (links == 0 && near == 0) add("No radio heard and no internet link yet. Messages wait and go when someone is in reach")
+                if (near > 0) add("$near radio${if (near == 1) "" else "s"} heard nearby over LoRa")
+                if (!hasRadio) add("No radio: LoRa is not used (add one under Connection)")
+                if (links == 0 && near == 0) add("No internet link and no radio heard yet. Messages wait and go when someone is in reach")
                 s[7]?.let { add("this node works as ${Names.ROLES.getOrElse(it) { "?" }.lowercase()}") }
             }.joinToString(". ") + "."
         }

@@ -223,6 +223,8 @@ object Node : LinkListener {
         override fun run() {
             send(Cmd.getStats())
             if (fastPoll) send(Cmd.getNeighbors())
+            updateOffline()
+            if (System.currentTimeMillis() - lastPosition > 10 * 60_000) updatePosition()
             main.postDelayed(this, if (fastPoll) 5000 else 15_000)
         }
     }
@@ -235,14 +237,99 @@ object Node : LinkListener {
         val t = text.trim()
         if (t.isEmpty()) return null
         if (t.toByteArray().size > maxText(conv)) return "The message is too long"
-        if (conn.value.state != Conn.State.ONLINE) return "Not connected"
-        val (k, a) = conv.split(":", limit = 2)
-        val r = req()
+        // No way out (airplane mode, no radio): keep it and send it when
+        // there is one, instead of pretending it went.
+        if (offline.value || conn.value.state != Conn.State.ONLINE) {
+            db.insert(Msg(0, conv, true, me.value?.addr ?: "", t, System.currentTimeMillis(), "queued", 0, 0))
+            bump()
+            return null
+        }
         val id = db.insert(Msg(0, conv, true, me.value?.addr ?: "", t, System.currentTimeMillis(), "sending…", 0, 0))
-        pending[r] = id
-        send(if (k == "ch") Cmd.sendChannel(r, a, t) else Cmd.sendDirect(r, a, t))
+        transmit(id, conv, t)
         bump()
         return null
+    }
+
+    private fun transmit(row: Long, conv: String, t: String) {
+        val (k, a) = conv.split(":", limit = 2)
+        val r = req()
+        pending[r] = row
+        send(if (k == "ch") Cmd.sendChannel(r, a, t) else Cmd.sendDirect(r, a, t))
+    }
+
+    /** Messages written while offline go out once there is a way. */
+    private fun flushQueued() {
+        if (offline.value || conn.value.state != Conn.State.ONLINE) return
+        val q = db.queued()
+        if (q.isEmpty()) return
+        q.forEach { m -> db.setStatus(m.id, "sending…"); transmit(m.id, m.conv, m.text) }
+        note("Sent ${q.size} message(s) written while offline")
+        bump()
+    }
+
+    /**
+     * No way to reach anyone: no internet on the phone (or the host has no
+     * links) and no radio. A radio over Bluetooth always counts as a way.
+     */
+    val offline = MutableStateFlow(false)
+    val offlineWhy = MutableStateFlow("")
+
+    private fun updateOffline() {
+        val mode = prefs.mode
+        val s = stats.value
+        val net = runCatching {
+            val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
+            cm.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        }.getOrDefault(true)
+        val off = when (mode) {
+            Mode.BLE -> false
+            Mode.PHONE -> !ModemBridge.enabled(app) && (!net || (s[5] ?: 1) == 0)
+            Mode.REMOTE, Mode.SERVER -> !net
+        }
+        offlineWhy.value = when {
+            !off -> ""
+            !net -> "No internet" + (if (mode == Mode.PHONE) " and no radio" else "") + ". Messages wait and go out when you are back online."
+            else -> "The phone has internet, but no Må:rse node answers (the backbone servers cannot be reached). Messages wait and go out when one does."
+        }
+        if (off != offline.value) offline.value = off
+        if (!off) flushQueued()
+    }
+
+    // ---------- the phone's position, for sharing ----------
+
+    fun hasLocation(ctx: Context) =
+        ctx.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    private var lastPosition = 0L
+
+    fun setPrecision(ctx: Context, prec: Int) {
+        val sh = sharing.value
+        send(Cmd.setSharing(prec, ((sh?.lat ?: 0.0) * 1e7).toInt(), ((sh?.lon ?: 0.0) * 1e7).toInt(), sh?.telemetry ?: false))
+        send(Cmd.getSharing())
+        if (prec > 0) updatePosition(ctx)
+    }
+
+    /** The phone's location to the node (only while sharing is on). */
+    @android.annotation.SuppressLint("MissingPermission")
+    fun updatePosition(ctx: Context = app) {
+        val sh = sharing.value ?: return
+        if (sh.prec == 0 || !hasLocation(ctx)) return
+        lastPosition = System.currentTimeMillis()
+        val lm = ctx.getSystemService(android.location.LocationManager::class.java)
+        val use = { l: android.location.Location? ->
+            if (l != null) main.post {
+                val cur = sharing.value ?: return@post
+                send(Cmd.setSharing(cur.prec, (l.latitude * 1e7).toInt(), (l.longitude * 1e7).toInt(), cur.telemetry))
+                send(Cmd.getSharing())
+            }
+        }
+        val providers = lm.getProviders(true)
+        providers.mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time }?.let(use)
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            val p = listOf(android.location.LocationManager.FUSED_PROVIDER, android.location.LocationManager.GPS_PROVIDER, android.location.LocationManager.NETWORK_PROVIDER).firstOrNull { it in providers }
+            if (p != null) runCatching { lm.getCurrentLocation(p, null, app.mainExecutor) { use(it) } }
+        }
     }
 
     fun joinChannel(name: String) { send(Cmd.join(name.trim().removePrefix("#"))) }
@@ -375,7 +462,7 @@ object Node : LinkListener {
                 val m = if (fresh) old.filterKeys { it in 60..70 || it >= 93 }.toMutableMap() else old.toMutableMap()
                 ev.items.forEach { (k, v) -> m[k] = v }
                 m
-            }
+            }.also { updateOffline() }
             is Ev.Radio -> radio.value = ev.cfg
             is Ev.Regions -> regions.value = ev
             is Ev.Sharing -> sharing.value = ev

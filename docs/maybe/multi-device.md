@@ -1,9 +1,19 @@
 # Linked devices: one person, several devices
 
-Status: design note (2026-11-17). Nothing here is built in host, firmware or
-client yet. The simulator models the routing and mail parts
-(`tools/sim-experiments/linked_devices.mjs`, results below). Nothing is in
-production, so formats change without backward compatibility.
+Status (2026-11-17): **stage 1 is built in maarse-host, the web client and
+the Android app** (not in firmware): device certificates and the signed device
+list (`maarse-crypto/src/person.rs`), linking by address with check words,
+`APP_PERSON` in announces, "newest announce wins" for messages to the person
+(chosen by the sender), messages from a device shown as from the person, and
+sibling sync of received and sent messages (`maarse-host/src/node/person.rs`,
+test `tools/linked_devices_test.py`). Messages to the person are encrypted to
+the chosen device's own key, not yet to a weekly inbox key, so post offices
+still keep mail under the device. Not built yet: sections 2 (inbox key), 4
+(offices keyed on M), 6 (time, sequence numbers), 7 (backup v2), revocation
+from the client, QR linking, firmware devices. The simulator models the
+routing and mail parts (`tools/sim-experiments/linked_devices.mjs`, results
+below). Nothing is in production, so formats change without backward
+compatibility.
 
 ## Goal
 
@@ -196,12 +206,15 @@ this (`maarse-core/src/companion.rs`, `docs/protocol-spec.md`):
 
 | Code | Name | Content |
 |---|---|---|
-| 0x35 | `LinkDevice` | master side: device public key (32+32) and name → certificate |
-| 0x36 | `DeviceList` | get, or (master) set/revoke: signed list |
-| 0x37 | `InboxState` | install the chain id, week and K(n) (local only, like `SetIdentity`) |
-| 0xb5 | `DeviceLinked` | certificate of a new device |
-| 0xb6 | `DeviceListChanged` | the signed list |
-| 0xb7 | `SiblingSync` | a synced item from a sibling: message copy, sent copy or read mark |
+| 0x35 | `LinkDevice` | master side: the new device's address → certificate and list sent to it |
+| 0x36 | `GetPerson` | reply `Person` |
+| 0x37 | `PersonSetup` | create, restore from the phrase, await link, leave, cancel |
+| 0xb5 | `DeviceLinked` | a device was linked (index and check words) |
+| 0xb6 | `Person` | state, person, index, device list version and devices, check words |
+| 0xb7 | `PersonPhrase` | the 24 words of a new person, once |
+
+Sibling copies, certificates and lists travel between devices as direct
+message content `0x09` (`maarse-core/src/content.rs`, module `person`).
 
 New packet content: the inbox week number (2 bytes) and chain id (1 byte) in
 messages to M; hello time + stratum (5 bytes); Deposit op `KEYREC` for key

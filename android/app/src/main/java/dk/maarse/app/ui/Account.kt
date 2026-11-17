@@ -1,0 +1,176 @@
+package dk.maarse.app.ui
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import dk.maarse.app.Node
+import dk.maarse.app.PersonOp
+import dk.maarse.app.PersonState
+import dk.maarse.app.shortAddr
+
+private fun copy(ctx: Context, label: String, text: String) {
+    ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(label, text))
+}
+
+/**
+ * Linked devices: one account (person) for the phone, the PC and more. The
+ * account's address is what friends write to; every device gets the messages.
+ */
+@Composable
+fun AccountSection() {
+    val ctx = LocalContext.current
+    val p by Node.person.collectAsState()
+    val me by Node.me.collectAsState()
+    val err by Node.lastError.collectAsState()
+    SectionTitle("Account (linked devices)")
+    val state = p?.state
+    when (state) {
+        null -> Hint("Fetching…")
+        PersonState.NONE -> NoAccount()
+        PersonState.AWAITING -> {
+            Hint("This device is waiting to be linked (10 minutes). On your master device, open Account → Add device and enter this address:")
+            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Column(Modifier.padding(12.dp)) {
+                    SelectionContainer { Text(me?.addr ?: "", fontFamily = FontFamily.Monospace) }
+                    Text("Check words: ${p?.words}", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
+                    Text("The master device shows the same words when it has linked this device.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { copy(ctx, "Device address", me?.addr ?: "") }) { Text("Copy address") }
+                TextButton(onClick = { Node.personSetup(PersonOp.CANCEL) }) { Text("Cancel") }
+            }
+        }
+        PersonState.MEMBER -> Member()
+    }
+    err?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
+    Dialogs()
+}
+
+@Composable
+private fun NoAccount() {
+    var restoring by remember { mutableStateOf(false) }
+    var words by remember { mutableStateOf("") }
+    Hint("With an account, friends write to one address and the message reaches all your devices (phone, PC …). Your sent messages show on all of them too.")
+    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Button(onClick = { Node.personSetup(PersonOp.CREATE) }) { Text("Create an account (this is the master device)") }
+        OutlinedButton(onClick = { Node.personSetup(PersonOp.AWAIT_LINK) }) { Text("Link this device to my account") }
+        TextButton(onClick = { restoring = !restoring }) { Text("Restore an account from its 24 words") }
+        if (restoring) {
+            OutlinedTextField(words, { words = it }, Modifier.fillMaxWidth(), label = { Text("The 24 words, separated by spaces") })
+            Button(onClick = { Node.personSetup(PersonOp.RESTORE, words.trim().lowercase()) }, enabled = words.trim().split(Regex("\\s+")).size == 24) {
+                Text("Restore (this becomes the master device)")
+            }
+        }
+    }
+}
+
+@Composable
+private fun Member() {
+    val ctx = LocalContext.current
+    val p by Node.person.collectAsState()
+    val me by Node.me.collectAsState()
+    val pp = p ?: return
+    var adding by remember { mutableStateOf(false) }
+    var addr by remember { mutableStateOf("") }
+    var leaving by remember { mutableStateOf(false) }
+    Hint("Your account address — give this to friends:")
+    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            SelectionContainer { Text(pp.person, fontFamily = FontFamily.Monospace) }
+            Text(if (pp.master) "This is the master device (device ${pp.index})." else "This is device ${pp.index}.", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    OutlinedButton(onClick = { copy(ctx, "Account address", pp.person) }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("Copy account address") }
+    Text("Devices", Modifier.padding(start = 16.dp, top = 8.dp), style = MaterialTheme.typography.labelLarge)
+    pp.devices.forEach { (d, revoked) ->
+        val name = Node.nodes.value[d]?.name
+        Text(
+            buildString {
+                append(shortAddr(d))
+                name?.let { append(" · ~$it") }
+                if (d == me?.addr) append(" · this device")
+                if (revoked) append(" · removed")
+            },
+            Modifier.padding(horizontal = 24.dp, vertical = 2.dp),
+        )
+    }
+    if (pp.master) {
+        if (!adding) OutlinedButton(onClick = { adding = true }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) { Text("Add device") }
+        else Column(Modifier.padding(horizontal = 16.dp)) {
+            Hint("On the new device: Settings → Account → \"Link this device to my account\". Enter the address it shows:")
+            OutlinedTextField(addr, { addr = it.trim().lowercase() }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("The new device's address (32 characters)") })
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { Node.linkDevice(addr); adding = false; addr = "" }, enabled = addr.length == 32 && addr.all { it in "0123456789abcdef" }) { Text("Link") }
+                TextButton(onClick = { adding = false }) { Text("Cancel") }
+            }
+        }
+    } else Hint("Devices are added on the master device.")
+    TextButton(onClick = { leaving = true }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("Remove this device from the account") }
+    if (leaving) AlertDialog(
+        onDismissRequest = { leaving = false },
+        title = { Text("Remove this device?") },
+        text = {
+            Text(if (pp.master) "This is the master device. Without it you can only add devices again with the 24 words." else "Messages to the account will no longer reach this device. The device keeps its own address.")
+        },
+        confirmButton = { TextButton(onClick = { Node.personSetup(PersonOp.LEAVE); leaving = false }) { Text("Remove") } },
+        dismissButton = { TextButton(onClick = { leaving = false }) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun Dialogs() {
+    val phrase by Node.phrase.collectAsState()
+    val linked by Node.linked.collectAsState()
+    phrase?.let { words ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Write down these 24 words") },
+            text = {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    Text("They are your account. With them you can make a new master device if this one is lost. They are shown only now; anyone who has them owns the account.")
+                    words.split(" ").chunked(2).forEachIndexed { row, ws ->
+                        Text(ws.mapIndexed { i, w -> "%2d. %-10s".format(row * 2 + i + 1, w) }.joinToString(" "), fontFamily = FontFamily.Monospace, modifier = Modifier.padding(top = 6.dp))
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { Node.phrase.value = null }) { Text("I have written them down") } },
+        )
+    }
+    linked?.let { l ->
+        AlertDialog(
+            onDismissRequest = { Node.linked.value = null },
+            title = { Text("Device linked") },
+            text = { Text("Device ${l.index} (${shortAddr(l.device)}) belongs to the account now.\n\nCheck words: ${l.words}\n\nThe new device showed the same words while it waited. If they differ, remove the device.") },
+            confirmButton = { TextButton(onClick = { Node.linked.value = null }) { Text("OK") } },
+        )
+    }
+}

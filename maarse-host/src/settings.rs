@@ -52,7 +52,7 @@ pub fn save(data_dir: &Path, text: &str) -> Result<(), String> {
     let mut args = to_args(text)?;
     // Checked together with the command line, which also applies (e.g. a
     // server's --public-addr given in its start script).
-    args.extend(std::env::args().skip(1).filter(|a| !a.starts_with("--set-")));
+    args.extend(crate::cli_args().into_iter().filter(|a| !a.starts_with("--set-")));
     crate::parse_from(args)?;
     let body: String = text.lines().map(|l| format!("{}\n", l.trim_end())).collect();
     std::fs::write(file(data_dir), body).map_err(|e| format!("could not save: {e}"))
@@ -96,7 +96,7 @@ pub fn restart() -> ! {
     println!("\n[settings] restarting with new settings …\n");
     let exe = std::env::current_exe().expect("current_exe");
     match std::process::Command::new(exe)
-        .args(std::env::args().skip(1))
+        .args(crate::cli_args())
         .env("MAARSE_RESTART", "1")
         .spawn()
     {
@@ -154,7 +154,7 @@ pub fn status_json(data_dir: &Path) -> String {
     format!(
         "{{\"settings\":{},\"cli\":{},\"ports\":{},\"startup\":{},\"tun_feature\":{},\"tun_up\":{}}}",
         json_str(&load(data_dir)),
-        json_list(std::env::args().skip(1).collect::<Vec<_>>().iter().map(|s| s.as_str())),
+        json_list(crate::cli_args().iter().map(|s| s.as_str())),
         json_list(ports.iter().map(|s| s.as_str())),
         json_list(startup.iter().map(|s| s.as_str())),
         cfg!(feature = "tun"),

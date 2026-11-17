@@ -1,19 +1,22 @@
-"""Builds the Må:rse app for Android (APK) without Gradle, directly with the SDK's
-tools: aapt2, javac, d8, zipalign and apksigner.
+"""Builds the native Må:rse app for Android (APK).
 
     python tools/build_apk.py            -> dist/maarse.apk
 
-The web client (maarse-client/) is added as assets. Requires the Android SDK
-(ANDROID_HOME, otherwise %LOCALAPPDATA%/Android/Sdk) with build-tools and a
-platform (35+), plus a JDK (JAVA_HOME or javac in PATH). The APK is signed
-with a debug key (~/.android/debug.keystore, created if missing), or
-with MAARSE_APK_KEYSTORE/MAARSE_APK_PASS for a release.
+The app is a Kotlin/Compose project in android/ with maarse-host embedded as
+a native library (crate maarse-android, built by cargo-ndk from Gradle).
+
+Requires: the Android SDK (ANDROID_HOME, otherwise %LOCALAPPDATA%/Android/Sdk)
+with platform 35 and NDK 27.2.12479018, a JDK 17+ (JAVA_HOME or java in PATH),
+Rust with the aarch64-linux-android and x86_64-linux-android targets, and
+cargo-ndk (cargo install cargo-ndk).
+
+The APK is signed with a debug key (~/.android/debug.keystore, created if
+missing), or with MAARSE_APK_KEYSTORE/MAARSE_APK_PASS for a release.
 """
-import glob, os, shutil, subprocess, sys, zipfile
+import os, shutil, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, "android")
-OUT = os.path.join(ROOT, "target", "android")
 EXE = ".exe" if os.name == "nt" else ""
 BAT = ".bat" if os.name == "nt" else ""
 
@@ -27,13 +30,10 @@ def find_sdk():
     sys.exit("Android SDK not found (set ANDROID_HOME)")
 
 
-def newest(path, minimum=0):
+def newest(path):
     def key(n):
-        return [int(x) if x.isdigit() else 0 for x in n.replace("android-", "").split(".")]
-    items = [n for n in os.listdir(path) if key(n)[0] >= minimum]
-    if not items:
-        sys.exit(f"nothing in {path}")
-    return os.path.join(path, sorted(items, key=key)[-1])
+        return [int(x) if x.isdigit() else 0 for x in n.split(".")]
+    return os.path.join(path, sorted(os.listdir(path), key=key)[-1])
 
 
 def tool(name):
@@ -46,50 +46,24 @@ def tool(name):
     return p
 
 
-def run(*args):
-    r = subprocess.run([str(a) for a in args], capture_output=True, text=True)
+def run(*args, **kw):
+    r = subprocess.run([str(a) for a in args], capture_output=True, text=True, **kw)
     if r.returncode != 0:
-        sys.exit(f"ERROR: {' '.join(map(str, args[:2]))}\n{r.stdout}\n{r.stderr}")
+        sys.exit(f"ERROR: {' '.join(map(str, args[:3]))}\n{r.stdout[-4000:]}\n{r.stderr[-4000:]}")
     return r.stdout
 
 
 sdk = find_sdk()
-bt = newest(os.path.join(sdk, "build-tools"), 34)
-platform = newest(os.path.join(sdk, "platforms"), 35)
-android_jar = os.path.join(platform, "android.jar")
-print(f"SDK {sdk}\n  build-tools {os.path.basename(bt)}, platform {os.path.basename(platform)}")
+bt = newest(os.path.join(sdk, "build-tools"))
+env = dict(os.environ, ANDROID_HOME=sdk, ANDROID_NDK_HOME=os.path.join(sdk, "ndk", "27.2.12479018"))
+lp = os.path.join(APP, "local.properties")
+if not os.path.exists(lp):
+    with open(lp, "w") as f:
+        f.write("sdk.dir=" + sdk.replace("\\", "/") + "\n")
 
-shutil.rmtree(OUT, ignore_errors=True)
-for d in ["res/mipmap", "assets/web", "gen", "classes", "dex"]:
-    os.makedirs(os.path.join(OUT, d), exist_ok=True)
-
-# Resources: icon from the web client.
-shutil.copy(os.path.join(ROOT, "maarse-client", "icon-192.png"), os.path.join(OUT, "res", "mipmap", "ic_launcher.png"))
-# Assets: the whole web client.
-for f in os.listdir(os.path.join(ROOT, "maarse-client")):
-    shutil.copy(os.path.join(ROOT, "maarse-client", f), os.path.join(OUT, "assets", "web", f))
-
-aapt2 = os.path.join(bt, "aapt2" + EXE)
-run(aapt2, "compile", "--dir", os.path.join(OUT, "res"), "-o", os.path.join(OUT, "res.zip"))
-base = os.path.join(OUT, "base.apk")
-run(aapt2, "link", "-o", base, "-I", android_jar, "--manifest", os.path.join(APP, "AndroidManifest.xml"),
-    "-A", os.path.join(OUT, "assets"), "--java", os.path.join(OUT, "gen"), "--auto-add-overlay",
-    os.path.join(OUT, "res.zip"))
-
-sources = glob.glob(os.path.join(APP, "src", "**", "*.java"), recursive=True) + \
-          glob.glob(os.path.join(OUT, "gen", "**", "*.java"), recursive=True)
-run(tool("javac"), "-source", "11", "-target", "11", "-nowarn", "-Xlint:-options", "-encoding", "UTF-8",
-    "-classpath", android_jar, "-d", os.path.join(OUT, "classes"), *sources)
-classes = glob.glob(os.path.join(OUT, "classes", "**", "*.class"), recursive=True)
-run(os.path.join(bt, "d8" + BAT), "--release", "--min-api", "26", "--lib", android_jar,
-    "--output", os.path.join(OUT, "dex"), *classes)
-
-unsigned = os.path.join(OUT, "unsigned.apk")
-shutil.copy(base, unsigned)
-with zipfile.ZipFile(unsigned, "a", zipfile.ZIP_DEFLATED) as z:
-    z.write(os.path.join(OUT, "dex", "classes.dex"), "classes.dex")
-aligned = os.path.join(OUT, "aligned.apk")
-run(os.path.join(bt, "zipalign" + EXE), "-f", "-p", "4", unsigned, aligned)
+print("Gradle: assembleRelease (with maarse-host via cargo-ndk)")
+run(os.path.join(APP, "gradlew" + BAT), "assembleRelease", "--console=plain", cwd=APP, env=env)
+unsigned = os.path.join(APP, "app", "build", "outputs", "apk", "release", "app-release-unsigned.apk")
 
 # Release: MAARSE_APK_KEYSTORE + MAARSE_APK_PASS (e.g. from tools/release.py);
 # otherwise the debug key.
@@ -101,6 +75,8 @@ if not os.environ.get("MAARSE_APK_KEYSTORE") and not os.path.exists(ks):
         "-alias", "androiddebugkey", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
         "-dname", "CN=Android Debug,O=Android,C=US")
 os.makedirs(os.path.join(ROOT, "dist"), exist_ok=True)
+aligned = os.path.join(APP, "app", "build", "aligned.apk")
+run(os.path.join(bt, "zipalign" + EXE), "-f", "-p", "4", unsigned, aligned)
 apk = os.path.join(ROOT, "dist", "maarse.apk")
 run(os.path.join(bt, "apksigner" + BAT), "sign", "--ks", ks, "--ks-pass", "pass:" + ks_pass,
     "--key-pass", "pass:" + ks_pass, "--out", apk, aligned)

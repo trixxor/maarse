@@ -565,6 +565,7 @@
         <nav class="tools list">
           <button id="btn-myqr" data-view="myqr" disabled><svg class="i"><use href="#i-qr"/></svg><span>Contact card and QR code<small>Let others add you</small></span></button>
           <button id="btn-diag2" data-view="diag" disabled><svg class="i"><use href="#i-pin"/></svg><span>Name, position and telemetry<small>What your announces share</small></span></button>
+          <button id="btn-account" data-view="account" disabled title="One account for your phone, PC and more (maarse-host)"><svg class="i"><use href="#i-key"/></svg><span>Account and linked devices<small>One address for all your devices</small></span></button>
           <button id="btn-backup" data-view="backup"><svg class="i"><use href="#i-key"/></svg><span>Backup and recovery<small id="bk-sub">Recovery phrase and encrypted backup</small></span></button>
         </nav>
         <h3 class="grp">This node <small>saved on the node</small></h3>
@@ -682,6 +683,10 @@ const Cmd = {
   },
   getWifi: () => frame(0x29),
   setModemKey: (passphrase) => frame(0x2d, enc.encode(passphrase)),
+  // Linked devices (maarse-host): see maarse-core/src/companion.rs.
+  linkDevice: (req, devHex) => frame(0x35, u16(req), unhex(devHex)),
+  getPerson: () => frame(0x36),
+  personSetup: (req, op, text = "") => frame(0x37, u16(req), [op], enc.encode(text)),
   requestPage: (req, destHex, path) => frame(0x26, u16(req), unhex(destHex), enc.encode(path)),
   otaBegin: (req, flags, manifest) => frame(0x18, u16(req), [flags], manifest),
   otaChunk: (req, offset, data) => frame(0x19, u16(req), u32(offset), data),
@@ -771,6 +776,13 @@ function decodeEvent(f) {
     case 0x8f: return { type: "error", req: f[1] | f[2] << 8, code: f[3], text: txt(4) };
     case 0xa8: case 0xa9: case 0xaa: case 0xab: return rtDecodeEvent(f);
     case 0xac: return alertDecode(f);
+    case 0xb5: return { type: "deviceLinked", device: a(1), index: f[17], words: txt(18) };
+    case 0xb6: {
+      const n = f[24], devices = [];
+      for (let i = 0; i < n; i++) devices.push({ addr: a(25 + 17 * i), revoked: !!f[41 + 17 * i] });
+      return { type: "person", state: f[1], master: !!(f[2] & 1), person: a(3), index: f[19], devices, words: txt(25 + 17 * n) };
+    }
+    case 0xb7: return { type: "personPhrase", phrase: txt(1) };
     default: return histDecode(f, t) ?? { type: "unknown", kind: t };
   }
 }
@@ -1012,6 +1024,7 @@ function renderChat() {
   if (state.view === "firmware") return renderFirmware(box);
   if (state.view === "backup") return renderBackup(box);
   if (state.view === "settings") return renderSettings(box);
+  if (state.view === "account") return renderAccount(box);
   if (state.view === "service") return renderService(box);
   if (state.view === "mc") return renderMc(box);
   renderChatTools();
@@ -1075,6 +1088,8 @@ function setConnected(on, name) {
   for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-diag2", "btn-status", "btn-radio", "btn-diag", "btn-range", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
   $("btn-settings").disabled = !(on && transport instanceof WsTransport);
+  $("btn-account").disabled = !(on && transport instanceof WsTransport);
+  if (on && transport instanceof WsTransport) transport.send(Cmd.getPerson());
   $("btn-service").disabled = !(on && transport instanceof WsTransport);
   if (!$("btn-service").disabled && store.get("openServiceOnConnect", false)) { store.set("openServiceOnConnect", false); $("btn-service").click(); }
   if (on && transport instanceof WsTransport) mcConnect(); else mcClose();
@@ -1165,6 +1180,12 @@ function onEvent(ev) {
       renderChat();
       break;
     }
+    case "person": acct.p = ev; if (state.view === "account") renderChat(); break;
+    case "personPhrase": acct.phrase = ev.phrase; if (state.view === "account") renderChat(); break;
+    case "deviceLinked":
+      acct.linked = ev; log(`Device linked: ${short(ev.device)} (${ev.words})`);
+      if (state.view === "account") renderChat();
+      break;
     case "carryAcked": {
       const m = state.byMsgId.get(ev.msgId);
       if (m) { m.status = "✓ delivered (carried)"; log("Delivered (carried by others): " + (m.text || "message").slice(0, 60)); renderChat(); }
@@ -1228,6 +1249,7 @@ function onEvent(ev) {
       break;
     case "fileLimit": limitAnswer(ev); break;
     case "error": {
+      if (state.view === "account") { acct.err = ev.text; renderChat(); }
       if (alerts.reqs.delete(ev.req)) { alerts.status = "Not issued: " + ev.text; if (state.view === "alerts") renderChat(); break; }
       if (ev.req === 0 && limitWaiters.length) limitAnswer(null); // the firmware does not know 0x14
       const m = state.pending.get(ev.req);
@@ -3954,6 +3976,67 @@ function hsAfterRestart() {
   renderChat();
   setTimeout(() => { hs.msg = ""; hsLoad(); }, 6000);
 }
+// ---------- account (linked devices, docs/maybe/multi-device.md) ----------
+const acct = { p: null, phrase: null, linked: null, err: "", req: 0x6800 };
+
+function renderAccount(box) {
+  $("chat-title").textContent = "Account and linked devices";
+  $("chat-sub").textContent = "One address for your phone, PC and more";
+  const w = el("div", { className: "secure" });
+  box.append(w);
+  const p = acct.p, send = f => transport?.send(f), r = () => ++acct.req & 0xffff;
+  if (acct.err) w.append(el("p", { className: "warn", textContent: acct.err }));
+  if (acct.phrase) {
+    const words = acct.phrase.split(" ");
+    const grid = el("ol", { className: "words" }, ...words.map(x => el("li", { textContent: x })));
+    const done = el("button", { className: "primary", textContent: "I have written them down" });
+    done.onclick = () => { acct.phrase = null; renderChat(); };
+    w.append(el("h3", { textContent: "Write down these 24 words" }),
+      el("p", { textContent: "They are your account. With them you can make a new master device if this one is lost. They are shown only now; anyone who has them owns the account." }), grid, done);
+    return;
+  }
+  if (acct.linked) {
+    const ok = el("button", { textContent: "OK" });
+    ok.onclick = () => { acct.linked = null; renderChat(); };
+    w.append(el("p", { className: "warn", textContent: `Device ${acct.linked.index} (${short(acct.linked.device)}) is linked. Check words: ${acct.linked.words}. The new device showed the same words while it waited; if they differ, remove it.` }), ok);
+  }
+  if (!p) { w.append(el("p", { className: "hint", textContent: "Fetching …" })); return; }
+  if (p.state === 0) {
+    w.append(el("p", { textContent: "With an account, friends write to one address and the message reaches all your devices. Messages you send show on all of them too." }));
+    const mk = el("button", { className: "primary", textContent: "Create an account (this is the master device)" });
+    mk.onclick = () => send(Cmd.personSetup(r(), 1));
+    const wait = el("button", { textContent: "Link this device to my account" });
+    wait.onclick = () => send(Cmd.personSetup(r(), 3));
+    const ta = el("textarea", { placeholder: "The 24 words, separated by spaces", rows: 3 });
+    ta.style.width = "100%";
+    const rs = el("button", { textContent: "Restore from the 24 words (this becomes the master device)" });
+    rs.onclick = () => send(Cmd.personSetup(r(), 2, ta.value.trim().toLowerCase().split(/\s+/).join(" ")));
+    w.append(el("div", { className: "row" }, mk, wait), el("h3", { textContent: "Restore" }), ta, rs);
+  } else if (p.state === 1) {
+    const cancel = el("button", { textContent: "Cancel" });
+    cancel.onclick = () => send(Cmd.personSetup(r(), 5));
+    w.append(el("p", { textContent: "This device is waiting to be linked (10 minutes). On your master device, open Account → Add device and enter this address:" }),
+      el("p", { className: "me", textContent: state.me || "" }),
+      el("p", { textContent: "Check words: " + p.words }), cancel);
+  } else {
+    w.append(el("p", { textContent: "Your account address — give this to friends:" }), el("p", { className: "me", textContent: p.person }),
+      el("p", { className: "hint", textContent: p.master ? `This is the master device (device ${p.index}).` : `This is device ${p.index}.` }),
+      el("h3", { textContent: "Devices" }),
+      el("ul", {}, ...p.devices.map(d => el("li", { textContent: short(d.addr) + (d.addr === state.me ? " · this device" : "") + (d.revoked ? " · removed" : "") }))));
+    if (p.master) {
+      const inp = el("input", { placeholder: "The new device's address (32 characters)" });
+      inp.style.width = "100%";
+      const add = el("button", { className: "primary", textContent: "Add device" });
+      add.onclick = () => { const v = inp.value.trim().toLowerCase(); if (/^[0-9a-f]{32}$/.test(v)) { acct.err = ""; send(Cmd.linkDevice(r(), v)); } else { acct.err = "Enter 32 hex characters"; renderChat(); } };
+      w.append(el("h3", { textContent: "Add device" }),
+        el("p", { className: "hint", textContent: "On the new device: Account → \"Link this device to my account\". Enter the address it shows:" }), inp, add);
+    }
+    const leave = el("button", { textContent: "Remove this device from the account" });
+    leave.onclick = () => { if (confirm("Remove this device from the account?")) send(Cmd.personSetup(r(), 4)); };
+    w.append(el("p"), leave);
+  }
+}
+
 function renderSettings(box) {
   $("chat-title").textContent = "Host settings";
   $("chat-sub").textContent = "Stored in settings.txt; the host restarts on save";
@@ -4031,6 +4114,7 @@ function renderSettings(box) {
   };
   wrap.append(el("div", { className: "row" }, save, restart), out);
 }
+$("btn-account").onclick = () => { acct.err = ""; setView("account"); transport?.send(Cmd.getPerson()); };
 $("btn-settings").onclick = () => { hs.data = null; hs.msg = ""; setView("settings"); hsLoad(); };
 
 // ---------- Service page: host status, live log, restart and stop ----------

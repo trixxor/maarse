@@ -18,6 +18,7 @@ pub mod alert;
 pub mod bulletin;
 pub mod files;
 pub mod ota;
+pub mod person;
 pub mod ratchet;
 pub mod recovery;
 pub mod seal;

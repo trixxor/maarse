@@ -20,7 +20,7 @@ The firmware has a **range test mode** for this. One node is the **beacon**: it 
 - **Two nodes with this firmware.** For example the XIAO nRF52840 + Wio-SX1262 and the Heltec V4. Both must be flashed from the same build. Commands are in [GUIDE.md](GUIDE.md#firmware-status-and-what-is-missing). In short:
   - XIAO: `cargo build --release --features board-xiao-nrf52840` in `firmware/nrf`, then `cargo run --release -p maarse-uf2 -- firmware/nrf/target/thumbv7em-none-eabihf/release/maarse-fw-nrf dist/maarse-xiao-nrf52840.uf2` and `python scripts/flash-nrf.py COM7 dist/maarse-xiao-nrf52840.uf2`. Press reset once afterwards so USB comes back.
   - Heltec V4: `cargo +esp build --release --features board-heltec-v4` in `firmware/esp`, then `espflash flash --port COM6 --chip esp32s3 --partition-table firmware/esp/partitions.csv --erase-parts otadata <elf>`. The port must be free: a maarse-host using the board as its modem (`--serial COM6`) has to be stopped first.
-- **A phone for the receiver.** Use the Må:rse Android app (APK from `python tools/build_apk.py`, which now asks for location permission) or Chrome on Android with the client opened over **https** or from `localhost`. Location and Bluetooth only work in a secure context. A plain `http://192.168.x.x:8080` address from maarse-host does not qualify. A laptop works too, connected over USB, but it has no GPS: you then type in the distance per point yourself.
+- **A phone for the receiver.** Use Chrome on Android (the native app has no range test page yet) with the client opened over **https** or from `localhost`. Location and Bluetooth only work in a secure context. A plain `http://192.168.x.x:8080` address from maarse-host does not qualify. A laptop works too, connected over USB, but it has no GPS: you then type in the distance per point yourself.
 - **Power for the beacon.** A battery or power bank for at least the length of the drive. A USB power bank may switch off at low current: the XIAO draws only a few mA, so use one without auto-off, or a LiPo on the battery pads.
 - **Optional:** a USB power meter (inline USB-A/C "USB doctor") for the power part, tape or a mast to put the beacon up high, and a notebook.
 
@@ -73,7 +73,7 @@ Use two kinds of run:
    - **Country:** points about every 1–2 km on open roads, also hilltops and dips.
 2. **Moving coverage log (for the map).** Stop SF cycling (uncheck it on both, restart both modes) and use a fixed SF (e.g. SF9 or SF12) with a short interval (SF9: 5 s). Drive normally. Every received beacon is logged with its position, and the lost ones show as red marks in the chart. At 50 km/h with a 5 s interval there is one sample per 70 m.
 
-When you are done, tap the three **Export** buttons on the receiver page (received beacons, beacons sent, power). In the Android app they open the share menu (save to Files/Drive, or mail them to yourself). Back home, connect to the beacon, tap **Export beacons sent** and **Export power**, then **Stop**.
+When you are done, tap the three **Export** buttons on the receiver page (received beacons, beacons sent, power). Back home, connect to the beacon, tap **Export beacons sent** and **Export power**, then **Stop**.
 
 The CSVs are kept only in the page while it is open. Export before you close it or reload. The receiver node also keeps per-SF totals until it is restarted or the test is started again, and the page shows them under **Results per SF**.
 

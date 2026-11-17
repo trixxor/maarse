@@ -42,6 +42,16 @@ pub const APP_NAME: u8 = 0x05;
 pub const APP_ROLE: u8 = 0x06;
 /// Capabilities: `0x07 | 1 | bits`. Older nodes skip it by its length.
 pub const APP_CAPS: u8 = 0x07;
+/// Linked devices: "I am device number i of person M": M's address (16) |
+/// index (1). A claim only: it is trusted after the device's certificate has
+/// been checked (`maarse_crypto::person`).
+pub const APP_PERSON: u8 = 0x08;
+
+pub fn push_person(v: &mut AppBuf, person: &Address, index: u8) {
+    let _ = v.extend_from_slice(&[APP_PERSON, 17]);
+    let _ = v.extend_from_slice(&person.0);
+    let _ = v.push(index);
+}
 /// Capability: reads compressed text (`content::TEXT_Z`).
 pub const CAP_TEXTZ: u8 = 0x01;
 /// Capability: reads mail bundles (`mail::OP_BUNDLE`).
@@ -259,6 +269,8 @@ pub struct AppData {
     pub caps: Option<u8>,
     /// The edge bridge the sender has chosen (role field bytes 2-3).
     pub role_bridge: Option<u16>,
+    /// Person and device index (`APP_PERSON`), if present.
+    pub person: Option<(Address, u8)>,
 }
 
 /// Builds app data. The position is rounded here (a precise position is
@@ -312,6 +324,7 @@ pub fn parse(b: &[u8]) -> AppData {
                     APP_TELEMETRY => a.telemetry = Telemetry::decode(d),
                     APP_NAME => a.name = clean_name(d),
                     APP_CAPS => a.caps = d.first().copied(),
+                    APP_PERSON if d.len() >= 17 => a.person = Address::from_slice(&d[..16]).map(|p| (p, d[16])),
                     APP_ROLE => {
                         a.role = d.first().copied();
                         a.role_flags = d.get(1).copied();
@@ -335,6 +348,18 @@ mod tests {
 
     fn pos(p: Precision) -> Position {
         Position { precision: p, lat_e7: AARHUS.0, lon_e7: AARHUS.1 }
+    }
+
+    #[test]
+    fn person_field_round_trips_next_to_the_others() {
+        let mut v = build(None, true, None, None, Some(b"Ida"));
+        let m = Address([7; 16]);
+        push_person(&mut v, &m, 2);
+        push_caps(&mut v, MY_CAPS);
+        let a = parse(&v);
+        assert_eq!(a.person, Some((m, 2)));
+        assert_eq!(a.caps, Some(MY_CAPS));
+        assert_eq!(a.name.as_deref(), Some(&b"Ida"[..]));
     }
 
     #[test]

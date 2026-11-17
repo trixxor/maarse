@@ -7,6 +7,13 @@ license.workspace = true
 # Two programs from the same code: the host, and maarse-server (a host
 # without radio or web client that keeps the open backbone together; it
 # picks its defaults from its own name, see `server_mode` in main.rs).
+# The same code as a library, for the Android app (see maarse-android).
+[lib]
+name = "maarse_host"
+path = "src/lib.rs"
+test = false
+doctest = false
+
 [[bin]]
 name = "maarse-host"
 path = "src/main.rs"

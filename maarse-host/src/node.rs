@@ -5,6 +5,7 @@ mod ext;
 mod pages;
 mod tun;
 mod hist;
+mod person;
 mod identity;
 mod alerts;
 mod debugview;
@@ -320,6 +321,8 @@ pub struct Node {
     ext: ext::Ext,
     /// Message history for several screens (see history.rs and node/hist.rs).
     hist: hist::Hist,
+    /// Linked devices: our person, other devices' certificates (node/person.rs).
+    persons: person::Persons,
     /// Identities whose signed bulletins and alerts we show (`--bulletin-key`).
     bulletin_keys: Vec<PublicIdentity>,
     /// Alerts v2: roots, certificates, replay guard, issuer key (node/alerts.rs).
@@ -556,6 +559,7 @@ impl Node {
                 cfg.mqtt.clone().map(|m| crate::mqtt::Mqtt::spawn(m, format!("maarse-{}", short(&addr)))),
             ),
             hist: hist::Hist::open(&cfg.data_dir, cfg.history_days),
+            persons: person::Persons::load(&cfg.data_dir, &addr),
             bulletin_keys: cfg.bulletin_keys.clone(),
             alerts: alerts::Alerts::load(cfg)?,
         };
@@ -1401,6 +1405,7 @@ impl Node {
                     }
                 }
                 self.on_app_data(dest, hops, a.app_data);
+                self.person_on_announce(dest, a.app_data);
                 if self.known.insert(dest, a.identity).is_none() {
                     self.log(format!("new node heard: {}", short(&dest)));
                     if let Ok(mut f) = fs::OpenOptions::new()
@@ -1515,12 +1520,16 @@ impl Node {
                     short(&from),
                     format_name(format)
                 ));
+                // A device of a person is shown as the person.
+                let peer = self.person_peer(&from);
                 self.broadcast(&Event::DirectReceived {
-                    from,
+                    from: peer,
                     hops,
                     text: text(t),
                 });
+                self.person_received(peer, t);
             }
+            Some(Content::Person(o, data)) => self.on_person(from, o, data),
             Some(Content::FileOffer(offer)) => self.on_file_offer(from, offer),
             Some(Content::Control(counter, frame)) => self.on_control(from, counter, frame),
             Some(Content::ControlReply(_, frame)) => {
@@ -2293,6 +2302,7 @@ impl Node {
         self.present.retain(|_, t| t.elapsed() < MAIL_PRESENT);
         self.tun_tick();
         self.hist_maintain();
+        self.person_maintain();
         let now = Instant::now();
         // Messages without an acknowledgement: put them in the recipient's mailbox.
         // MAARSE_DEPOSIT_AFTER_S makes it possible to test the mailbox quickly.
@@ -2561,6 +2571,7 @@ impl Node {
     }
 
     fn command(&mut self, id: ClientId, cmd: Command) {
+        let Some(cmd) = self.person_command(id, cmd) else { return };
         let Some(cmd) = self.ext_command(id, cmd) else { return };
         let Some(cmd) = self.page_command(id, cmd) else { return };
         match cmd {
@@ -2604,6 +2615,7 @@ impl Node {
                     Ok(msg_id) => {
                         self.send_client(id, &Event::Sent { req, msg_id });
                         self.hist_sent(id, crate::history::KIND_DIRECT, dest, msg_id, &msg);
+                        self.person_sent(dest, &msg);
                     }
                     Err(e) => self.send_client(id, &err_ev(req, error_code::UNKNOWN_DEST, e)),
                 }
@@ -2783,6 +2795,8 @@ impl Node {
                 Ok(serial) => self.send_client(id, &Event::Sent { req, msg_id: serial as u64 }),
                 Err((code, e)) => self.send_client(id, &err_ev(req, code, e)),
             },
+            // Handled in node/person.rs before we get here.
+            Command::LinkDevice { .. } | Command::GetPerson | Command::PersonSetup { .. } => {}
         }
     }
 }
@@ -3288,6 +3302,7 @@ pub(super) mod file_interop_tests {
             udp_peers: Vec::new(),
             udp_broadcast: None,
             open_browser: false,
+            require_key: false,
             max_file: 1024 * 1024,
             filebox_per_recipient: 20 << 20,
             filebox_total: 200 << 20,

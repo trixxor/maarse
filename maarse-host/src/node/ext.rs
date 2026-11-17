@@ -61,6 +61,7 @@ impl Node {
         let flags = if self.router.hears_repeater(self.now_ms()) { appdata::ROLE_HEARS_REPEATER } else { 0 };
         appdata::push_role(&mut v, self.router.role.as_u8(), flags);
         appdata::push_caps(&mut v, appdata::MY_CAPS);
+        self.person_app_data(&mut v);
         v.to_vec()
     }
 

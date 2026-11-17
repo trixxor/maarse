@@ -425,6 +425,10 @@ fn service_worker() -> String {
 ///   messages in your name via localhost.
 /// * Everyone else (e.g. the phone over VPN, or the app, which has its own
 ///   origin) must bring the access key: `ws://host/ws?token=<key>`.
+/// `--require-key`: no free pass for 127.0.0.1. On a phone every other app
+/// can reach the loopback address, so there the key is always needed.
+pub static REQUIRE_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn allowed(query: &str, host: Option<&str>, origin: Option<&str>, loopback: bool, token: &str) -> bool {
     let given = query
         .split('&')
@@ -438,7 +442,7 @@ fn allowed(query: &str, host: Option<&str>, origin: Option<&str>, loopback: bool
         None => true,
         Some(o) => o == format!("http://{host}"),
     };
-    loopback && origin_ok
+    loopback && origin_ok && !REQUIRE_KEY.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Constant-time comparison (the key must not be guessable character by character).

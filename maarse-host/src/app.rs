@@ -136,6 +136,8 @@ pub struct Config {
     pub udp_peers: Vec<String>,
     pub udp_broadcast: Option<u16>,
     pub open_browser: bool,
+    /// `--require-key`: the access key also from 127.0.0.1.
+    pub require_key: bool,
     pub max_file: u32,
     /// The file mailbox quota per recipient and in total (bytes; 0 disables it).
     pub filebox_per_recipient: u64,
@@ -398,6 +400,9 @@ Usage: maarse-host [options]
   --sign-issuer-cert <root key> <issuer hex> <name> <days> <out> [events] [max severity]
                         sign an issuer certificate with a root key and exit
   --no-browser          do not open the browser automatically
+  --require-key         ask for the access key from this machine too (for
+                        phones and shared computers, where other programs
+                        can reach 127.0.0.1)
   --service             run under a service manager (systemd, Task Scheduler):
                         implies --no-browser; a settings restart exits with
                         code 75 and leaves the restart to the supervisor
@@ -411,7 +416,16 @@ Example with two computers:
 /// Are we maarse-server? Decided by the program's name, so one code base
 /// gives two programs with their own defaults.
 pub fn server_mode() -> bool {
-    option_env!("CARGO_BIN_NAME") == Some("maarse-server")
+    option_env!("CARGO_BIN_NAME") == Some("maarse-server") || SERVER_MODE.load(Ordering::Relaxed)
+}
+
+/// Server mode chosen at run time, for the library build (the Android app),
+/// where there is no program name to go by.
+static SERVER_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Runs the program as maarse-server instead of maarse-host (library use).
+pub fn set_server_mode(on: bool) {
+    SERVER_MODE.store(on, Ordering::Relaxed);
 }
 
 /// Default data folder for this program.
@@ -437,6 +451,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         udp_peers: Vec::new(),
         udp_broadcast: None,
         open_browser: true,
+        require_key: false,
         max_file: 1024 * 1024,
         filebox_per_recipient: 20 << 20,
         filebox_total: 200 << 20,
@@ -510,6 +525,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--udp-peer" => c.udp_peers.push(val("--udp-peer")?),
             "--udp-broadcast" => c.udp_broadcast = Some(val("--udp-broadcast")?.parse().map_err(|_| "--udp-broadcast: invalid port")?),
             "--no-browser" => c.open_browser = false,
+            "--require-key" => c.require_key = true,
             "--service" => {
                 c.service = true;
                 c.open_browser = false;
@@ -662,11 +678,27 @@ fn open_browser(url: &str) {
     }
 }
 
+/// The command line given to [`run`]. In the Android app the process's own
+/// arguments are the Java runtime's, so they cannot be read back from std.
+static CLI: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+pub fn cli_args() -> Vec<String> {
+    CLI.get().cloned().unwrap_or_else(|| std::env::args().skip(1).collect())
+}
+
+#[allow(dead_code)] // not used by the library build
 fn main() {
+    run(std::env::args().skip(1).collect());
+}
+
+/// The whole program with these arguments (without the program name). Never
+/// returns: it runs the node until the process ends. Used by `main` and by
+/// the Android app, which runs it in a process of its own.
+pub fn run(cli: Vec<String>) {
+    let _ = CLI.set(cli.clone());
     service::mark_start();
     // Settings from the web client (<data>/settings.txt) first, then the
     // command line, which therefore wins.
-    let cli: Vec<String> = std::env::args().skip(1).collect();
     if let Some(code) = alert_tools(&cli) {
         std::process::exit(code);
     }
@@ -829,6 +861,7 @@ fn main() {
     if let Some(m) = &cfg.mqtt {
         settings::report(format!("  MQTT:     {} (topics under {}/)", m.addr, m.prefix), false);
     }
+    web::REQUIRE_KEY.store(cfg.require_key, std::sync::atomic::Ordering::Relaxed);
     if let Some(addr) = cfg.http {
         let token = web::access_token(&cfg.data_dir);
         match web::spawn(addr, token.clone(), cfg.data_dir.clone(), tx.clone()) {

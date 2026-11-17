@@ -198,6 +198,58 @@ pub enum Command {
     /// `maarse_crypto::alert`). Alerts are never sent by typing on the
     /// bulletin channel. The reply is `Sent` (msg_id = the alert's serial).
     SendAlert { req: u16, meta: AlertMeta, text: Text },
+    /// 0x35: on the master device, link `device` (which must be waiting, see
+    /// [`person_op::AWAIT_LINK`]): sign its certificate, add it to the device
+    /// list and send both to it. Local only. Replies: `Person`, and
+    /// `DeviceLinked` on every device of the person.
+    LinkDevice { req: u16, device: Address },
+    /// 0x36: the person this device belongs to. The reply is `Person`.
+    GetPerson,
+    /// 0x37: set up linked devices on this device, see [`person_op`]. Local
+    /// only. Replies: `Person` (and `PersonPhrase` after `CREATE`).
+    PersonSetup { req: u16, op: u8, text: Text },
+}
+
+/// Operations of `Command::PersonSetup` (linked devices,
+/// `docs/maybe/multi-device.md`).
+pub mod person_op {
+    /// Make a new person with this device as the master device. The node
+    /// makes a fresh 24-word phrase and sends it once as `PersonPhrase`.
+    pub const CREATE: u8 = 1;
+    /// Make this device the master device of the person behind the phrase in
+    /// `text` (lowercase words, one space between).
+    pub const RESTORE: u8 = 2;
+    /// Wait (10 minutes) to be linked by a master device; announces at once.
+    pub const AWAIT_LINK: u8 = 3;
+    /// Forget the person on this device (the device keeps its own identity).
+    pub const LEAVE: u8 = 4;
+    /// Stop waiting to be linked.
+    pub const CANCEL: u8 = 5;
+}
+
+/// States in `Event::Person`.
+pub mod person_state {
+    pub const NONE: u8 = 0;
+    pub const AWAITING_LINK: u8 = 1;
+    pub const MEMBER: u8 = 2;
+}
+
+/// `Event::Person`: the person this device belongs to.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct PersonInfo {
+    /// `person_state::*`.
+    pub state: u8,
+    /// This device holds the master secret.
+    pub master: bool,
+    /// The person's address (zero when `NONE` or `AWAITING_LINK`).
+    pub person: Address,
+    /// This device's number.
+    pub index: u8,
+    pub version: u32,
+    /// (device, revoked).
+    pub devices: heapless::Vec<(Address, bool), 4>,
+    /// While waiting to be linked: the words the master device must show too.
+    pub words: heapless::Vec<u8, 48>,
 }
 
 /// The fields of an alert besides text, issuer and serial (see
@@ -537,6 +589,17 @@ pub enum Event {
         name: heapless::Vec<u8, 24>,
         text: Text,
     },
+    /// 0xb5: a device was linked to our person (shown on every device, so an
+    /// unknown device is noticed). `words`: the new device's link words, which
+    /// it showed while waiting; the user checks they are the same.
+    DeviceLinked { device: Address, index: u8, words: heapless::Vec<u8, 48> },
+    /// 0xb6: the person this device belongs to (reply to `GetPerson`, and on
+    /// every change). Format: state | flags (bit 0 master) | person (16) |
+    /// index | version (u32) | count | [device (16) | revoked (1)]… | words.
+    Person(PersonInfo),
+    /// 0xb7: the 24 words of a new person, sent once after
+    /// `PersonSetup CREATE`. Written on paper; the node does not keep them.
+    PersonPhrase { phrase: Text },
 }
 
 /// Per-SF results on a range test receiver (12 bytes): sf | rx (u16) | lost
@@ -1077,6 +1140,9 @@ impl Command {
             Command::SetRangeTest(c) => W::new(0x2a).b(&c.to_bytes()).done(),
             Command::GetRangeTest => W::new(0x2b).done(),
             Command::SendAlert { req, meta, text } => meta.put(W::new(0x2c).b(&req.to_le_bytes())).b(text).done(),
+            Command::LinkDevice { req, device } => W::new(0x35).b(&req.to_le_bytes()).b(&device.0).done(),
+            Command::GetPerson => W::new(0x36).done(),
+            Command::PersonSetup { req, op, text } => W::new(0x37).b(&req.to_le_bytes()).b(&[*op]).b(text).done(),
         }
     }
 
@@ -1164,6 +1230,9 @@ impl Command {
             ),
             0x2b => Command::GetRangeTest,
             0x2c => Command::SendAlert { req: r.u16()?, meta: AlertMeta::take(&mut r)?, text: r.text()? },
+            0x35 => Command::LinkDevice { req: r.u16()?, device: r.addr()? },
+            0x36 => Command::GetPerson,
+            0x37 => Command::PersonSetup { req: r.u16()?, op: r.u8()?, text: r.text()? },
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -1396,6 +1465,20 @@ impl Event {
                 .b(&x.charge_ma_ms.to_le_bytes())
                 .b(&x.skipped.to_le_bytes())
                 .done(),
+            Event::DeviceLinked { device, index, words } => W::new(0xb5).b(&device.0).b(&[*index]).b(words).done(),
+            Event::Person(p) => {
+                let mut w = W::new(0xb6)
+                    .b(&[p.state, p.master as u8])
+                    .b(&p.person.0)
+                    .b(&[p.index])
+                    .b(&p.version.to_le_bytes())
+                    .b(&[p.devices.len() as u8]);
+                for (d, revoked) in &p.devices {
+                    w = w.b(&d.0).b(&[*revoked as u8]);
+                }
+                w.b(&p.words).done()
+            }
+            Event::PersonPhrase { phrase } => W::new(0xb7).b(phrase).done(),
             Event::Power(p) => {
                 let mut w = W::new(0xab)
                     .b(&p.uptime_s.to_le_bytes())
@@ -1582,6 +1665,24 @@ impl Event {
                 let peer = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
                 Event::Wifi { enabled, modem, state, ip, ssid, peer }
             }
+            0xb5 => Event::DeviceLinked {
+                device: r.addr()?,
+                index: r.u8()?,
+                words: heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?,
+            },
+            0xb6 => {
+                let (state, master) = (r.u8()?, r.u8()? & 1 != 0);
+                let (person, index, version) = (r.addr()?, r.u8()?, r.u32()?);
+                let n = r.u8()? as usize;
+                let mut devices = heapless::Vec::new();
+                for _ in 0..n {
+                    let d = (r.addr()?, r.u8()? != 0);
+                    devices.push(d).map_err(|_| FrameError::TooLong)?;
+                }
+                let words = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
+                Event::Person(PersonInfo { state, master, person, index, version, devices, words })
+            }
+            0xb7 => Event::PersonPhrase { phrase: r.text()? },
             0xb4 => {
                 let addr = r.addr()?;
                 let identity = r.identity().ok_or(FrameError::TooShort)?;
@@ -1776,8 +1877,21 @@ mod tests {
         roundtrip_cmd(Command::OtaEnd { req: 3, apply: true });
         roundtrip_cmd(Command::OtaStatus);
         roundtrip_cmd(Command::SetIdentity { confirm: true, secret: [7; 64] });
+        roundtrip_cmd(Command::LinkDevice { req: 4, device: Address([3; 16]) });
+        roundtrip_cmd(Command::GetPerson);
+        roundtrip_cmd(Command::PersonSetup { req: 5, op: person_op::RESTORE, text: text(b"abandon ability") });
         roundtrip_cmd(Command::SetIdentity { confirm: false, secret: [0; 64] });
         roundtrip_ev(Event::IdentityChanged { addr: Address([5; 16]), identity: [9; 64] });
+        roundtrip_ev(Event::DeviceLinked { device: Address([6; 16]), index: 2, words: heapless::Vec::from_slice(b"a b c d").unwrap() });
+        let mut devices = heapless::Vec::new();
+        devices.push((Address([1; 16]), false)).unwrap();
+        devices.push((Address([2; 16]), true)).unwrap();
+        roundtrip_ev(Event::Person(PersonInfo {
+            state: person_state::MEMBER, master: true, person: Address([8; 16]), index: 1, version: 7, devices,
+            words: heapless::Vec::from_slice(b"apple brick cloud dune").unwrap(),
+        }));
+        roundtrip_ev(Event::Person(PersonInfo::default()));
+        roundtrip_ev(Event::PersonPhrase { phrase: text(b"abandon ability able") });
         assert_eq!(Command::SetIdentity { confirm: true, secret: [1; 64] }.encode()[2], 0x34);
         assert!(Command::decode(&[0x34, 1, 2, 3]).is_err());
         roundtrip_ev(Event::OtaState {

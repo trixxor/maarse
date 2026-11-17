@@ -38,6 +38,29 @@ pub const IP: u8 = 0x07;
 /// Text compressed with `textz` (sent only to nodes whose announce says they
 /// can read it, see `appdata::CAP_TEXTZ`).
 pub const TEXT_Z: u8 = 0x08;
+/// Linked devices (one person, several devices): `PERSON | op | data`, see
+/// the `person` module below and `docs/maybe/multi-device.md`.
+pub const PERSON: u8 = 0x09;
+
+/// Operations in [`PERSON`] content.
+pub mod person {
+    /// "I am a device of this person": device certificate (129 bytes).
+    pub const CERT: u8 = 1;
+    /// Asks a device for its certificate (empty).
+    pub const CERT_REQUEST: u8 = 2;
+    /// The person's signed device list.
+    pub const LIST: u8 = 3;
+    /// From the master device to a device waiting to be linked: its new
+    /// certificate (129 bytes); the device list follows as [`LIST`].
+    pub const LINK_GRANT: u8 = 4;
+    /// A copy for a sibling device: kind (1) | peer (16) | id (u32 LE) |
+    /// part (high nibble: number from 0, low nibble: count) | text piece.
+    pub const SIBLING: u8 = 5;
+    /// [`SIBLING`] kinds: a message the device received, or one it sent.
+    pub const SIBLING_RECEIVED: u8 = 1;
+    pub const SIBLING_SENT: u8 = 2;
+    pub const SIBLING_HEADER: usize = 2 + 1 + 16 + 4 + 1;
+}
 
 /// MIME for a `maarse://` page: Må:rse markup (UTF-8), compressed with
 /// raw deflate (RFC 1951). Not HTML: the client only shows text, headings
@@ -79,6 +102,8 @@ pub enum Content<'a> {
     Call(&'a [u8]),
     /// IP tunnel: packet ID (u16) | piece no. | count | data.
     Ip(&'a [u8]),
+    /// Linked devices: (operation, data), see [`person`].
+    Person(u8, &'a [u8]),
     Unknown(u8),
 }
 
@@ -134,6 +159,7 @@ pub fn parse(plain: &[u8]) -> Option<Content<'_>> {
         RESYNC => Some(Content::Resync),
         CALL => Some(Content::Call(&plain[1..])),
         IP => Some(Content::Ip(&plain[1..])),
+        PERSON if plain.len() >= 2 => Some(Content::Person(plain[1], &plain[2..])),
         PAGE_REQUEST => Some(match page_path(&plain[1..]) {
             Some(p) => Content::PageRequest(p),
             None => Content::Unknown(PAGE_REQUEST),
@@ -257,7 +283,8 @@ mod tests {
     #[test]
     fn text_and_unknown() {
         assert_eq!(parse(&text(b"hej")), Some(Content::Text(b"hej")));
-        assert_eq!(parse(&[9, 1]), Some(Content::Unknown(9)));
+        assert_eq!(parse(&[0x7f, 1]), Some(Content::Unknown(0x7f)));
+        assert_eq!(parse(&[PERSON, person::CERT_REQUEST]), Some(Content::Person(person::CERT_REQUEST, &[])));
         assert_eq!(parse(&[RESYNC]), Some(Content::Resync));
         assert_eq!(parse(&[]), None);
         assert_eq!(parse(&[FILE_OFFER, 1, 2]), None);

@@ -239,9 +239,18 @@ Besides TCP peers, the serial LoRa modem and Wi-Fi modems, maarse-host can carry
 
 ## Android app (APK)
 
-`python tools/build_apk.py` builds `dist/maarse.apk` directly with the Android SDK's tools (aapt2, javac, d8, zipalign, apksigner), without Gradle. Needs the Android SDK (build-tools 34+, platform 35+) and a JDK; the APK is signed with the debug key.
+The app (`android/`) is a native Kotlin/Jetpack Compose app. It has four connection modes:
 
-The app (`android/`) is the web client in a WebView plus a Bluetooth bridge in Java to the node's Nordic UART service, because WebView has no Web Bluetooth. The web client sees the bridge (`window.MaarseAndroid`) and then only shows Bluetooth. The app asks for Bluetooth and microphone permission when they are needed. Install with `adb install dist/maarse.apk` or by opening the file on the phone (allow unknown sources).
+- **Radio over Bluetooth:** the app is a companion to a Må:rse radio (Nordic UART service), as before.
+- **Phone as node:** the whole maarse-host runs inside the app, so the phone is a Må:rse node with its own identity on the backbone. It joins the open backbone by default (`--public`, `--listen off`).
+- **Host elsewhere:** follow a maarse-host on another machine (home PC, over VPN) with its access key.
+- **Server on this phone:** maarse-server for an old phone on Wi-Fi and a charger (backbone node and post office, dashboard on port 8080). It stops by itself when the phone leaves Wi-Fi or the charger, because mobile networks cannot be reached from outside (CGNAT).
+
+maarse-host is built as a library (`maarse-host/src/lib.rs`, the same `app.rs` as the programs) and embedded through a small JNI crate, `maarse-android`. The app runs it in a foreground service in a process of its own (`:host`), so a fatal error or a settings restart ends only that process. The UI talks to it like the web client does: the companion protocol over WebSocket on `127.0.0.1:47080`, with the access key (`--require-key`, because every app on a phone can reach 127.0.0.1). Its settings are `settings.txt` in the app's data folder, edited on the Settings page. A second foreground service keeps the connection while the screen is off, and messages and alerts arrive as Android notifications (severe, actual alerts on their own loud channel).
+
+`python tools/build_apk.py` builds `dist/maarse.apk` with Gradle (`android/gradlew assembleRelease`); Gradle builds the native library with cargo-ndk first. Needs the Android SDK (platform 35, NDK 27.2.12479018 in `<sdk>/ndk/`), a JDK 17+, Rust with the `aarch64-linux-android` and `x86_64-linux-android` targets, and `cargo install cargo-ndk`. The APK is signed with the debug key, or with the release key from `tools/release.py`. Install with `adb install dist/maarse.apk` or by opening the file on the phone (allow unknown sources).
+
+**Not in the app yet** (use the web client in Chrome for these): files and voice messages, calls, the map, remote administration of other nodes, the range test, firmware updates and the alert issuing form. The phone node has no IP tunnel (`--tun` needs Android's VpnService) and cannot use a radio as its modem yet (USB serial and LoRa modem over Bluetooth are not built).
 
 ## The web client as an app (PWA)
 

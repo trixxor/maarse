@@ -2931,8 +2931,10 @@ mod tests {
     }
 
     /// The router's size in the firmware (the nRF52840 has 256 KB RAM). Run with
-    /// `--nocapture` to see the number.
+    /// `--nocapture` to see the number. Not with `big-carry` (the simulator's
+    /// bigger carry store, never in firmware), which a workspace build turns on.
     #[test]
+    #[cfg(not(feature = "big-carry"))]
     fn router_size_in_firmware() {
         let size = core::mem::size_of::<Router<256, 1024>>();
         std::println!("size_of::<Router<256, 1024>>() = {size} bytes");

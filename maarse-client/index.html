@@ -1073,7 +1073,7 @@ function renderChat() {
     }
     const meta = document.createElement("div"); meta.className = "meta";
     meta.textContent = m.time + (!m.mine && m.hops !== undefined ? ` · ${m.hops} ${m.hops === 1 ? "hop" : "hops"}` : "");
-    const sw = m.mine ? statusWords(m.status) : null;
+    const sw = m.mine ? statusWords(m.status, state.active.startsWith("ch:")) : null;
     if (sw) meta.append(el("span", { className: "st " + sw.cls, textContent: sw.text }));
     if (hist.on && !m.url) {
       const del = el("a", { href: "#", className: "del", textContent: "Delete", title: "Delete from your node's history (not from the other person)" });
@@ -4685,8 +4685,10 @@ function updateUnreadBadge() {
 }
 
 // ---------- message status in words ----------
-function statusWords(s) {
+function statusWords(s, channel = false) {
   if (!s) return null;
+  // Channels go to everyone: there is no acknowledgement to wait for.
+  if (channel && s === "sent") return { cls: "ok", text: "✓ Sent" };
   if (s.startsWith("error")) return { cls: "bad", text: "⚠ Not delivered: " + s.slice(6).trim() };
   if (s.includes("carried")) return { cls: "ok", text: "✓ Delivered (carried)" };
   if (s.includes("from mailbox")) return { cls: "ok", text: "✓ Delivered from mailbox" };

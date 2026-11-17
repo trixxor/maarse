@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Room for many carried messages (simulator experiments; a node with flash
+# storage). Without it a node keeps at most `CARRY_MAX` in RAM.
+big-carry = []
+
 [dependencies]
 heapless = "0.8"
 sha2 = { version = "0.10", default-features = false }

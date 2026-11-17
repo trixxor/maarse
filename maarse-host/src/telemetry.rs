@@ -13,7 +13,15 @@
 //!   receipt's address is derived from the message), so delivery time and
 //!   success as seen from here; the same for route searches and answers;
 //! * the attached LoRa modem's own counters (radio, airtime, duty cycle,
-//!   signal, noise floor, battery, memory), polled every 30 s.
+//!   signal, noise floor, battery, memory), polled every 30 s;
+//! * carried messages (store-carry-forward): each handoff's giver and taker
+//!   (path IDs), tokens and lifetime left are in the clear, and the
+//!   "delivered" notice is addressed to a token derived from the message, so
+//!   the time from the first handoff seen here to the notice;
+//! * this host's own post office: when mail was stored and when delivered;
+//! * a journey per direct message: every time it (or a carried copy, its
+//!   receipt, its mail entry) passed here, with link, hops and route. The
+//!   sender stays unknown: it is inside the encrypted message.
 
 use maarse_core::Address;
 use maarse_core::appdata::{self, AppData};
@@ -27,6 +35,34 @@ const MAX_NODES: usize = 20_000;
 const MAX_DESTS: usize = 5_000;
 const MAX_PENDING: usize = 4_000;
 const SAMPLES: usize = 1_000;
+/// Message journeys kept (the most recently active).
+const MAX_JOURNEYS: usize = 500;
+/// Steps kept per journey.
+const MAX_STEPS: usize = 40;
+
+/// One thing that happened to a message here.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Step {
+    /// Unix ms.
+    pub t: u64,
+    pub what: String,
+    /// Link names (in or out).
+    pub link: String,
+    pub hops: u8,
+    pub path: Vec<String>,
+    pub note: String,
+}
+
+/// Everything seen here about one direct message (by its packet ID).
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Journey {
+    pub dest: String,
+    pub first: u64,
+    pub last: u64,
+    pub steps: Vec<Step>,
+    /// Done: receipt, carry notice or mail delivery seen (unix ms).
+    pub done: Option<u64>,
+}
 
 pub fn type_index(p: Option<PacketType>) -> usize {
     p.map_or(16, |t| t as usize)
@@ -176,8 +212,29 @@ pub struct Telemetry {
     pub router: HashMap<String, u64>,
     pub dht_ops: HashMap<String, u64>,
     pub mail_ops: HashMap<String, u64>,
+    /// Carry: handoffs seen, distinct messages carried, delivered notices
+    /// matched, and (unix s, ms from the first handoff seen to the notice,
+    /// handoffs seen) per delivered message.
+    #[serde(default)]
+    pub carry_handoffs: u64,
+    #[serde(default)]
+    pub carry_messages: u64,
+    #[serde(default)]
+    pub carry_delivered: u64,
+    #[serde(default)]
+    pub carry_ms: VecDeque<(u64, u32, u8)>,
+    /// This host's post office: (unix s, ms the mail waited here, messages
+    /// in the delivery packet).
+    #[serde(default)]
+    pub mail_ms: VecDeque<(u64, u32, u8)>,
+    /// Journeys by message packet ID (hex).
+    #[serde(default)]
+    pub journeys: HashMap<String, Journey>,
     #[serde(skip)]
-    pending_data: HashMap<Address, (u64, Address, u8)>,
+    pending_data: HashMap<Address, (u64, Address, u8, u64)>,
+    /// Carried message: notice token -> (first seen ms, message ID, handoffs).
+    #[serde(skip)]
+    pending_carry: HashMap<Address, (u64, u64, u8)>,
     #[serde(skip)]
     pending_route: HashMap<Address, (u64, Address, bool)>,
     #[serde(skip)]
@@ -340,6 +397,10 @@ impl Telemetry {
         match h.ptype {
             PacketType::Data | PacketType::Fragment | PacketType::Deposit => {
                 let hops = h.hops;
+                if h.ptype == PacketType::Data {
+                    let what = if out { "sent on" } else { "received" };
+                    self.journey_step(pid, &h.dest, Step { t, what: what.into(), link: link_names(links), hops, path: path_s.clone(), note: String::new() }, false);
+                }
                 let d = self.dest(&h.dest);
                 d.data += 1;
                 d.bytes += size;
@@ -351,14 +412,16 @@ impl Telemetry {
                     if self.pending_data.len() >= MAX_PENDING {
                         self.pending_data.retain(|_, v| t.saturating_sub(v.0) < 120_000);
                     }
-                    self.pending_data.insert(token, (t, h.dest, hops));
+                    self.pending_data.insert(token, (t, h.dest, hops, pid));
                     self.data_seen += 1;
                     self.minute().data_seen += 1;
                 }
             }
             PacketType::Ack => {
                 self.dest(&h.dest).acks += 1;
-                if let Some((t0, dest, hops)) = self.pending_data.remove(&h.dest) {
+                if let Some((t0, dest, hops, mid)) = self.pending_data.remove(&h.dest) {
+                    let note = format!("{:.1} s after it passed here", t.saturating_sub(t0) as f64 / 1000.0);
+                    self.journey_step(mid, &dest, Step { t, what: "receipt".into(), link: link_names(links), hops: h.hops, path: path_s.clone(), note }, true);
                     self.data_acked += 1;
                     self.minute().acks_matched += 1;
                     push_sample(&mut self.latency_ms, (now, t.saturating_sub(t0) as u32, hops));
@@ -400,6 +463,7 @@ impl Telemetry {
                     }
                 }
             }
+            PacketType::Carry => self.carry_packet(&h, payload, links, out, t),
             PacketType::KeyRequest => self.dest(&h.dest).key_requests += 1,
             PacketType::Announce | PacketType::Hello | PacketType::Channel | PacketType::Summary => {}
             _ => self.dest(&h.dest).other += 1,
@@ -459,6 +523,85 @@ impl Telemetry {
         // Map path IDs to addresses for the repeater table.
         if let Some(r) = self.repeaters.get_mut(&dest.path_id()) {
             r.addr = Some(hex(&dest.0));
+        }
+    }
+
+    /// Adds a step to message `id`'s journey (`done` marks it finished).
+    pub fn journey_step(&mut self, id: u64, dest: &Address, step: Step, done: bool) {
+        let key = format!("{id:016x}");
+        if self.journeys.len() >= MAX_JOURNEYS && !self.journeys.contains_key(&key) {
+            if let Some(k) = self.journeys.iter().min_by_key(|(_, j)| j.last).map(|(k, _)| k.clone()) {
+                self.journeys.remove(&k);
+            }
+        }
+        let t = step.t;
+        let j = self.journeys.entry(key).or_insert_with(|| Journey { dest: hex(&dest.0), first: t, ..Default::default() });
+        j.last = t;
+        if done && j.done.is_none() {
+            j.done = Some(t);
+        }
+        if j.steps.len() < MAX_STEPS {
+            j.steps.push(step);
+        }
+    }
+
+    /// A `Carry` packet: a handoff (path = the taker) or a delivered notice
+    /// (no path, addressed to the message's notice token).
+    fn carry_packet(&mut self, h: &Header, payload: &[u8], links: &[(String, &'static str)], out: bool, t: u64) {
+        let link = link_names(links);
+        let Some(path) = &h.path else {
+            if let Some((t0, id, n)) = self.pending_carry.remove(&h.dest) {
+                self.carry_delivered += 1;
+                push_sample(&mut self.carry_ms, (t / 1000, t.saturating_sub(t0).min(u32::MAX as u64) as u32, n));
+                let dest = self.journeys.get(&format!("{id:016x}")).and_then(|j| Address::from_slice(&decode_hex(&j.dest))).unwrap_or(Address([0; 16]));
+                let note = format!("{} after the first handoff seen here", fmt_wait(t.saturating_sub(t0)));
+                self.journey_step(id, &dest, Step { t, what: "carry delivered notice".into(), link, note, ..Default::default() }, true);
+            }
+            return;
+        };
+        if payload.len() < 5 {
+            return;
+        }
+        let tokens = payload[0];
+        let ttl_s = u16::from_be_bytes([payload[1], payload[2]]);
+        let from = u16::from_be_bytes([payload[3], payload[4]]);
+        let msg = &payload[5..];
+        let id = maarse_core::dedup::packet_id(PacketType::Data, &h.dest, msg);
+        self.carry_handoffs += 1;
+        let token = maarse_core::router::ack_token(id);
+        match self.pending_carry.get_mut(&token) {
+            Some(e) => e.2 = e.2.saturating_add(1),
+            None => {
+                if self.pending_carry.len() >= MAX_PENDING {
+                    // Carried copies live up to hours: drop the oldest.
+                    if let Some(k) = self.pending_carry.iter().min_by_key(|(_, v)| v.0).map(|(k, _)| *k) {
+                        self.pending_carry.remove(&k);
+                    }
+                }
+                self.pending_carry.insert(token, (t, id, 1));
+                self.carry_messages += 1;
+            }
+        }
+        let to = path.first().copied().unwrap_or(0);
+        let what = if tokens == 0 { "carried to the recipient" } else { "carry handoff" };
+        let note = format!("{from:04x} -> {to:04x}, {tokens} token(s), {} min left{}", ttl_s / 60, if out { " (sent by us)" } else { "" });
+        self.journey_step(id, &h.dest, Step { t, what: what.into(), link, hops: h.hops, path: vec![format!("{from:04x}"), format!("{to:04x}")], note }, false);
+    }
+
+    /// This host's post office stored message `id` for `recipient`.
+    pub fn mail_stored(&mut self, id: u64, recipient: &Address, copy: bool) {
+        let note = if copy { "copy from another host" } else { "sent here" }.to_string();
+        self.journey_step(id, recipient, Step { t: now_ms(), what: "stored at this post office".into(), note, ..Default::default() }, false);
+    }
+
+    /// This host's post office delivered `ids` (message ID, stored unix ms)
+    /// to `recipient` in one packet.
+    pub fn mail_delivered(&mut self, recipient: &Address, ids: &[(u64, u64)]) {
+        let t = now_ms();
+        for &(id, stored) in ids {
+            let ms = t.saturating_sub(stored);
+            push_sample(&mut self.mail_ms, (t / 1000, ms.min(u32::MAX as u64) as u32, ids.len().min(255) as u8));
+            self.journey_step(id, recipient, Step { t, what: "delivered from this post office".into(), note: format!("waited {}", fmt_wait(ms)), ..Default::default() }, true);
         }
     }
 
@@ -538,6 +681,10 @@ impl Telemetry {
             x.sort_unstable();
             Some(x[((x.len() - 1) as f64 * q) as usize])
         };
+        let mut recent: Vec<(&String, &Journey)> = self.journeys.iter().collect();
+        recent.sort_by_key(|(_, j)| std::cmp::Reverse(j.last));
+        let journeys: Vec<Value> =
+            recent.into_iter().take(200).map(|(k, j)| json!({"id": k, "dest": j.dest, "first": j.first, "last": j.last, "done": j.done, "steps": j.steps})).collect();
         json!({
             "started": self.started,
             "types": types,
@@ -566,8 +713,37 @@ impl Telemetry {
             "router": self.router,
             "dht_ops": self.dht_ops,
             "mail_ops": self.mail_ops,
+            "carry": {
+                "handoffs": self.carry_handoffs, "messages": self.carry_messages, "delivered": self.carry_delivered,
+                "p50": pct(&self.carry_ms, 0.5), "p90": pct(&self.carry_ms, 0.9), "max": pct(&self.carry_ms, 1.0),
+                "samples": self.carry_ms,
+            },
+            "mail_time": {
+                "p50": pct(&self.mail_ms, 0.5), "p90": pct(&self.mail_ms, 0.9), "max": pct(&self.mail_ms, 1.0),
+                "samples": self.mail_ms,
+            },
+            "journeys": journeys,
             "me": me.map(|(a, b)| json!([a, b])),
         })
+    }
+}
+
+fn link_names(links: &[(String, &'static str)]) -> String {
+    links.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+}
+
+fn decode_hex(s: &str) -> Vec<u8> {
+    (0..s.len() / 2).filter_map(|i| u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()).collect()
+}
+
+fn fmt_wait(ms: u64) -> String {
+    let s = ms / 1000;
+    if s < 120 {
+        format!("{s} s")
+    } else if s < 7200 {
+        format!("{} min", s / 60)
+    } else {
+        format!("{:.1} h", s as f64 / 3600.0)
     }
 }
 
@@ -617,6 +793,45 @@ mod tests {
         assert_eq!(t.route_ms[0].2, 2);
         let j = t.json(None);
         assert_eq!(j["delivery"]["data_acked"], 2);
+        // The Data and its receipt form one journey, finished.
+        assert_eq!(t.journeys[&format!("{pid:016x}")].steps.len(), 2);
+        assert!(t.journeys[&format!("{pid:016x}")].done.is_some());
+    }
+
+    #[test]
+    fn carry_and_post_office_times_are_matched() {
+        let mut t = Telemetry::new();
+        let link = [("serial COM6".to_string(), "radio")];
+        let dest = Address([6; 16]);
+        let msg = b"sealed message";
+        // Two handoffs of the same carried message: 0x1111 gives 0x2222 two tokens, then 0x2222 hands it to the recipient.
+        for (from, to, tokens) in [(0x1111u16, 0x2222u16, 2u8), (0x2222, dest.path_id(), 0)] {
+            let mut p = vec![tokens, 0x07, 0x08];
+            p.extend_from_slice(&from.to_be_bytes());
+            p.extend_from_slice(msg);
+            let pkt = encode(&Header::new(PacketType::Carry, dest).with_path(heapless::Vec::from_slice(&[to]).unwrap()), &p).unwrap();
+            t.packet(false, &link, &pkt, Some(3));
+        }
+        assert_eq!((t.carry_handoffs, t.carry_messages), (2, 1));
+        // The delivered notice: a Carry without a path to the notice token.
+        let id = maarse_core::dedup::packet_id(PacketType::Data, &dest, msg);
+        let notice = encode(&Header::new(PacketType::Carry, maarse_core::router::ack_token(id)), b"").unwrap();
+        t.packet(false, &link, &notice, Some(3));
+        assert_eq!(t.carry_delivered, 1);
+        assert_eq!(t.carry_ms[0].2, 2, "two handoffs seen");
+        let j = &t.journeys[&format!("{id:016x}")];
+        assert_eq!(j.steps.len(), 3);
+        assert!(j.done.is_some());
+        assert!(j.steps[0].note.contains("1111 -> 2222"));
+        // The post office: stored, then delivered.
+        t.mail_stored(42, &dest, false);
+        t.mail_delivered(&dest, &[(42, now_ms() - 90_000)]);
+        assert_eq!(t.mail_ms.len(), 1);
+        assert!(t.mail_ms[0].1 >= 90_000);
+        assert!(t.journeys[&format!("{:016x}", 42u64)].done.is_some());
+        let v = t.json(None);
+        assert_eq!(v["carry"]["delivered"], 1);
+        assert_eq!(v["journeys"].as_array().map(|a| a.len()), Some(2));
     }
 
     #[test]

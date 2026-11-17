@@ -174,6 +174,32 @@ pub struct Scenario {
     /// Offices pack up to three waiting messages for a recipient into one
     /// packet (one ack for the bundle).
     pub mail_bundle: bool,
+    /// Linked devices: each inner list is one person's devices (node
+    /// indices). A message to any of them is addressed to the person: the
+    /// sender uses the first device it has a route to (else the first one).
+    pub device_groups: Vec<Vec<usize>>,
+    /// The device that receives a message for the person sends a copy to
+    /// each of the person's other devices (routed, over LoRa or TCP, with the
+    /// post offices when the sibling is away).
+    pub sibling_sync: bool,
+    /// Linked devices: senders pick the device whose announce they got
+    /// last (the newest announce for the person wins) instead of the first
+    /// one they have a route to.
+    pub person_fresh: bool,
+    /// Linked devices: a device that forwards a copy to a sibling it heard
+    /// from in the last hour tells the sender (in the ack) to use that
+    /// sibling next time.
+    pub redirect_hint: bool,
+    /// Carry: lifetime of a copy a node starts carrying (s; 0 = the
+    /// firmware's 30 min) and messages a node carries at most (0 = 8).
+    pub carry_ttl_s: f64,
+    pub carry_max: usize,
+    /// Post offices off the backbone hand the mail they hold to carriers
+    /// (`office_carry_tokens` copies each, living `carry_ttl_s`).
+    pub office_carry: bool,
+    pub office_carry_tokens: u8,
+    /// Smart carry in every router (see `Router::carry_smart`).
+    pub carry_smart: bool,
     /// Share of the handhelds that sleep to save battery: the radio is off
     /// except `wake_s` seconds of every `sleep_s + wake_s`; on waking they
     /// sync their post office (MailSync).
@@ -249,6 +275,15 @@ impl Default for Scenario {
             trunk_summary: false,
             proxy_reply: false,
             mail_bundle: false,
+            device_groups: Vec::new(),
+            sibling_sync: false,
+            person_fresh: false,
+            redirect_hint: false,
+            carry_ttl_s: 0.0,
+            carry_max: 0,
+            office_carry: false,
+            office_carry_tokens: 4,
+            carry_smart: false,
             sleepy_share: 0.0,
             sleep_s: 300.0,
             wake_s: 30.0,

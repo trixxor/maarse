@@ -1369,10 +1369,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// Sets the router's role. Relays (forest mode, handhelds on the move)
     /// also carry messages they cannot deliver: in the simulator, 4 copies
     /// gave +14-16 points delivered for about +10 % airtime. Repeaters and
-    /// clients do not carry.
+    /// clients do not carry. Smart carry (copies only to neighbours that
+    /// move, routing on arrival, no 5-minute re-route loop): in the crisis
+    /// simulation the same delivery for 31 % less airtime
+    /// (docs/maybe/crisis-carry.md).
     fn apply_role(&mut self, role: Role) {
         self.router.set_role(role);
         self.router.carry_copies = if role == Role::Relay { RELAY_CARRY_COPIES } else { 0 };
+        self.router.carry_smart = true;
     }
 
     /// Changes role and stores it in flash. Returns a log text.

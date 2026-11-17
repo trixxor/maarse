@@ -160,6 +160,12 @@ pub const BRIDGE_ANNOUNCE_S: u32 = 600;
 pub const EDGE_WINDOW_MS: u64 = 300_000;
 /// Messages a node carries at most (see "Carry").
 pub const CARRY_MAX: usize = 8;
+/// Room for carried messages (`carry_max` is the limit in use).
+#[cfg(not(feature = "big-carry"))]
+pub const CARRY_CAP: usize = CARRY_MAX;
+/// Room for carried messages (`carry_max` is the limit in use).
+#[cfg(feature = "big-carry")]
+pub const CARRY_CAP: usize = 128;
 /// How long a carried copy lives.
 pub const CARRY_TTL_MS: u64 = 30 * 60 * 1000;
 /// How often the router looks for neighbours to hand carried messages to.
@@ -205,6 +211,8 @@ struct Carried {
 /// destination may be reachable through the repeater network by now (a car
 /// out of a coverage gap, a base station waiting for it).
 const CARRY_REROUTE_MS: u64 = 300_000;
+/// Smart carry: a moving carrier tries routing a message again at most this often.
+const CARRY_ARRIVE_MS: u64 = 600_000;
 const MAX_TRACES: usize = 4;
 /// How many legs an anchor remembers at a time (requests and messages).
 const MAX_ANCHORED: usize = 16;
@@ -457,6 +465,8 @@ pub struct RouterStats {
     /// Carry packets sent and messages delivered to us by carrying.
     pub carry_handoffs: u32,
     pub carry_delivered: u32,
+    /// Smart carry: carried messages a moving carrier tried to route on arrival.
+    pub carry_rerouted: u32,
     /// Delivered notices sent (see "Delivered notice").
     pub carry_notices: u32,
     /// Flood transmissions cancelled because neighbours had covered the area.
@@ -507,11 +517,23 @@ pub struct Router<const R: usize, const D: usize> {
     pub extra_flood_delay_ms: u32,
     /// Copies per message for store-carry-forward; 0 = off (see "Carry").
     pub carry_copies: u8,
-    carried: heapless::Vec<Carried, CARRY_MAX>,
+    carried: heapless::Vec<Carried, CARRY_CAP>,
+    /// Messages carried at most (≤ [`CARRY_CAP`]; default [`CARRY_MAX`]).
+    pub carry_max: usize,
+    /// Lifetime of a copy we start carrying (default [`CARRY_TTL_MS`]).
+    pub carry_ttl_ms: u64,
+    /// Smart carry (experimental, off by default): copies go only to
+    /// neighbours that move; a carrier that moves tries ordinary routing
+    /// when it meets new neighbours (at most every [`CARRY_ARRIVE_MS`] per
+    /// message); the sender re-routes its own carried messages only when it
+    /// regains a repeater, not every [`CARRY_REROUTE_MS`].
+    pub carry_smart: bool,
     next_carry_ms: u64,
     /// Neighbours seen at the previous carry step: handoffs only go to new
     /// encounters, not to the same neighbours again and again.
     carry_seen: heapless::Vec<PathId, 32>,
+    /// New neighbours at the last carry step (smart carry: "arrived").
+    carry_seen_new: usize,
     /// We heard a repeater at the previous carry step.
     carry_near_repeater: bool,
     /// Carried messages known to be delivered.
@@ -660,9 +682,13 @@ impl<const R: usize, const D: usize> Router<R, D> {
             suppress_after: 1,
             extra_flood_delay_ms: 0,
             carry_copies: 0,
+            carry_max: CARRY_MAX,
+            carry_ttl_ms: CARRY_TTL_MS,
+            carry_smart: false,
             carried: heapless::Vec::new(),
             next_carry_ms: 0,
             carry_seen: heapless::Vec::new(),
+            carry_seen_new: 0,
             carry_near_repeater: false,
             carry_done: heapless::Vec::new(),
             relay_hops: DEFAULT_RELAY_HOPS,
@@ -1179,6 +1205,11 @@ impl<const R: usize, const D: usize> Router<R, D> {
         }
     }
 
+    /// A neighbour (by path ID) said it moves.
+    fn is_mobile_neighbor(&self, id: PathId, now_ms: u64) -> bool {
+        self.mobile_dests.iter().any(|(a, t)| a.path_id() == id && now_ms.saturating_sub(*t) < INFO_WINDOW_MS)
+    }
+
     fn is_mobile_dest(&self, addr: &Address, now_ms: u64) -> bool {
         self.mobile_dests.iter().any(|(a, t)| a == addr && now_ms.saturating_sub(*t) < INFO_WINDOW_MS)
     }
@@ -1620,7 +1651,19 @@ impl<const R: usize, const D: usize> Router<R, D> {
         if self.carry_copies == 0 || dest == self.addr {
             return;
         }
-        self.add_carried(dest, payload, self.carry_copies, CARRY_TTL_MS, None, now_ms);
+        self.add_carried(dest, payload, self.carry_copies, self.carry_ttl_ms, None, now_ms);
+    }
+
+    /// Carries a message for someone else, e.g. mail a post office cannot
+    /// deliver (see "Carry"): `tokens` copies, living `ttl_ms`. Returns
+    /// false when it was not taken (no room, already carried, no tokens).
+    pub fn carry_for(&mut self, dest: Address, payload: &[u8], tokens: u8, ttl_ms: u64, now_ms: u64) -> bool {
+        let id = packet_id(PacketType::Data, &dest, payload);
+        if self.carried.iter().any(|c| c.id == id) || self.carry_done.iter().any(|d| d.id == id) {
+            return false;
+        }
+        self.add_carried(dest, payload, tokens, ttl_ms, None, now_ms);
+        self.carried.iter().any(|c| c.id == id)
     }
 
     fn add_carried(
@@ -1637,7 +1680,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             return;
         }
         let Ok(payload) = Buf::from_slice(payload) else { return };
-        if self.carried.is_full()
+        if (self.carried.is_full() || self.carried.len() >= self.carry_max.clamp(1, CARRY_CAP))
             && let Some(i) = self.carried.iter().enumerate().min_by_key(|(_, c)| c.until_ms).map(|(i, _)| i)
         {
             self.carried.swap_remove(i);
@@ -1666,10 +1709,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let regained = near_repeater && !self.carry_near_repeater;
         self.carry_near_repeater = near_repeater;
         if near_repeater {
-            let due: heapless::Vec<(Address, Buf, u64), CARRY_MAX> = self
+            let due: heapless::Vec<(Address, Buf, u64), CARRY_CAP> = self
                 .carried
                 .iter()
-                .filter(|c| c.own && (regained || c.routed_ms == 0 || now_ms.saturating_sub(c.routed_ms) >= CARRY_REROUTE_MS))
+                .filter(|c| c.own && (regained || !self.carry_smart && (c.routed_ms == 0 || now_ms.saturating_sub(c.routed_ms) >= CARRY_REROUTE_MS)))
                 .map(|c| (c.dest, c.payload.clone(), c.id))
                 .collect();
             for (dest, payload, id) in due {
@@ -1686,6 +1729,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 }
             }
         }
+        self.carry_seen_new = here.iter().filter(|n| !self.carry_seen.contains(n)).count();
         let fresh: heapless::Vec<PathId, 32> = here
             .iter()
             .copied()
@@ -1693,6 +1737,34 @@ impl<const R: usize, const D: usize> Router<R, D> {
             .filter(|n| !self.neighbors.get(*n).is_some_and(|x| matches!(x.role, Some(Role::Repeater | Role::Anchor))))
             .collect();
         self.carry_seen = here.clone();
+        // Smart carry: only neighbours that move take copies.
+        let fresh: heapless::Vec<PathId, 32> =
+            if self.carry_smart { fresh.iter().copied().filter(|&n| self.is_mobile_neighbor(n, now_ms)).collect() } else { fresh };
+        // Smart carry: a moving carrier that meets new neighbours has arrived
+        // somewhere: try ordinary routing from here.
+        if self.carry_smart && self.mobile && self.carry_seen_new >= 2 {
+            let due: heapless::Vec<(Address, Buf, u64), CARRY_CAP> = self
+                .carried
+                .iter()
+                .filter(|c| c.routed_ms == 0 || now_ms.saturating_sub(c.routed_ms) >= CARRY_ARRIVE_MS)
+                .take(2)
+                .map(|c| (c.dest, c.payload.clone(), c.id))
+                .collect();
+            for (dest, payload, id) in due {
+                if let Some(c) = self.carried.iter_mut().find(|c| c.id == id) {
+                    c.routed_ms = now_ms;
+                }
+                let mut token = [0u8; 16];
+                token[..8].copy_from_slice(&(id ^ now_ms.rotate_left(31)).to_le_bytes());
+                token[8] = 0xCB;
+                self.stats.carry_rerouted += 1;
+                if let Ok((_, more)) = self.send_typed(PacketType::Data, dest, &payload, token, now_ms) {
+                    for m in more {
+                        let _ = out.push(m);
+                    }
+                }
+            }
+        }
         let mut sent = 0;
         // Tell new encounters that may hold a copy of a delivered message.
         for i in 0..self.carry_done.len() {

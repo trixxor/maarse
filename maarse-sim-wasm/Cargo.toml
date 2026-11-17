@@ -8,7 +8,7 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-maarse-core = { version = "0.1.0", path = "../maarse-core" }
+maarse-core = { version = "0.1.0", path = "../maarse-core", features = ["big-carry"] }
 maarse-crypto = { version = "0.1.0", path = "../maarse-crypto" }
 maarse-sim = { version = "0.1.0", path = "../maarse-sim" }
 rand = { version = "0.8", default-features = false, features = ["small_rng"] }

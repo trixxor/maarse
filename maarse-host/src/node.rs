@@ -1284,10 +1284,16 @@ impl Node {
             }
             Some(Pending::FileChunk(file_id, idx)) => self.chunk_acked(file_id, idx),
             Some(Pending::MailBundle(recipient, ids)) => {
+                let mut done = Vec::new();
                 if let Some(m) = self.mailbox.get_mut(&recipient) {
                     for id in &ids {
-                        m.remove(id);
+                        if let Some(mail) = m.remove(id) {
+                            done.push((*id, unix_ms(mail.stored)));
+                        }
                     }
+                }
+                if let Some(t) = self.tele.as_mut() {
+                    t.mail_delivered(&recipient, &done);
                 }
                 self.counters.mail_delivered += ids.len() as u32;
                 self.save_mailbox();
@@ -1305,8 +1311,10 @@ impl Node {
                 }
             }
             Some(Pending::MailDelivery(recipient)) => {
-                if let Some(m) = self.mailbox.get_mut(&recipient) {
-                    m.remove(&msg_id);
+                if let Some(mail) = self.mailbox.get_mut(&recipient).and_then(|m| m.remove(&msg_id))
+                    && let Some(t) = self.tele.as_mut()
+                {
+                    t.mail_delivered(&recipient, &[(msg_id, unix_ms(mail.stored))]);
                 }
                 self.update_tim();
                 // Delete the copies too.
@@ -2008,6 +2016,9 @@ impl Node {
         }
         box_.insert(id, Mail { sealed: sealed.clone(), stored: SystemTime::now() });
         let count = box_.len();
+        if let Some(t) = self.tele.as_mut() {
+            t.mail_stored(id, &recipient, !replicate);
+        }
         self.log(format!("post office: stored message for {} ({count} in total)", short(&recipient)));
         self.save_mailbox();
         self.update_tim();
@@ -3795,4 +3806,9 @@ mod next_hop_tests {
         n.send_links(&encode(&u, b"y").unwrap());
         assert_eq!((ra.try_iter().count(), rb.try_iter().count()), (1, 1));
     }
+}
+
+/// `t` as unix ms (0 before 1970).
+fn unix_ms(t: SystemTime) -> u64 {
+    t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }

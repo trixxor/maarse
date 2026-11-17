@@ -374,6 +374,9 @@ enum Ev {
     MailTcp { to: usize, payload: Vec<u8> },
 }
 
+/// Copies a sibling sends per sync request.
+const BACKFILL_MAX: usize = 6;
+
 pub struct Msg {
     pub from: usize,
     pub to: usize,
@@ -391,6 +394,8 @@ pub struct Msg {
     /// When sent, exactly one end heard a repeater (into or out of an area
     /// without coverage: what edge bridges are for).
     pub cross: bool,
+    /// A sibling copy: the index of the original message.
+    pub sync_of: Option<usize>,
 }
 
 pub struct Alert {
@@ -518,6 +523,10 @@ pub struct Stats {
     pub mail_retries: u64,
     pub mail_refetches: u64,
     pub mail_consolidated: u64,
+    pub redirect_hints: u64,
+    pub office_carried: u64,
+    pub sync_presses: u64,
+    pub backfilled: u64,
 }
 
 pub struct Engine {
@@ -629,6 +638,13 @@ pub struct Engine {
     /// class, recipients present (until), and per user the home office, the
     /// previous one, recently received messages and the last sync.
     mailbox: Vec<HashMap<usize, Vec<usize>>>,
+    /// Linked devices: (listener, device) -> when the listener last got that
+    /// device's announce.
+    heard_device: HashMap<(usize, usize), u64>,
+    /// Linked devices: sync request messages (not counted as mail).
+    pub sync_req: HashSet<usize>,
+    /// (office, message) handed to carriers (`office_carry`).
+    office_handed: HashSet<(usize, usize)>,
     mail_class: Vec<u8>,
     present: Vec<HashMap<usize, u64>>,
     home_po: Vec<Option<usize>>,
@@ -718,7 +734,10 @@ impl Engine {
             let mut router = Box::new(Node::new(Address(addr), role));
             let _ = router.subscribe(public_channel);
             let _ = router.subscribe(bulletin_channel);
-            router.mobile = f.mobile_mode && kind == Kind::Mobile;
+            // Cars, and handhelds given a route (travellers): the simulator
+            // does not model how a node notices that it moves.
+            router.mobile = f.mobile_mode && (kind == Kind::Mobile || spec.route.len() >= 2);
+            router.carry_smart = sc.carry_smart;
             router.hello = sc.neighbor_info == "hello";
             router.ring = sc.path_ring;
             if sc.announce_scope > 0 {
@@ -737,6 +756,12 @@ impl Engine {
                 router.mobile_route_ms = (sc.mobile_route_s * 1000.0) as u64;
             }
             router.carry_copies = if f.carry { if spec.carry > 0 { spec.carry } else { 2 } } else { 0 };
+            if sc.carry_ttl_s > 0.0 {
+                router.carry_ttl_ms = (sc.carry_ttl_s * 1000.0) as u64;
+            }
+            if sc.carry_max > 0 {
+                router.carry_max = sc.carry_max;
+            }
             router.local_repair = f.local_repair;
             router.load_control = f.load_control;
             router.relay_hops = sc.relay_hops.clamp(1, maarse_core::router::MAX_RELAY_HOPS);
@@ -876,6 +901,9 @@ impl Engine {
             tick_at: Vec::new(),
             trunk_dropped: HashMap::default(),
             mailbox: Vec::new(),
+            heard_device: HashMap::default(),
+            sync_req: HashSet::default(),
+            office_handed: HashSet::default(),
             mail_class: Vec::new(),
             present: Vec::new(),
             home_po: Vec::new(),
@@ -1545,10 +1573,17 @@ impl Engine {
 
     fn on_deliver(&mut self, node: usize, ptype: PacketType, dest: Address, payload: &[u8], hops: u8) {
         if ptype == PacketType::Announce
+            && self.sc.person_fresh
+            && let Some(&who) = self.addr_idx.get(&dest)
+            && self.sc.device_groups.iter().any(|g| g.contains(&who))
+        {
+            self.heard_device.insert((node, who), self.now);
+        }
+        if ptype == PacketType::Announce
             && !self.mailbox.is_empty()
             && (!self.bb_ctx || self.sc.mail == "named")
             && let Some(&who) = self.addr_idx.get(&dest)
-            && self.mailbox[node].get(&who).is_some_and(|v| !v.is_empty())
+            && self.holds_mail(node, who)
         {
             // A post office hears a recipient it holds mail for.
             self.deliver_mail(node, who, &[]);
@@ -1647,6 +1682,7 @@ impl Engine {
                     let i = u32::from_be_bytes([c[0], c[1], c[2], c[3]]) as usize;
                     if i < self.msgs.len() && self.msgs[i].to == node && self.msgs[i].delivered_ms.is_none() {
                         self.msgs[i].delivered_ms = Some(self.now);
+                        self.sibling_copies(i, node);
                         let from = self.msgs[i].from;
                         if self.knows(node, from) {
                             self.msgs[i].shown_ms = Some(self.now);
@@ -1666,6 +1702,7 @@ impl Engine {
                     && self.msgs[i].delivered_ms.is_none()
                 {
                     self.msgs[i].delivered_ms = Some(self.now);
+                    self.sibling_copies(i, node);
                     self.tr(format!("{{\"t\":{},\"ev\":\"deliver\",\"msg\":{i},\"n\":{node},\"hops\":{hops}}}", self.now));
                     if !self.got.is_empty() {
                         self.got[node].push(i);
@@ -2024,12 +2061,13 @@ impl Engine {
     /// the destination is known to be unreachable (another island without a
     /// working gateway), nothing is flooded.
     pub fn send_message(&mut self, from: usize, to: usize) -> usize {
+        let to = self.person_device(from, to);
         let m = self.msgs.len();
         let mut payload = format!("message {m} from {from} to {to}: ").into_bytes();
         payload.resize(self.msg_size(), b'.');
         let id = packet_id(PacketType::Data, &self.nodes[to].router.addr, &payload);
         let cross = self.nodes[from].router.hears_repeater(self.now) != self.nodes[to].router.hears_repeater(self.now);
-        self.msgs.push(Msg { from, to, payload: payload.clone(), id, sent_ms: self.now, delivered_ms: None, acked_ms: None, shown_ms: None, dropped_unknown: false, unsent: false, cross });
+        self.msgs.push(Msg { from, to, payload: payload.clone(), id, sent_ms: self.now, delivered_ms: None, acked_ms: None, shown_ms: None, dropped_unknown: false, unsent: false, cross, sync_of: None });
         self.tags.insert(id, m as u32);
         self.tr(format!("{{\"t\":{},\"ev\":\"send\",\"msg\":{m},\"from\":{from},\"to\":{to},\"pid\":\"{id:016x}\"}}", self.now));
         if !self.nodes[from].alive() {
@@ -2058,6 +2096,170 @@ impl Engine {
         }
         self.continue_send(m);
         m
+    }
+
+    /// Linked devices: the device of `to`'s person that `from` sends to (the
+    /// first one it has a route to, else the first in the group).
+    fn person_device(&self, from: usize, to: usize) -> usize {
+        let Some(g) = self.sc.device_groups.iter().find(|g| g.contains(&to)) else { return to };
+        if g.contains(&from) {
+            return to;
+        }
+        let routes = self.nodes[from].router.routes();
+        let known = g.iter().copied().filter_map(|d| routes.get(&self.nodes.get(d)?.router.addr).map(|r| (d, r.last_seen_ms, r.cost)));
+        let pick = if self.sc.person_fresh {
+            // The device whose announce the sender got last (the newest
+            // announce for the person wins), else the first with a route.
+            let heard = g.iter().copied().filter_map(|d| self.heard_device.get(&(from, d)).map(|&t| (d, t))).max_by_key(|&(_, t)| t).map(|(d, _)| d);
+            heard.or_else(|| known.map(|(d, _, _)| d).next())
+        } else {
+            known.map(|(d, _, _)| d).next()
+        };
+        pick.unwrap_or(g[0])
+    }
+
+    /// Offices off the backbone hand the mail they hold to carriers: the
+    /// office's router carries it (spray with tokens to the neighbours it
+    /// meets, straight to the recipient when heard). Each message once per
+    /// office; the office keeps its own copy.
+    fn office_carry(&mut self) {
+        let ttl = if self.sc.carry_ttl_s > 0.0 { (self.sc.carry_ttl_s * 1000.0) as u64 } else { maarse_core::router::CARRY_TTL_MS };
+        let tokens = self.sc.office_carry_tokens.max(1);
+        for o in 0..self.mailbox.len() {
+            if self.mailbox[o].is_empty() || !self.nodes[o].alive() || self.on_backbone(o) {
+                continue;
+            }
+            let held: Vec<usize> = self.mailbox[o].values().flatten().copied().filter(|&m| self.msgs[m].delivered_ms.is_none() && !self.office_handed.contains(&(o, m))).collect();
+            let mut took = false;
+            for m in held {
+                let dest = self.nodes[self.msgs[m].to].router.addr;
+                let payload = self.msgs[m].payload.clone();
+                if self.nodes[o].router.carry_for(dest, &payload, tokens, ttl, self.now) {
+                    self.office_handed.insert((o, m));
+                    self.stats.office_carried += 1;
+                    took = true;
+                }
+            }
+            if took {
+                self.apply(o, Vec::new(), None);
+            }
+        }
+    }
+
+    /// Linked devices: the mailbox key of `r`'s person (its first device),
+    /// or `r` itself. Offices keep mail for the person, not the device.
+    fn pkey(&self, r: usize) -> usize {
+        self.sc.device_groups.iter().find(|g| g.contains(&r)).map_or(r, |g| g[0])
+    }
+
+    /// Linked devices: the mailbox keys mail for device `r` can be under
+    /// (the person's, and the device's own for sibling copies).
+    fn mail_keys(&self, r: usize) -> Vec<usize> {
+        let k = self.pkey(r);
+        if k == r { vec![r] } else { vec![k, r] }
+    }
+
+    /// Office `node` holds mail for device `r` (or its person).
+    fn holds_mail(&self, node: usize, r: usize) -> bool {
+        self.mail_keys(r).iter().any(|k| self.mailbox[node].get(k).is_some_and(|v| !v.is_empty()))
+    }
+
+    /// Linked devices: every device of `r`'s person (or just `r`).
+    fn devices(&self, r: usize) -> Vec<usize> {
+        self.sc.device_groups.iter().find(|g| g.contains(&r)).cloned().unwrap_or_else(|| vec![r])
+    }
+
+    /// Linked devices: office `node` hands the person's mail (kept under
+    /// `key`) to `device`: each waiting message is re-addressed to it
+    /// (messages one device already has are dropped from the box).
+    fn retarget_mail(&mut self, node: usize, key: usize, device: usize) {
+        let Some(list) = self.mailbox[node].get(&key).cloned() else { return };
+        let dest = self.nodes[device].router.addr;
+        let mut keep = Vec::new();
+        for m in list {
+            if self.msgs[m].delivered_ms.is_some() {
+                continue;
+            }
+            if self.msgs[m].to != device && !self.devices(device).contains(&self.msgs[m].from) {
+                self.tags.remove(&self.msgs[m].id);
+                self.msgs[m].to = device;
+                self.msgs[m].id = packet_id(PacketType::Data, &dest, &self.msgs[m].payload);
+                self.tags.insert(self.msgs[m].id, m as u32);
+            }
+            keep.push(m);
+        }
+        self.mailbox[node].insert(key, keep);
+    }
+
+    /// Linked devices: `node` received message `m` for its person; send a
+    /// copy to each sibling device (not for copies themselves).
+    fn sibling_copies(&mut self, m: usize, node: usize) {
+        let Some(g) = self.sc.device_groups.iter().find(|g| g.contains(&node)).cloned() else { return };
+        let from = self.msgs[m].from;
+        if g.contains(&from) {
+            // From a sibling: it is active. A sync request: send it what it lacks.
+            self.heard_device.insert((node, from), self.now);
+            if self.sync_req.remove(&m) {
+                self.backfill(node, from);
+            }
+            return;
+        }
+        if !self.sc.sibling_sync || self.msgs[m].sync_of.is_some() {
+            return;
+        }
+        let n = self.nodes.len();
+        for s in g.into_iter().filter(|&s| s != node && s < n) {
+            // Redirect hint: a sibling heard from in the last hour is the
+            // active one; the ack tells the sender to use it next time.
+            if self.sc.redirect_hint && self.heard_device.get(&(node, s)).is_some_and(|&t| self.now < t + 3_600_000) {
+                self.heard_device.insert((from, s), self.now);
+                self.stats.redirect_hints += 1;
+            }
+            let c = self.send_message(node, s);
+            self.msgs[c].sync_of = Some(m);
+        }
+    }
+
+    /// The person's original message `m` (or a copy of it) reached `d`.
+    fn device_has(&self, d: usize, m: usize) -> bool {
+        self.msgs.iter().enumerate().any(|(i, x)| x.to == d && x.delivered_ms.is_some() && (i == m || x.sync_of == Some(m)))
+    }
+
+    /// Sync button: device `d` fetches its mail and asks each sibling for
+    /// what it lacks (a small request message; the sibling answers with copies).
+    pub fn person_sync(&mut self, d: usize) {
+        if d >= self.nodes.len() || !self.nodes[d].alive() {
+            return;
+        }
+        self.stats.sync_presses += 1;
+        if !self.sc.mail.is_empty() {
+            self.mail_sync(d);
+        }
+        let Some(g) = self.sc.device_groups.iter().find(|g| g.contains(&d)).cloned() else { return };
+        for s in g.into_iter().filter(|&s| s != d) {
+            let r = self.send_message(d, s);
+            self.sync_req.insert(r);
+        }
+    }
+
+    /// Sibling `s` sends `d` a copy of every message (at most
+    /// `BACKFILL_MAX` per request; the device asks again) for the person that
+    /// `s` has and `d` lacks.
+    fn backfill(&mut self, s: usize, d: usize) {
+        let g = self.devices(d);
+        let missing: Vec<usize> = (0..self.msgs.len())
+            .filter(|&m| self.msgs[m].sync_of.is_none() && !self.sync_req.contains(&m) && g.contains(&self.msgs[m].to) && !g.contains(&self.msgs[m].from))
+            .filter(|&m| self.device_has(s, m) && !self.device_has(d, m))
+            // Not what is already on its way (a copy sent in the last 30 min).
+            .filter(|&m| !self.msgs.iter().any(|x| x.sync_of == Some(m) && x.to == d && x.delivered_ms.is_none() && self.now < x.sent_ms + 1_800_000))
+            // A few per request, so a burst does not crowd out the copies in flight.
+            .take(BACKFILL_MAX)
+            .collect();
+        for m in missing {
+            let c = self.send_message(s, d);
+            self.msgs[c].sync_of = Some(m);
+            self.stats.backfilled += 1;
+        }
     }
 
     /// The sender knows the recipient's key: route the message.
@@ -2459,7 +2661,7 @@ impl Engine {
     /// The replica hosts of `recipient` (rendezvous hashing over all hosts).
     fn replica_hosts(&self, recipient: usize) -> Vec<usize> {
         let addrs: Vec<Address> = self.host_list.iter().map(|&h| self.nodes[h].router.addr).collect();
-        let r: heapless::Vec<Address, { maarse_core::mail::REPLICAS }> = maarse_core::mail::replicas(&self.nodes[recipient].router.addr, &addrs);
+        let r: heapless::Vec<Address, { maarse_core::mail::REPLICAS }> = maarse_core::mail::replicas(&self.nodes[self.pkey(recipient)].router.addr, &addrs);
         r.iter().filter_map(|a| self.addr_idx.get(a).copied()).collect()
     }
 
@@ -2471,6 +2673,11 @@ impl Engine {
         if class == 0 {
             return;
         }
+        let device = recipient;
+        // Mail from outside is kept for the person; copies, sync requests and
+        // anything else between a person's own devices for that device.
+        let own = self.devices(recipient).contains(&self.msgs[m].from);
+        let recipient = if self.msgs[m].sync_of.is_some() || own { recipient } else { self.pkey(recipient) };
         let total: usize = self.mailbox[node].values().map(|v| v.len()).sum();
         let list = self.mailbox[node].entry(recipient).or_default();
         if list.contains(&m) {
@@ -2513,16 +2720,17 @@ impl Engine {
                 self.send_deposit(node, h, recipient, maarse_core::mail::OP_STORE, &body);
             }
         }
-        if self.present[node].get(&recipient).is_some_and(|&t| self.now < t) {
+        let here = self.devices(device).into_iter().find(|d| self.present[node].get(d).is_some_and(|&t| self.now < t));
+        if let Some(here) = here {
             // Only the new one: the rest is on its way already.
             let others: Vec<usize> = self.mailbox[node].get(&recipient).map(|v| v.iter().copied().filter(|&x| x != m).collect()).unwrap_or_default();
-            self.deliver_mail(node, recipient, &others);
+            self.deliver_mail(node, here, &others);
         }
     }
 
     /// The recipients with mail waiting, told in the office's hello.
     fn update_tim(&mut self, node: usize) {
-        let ids: Vec<u16> = self.mailbox[node].iter().filter(|(_, v)| !v.is_empty()).map(|(&r, _)| self.nodes[r].router.id).take(4).collect();
+        let ids: Vec<u16> = self.mailbox[node].iter().filter(|(_, v)| !v.is_empty()).flat_map(|(&r, _)| self.devices(r)).map(|r| self.nodes[r].router.id).take(4).collect();
         let w = &mut self.nodes[node].router.mail_waiting;
         w.clear();
         for id in ids {
@@ -2532,18 +2740,31 @@ impl Engine {
 
     /// Office `node` sends what it holds for `recipient` (except `have`).
     fn deliver_mail(&mut self, node: usize, recipient: usize, have: &[usize]) {
+        let key = self.pkey(recipient);
+        if key != recipient {
+            // Linked devices: the device's own copies, then the person's mail.
+            self.deliver_mail_key(node, recipient, recipient, have);
+        }
+        if !self.sc.device_groups.is_empty() {
+            self.retarget_mail(node, key, recipient);
+        }
+        self.deliver_mail_key(node, recipient, key, have);
+    }
+
+    /// `deliver_mail` for the mail kept under `key` at `node`.
+    fn deliver_mail_key(&mut self, node: usize, recipient: usize, key: usize, have: &[usize]) {
         // Not what the recipient has, and not what was sent in the last minute.
         let now = self.now;
         let sent = &self.mail_sent;
         let mut list: Vec<usize> = self.mailbox[node]
-            .get(&recipient)
+            .get(&key)
             .map(|v| v.iter().copied().filter(|m| !have.contains(m) && sent.get(&(node, *m)).is_none_or(|&t| now >= t + 60_000)).collect())
             .unwrap_or_default();
         if self.sc.mail_paced {
             // One at a time over a long route (the next when this one is
             // acknowledged): a burst would overflow the LoRa trunks.
             let local = self.on_backbone(node) && self.radio_seen.get(node).is_some_and(|m| m.get(&recipient).is_some_and(|&t| now < t + 3_600_000));
-            let inflight = self.mailbox[node].get(&recipient).is_some_and(|v| v.iter().any(|m| sent.get(&(node, *m)).is_some_and(|&t| now < t + 60_000)));
+            let inflight = self.mailbox[node].get(&key).is_some_and(|v| v.iter().any(|m| sent.get(&(node, *m)).is_some_and(|&t| now < t + 60_000)));
             if !local {
                 if inflight {
                     return;
@@ -2574,7 +2795,7 @@ impl Engine {
                 self.stats.mail_deliveries += 1;
                 let before = self.nodes[node].router.stats;
                 if let Ok((msg_id, actions)) = self.nodes[node].router.send_direct(dest, &payload, token, self.now) {
-                    self.bundles.insert(msg_id, (node, recipient, chunk.to_vec()));
+                    self.bundles.insert(msg_id, (node, key, chunk.to_vec()));
                     self.after_router(node, before, Some(chunk[0] as u32));
                     self.apply(node, actions.into_iter().collect(), Some(chunk[0] as u32));
                 }
@@ -2667,7 +2888,7 @@ impl Engine {
             maarse_core::mail::OP_FETCH => {
                 let have: Vec<usize> = d.ids().map(|x| x as usize).collect();
                 let Some(&asker) = d.asker().as_ref().and_then(|a| self.addr_idx.get(a)) else { return };
-                let list: Vec<usize> = self.mailbox[node].get(&rec).map(|v| v.iter().copied().filter(|m| !have.contains(m)).collect()).unwrap_or_default();
+                let list: Vec<usize> = self.mail_keys(rec).iter().flat_map(|k| self.mailbox[node].get(k).cloned().unwrap_or_default()).filter(|m| !have.contains(m)).collect();
                 for m in list {
                     let body = Self::store_body(m, true);
                     self.send_deposit(node, asker, rec, maarse_core::mail::OP_STORE, &body);
@@ -2675,8 +2896,10 @@ impl Engine {
             }
             maarse_core::mail::OP_DELIVERED => {
                 let ids: Vec<usize> = d.ids().map(|x| x as usize).collect();
-                if let Some(v) = self.mailbox[node].get_mut(&rec) {
-                    v.retain(|m| !ids.contains(m));
+                for key in self.mail_keys(rec) {
+                    if let Some(v) = self.mailbox[node].get_mut(&key) {
+                        v.retain(|m| !ids.contains(m));
+                    }
                 }
                 self.update_tim(node);
             }
@@ -2709,7 +2932,7 @@ impl Engine {
         }
         let (home, have) = maarse_core::mail::parse_sync(payload);
         let have: Vec<usize> = have.iter().map(|&x| x as usize).collect();
-        let holds = self.mailbox[node].get(&rec).is_some_and(|v| !v.is_empty());
+        let holds = self.holds_mail(node, rec);
         let named = home == Some(self.nodes[node].router.id);
         if !holds && !named {
             return;
@@ -2743,6 +2966,9 @@ impl Engine {
     /// the previous one too), act on "mail waiting" hints, and sync every
     /// 6 hours anyway.
     fn mail_tick(&mut self) {
+        if self.sc.office_carry {
+            self.office_carry();
+        }
         // Host-to-host mail that waited for TCP.
         if !self.mail_deferred.is_empty() {
             let all = std::mem::take(&mut self.mail_deferred);
@@ -3464,6 +3690,9 @@ impl Engine {
         r.anchor_ttl_ms = old.anchor_ttl_ms;
         r.boundary = old.boundary;
         r.carry_copies = old.carry_copies;
+        r.carry_max = old.carry_max;
+        r.carry_ttl_ms = old.carry_ttl_ms;
+        r.carry_smart = old.carry_smart;
         r.local_repair = f.local_repair;
         r.load_control = f.load_control;
         r.relay_hops = old.relay_hops;
@@ -3787,6 +4016,7 @@ impl Engine {
                     self.islands.clear();
                 }
             }
+            "sync" => self.person_sync(ev.node),
             "message" => {
                 if ev.from < self.nodes.len() && ev.node < self.nodes.len() {
                     self.send_message(ev.from, ev.node);
@@ -3995,6 +4225,10 @@ impl Engine {
             "mail_retries": self.stats.mail_retries,
             "mail_refetches": self.stats.mail_refetches,
             "mail_consolidated": self.stats.mail_consolidated,
+            "redirect_hints": self.stats.redirect_hints,
+            "office_carried": self.stats.office_carried,
+            "sync_presses": self.stats.sync_presses,
+            "backfilled": self.stats.backfilled,
             "trunk_packets": self.stats.trunk_packets,
             "trunk_dropped": self.stats.trunk_dropped,
             "trunk_jammed": self.stats.trunk_jammed,
@@ -4030,6 +4264,7 @@ impl Engine {
             "hop_retries": sum(|s| s.hop_retries),
             "carry_handoffs": sum(|s| s.carry_handoffs),
             "carry_delivered": sum(|s| s.carry_delivered),
+            "carry_rerouted": sum(|s| s.carry_rerouted),
             "routes_learned": sum(|s| s.routes_learned),
             "path_requests": sum(|s| s.path_requests),
             "quota_dropped": sum(|s| s.quota_dropped),
@@ -4358,7 +4593,7 @@ impl Engine {
             .enumerate()
             .skip(from)
             .take(max)
-            .map(|(i, m)| json!([i, m.from, m.to, m.sent_ms, m.delivered_ms, m.acked_ms, format!("{:016x}", m.id)]))
+            .map(|(i, m)| json!([i, m.from, m.to, m.sent_ms, m.delivered_ms, m.acked_ms, format!("{:016x}", m.id), m.sync_of]))
             .collect();
         json!({"total": self.msgs.len(), "msgs": v})
     }

@@ -302,6 +302,9 @@ private fun MeScreen(nav: Nav) {
                 PersonState.AWAITING -> "Waiting to be linked"
                 else -> "One address for your phone, PC and more"
             }) { nav.go(Screen.Page(MePage.ACCOUNT)) }
+            if (p?.state == PersonState.MEMBER) GroupRow("Sync now", "Fetch your mail and copies from your other devices (also done at start-up)") {
+                Node.personSetup(dk.maarse.app.PersonOp.SYNC)
+            }
             GroupRow("Name, position and role", "What your announces share", last = true) { nav.go(Screen.Page(MePage.NODE)) }
         }
         GroupTitle("This phone")

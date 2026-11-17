@@ -12,7 +12,7 @@ use crate::bus::{
     Frame, Pkt, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_TX, RSTATS, TxReq, USB_IN, USB_OUT,
 };
 use core::sync::atomic::Ordering::Relaxed;
-use embassy_futures::select::{Either, Either4, select, select4};
+use embassy_futures::select::{Either3, Either4, select3, select4};
 use embassy_futures::yield_now;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::{FnvIndexMap, FnvIndexSet};
@@ -441,11 +441,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         loop {
             if self.stamping.is_some() {
                 self.stamp_step();
-                match select4(RADIO_RX.receive(), USB_IN.receive(), select(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait()), yield_now()).await {
+                match select4(RADIO_RX.receive(), USB_IN.receive(), select3(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive()), yield_now()).await {
                     Either4::First((pkt, snr)) => self.on_radio(pkt, snr),
                     Either4::Second(frame) => self.on_frame(frame),
-                    Either4::Third(Either::First(pkt)) => self.on_net(pkt),
-                    Either4::Third(Either::Second(())) => self.toggle_radio(),
+                    Either4::Third(Either3::First(pkt)) => self.on_net(pkt),
+                    Either4::Third(Either3::Second(())) => self.toggle_radio(),
+                    Either4::Third(Either3::Third(c)) => self.on_display_cmd(c),
                     Either4::Fourth(()) => {
                         if Instant::now() >= self.next_deadline() {
                             self.on_timer();
@@ -455,11 +456,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 continue;
             }
             let deadline = self.next_deadline();
-            match select4(RADIO_RX.receive(), USB_IN.receive(), select(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait()), Timer::at(deadline)).await {
+            match select4(RADIO_RX.receive(), USB_IN.receive(), select3(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive()), Timer::at(deadline)).await {
                 Either4::First((pkt, snr)) => self.on_radio(pkt, snr),
                 Either4::Second(frame) => self.on_frame(frame),
-                Either4::Third(Either::First(pkt)) => self.on_net(pkt),
-                Either4::Third(Either::Second(())) => self.toggle_radio(),
+                Either4::Third(Either3::First(pkt)) => self.on_net(pkt),
+                Either4::Third(Either3::Second(())) => self.toggle_radio(),
+                Either4::Third(Either3::Third(c)) => self.on_display_cmd(c),
                 Either4::Fourth(()) => self.on_timer(),
             }
         }
@@ -546,7 +548,55 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
+    /// What the display pages show: role, radio settings, name, neighbours.
+    fn update_display_info(&mut self) {
+        use crate::bus::{NEIGHBORS_SHOW, NODE_NAME, RADIO_BW, RADIO_FREQ, RADIO_MISC, ROLE_SHOW};
+        let setting = if self.auto_role { ROLE_AUTO as u32 } else { self.router.role.as_u8() as u32 };
+        ROLE_SHOW.store(setting | (self.router.role.as_u8() as u32) << 8, Relaxed);
+        let r = &self.radio;
+        RADIO_FREQ.store(r.freq_hz, Relaxed);
+        RADIO_BW.store(r.bw_hz, Relaxed);
+        let duty = (r.duty_permille as u32).min(255);
+        RADIO_MISC.store(r.sf as u32 | (r.cr as u32) << 8 | (r.tx_power_dbm as u8 as u32) << 16 | duty << 24, Relaxed);
+        NODE_NAME.lock(|n| {
+            let mut n = n.borrow_mut();
+            n.clear();
+            let _ = n.push_str(core::str::from_utf8(&self.ext.name).unwrap_or(""));
+        });
+        let now = now_ms();
+        NEIGHBORS_SHOW.lock(|v| {
+            let mut v = v.borrow_mut();
+            v.clear();
+            for nb in self.router.neighbors.sorted().iter().take(4) {
+                let id = match nb.addr {
+                    Some(a) => u32::from_be_bytes([a.0[0], a.0[1], a.0[2], a.0[3]]),
+                    None => nb.id as u32,
+                };
+                let age = (now.saturating_sub(nb.last_ms) / 1000) as u32;
+                let _ = v.push((id, nb.rssi, nb.snr, age));
+            }
+        });
+    }
+
+    /// A command from the display's settings page.
+    fn on_display_cmd(&mut self, cmd: u8) {
+        use crate::bus::{DCMD_ANNOUNCE, DCMD_ROLE};
+        match cmd {
+            c if c >= DCMD_ROLE && c <= DCMD_ROLE + ROLE_AUTO => match self.set_role(c - DCMD_ROLE) {
+                Ok(msg) => log(msg),
+                Err(e) => log(e),
+            },
+            DCMD_ANNOUNCE if !self.modem && !self.acting_modem() => {
+                self.announce();
+                log("Announce sent (from the display)");
+            }
+            _ => {}
+        }
+        self.update_display_info();
+    }
+
     fn on_timer(&mut self) {
+        self.update_display_info();
         // The phone that used us as its LoRa modem over Bluetooth is gone:
         // route on our own again.
         if crate::bus::BLE_LOST.swap(false, Relaxed) && self.modem && !self.wifi_modem {

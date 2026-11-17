@@ -19,6 +19,11 @@ mod battery;
 mod ble;
 #[cfg(feature = "display")]
 mod display;
+#[cfg(feature = "display")]
+mod display_ui;
+#[cfg(feature = "display")]
+#[allow(dead_code)] // generated: not every size is used
+mod art;
 mod ota;
 mod radio;
 mod usb;

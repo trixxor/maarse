@@ -184,6 +184,31 @@ pub static MY_SHORT: AtomicU32 = AtomicU32::new(0);
 /// on air (first 4 bytes); `u32::MAX` = a host that did not say; 0 = not a modem.
 pub static MODEM_HOST_SHORT: AtomicU32 = AtomicU32::new(0);
 
+/// For the display: the latest messages, newest first (sender's short
+/// address, start of the text, uptime in seconds when it came).
+pub static RECENT_MSGS: Mutex<M, RefCell<heapless::Vec<(u32, Preview, u32), 3>>> =
+    Mutex::new(RefCell::new(heapless::Vec::new()));
+/// For the display: the role setting (0 client, 1 repeater, 2 relay,
+/// 3 anchor, 4 auto) in the low byte, the role in use in the next byte.
+pub static ROLE_SHOW: AtomicU32 = AtomicU32::new(0);
+/// For the display: frequency (Hz), bandwidth (Hz) and SF | CR << 8 |
+/// (TX power as u8) << 16 | duty cycle permille << 24 (capped at 255).
+pub static RADIO_FREQ: AtomicU32 = AtomicU32::new(0);
+pub static RADIO_BW: AtomicU32 = AtomicU32::new(0);
+pub static RADIO_MISC: AtomicU32 = AtomicU32::new(0);
+/// For the display: the node's name (empty = none).
+pub static NODE_NAME: Mutex<M, RefCell<heapless::String<24>>> = Mutex::new(RefCell::new(heapless::String::new()));
+/// For the display: the nearest neighbours (short id, RSSI dBm, SNR dB,
+/// seconds since heard), best first.
+pub static NEIGHBORS_SHOW: Mutex<M, RefCell<heapless::Vec<(u32, i16, i8, u32), 4>>> =
+    Mutex::new(RefCell::new(heapless::Vec::new()));
+/// Commands from the display's settings page to the node.
+pub static DISPLAY_CMD: Channel<M, u8, 4> = Channel::new();
+/// `DISPLAY_CMD`: set the role (value + this, value as in `ROLE_SHOW`).
+pub const DCMD_ROLE: u8 = 0;
+/// `DISPLAY_CMD`: send an announce now.
+pub const DCMD_ANNOUNCE: u8 = 10;
+
 /// Remembers the latest message (the sender's short address and the start of the text).
 pub fn note_message(from: &Address, text: &[u8]) {
     MSG_COUNT.fetch_add(1, Relaxed);
@@ -195,6 +220,14 @@ pub fn note_message(from: &Address, text: &[u8]) {
             break;
         }
     }
+    let now = embassy_time::Instant::now().as_secs() as u32;
+    RECENT_MSGS.lock(|r| {
+        let mut r = r.borrow_mut();
+        if r.is_full() {
+            r.pop();
+        }
+        let _ = r.insert(0, (short, p.clone(), now));
+    });
     LAST_MSG.lock(|m| *m.borrow_mut() = (short, p));
 }
 

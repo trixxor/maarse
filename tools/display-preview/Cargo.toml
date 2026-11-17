@@ -1,0 +1,13 @@
+[package]
+name = "display-preview"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Renders the Heltec OLED pages (firmware/esp/src/display_ui.rs) to images on a PC"
+
+# Standalone: not part of the main workspace.
+[workspace]
+
+[dependencies]
+embedded-graphics = "0.8.2"
+heapless = "0.8"

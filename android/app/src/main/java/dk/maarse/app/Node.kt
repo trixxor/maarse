@@ -436,10 +436,21 @@ object Node : LinkListener {
         deleteMessage(m)
     }
 
-    /** Removes a message from this phone (not from others'). */
+    /** Removes a message here and from the host's history (not from the other person's phone). */
     fun deleteMessage(m: Msg) {
         m.file?.let { runCatching { java.io.File(it).delete() } }
         db.delete(m.id)
+        if (hostHistory && m.file == null)
+            send(Cmd.histDelete(m.conv.substringAfter(":"), if (m.mine) 1 else 0, m.ts / 1000, m.text.toByteArray()))
+        bump()
+    }
+
+    /** Deletes a whole conversation here and in the host's history. */
+    fun deleteConversation(conv: String) {
+        db.messages(conv, 100_000).forEach { it.file?.let { f -> runCatching { java.io.File(f).delete() } } }
+        db.deleteConv(conv)
+        if (hostHistory) send(Cmd.histDelete(conv.substringAfter(":"), 2, 0, ByteArray(0)))
+        unread.update { it - conv }
         bump()
     }
 
@@ -554,6 +565,12 @@ object Node : LinkListener {
             is Ev.CarryAcked -> db.byMsgId(ev.msgId)?.let { setStatus(it, "carried") }
             is Ev.FileStarted, is Ev.FileIncoming, is Ev.FileChunk, is Ev.FileProgress, is Ev.FileDone -> onFileEvent(ev)
             is Ev.Call -> Calls.onData(ev.from, ev.data)
+            is Ev.Deleted -> {
+                val conv = convOf(ev.conv)
+                if (ev.flags and 2 != 0) db.deleteConv(conv)
+                else db.deleteLike(conv, ev.flags and 1 != 0, String(ev.content), ev.unix * 1000)
+                bump()
+            }
             is Ev.Error -> {
                 pending.remove(ev.req)?.let { setStatus(it, "error: ${ev.text}") }
                 pendingFiles.remove(ev.req)?.let { setStatus(it, "error: ${ev.text}") }

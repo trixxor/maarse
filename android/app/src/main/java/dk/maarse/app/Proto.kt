@@ -77,6 +77,8 @@ object Cmd {
         u16(req); if (conv != null) addr(conv) else bytes(ByteArray(16)); u64(before); u8(limit)
     }
     fun histMarkRead(conv: String, upTo: Long) = frame(0x31) { addr(conv); u64(upTo) }
+    /** flags: 1 outgoing, 2 the whole conversation. */
+    fun histDelete(conv: String, flags: Int, unix: Long, content: ByteArray) = frame(0x33) { addr(conv); u8(flags); u32(unix); bytes(content) }
     // Files (the same frames as the web client's sendFile).
     fun fileBegin(req: Int, dest: String, size: Int, mime: String, name: String) = frame(0x06) {
         val m = mime.toByteArray().copyOf(minOf(mime.toByteArray().size, 60))
@@ -155,6 +157,7 @@ sealed class Ev {
     data class FileStarted(val req: Int, val fileId: Long, val chunks: Int) : Ev()
     data class FileLimit(val dest: String, val max: Long, val viaLora: Boolean, val mailbox: Boolean) : Ev()
     data class Call(val from: String, val data: ByteArray) : Ev()
+    data class Deleted(val conv: String, val flags: Int, val unix: Long, val content: ByteArray) : Ev()
     data class Unknown(val kind: Int) : Ev()
 }
 
@@ -211,6 +214,7 @@ fun decodeEvent(f: ByteArray): Ev {
         0x8c -> Ev.FileDone(r.u64(1), r.u8(9) != 0, r.u8(10) != 0, r.txt(11))
         0x8d -> Ev.FileStarted(r.u16(1), r.u64(3), r.u16(11))
         0x96 -> Ev.FileLimit(r.addr(1), r.u32(17), r.u8(21) and 1 != 0, r.u8(21) and 2 != 0)
+        0xb9 -> Ev.Deleted(r.addr(1), r.u8(17), r.u32(18), f.copyOfRange(minOf(22, f.size), f.size))
         0xa5 -> Ev.Call(r.addr(1), f.copyOfRange(minOf(17, f.size), f.size))
         0xb5 -> Ev.DeviceLinked(r.addr(1), r.u8(17), r.txt(18))
         0xb6 -> {

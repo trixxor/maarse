@@ -121,6 +121,12 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 2) {
 
     fun delete(id: Long) { writableDatabase.delete("msg", "id = ?", arrayOf("$id")) }
 
+    /** A message deleted on another screen: same conversation, direction and text, within two minutes. */
+    fun deleteLike(conv: String, mine: Boolean, text: String, ts: Long) {
+        writableDatabase.delete("msg", "conv = ? AND mine = ? AND text = ? AND ABS(ts - ?) <= 120000",
+            arrayOf(conv, if (mine) "1" else "0", text, "$ts"))
+    }
+
     fun deleteConv(conv: String) { writableDatabase.delete("msg", "conv = ?", arrayOf(conv)) }
 
     private fun row(c: android.database.Cursor) = Msg(

@@ -76,6 +76,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ChatsScreen(onOpen: (String) -> Unit) {
     val version by Node.msgVersion.collectAsState()
@@ -85,6 +86,17 @@ fun ChatsScreen(onOpen: (String) -> Unit) {
     val last = remember(version) { Node.db.lastPerConv() }
     val convs = last.map { it.conv } + channels.keys.map { "ch:$it" }.filter { c -> last.none { it.conv == c } }
     var adding by remember { mutableStateOf(false) }
+    var removing by remember { mutableStateOf<String?>(null) }
+    removing?.let { c ->
+        AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text("Delete the chat with ${Node.convTitle(c)}?") },
+            text = { Text("Removes it from this phone and your node's history. The other person keeps their copy." +
+                if (c.startsWith("ch:")) " You stay in the channel." else " It comes back if they write again.") },
+            confirmButton = { TextButton(onClick = { Node.deleteConversation(c); removing = null }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
+        )
+    }
     Box(Modifier.fillMaxSize()) {
         if (convs.isEmpty()) Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("No conversations yet", style = MaterialTheme.typography.titleMedium)
@@ -97,7 +109,7 @@ fun ChatsScreen(onOpen: (String) -> Unit) {
                 val n = unread[c] ?: 0
                 val title = Node.convTitle(c)
                 Row(
-                    Modifier.fillMaxWidth().clickable { onOpen(c) }.padding(horizontal = 16.dp, vertical = 10.dp),
+                    Modifier.fillMaxWidth().combinedClickable(onClick = { onOpen(c) }, onLongClick = { removing = c }).padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Avatar(title, c.substringAfter(":"))

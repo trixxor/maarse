@@ -62,10 +62,22 @@ fun ContactsScreen(onContact: (String) -> Unit) {
             placeholder = { Text("Search by name or address") }, leadingIcon = { Icon(Icons.Default.Search, null) },
             shape = RoundedCornerShape(24.dp),
         )
-        if (list.isEmpty()) Text("Nobody heard yet. People show up when they announce themselves or write to you.",
+        if (list.isEmpty()) Text("Nobody heard yet. People show up when they announce themselves or write to you. Give someone a name to save them.",
             Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val saved = list.filter { Node.nicknames.value.containsKey(it.addr) }
         LazyColumn {
-            items(list, key = { it.addr }) { n ->
+            if (saved.isNotEmpty()) item { GroupTitle("Saved (${saved.size})") }
+            items(saved, key = { "s" + it.addr }) { n -> ContactRow(n, onContact) }
+            if (list.size > saved.size) item { GroupTitle("Heard recently") }
+            items(list - saved.toSet(), key = { it.addr }) { n -> ContactRow(n, onContact) }
+        }
+    }
+}
+
+@Composable
+private fun ContactRow(n: NodeEntry, onContact: (String) -> Unit) {
+    run {
+        run {
                 val title = Node.label(n.addr)
                 Row(
                     Modifier.fillMaxWidth().clickable { onContact(n.addr) }.padding(horizontal = 16.dp, vertical = 10.dp),
@@ -77,7 +89,6 @@ fun ContactsScreen(onContact: (String) -> Unit) {
                         Text(reach(n), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-            }
         }
     }
 }

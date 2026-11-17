@@ -12,7 +12,7 @@ rem ======================================================================
 rem ---- Required ---------------------------------------------------------
 rem The address and port others reach this server on (your public IP or a
 rem DNS name). Open this TCP port in the router/firewall.
-set PUBLIC_ADDR=server.example.org:4242
+set PUBLIC_ADDR=nj01.dk.eu.maarse.dk:4242
 
 rem ---- Network ----------------------------------------------------------
 rem Port the backbone listens on (must match the port in PUBLIC_ADDR).
@@ -20,7 +20,7 @@ set LISTEN=0.0.0.0:4242
 rem Other servers or hosts to connect to, separated by spaces (may be empty).
 set PEERS=
 rem A DNS name with several servers behind it (may be empty).
-set SEED_DNS=
+set SEED_DNS=seed.maarse.dk
 rem Keep at least this many backbone links.
 set MIN_PEERS=6
 

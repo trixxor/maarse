@@ -788,6 +788,8 @@ pub fn run(cli: Vec<String>) {
     };
     println!("{} v{}", if cfg.backbone { "Må:rse-server" } else { "Må:rse-host" }, env!("CARGO_PKG_VERSION"));
     settings::report(format!("  Address:  {}", node.address()), false);
+    // A LoRa modem shows the address of the host it works for.
+    let _ = links::HOST_ADDR.set(node.address().0);
     settings::report(format!("  Data:     {}", cfg.data_dir.display()), false);
     let key: String = node.public_identity().to_bytes().iter().map(|b| format!("{b:02x}")).collect();
     settings::report(format!("  Bulletin key (for --bulletin-key on receivers): {key}"), false);

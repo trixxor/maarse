@@ -559,6 +559,25 @@ fn run_serial(port: Box<dyn serialport::SerialPort>, name: String, tx: &Sender<I
     run_modem(port, name, "usb-modem", tx);
 }
 
+/// This host's address, sent to a LoRa modem with the modem command so its
+/// display can show the ID in use (set once at startup).
+pub static HOST_ADDR: std::sync::OnceLock<[u8; 16]> = std::sync::OnceLock::new();
+
+/// The modem command: `0x41`, followed by our address when known.
+fn modem_command() -> Vec<u8> {
+    let mut f = vec![0x41];
+    if let Some(a) = HOST_ADDR.get() {
+        f.extend_from_slice(a);
+    }
+    let mut out = (f.len() as u16).to_le_bytes().to_vec();
+    out.extend_from_slice(&f);
+    out
+}
+
+/// How often the modem command is repeated: a radio that fell out of modem
+/// mode (e.g. after a quick Bluetooth reconnect) comes back by itself.
+const MODEM_REPEAT: Duration = Duration::from_secs(20);
+
 /// A LoRa modem over a TCP byte stream with the serial modem protocol
 /// (`--modem-tcp`): the Android app bridges it to a radio over Bluetooth.
 /// If `<data>/modem-tcp-key.txt` exists, its key is sent first (a line
@@ -586,9 +605,10 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
     let id = next_id();
     let (wtx, wrx) = channel::<Vec<u8>>();
     // Put the node in modem mode: the host does the routing.
-    if port.write_all(&[1, 0, 0x41]).is_err() {
+    if port.write_all(&modem_command()).is_err() {
         return;
     }
+    let mut last_modem_cmd = std::time::Instant::now();
     register(id, &name, kind);
     if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
         unregister(id);
@@ -631,6 +651,13 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
             last_poll = std::time::Instant::now();
             use maarse_core::companion::Command;
             if port.write_all(&Command::GetStats.encode()).is_err() || port.write_all(&Command::GetRadio.encode()).is_err() {
+                break 'link;
+            }
+        }
+        if last_modem_cmd.elapsed() >= MODEM_REPEAT {
+            last_modem_cmd = std::time::Instant::now();
+            if let Err(e) = port.write_all(&modem_command()) {
+                eprintln!("[modem] {kind}: write error: {e}");
                 break 'link;
             }
         }

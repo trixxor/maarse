@@ -550,7 +550,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         // The phone that used us as its LoRa modem over Bluetooth is gone:
         // route on our own again.
         if crate::bus::BLE_LOST.swap(false, Relaxed) && self.modem && !self.wifi_modem {
-            self.modem = false;
+            self.set_modem(false, &[]);
             log("Bluetooth client gone: an ordinary node again (not a modem)");
         }
         if self.wifi_modem {
@@ -905,10 +905,26 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     // ---------- USB ----------
 
+    /// Starts or ends modem mode. `host`: the host's address from the modem
+    /// command (may be empty), shown on the display as the ID in use.
+    fn set_modem(&mut self, on: bool, host: &[u8]) {
+        self.modem = on;
+        let short = match (on, host) {
+            (false, _) => 0,
+            (true, [a, b, c, d, ..]) => u32::from_be_bytes([*a, *b, *c, *d]).max(1),
+            (true, _) => u32::MAX,
+        };
+        crate::bus::MODEM_HOST_SHORT.store(short, Relaxed);
+    }
+
     fn on_frame(&mut self, frame: Frame) {
         match frame.first() {
             Some(0x41) => {
-                self.modem = true;
+                // A fresh modem command wins over a "Bluetooth client gone"
+                // left from before a quick reconnect (on_timer may not have
+                // run yet; it would end modem mode right after this).
+                crate::bus::BLE_LOST.store(false, Relaxed);
+                self.set_modem(true, &frame[1..]);
                 return;
             }
             Some(0x40) => {
@@ -923,7 +939,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             return err(0, error_code::BAD_FRAME, "invalid frame");
         };
         let Some(cmd) = self.ext_command(cmd).and_then(|c| self.range_command(c)) else {
-            self.modem = false;
+            self.set_modem(false, &[]);
             return;
         };
         // Status and radio settings may be fetched without leaving modem mode.
@@ -931,7 +947,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             cmd,
             Command::GetStats | Command::GetRadio | Command::SetRadio(_) | Command::SetRole { .. }
         ) {
-            self.modem = false;
+            self.set_modem(false, &[]);
         }
         match cmd {
             Command::GetStats => {

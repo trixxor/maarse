@@ -180,6 +180,9 @@ pub static LAST_MSG: Mutex<M, RefCell<(u32, Preview)>> =
     Mutex::new(RefCell::new((0, heapless::String::new())));
 /// The node's own short address (first 4 bytes), for the display.
 pub static MY_SHORT: AtomicU32 = AtomicU32::new(0);
+/// Working as a LoRa modem: the short address of the host whose ID is used
+/// on air (first 4 bytes); `u32::MAX` = a host that did not say; 0 = not a modem.
+pub static MODEM_HOST_SHORT: AtomicU32 = AtomicU32::new(0);
 
 /// Remembers the latest message (the sender's short address and the start of the text).
 pub fn note_message(from: &Address, text: &[u8]) {

@@ -24,7 +24,7 @@ use esp_hal::i2c::master::I2c;
 use ssd1306::prelude::*;
 use ssd1306::{I2CDisplayInterface, Ssd1306};
 use maarse_fw_common::bus::{
-    BLE_ACTIVE, BLE_CONNECTED, DISPLAY_NOTE, KNOWN_NODES, LAST_MSG, MSG_COUNT, MY_SHORT, NOTE_ONE_RADIO,
+    BLE_ACTIVE, BLE_CONNECTED, DISPLAY_NOTE, KNOWN_NODES, LAST_MSG, MODEM_HOST_SHORT, MSG_COUNT, MY_SHORT, NOTE_ONE_RADIO,
     NOTE_TO_BLE, NOTE_TO_WIFI, NOTE_WIFI_NOT_SET_UP, RSTATS, TOGGLE_RADIO, USB_LAST_RX, WIFI_IP, WIFI_STATE,
     WIFI_SUPPORTED,
 };
@@ -83,7 +83,12 @@ pub async fn display_task(i2c: I2c<'static, Blocking>, mut button: Input<'static
 }
 
 fn overview(l: &mut [Line; 6]) {
-    let _ = write!(l[0], "Maarse {:08x}", MY_SHORT.load(Relaxed));
+    // The ID in use on air: the host's when we are its LoRa modem, else our own.
+    let _ = match MODEM_HOST_SHORT.load(Relaxed) {
+        0 => write!(l[0], "Maarse {:08x}", MY_SHORT.load(Relaxed)),
+        u32::MAX => write!(l[0], "Modem (host ID ?)"),
+        h => write!(l[0], "ID {:08x} modem", h),
+    };
     let _ = write!(l[1], "Nodes {}  Msgs {}", KNOWN_NODES.load(Relaxed), MSG_COUNT.load(Relaxed));
     links(&mut l[2]);
     wifi_line(&mut l[3]);

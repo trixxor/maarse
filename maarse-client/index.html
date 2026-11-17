@@ -1041,7 +1041,17 @@ function renderChat() {
     if (!m.mine && kind === "ch") {
       const f = document.createElement("div"); f.className = "from";
       if (br) f.append(el("span", { className: "net mc", textContent: "MC", title: "From MeshCore via the bridge" }), " " + br.name);
-      else { if (mcBridgedTo(state.channels.get(addr))) f.append(el("span", { className: "net maa", textContent: "Må" }), " "); f.append(label(m.from)); }
+      else {
+        if (mcBridgedTo(state.channels.get(addr))) f.append(el("span", { className: "net maa", textContent: "Må" }), " ");
+        // Tap the sender to write to them directly (as in Meshtastic and MeshCore).
+        const who = el("a", { href: "#", textContent: label(m.from), title: "Write to " + label(m.from) + " directly" });
+        who.onclick = (e) => {
+          e.preventDefault();
+          if (!state.contacts.has(m.from)) state.contacts.set(m.from, { heard: true });
+          state.active = "dm:" + m.from; state.unread.delete(state.active); markTab("chats"); setView("chat"); renderSide(); renderChat();
+        };
+        f.append(who);
+      }
       d.appendChild(f);
     }
     if (m.url && m.voice) {

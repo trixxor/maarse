@@ -199,7 +199,7 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
                         }
                     }
                 }
-                item(key = m.id) { Bubble(m, isDm, shown == m.id) { shown = if (shown == m.id) null else m.id } }
+                item(key = m.id) { Bubble(m, isDm, shown == m.id, onSender = onContact) { shown = if (shown == m.id) null else m.id } }
             }
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
@@ -230,7 +230,7 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
 }
 
 @Composable
-private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onTap: () -> Unit) {
+private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onSender: (String) -> Unit, onTap: () -> Unit) {
     val mine = m.mine
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
         Column(
@@ -239,7 +239,9 @@ private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onTap: () -> Unit) {
                 .background(if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer)
                 .clickable(onClick = onTap).padding(start = 12.dp, end = 10.dp, top = 7.dp, bottom = 5.dp),
         ) {
-            if (!mine && !isDm) Text(Node.label(m.from), style = MaterialTheme.typography.labelMedium, color = avatarColor(m.from), fontWeight = FontWeight.SemiBold)
+            // In a channel: tap the sender to see them and write directly.
+            if (!mine && !isDm) Text(Node.label(m.from), style = MaterialTheme.typography.labelMedium, color = avatarColor(m.from), fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { onSender(m.from) }.padding(vertical = 2.dp))
             Text(m.text, color = if (mine) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
             Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(m.ts)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

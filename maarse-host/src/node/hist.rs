@@ -164,6 +164,11 @@ impl Node {
                     self.send_raw(id, f);
                 }
             }
+            Some(HistCmd::Delete { conv, flags, ts, content }) => {
+                let n = h.delete(conv, flags, ts, &content);
+                self.log(format!("history: {n} record(s) deleted by a screen"));
+                self.broadcast_raw(&History::deleted_frame(conv, flags, ts, &content), None);
+            }
             None => self.send_client(id, &err_ev(0, error_code::BAD_FRAME, "invalid frame")),
         }
     }

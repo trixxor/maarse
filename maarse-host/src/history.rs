@@ -10,6 +10,7 @@
 //! M <id> <unix> <kind> <flag> <state> <hops> <msg_id> <conv> <from> <content>
 //! S <id> <state>                         delivery state changed
 //! R <conv> <id>                          read up to and including <id>
+//! D <id>                                 deleted by the user
 //! ```
 //!
 //! * `kind`: 1 = direct message, 2 = channel message, 3 = file (metadata only).
@@ -37,6 +38,10 @@
 //! * `0x31 MarkRead`: conv (16) | up to and including id (u64, 0 = everything so far).
 //!   Forwarded to all screens as `ReadMark`.
 //! * `0x32 GetReadState`: answer: one `ReadMark` per conversation.
+//! * `0x33 Delete`: conv (16) | flags (u8: bit 0 outgoing, bit 1 the whole
+//!   conversation) | unix (u32) | content (the rest). Deletes the message
+//!   with that text and direction within two minutes of that time (or the
+//!   whole conversation). Forwarded to all screens as `Deleted`.
 //!
 //! Events:
 //! * `0xB0 HistoryItem`: id (u64) | unix (u32) | flag (u8: bit 0 outgoing,
@@ -45,6 +50,7 @@
 //! * `0xB1 HistoryEnd`: req (u16) | conv (16) | count (u8) | more (u8)
 //!   | oldest id (u64).
 //! * `0xB2 ReadMark`: conv (16) | up to and including id (u64) | unread (u16).
+//! * `0xB9 Deleted`: the same fields as `Delete`.
 //! * `0xB3 HistoryInfo`: enabled (u8) | days (u16) | count (u32) |
 //!   newest id (u64). Sent on connect; the client only uses history
 //!   once it has received this.
@@ -58,6 +64,10 @@ use std::path::PathBuf;
 pub const CMD_GET_HISTORY: u8 = 0x30;
 pub const CMD_MARK_READ: u8 = 0x31;
 pub const CMD_GET_READ_STATE: u8 = 0x32;
+pub const CMD_DELETE: u8 = 0x33;
+pub const EV_DELETED: u8 = 0xB9;
+pub const DEL_OUTGOING: u8 = 1;
+pub const DEL_CONVERSATION: u8 = 2;
 pub const EV_ITEM: u8 = 0xB0;
 pub const EV_END: u8 = 0xB1;
 pub const EV_READ_MARK: u8 = 0xB2;
@@ -100,6 +110,7 @@ pub enum HistCmd {
     Get { req: u16, conv: Option<Address>, before: u64, limit: u8 },
     MarkRead { conv: Address, up_to: u64 },
     GetReadState,
+    Delete { conv: Address, flags: u8, ts: u32, content: Vec<u8> },
 }
 
 pub fn is_history_command(frame: &[u8]) -> bool {
@@ -123,6 +134,12 @@ pub fn parse_command(frame: &[u8]) -> Option<HistCmd> {
             up_to: u64::from_le_bytes(b[16..24].try_into().ok()?),
         }),
         CMD_GET_READ_STATE => Some(HistCmd::GetReadState),
+        CMD_DELETE if b.len() >= 21 => Some(HistCmd::Delete {
+            conv: Address::from_slice(&b[..16])?,
+            flags: b[16],
+            ts: u32::from_le_bytes(b[17..21].try_into().ok()?),
+            content: b[21..].to_vec(),
+        }),
         _ => None,
     }
 }
@@ -243,6 +260,15 @@ impl History {
                 ["S", id, st] => {
                     if let (Some(&i), Ok(st)) = (id.parse().ok().and_then(|id: u64| by_id.get(&id)), st.parse()) {
                         self.items[i].state = st;
+                    }
+                }
+                ["D", id] => {
+                    if let Ok(id) = id.parse::<u64>() {
+                        self.items.retain(|i| i.id != id);
+                        by_id.clear();
+                        for (n, it) in self.items.iter().enumerate() {
+                            by_id.insert(it.id, n);
+                        }
                     }
                 }
                 ["R", conv, id] => {
@@ -395,6 +421,35 @@ impl History {
         frame(EV_INFO, &b)
     }
 
+    /// Deletes a message (same conversation, direction and text within two
+    /// minutes of `ts`) or, with `DEL_CONVERSATION`, the whole conversation.
+    /// Returns how many records went.
+    pub fn delete(&mut self, conv: Address, flags: u8, ts: u32, content: &[u8]) -> usize {
+        let all = flags & DEL_CONVERSATION != 0;
+        let out = flags & DEL_OUTGOING != 0;
+        let ids: Vec<u64> = self
+            .items
+            .iter()
+            .filter(|i| i.conv == conv && (all || (i.outgoing == out && i.content == content && i.ts.abs_diff(ts) <= 120)))
+            .map(|i| i.id)
+            .collect();
+        let ids = if all { ids } else { ids.into_iter().take(1).collect() };
+        for id in &ids {
+            self.append(&format!("D\t{id}\n"));
+        }
+        self.items.retain(|i| !ids.contains(&i.id));
+        ids.len()
+    }
+
+    /// The `Deleted` event.
+    pub fn deleted_frame(conv: Address, flags: u8, ts: u32, content: &[u8]) -> Vec<u8> {
+        let mut b = conv.0.to_vec();
+        b.push(flags);
+        b.extend_from_slice(&ts.to_le_bytes());
+        b.extend_from_slice(content);
+        frame(EV_DELETED, &b)
+    }
+
     /// Direct messages (sent and received) newer than `ts`, oldest first.
     pub fn since(&self, ts: u32, limit: usize) -> Vec<&Item> {
         self.items.iter().filter(|i| i.ts > ts && i.kind == KIND_DIRECT).take(limit).collect()
@@ -437,6 +492,27 @@ mod tests {
             from: Address([if out { 0xee } else { conv }; 16]),
             content: text.as_bytes().to_vec(),
         }
+    }
+
+    #[test]
+    fn delete_survives_a_restart() {
+        let d = dir("delete");
+        let now = 1_800_000_000;
+        let (c1, c2) = (Address([1; 16]), Address([2; 16]));
+        {
+            let mut h = History::open(d.clone(), 90, now).unwrap();
+            h.add(msg(1, now, false, "keep"));
+            h.add(msg(1, now + 5, true, "remove me"));
+            h.add(msg(2, now, false, "a"));
+            h.add(msg(2, now, true, "b"));
+            // Wrong direction: nothing; right one, a minute off: deleted.
+            assert_eq!(h.delete(c1, 0, now + 5, b"remove me"), 0);
+            assert_eq!(h.delete(c1, DEL_OUTGOING, now + 65, b"remove me"), 1);
+            assert_eq!(h.delete(c2, DEL_CONVERSATION, 0, b""), 2);
+        }
+        let h = History::open(d.clone(), 90, now + 10).unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h.page(Some(c1), 0, 10).0[0].content, b"keep");
     }
 
     #[test]

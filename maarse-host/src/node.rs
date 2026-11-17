@@ -330,6 +330,8 @@ pub struct Node {
     persons: person::Persons,
     /// Hosts found in the DHT (reached over TCP, if through a relay).
     dht_hosts: HashSet<Address>,
+    /// Files whose wait for a TCP route has been logged.
+    file_wait_logged: HashSet<u64>,
     /// Sequence numbers per conversation (node/seq.rs).
     seqs: seq::Seqs,
     /// Identities whose signed bulletins and alerts we show (`--bulletin-key`).
@@ -571,6 +573,7 @@ impl Node {
             hist: hist::Hist::open(&cfg.data_dir, cfg.history_days),
             persons: person::Persons::load(&cfg.data_dir, &addr),
             dht_hosts: HashSet::new(),
+            file_wait_logged: HashSet::new(),
             seqs: seq::Seqs::load(&cfg.data_dir),
             bulletin_keys: cfg.bulletin_keys.clone(),
             alerts: alerts::Alerts::load(cfg)?,
@@ -1692,6 +1695,9 @@ impl Node {
             }
             // Over 8 KB only along a route we know is TCP all the way.
             if f.size > LORA_MAX_FILE && self.path_kind(&f.dest) != PathKind::Tcp {
+                if self.file_wait_logged.insert(file_id) {
+                    self.log(format!("file to {} waits: no route known to be internet all the way (over 8 KB is not sent over LoRa)", short(&f.dest)));
+                }
                 return;
             }
             let Some(idx) =
@@ -1869,17 +1875,17 @@ impl Node {
 
     /// The route type to `dest` based on where it was last heard.
     fn path_kind(&self, dest: &Address) -> PathKind {
-        let heard = self.heard_via.get(dest);
-        if heard.is_none() {
-            return PathKind::Unknown;
-        }
-        let heard_tcp = heard.is_some_and(|h| h.1);
-        // A host found in the DHT (say behind NAT, through a relay), or any
-        // node heard over TCP when we have no radio at all (a phone node):
+        // A host found in the DHT (say behind NAT, through a relay; we may
+        // never have heard its announce), or any node heard when we have
+        // no radio at all (a phone node) and have heard over the backbone:
         // nothing on the way can be LoRa.
         let no_radio = !self.links.values().any(|(n, _)| !crate::extra_links::is_backbone(n));
-        if heard_tcp && (self.dht_hosts.contains(dest) || no_radio) {
+        let heard = self.heard_via.get(dest);
+        if self.dht_hosts.contains(dest) || (no_radio && heard.is_some()) {
             return PathKind::Tcp;
+        }
+        if heard.is_none() {
+            return PathKind::Unknown;
         }
         let in_dht = |a: &Address| self.dht.table.closest(a, 1).first().is_some_and(|c| c.id == *a);
         // Known backbone hosts: direct TCP neighbours (0 hops) and DHT contacts.
@@ -3135,8 +3141,8 @@ impl Node {
                 short(&rec.gw),
                 rec.ep
             ));
-            // A host itself (0 hops behind its gateway) is reached over TCP.
-            if rec.hops == 0 {
+            // A host in the DHT is reached over TCP (through its gateway).
+            if rec.hops == 0 || self.known.contains_key(&rec.dest) {
                 self.dht_hosts.insert(rec.dest);
             }
             // The announce is genuine (checked in lookup): we now know the keys.

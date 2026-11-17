@@ -989,8 +989,29 @@ function convRow(key, name, title) {
   d.append(av, t);
   const u = state.unread.get(key);
   if (u) { const b = document.createElement("span"); b.className = "badge"; b.textContent = u; d.appendChild(b); }
+  // Delete the whole chat (here, on the host's other screens and in its history).
+  const x = el("button", { className: "delchat", textContent: "✕", title: "Delete this chat" });
+  Object.assign(x.style, { marginLeft: "auto", background: "none", border: "0", color: "inherit", opacity: "0.45", cursor: "pointer", fontSize: "13px" });
+  x.onclick = (e) => {
+    e.stopPropagation();
+    const ch = key.startsWith("ch:");
+    if (!confirm(`Delete the chat with ${name}?
+
+Removes it here and from your node's history; the other person keeps their copy.` + (ch ? " You stay in the channel." : " It comes back if they write again."))) return;
+    if (hist.on) histDeleteMsg(key, null, true);
+    forgetChat(key);
+  };
+  d.appendChild(x);
   d.onclick = () => { markTab("chats"); setView("chat"); state.active = key; state.unread.delete(key); histMarkRead(key); renderSide(); renderChat(); };
   return d;
+}
+
+function forgetChat(key) {
+  state.convs.delete(key); state.unread.delete(key);
+  const addr = key.slice(3);
+  if (key.startsWith("dm:") && !nicknames[addr]) state.contacts.delete(addr);
+  if (state.active === key) state.active = null;
+  renderSide(); renderChat();
 }
 
 function renderSide() {
@@ -999,7 +1020,9 @@ function renderSide() {
   const ct = $("contacts"); ct.replaceChildren();
   const all = new Set([...state.contacts.keys(), ...Object.keys(nicknames),
     ...[...state.convs.keys()].filter(k => k.startsWith("dm:")).map(k => k.slice(3))]);
-  for (const addr of all) {
+  // Saved contacts (given a name) first.
+  const sorted = [...all].sort((a, b) => (nicknames[b] ? 1 : 0) - (nicknames[a] ? 1 : 0));
+  for (const addr of sorted) {
     const heard = state.contacts.get(addr)?.heard;
     if (chatVisible("dm:" + addr)) ct.appendChild(convRow("dm:" + addr, label(addr) + (isVerified(addr) ? " ✓" : "") + (heard ? "" : " · not heard"), addr));
   }
@@ -4492,7 +4515,7 @@ function histOnEvent(ev) {
     case "deleted": {
       for (const key of ["dm:" + ev.conv, "ch:" + ev.conv]) {
         if (!state.convs.has(key)) continue;
-        if (ev.flags & 2) state.convs.set(key, []);
+        if (ev.flags & 2) { forgetChat(key); continue; }
         else {
           const list = conv(key), mine = !!(ev.flags & 1);
           const i = list.findIndex(m => !!m.mine === mine && m.text === ev.text && Math.abs((m.ts || ev.ts) - ev.ts) <= 120);

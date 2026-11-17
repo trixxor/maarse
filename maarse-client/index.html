@@ -1057,7 +1057,10 @@ function renderChat() {
     if (m.url && m.voice) {
       const a = document.createElement("audio"); a.controls = true; a.src = m.url; a.preload = "metadata"; d.appendChild(a);
     } else if (m.url && m.mime?.startsWith("image/")) {
-      const img = document.createElement("img"); img.src = m.url; img.alt = m.name || "picture"; d.appendChild(img);
+      const img = document.createElement("img"); img.src = m.url; img.alt = m.name || "picture";
+      img.style.cursor = "zoom-in"; img.title = "Show full size";
+      img.onclick = () => showImage(m.url, m.name || "picture");
+      d.appendChild(img);
     } else if (m.url) {
       const l = document.createElement("a"); l.href = m.url; l.download = m.name || "file"; l.textContent = "⬇ " + (m.name || "file");
       d.appendChild(l);
@@ -1072,6 +1075,12 @@ function renderChat() {
     meta.textContent = m.time + (!m.mine && m.hops !== undefined ? ` · ${m.hops} ${m.hops === 1 ? "hop" : "hops"}` : "");
     const sw = m.mine ? statusWords(m.status) : null;
     if (sw) meta.append(el("span", { className: "st " + sw.cls, textContent: sw.text }));
+    if (hist.on && !m.url) {
+      const del = el("a", { href: "#", className: "del", textContent: "Delete", title: "Delete from your node's history (not from the other person)" });
+      del.style.marginLeft = "8px"; del.style.opacity = "0.6";
+      del.onclick = (e) => { e.preventDefault(); if (confirm("Delete this message here and on your other screens?")) histDeleteMsg(state.active, m); };
+      meta.append(del);
+    }
     d.appendChild(meta);
     box.appendChild(d);
   }
@@ -4396,6 +4405,7 @@ function histDecode(f, t) {
     case 0xb1: return { type: "historyEnd", req: f[1] | f[2] << 8, conv: a(3), count: f[19], more: !!f[20], oldest: readU64(f, 21) };
     case 0xb2: return { type: "readMark", conv: a(1), upTo: readU64(f, 17), unread: f[25] | f[26] << 8 };
     case 0xb3: return { type: "historyInfo", days: f[2] | f[3] << 8, count: rd32(f, 4) };
+    case 0xb9: return { type: "deleted", conv: a(1), flags: f[17], ts: rd32(f, 18), text: dec.decode(f.slice(22)) };
   }
   return null;
 }
@@ -4407,7 +4417,7 @@ function histTime(ts) {
 }
 function histKey(ev) { return (ev.kind === 2 ? "ch:" : "dm:") + ev.conv; }
 function histMsg(ev) {
-  const m = { id: ev.id, from: ev.from, time: histTime(ev.ts), mine: ev.outgoing, kind: ev.kind === 2 ? "ch" : "dm" };
+  const m = { id: ev.id, ts: ev.ts, from: ev.from, time: histTime(ev.ts), mine: ev.outgoing, kind: ev.kind === 2 ? "ch" : "dm" };
   if (ev.kind === 3) {
     const size = rd32(ev.content, 0), ml = ev.content[4];
     const mime = dec.decode(ev.content.slice(5, 5 + ml)), name = dec.decode(ev.content.slice(5 + ml));
@@ -4425,6 +4435,33 @@ function histInsert(key, msgs) {
   const merged = withId.concat(fresh).sort((x, y) => (BigInt(x.id) < BigInt(y.id) ? -1 : 1));
   state.convs.set(key, merged.concat(without));
 }
+// Deletes a message (or with whole = true the conversation) in the host's
+// history; the host tells every screen (event 0xb9).
+function histDeleteMsg(key, m, whole = false) {
+  const [, addr] = key.split(":");
+  const ts = m?.ts || Math.floor(Date.now() / 1000);
+  histSend(frame(0x33, unhex(addr), [(whole ? 2 : 0) | (m?.mine ? 1 : 0)], u32(whole ? 0 : ts), whole ? [] : enc.encode(m.text || "")));
+}
+
+// A picture over the whole window; click or Escape closes it.
+function showImage(url, name) {
+  const o = el("div", { role: "dialog", ariaLabel: name });
+  Object.assign(o.style, { position: "fixed", inset: "0", background: "rgba(0,0,0,0.92)", zIndex: "1000",
+    display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-out" });
+  const img = el("img", { src: url, alt: name });
+  Object.assign(img.style, { maxWidth: "96vw", maxHeight: "92vh", objectFit: "contain", borderRadius: "6px" });
+  const save = el("a", { href: url, download: name, textContent: "Save", title: "Save the picture" });
+  Object.assign(save.style, { position: "absolute", top: "14px", right: "18px", color: "#fff", fontSize: "15px", padding: "6px 12px",
+    border: "1px solid rgba(255,255,255,0.5)", borderRadius: "8px", textDecoration: "none" });
+  save.onclick = (e) => e.stopPropagation();
+  const close = () => { o.remove(); document.removeEventListener("keydown", esc); };
+  const esc = (e) => { if (e.key === "Escape") close(); };
+  o.onclick = close;
+  document.addEventListener("keydown", esc);
+  o.append(img, save);
+  document.body.append(o);
+}
+
 function histSend(f) { if (transport) Promise.resolve(transport.send(f)).catch(() => {}); }
 
 function histMarkRead(key) {
@@ -4450,6 +4487,19 @@ function histOnEvent(ev) {
       log(`History on the host: ${ev.count} messages (kept for ${ev.days} days)`);
       histSend(histCmd.get(++hist.req & 0xffff, null, "0", 200));
       return true;
+    case "deleted": {
+      for (const key of ["dm:" + ev.conv, "ch:" + ev.conv]) {
+        if (!state.convs.has(key)) continue;
+        if (ev.flags & 2) state.convs.set(key, []);
+        else {
+          const list = conv(key), mine = !!(ev.flags & 1);
+          const i = list.findIndex(m => !!m.mine === mine && m.text === ev.text && Math.abs((m.ts || ev.ts) - ev.ts) <= 120);
+          if (i >= 0) list.splice(i, 1);
+        }
+      }
+      renderSide(); renderChat();
+      return true;
+    }
     case "historyItem":
       if (ev.live) {
         // Sent from another screen following the same host.

@@ -59,6 +59,9 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import dk.maarse.app.Images
@@ -334,10 +337,12 @@ private fun Attachment(m: Msg) {
     when {
         mime.startsWith("image/") -> {
             val bmp = remember(path) { Images.thumb(path) }
+            var full by remember { mutableStateOf(false) }
             bmp?.let {
                 androidx.compose.foundation.Image(it.asImageBitmap(), "Picture", Modifier.padding(bottom = 4.dp).width(240.dp).clip(RoundedCornerShape(12.dp))
-                    .clickable { openFile(ctx, path, mime) }, contentScale = androidx.compose.ui.layout.ContentScale.FillWidth)
+                    .clickable { full = true }, contentScale = androidx.compose.ui.layout.ContentScale.FillWidth)
             }
+            if (full) FullImage(path, mime) { full = false }
         }
         mime == Voice.MIME -> {
             var playing by remember { mutableStateOf(false) }
@@ -354,6 +359,37 @@ private fun Attachment(m: Msg) {
         }
     }
 }
+
+/** A picture over the whole screen: pinch to zoom, drag to move, share, close. */
+@Composable
+private fun FullImage(path: String, mime: String, onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    val bmp = remember(path) { Images.thumb(path, 2048) }
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    val zoom = androidx.compose.foundation.gestures.rememberTransformableState { z, pan, _ ->
+        scale = (scale * z).coerceIn(1f, 6f)
+        offset = if (scale == 1f) androidx.compose.ui.geometry.Offset.Zero else offset + pan
+    }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black)) {
+            bmp?.let {
+                androidx.compose.foundation.Image(
+                    it.asImageBitmap(), "Picture",
+                    Modifier.fillMaxSize().androidx_transform(scale, offset).then(Modifier.transformable(zoom)),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                )
+            }
+            Row(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                IconButton(onClick = { openFile(ctx, path, mime) }) { Icon(Icons.Default.Share, "Share or save", tint = androidx.compose.ui.graphics.Color.White) }
+                IconButton(onClick = onClose) { Icon(Icons.Default.Close, "Close", tint = androidx.compose.ui.graphics.Color.White) }
+            }
+        }
+    }
+}
+
+private fun Modifier.androidx_transform(scale: Float, offset: androidx.compose.ui.geometry.Offset) =
+    this.graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y)
 
 private fun openFile(ctx: android.content.Context, path: String, mime: String) {
     val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "dk.maarse.app.files", java.io.File(path))

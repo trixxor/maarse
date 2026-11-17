@@ -418,6 +418,114 @@ pub fn open_inbox(
     Ok((s_addr, n))
 }
 
+// ---------- backup of the master (`.maarse-account`, v2) ----------
+
+/// File header.
+pub const BACKUP_MAGIC: &[u8; 4] = b"MAB2";
+/// PBKDF2-HMAC-SHA256 rounds. With a 6-word code (66 bits) this is about
+/// 2^85 work for someone who steals the file, with no server to stop guesses.
+pub const BACKUP_ROUNDS: u32 = 600_000;
+pub const BACKUP_OVERHEAD: usize = 4 + 16 + 12 + 16;
+/// Words in a backup code.
+pub const CODE_WORDS: usize = 6;
+
+/// A backup code: 6 words from the BIP39 list (66 random bits).
+pub fn backup_code(rng: &mut impl rand_core::CryptoRngCore) -> heapless::String<64> {
+    let mut b = [0u8; 9];
+    rng.fill_bytes(&mut b);
+    let bits = u128::from_be_bytes([0, 0, 0, 0, 0, 0, 0, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8]]);
+    let mut s = heapless::String::new();
+    for i in 0..CODE_WORDS {
+        let idx = ((bits >> (11 * i)) & 0x7ff) as u16;
+        if i > 0 {
+            let _ = s.push(' ');
+        }
+        let _ = s.push_str(crate::recovery::word(idx));
+    }
+    s
+}
+
+/// Normalises a typed code: lowercase, single spaces.
+pub fn normalise_code(code: &str, out: &mut heapless::String<128>) {
+    out.clear();
+    for (i, w) in code.split_whitespace().enumerate() {
+        if i > 0 {
+            let _ = out.push(' ');
+        }
+        for c in w.chars() {
+            let _ = out.push(c.to_ascii_lowercase());
+        }
+    }
+}
+
+fn backup_key(code: &str, salt: &[u8; 16]) -> [u8; 32] {
+    use hmac::{Hmac, Mac};
+    type H = Hmac<sha2::Sha256>;
+    // PBKDF2 with one output block (32 bytes).
+    let mut code_n = heapless::String::<128>::new();
+    normalise_code(code, &mut code_n);
+    let mac = H::new_from_slice(code_n.as_bytes()).expect("HMAC takes any key");
+    let mut m = mac.clone();
+    m.update(salt);
+    m.update(&1u32.to_be_bytes());
+    let mut u: [u8; 32] = m.finalize().into_bytes().into();
+    let mut t = u;
+    for _ in 1..BACKUP_ROUNDS {
+        let mut m = mac.clone();
+        m.update(&u);
+        u = m.finalize().into_bytes().into();
+        for i in 0..32 {
+            t[i] ^= u[i];
+        }
+    }
+    t
+}
+
+/// Encrypts `plain` with the code: magic | salt | nonce | ChaCha20-Poly1305.
+pub fn backup_seal(code: &str, rng: &mut impl rand_core::CryptoRngCore, plain: &[u8], out: &mut [u8]) -> Option<usize> {
+    use chacha20poly1305::aead::AeadInPlace;
+    use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
+    let n = plain.len() + BACKUP_OVERHEAD;
+    if out.len() < n {
+        return None;
+    }
+    let mut salt = [0u8; 16];
+    let mut nonce = [0u8; 12];
+    rng.fill_bytes(&mut salt);
+    rng.fill_bytes(&mut nonce);
+    let key = backup_key(code, &salt);
+    out[..4].copy_from_slice(BACKUP_MAGIC);
+    out[4..20].copy_from_slice(&salt);
+    out[20..32].copy_from_slice(&nonce);
+    let (head, rest) = out.split_at_mut(32);
+    rest[..plain.len()].copy_from_slice(plain);
+    let tag = ChaCha20Poly1305::new(Key::from_slice(&key))
+        .encrypt_in_place_detached(Nonce::from_slice(&nonce), &head[..4], &mut rest[..plain.len()])
+        .ok()?;
+    rest[plain.len()..plain.len() + 16].copy_from_slice(&tag);
+    Some(n)
+}
+
+/// Opens a backup with the code. `None` for a wrong code or a damaged file.
+pub fn backup_open(code: &str, file: &[u8], out: &mut [u8]) -> Option<usize> {
+    use chacha20poly1305::aead::AeadInPlace;
+    use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce, Tag};
+    if file.len() < BACKUP_OVERHEAD || &file[..4] != BACKUP_MAGIC {
+        return None;
+    }
+    let n = file.len() - BACKUP_OVERHEAD;
+    if out.len() < n {
+        return None;
+    }
+    let salt: [u8; 16] = file[4..20].try_into().ok()?;
+    let key = backup_key(code, &salt);
+    out[..n].copy_from_slice(&file[32..32 + n]);
+    ChaCha20Poly1305::new(Key::from_slice(&key))
+        .decrypt_in_place_detached(Nonce::from_slice(&file[20..32]), &file[..4], &mut out[..n], Tag::from_slice(&file[32 + n..]))
+        .ok()?;
+    Some(n)
+}
+
 /// Short words the user compares on both screens when linking, so a device
 /// is only added on purpose ("check that the new device shows the same").
 pub fn link_words(device: &PublicIdentity) -> [&'static str; 4] {
@@ -512,6 +620,22 @@ mod tests {
         assert!(open_inbox(&week.secret(), &person, &ct[..n], lookup, &mut out).is_err());
         // A full-length text fits in one packet.
         assert!(maarse_core::router::MAX_DIRECT_PAYLOAD - INBOX_OVERHEAD >= 143);
+    }
+
+    #[test]
+    fn backup_opens_only_with_the_code() {
+        let code = backup_code(&mut OsRng);
+        assert_eq!(code.split(' ').count(), CODE_WORDS);
+        let mut f = [0u8; 300];
+        let n = backup_seal(&code, &mut OsRng, b"master secret", &mut f).unwrap();
+        let mut out = [0u8; 300];
+        // Typed in capitals with extra spaces: still fine.
+        let typed = std::format!("  {}  ", code.to_uppercase().replace(' ', "   "));
+        let m = backup_open(&typed, &f[..n], &mut out).unwrap();
+        assert_eq!(&out[..m], b"master secret");
+        assert!(backup_open("wrong code words here a b", &f[..n], &mut out).is_none());
+        f[40] ^= 1;
+        assert!(backup_open(&code, &f[..n], &mut out).is_none());
     }
 
     #[test]

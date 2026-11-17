@@ -84,7 +84,7 @@ object Cmd {
 }
 
 /** `PersonSetup` operations and `Person` states (maarse-core companion.rs). */
-object PersonOp { const val CREATE = 1; const val RESTORE = 2; const val AWAIT_LINK = 3; const val LEAVE = 4; const val CANCEL = 5; const val REMOVE = 6 }
+object PersonOp { const val CREATE = 1; const val RESTORE = 2; const val AWAIT_LINK = 3; const val LEAVE = 4; const val CANCEL = 5; const val REMOVE = 6; const val BACKUP = 7; const val RESTORE_BACKUP = 8 }
 object PersonState { const val NONE = 0; const val AWAITING = 1; const val MEMBER = 2 }
 
 data class RadioCfg(val freq: Long, val bw: Long, val sf: Int, val cr: Int, val power: Int, val duty: Int, val preamble: Int, val announce: Int)
@@ -136,6 +136,7 @@ sealed class Ev {
     ) : Ev()
     data class DeviceLinked(val device: String, val index: Int, val words: String) : Ev()
     data class PersonPhrase(val phrase: String) : Ev()
+    data class PersonBackup(val code: String) : Ev()
     data class Unknown(val kind: Int) : Ev()
 }
 
@@ -193,6 +194,7 @@ fun decodeEvent(f: ByteArray): Ev {
                 (0 until n).map { r.addr(25 + 17 * it) to (r.u8(41 + 17 * it) != 0) }, r.txt(25 + 17 * n))
         }
         0xb7 -> Ev.PersonPhrase(r.txt(1))
+        0xb8 -> Ev.PersonBackup(r.txt(1))
         0xb0 -> Ev.HistoryItem(r.u64(1), r.u32(9), r.u8(13) and 1 != 0, r.u8(13) and 2 != 0, r.u8(14), r.u8(15),
             r.u8(16), r.u64(17), r.addr(25), r.addr(41), f.copyOfRange(minOf(57, f.size), f.size))
         0xb1 -> Ev.HistoryEnd(r.u16(1), r.addr(3), r.u8(19), r.u8(20) != 0, r.u64(21))

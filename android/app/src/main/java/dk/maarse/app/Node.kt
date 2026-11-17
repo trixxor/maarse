@@ -50,6 +50,8 @@ object Node : LinkListener {
     val person = MutableStateFlow<Ev.Person?>(null)
     /** Shown once in a dialog: the 24 words of a new person. */
     val phrase = MutableStateFlow<String?>(null)
+    /** Shown once in a dialog: the 6-word code of a backup just made. */
+    val backupCode = MutableStateFlow<String?>(null)
     /** Shown in a dialog: a device was linked to our person. */
     val linked = MutableStateFlow<Ev.DeviceLinked?>(null)
     /** The last error from the node, for the screen that caused it. */
@@ -256,6 +258,45 @@ object Node : LinkListener {
     fun personSetup(op: Int, text: String = "") { lastError.value = null; send(Cmd.personSetup(req(), op, text)) }
     fun linkDevice(device: String) { lastError.value = null; send(Cmd.linkDevice(req(), device)) }
 
+    // ---------- the account backup file on the host ----------
+
+    private val http by lazy { okhttp3.OkHttpClient() }
+
+    private fun remoteUrl(path: String): String {
+        val addr = prefs.remoteAddr.trim().removePrefix("http://").removePrefix("ws://").trimEnd('/')
+        return "http://$addr$path?token=${prefs.remoteKey.trim()}"
+    }
+
+    /** The backup the host just wrote (phone: its folder; elsewhere: over HTTP). */
+    fun readBackup(done: (ByteArray?) -> Unit) {
+        Thread {
+            val b = runCatching {
+                if (prefs.mode == Mode.REMOTE) http.newCall(okhttp3.Request.Builder().url(remoteUrl("/api/account-backup")).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes() else null }
+                else java.io.File(HostFiles.dataDir(app, false), "account-backup.maarse").readBytes()
+            }.getOrNull()
+            main.post { done(b) }
+        }.start()
+    }
+
+    /** Puts a backup file on the host, then restores from it with the code. */
+    fun restoreBackup(file: ByteArray, code: String) {
+        lastError.value = null
+        Thread {
+            val ok = runCatching {
+                if (prefs.mode == Mode.REMOTE) {
+                    val body = okhttp3.RequestBody.create(null, file)
+                    http.newCall(okhttp3.Request.Builder().url(remoteUrl("/api/account-restore")).post(body).build()).execute().use { it.isSuccessful }
+                } else {
+                    java.io.File(HostFiles.dataDir(app, false), "account-restore.maarse").writeBytes(file); true
+                }
+            }.getOrDefault(false)
+            main.post {
+                if (ok) send(Cmd.personSetup(req(), PersonOp.RESTORE_BACKUP, code.trim().lowercase()))
+                else lastError.value = "Could not hand the backup file to the host"
+            }
+        }.start()
+    }
+
     private fun bump() { msgVersion.update { it + 1 } }
 
     private fun setStatus(row: Long, s: String, msgId: Long? = null) { db.setStatus(row, s, msgId); bump() }
@@ -307,6 +348,7 @@ object Node : LinkListener {
             }
             is Ev.Person -> person.value = ev
             is Ev.PersonPhrase -> phrase.value = ev.phrase
+            is Ev.PersonBackup -> backupCode.value = ev.code
             is Ev.DeviceLinked -> { linked.value = ev; note("Device linked: ${shortAddr(ev.device)} (${ev.words})") }
             is Ev.Direct -> {
                 heard(ev.from) { it.copy(hops = ev.hops) }

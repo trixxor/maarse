@@ -182,6 +182,31 @@ try:
     b.wait(lambda f: f[0] == 0xb6 and f[1] == 0, secs=30, what="B told it was removed")
     assert "new inbox chain" in log_of("A")
     print("5. A removed B; B knows it is out, new inbox chain on A")
+
+    # 6. Backup v2: A writes a backup (6-word code); a new device D restores
+    #    from it and becomes the master; the old master A is removed.
+    a.send(frame(0x37, struct.pack("<H", 13), bytes([7])))
+    code = a.wait(lambda f: f[0] == 0xb8, secs=60, what="backup code")[1:].decode()
+    assert len(code.split()) == 6, code
+    import urllib.request
+    req = urllib.request.Request("http://127.0.0.1:8191/api/account-backup", headers={"Origin": "http://127.0.0.1:8191"})
+    blob = urllib.request.urlopen(req).read()
+    assert blob[:4] == b"MAB2", blob[:8]
+    print("6. backup made on A; code has 6 words; file over HTTP:", len(blob), "bytes")
+    start("D", 8194, ["--listen", "off", "--peer", "127.0.0.1:4391"])
+    d = Client(8194)
+    D = d.addr()
+    up = urllib.request.Request("http://127.0.0.1:8194/api/account-restore", data=blob, method="POST", headers={"Origin": "http://127.0.0.1:8194"})
+    assert urllib.request.urlopen(up).read() == b"ok"
+    d.send(frame(0x37, struct.pack("<H", 14), bytes([8]), b"wrong code words here so no"))
+    d.wait(lambda f: f[0] == 0x8f, secs=60, what="wrong code refused")
+    urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8194/api/account-restore", data=blob, method="POST", headers={"Origin": "http://127.0.0.1:8194"}))
+    d.send(frame(0x37, struct.pack("<H", 15), bytes([8]), code.upper().encode()))
+    pd = person(d.wait(lambda f: f[0] == 0xb6 and f[1] == 2, secs=60, what="D master"))
+    assert pd["master"] and pd["person"] == M and D in pd["devices"], pd
+    print("   D restored the person from the file and the code; D is the master device")
+    a.wait(lambda f: f[0] == 0xb6 and f[1] == 0, secs=30, what="A told it was removed")
+    print("   the old master A was removed")
     print("PASSED")
 except AssertionError as e:
     ok = False

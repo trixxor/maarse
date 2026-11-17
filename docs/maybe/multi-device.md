@@ -28,8 +28,15 @@ learns the time from neighbours, hosts are stratum 1. Hosts number their text
 messages per contact (`content::SEQ`, capability `CAP_SEQ`) and show a gap
 ("2 earlier messages have not arrived") in the conversation.
 
-Not built yet: section 7 (backup v2), QR linking, redirect hint and sync
-button, firmware devices. The simulator models
+Section 7 is built too, with ChaCha20-Poly1305 instead of AES-GCM (the host
+encrypts, not the browser): the master device writes `account-backup.maarse`
+(master secret, inbox chain, device list) under a 6-word code made by the
+node; restoring on another device makes it the master, removes the old master
+device and starts a new inbox chain. The file goes through
+`/api/account-backup` and `/api/account-restore` (web client) or the host's
+folder (the app).
+
+Not built yet: QR linking, redirect hint and sync button, firmware devices. The simulator models
 the routing and mail parts (`tools/sim-experiments/linked_devices.mjs`,
 results below). Nothing is in production, so formats change without backward
 compatibility.

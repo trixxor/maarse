@@ -6,6 +6,7 @@ mod pages;
 mod tun;
 mod hist;
 mod person;
+pub(crate) use person::{BACKUP_FILE, RESTORE_FILE};
 mod seq;
 mod identity;
 mod alerts;

@@ -390,6 +390,30 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
             thread::sleep(Duration::from_millis(300));
             crate::service::stop();
         }
+        // Linked devices: the master's encrypted backup (node/person.rs), and
+        // a backup to restore from (the code goes over the WebSocket).
+        ("GET", "/api/account-backup") => match std::fs::read(data_dir.join(crate::node::BACKUP_FILE)) {
+            Ok(b) => send(&mut stream, "200 OK", "application/octet-stream", "Content-Disposition: attachment; filename=\"maarse-account.maarse\"\r\n", &b),
+            Err(_) => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "No backup has been made"),
+        },
+        ("POST", "/api/account-restore") => {
+            let len: usize = header(head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
+            if len > 4096 {
+                return reply(&mut stream, "413 Payload Too Large", "text/plain", "too large");
+            }
+            let mut body = req.split_off((head_end + 4).min(req.len()));
+            let mut buf = [0u8; 4096];
+            while body.len() < len {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => body.extend_from_slice(&buf[..n]),
+                }
+            }
+            match std::fs::write(data_dir.join(crate::node::RESTORE_FILE), &body[..len.min(body.len())]) {
+                Ok(()) => reply(&mut stream, "200 OK", "text/plain; charset=utf-8", "ok"),
+                Err(e) => reply(&mut stream, "500 Internal Server Error", "text/plain; charset=utf-8", &e.to_string()),
+            }
+        }
         ("GET", "/api/devices") => {
             let body = crate::links::devices_json();
             reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)

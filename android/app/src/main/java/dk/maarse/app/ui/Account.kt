@@ -3,6 +3,8 @@ package dk.maarse.app.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -83,8 +85,23 @@ private fun NoAccount() {
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Button(onClick = { Node.personSetup(PersonOp.CREATE) }) { Text("Create an account (this is the master device)") }
         OutlinedButton(onClick = { Node.personSetup(PersonOp.AWAIT_LINK) }) { Text("Link this device to my account") }
-        TextButton(onClick = { restoring = !restoring }) { Text("Restore an account from its 24 words") }
+        TextButton(onClick = { restoring = !restoring }) { Text("Restore an account (backup file or 24 words)") }
         if (restoring) {
+            val ctx = LocalContext.current
+            var file by remember { mutableStateOf<ByteArray?>(null) }
+            var code by remember { mutableStateOf("") }
+            val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) file = runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            }
+            Text("From a backup file and its 6-word code:", style = MaterialTheme.typography.labelLarge)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { pick.launch(arrayOf("*/*")) }) { Text(if (file == null) "Choose the file" else "File chosen (${file?.size} bytes)") }
+            }
+            OutlinedTextField(code, { code = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("The 6-word code") })
+            Button(onClick = { file?.let { Node.restoreBackup(it, code) } }, enabled = file != null && code.trim().split(Regex("\\s+")).size == 6) {
+                Text("Restore from the file (this becomes the master device)")
+            }
+            Text("Or from the 24 words:", style = MaterialTheme.typography.labelLarge)
             OutlinedTextField(words, { words = it }, Modifier.fillMaxWidth(), label = { Text("The 24 words, separated by spaces") })
             Button(onClick = { Node.personSetup(PersonOp.RESTORE, words.trim().lowercase()) }, enabled = words.trim().split(Regex("\\s+")).size == 24) {
                 Text("Restore (this becomes the master device)")
@@ -146,6 +163,7 @@ private fun Member() {
                 TextButton(onClick = { adding = false }) { Text("Cancel") }
             }
         }
+        OutlinedButton(onClick = { Node.personSetup(PersonOp.BACKUP) }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("Make a backup (file + 6-word code)") }
     } else Hint("Devices are added on the master device.")
     TextButton(onClick = { leaving = true }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("Remove this device from the account") }
     if (leaving) AlertDialog(
@@ -161,6 +179,29 @@ private fun Member() {
 
 @Composable
 private fun Dialogs() {
+    val ctx = LocalContext.current
+    val backup by Node.backupCode.collectAsState()
+    var saved by remember { mutableStateOf<String?>(null) }
+    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        if (uri != null) Node.readBackup { b ->
+            saved = if (b != null && runCatching { ctx.contentResolver.openOutputStream(uri)?.use { it.write(b) } }.isSuccess) "Saved." else "Could not save the file."
+        }
+    }
+    backup?.let { code ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Backup made") },
+            text = {
+                Column {
+                    Text("Save the file somewhere safe (another device, a USB stick, cloud storage). It opens only with this code — write it down, it is shown only now:")
+                    Text(code, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 8.dp))
+                    OutlinedButton(onClick = { save.launch("maarse-account.maarse") }) { Text("Save the backup file") }
+                    saved?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = { TextButton(onClick = { Node.backupCode.value = null; saved = null }) { Text("I have saved the file and the code") } },
+        )
+    }
     val phrase by Node.phrase.collectAsState()
     val linked by Node.linked.collectAsState()
     phrase?.let { words ->

@@ -783,6 +783,7 @@ function decodeEvent(f) {
       return { type: "person", state: f[1], master: !!(f[2] & 1), person: a(3), index: f[19], devices, words: txt(25 + 17 * n) };
     }
     case 0xb7: return { type: "personPhrase", phrase: txt(1) };
+    case 0xb8: return { type: "personBackup", code: txt(1) };
     default: return histDecode(f, t) ?? { type: "unknown", kind: t };
   }
 }
@@ -1182,6 +1183,7 @@ function onEvent(ev) {
     }
     case "person": acct.p = ev; if (state.view === "account") renderChat(); break;
     case "personPhrase": acct.phrase = ev.phrase; if (state.view === "account") renderChat(); break;
+    case "personBackup": acct.backup = ev.code; if (state.view === "account") renderChat(); break;
     case "deviceLinked":
       acct.linked = ev; log(`Device linked: ${short(ev.device)} (${ev.words})`);
       if (state.view === "account") renderChat();
@@ -3977,7 +3979,7 @@ function hsAfterRestart() {
   setTimeout(() => { hs.msg = ""; hsLoad(); }, 6000);
 }
 // ---------- account (linked devices, docs/maybe/multi-device.md) ----------
-const acct = { p: null, phrase: null, linked: null, err: "", req: 0x6800 };
+const acct = { p: null, phrase: null, linked: null, backup: null, err: "", req: 0x6800 };
 
 function renderAccount(box) {
   $("chat-title").textContent = "Account and linked devices";
@@ -3993,6 +3995,16 @@ function renderAccount(box) {
     done.onclick = () => { acct.phrase = null; renderChat(); };
     w.append(el("h3", { textContent: "Write down these 24 words" }),
       el("p", { textContent: "They are your account. With them you can make a new master device if this one is lost. They are shown only now; anyone who has them owns the account." }), grid, done);
+    return;
+  }
+  if (acct.backup) {
+    const { base, q } = hsBase();
+    const dl = el("a", { href: `${base}/api/account-backup${q}`, download: "maarse-account.maarse", className: "btn primary", textContent: "Download the backup file" });
+    const done = el("button", { textContent: "I have saved the file and written down the code" });
+    done.onclick = () => { acct.backup = null; renderChat(); };
+    w.append(el("h3", { textContent: "Backup made" }),
+      el("p", { textContent: "Save the file somewhere safe (another device, a USB stick, cloud storage). The file opens only with this code — write it down, it is shown only now:" }),
+      el("p", { className: "me", textContent: acct.backup }), el("div", { className: "row" }, dl, done));
     return;
   }
   if (acct.linked) {
@@ -4011,7 +4023,24 @@ function renderAccount(box) {
     ta.style.width = "100%";
     const rs = el("button", { textContent: "Restore from the 24 words (this becomes the master device)" });
     rs.onclick = () => send(Cmd.personSetup(r(), 2, ta.value.trim().toLowerCase().split(/\s+/).join(" ")));
-    w.append(el("div", { className: "row" }, mk, wait), el("h3", { textContent: "Restore" }), ta, rs);
+    const file = el("input", { type: "file", accept: ".maarse" });
+    const code = el("input", { placeholder: "The 6-word code" });
+    code.style.width = "100%";
+    const rb = el("button", { textContent: "Restore from the backup file (this becomes the master device)" });
+    rb.onclick = async () => {
+      const f = file.files?.[0];
+      if (!f) { acct.err = "Choose the backup file first"; return renderChat(); }
+      const { base, q } = hsBase();
+      try {
+        const resp = await fetch(`${base}/api/account-restore${q}`, { method: "POST", body: await f.arrayBuffer() });
+        if (!resp.ok) throw new Error(await resp.text());
+        acct.err = "";
+        send(Cmd.personSetup(r(), 8, code.value.trim().toLowerCase()));
+      } catch (e) { acct.err = "Could not send the file: " + e.message; renderChat(); }
+    };
+    w.append(el("div", { className: "row" }, mk, wait), el("h3", { textContent: "Restore" }),
+      el("p", { className: "hint", textContent: "From a backup file and its 6-word code:" }), file, code, rb,
+      el("p", { className: "hint", textContent: "Or from the 24 words:" }), ta, rs);
   } else if (p.state === 1) {
     const cancel = el("button", { textContent: "Cancel" });
     cancel.onclick = () => send(Cmd.personSetup(r(), 5));
@@ -4038,6 +4067,12 @@ function renderAccount(box) {
       add.onclick = () => { const v = inp.value.trim().toLowerCase(); if (/^[0-9a-f]{32}$/.test(v)) { acct.err = ""; send(Cmd.linkDevice(r(), v)); } else { acct.err = "Enter 32 hex characters"; renderChat(); } };
       w.append(el("h3", { textContent: "Add device" }),
         el("p", { className: "hint", textContent: "On the new device: Account → \"Link this device to my account\". Enter the address it shows:" }), inp, add);
+    }
+    if (p.master) {
+      const bk = el("button", { textContent: "Make a backup (file + 6-word code)" });
+      bk.onclick = () => send(Cmd.personSetup(r(), 7));
+      w.append(el("h3", { textContent: "Backup" }),
+        el("p", { className: "hint", textContent: "If this device is lost, a backup makes another device the master. The 24 words do too." }), bk);
     }
     const leave = el("button", { textContent: "Remove this device from the account" });
     leave.onclick = () => { if (confirm("Remove this device from the account?")) send(Cmd.personSetup(r(), 4)); };

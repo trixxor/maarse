@@ -229,6 +229,14 @@ pub mod person_op {
     /// characters) is in `text`. It is marked revoked in a new device list,
     /// and the inbox key starts a new chain it does not get.
     pub const REMOVE: u8 = 6;
+    /// On the master device: write an encrypted backup of the master
+    /// (`account-backup.maarse` in the data folder) and send its 6-word code
+    /// once as `PersonBackup`.
+    pub const BACKUP: u8 = 7;
+    /// Make this device the master device from a backup the client has put
+    /// in the data folder as `account-restore.maarse`; `text` is the code.
+    /// The old master device is removed and the inbox key starts a new chain.
+    pub const RESTORE_BACKUP: u8 = 8;
 }
 
 /// States in `Event::Person`.
@@ -604,6 +612,9 @@ pub enum Event {
     /// 0xb7: the 24 words of a new person, sent once after
     /// `PersonSetup CREATE`. Written on paper; the node does not keep them.
     PersonPhrase { phrase: Text },
+    /// 0xb8: a backup was written (`account-backup.maarse`); its 6-word code,
+    /// sent once. The node does not keep the code.
+    PersonBackup { code: Text },
 }
 
 /// Per-SF results on a range test receiver (12 bytes): sf | rx (u16) | lost
@@ -1483,6 +1494,7 @@ impl Event {
                 w.b(&p.words).done()
             }
             Event::PersonPhrase { phrase } => W::new(0xb7).b(phrase).done(),
+            Event::PersonBackup { code } => W::new(0xb8).b(code).done(),
             Event::Power(p) => {
                 let mut w = W::new(0xab)
                     .b(&p.uptime_s.to_le_bytes())
@@ -1687,6 +1699,7 @@ impl Event {
                 Event::Person(PersonInfo { state, master, person, index, version, devices, words })
             }
             0xb7 => Event::PersonPhrase { phrase: r.text()? },
+            0xb8 => Event::PersonBackup { code: r.text()? },
             0xb4 => {
                 let addr = r.addr()?;
                 let identity = r.identity().ok_or(FrameError::TooShort)?;
@@ -1896,6 +1909,7 @@ mod tests {
         }));
         roundtrip_ev(Event::Person(PersonInfo::default()));
         roundtrip_ev(Event::PersonPhrase { phrase: text(b"abandon ability able") });
+        roundtrip_ev(Event::PersonBackup { code: text(b"one two three four five six") });
         assert_eq!(Command::SetIdentity { confirm: true, secret: [1; 64] }.encode()[2], 0x34);
         assert!(Command::decode(&[0x34, 1, 2, 3]).is_err());
         roundtrip_ev(Event::OtaState {

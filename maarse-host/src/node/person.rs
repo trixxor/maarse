@@ -48,6 +48,10 @@ const PIECE: usize = maarse_crypto::ratchet::MAX_FS_TEXT - content::person::SIBL
 const KEEP_WEEKS: u16 = 2;
 /// How often a device fetches its person's mail from the replicas.
 const FETCH_EVERY: Duration = Duration::from_secs(600);
+/// The backup the master device writes, and the one a client puts here to
+/// restore (in the data folder; see `person_op::BACKUP`).
+pub(crate) const BACKUP_FILE: &str = "account-backup.maarse";
+pub(crate) const RESTORE_FILE: &str = "account-restore.maarse";
 
 fn week_now() -> u16 {
     pc::week_of(unix_now())
@@ -406,6 +410,8 @@ impl Node {
                 self.person_changed();
                 self.announce();
             }
+            person_op::BACKUP => self.person_backup(id, req),
+            person_op::RESTORE_BACKUP => self.person_restore_backup(id, req, t),
             person_op::REMOVE => match parse_hex_addr(t) {
                 Some(d) => self.remove_device(id, req, d),
                 None => fail(self, "Give the device's address (32 hex characters)"),
@@ -512,6 +518,113 @@ impl Node {
         for d in list.active().filter(|d| *d != me).collect::<Vec<_>>() {
             let _ = self.send_sealed(d, &l, Pending::Control);
         }
+    }
+
+
+    // ---------- backup of the master (v2) ----------
+
+    /// Writes `account-backup.maarse`: the master secret, the inbox chain and
+    /// the device list, encrypted with a fresh 6-word code (sent once).
+    fn person_backup(&mut self, id: ClientId, req: u16) {
+        let fail = |s: &mut Self, e: &str| s.send_client(id, &err_ev(req, error_code::BAD_FRAME, e));
+        let Some(m) = &self.persons.me else { return fail(self, "This device does not belong to a person") };
+        let Some(master) = &m.master else { return fail(self, "Only the master device can make a backup") };
+        // version (1) | master device (16) | master secret (64) | inbox (35) | list length (u16) | list
+        let mut plain = vec![1u8];
+        plain.extend_from_slice(&self.addr.0);
+        plain.extend_from_slice(&master.to_secret_bytes());
+        plain.extend_from_slice(&m.inbox.as_ref().map(|c| c.to_bytes()).unwrap_or([0; INBOX_STATE_LEN]));
+        let l = m.list.to_bytes();
+        plain.extend_from_slice(&(l.len() as u16).to_le_bytes());
+        plain.extend_from_slice(&l);
+        let code = pc::backup_code(&mut OsRng);
+        let mut out = vec![0u8; plain.len() + pc::BACKUP_OVERHEAD];
+        let Some(n) = pc::backup_seal(&code, &mut OsRng, &plain, &mut out) else { return fail(self, "Could not encrypt the backup") };
+        if let Err(e) = fs::write(self.data_dir.join(BACKUP_FILE), &out[..n]) {
+            return fail(self, &format!("Could not write the backup: {e}"));
+        }
+        self.log(format!("account backup written to {BACKUP_FILE}"));
+        self.send_client(id, &Event::PersonBackup { code: text(code.as_bytes()) });
+    }
+
+    /// Becomes the master device from `account-restore.maarse` and the code.
+    fn person_restore_backup(&mut self, id: ClientId, req: u16, code: &[u8]) {
+        let fail = |s: &mut Self, e: &str| s.send_client(id, &err_ev(req, error_code::BAD_FRAME, e));
+        if self.persons.me.as_ref().is_some_and(|m| m.master.is_some()) {
+            return fail(self, "This device is already a master device");
+        }
+        let path = self.data_dir.join(RESTORE_FILE);
+        let Ok(file) = fs::read(&path) else { return fail(self, "No backup file was given") };
+        let mut plain = vec![0u8; file.len()];
+        let Some(n) = pc::backup_open(&String::from_utf8_lossy(code), &file, &mut plain) else {
+            return fail(self, "Wrong code, or the file is damaged");
+        };
+        let p = &plain[..n];
+        if p.len() < 1 + 16 + 64 + INBOX_STATE_LEN + 2 || p[0] != 1 {
+            return fail(self, "Unknown backup format");
+        }
+        let old_master = Address::from_slice(&p[1..17]).unwrap_or_default();
+        let secret: [u8; 64] = p[17..81].try_into().unwrap_or([0; 64]);
+        let master = Identity::from_secret_bytes(&secret);
+        let old_inbox = InboxChain::from_bytes(&p[81..81 + INBOX_STATE_LEN]);
+        let o = 81 + INBOX_STATE_LEN;
+        let ln = u16::from_le_bytes([p[o], p[o + 1]]) as usize;
+        let Some(old_list) = p.get(o + 2..o + 2 + ln).and_then(|b| DeviceList::verify(&master.public(), b).ok()) else {
+            return fail(self, "The device list in the backup is not valid");
+        };
+        let _ = fs::remove_file(&path);
+        // The old master device is removed (it may be lost or stolen); the
+        // other devices stay. Removed ones are dropped to make room.
+        let me = self.addr;
+        let mut devices: Vec<DeviceEntry> = old_list
+            .devices
+            .iter()
+            .filter(|d| !d.revoked || d.addr == old_master)
+            .map(|d| DeviceEntry { addr: d.addr, revoked: d.revoked || (d.addr == old_master && d.addr != me) })
+            .filter(|d| d.addr != me)
+            .collect();
+        devices.push(DeviceEntry { addr: me, revoked: false });
+        while devices.len() > MAX_DEVICES {
+            match devices.iter().position(|d| d.revoked) {
+                Some(i) => {
+                    devices.remove(i);
+                }
+                None => return fail(self, "The backup's device list is full"),
+            }
+        }
+        let used: Vec<u8> = devices.iter().filter_map(|d| self.persons.certs.get(&d.addr).map(|c| c.index)).collect();
+        let index = (0..=255u8).find(|i| !used.contains(i)).unwrap_or(0);
+        let cert = DeviceCert::issue(&master, &me, index);
+        let Ok(list) = DeviceList::issue(&master, next_version(old_list.version), &devices) else {
+            return fail(self, "Could not sign the device list");
+        };
+        let chain = old_inbox.as_ref().map_or(1, |c| c.chain.wrapping_add(1));
+        let fresh = InboxChain::new(&mut OsRng, chain, week_now());
+        let person = master.address();
+        self.persons.lists.insert(person, list.clone());
+        self.persons.me = Some(Member {
+            master: Some(master),
+            cert,
+            list: list.clone(),
+            inbox: Some(fresh.clone()),
+            old_inbox: old_inbox.and_then(|c| c.at(week_now().saturating_sub(KEEP_WEEKS).max(c.week))),
+        });
+        self.persons.awaiting = None;
+        self.persons.save_member();
+        // The others learn the new list first, then the new chain.
+        self.send_list_to_all(&list);
+        for d in list.active().filter(|d| *d != me).collect::<Vec<_>>() {
+            self.send_inbox_state(d, &fresh);
+        }
+        if old_master != me {
+            let mut l = vec![content::PERSON, op::LIST];
+            l.extend_from_slice(&list.to_bytes());
+            let _ = self.send_sealed(old_master, &l, Pending::Control);
+        }
+        self.persons.introduced.clear();
+        self.log(format!("restored {} from a backup; this is the master device now", short(&person)));
+        self.person_changed();
+        self.announce();
     }
 
     // ---------- sending to a person ----------
@@ -876,15 +989,11 @@ impl Node {
     fn on_list(&mut self, from: Address, data: &[u8]) {
         // Our own person's list, or the one we are joining; or a contact's
         // list (it tells us which of their devices are removed).
-        let master = match (&self.persons.me, &self.persons.granted) {
-            (Some(m), _) if self.persons.person_of(&from) == Some(m.person()) || m.list.active().any(|a| a == from) => m.cert.master,
-            (None, Some(g)) => g.master,
-            _ => match self.persons.certs.get(&from) {
-                Some(c) => c.master,
-                None => return,
-            },
-        };
-        let Ok(list) = DeviceList::verify(&master, data) else {
+        // The signature decides, not who brought it: our own person's key
+        // first (a new master device after a restore is not known yet).
+        let own = self.persons.me.as_ref().map(|m| m.cert.master).or(self.persons.granted.map(|g| g.master));
+        let contact = self.persons.certs.get(&from).map(|c| c.master);
+        let Some((master, list)) = [own, contact].into_iter().flatten().find_map(|k| DeviceList::verify(&k, data).ok().map(|l| (k, l))) else {
             return self.log(format!("device list from {} refused (bad signature)", short(&from)));
         };
         let person = master.address();

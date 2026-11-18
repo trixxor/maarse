@@ -132,6 +132,28 @@ pub(crate) fn grey_picture(img: &image::DynamicImage) -> Option<Vec<u8>> {
     best
 }
 
+/// Grey, good: what a page asks for with "grey!". Longest side 384 (down to
+/// 256), grey JPEG at quality 30 or better, aiming at 4 KB, so it is clearly better
+/// than the small copy and still a fraction of the 8 KB LoRa limit.
+pub(crate) fn grey_picture_good(img: &image::DynamicImage) -> Option<Vec<u8>> {
+    // Keep the quality up and make the picture smaller first: a smaller
+    // sharp picture reads better than a big blocky one.
+    let mut smallest: Option<Vec<u8>> = None;
+    for side in [384, 320, 256] {
+        let g = image::DynamicImage::ImageLuma8(img.thumbnail(side, side).to_luma8());
+        for q in [75, 65, 55, 45, 38, 30] {
+            let b = jpeg(&g, q)?;
+            if b.len() <= 4096 {
+                return Some(b);
+            }
+            if smallest.as_ref().is_none_or(|x| b.len() < x.len()) {
+                smallest = Some(b);
+            }
+        }
+    }
+    smallest
+}
+
 const BAYER4: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
 /// Dots: longest side 256, contrast stretched (2 % cut at each end), 4×4
@@ -228,7 +250,9 @@ pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bo
     match style {
         PicStyle::ForceGrey => {
             let img = image::load_from_memory(data).ok()?;
-            return grey_picture(&img).filter(|b| b.len() <= max).map(|b| (b, "image/jpeg"));
+            // The good copy if it fits, else the small one.
+            let good = grey_picture_good(&img).filter(|b| b.len() <= max);
+            return good.or_else(|| grey_picture(&img)).filter(|b| b.len() <= max).map(|b| (b, "image/jpeg"));
         }
         PicStyle::ForceDots => {
             // A busy picture can make big dots: smaller until it fits.
@@ -472,7 +496,9 @@ mod tests {
         // over LoRa and the original over the internet.
         for lora in [true, false] {
             assert_eq!(picture_for(&src, "a.jpg", PicStyle::ForceDots, lora, 1 << 20).unwrap(), (dots.clone(), "image/png"));
-            assert_eq!(picture_for(&src, "a.jpg", PicStyle::ForceGrey, lora, 1 << 20).unwrap(), (grey.clone(), "image/jpeg"));
+            let (fg, m) = picture_for(&src, "a.jpg", PicStyle::ForceGrey, lora, 1 << 20).unwrap();
+            assert_eq!(m, "image/jpeg");
+            assert!(fg.len() > grey.len() && fg.len() <= LORA_PICTURE_MAX, "forced grey {} bytes", fg.len());
         }
         let (fc, _) = picture_for(&src, "a.jpg", PicStyle::ForceColour, true, 1 << 20).unwrap();
         assert!(fc.len() <= LORA_PICTURE_MAX, "forced colour over LoRa {} bytes", fc.len());

@@ -596,7 +596,7 @@ The client asks for the picture like a page, with the style as the first path se
 
 **The browser.** Pages open in a small browser: back, forward, reload (stop while loading), an address bar that shows the page title, the node and whether it comes over LoRa or the internet (tap it to type an address), a bookmark star and a home button. Home is the start page with your bookmarks, nodes sharing pages and recently visited pages. A status bar at the bottom shows the route, size and when the page was fetched.
 
-**Forcing a quality.** An `!` after the style makes the page decide: `![map](kort.png "dots!")` always comes as dots, `"grey!"` as the grey copy, `"colour!"` in colour (the original over the internet). This holds over LoRa and over the internet, there is no "better picture" button, and over LoRa nothing is ever over 8 KB (`_fdots/…`, `_fgrey/…`, `_fcolour/…`).
+**Forcing a quality.** An `!` after the style makes the page decide: `![map](kort.png "dots!")` always comes as dots, `"grey!"` as a better grey copy (sharper and larger than the small one, about 4 KB), `"colour!"` in colour (the original over the internet). This holds over LoRa and over the internet, there is no "better picture" button, and over LoRa nothing is ever over 8 KB (`_fdots/…`, `_fgrey/…`, `_fcolour/…`).
 
 **Title.** A line `@title Hals Havn BBS` (anywhere, usually first) is the page's title, like `<title>` on a web page: shown above the page and in the lists of pages, not on the page itself. Without it the first heading is used.
 

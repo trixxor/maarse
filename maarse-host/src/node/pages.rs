@@ -7,6 +7,13 @@
 //! `pages/weather/aarhus/index.mu`. The page is sent compressed (raw deflate) as
 //! an ordinary file with MIME [`content::PAGE_MIME`] and the path as its name, so
 //! it uses the same per-chunk acknowledgement and limit over LoRa as files.
+//!
+//! Pictures: a page may show `![caption](hytte.jpg "grey")`. The client asks
+//! for the picture like a page, with the style as a first path segment
+//! (`_grey/hytte.jpg`, `_dots/…`, `_colour/…`). Over the internet the original
+//! is sent (scaled down only if it is over the limit). Over LoRa the host
+//! makes a small copy: grey (grey JPEG of about 1.3 KB, the default), dots
+//! (1-bit ordered dithering as a 1-bit PNG) or colour (JPEG under 8 KB).
 
 use super::{Node, err_ev, short};
 use crate::ClientId;
@@ -46,6 +53,162 @@ pub(crate) fn compress(markup: &[u8]) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec(markup, 9)
 }
 
+/// How a picture on a page goes over LoRa.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PicStyle {
+    Grey,
+    Dots,
+    Colour,
+}
+
+/// Splits `_dots/hytte.jpg` into (style, `hytte.jpg`) when the rest is a
+/// picture; `None` for pages.
+pub(crate) fn picture_path(path: &str) -> Option<(PicStyle, &str)> {
+    let (style, rest) = match path.split_once('/') {
+        Some(("_grey", r)) => (PicStyle::Grey, r),
+        Some(("_dots", r)) => (PicStyle::Dots, r),
+        Some(("_colour", r)) => (PicStyle::Colour, r),
+        _ => (PicStyle::Grey, path),
+    };
+    let ext = rest.rsplit_once('.')?.1;
+    ["jpg", "jpeg", "png", "webp"].contains(&ext).then_some((style, rest))
+}
+
+fn mime_of(path: &str) -> &'static str {
+    match path.rsplit_once('.').map(|x| x.1) {
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        _ => "image/jpeg",
+    }
+}
+
+fn jpeg(img: &image::DynamicImage, q: u8) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    img.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, q)).ok()?;
+    Some(out)
+}
+
+/// Grey, small: longest side 256, grey JPEG at falling quality until it is
+/// at most 1.5 KB (or the smallest tried).
+pub(crate) fn grey_picture(img: &image::DynamicImage) -> Option<Vec<u8>> {
+    let g = image::DynamicImage::ImageLuma8(img.thumbnail(256, 256).to_luma8());
+    let mut best: Option<Vec<u8>> = None;
+    for q in [30, 20, 12, 8] {
+        let b = jpeg(&g, q)?;
+        let small = b.len() <= 1500;
+        if best.as_ref().is_none_or(|x| b.len() < x.len()) {
+            best = Some(b);
+        }
+        if small {
+            break;
+        }
+    }
+    best
+}
+
+const BAYER4: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+
+/// Dots: longest side 256, contrast stretched (2 % cut at each end), 4×4
+/// ordered dithering, written as a 1-bit grey PNG.
+pub(crate) fn dots_picture(img: &image::DynamicImage) -> Vec<u8> {
+    let g = img.thumbnail(256, 256).to_luma8();
+    let (w, h) = g.dimensions();
+    let mut hist = [0usize; 256];
+    for p in g.pixels() {
+        hist[p.0[0] as usize] += 1;
+    }
+    let cut = (w * h) as usize / 50;
+    let (mut lo, mut s) = (0usize, 0usize);
+    while lo < 255 {
+        s += hist[lo];
+        if s >= cut {
+            break;
+        }
+        lo += 1;
+    }
+    let (mut hi, mut s) = (255usize, 0usize);
+    while hi > 0 {
+        s += hist[hi];
+        if s >= cut {
+            break;
+        }
+        hi -= 1;
+    }
+    let span = hi.saturating_sub(lo).max(1) as i32;
+    let stride = w.div_ceil(8) as usize + 1;
+    let mut raw = vec![0u8; stride * h as usize];
+    for (x, y, p) in g.enumerate_pixels() {
+        let v = ((p.0[0] as i32 - lo as i32) * 255 / span).clamp(0, 255) as f32;
+        let t = (BAYER4[(y % 4 * 4 + x % 4) as usize] as f32 + 0.5) * 16.0;
+        if v > t {
+            raw[y as usize * stride + 1 + (x as usize >> 3)] |= 0x80 >> (x & 7);
+        }
+    }
+    png_grey1(w, h, &raw)
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut c = !0u32;
+    for &b in data {
+        c ^= b as u32;
+        for _ in 0..8 {
+            c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+        }
+    }
+    !c
+}
+
+/// A 1-bit grey PNG from filtered rows (filter byte 0, then packed bits).
+fn png_grey1(w: u32, h: u32, raw: &[u8]) -> Vec<u8> {
+    let mut out = vec![137, 80, 78, 71, 13, 10, 26, 10];
+    let mut chunk = |kind: &[u8; 4], body: &[u8]| {
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        let mut t = kind.to_vec();
+        t.extend_from_slice(body);
+        out.extend_from_slice(&t);
+        out.extend_from_slice(&crc32(&t).to_be_bytes());
+    };
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&w.to_be_bytes());
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[1, 0, 0, 0, 0]);
+    chunk(b"IHDR", &ihdr);
+    chunk(b"IDAT", &miniz_oxide::deflate::compress_to_vec_zlib(raw, 9));
+    chunk(b"IEND", &[]);
+    out
+}
+
+/// Colour: smaller sides and lower quality until the JPEG fits `limit`.
+pub(crate) fn colour_picture(img: &image::DynamicImage, limit: usize) -> Option<Vec<u8>> {
+    for side in [1280, 960, 640, 480, 320, 240, 160] {
+        let t = image::DynamicImage::ImageRgb8(img.thumbnail(side, side).to_rgb8());
+        for q in [75, 55, 40, 25] {
+            let b = jpeg(&t, q)?;
+            if b.len() <= limit {
+                return Some(b);
+            }
+        }
+    }
+    None
+}
+
+/// The bytes and MIME of a picture for a route: the original over the
+/// internet when it fits, else a small copy in the asked style.
+pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bool, max: usize) -> Option<(Vec<u8>, &'static str)> {
+    if !via_lora && data.len() <= max {
+        return Some((data.to_vec(), mime_of(name)));
+    }
+    let img = image::load_from_memory(data).ok()?;
+    if !via_lora {
+        return colour_picture(&img, max).map(|b| (b, "image/jpeg"));
+    }
+    match style {
+        PicStyle::Grey => grey_picture(&img).map(|b| (b, "image/jpeg")),
+        PicStyle::Dots => Some((dots_picture(&img), "image/png")),
+        PicStyle::Colour => colour_picture(&img, max).map(|b| (b, "image/jpeg")),
+    }
+}
+
 impl Node {
     fn pages_dir(&self) -> PathBuf {
         self.data_dir.join("pages")
@@ -78,6 +241,11 @@ impl Node {
         times.push(now);
 
         let path_s = String::from_utf8_lossy(path).into_owned();
+        if let Some((style, rel)) = picture_path(&path_s) {
+            let rel = rel.to_string();
+            self.serve_picture(from, path, style, rel);
+            return;
+        }
         let mut data = compress(self.page_markup(&path_s).as_bytes());
         let max = self.file_limit(&from).max_bytes as usize;
         if data.len() > max {
@@ -89,6 +257,26 @@ impl Node {
         self.log(format!("page '{path_s}' to {} ({} bytes)", short(&from), data.len()));
         if let Err((_, e)) = self.send_file_bytes(from, data, mime, path.clone()) {
             self.log(format!("page to {}: {e}", short(&from)));
+        }
+    }
+
+    /// Sends a picture from `pages/` in the form the route allows; a short
+    /// page saying so when the picture is missing or cannot be made to fit.
+    fn serve_picture(&mut self, from: Address, path: &Small, style: PicStyle, rel: String) {
+        let lim = self.file_limit(&from);
+        let max = lim.max_bytes as usize;
+        let made = fs::read(self.pages_dir().join(&rel)).ok().and_then(|d| picture_for(&d, &rel, style, lim.via_lora, max));
+        let (data, mime) = match made {
+            Some((d, m)) if d.len() <= max => (d, Small::from_slice(m.as_bytes()).unwrap_or_default()),
+            _ => {
+                let msg = format!("# No picture\n\nThe picture `{rel}` is missing here or could not be made small enough.\n");
+                (compress(msg.as_bytes()), Small::from_slice(content::PAGE_MIME).unwrap_or_default())
+            }
+        };
+        let route = if lim.via_lora { "LoRa" } else { "internet" };
+        self.log(format!("picture '{rel}' ({style:?}, {route}) to {} ({} bytes)", short(&from), data.len()));
+        if let Err((_, e)) = self.send_file_bytes(from, data, mime, path.clone()) {
+            self.log(format!("picture to {}: {e}", short(&from)));
         }
     }
 
@@ -159,6 +347,44 @@ mod tests {
         assert_eq!(find_page(&dir, "weather"), Some(dir.join("weather").join("index.mu")));
         assert_eq!(find_page(&dir, "missing"), None);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn picture_paths_and_styles() {
+        assert_eq!(picture_path("_dots/hytte.jpg"), Some((PicStyle::Dots, "hytte.jpg")));
+        assert_eq!(picture_path("vejr/kort.png"), Some((PicStyle::Grey, "vejr/kort.png")));
+        assert_eq!(picture_path("_colour/a.webp"), Some((PicStyle::Colour, "a.webp")));
+        assert_eq!(picture_path("weather/index"), None);
+        assert_eq!(picture_path("_dots/readme"), None);
+    }
+
+    #[test]
+    fn small_pictures_for_lora() {
+        // A 640×480 photo-like test picture: gradients plus noise.
+        let mut rng = 1u32;
+        let img = image::RgbImage::from_fn(640, 480, |x, y| {
+            rng = rng.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            let n = (rng >> 24) as u8 / 8;
+            image::Rgb([(x / 3) as u8 / 2 + n, (y / 2) as u8 / 2 + n, 120 + n])
+        });
+        let mut src = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut src, 90))
+            .unwrap();
+        let (grey, m) = picture_for(&src, "a.jpg", PicStyle::Grey, true, 8192).unwrap();
+        assert_eq!(m, "image/jpeg");
+        let g = image::load_from_memory(&grey).unwrap();
+        assert_eq!((g.width(), g.height()), (256, 192));
+        let (dots, m) = picture_for(&src, "a.jpg", PicStyle::Dots, true, 8192).unwrap();
+        assert_eq!(m, "image/png");
+        let d = image::load_from_memory(&dots).unwrap();
+        assert_eq!((d.width(), d.height()), (256, 192));
+        let (colour, _) = picture_for(&src, "a.jpg", PicStyle::Colour, true, 8192).unwrap();
+        assert!(colour.len() <= 8192);
+        // Over the internet the original goes as it is.
+        let (orig, m) = picture_for(&src, "a.jpg", PicStyle::Grey, false, 1 << 20).unwrap();
+        assert_eq!((orig.len(), m), (src.len(), "image/jpeg"));
+        println!("grey {} B, dots {} B, colour {} B", grey.len(), dots.len(), colour.len());
     }
 
     #[test]

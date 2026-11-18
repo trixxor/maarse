@@ -90,6 +90,8 @@ object Cmd {
     fun fileEnd(req: Int) = frame(0x08) { u16(req) }
     fun cancelFile(fileId: Long) = frame(0x38) { u64(fileId) }
     fun getFileLimit(dest: String) = frame(0x14) { addr(dest) }
+    /** Asks a node for a maarse:// page or a picture on one (0x26). */
+    fun requestPage(req: Int, dest: String, path: String) = frame(0x26) { u16(req); addr(dest); text(path) }
     /** Call signalling and audio (0x27): content belongs to the clients, see Calls.kt. */
     fun sendCall(dest: String, data: ByteArray) = frame(0x27) { addr(dest); bytes(data) }
     // Linked devices (maarse-host only).

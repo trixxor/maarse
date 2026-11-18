@@ -41,7 +41,7 @@ import dk.maarse.app.StatKey
 import dk.maarse.app.formatStat
 
 /** Pages behind the Network tab's "More". */
-enum class NetPage(val title: String) { BACKBONE("Backbone"), ALERTS("Alerts"), NEIGHBOURS("Neighbours and routes"), NUMBERS("All numbers"), LOG("Log") }
+enum class NetPage(val title: String) { BACKBONE("Backbone"), ALERTS("Alerts"), NEIGHBOURS("Neighbours and routes"), NUMBERS("All numbers"), LOG("Log"), PAGES("Pages") }
 
 /** The network in plain words first, a few numbers, then the details. */
 @Composable
@@ -114,7 +114,8 @@ fun NetworkScreen(onPage: (NetPage) -> Unit) {
             GroupRow("Alerts", if (alerts.isEmpty()) "None received" else "${alerts.size} received") { onPage(NetPage.ALERTS) }
             GroupRow("Neighbours and routes", "Who you hear, and how well") { onPage(NetPage.NEIGHBOURS) }
             GroupRow("All numbers", "Every counter the node keeps") { onPage(NetPage.NUMBERS) }
-            GroupRow("Log", "What happened, live", last = true) { onPage(NetPage.LOG) }
+            GroupRow("Log", "What happened, live") { onPage(NetPage.LOG) }
+            GroupRow("Pages", "Browse maarse:// pages", last = true) { onPage(NetPage.PAGES) }
         }
     }
 }
@@ -139,6 +140,7 @@ fun NetPageContent(p: NetPage) {
         NetPage.NUMBERS -> AllStats()
         NetPage.LOG -> LogView()
         NetPage.BACKBONE -> BackbonePage()
+        NetPage.PAGES -> PagesPage()
     }
 }
 

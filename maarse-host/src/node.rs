@@ -4976,6 +4976,30 @@ mod radio_file_e2e_tests {
         }
     }
 
+    /// A picture on a page over LoRa: B makes the small copy in the style
+    /// A asks for (dots: a 1-bit PNG; grey: a small JPEG), and it arrives.
+    #[test]
+    fn page_picture_over_lora_is_made_small() {
+        let (mut a, mut b) = radio_pair("pagepic");
+        let pages = b.n.data_dir.join("pages");
+        fs::create_dir_all(&pages).unwrap();
+        let img = image::RgbImage::from_fn(800, 600, |x, y| image::Rgb([(x / 4) as u8, (y / 3) as u8, ((x + y) / 8) as u8]));
+        image::DynamicImage::ImageRgb8(img).save(pages.join("map.jpg")).unwrap();
+        for (style, mime, max) in [("dots", "image/png", 4000u32), ("grey", "image/jpeg", 3000)] {
+            a.n.command(1, Command::RequestPage { req: 9, dest: b.n.addr, path: text(format!("_{style}/map.jpg").as_bytes()) });
+            let (ea, _, _, _) = run_radio(&mut a, &mut b, 120, &mut |ea, _| ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, .. })));
+            let got = ea.iter().find_map(|e| match e {
+                Event::FileIncoming { mime: m, size, .. } => Some((String::from_utf8_lossy(m).to_string(), *size)),
+                _ => None,
+            });
+            let (m, size) = got.unwrap_or_else(|| panic!("no picture for {style}"));
+            assert_eq!(m, mime, "{style}");
+            assert!(size <= max, "{style}: {size} bytes");
+            assert!(ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, ok: true, .. })), "{style} not finished");
+            println!("{style}: {size} bytes over LoRa");
+        }
+    }
+
     /// The phone node's case: a 7.5 KB picture over one LoRa hop through
     /// half-duplex modems. A burst of chunks makes the sender deaf to the
     /// acks, so chunks must go one at a time over LoRa.

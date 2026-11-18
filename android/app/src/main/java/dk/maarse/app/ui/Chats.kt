@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import dk.maarse.app.Images
+import android.graphics.BitmapFactory
 import dk.maarse.app.Voice
 import dk.maarse.app.VoicePlayer
 import dk.maarse.app.VoiceRecorder
@@ -251,6 +252,7 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
         val used = text.toByteArray().size
         val ctx = LocalContext.current
         var askLora by remember { mutableStateOf<Triple<ByteArray, String, String>?>(null) }
+        var askPic by remember { mutableStateOf<Triple<ByteArray, String, String>?>(null) }
         val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             if (uri == null) return@rememberLauncherForActivityResult
             val bytes = runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
@@ -264,7 +266,10 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
             // wait. Ask whether to compress it for LoRa.
             Node.queryFileLimit(conv.substringAfter(":")) { l ->
                 Node.note(if (l == null) "File route: no answer from the node" else "File route: up to ${l.max / 1024} KB, via LoRa ${l.viaLora}, post office ${l.mailbox}")
+                // Over LoRa a picture goes as colour, grey or dots: the user picks.
+                val lora = if (l != null) l.viaLora && !l.mailbox else Node.fileMax() <= LORA_FILE
                 if (l != null && l.mailbox && bytes.size > LORA_FILE) askLora = Triple(bytes, mime, name)
+                else if (mime.startsWith("image/") && lora) askPic = Triple(bytes, mime, name)
                 else error = Node.sendFile(conv, bytes, mime, name)
             }
         }
@@ -281,7 +286,7 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
                     )
                 },
                 confirmButton = {
-                    if (image) TextButton(onClick = { askLora = null; error = Node.sendFile(conv, bytes, mime, name, LORA_FILE) }) { Text("Compress and send") }
+                    if (image) TextButton(onClick = { askLora = null; askPic = Triple(bytes, mime, name) }) { Text("Send over LoRa") }
                 },
                 dismissButton = {
                     Row {
@@ -290,6 +295,13 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
                     }
                 },
             )
+        }
+        askPic?.let { (bytes, mime, name) ->
+            PictureChoice(bytes, mime, onCancel = { askPic = null }) { data, m, ext ->
+                askPic = null
+                val n = if (data === bytes) name else name.substringBeforeLast('.') + ext
+                error = Node.sendFile(conv, data, m, n, LORA_FILE)
+            }
         }
         var recording by remember { mutableStateOf<VoiceRecorder?>(null) }
         var recSecs by remember { mutableStateOf(0) }
@@ -387,7 +399,9 @@ private fun Attachment(m: Msg) {
             var full by remember { mutableStateOf(false) }
             bmp?.let {
                 androidx.compose.foundation.Image(it.asImageBitmap(), "Picture", Modifier.padding(bottom = 4.dp).width(240.dp).clip(RoundedCornerShape(12.dp))
-                    .clickable { full = true }, contentScale = androidx.compose.ui.layout.ContentScale.FillWidth)
+                    .clickable { full = true }, contentScale = androidx.compose.ui.layout.ContentScale.FillWidth,
+                    // Dots (1-bit PNG sent over LoRa) stay sharp when enlarged.
+                    filterQuality = if (mime == "image/png" && it.width <= 256) androidx.compose.ui.graphics.FilterQuality.None else androidx.compose.ui.graphics.FilterQuality.Low)
             }
             if (full) FullImage(path, mime) { full = false }
         }
@@ -520,3 +534,49 @@ private fun fileProgress(m: Msg): Float? {
 
 /** Largest file sent over LoRa (maarse-host LORA_MAX_FILE). */
 private const val LORA_FILE = 8192
+
+/** How a picture goes over LoRa: colour, grey or dots, each with its real size and air time. */
+@Composable
+private fun PictureChoice(bytes: ByteArray, mime: String, onCancel: () -> Unit, onPick: (ByteArray, String, String) -> Unit) {
+    class Opt(val title: String, val sub: String, val data: ByteArray, val mime: String, val ext: String)
+    var opts by remember { mutableStateOf<List<Opt>?>(null) }
+    LaunchedEffect(bytes) {
+        opts = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            listOfNotNull(
+                (if (bytes.size <= LORA_FILE) bytes else Images.shrink(bytes, LORA_FILE))?.let { Opt("Colour", "Best picture", it, if (it === bytes) mime else "image/webp", ".webp") },
+                Images.grey(bytes)?.let { Opt("Grey, small", "Fastest; text stays readable", it, "image/webp", ".webp") },
+                Images.dots(bytes)?.let { Opt("Dots", "Retro look, best for drawings", it, "image/png", ".png") },
+            )
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("This picture goes over LoRa") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Pick how it is sent. Smaller arrives sooner and uses less air time.", style = MaterialTheme.typography.bodyMedium)
+                val list = opts
+                if (list == null) Text("Making the small versions…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else list.forEach { o ->
+                    val bmp = remember(o) { BitmapFactory.decodeByteArray(o.data, 0, o.data.size) }
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
+                        .clickable { onPick(o.data, o.mime, o.ext) }.padding(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        bmp?.let {
+                            androidx.compose.foundation.Image(it.asImageBitmap(), o.title, Modifier.size(72.dp).clip(RoundedCornerShape(6.dp)).background(androidx.compose.ui.graphics.Color.White),
+                                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                                filterQuality = if (o.mime == "image/png") androidx.compose.ui.graphics.FilterQuality.None else androidx.compose.ui.graphics.FilterQuality.Low)
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(o.title, fontWeight = FontWeight.SemiBold)
+                            Text("%.1f KB · about %d s".format(o.data.size / 1024f, Images.loraSecs(o.data.size)), style = MaterialTheme.typography.bodySmall)
+                            Text(o.sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+    )
+}

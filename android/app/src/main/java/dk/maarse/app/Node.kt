@@ -364,7 +364,7 @@ object Node : LinkListener {
     }
 
     /** Largest file the node takes: over a radio 8 KB (LoRa), on a host its limit. */
-    private fun fileMax(): Int {
+    fun fileMax(): Int {
         val m = me.value?.maxFile?.toInt()?.takeIf { it > 0 } ?: 8192
         return if (prefs.mode == Mode.BLE) minOf(m, 8192) else m
     }
@@ -418,7 +418,8 @@ object Node : LinkListener {
     private fun onFileEvent(ev: Ev) {
         when (ev) {
             is Ev.FileStarted -> pendingFiles.remove(ev.req)?.let { row -> fileOut[ev.fileId] = row; setStatus(row, "sending 0/${ev.chunks}") }
-            is Ev.FileIncoming -> {
+            // Pages and pictures we asked for go to the Pages screen, not a chat.
+            is Ev.FileIncoming -> if (!Pages.onIncoming(ev)) {
                 if (ev.size <= 0 || ev.size > 16 * 1024 * 1024) return
                 heard(ev.from) { it }
                 val conv = "dm:${ev.from}"
@@ -427,17 +428,17 @@ object Node : LinkListener {
                 fileIn[ev.fileId] = Incoming(row, ByteArray(ev.size), ev.mime, ev.name, ev.from)
                 bump()
             }
-            is Ev.FileChunk -> fileIn[ev.fileId]?.let { f ->
+            is Ev.FileChunk -> if (!Pages.onChunk(ev)) fileIn[ev.fileId]?.let { f ->
                 val n = minOf(ev.data.size, f.buf.size - ev.offset)
                 if (ev.offset >= 0 && n > 0) System.arraycopy(ev.data, 0, f.buf, ev.offset, n)
             }
-            is Ev.FileProgress -> if (ev.outgoing) fileOut[ev.fileId]?.let { setStatus(it, "sending ${ev.done}/${ev.total}") }
+            is Ev.FileProgress -> if (!ev.outgoing && Pages.onProgress(ev)) Unit else if (ev.outgoing) fileOut[ev.fileId]?.let { setStatus(it, "sending ${ev.done}/${ev.total}") }
                 else fileIn[ev.fileId]?.let { f ->
                     db.setFile(f.row, null, f.mime, fileLabel(f.mime, f.name, null) + " — receiving ${100 * ev.done / maxOf(1, ev.total)} %"); bump()
                 }
             // A file kept in the node's file mailbox keeps its file id (in the
             // msgId column), so it can be cancelled and marked delivered later.
-            is Ev.FileDone -> if (ev.outgoing) (fileOut.remove(ev.fileId) ?: db.byMsgId(ev.fileId))?.let { row ->
+            is Ev.FileDone -> if (!ev.outgoing && Pages.onDone(ev)) Unit else if (ev.outgoing) (fileOut.remove(ev.fileId) ?: db.byMsgId(ev.fileId))?.let { row ->
                 when {
                     // "cancelled" or "cancelled by the recipient"
                     !ev.ok -> setStatus(row, if (ev.text.startsWith("cancelled")) ev.text else "error: ${ev.text}")

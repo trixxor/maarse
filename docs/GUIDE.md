@@ -584,6 +584,18 @@ Ordinary text. **bold** and `code`.
 
 Code blocks are written between lines with three backticks.
 
+**Pictures.** A line of its own shows a picture from the pages folder (path from `pages/`, lower case):
+
+```text
+![Harbour at dawn](harbour.jpg)            grey (the default)
+![Map of the trail](trail/map.png "dots")  1-bit ordered dots, best for drawings and maps
+![Logo](logo.png "colour")                 colour, up to 8 KB over LoRa
+```
+
+The client asks for the picture like a page, with the style as the first path segment (`_grey/harbour.jpg`). Over the internet the host sends the original (scaled down only if it is over the limit). Over LoRa it makes a small copy: grey is a grey JPEG of about 1–1.5 KB (about 10–15 s of air), dots a 1-bit PNG, colour a JPEG under 8 KB. Over LoRa the picture waits for a tap; over the internet it loads at once. Pictures are fetched one at a time per node (`maarse-host/src/node/pages.rs`).
+
+**Pictures in chats.** When a picture goes over LoRa, the web client and the Android app ask how to send it: colour (up to 8 KB), grey (about 1.3 KB) or dots, each shown with its real size and air time.
+
 ## Gateway to MeshCore
 
 `maarse-host` can bridge to an existing [MeshCore](https://github.com/meshcore-dev/MeshCore) net, so Må:rse and MeshCore users can write to each other. The host does not reimplement MeshCore's encryption. Instead it drives an ordinary MeshCore node over USB with the same companion protocol MeshCore apps use.

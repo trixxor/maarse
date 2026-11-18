@@ -81,7 +81,10 @@ object Pages {
      *  shown on the page), else the first heading. */
     fun title(markup: String): String =
         (Regex("(?m)^@title\\s+(.+)$").find(markup) ?: Regex("(?m)^#{1,3}\\s+(.+)$").find(markup))
-            ?.groupValues?.get(1)?.replace(Regex("[*`]"), "")?.trim()?.take(80) ?: ""
+            ?.groupValues?.get(1)
+            // Markup is dropped: `-> x <-` centring, {red:…} colours, *, ~ and backticks.
+            ?.replace(Regex("""^->\s*(.*?)\s*<-\s*$"""), "$1")?.replace(Regex("""\{!?[a-z]+:([^{}]+)\}"""), "$1")
+            ?.replace(Regex("[*`~]"), "")?.trim()?.take(80) ?: ""
     /** The title of a node's front page, if we have it. */
     fun siteTitle(addr: String): String = cache["$addr/index"]?.let { title(it) } ?: ""
 

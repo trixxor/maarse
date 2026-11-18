@@ -222,6 +222,32 @@
   .page code { font-family: var(--mono); font-size: .92em; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
   .page blockquote { border-left: 3px solid var(--accent); margin: 10px 0; padding: 2px 12px; color: var(--muted); }
   .page a { color: var(--accent); font-weight: 600; }
+  /* Page markup: tables, centred lines, colours ({red:…}, {!red:…}) and callouts (>!red …).
+     The palette has a text colour (--pf-*) and a soft background (--pb-*) per theme. */
+  .page { --pf-red: #b3261e; --pb-red: #fbdad6; --pf-orange: #b55400; --pb-orange: #fde2c8; --pf-yellow: #8a6a00; --pb-yellow: #fff0a8;
+          --pf-green: #2e7d32; --pb-green: #d6efd8; --pf-blue: #1f5fbf; --pb-blue: #dbe6fb; --pf-purple: #7a3db0; --pb-purple: #ebdcf7;
+          --pf-grey: #5f6b66; --pb-grey: #e4e9e6; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .page { --pf-red: #ff8a80; --pb-red: #4a1d1a; --pf-orange: #ffb46b; --pb-orange: #4a2c10; --pf-yellow: #ffd95a; --pb-yellow: #443a0e;
+      --pf-green: #7fd68a; --pb-green: #1b3a1f; --pf-blue: #8ab4ff; --pb-blue: #1b2b4a; --pf-purple: #cda2ff; --pb-purple: #34234a; --pf-grey: #a3afa9; --pb-grey: #2b3430; }
+  }
+  :root[data-theme="dark"] .page { --pf-red: #ff8a80; --pb-red: #4a1d1a; --pf-orange: #ffb46b; --pb-orange: #4a2c10; --pf-yellow: #ffd95a; --pb-yellow: #443a0e;
+    --pf-green: #7fd68a; --pb-green: #1b3a1f; --pf-blue: #8ab4ff; --pb-blue: #1b2b4a; --pf-purple: #cda2ff; --pb-purple: #34234a; --pf-grey: #a3afa9; --pb-grey: #2b3430; }
+  .page .fg-red { color: var(--pf-red); } .page .fg-orange { color: var(--pf-orange); } .page .fg-yellow { color: var(--pf-yellow); }
+  .page .fg-green { color: var(--pf-green); } .page .fg-blue { color: var(--pf-blue); } .page .fg-purple { color: var(--pf-purple); } .page .fg-grey { color: var(--pf-grey); }
+  .page [class^="hl-"] { color: var(--ink); border-radius: 3px; padding: 0 3px; }
+  .page .hl-red { background: var(--pb-red); } .page .hl-orange { background: var(--pb-orange); } .page .hl-yellow { background: var(--pb-yellow); }
+  .page .hl-green { background: var(--pb-green); } .page .hl-blue { background: var(--pb-blue); } .page .hl-purple { background: var(--pb-purple); } .page .hl-grey { background: var(--pb-grey); }
+  .page blockquote.callout { color: var(--ink); border-radius: 0 6px 6px 0; padding: 6px 12px; }
+  .page .co-red { border-color: var(--pf-red); background: var(--pb-red); } .page .co-orange { border-color: var(--pf-orange); background: var(--pb-orange); }
+  .page .co-yellow { border-color: var(--pf-yellow); background: var(--pb-yellow); } .page .co-green { border-color: var(--pf-green); background: var(--pb-green); }
+  .page .co-blue { border-color: var(--pf-blue); background: var(--pb-blue); } .page .co-purple { border-color: var(--pf-purple); background: var(--pb-purple); }
+  .page .co-grey { border-color: var(--pf-grey); background: var(--pb-grey); }
+  .page .centre { text-align: center; }
+  .page .tbl { max-width: 100%; overflow-x: auto; margin: 10px 0; }
+  .page table { border-collapse: collapse; font-size: 14px; line-height: 1.4; }
+  .page th, .page td { border: 1px solid var(--line); padding: 4px 10px; vertical-align: top; text-align: left; }
+  .page th { background: var(--bg); font-weight: 600; }
   .secure { max-width: 580px; }
   .svc { max-width: 900px; }
   .svc-log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; height: 50vh; overflow: auto;
@@ -3230,26 +3256,39 @@ async function pageDone(ev, m) {
   if (state.view === "pages") renderChat();
 }
 
-// Inline: **bold**, `code`, [text](link). Everything becomes text nodes.
-function pageInline(text, base) {
+// Inline: `code`, **bold**, ~~struck~~, *italic*, {red:colour}, {!red:highlight}
+// and [text](link). Everything becomes text nodes and plain elements, never HTML.
+// Bold, struck, italic and colour may hold other inline markup.
+const PAGE_COLOURS = ["red", "orange", "yellow", "green", "blue", "purple", "grey"];
+const PAGE_INLINE = /`([^`]+)`|\*\*(.+?)\*\*|~~(.+?)~~|\*([^*\s](?:[^*]*[^*\s])?)\*|\{(!?)([a-z]+):([^{}]+)\}|\[([^\]]+)\]\(([^)\s]+)\)/g;
+function pageColour(name) { return name === "gray" ? "grey" : PAGE_COLOURS.includes(name) ? name : null; }
+function pageInline(text, base, depth = 0) {
   const out = [];
-  const re = /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)/g;
+  if (depth > 4) { out.push(document.createTextNode(text)); return out; }
+  const re = new RegExp(PAGE_INLINE.source, "g");
+  const inner = (s) => pageInline(s, base, depth + 1);
   let last = 0, m;
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
-    if (m[1]) out.push(el("b", {}, m[1]));
-    else if (m[2]) out.push(el("code", {}, m[2]));
-    else {
-      const target = m[4];
+    if (m[1]) out.push(el("code", {}, m[1]));
+    else if (m[2]) out.push(el("b", {}, ...inner(m[2])));
+    else if (m[3]) out.push(el("s", {}, ...inner(m[3])));
+    else if (m[4]) out.push(el("i", {}, ...inner(m[4])));
+    else if (m[6]) {
+      // An unknown colour is shown as its plain text.
+      const c = pageColour(m[6]);
+      out.push(c ? el("span", { className: (m[5] ? "hl-" : "fg-") + c }, ...inner(m[7])) : el("span", {}, ...inner(m[7])));
+    } else {
+      const target = m[9];
       const p = parsePageUrl(target, base);
       if (p) {
-        const a = el("a", { href: "#", textContent: m[3], title: pageUrl(p) });
+        const a = el("a", { href: "#", textContent: m[8], title: pageUrl(p) });
         a.onclick = (e) => { e.preventDefault(); openPage(pageUrl(p)); };
         out.push(a);
       } else if (/^https?:\/\//i.test(target)) {
         // Links out of the network are not opened: show the address so the user can decide.
-        out.push(document.createTextNode(`${m[3]} <${target}>`));
-      } else out.push(document.createTextNode(m[3]));
+        out.push(document.createTextNode(`${m[8]} <${target}>`));
+      } else out.push(document.createTextNode(m[8]));
     }
     last = re.lastIndex;
   }
@@ -3372,36 +3411,97 @@ function pagePicture(caption, src, style, base, forced = false) {
 // the page), else the first heading.
 function pageTitle(markup) {
   const m = markup.match(/^@title\s+(.+)$/m) || markup.match(/^#{1,3}\s+(.+)$/m);
-  return m ? m[1].replace(/[*`]/g, "").trim().slice(0, 80) : "";
+  // Markup is dropped: `-> x <-` centring, {red:…} colours, *, ~ and backticks.
+  return m ? m[1].replace(/^->\s*(.*?)\s*<-\s*$/, "$1").replace(/\{!?[a-z]+:([^{}]+)\}/g, "$1").replace(/[*`~]/g, "").trim().slice(0, 80) : "";
 }
+// Pipe tables: `| a | b |` rows; a second row like `|---|:--:|--:|` makes the
+// first row a header and sets left, centre or right alignment. `\|` is a
+// literal bar. Returns { head, aligns, rows } with every row as long as the widest.
+function pageTable(lines) {
+  const cells = (l) => {
+    let s = l.trim().replace(/^\|/, "");
+    if (/(^|[^\\])\|$/.test(s)) s = s.slice(0, -1);
+    return s.split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, "|"));
+  };
+  let rows = lines.map(cells), head = null, aligns = [];
+  if (rows.length > 1 && rows[1].every(c => /^:?-+:?$/.test(c))) {
+    aligns = rows[1].map(c => c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "left");
+    head = rows[0];
+    rows = rows.slice(2);
+  }
+  const n = Math.min(20, Math.max(head ? head.length : 0, ...rows.map(r => r.length)));
+  const fit = (r) => Array.from({ length: n }, (_, i) => r[i] ?? "");
+  return { head: head && fit(head), aligns: Array.from({ length: n }, (_, i) => aligns[i] || "left"), rows: rows.map(fit) };
+}
+// A centred line: `-> text <-`.
+const PAGE_CENTRE = /^->\s*(.*?)\s*<-\s*$/;
+// A quote line; `>!colour` starts a coloured box (callout), e.g. `>!red Storm tonight`.
+const PAGE_QUOTE = /^>(?:!([a-z]+)(?=\s|$))?\s?(.*)$/;
+
 function renderMarkup(markup, base) {
   const root = el("div", { className: "page" });
   const lines = markup.replace(/\r/g, "").split("\n");
-  let para = [], list = null, code = null;
+  let para = [], list = null, code = null, table = null, quote = null;
   const flush = () => {
     if (para.length) { root.append(el("p", {}, ...pageInline(para.join(" "), base))); para = []; }
-    list = null;
+    if (table) {
+      const t = pageTable(table), tb = el("table");
+      const row = (r, tag) => el("tr", {}, ...r.map((c, i) => {
+        const td = el(tag, {}, ...pageInline(c, base));
+        if (t.aligns[i] !== "left") td.style.textAlign = t.aligns[i];
+        return td;
+      }));
+      if (t.head) tb.append(el("thead", {}, row(t.head, "th")));
+      tb.append(el("tbody", {}, ...t.rows.map(r => row(r, "td"))));
+      // The table scrolls sideways inside its box, never the page.
+      root.append(el("div", { className: "tbl" }, tb));
+      table = null;
+    }
+    list = null; quote = null;
   };
   for (const line of lines) {
     if (code) { if (line.startsWith("```")) { root.append(el("pre", {}, code.join("\n"))); code = null; } else code.push(line); continue; }
+    if (table && !/^\s*\|/.test(line)) flush();
     if (line.startsWith("```")) { flush(); code = []; continue; }
     const h = line.match(/^(#{1,3})\s+(.*)$/);
-    if (h) { flush(); root.append(el("h" + (h[1].length + 1), {}, ...pageInline(h[2], base))); continue; }
+    if (h) {
+      flush();
+      const c = h[2].match(PAGE_CENTRE);
+      const e = el("h" + (h[1].length + 1), {}, ...pageInline(c ? c[1] : h[2], base));
+      if (c) e.className = "centre";
+      root.append(e);
+      continue;
+    }
     if (/^\s*$/.test(line)) { flush(); continue; }
     if (/^@title\s/.test(line)) continue;
     if (/^---+\s*$/.test(line)) { flush(); root.append(el("hr")); continue; }
     const pic = line.match(PIC_LINE);
     if (pic && base) { flush(); root.append(pagePicture(pic[1], pic[2], pic[3], base, pic[4] === "!")); continue; }
+    if (/^\s*\|/.test(line)) { if (!table) { flush(); table = []; } table.push(line); continue; }
     const li = line.match(/^\s*[-*]\s+(.*)$/);
     if (li) {
       if (para.length) { root.append(el("p", {}, ...pageInline(para.join(" "), base))); para = []; }
+      quote = null;
       if (!list) { list = el("ul"); root.append(list); }
       list.append(el("li", {}, ...pageInline(li[1], base)));
       continue;
     }
-    const q = line.match(/^>\s?(.*)$/);
-    if (q) { flush(); root.append(el("blockquote", {}, ...pageInline(q[1], base))); continue; }
-    list = null; para.push(line.trim());
+    const q = line.match(PAGE_QUOTE);
+    if (q) {
+      // Quote lines in a row make one box, one line each; `>!colour` starts a new, coloured one.
+      if (!quote || q[1]) {
+        flush();
+        quote = el("blockquote", {});
+        const c = q[1] && pageColour(q[1]);
+        if (c) quote.className = "callout co-" + c;
+        root.append(quote);
+      } else quote.append(el("br"));
+      quote.append(...pageInline(q[2], base));
+      continue;
+    }
+    const c = line.match(PAGE_CENTRE);
+    if (c) { flush(); root.append(el("p", { className: "centre" }, ...pageInline(c[1], base))); continue; }
+    list = null; quote = null; para.push(line.trim());
   }
   if (code) root.append(el("pre", {}, code.join("\n")));
   flush();

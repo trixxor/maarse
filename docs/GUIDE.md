@@ -573,9 +573,9 @@ Markup (`.mu`, UTF-8) is deliberately not HTML, so a page from a stranger cannot
 
 ```text
 # Heading (also ## and ###)
-Ordinary text. **bold** and `code`.
+Ordinary text. **bold**, *italic*, ~~struck~~ and `code`.
 - item
-> quote
+> quote (lines in a row make one quote)
 ---
 [Link to another page here](/about)
 [Link to another node](maarse://0123456789abcdef0123456789abcdef/)
@@ -583,6 +583,25 @@ Ordinary text. **bold** and `code`.
 ```
 
 Code blocks are written between lines with three backticks.
+
+**Tables, colours and callouts.** A little more like HTML, but still plain text that compresses well (the page goes over LoRa, where every byte costs air time):
+
+```text
+| Day | High  | Height |       a pipe table; the second row makes the first a header
+|-----|:-----:|-------:|       :--: centres a column, --: aligns it right
+| Mon | 06:10 | 0.4 m  |
+{red:text}                     text in a colour
+{!yellow:text}                 text on a coloured background (highlight)
+>!red Gale warning tonight     a coloured box (callout); more > lines continue it
+-> Centred line <-             centred; also on headings: # -> Title <-
+```
+
+- Colours: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `grey` (`gray` works too). Each has its own shade in the light and the dark theme, so a page reads well in both. An unknown colour shows the text without colour.
+- Colours, bold, italic and struck text may hold other markup (`{blue:**bold blue**}`); colours cannot be nested in colours.
+- Tables: every row starts with `|`; the trailing `|` is optional and `\|` is a bar inside a cell. Without the `|---|` row there is no header. Cells may hold inline markup and links. At most 20 columns. A wide table scrolls sideways inside its own box, never the page.
+- Byte cost: a colour costs its name plus 3 bytes (`{red:…}` = 6, `{!red:…}` = 7), a callout its name plus 3 (`>!red `), a centred line 6 bytes, and a table 3 bytes per cell plus the `|---|` row. Repeated markup like `| ` and `{green:` compresses to almost nothing: `docs/sample-pages/formatting.mu`, which uses all of it, is 919 bytes and 579 bytes deflated (copy it into `<data>/pages/` to try it) (about 6 s of air, where a 1.3 KB grey picture takes 10–15 s). Keep the separator row short (`|---|---|`); the dashes are only there to be read.
+- Older clients show the new markup as its plain text (`{red:18 m/s}`, `| a | b |`), which stays readable.
+- Web client and Android app render the same markup the same way (`renderMarkup`/`pageInline` in `maarse-client/index.html`, `parseMarkup`/`Inline` in `android/.../ui/PagesScreen.kt`).
 
 **Pictures.** A line of its own shows a picture from the pages folder (path from `pages/`, lower case):
 

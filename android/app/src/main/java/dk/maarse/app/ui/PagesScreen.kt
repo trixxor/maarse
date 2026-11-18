@@ -387,8 +387,10 @@ private fun Inline(text: String, base: Pages.Url, style: androidx.compose.ui.tex
 // Colour 8 KB. Over LoRa the first waits for a tap; over the internet it loads
 // at once. Tapping the picture offers the next steps. `forced` ("dots!" on the page):
 // that copy on every route, no steps.
-private data class PicStep(val id: String, val name: String, val time: String)
-private val PIC_STEPS = listOf(PicStep("_c4", "Colour 4 KB", "about 35 s"), PicStep("_c8", "Colour 8 KB", "about 1 min"))
+private data class PicStep(val id: String, val name: String, val time: String, val net: Boolean = false)
+// Full size is the original: over the internet only; over LoRa 8 KB is the most.
+private val PIC_STEPS = listOf(PicStep("_c4", "Colour 4 KB", "about 35 s"), PicStep("_c8", "Colour 8 KB", "about 1 min"),
+    PicStep("_full", "Full size", "", net = true))
 
 /** A picture: over LoRa it waits for a tap; over the internet it loads at once.
  *  `version` is passed so a picture redraws when Pages changes. */
@@ -400,23 +402,20 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
     val st = when (style) { "color", "colour" -> "colour"; "dots" -> "dots"; else -> "grey" }
     val rel = src.trimStart('/').lowercase()
     val path = if (forced) "_f$st/$rel" else "_$st/$rel"
-    val loadText = "Load picture · " + when {
-        !forced -> "Greyscale · about 1.3 KB · 10–15 s"
-        st == "dots" -> "dots, set by the page · 10–20 s"
-        st == "colour" -> "Colour 8 KB, set by the page · about 1 min"
-        else -> "Greyscale, set by the page · 10–15 s"
-    } + " over LoRa"
+    val loadText = "Click here to see the picture · " + when {
+        !forced -> "smallest size, about 1.3 KB"
+        st == "dots" -> "dots, set by the page"
+        st == "colour" -> "Colour 8 KB, set by the page"
+        else -> "Greyscale, set by the page"
+    }
     val key = "${base.addr}/$path"
     val lora = Pages.overLora(base.addr)
     // The best step that has come wins: Colour 8 KB, Colour 4 KB, then the first copy.
-    val steps = if (forced) emptyList() else PIC_STEPS
+    val steps = if (forced) emptyList() else PIC_STEPS.filter { !(it.net && lora) }
     val top = steps.lastOrNull { Pages.picture("${base.addr}/${it.id}/$rel") is Pages.Pic.Got }
     val first = Pages.picture(key)
     val pic = top?.let { Pages.picture("${base.addr}/${it.id}/$rel") } ?: first
     var large by remember(key) { mutableStateOf(false) }
-    LaunchedEffect(key, lora) {
-        if (!lora && pic == null && !Pages.queued(base.addr, path)) Pages.requestPicture(base.addr, path)
-    }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         when (pic) {
             is Pages.Pic.Got -> {
@@ -432,7 +431,8 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                 Text("${if (caption.isNotEmpty()) "$caption · " else ""}$stepName · " + "%.1f KB".format(pic.data.size / 1024f),
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!forced) {
-                    val higher = steps.drop(if (top == null) 0 else steps.indexOf(top) + 1)
+                    // Only the next step: smallest first, one size up at a time.
+                    val higher = steps.drop(if (top == null) 0 else steps.indexOf(top) + 1).take(1)
                     val working = higher.firstOrNull { val p = Pages.picture("${base.addr}/${it.id}/$rel"); p is Pages.Pic.Busy || p is Pages.Pic.Asking || Pages.queued(base.addr, "${it.id}/$rel") }
                     val wp = working?.let { Pages.picture("${base.addr}/${it.id}/$rel") }
                     when {

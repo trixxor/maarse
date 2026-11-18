@@ -19,6 +19,8 @@
 //! - `_c4/hytte.jpg`: **Colour 4 KB**, asked for when the reader taps the
 //!   picture for a better one.
 //! - `_c8/hytte.jpg`: **Colour 8 KB**, the most LoRa carries.
+//! - `_full/hytte.jpg`: **Full size**, the original, over the internet only
+//!   (over LoRa it is Colour 8 KB).
 //!
 //! The steps are the same over the internet (where the first loads without
 //! a tap), so a page looks the same on every route and no picture is ever
@@ -80,6 +82,9 @@ pub(crate) enum PicStyle {
     /// picture than the greyscale one.
     Colour4,
     Colour8,
+    /// Full size: the original over the internet (scaled to the limit only
+    /// if it is larger); over LoRa never more than Colour 8 KB.
+    Full,
     /// Forced by the page ("grey!", "dots!", "colour!"): this copy on any
     /// route, never over 8 KB over LoRa.
     ForceGrey,
@@ -103,6 +108,7 @@ pub(crate) fn picture_path(path: &str) -> Option<(PicStyle, &str)> {
         Some(("_colour", r)) => (PicStyle::Colour, r),
         Some(("_c4", r)) => (PicStyle::Colour4, r),
         Some(("_c8" | "_best", r)) => (PicStyle::Colour8, r),
+        Some(("_full", r)) => (PicStyle::Full, r),
         Some(("_fgrey", r)) => (PicStyle::ForceGrey, r),
         Some(("_fdots", r)) => (PicStyle::ForceDots, r),
         Some(("_fcolour", r)) => (PicStyle::ForceColour, r),
@@ -232,8 +238,20 @@ fn png_grey1(w: u32, h: u32, raw: &[u8]) -> Vec<u8> {
 /// page looks the same over LoRa and over the internet and no picture is ever
 /// over 8 KB. The first copy is Greyscale (or dots when smaller); Colour 4 KB
 /// and Colour 8 KB on request; a forced copy ("!") as the page says.
-pub(crate) fn picture_for(data: &[u8], _name: &str, style: PicStyle, _via_lora: bool, max: usize) -> Option<(Vec<u8>, &'static str)> {
+pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bool, max: usize) -> Option<(Vec<u8>, &'static str)> {
     const WEBP: &str = "image/webp";
+    // Full size over the internet: the original as it is when it fits.
+    if style == PicStyle::Full && !via_lora {
+        if data.len() <= max {
+            let mime = match name.rsplit_once('.').map(|x| x.1) {
+                Some("png") => "image/png",
+                Some("webp") => "image/webp",
+                _ => "image/jpeg",
+            };
+            return Some((data.to_vec(), mime));
+        }
+        return colour_picture(&image::load_from_memory(data).ok()?, max).map(|b| (b, WEBP));
+    }
     let max = max.min(LORA_PICTURE_MAX);
     let img = image::load_from_memory(data).ok()?;
     match style {
@@ -249,7 +267,8 @@ pub(crate) fn picture_for(data: &[u8], _name: &str, style: PicStyle, _via_lora: 
             None
         }
         PicStyle::Colour4 => colour_picture(&img, max.min(COLOUR4_MAX)).map(|b| (b, WEBP)),
-        PicStyle::Colour8 | PicStyle::ForceColour => colour_picture(&img, max).map(|b| (b, WEBP)),
+        // Over LoRa full size is never more than Colour 8 KB.
+        PicStyle::Colour8 | PicStyle::ForceColour | PicStyle::Full => colour_picture(&img, max).map(|b| (b, WEBP)),
         PicStyle::Grey | PicStyle::Dots | PicStyle::Colour => {
             // The smallest first copy.
             let grey = grey_picture(&img);
@@ -482,6 +501,10 @@ mod tests {
         for lora in [true, false] {
             assert_eq!(get(PicStyle::ForceColour, lora).0, c8);
         }
+        // Full size: the original over the internet, Colour 8 KB over LoRa.
+        assert_eq!(get(PicStyle::Full, false), (src.clone(), "image/jpeg"));
+        assert_eq!(get(PicStyle::Full, true).0, c8);
+        assert_eq!(picture_path("_full/a.jpg"), Some((PicStyle::Full, "a.jpg")));
         // Noise is the worst case: still within 8 KB over LoRa in every step.
         let mut noise = image::RgbImage::new(600, 600);
         let mut x = 1u32;

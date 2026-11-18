@@ -98,6 +98,9 @@
   .phone .ttx-wrap { padding: 8px 0; }
   .phone .ttx { --c: 9px; }
 
+  .bbs-wrap { background: #000; min-height: 100%; padding: 14px 0; display: grid; justify-items: center; overflow: hidden; }
+  .bbs { margin: 0; background: #000; color: #aaa; font: 15px/1.18 Consolas, "Lucida Console", ui-monospace, monospace; white-space: pre; }
+  .phone .bbs { font-size: 6.6px; }
   /* ================= C: THE PATTERN BOOK ================= */
   .pb { background: #f6f7f9; color: #1b1f24; font: 14px/1.55 "Segoe UI", system-ui, sans-serif; min-height: 100%; display: grid; grid-template-columns: 220px 1fr; }
   .pb nav { position: sticky; top: 0; align-self: start; padding: 22px 14px; border-right: 1px solid #e1e4e8; height: 640px; background: #fff; }
@@ -158,7 +161,7 @@
   <h1>Pages: browser and three designs</h1>
   <button data-t="layout" class="on">1 · Browser layout</button>
   <button data-t="a">A · Newspaper</button>
-  <button data-t="b">B · Teletext</button>
+  <button data-t="b">B · BBS</button>
   <button data-t="c">C · Pattern book</button>
   <button data-t="mu">MU additions (decide)</button>
 </header>
@@ -187,7 +190,7 @@
 
 <!-- ======================= B: TELETEXT ======================= -->
 <section class="tab" id="t-b">
-  <p class="intro"><b>B · Må:rse Text 100.</b> Teletext as it was: black screen, the seven hard colours, a 40×25 character grid, page number and a running clock in the header row, block-graphic (mosaic) logo, double-height headlines, dotted leaders to page numbers, a flashing warning, and the four coloured Fastext keys at the bottom. On the PC keys 1–4 (or typing a page number) jump; on a phone the grid scales to the screen width.</p>
+  <p class="intro"><b>B · Hals Havn BBS.</b> An old dial-up BBS: black screen, the 16 ANSI colours, an 80×25 text screen in a mono font, ANSI art logo, double-line frames, a status bar with node and time, a main menu with hot keys in brackets, the message base as a numbered list, and a prompt at the bottom. Everything is made from <code>@bg</code>, <code>@font mono</code>, <code>@grid 80x25</code> and hex colours in the .mu file. On a phone the 80 columns scale down to the width (small but whole, like a terminal), or the author can make the page 40 wide.</p>
   <div class="row">
     <div class="pc"><div class="lbl" style="padding:8px 10px 0">PC host</div><div id="b-pc"></div></div>
   </div>
@@ -328,99 +331,70 @@ Diesel and petrol are back from Thursday 07:00, card only.
 
 {small:[front page](/) · [the backbone](maarse://43916f06…/)}`);
 
-// ======================= B: teletext =======================
-// Rows: [text, colour classes per run]. Each row is 40 cells. Runs: "f:b:text" (f = fg, b = bg).
-function runs(...rs) { return rs.map(([f, b, t]) => `<span class="${f || "W"} ${b ? "b" + b : ""}">${t.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</span>`).join(""); }
-function pad(s, n) { return (s + " ".repeat(n)).slice(0, n); }
-const clock = () => new Date().toTimeString().slice(0, 8);
-function ttxRows() {
-  const day = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short" });
-  return [
-    ["", runs(["W", "", " P100  "], ["Y", "", "MÅ:RSE"], ["W", "", pad("  100  " + day + " ", 19)], ["Y", "", clock()])],
-    ["logo", ""],
-    ["dh", runs(["C", "", pad(" HARBOUR NEWS", 40)])],
-    ["", runs(["W", "", pad(" Gale tonight: boats in by 20:00 ....", 36)], ["Y", "", "101 "])],
-    ["", runs(["C", "", pad(" Fuel pier open again .............", 36)], ["Y", "", "102 "])],
-    ["", runs(["W", "", pad(" Repeater on the mast covers the bay.", 36)], ["Y", "", "103 "])],
-    ["", runs(["C", "", pad(" Notice board: 6 new messages .....", 36)], ["Y", "", "104 "])],
-    ["", " ".repeat(40)],
-    ["", runs(["W", "R", pad("  WEATHER  ", 11)], ["W", "", pad("  Hals, tonight", 29)])],
-    ["", runs(["W", "", pad("  06  8 m/s W   ", 18)], ["G", "", pad("calm", 22)])],
-    ["", runs(["W", "", pad("  12 14 m/s W   ", 18)], ["Y", "", pad("choppy", 22)])],
-    ["", runs(["W", "", pad("  18 ", 5)], ["R", "", pad("18 m/s NW   ", 13)], ["R fl", "", pad("GALE WARNING", 22)])],
-    ["", " ".repeat(40)],
-    ["", runs(["k", "B", pad("  NETWORK  ", 11)], ["W", "", pad("", 29)])],
-    ["", runs(["W", "", pad("  Hals Havn     0 hops  ", 24)], ["G", "", pad("█████", 16)])],
-    ["", runs(["W", "", pad("  Øster Hurup   2 hops  ", 24)], ["Y", "", "███"], ["B", "", pad("██", 13)])],
-    ["", runs(["W", "", pad("  Backbone      internet", 24)], ["C", "", pad(" ◆ online", 16)])],
-    ["", " ".repeat(40)],
-    ["", runs(["k", "Y", pad("  MESSAGES 104  ", 16)], ["W", "", pad("  newest first", 24)])],
-    ["", runs(["G", "", pad("  CARL ", 8)], ["W", "", pad("Lost: blue fender IDA, pier 3", 32)])],
-    ["", runs(["G", "", pad("  CAFE ", 8)], ["W", "", pad("For sale: 15 hp outboard", 32)])],
-    ["", runs(["G", "", pad("  DENNIS ", 10)], ["W", "", pad("Who hears the new antenna?", 30)])],
-    ["", " ".repeat(40)],
-    ["", runs(["W", "R", pad(" News", 10)], ["k", "G", pad(" Weather", 10)], ["k", "Y", pad(" Board", 10)], ["k", "C", pad(" Index", 10)])],
-  ];
+// ======================= B: BBS =======================
+// ANSI palette (the 16 colours of a PC text screen).
+const ANSI = { k: "#000", r: "#a00", g: "#0a0", y: "#a50", b: "#00a", m: "#a0a", c: "#0aa", w: "#aaa",
+               K: "#555", R: "#f55", G: "#5f5", Y: "#ff5", B: "#55f", M: "#f5f", C: "#5ff", W: "#fff" };
+// A line is written as runs "‹fg[bg]›text"; fg/bg are ANSI letters.
+function ansiLine(line) {
+  return line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/‹(\w) ?(\w)?›([^‹]*)/g, (_, f, b, t) =>
+    `<span style="color:${ANSI[f]};${b ? "background:" + ANSI[b] : ""}">${t}</span>`);
 }
-// A 5x7 pixel font for the mosaic logo (drawn as teletext sextant pixels: 2 wide x 3 high per cell).
-const FONT = { M: ["10001","11011","10101","10001","10001","10001","10001"], A: ["01110","10001","10001","11111","10001","10001","10001"],
-  R: ["11110","10001","10001","11110","10100","10010","10001"], S: ["01111","10000","10000","01110","00001","00001","11110"],
-  E: ["11111","10000","10000","11110","10000","10000","11111"], T: ["11111","00100","00100","00100","00100","00100","00100"],
-  X: ["10001","10001","01010","00100","01010","10001","10001"], ":": ["0","0","1","0","1","0","0"], " ": ["00","00","00","00","00","00","00"] };
-// One font pixel = one sextant pixel (half a cell wide, a third of a cell high), as on real teletext.
-function logo(canvas, cell) {
-  const px = cell / 2, py = cell * 1.5 / 3, rows = 9;
-  canvas.width = 40 * cell; canvas.height = 3 * cell * 1.5;
-  const g = canvas.getContext("2d");
-  g.fillStyle = "#00f"; g.fillRect(0, 0, canvas.width, canvas.height);
-  const draw = (word, x0, colour) => {
-    for (const ch of word) {
-      const f = FONT[ch];
-      g.fillStyle = colour;
-      for (let r = 0; r < 7; r++) for (let c = 0; c < f[r].length; c++) if (f[r][c] === "1") g.fillRect((x0 + c) * px, (1.5 + r) * py, px, py);
-      if (ch === "A" && colour === "#ff0" && word.startsWith("MA")) g.fillRect((x0 + 2) * px, 0.2 * py, px, py); // the ring of Å
-      x0 += f[0].length + 1;
-    }
-    return x0;
-  };
-  draw("MA:RSE", 4, "#ff0");
-  draw("TEXT", 52, "#fff");
-  void rows;
-}
-function ttxHTML(id) { return `<div class="ttx-wrap"><div class="ttx" id="${id}"></div></div>`; }
-function drawTtx(el, cell) {
-  el.innerHTML = "";
-  for (const [kind, html] of ttxRows()) {
-    if (kind === "logo") { const c = document.createElement("canvas"); logo(c, cell); el.append(c); continue; }
-    const r = document.createElement("div"); r.className = "r" + (kind === "dh" ? " dh" : ""); r.innerHTML = html; el.append(r);
-  }
-}
-frames("b", "Må:rse Text 100", "3eb445ec / text", ttxHTML("ttx-pc"), "Over the internet · 1.1 KB · keys 1–4 or a page number");
-document.getElementById("b-ph").querySelector(".ttx").id = "ttx-ph";
-const tick = () => { drawTtx(document.getElementById("ttx-pc"), 17); drawTtx(document.getElementById("ttx-ph"), 9); };
-tick(); setInterval(tick, 1000);
-source("b", `@title Må:rse Text 100
-⟦@theme teletext⟧
-⟦@fastext red:[News](news) green:[Weather](weather) yellow:[Board](board) cyan:[Index](/)⟧
-⟦\`\`\`mosaic
-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-bbbbyb...y..yyy....yyyy...yyyy.yyyyy....wwwww.wwwww.w...w.wwwww...............bb
-bbbbyy.yy.y...y.y..y...y.y.....y..........w...w......w.w....w.................bb
-...  (6 rows: 1 byte per pixel, compresses to ~90 bytes)
-\`\`\`⟧
-# ⟦{cyan:⟧HARBOUR NEWS⟦}⟧
-Gale tonight: boats in by 20:00 .... {yellow:[101](news)}
-⟦{cyan:⟧Fuel pier open again ......⟦}⟧ {yellow:[102](fuel)}
-Repeater on the mast covers the bay. {yellow:[103](net)}
+const BBS = [
+"‹W b› Hals Havn BBS ‹Y b›│ Node 1 ‹W b›│ 14400 baud ‹C b›│ SysOp: Dennis                 ‹Y b›TIME ##:## ",
+"‹B›╔══════════════════════════════════════════════════════════════════════════════╗",
+"‹B›║‹C›  ██   ██  █████  ██      ███████   ‹M›  ██████  ██████  ███████              ‹B›   ║",
+"‹B›║‹C›  ██   ██ ██   ██ ██      ██        ‹M›  ██   ██ ██   ██ ██                   ‹B›   ║",
+"‹B›║‹C›  ███████ ███████ ██      ███████   ‹M›  ██████  ██████  ███████              ‹B›   ║",
+"‹B›║‹C›  ██   ██ ██   ██ ██           ██   ‹M›  ██   ██ ██   ██      ██              ‹B›   ║",
+"‹B›║‹C›  ██   ██ ██   ██ ███████ ███████   ‹M›  ██████  ██████  ███████              ‹B›   ║",
+"‹B›║‹K›                 over Må:rse LoRa and the backbone since 2026                 ‹B›║",
+"‹B›╚══════════════════════════════════════════════════════════════════════════════╝",
+"‹W›  Welcome back, ‹Y›dennis‹W›! You are caller ‹G›#1337‹W› today. ‹R›Gale warning tonight!",
+"",
+"‹B›  ┌─‹W b› MAIN MENU ‹B›──────────────────────┐  ┌─‹W b› LATEST MESSAGES ‹B›──────────────────┐",
+"‹B›  │ ‹K›[‹Y›M‹K›]‹W› Message board      ‹G› 6 new ‹B›   │  │ ‹G›#4 ‹C›CARL   ‹W›Lost: blue fender IDA    ‹B›│",
+"‹B›  │ ‹K›[‹Y›F‹K›]‹W› File area          ‹K›12 files‹B›  │  │ ‹G›#3 ‹C›CAFE   ‹W›For sale: 15 hp outboard ‹B›│",
+"‹B›  │ ‹K›[‹Y›W‹K›]‹W› Weather and tide         ‹B›    │  │ ‹G›#2 ‹C›DENNIS ‹W›Who hears the antenna?   ‹B›│",
+"‹B›  │ ‹K›[‹Y›G‹K›]‹W› Picture gallery          ‹B›    │  │ ‹G›#1 ‹C›SYSOP  ‹W›Be kind. Small pictures. ‹B›│",
+"‹B›  │ ‹K›[‹Y›B‹K›]‹W› Bulletins           ‹R›  1 ! ‹B›   │  ├────────────────────────────────────┤",
+"‹B›  │ ‹K›[‹Y›A‹K›]‹W› About this board         ‹B›    │  │ ‹K›[‹Y›P‹K›]‹W› Post a message                 ‹B›│",
+"‹B›  │ ‹K›[‹Y›Q‹K›]‹W› Goodbye (log off)        ‹B›    │  │ ‹K›[‹Y›R‹K›]‹W› Read all                       ‹B›│",
+"‹B›  └──────────────────────────────────┘  └────────────────────────────────────┘",
+"",
+"‹K›  WEATHER ‹W›06 ‹G›8 m/s W calm   ‹W›12 ‹Y›14 m/s W choppy   ‹W›18 ‹R›18 m/s NW GALE",
+"",
+"‹C›  Hals Havn BBS ‹K›│ ‹W›Time left: ‹Y›59 min ‹K›│ ‹W›Your choice: ‹W k›█",
+];
+function bbsHTML(id) { return `<div class="bbs-wrap"><pre class="bbs" id="${id}"></pre></div>`; }
+function drawBbs(el) { const t = new Date().toTimeString().slice(0, 5); el.innerHTML = BBS.map(l => ansiLine(l.replace("##:##", t))).join("\n"); }
+frames("b", "Hals Havn BBS", "3eb445ec / bbs", bbsHTML("bbs-pc"), "Over the internet · 1.4 KB · keys M F W G B A in brackets");
+document.getElementById("b-ph").querySelector(".bbs").id = "bbs-ph";
+const tick = () => { drawBbs(document.getElementById("bbs-pc")); drawBbs(document.getElementById("bbs-ph")); };
+tick(); setInterval(tick, 10000);
+source("b", `@title Hals Havn BBS
+⟦@bg #000⟧
+⟦@fg #aaa⟧
+⟦@font mono⟧
+⟦@grid 80x25⟧
+⟦{#fff!#00a: Hals Havn BBS }⟧⟦{#ff5!#00a:│ Node 1 }⟧ ... ⟦{#ff5!#00a:TIME @time }⟧
+⟦{#55f:⟧╔══════════════════════════════════════╗⟦}⟧
+⟦{#55f:⟧║⟦}{#5ff:⟧  ██   ██  █████  ██      ███████ ⟦}{#f5f:⟧ ██████ ...⟦}⟧
+...
+⟦{#55f:⟧╚══════════════════════════════════════╝⟦}⟧
+  Welcome back! ⟦{#f55:⟧Gale warning tonight!⟦}⟧
 
-{!red: WEATHER } Hals, tonight
-  06  8 m/s W   {green:calm}
-  12 14 m/s W   {yellow:choppy}
-  18 {red:18 m/s NW}  ⟦{flash:⟧{red:GALE WARNING}⟦}⟧
+⟦::: 2⟧
+⟦{#55f:⟧┌─ MAIN MENU ─────────────┐⟦}⟧
+│ [⟦{#ff5:⟧[M](board)⟦}⟧] Message board  ⟦{#5f5:⟧6 new⟦}⟧ │
+│ [⟦{#ff5:⟧[F](files)⟦}⟧] File area            │
+...
+⟦+++⟧
+⟦{#55f:⟧┌─ LATEST MESSAGES ───────┐⟦}⟧
+⟦@board 4⟧
+⟦:::⟧
 
-{!yellow: MESSAGES 104 } newest first
-⟦@board⟧`);
-
+{#5ff:Hals Havn BBS} │ Your choice: █`);
 // ======================= C: pattern book =======================
 const C = `<div class="pb">
   <nav><b>Pattern book</b><a class="on">Text <small>4</small></a><a>Colours <small>2</small></a><a>Boxes <small>3</small></a><a>Tables <small>1</small></a><a>Columns <small>2</small></a><a>Pictures <small>4</small></a><a>Links <small>3</small></a><a>Themes <small>2</small></a><a>Notice board <small>6</small></a></nav>

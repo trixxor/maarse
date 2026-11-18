@@ -332,6 +332,29 @@
       expect: (sim) => { const s = sim.summary(); return [[s.delivered_pct > 85, `delivered ${s.delivered_pct.toFixed(1)} % (> 85 %)`]]; },
       run_s: 1800,
     },
+    office_failure: {
+      title: "Post office dies, a copy delivers",
+      text: "A handheld in Odense is switched off. At 30 s someone in Aalborg writes to it: the mail goes to the Aalborg post office and two copies elsewhere. At 4 min the Aalborg hosts die. At 6 min the Odense handheld comes back. Expected: it gets the mail from a copy.",
+      build: (land, towns, seed) => {
+        const s = generateDenmark({ seed }, land, towns); s.name = "Post office dies"; quiet(s);
+        const a = userNear(s, 57.048, 9.919), b = userNear(s, 55.396, 10.388, a);
+        const aal = s.nodes.map((n, i) => [n, i]).filter(([n]) => n.kind === "host" && km([n.lat, n.lon], [57.048, 9.919]) < 25).map(([, i]) => i);
+        s.events.push({ t_s: 10, type: "kill", nodes: [b] });
+        s.events.push({ t_s: 30, type: "message", from: a, node: b });
+        s.events.push({ t_s: 240, type: "kill", nodes: aal });
+        s.events.push({ t_s: 360, type: "revive", nodes: [b] });
+        s.duration_s = 1800;
+        return s;
+      },
+      expect: (sim) => {
+        const m = sim.msgs(0, 10).msgs[0];
+        return [
+          [sim.summary().mail_deposits > 0, "the message went to a post office"],
+          [m && m[4] !== null && m[4] >= 360000, "the Odense handheld gets it after it comes back, with the Aalborg office dead"],
+        ];
+      },
+      run_s: 1800,
+    },
     bornholm: {
       title: "Bornholm cut off",
       text: "Bornholm's backbone links fail at 1 min. At 3 min an authority on Copenhagen sends a water alert to Bornholm: does it get there?",

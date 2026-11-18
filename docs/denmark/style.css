@@ -160,3 +160,34 @@ h3 { font-weight:600; }
 #bench .bh-verdict div { border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
 #bench .bh-verdict b { display:block; font-size:22px; font-variant-numeric:tabular-nums; }
 #bench .bh-verdict span { font-size:11px; color:var(--mute); }
+
+/* ---- Build: cards ---- */
+details.card { border:1px solid var(--line); border-radius:14px; background:var(--panel); margin:10px 0; box-shadow:0 1px 2px rgba(22,25,29,.04); }
+details.card > summary { list-style:none; display:flex; gap:12px; align-items:center; padding:12px 14px; cursor:pointer; border-radius:14px; }
+details.card > summary::-webkit-details-marker { display:none; }
+details.card > summary::after { content:"▸"; margin-left:auto; color:var(--mute); transition:transform .15s; }
+details.card[open] > summary::after { transform:rotate(90deg); }
+details.card > summary:hover { background:rgba(127,127,127,.06); }
+details.card > summary b { display:block; font-size:14px; }
+details.card > summary small { display:block; font-size:12px; color:var(--mute); }
+details.card .ci { width:32px; height:32px; flex:none; border-radius:9px; display:grid; place-items:center; background:color-mix(in srgb, var(--acc) 12%, transparent); color:var(--acc); font-size:16px; }
+details.card .card-body { padding:2px 14px 14px; border-top:1px solid var(--line); }
+details.card .card-body > h3:first-child { margin-top:10px; }
+.tools { gap:6px; } .tools button { text-align:left; padding:7px 10px; border-radius:9px; }
+.tools button.on { outline:0; background:color-mix(in srgb, var(--acc) 14%, var(--panel)); border-color:var(--acc); color:var(--ink); }
+#g-regions input { padding:4px 6px; border-radius:7px; }
+#g-regions th, #g-regions td { border-bottom:0; padding:3px 3px; }
+#features label { margin:2px 0; }
+#g-regions { font-size:12px; } #g-regions input { font-size:12px; }
+#g-regions td:first-child { white-space:nowrap; padding-right:6px; }
+details.card label:has(> input[type=range]) { flex-wrap:nowrap; }
+details.card label > input[type=range] + span { min-width:28px; text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
+details.card .scroll { border:0; }
+#g-regions input { padding:3px 4px; text-align:right; -moz-appearance:textfield; appearance:textfield; }
+#g-regions input::-webkit-outer-spin-button, #g-regions input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+#g-regions td:first-child { max-width:84px; overflow:hidden; text-overflow:ellipsis; }
+#g-regions { table-layout:fixed; width:100%; }
+#g-regions th:first-child, #g-regions td:first-child { width:27%; }
+#g-regions th:nth-child(2) { width:14%; }
+#g-regions input { width:100% !important; box-sizing:border-box; }
+details.card .scroll:has(#g-regions) { overflow:visible; }

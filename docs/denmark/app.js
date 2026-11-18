@@ -1544,7 +1544,7 @@
   // Generator: users and connection mix per region (defaults from the mockup).
   const GEN_REGIONS = [["hovedstaden", "Hovedstaden", 160, 20, 45, 35, 6, 4], ["sjaelland", "Sjælland", 80, 35, 45, 20, 8, 6], ["syddanmark", "Syddanmark", 110, 35, 45, 20, 8, 6], ["midtjylland", "Midtjylland", 110, 30, 45, 25, 8, 5], ["nordjylland", "Nordjylland", 70, 45, 40, 15, 10, 8]];
   const genCols = ["users", "lora", "both", "app", "cars", "relays"];
-  $("g-regions").insertAdjacentHTML("beforeend", GEN_REGIONS.map(([id, label, ...v]) => `<tr data-r="${id}"><td>${label}</td>${v.map((x, k) => `<td><input type="number" min="0" ${k ? 'max="100"' : ""} data-c="${genCols[k]}" value="${x}" style="width:${k ? 46 : 58}px" aria-label="${label} ${genCols[k]}"></td>`).join("")}</tr>`).join(""));
+  $("g-regions").insertAdjacentHTML("beforeend", GEN_REGIONS.map(([id, label, ...v]) => `<tr data-r="${id}"><td>${label}</td>${v.map((x, k) => `<td><input type="number" min="0" ${k ? 'max="100"' : ""} data-c="${genCols[k]}" value="${x}" style="width:${k ? 34 : 44}px" aria-label="${label} ${genCols[k]}"></td>`).join("")}</tr>`).join(""));
   function genRegions() {
     const out = {};
     $("g-regions").querySelectorAll("tr[data-r]").forEach(tr => { const m = {}; tr.querySelectorAll("input").forEach(i => m[i.dataset.c] = +i.value || 0); out[tr.dataset.r] = m; });

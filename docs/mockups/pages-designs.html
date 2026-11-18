@@ -135,6 +135,36 @@
   .phone .pb main { padding: 14px 12px 30px; } .phone .pb .grid { grid-template-columns: 1fr; } .phone .pb .hero h2 { font-size: 24px; }
   .phone .pb .pics { grid-template-columns: repeat(2, 1fr); }
 
+  /* ================= D: DASHBOARD ================= */
+  .db { background: #0e1726; color: #e6edf6; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; min-height: 100%; padding: 20px 24px 30px; }
+  .db .top { display: flex; justify-content: space-between; align-items: end; margin-bottom: 16px; }
+  .db .top h2 { margin: 0; font-size: 26px; letter-spacing: -.3px; } .db .top small { color: #8da2bd; }
+  .db .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .db .tile { background: #16233a; border: 1px solid #22324f; border-radius: 12px; padding: 12px 14px; }
+  .db .tile.w2 { grid-column: span 2; } .db .tile.alert { background: #4a1418; border-color: #8a2a30; }
+  .db .k { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: #8da2bd; }
+  .db .big { font-size: 38px; font-weight: 700; line-height: 1.1; margin: 4px 0 2px; }
+  .db .g { color: #5fe0a0; } .db .y { color: #ffd166; } .db .r { color: #ff6b6b; } .db .b { color: #6cb6ff; }
+  .db table { width: 100%; border-collapse: collapse; font-size: 13px; } .db td { padding: 4px 0; border-bottom: 1px solid #22324f; }
+  .db .bar { height: 6px; border-radius: 3px; background: #22324f; margin-top: 6px; overflow: hidden; } .db .bar i { display: block; height: 100%; }
+  .db .note { padding: 6px 0; border-bottom: 1px solid #22324f; font-size: 13px; } .db .note b { color: #6cb6ff; margin-right: 6px; }
+  .db .pic { height: 120px; border-radius: 8px; background: linear-gradient(160deg, #2b4a73, #0e1726); display: grid; place-items: center; color: #8da2bd; font-size: 12px; }
+  .phone .db { padding: 14px 12px; } .phone .db .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .phone .db .big { font-size: 28px; }
+  /* ================= E: ZINE ================= */
+  .zn { background: #f2efe6; color: #111; font: 15px/1.45 Georgia, serif; min-height: 100%; padding: 22px 26px 34px; overflow: hidden; }
+  .zn .mast { font: italic 900 72px/0.9 Impact, "Arial Black", sans-serif; letter-spacing: -2px; margin: 10px 0 8px; }
+  .zn .mast span { background: #ff3b6b; color: #fff; padding: 0 10px; }
+  .zn .tag { display: table; margin: 4px 0; font: 700 12px "Courier New", monospace; background: #111; color: #f2efe6; padding: 2px 8px; }
+  .zn .cols { column-count: 3; column-gap: 22px; margin-top: 18px; }
+  .zn h3 { font: italic 900 30px/1 Impact, "Arial Black", sans-serif; margin: 0 0 6px; break-after: avoid; }
+  .zn .blk { background: #ffe14d; padding: 10px 12px; margin: 0 0 12px; break-inside: avoid; border: 3px solid #111; }
+  .zn .blk.c { background: #5ad1ff; }
+  .zn p { margin: 0 0 10px; }
+  .zn .ph { height: 140px; background: repeating-radial-gradient(circle at 30% 40%, #222 0 1px, #f2efe6 1px 4px); margin: 0 0 4px; }
+  .zn .cap { font: 12px "Courier New", monospace; margin-bottom: 12px; }
+  .zn .tear { background: #fff; padding: 8px 10px; margin: 0 0 10px; break-inside: avoid; font: 13px/1.35 "Courier New", monospace; border-bottom: 3px dashed #111; }
+  
+  .phone .zn { padding: 14px; } .phone .zn .mast { font-size: 44px; } .phone .zn .cols { column-count: 1; }
   /* ---------- MU additions table ---------- */
   table.mu { border-collapse: collapse; width: 100%; max-width: 1200px; font-size: 13.5px; }
   table.mu th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--line); padding: 8px; }
@@ -163,6 +193,8 @@
   <button data-t="a">A · Newspaper</button>
   <button data-t="b">B · BBS</button>
   <button data-t="c">C · Pattern book</button>
+  <button data-t="d">D · Dashboard</button>
+  <button data-t="e">E · Zine</button>
   <button data-t="mu">MU additions (decide)</button>
 </header>
 
@@ -210,6 +242,19 @@
     <div><div class="lbl">Android</div><div id="c-ph"></div></div>
     <div class="src"><div class="lbl">The page in MU (new markup in yellow)</div><pre id="c-src"></pre><div class="bytes" id="c-bytes"></div></div>
   </div>
+</section>
+
+<section class="tab" id="t-d">
+  <p class="intro"><b>D · Harbour Dashboard.</b> The page you open to see how things stand right now: tiles with big numbers, coloured states, a red warning tile, a small table, a bar, the newest notices and a harbour camera still. Four tiles a row on the PC, two on a phone. Made from <code>@bg</code>, <code>@font sans</code>, <code>::: cards 4</code>, <code>{big:}</code> and hex colours.</p>
+  <div class="row"><div class="pc"><div class="lbl" style="padding:8px 10px 0">PC host</div><div id="d-pc"></div></div></div>
+  <div class="row" style="margin-top:22px"><div><div class="lbl">Android</div><div id="d-ph"></div></div>
+  <div class="src"><div class="lbl">The page in MU (new markup in yellow)</div><pre id="d-src"></pre><div class="bytes" id="d-bytes"></div></div></div>
+</section>
+<section class="tab" id="t-e">
+  <p class="intro"><b>E · Harbour Zine.</b> A photocopied underground magazine: huge slanted headlines, a pink masthead, yellow and blue blocks with hard shadows, a halftone picture, typewriter captions, and the notice board as torn-off slips. Three columns on the PC, one on a phone. Made from <code>@bg</code>, <code>@font serif</code>, <code>::: 3</code>, colour boxes and <code>{big:}</code>.</p>
+  <div class="row"><div class="pc"><div class="lbl" style="padding:8px 10px 0">PC host</div><div id="e-pc"></div></div></div>
+  <div class="row" style="margin-top:22px"><div><div class="lbl">Android</div><div id="e-ph"></div></div>
+  <div class="src"><div class="lbl">The page in MU (new markup in yellow)</div><pre id="e-src"></pre><div class="bytes" id="e-bytes"></div></div></div>
 </section>
 
 <!-- ======================= MU ADDITIONS ======================= -->
@@ -456,6 +501,94 @@ Everything a page can do, with the text that makes it.
 
 ## Notice board
 ⟦@board⟧`);
+
+// ======================= D: dashboard =======================
+const D = `<div class="db">
+  <div class="top"><div><h2>Hals Havn · now</h2><small>Updated 18:26 · over LoRa and the backbone</small></div><small>3eb445ec</small></div>
+  <div class="grid">
+    <div class="tile alert w2"><div class="k">Warning</div><div class="big r">Gale 18 m/s</div>Northwest from 20:00. Boats stay in, double your lines.</div>
+    <div class="tile"><div class="k">Wind</div><div class="big y">14 <small style="font-size:16px">m/s W</small></div>rising</div>
+    <div class="tile"><div class="k">Water</div><div class="big b">+0.4 m</div>high 06:52 · low 13:07</div>
+    <div class="tile"><div class="k">Fuel pier</div><div class="big g">Open</div>card only, from 07:00</div>
+    <div class="tile"><div class="k">Network</div><div class="big g">6 nodes</div><div class="bar"><i style="width:80%;background:#5fe0a0"></i></div></div>
+    <div class="tile w2"><div class="k">Nodes nearby</div><table><tr><td>Hals Havn</td><td>0 hops</td><td class="g">strong</td></tr><tr><td>Øster Hurup</td><td>2 hops</td><td class="y">fair</td></tr><tr><td>Backbone</td><td>internet</td><td class="b">online</td></tr></table></div>
+    <div class="tile w2"><div class="k">Notice board · newest</div><div class="note"><b>Carl</b>Lost: blue fender IDA, pier 3</div><div class="note"><b>Café</b>For sale: 15 hp outboard</div><div class="note"><b>dennis</b>Who hears the new antenna?</div></div>
+    <div class="tile w2"><div class="k">Harbour camera</div><div class="pic">picture · tap for colour</div></div>
+  </div>
+</div>`;
+frames("d", "Hals Havn · now", "3eb445ec / now", D, "Over the internet · 0.9 KB · fetched 18:26");
+source("d", `@title Hals Havn · now
+⟦@bg #0e1726⟧
+⟦@fg #e6edf6⟧
+⟦@font sans⟧
+## Hals Havn · now
+{⟦#8da2bd⟧:Updated 18:26 · over LoRa and the backbone}
+
+⟦::: cards 4⟧
+>!red {small:WARNING}
+>⟦{big:⟧{⟦#ff6b6b⟧:Gale 18 m/s}⟦}⟧
+>Northwest from 20:00. Boats stay in.
+⟦+++⟧
+{small:WIND}
+⟦{big:⟧{⟦#ffd166⟧:14 m/s W}⟦}⟧
+rising
+⟦+++⟧
+{small:WATER}
+⟦{big:⟧{⟦#6cb6ff⟧:+0.4 m}⟦}⟧
+high 06:52 · low 13:07
+⟦+++⟧
+...
+⟦+++⟧
+{small:NOTICE BOARD · NEWEST}
+⟦@board 3⟧
+⟦+++⟧
+![Harbour camera](cam.jpg)
+⟦:::⟧`);
+
+// ======================= E: zine =======================
+const E = `<div class="zn">
+  <span class="tag">ISSUE #01 · FREE · PASS IT ON</span>
+  <div class="mast"><span>HARBOUR</span> ZINE</div>
+  <span class="tag" style="background:#ff3b6b">made on a LoRa radio in Hals</span>
+  <div class="cols">
+    <h3>GALE!</h3>
+    <div class="blk"><b>Tonight 20:00.</b> Northwest, 18 m/s. Boats stay in. Tie it down, then tie it down again.</div>
+    <p>The new repeater on the mast heard the warning before the radio did. Two hops to Øster Hurup and everybody knew. That is the whole point.</p>
+    <div class="ph"></div><div class="cap">fig. 1 — the cabin, in dots, 0.8 KB</div>
+    <h3>FUEL IS BACK</h3>
+    <p>Diesel and petrol at the pier from Thursday, card only. Two weeks of rowing are over.</p>
+    <div class="blk c"><b>How to make a page like this:</b> write a .mu file, put it in pages/, done. No HTML, no ads, no tracking.</div>
+    <h3>SLIPS</h3>
+    <div class="tear">LOST: blue fender, "IDA", pier 3. — Carl</div>
+    <div class="tear">FOR SALE: 15 hp outboard, runs. — the café</div>
+    <div class="tear">WHO HEARS ME? new antenna, tell me your signal. — dennis</div>
+    <div class="tear" style="background:#ffe14d">WRITE YOURS ↓ (200 characters)</div>
+  </div>
+</div>`;
+frames("e", "Harbour Zine #01", "3eb445ec / zine", E, "Over the internet · 1.1 KB · fetched 18:26");
+source("e", `@title Harbour Zine #01
+⟦@bg #f2efe6⟧
+⟦@fg #111⟧
+⟦@font serif⟧
+{!#111:{#f2efe6:ISSUE #01 · FREE · PASS IT ON}}
+# ⟦{big:⟧{!#ff3b6b:{#fff:HARBOUR}} ZINE⟦}⟧
+
+⟦::: 3⟧
+## GALE!
+>!yellow **Tonight 20:00.** Northwest, 18 m/s. Boats stay in.
+
+The new repeater on the mast heard the warning first.
+
+![the cabin, in dots, 0.8 KB](hytte.jpg "dots")
+
+## FUEL IS BACK
+Diesel and petrol at the pier from Thursday.
+
+>!⟦#5ad1ff⟧ **How to make a page like this:** write a .mu file.
+
+## SLIPS
+⟦@board⟧
+⟦:::⟧`);
 </script>
 </body>
 </html>

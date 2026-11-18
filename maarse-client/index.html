@@ -479,6 +479,8 @@
   main { flex: 1; display: grid; grid-template-columns: 320px minmax(0, 1fr); min-height: 0; }
   body[data-tab="map"] main { grid-template-columns: minmax(0, 1fr); }
   body[data-tab="map"] aside { display: none; }
+  body[data-tab="pages"] main { grid-template-columns: minmax(0, 1fr); }
+  body[data-tab="pages"] aside { display: none; }
   aside { padding: 0 0 24px; gap: 0; }
   .pane { display: flex; flex-direction: column; gap: 2px; padding: 0 10px; }
   .pane-head { display: flex; align-items: center; padding: 14px 6px 6px; }
@@ -655,6 +657,7 @@
 <nav class="rail" id="rail" aria-label="Main">
   <div class="brand"><h1>Må<span class="colon">:</span>rse</h1></div>
   <button data-tab="chats" class="on"><span class="pill"><svg class="i"><use href="#i-chat"/></svg></span>Chats<span class="badge" id="tab-unread" hidden></span></button>
+  <button data-tab="pages"><span class="pill"><svg class="i"><use href="#i-pages"/></svg></span>Pages</button>
   <button data-tab="nodes"><span class="pill"><svg class="i"><use href="#i-nodes"/></svg></span>Nodes</button>
   <button data-tab="network"><span class="pill"><svg class="i"><use href="#i-net"/></svg></span>Network</button>
   <button data-tab="settings"><span class="pill"><svg class="i"><use href="#i-gear"/></svg></span>Settings<span class="badge warnb" id="tab-warn" hidden>!</span></button>
@@ -734,6 +737,7 @@
           <button id="btn-net" data-view="network"><svg class="i"><use href="#i-net"/></svg><span>Overview<small>Is the radio on the air, is the internet link up</small></span></button>
           <button id="btn-diag" data-view="diag" disabled><svg class="i"><use href="#i-diag"/></svg><span>Neighbours and trace route<small>Who you hear, how far a route reaches</small></span></button>
           <button id="btn-announce" disabled title="Tell the network you are here"><svg class="i"><use href="#i-wave"/></svg><span>Announce me now<small>Tell the network you are here</small></span></button>
+          <button id="btn-sync" disabled title="Fetch your mail and copies from your other devices"><svg class="i"><use href="#i-wave"/></svg><span>Sync now<small>Mail and copies from your other devices</small></span></button>
         </nav>
         <h3 class="grp">Details <small>for troubleshooting</small></h3>
         <nav class="tools list" aria-label="Details">
@@ -1486,7 +1490,7 @@ function onEvent(ev) {
       renderChat();
       break;
     }
-    case "person": acct.p = ev; if (state.view === "account") renderChat(); break;
+    case "person": acct.p = ev; $("btn-sync").disabled = !(transport && ev.state === 2); if (state.view === "account") renderChat(); break;
     case "personPhrase": acct.phrase = ev.phrase; if (state.view === "account") renderChat(); break;
     case "personBackup": acct.backup = ev.code; if (state.view === "account") renderChat(); break;
     case "deviceLinked":
@@ -5590,6 +5594,7 @@ $("text").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
 $("text").addEventListener("input", updateComposer);
 $("btn-copy").onclick = () => { navigator.clipboard?.writeText(state.me || ""); log("Address copied"); };
 $("btn-announce").onclick = () => transport?.send(Cmd.announce());
+$("btn-sync").onclick = () => transport?.send(Cmd.personSetup(state.nextReq++ & 0xffff, 9));
 $("btn-join").onclick = () => {
   const n = $("join-name").value.trim();
   if (n && transport) { transport.send(Cmd.join(n)); $("join-name").value = ""; }
@@ -5848,7 +5853,7 @@ function pwaTitle() {
 // so the navigation always shows where you are. See docs/mockups/README.md.
 
 Object.assign(state, { tab: "chats", activity: [], airHist: [], nodeSel: null, chatFilter: "all", nodeFilter: "all", stripTimer: null });
-var VIEW_TAB = { chat: "chats", mc: "chats", remote: "chats", alerts: "chats", node: "nodes", map: "nodes", pages: "nodes", announces: "nodes",
+var VIEW_TAB = { chat: "chats", mc: "chats", remote: "chats", alerts: "chats", node: "nodes", map: "nodes", pages: "pages", announces: "nodes",
   network: "network", activity: "network", status: "network", range: "settings", radio: "settings", firmware: "settings",
   settings: "settings", connections: "settings", computer: "settings", service: "settings", backup: "settings", myqr: "settings", account: "settings" };
 
@@ -5882,6 +5887,8 @@ function setTab(t) {
   if (t === "chats") { setView(state.view === "mc" ? "mc" : "chat"); mobileSide(true); }
   else if (t === "nodes") { renderNodes(); setView("node"); mobileSide(!state.nodeSel); }
   else if (t === "network") setView("network");
+  // A tap on Pages while in Pages: the browser's start page.
+  else if (t === "pages") { if (state.view === "pages" && pages.url) pageHome(); else setView("pages"); mobileSide(false); }
   else if (t === "settings") {
     const v = transport && !backupOk() ? "backup" : transport ? "radio" : "backup";
     setView(window.matchMedia("(max-width: 760px)").matches ? state.view : v);

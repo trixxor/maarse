@@ -98,9 +98,8 @@ fun PagesPage(onExit: () -> Unit = {}) {
     // Read here, so every change in Pages redraws this screen.
     @Suppress("UNUSED_VARIABLE") val v = Pages.version.collectAsState().value
     val cur = Pages.url
-    androidx.activity.compose.BackHandler(Pages.history.isNotEmpty() || cur != null) {
-        if (Pages.history.isNotEmpty()) Pages.back() else Pages.home()
-    }
+    // Back walks the pages you visited; with none left, the app's rule takes over (to Chats).
+    androidx.activity.compose.BackHandler(Pages.history.isNotEmpty()) { Pages.back() }
     Column(Modifier.fillMaxSize()) {
         BrowserBar(cur, onExit, v)
         if (Pages.loading) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().height(3.dp))
@@ -140,6 +139,8 @@ private fun BrowserBar(cur: Pages.Url?, onExit: () -> Unit, @Suppress("UNUSED_PA
     // Read here too: a child given an unchanged-looking version may be skipped.
     Pages.version.collectAsState().value
     var editing by remember(cur) { mutableStateOf(cur == null) }
+    // The keyboard comes only when the reader taps the address, never by itself (it would cover the bar).
+    var tapped by remember(cur) { mutableStateOf(false) }
     val full = cur?.toString() ?: ""
     var input by remember(cur) { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(full, androidx.compose.ui.text.TextRange(0, full.length))) }
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -162,7 +163,7 @@ private fun BrowserBar(cur: Pages.Url?, onExit: () -> Unit, @Suppress("UNUSED_PA
         }
         // The address pill: the page's title and node when shown; tap to type.
         Row(Modifier.weight(1f).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surface)
-            .clickable { editing = true }.padding(horizontal = 12.dp, vertical = if (editing) 0.dp else 8.dp),
+            .clickable { editing = true; tapped = true }.padding(horizontal = 12.dp, vertical = if (editing) 0.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (cur != null && !editing) RouteBadge(Pages.overLora(cur.addr))
             // A locked page: how many may read it.
@@ -181,7 +182,7 @@ private fun BrowserBar(cur: Pages.Url?, onExit: () -> Unit, @Suppress("UNUSED_PA
                 if (input.text.isNotEmpty()) Text("✕", Modifier.clip(RoundedCornerShape(12.dp)).clickable { input = androidx.compose.ui.text.input.TextFieldValue("") }.padding(6.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 // Focus the field (keyboard up, whole address selected) when typing starts.
-                androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+                androidx.compose.runtime.LaunchedEffect(tapped) { if (tapped) runCatching { focus.requestFocus() } }
             } else Column(Modifier.weight(1f)) {
                 Text(title ?: full, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)

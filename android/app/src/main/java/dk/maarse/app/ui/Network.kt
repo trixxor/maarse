@@ -57,6 +57,13 @@ fun NetworkScreen(onPage: (NetPage) -> Unit) {
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
         if (conn.mode == Mode.SERVER) { ServerPanel(); return@Column }
+        // The two things people do often, within reach at the top.
+        val person by Node.person.collectAsState()
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            androidx.compose.material3.FilledTonalButton(onClick = { Node.send(Cmd.announce()) }, Modifier.weight(1f)) { Text("Announce now") }
+            androidx.compose.material3.FilledTonalButton(onClick = { Node.personSetup(dk.maarse.app.PersonOp.SYNC) }, Modifier.weight(1f),
+                enabled = person?.state == dk.maarse.app.PersonState.MEMBER) { Text("Sync now") }
+        }
         val online = conn.state == Conn.State.ONLINE
         // Radios heard: only with a radio (over Bluetooth, or as the phone's modem).
         val hasRadio = conn.mode == Mode.BLE || (conn.mode == Mode.PHONE && dk.maarse.app.ModemBridge.enabled(androidx.compose.ui.platform.LocalContext.current))

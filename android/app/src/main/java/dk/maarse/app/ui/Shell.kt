@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Router
 import androidx.compose.material.icons.outlined.Smartphone
@@ -72,7 +73,7 @@ import dk.maarse.app.Node
 import dk.maarse.app.PersonState
 import dk.maarse.app.R
 
-enum class Tab(val title: String) { CHATS("Chats"), CONTACTS("Nodes"), NETWORK("Network"), SETTINGS("Settings") }
+enum class Tab(val title: String) { CHATS("Chats"), PAGES("Pages"), CONTACTS("Nodes"), NETWORK("Network"), SETTINGS("Settings") }
 
 /** Pages behind "You". */
 enum class MePage(val title: String) {
@@ -91,47 +92,95 @@ sealed interface Screen {
     data object WelcomeAccount : Screen
 }
 
-/** Navigation: a small back stack of screens over the three tabs. */
+/** Navigation: five places in a bar that never hides; each place has its own
+ *  small stack of screens (a chat, a contact, a sub-page) and remembers it.
+ *  Back: one step back in the place you are in; with nothing left to go back
+ *  to it goes to Chats, and from Chats it leaves the app. A tap on the place
+ *  you are already in takes you to its top. */
 class Nav(start: Screen) {
-    val stack = mutableStateListOf(start)
+    private val stacks = Tab.entries.associateWith { mutableStateListOf<Screen>() }
     var tab by mutableStateOf(Tab.CHATS)
     var sheet by mutableStateOf(false)
-    val top get() = stack.last()
-    fun go(s: Screen) { stack.add(s) }
-    fun back() { if (stack.size > 1) stack.removeAt(stack.lastIndex) }
-    fun home(t: Tab? = null) { stack.clear(); stack.add(Screen.Home); t?.let { tab = it } }
+    /** The first-start screens (no bar), until they are done. */
+    var welcome by mutableStateOf(start.takeIf { it == Screen.Welcome || it == Screen.WelcomeAccount })
+    val top: Screen get() = welcome ?: stacks.getValue(tab).lastOrNull() ?: Screen.Home
+    val canGoBack get() = stacks.getValue(tab).isNotEmpty() || tab != Tab.CHATS
+    fun go(s: Screen) {
+        when {
+            s == Screen.Welcome || s == Screen.WelcomeAccount -> welcome = s
+            s == Screen.Net(NetPage.PAGES) -> select(Tab.PAGES, reset = false)
+            else -> stacks.getValue(tab).add(s)
+        }
+    }
+    fun back() {
+        val st = stacks.getValue(tab)
+        if (st.isNotEmpty()) st.removeAt(st.lastIndex) else if (tab != Tab.CHATS) tab = Tab.CHATS
+    }
+    /** To a place's top (and leave the first-start screens). */
+    fun home(t: Tab? = null) { welcome = null; t?.let { tab = it }; stacks.getValue(tab).clear() }
+    fun select(t: Tab, reset: Boolean = true) {
+        if (t == tab && reset) { stacks.getValue(t).clear(); if (t == Tab.PAGES) dk.maarse.app.Pages.home() }
+        tab = t
+    }
 }
 
 @Composable
 fun AppShell(nav: Nav) {
-    BackHandler(nav.stack.size > 1) { nav.back() }
-    PagesNav.open = { nav.go(Screen.Net(NetPage.PAGES)) }
+    BackHandler(nav.welcome == null && nav.canGoBack) { nav.back() }
+    PagesNav.open = { nav.select(Tab.PAGES, reset = false) }
     PagesNav.contact = { nav.go(Screen.Contact(it)) }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        when (val s = nav.top) {
-            Screen.Home -> Home(nav)
-            is Screen.Chat -> Box(Modifier.statusBarsPadding().navigationBarsPadding()) {
-                ChatScreen(s.conv, onBack = nav::back, onContact = { nav.go(Screen.Contact(it)) })
+        val s = nav.top
+        if (s == Screen.Welcome) Welcome(nav)
+        else if (s == Screen.WelcomeAccount) WelcomeAccount(nav)
+        else Column(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f)) {
+                when (s) {
+                    Screen.Home -> Home(nav)
+                    is Screen.Chat -> Box(Modifier.statusBarsPadding()) {
+                        ChatScreen(s.conv, onBack = nav::back, onContact = { nav.go(Screen.Contact(it)) })
+                    }
+                    is Screen.Contact -> Box(Modifier.statusBarsPadding()) {
+                        ContactScreen(s.addr, onBack = nav::back, onChat = { c -> nav.home(Tab.CHATS); nav.go(Screen.Chat(c)) })
+                    }
+                    Screen.Me -> SubPage("You", nav::back) { MeScreen(nav) }
+                    is Screen.Page -> SubPage(s.page.title, nav::back) { MePageContent(s.page) }
+                    is Screen.Net -> SubPage(s.page.title, nav::back) { NetPageContent(s.page) }
+                    else -> {}
+                }
             }
-            is Screen.Contact -> Box(Modifier.statusBarsPadding().navigationBarsPadding()) {
-                ContactScreen(s.addr, onBack = nav::back, onChat = { c -> nav.home(Tab.CHATS); nav.go(Screen.Chat(c)) })
-            }
-            Screen.Me -> SubPage("You", nav::back) { MeScreen(nav) }
-            is Screen.Page -> SubPage(s.page.title, nav::back) { MePageContent(s.page) }
-            // Pages is a browser with its own toolbar; the rest have the usual header.
-            is Screen.Net -> if (s.page == NetPage.PAGES) Box(Modifier.statusBarsPadding().navigationBarsPadding()) { PagesPage(onExit = nav::back) }
-                else SubPage(s.page.title, nav::back) { NetPageContent(s.page) }
-            Screen.Welcome -> Welcome(nav)
-            Screen.WelcomeAccount -> WelcomeAccount(nav)
+            BottomBar(nav)
         }
     }
     CallOverlay()
     if (nav.sheet) ConnectionSheet(onDismiss = { nav.sheet = false }, onMore = { nav.sheet = false; nav.go(Screen.Page(MePage.CONNECTION)) })
 }
 
+/** The five places, on every screen. */
+@Composable
+private fun BottomBar(nav: Nav) {
+    val unread by Node.unread.collectAsState()
+    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+        Tab.entries.forEach { t ->
+            val icon: ImageVector = when (t) {
+                Tab.CHATS -> Icons.AutoMirrored.Outlined.Chat; Tab.PAGES -> Icons.Outlined.Public; Tab.CONTACTS -> Icons.Outlined.People
+                Tab.NETWORK -> Icons.Outlined.Hub; Tab.SETTINGS -> Icons.Outlined.Settings
+            }
+            NavigationBarItem(
+                selected = nav.tab == t, onClick = { nav.select(t) }, label = { Text(t.title) },
+                colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer),
+                icon = {
+                    val n = if (t == Tab.CHATS) unread.values.sum() else 0
+                    if (n > 0) BadgedBox(badge = { Badge { Text("$n") } }) { Icon(icon, null) } else Icon(icon, null)
+                },
+            )
+        }
+    }
+}
+
 @Composable
 private fun SubPage(title: String, onBack: () -> Unit, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -150,10 +199,10 @@ private fun MeAvatar(size: androidx.compose.ui.unit.Dp, onClick: () -> Unit) {
 
 @Composable
 private fun Home(nav: Nav) {
-    val unread by Node.unread.collectAsState()
+    if (nav.tab == Tab.PAGES) { Box(Modifier.fillMaxSize().statusBarsPadding()) { PagesPage(onExit = { nav.select(Tab.CHATS) }) }; return }
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            MeAvatar(40.dp) { nav.tab = Tab.SETTINGS }
+            MeAvatar(40.dp) { nav.select(Tab.SETTINGS, reset = false) }
             Text(nav.tab.title, Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
         ConnectionBanner { nav.sheet = true }
@@ -161,22 +210,10 @@ private fun Home(nav: Nav) {
         Box(Modifier.weight(1f)) {
             when (nav.tab) {
                 Tab.CHATS -> ChatsScreen(onOpen = { nav.go(Screen.Chat(it)) }, onAlerts = { nav.go(Screen.Net(NetPage.ALERTS)) })
-                Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onPages = { nav.go(Screen.Net(NetPage.PAGES)) }, onAnnounces = { nav.go(Screen.Net(NetPage.ANNOUNCES)) })
+                Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onPages = { nav.select(Tab.PAGES, reset = false) }, onAnnounces = { nav.go(Screen.Net(NetPage.ANNOUNCES)) })
                 Tab.NETWORK -> NetworkScreen(onPage = { nav.go(Screen.Net(it)) })
                 Tab.SETTINGS -> MeScreen(nav)
-            }
-        }
-        NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-            Tab.entries.forEach { t ->
-                val icon: ImageVector = when (t) { Tab.CHATS -> Icons.AutoMirrored.Outlined.Chat; Tab.CONTACTS -> Icons.Outlined.People; Tab.NETWORK -> Icons.Outlined.Hub; Tab.SETTINGS -> Icons.Outlined.Settings }
-                NavigationBarItem(
-                    selected = nav.tab == t, onClick = { nav.tab = t }, label = { Text(t.title) },
-                    colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer),
-                    icon = {
-                        val n = if (t == Tab.CHATS) unread.values.sum() else 0
-                        if (n > 0) BadgedBox(badge = { Badge { Text("$n") } }) { Icon(icon, null) } else Icon(icon, null)
-                    },
-                )
+                Tab.PAGES -> {}
             }
         }
     }
@@ -369,7 +406,7 @@ private fun Welcome(nav: Nav) {
             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ModeChooser(onConnected = {
             Node.prefs.onboarded = true
-            nav.stack.clear(); nav.stack.add(Screen.Home)
+            nav.home()
             if (Node.prefs.mode == Mode.PHONE || Node.prefs.mode == Mode.REMOTE) nav.go(Screen.WelcomeAccount)
         })
         TextButton(onClick = { Node.prefs.onboarded = true; nav.home() }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Skip for now") }

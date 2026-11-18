@@ -10,8 +10,8 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const DK = window.DkScenarios;
 
-  const KIND_COLOR = { handheld: "#60a5fa", relay: "#a78bfa", repeater: "#fb923c", anchor: "#f87171", host: "#2dd4bf", wifi: "#facc15", mobile: "#f472b6" };
-  const KIND_R = { handheld: 3, relay: 3.5, repeater: 5, anchor: 7, host: 6, wifi: 5, mobile: 5 };
+  const KIND_COLOR = { handheld: "#60a5fa", relay: "#a78bfa", repeater: "#fb923c", anchor: "#f87171", host: "#2dd4bf", wifi: "#facc15", mobile: "#f472b6", server: "#94a3b8", app: "#e8930c" };
+  const KIND_R = { handheld: 3, relay: 3.5, repeater: 5, anchor: 7, host: 6, wifi: 5, mobile: 5, server: 6, app: 3 };
   const PTYPES = ["PathRequest", "PathResponse", "Data", "Ack", "Datagram", "Channel", "Bulletin", "Announce", "Carry", "Fragment", "Backbone"];
   const PCOLOR = { Announce: "#a3a3a3", PathRequest: "#f59e0b", PathResponse: "#10b981", Data: "#3b82f6", Ack: "#22c55e", Channel: "#8b5cf6", Bulletin: "#ef4444", Carry: "#ec4899", Fragment: "#0ea5e9", Datagram: "#eab308", Lookup: "#eab308", Backbone: "#14b8a6", Drop: "#dc2626", Event: "#64748b", DHT: "#14b8a6" };
   const PEXPLAIN = {
@@ -531,8 +531,9 @@
   function setTool(t) {
     tool = t; dtool = null; pick = null; routeDraft = null; linkDraft = -1;
     document.querySelectorAll("#tools button").forEach(x => x.classList.toggle("on", x.dataset.tool === t));
+    $("person-opts").classList.toggle("hidden", t !== "person");
     document.querySelectorAll("[data-dtool]").forEach(x => x.classList.remove("on"));
-    const hints = { select: "Click a node to inspect it; drag to move.", delete: "Click a node to delete it (its links go too).", mobile: "Click route points; double-click to finish. The car starts at the first point.", "link-tcp": "Click two hosts to link them over TCP (needs internet on both).", "link-wifi": "Click two nodes for a Wi-Fi point-to-point link (no internet needed)." };
+    const hints = { select: "Click a node to inspect it; drag to move.", delete: "Click a node to delete it (its links go too).", mobile: "Click route points; double-click to finish. The car starts at the first point.", person: "Click A, then waypoints, double-click at B. Set what they carry, speed and timing first.", server: "Click to place a server: a host on the internet without radio (backbone, DHT, post office).", app: "Click to place a phone with the app only: it needs a TCP link to a host (Link: TCP).", "link-tcp": "Click two hosts to link them over TCP (needs internet on both).", "link-wifi": "Click two nodes for a Wi-Fi point-to-point link (no internet needed)." };
     $("tool-hint").textContent = hints[t] || "Click on the map to place it. Edit its settings in the inspector.";
   }
   document.querySelectorAll("[data-dtool]").forEach(b => b.onclick = () => {
@@ -546,7 +547,7 @@
     const ll = [+e.latlng.lat.toFixed(5), +e.latlng.lng.toFixed(5)];
     if (pendingArea) return areaClick(ll);
     if (walkerPlace) return placeWalkers(ll);
-    if (tool === "mobile") {
+    if (tool === "mobile" || tool === "person") {
       routeDraft = routeDraft || [];
       routeDraft.push(ll);
       drawLayer.clearLayers();
@@ -562,6 +563,17 @@
   });
   map.on("dblclick", (e) => {
     if (pendingArea && pendingArea.kind === "polygon") { L.DomEvent.stop(e); return finishArea(); }
+    if (tool === "person" && routeDraft && routeDraft.length >= 2) {
+      L.DomEvent.stop(e);
+      const pause = (+$("ps-pause").value || 0) * 60;
+      const kind = $("ps-kind").value;
+      const town = DK.nearestTown(window.DK_TOWNS, routeDraft[0][0], routeDraft[0][1]);
+      scenario.nodes.push({ kind, lat: routeDraft[0][0], lon: routeDraft[0][1], region: town[4], route: routeDraft, speed_kmh: +$("ps-speed").value,
+        start_s: (+$("ps-start").value || 0) * 60, pauses_s: routeDraft.map((_, k) => (k > 0 && k < routeDraft.length - 1 ? pause : 0)), route_end: $("ps-end").value, mobile: true, label: "Person " + (scenario.nodes.filter(n => (n.label || "").startsWith("Person")).length + 1) });
+      routeDraft = null; drawLayer.clearLayers();
+      selected = scenario.nodes.length - 1; edited(); renderInspector();
+      return;
+    }
     if (tool === "mobile" && routeDraft && routeDraft.length >= 2) {
       L.DomEvent.stop(e);
       scenario.nodes.push({ kind: "mobile", lat: routeDraft[0][0], lon: routeDraft[0][1], route: routeDraft, speed_kmh: 90, label: "Car" });
@@ -1233,6 +1245,10 @@
       <label>Battery Wh <input id="in-batt" type="number" style="width:70px" value="${n.battery_wh ?? ""}" placeholder="auto"> Carry copies <input id="in-carry" type="number" style="width:50px" min="0" max="8" value="${n.carry || 0}"></label>
       <label>Wander radius m <input id="in-wander" type="number" style="width:70px" value="${n.wander_m || ""}" placeholder="0"> speed km/h <input id="in-speed" type="number" style="width:55px" value="${n.speed_kmh || ""}"></label>
       <label><input type="checkbox" id="in-net" ${n.internet ? "checked" : ""}> Internet</label>
+      <label><input type="checkbox" id="in-radio" ${n.radio ?? !["server", "app"].includes(n.kind) ? "checked" : ""}> LoRa radio</label>
+      <label>Moves <select id="in-mobile"><option value="">auto (route = mobile)</option><option value="1" ${n.mobile === true ? "selected" : ""}>mobile</option><option value="0" ${n.mobile === false ? "selected" : ""}>stationary</option></select></label>
+      ${n.route && n.route.length >= 2 ? `<label>Route ${n.route.length} points · starts at <input id="in-start" type="number" min="0" style="width:60px" value="${((n.start_s || 0) / 60).toFixed(1)}"> min · end <select id="in-end">${["back", "stay", "repeat"].map(x => `<option ${x === (n.route_end || "back") ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+      <label>Pause per waypoint (min, comma) <input id="in-pauses" size="16" value="${(n.pauses_s || []).map(x => +(x / 60).toFixed(1)).join(",")}"></label>` : ""}
       <label>Region <input id="in-region" value="${esc(n.region || "")}" size="12"></label>
       <button id="in-apply">Apply (restarts)</button>`;
     if (ins) {
@@ -1254,6 +1270,9 @@
       n.battery_wh = $("in-batt").value === "" ? -1 : +$("in-batt").value;
       n.carry = +$("in-carry").value || 0; n.internet = $("in-net").checked; n.region = $("in-region").value;
       n.wander_m = +$("in-wander").value || 0; n.speed_kmh = +$("in-speed").value || 0;
+      n.radio = $("in-radio").checked;
+      n.mobile = $("in-mobile").value === "" ? undefined : $("in-mobile").value === "1";
+      if ($("in-start")) { n.start_s = (+$("in-start").value || 0) * 60; n.route_end = $("in-end").value; n.pauses_s = $("in-pauses").value.split(",").filter(x => x.trim() !== "").map(x => (+x || 0) * 60); }
       edited(); renderInspector();
     };
     $("in-from").onclick = () => { $("jr-from").value = "#" + selected; openTab("journey"); };

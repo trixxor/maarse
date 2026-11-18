@@ -423,6 +423,18 @@ pub struct NodeSpec {
     /// point; the node walks to random points inside it at `speed_kmh`.
     pub wander_m: f64,
     pub label: String,
+    /// Route timing: the node stands still until `start_s`, waits
+    /// `pauses_s[k]` seconds at waypoint k, and at the end of the route
+    /// "back" (walk back, the default), "stay" or "repeat" (start over).
+    pub start_s: f64,
+    pub pauses_s: Vec<f64>,
+    pub route_end: String,
+    /// Mobile (moves) or stationary, as the node says in its announce.
+    /// None: mobile when it has a route or is a car.
+    pub mobile: Option<bool>,
+    /// Has a LoRa radio. None: yes, except kinds "server" (a VPS host)
+    /// and "app" (a phone with the app only, reached over the internet).
+    pub radio: Option<bool>,
 }
 
 impl Default for NodeSpec {
@@ -442,6 +454,11 @@ impl Default for NodeSpec {
             speed_kmh: 0.0,
             wander_m: 0.0,
             label: String::new(),
+            start_s: 0.0,
+            pauses_s: Vec::new(),
+            route_end: String::new(),
+            mobile: None,
+            radio: None,
         }
     }
 }

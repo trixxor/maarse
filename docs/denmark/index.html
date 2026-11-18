@@ -55,9 +55,17 @@
         <button data-tool="anchor">+ Anchor (mast)</button>
         <button data-tool="host">+ Host (gateway)</button>
         <button data-tool="wifi">+ ESP32 Wi-Fi</button>
+        <button data-tool="server">+ Server (VPS, no radio)</button>
+        <button data-tool="app">+ Phone, app only</button>
         <button data-tool="mobile">+ Car (draw route)</button>
+        <button data-tool="person">+ Person (draw route)</button>
         <button data-tool="link-tcp">Link: TCP</button>
         <button data-tool="link-wifi">Link: Wi-Fi P2P</button>
+      </div>
+      <div id="person-opts" class="hidden">
+        <label>Carries <select id="ps-kind"><option value="handheld">Handheld radio + phone</option><option value="app">Phone, app only</option><option value="relay">Relay box</option></select></label>
+        <label>Speed <select id="ps-speed"><option value="5">Walk 5 km/h</option><option value="15">Bike 15 km/h</option><option value="50">Car 50 km/h</option></select> starts at <input id="ps-start" type="number" min="0" value="0" style="width:60px"> min</label>
+        <label>At the end <select id="ps-end"><option value="stay">stay</option><option value="back">walk back</option><option value="repeat">start over</option></select> pause at each waypoint <input id="ps-pause" type="number" min="0" value="0" style="width:55px"> min</label>
       </div>
       <p class="hint" id="tool-hint">Click a node to inspect it; drag to move.</p>
 

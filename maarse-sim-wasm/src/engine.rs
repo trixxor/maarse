@@ -99,6 +99,8 @@ impl Kind {
             "host" => Kind::Host,
             "wifi" => Kind::Wifi,
             "mobile" => Kind::Mobile,
+            // A server is a host without radio; an app user a handheld without one.
+            "server" => Kind::Host,
             _ => Kind::Handheld,
         }
     }
@@ -219,6 +221,13 @@ pub struct SimNode {
     route_pos: f64,
     route_dir: f64,
     speed: f64,
+    /// Route timing (see `NodeSpec::start_s`, `pauses_s`, `route_end`).
+    route_start_ms: u64,
+    route_pauses: Vec<f64>,
+    route_end: u8,
+    pause_until: u64,
+    /// Has a LoRa radio (servers and app-only phones do not).
+    pub radio: bool,
     links: Vec<usize>,
     pub label: String,
     /// Wandering: radius (m) around `home`, and the current target point.
@@ -736,7 +745,7 @@ impl Engine {
             let _ = router.subscribe(bulletin_channel);
             // Cars, and handhelds given a route (travellers): the simulator
             // does not model how a node notices that it moves.
-            router.mobile = f.mobile_mode && (kind == Kind::Mobile || spec.route.len() >= 2);
+            router.mobile = f.mobile_mode && spec.mobile.unwrap_or(kind == Kind::Mobile || spec.route.len() >= 2);
             router.carry_smart = sc.carry_smart;
             router.hello = sc.neighbor_info == "hello";
             router.ring = sc.path_ring;
@@ -786,7 +795,7 @@ impl Engine {
                 mains: spec.mains.unwrap_or(kind.default_mains()),
                 battery_wh: battery,
                 battery_max: battery,
-                internet: spec.internet.unwrap_or(kind == Kind::Host),
+                internet: spec.internet.unwrap_or(kind == Kind::Host || spec.kind == "app"),
                 region: spec.region.clone(),
                 nbrs: Vec::new(),
                 txq: Vec::new(),
@@ -798,6 +807,11 @@ impl Engine {
                 speed: if spec.speed_kmh > 0.0 { spec.speed_kmh / 3.6 } else { 30.0 },
                 route_pos: 0.0,
                 route_dir: 1.0,
+                route_start_ms: (spec.start_s.max(0.0) * 1000.0) as u64,
+                route_pauses: spec.pauses_s.clone(),
+                route_end: match spec.route_end.as_str() { "stay" => 1, "repeat" => 2, _ => 0 },
+                pause_until: 0,
+                radio: spec.radio.unwrap_or(!matches!(spec.kind.as_str(), "server" | "app")),
                 route,
                 links: Vec::new(),
                 label: spec.label.clone(),
@@ -1015,7 +1029,7 @@ impl Engine {
 
     fn pair_rx(&self, a: usize, b: usize) -> Option<f32> {
         let (na, nb) = (&self.nodes[a], &self.nodes[b]);
-        if na.sf != nb.sf {
+        if !na.radio || !nb.radio || na.sf != nb.sf {
             return None;
         }
         let d = (na.x - nb.x).hypot(na.y - nb.y);
@@ -1498,6 +1512,9 @@ impl Engine {
                         }
                     }
                     if self.bb_ctx && self.sc.features.bordercast && self.nodes[node].kind == Kind::Host && self.keep_off_radio(node, &packet) {
+                        continue;
+                    }
+                    if !self.nodes[node].radio {
                         continue;
                     }
                     let slot = self.nodes[node].router.slot_ms.max(1) as u64;
@@ -4133,10 +4150,34 @@ impl Engine {
             if total <= 0.0 {
                 continue;
             }
+            if self.now < n.route_start_ms || self.now < n.pause_until {
+                continue;
+            }
+            let old = n.route_pos;
             n.route_pos += n.route_dir * n.speed * 2.0;
+            // A pause at a waypoint passed in this step: stop there.
+            let mut cum = 0.0;
+            for (k, l) in segs.iter().enumerate() {
+                cum += l;
+                let wp = k + 1;
+                let pause = n.route_pauses.get(wp).copied().unwrap_or(0.0);
+                if pause > 0.0 && wp < n.route.len() - 1 && ((old < cum && n.route_pos >= cum) || (old > cum && n.route_pos <= cum)) {
+                    n.route_pos = cum;
+                    n.pause_until = self.now + (pause * 1000.0) as u64;
+                    break;
+                }
+            }
             if n.route_pos >= total {
                 n.route_pos = total;
-                n.route_dir = -1.0;
+                match n.route_end {
+                    1 => n.route_dir = 0.0,
+                    2 => n.route_pos = 0.0,
+                    _ => n.route_dir = -1.0,
+                }
+                let end_pause = n.route_pauses.last().copied().unwrap_or(0.0);
+                if end_pause > 0.0 && n.route_pauses.len() == n.route.len() {
+                    n.pause_until = self.now + (end_pause * 1000.0) as u64;
+                }
             } else if n.route_pos <= 0.0 {
                 n.route_pos = 0.0;
                 n.route_dir = 1.0;

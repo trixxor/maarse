@@ -241,4 +241,43 @@ mod tests {
         b.run_until(200_000, usize::MAX);
         assert_eq!(a.summary()["tx"], b.summary()["tx"]);
     }
+
+    /// An app-only phone (no radio) reaches a radio handheld through its home
+    /// host over TCP; it is never heard on the radio.
+    #[test]
+    fn app_user_without_radio_goes_over_its_host() {
+        let mut v: Value = serde_json::from_str(&scenario()).unwrap();
+        v["events"] = json!([]);
+        v["traffic"] = json!({"direct_per_min": 0, "channel_per_min": 0});
+        v["nodes"].as_array_mut().unwrap().push(json!({"kind": "app", "lat": 55.6, "lon": 12.0, "region": "hovedstaden"})); // 22, next to host 19
+        v["links"].as_array_mut().unwrap().push(json!({"a": 22, "b": 19, "kind": "tcp"}));
+        let mut e = create(&v.to_string()).unwrap();
+        assert!(!e.nodes[22].radio && e.nodes[19].radio);
+        e.run_until(30_000, usize::MAX);
+        let m = e.send_message(22, 8);
+        e.run_until(300_000, usize::MAX);
+        assert!(e.msgs[m].delivered_ms.is_some(), "{}", e.follow(m));
+        let f = e.follow(m);
+        assert!(!f["events"].as_array().unwrap().iter().any(|x| x["ev"] == "tx" && x["n"] == 22), "the app sent on the radio");
+    }
+
+    /// A route with a pause at waypoint 1 and "stay" at the end.
+    #[test]
+    fn route_waits_at_waypoints_and_stays() {
+        let sc = json!({"seed": 1, "duration_s": 3600, "nodes": [
+            {"kind": "handheld", "lat": 56.0, "lon": 9.0, "speed_kmh": 36.0, "start_s": 10,
+             "route": [[56.0, 9.0], [56.0, 9.01], [56.0, 9.02]], "pauses_s": [0, 60, 0], "route_end": "stay"}
+        ], "traffic": {"direct_per_min": 0, "channel_per_min": 0}});
+        let mut e = create(&sc.to_string()).unwrap();
+        let x0 = e.nodes[0].x;
+        e.run_until(9_000, usize::MAX);
+        assert_eq!(e.nodes[0].x, x0, "moved before start_s");
+        e.run_until(120_000, usize::MAX); // 620 m at 10 m/s = 62 s, then waits 60 s
+        let mid = e.nodes[0].x;
+        assert!((mid - x0 - 622.0).abs() < 25.0, "not at waypoint 1: {}", mid - x0);
+        e.run_until(1_000_000, usize::MAX);
+        let end = e.nodes[0].x;
+        e.run_until(1_200_000, usize::MAX);
+        assert_eq!(e.nodes[0].x, end, "did not stay at the end");
+    }
 }

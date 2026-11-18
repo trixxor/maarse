@@ -224,24 +224,83 @@
   const perf = Object.assign({ maxEvents: 400000, maxSpeed: 1000, maxNodes: 2000 }, (() => { try { return JSON.parse(localStorage.getItem("dk-perf") || "{}"); } catch (e) { return {}; } })());
   function savePerf() { try { localStorage.setItem("dk-perf", JSON.stringify(perf)); } catch (e) { /* private window */ } }
   function syncPerf() { $("pf-events").value = perf.maxEvents; $("pf-speed").value = perf.maxSpeed; $("pf-nodes").value = perf.maxNodes; }
-  function benchmark() {
-    // Runs a copy of the current scenario as fast as possible (up to 15
-    // simulated minutes or 2 s of real time) and works out what this browser
-    // can keep up with.
-    const b = new Engine.Sim(JSON.parse(JSON.stringify(scenario)));
+  // Live benchmark: networks of growing size are generated and shown on the
+  // map; each runs flat out for a few seconds and we measure how many
+  // simulated seconds this browser gets through per real second. It stops
+  // when a size can no longer keep up with real time.
+  let bench = null;
+  const BENCH_USERS = [200, 500, 1000, 1500, 2000, 3000, 4500, 6000, 8000, 11000, 15000, 20000];
+  function openBench() {
+    if (bench) return;
+    playing && togglePlay();
+    const keep = { scenario, t: lastT };
+    bench = { stop: false, rows: [], keep };
+    $("bench").classList.remove("hidden");
+    renderBench("Starting…");
+    setTimeout(() => benchStep(0), 50);
+  }
+  function benchStep(k) {
+    if (bench.stop || k >= BENCH_USERS.length) return benchDone();
+    const users = BENCH_USERS[k];
+    scenario = DK.generateDenmark({ users, seed: 1 }, window.DK_LAND, window.DK_TOWNS);
+    scenario.name = `Benchmark ${users} users`;
+    scenario.trace = false;
+    syncForm(); edited(); fitScenario();
+    const row = { users, nodes: scenario.nodes.length, speed: 0, events: 0, simS: 0, ms: 0 };
+    bench.rows.push(row);
     const t0 = performance.now();
-    let events = 0, simS = 0;
-    while (simS < 900 && performance.now() - t0 < 2000) { events += b.step(10000, 1e9).events; simS += 10; }
-    const ms = performance.now() - t0;
-    const evPerSec = events / (ms / 1000);
-    b.free();
-    // Real time per simulated second; keep a frame under ~25 ms.
-    const msPerSimS = ms / simS;
-    const speedOk = Math.max(1, Math.floor(1000 / msPerSimS * 0.6));
-    perf.maxEvents = Math.max(100000, Math.round(evPerSec * 0.025));
-    perf.maxSpeed = Math.min(1000, speedOk);
-    savePerf(); syncPerf();
-    $("pf-out").textContent = `${scenario.nodes.length} nodes: ${simS} s simulated in ${(ms / 1000).toFixed(2)} s (${Math.round(evPerSec).toLocaleString()} events/s). This browser keeps up to about ${speedOk}× real time; limits set to ${perf.maxEvents.toLocaleString()} events per frame and ${perf.maxSpeed}× speed.`;
+    const tick = () => {
+      if (bench.stop) return benchDone();
+      const c0 = performance.now();
+      while (performance.now() - c0 < 200) { row.events += sim.step(2000, 1e9).events; row.simS += 2; }
+      row.ms = performance.now() - t0;
+      row.speed = row.simS * 1000 / row.ms;
+      lastT = sim.summary().t; state = sim.state(); restyle(); $("clock").textContent = fmtTime(lastT / 1000);
+      renderBench(`Running ${row.nodes.toLocaleString()} nodes: ${fmtTime(row.simS)} simulated in ${(row.ms / 1000).toFixed(1)} s`);
+      if (row.ms < 3000 && row.simS < 3600) setTimeout(tick, 16);
+      else if (row.speed < 1) benchDone();
+      else setTimeout(() => benchStep(k + 1), 100);
+    };
+    setTimeout(tick, 100);
+  }
+  function benchVerdict() {
+    const best = (x) => bench.rows.filter(r => r.speed >= x).reduce((m, r) => Math.max(m, r.nodes), 0);
+    return { rt: best(1), x10: best(10), x100: best(100) };
+  }
+  function benchDone() {
+    const v = benchVerdict();
+    bench.done = true;
+    renderBench(bench.stop ? "Stopped." : "Done.");
+  }
+  function renderBench(status) {
+    const rows = bench.rows;
+    const maxLog = Math.log10(Math.max(1000, ...rows.map(r => r.speed)));
+    const bar = (sp) => Math.max(2, Math.log10(Math.max(1, sp)) / maxLog * 100);
+    const v = benchVerdict();
+    $("bench").innerHTML = `<div class="bh-head"><b>Benchmark</b><span class="mute">how many nodes this browser can simulate</span></div>
+      <div class="bh-status">${esc(status)}</div>
+      <table class="bh-table"><tr><th>nodes</th><th>speed (× real time, log scale)</th><th class="n">×</th><th class="n">events/s</th></tr>
+      ${rows.map(r => `<tr><td class="n">${r.nodes.toLocaleString()}</td><td><div class="bh-bar ${r.speed >= 10 ? "ok" : r.speed >= 1 ? "warn" : "bad"}" style="width:${bar(r.speed).toFixed(0)}%"></div></td><td class="n">${r.speed >= 10 ? r.speed.toFixed(0) : r.speed.toFixed(1)}×</td><td class="n">${r.ms ? Math.round(r.events / (r.ms / 1000)).toLocaleString() : ""}</td></tr>`).join("")}</table>
+      <div class="bh-verdict">${v.rt ? `<div><b>${v.rt.toLocaleString()}</b><span>nodes in real time (1×)</span></div><div><b>${v.x10 ? v.x10.toLocaleString() : "–"}</b><span>nodes at 10×</span></div><div><b>${v.x100 ? v.x100.toLocaleString() : "–"}</b><span>nodes at 100×</span></div>` : `<span class="mute">Results appear as each size finishes.</span>`}</div>
+      <p class="hint">Each size is a generated Denmark with everyday traffic, run as fast as possible for 3 s. Green: 10× or faster, yellow: at least real time, red: slower than real time (the run stops there). The map drawing is not included.</p>
+      <div class="row">${bench.done ? `<button id="bh-use" class="primary">Use as limits</button><button id="bh-close">Close and restore my scenario</button>` : `<button id="bh-stop">Stop</button>`}</div>`;
+    if ($("bh-stop")) $("bh-stop").onclick = () => { bench.stop = true; };
+    if ($("bh-close")) $("bh-close").onclick = closeBench;
+    if ($("bh-use")) $("bh-use").onclick = () => {
+      const r = bench.rows.filter(x => x.speed >= 1);
+      if (v.rt) perf.maxNodes = v.rt;
+      const big = r.find(x => x.nodes >= (scenario ? 0 : 0)) || null;
+      const evps = Math.max(...bench.rows.map(x => x.events / Math.max(1, x.ms / 1000)));
+      perf.maxEvents = Math.max(100000, Math.round(evps * 0.025));
+      savePerf(); syncPerf();
+      $("pf-out").textContent = `Benchmark: ${v.rt.toLocaleString()} nodes in real time, ${v.x10 ? v.x10.toLocaleString() : "–"} at 10×, ${v.x100 ? v.x100.toLocaleString() : "–"} at 100×. Warning set above ${perf.maxNodes.toLocaleString()} nodes.`;
+      closeBench();
+    };
+  }
+  function closeBench() {
+    $("bench").classList.add("hidden");
+    const keep = bench.keep; bench = null;
+    scenario = keep.scenario; syncForm(); edited(); fitScenario();
   }
   function frame(ts) {
     requestAnimationFrame(frame);
@@ -1529,7 +1588,7 @@
   $("pf-events").onchange = () => { perf.maxEvents = Math.max(1000, +$("pf-events").value || 400000); savePerf(); };
   $("pf-speed").onchange = () => { perf.maxSpeed = Math.max(1, +$("pf-speed").value || 1000); savePerf(); };
   $("pf-nodes").onchange = () => { perf.maxNodes = Math.max(10, +$("pf-nodes").value || 2000); savePerf(); };
-  $("pf-bench").onclick = () => { $("pf-out").textContent = "Measuring…"; setTimeout(benchmark, 30); };
+  $("pf-bench").onclick = openBench;
   function syncForm() {
     document.querySelectorAll("#features input").forEach(i => i.checked = !!scenario.features[i.dataset.f]);
     $("sc-sf").value = scenario.sf; $("sc-duty").value = scenario.duty_permille;

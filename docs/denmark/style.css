@@ -150,3 +150,13 @@ h3 { font-weight:600; }
 .w-good { background:#15803d; } .w-weak { background:#a16207; } .w-none { background:#b91c1c; }
 .legend-row { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; margin:2px 0 4px; }
 .legend-row i { display:inline-block; width:14px; height:3px; margin-right:5px; vertical-align:middle; }
+#bench { left:50%; top:50%; transform:translate(-50%,-50%); width:min(560px, calc(100% - 40px)); max-height:calc(100% - 40px); overflow:auto; padding:16px 18px; font-size:13px; z-index:1500; }
+#bench .bh-head { display:flex; gap:10px; align-items:baseline; } #bench .bh-head b { font-size:18px; }
+#bench .bh-status { margin:6px 0 10px; font-variant-numeric:tabular-nums; }
+#bench .bh-table td { vertical-align:middle; padding:4px; }
+#bench .bh-bar { height:12px; border-radius:0 4px 4px 0; }
+#bench .bh-bar.ok { background:#15803d; } #bench .bh-bar.warn { background:#ca8a04; } #bench .bh-bar.bad { background:#b91c1c; }
+#bench .bh-verdict { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:12px 0 4px; }
+#bench .bh-verdict div { border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+#bench .bh-verdict b { display:block; font-size:22px; font-variant-numeric:tabular-nums; }
+#bench .bh-verdict span { font-size:11px; color:var(--mute); }

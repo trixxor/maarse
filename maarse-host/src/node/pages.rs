@@ -228,8 +228,15 @@ pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bo
             return grey_picture(&img).filter(|b| b.len() <= max).map(|b| (b, "image/jpeg"));
         }
         PicStyle::ForceDots => {
+            // A busy picture can make big dots: smaller until it fits.
             let img = image::load_from_memory(data).ok()?;
-            return Some(dots_picture(&img)).filter(|b| b.len() <= max).map(|b| (b, "image/png"));
+            for side in [256, 192, 128, 96] {
+                let d = dots_picture(&img.thumbnail(side, side));
+                if d.len() <= max {
+                    return Some((d, "image/png"));
+                }
+            }
+            return None;
         }
         PicStyle::ForceColour if via_lora || data.len() > max => {
             let img = image::load_from_memory(data).ok()?;
@@ -292,7 +299,10 @@ impl Node {
             return;
         }
         let mut data = compress(self.page_markup(&path_s).as_bytes());
-        let max = self.file_limit(&from).max_bytes as usize;
+        let lim = self.file_limit(&from);
+        // Never over 8 KB when the page may go over LoRa (also an unknown
+        // route, where it would otherwise wait in the mailbox).
+        let max = if lim.via_lora { (lim.max_bytes as usize).min(LORA_PICTURE_MAX) } else { lim.max_bytes as usize };
         if data.len() > max {
             let msg = format!("# Too large\n\nThe page `{path_s}` is {} KB compressed; the limit here is {} KB.\n",
                 data.len().div_ceil(1024), max / 1024);
@@ -449,6 +459,19 @@ mod tests {
         assert!(fc.len() <= LORA_PICTURE_MAX, "forced colour over LoRa {} bytes", fc.len());
         let (fo, _) = picture_for(&src, "a.jpg", PicStyle::ForceColour, false, 1 << 20).unwrap();
         assert_eq!(fo.len(), src.len());
+        // Noise makes the biggest dots; forced dots still fit in 8 KB.
+        let mut noise = image::RgbImage::new(600, 600);
+        let mut x = 1u32;
+        for p in noise.pixels_mut() {
+            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            *p = image::Rgb([x as u8, (x >> 8) as u8, (x >> 16) as u8]);
+        }
+        let mut nb = Vec::new();
+        image::DynamicImage::ImageRgb8(noise).write_to(&mut std::io::Cursor::new(&mut nb), image::ImageFormat::Png).unwrap();
+        for st in [PicStyle::ForceDots, PicStyle::ForceGrey, PicStyle::ForceColour, PicStyle::Best, PicStyle::Grey] {
+            let (b, _) = picture_for(&nb, "n.png", st, true, 1 << 20).unwrap();
+            assert!(b.len() <= LORA_PICTURE_MAX, "{st:?} noise over LoRa {} bytes", b.len());
+        }
         println!("grey {} B, dots {} B, colour {} B", grey.len(), dots.len(), colour.len());
     }
 

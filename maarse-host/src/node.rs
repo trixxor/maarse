@@ -3,6 +3,7 @@
 
 mod ext;
 mod pages;
+mod pagelock;
 mod calltest;
 mod backbone;
 mod tun;
@@ -1775,6 +1776,11 @@ impl Node {
         let plain: &[u8] = expanded.as_deref().unwrap_or(plain);
         match content::parse(plain) {
             Some(Content::PageRequest(path)) => self.on_page_request(from, &path),
+            Some(Content::BoardPost(path, note)) => {
+                if let Err(e) = self.on_board_post(from, &String::from_utf8_lossy(&path), note) {
+                    self.log(format!("note from {} not kept: {e}", short(&from)));
+                }
+            }
             Some(Content::Call(data)) => self.on_call(from, data),
             Some(Content::Ip(data)) => self.on_tun_control(from, data),
             Some(Content::Resync) => {
@@ -3539,6 +3545,7 @@ impl Node {
             | Command::SetName { .. }
             | Command::GetName
             | Command::RequestPage { .. }
+            | Command::PostBoard { .. }
             | Command::SendCall { .. } => {}
             Command::SendAlert { req, meta, text: body } => match self.send_alert(&meta, &body) {
                 Ok(serial) => self.send_client(id, &Event::Sent { req, msg_id: serial as u64 }),
@@ -5102,6 +5109,50 @@ mod radio_file_e2e_tests {
         let (ea, _, _, _) = run_radio(&mut a, &mut b, 240, &mut |_, _| false);
         let done = ea.iter().filter(|e| matches!(e, Event::FileDone { outgoing: false, ok: true, .. })).count();
         assert_eq!(done, 6, "five pages and one slow-down notice");
+    }
+
+    /// The markup of the last page A received in `ea`.
+    fn received_markup(ea: &[Event]) -> String {
+        let mut data = Vec::new();
+        for e in ea {
+            match e {
+                Event::FileIncoming { .. } => data.clear(),
+                Event::FileChunk { data: d, .. } => data.extend_from_slice(d),
+                _ => {}
+            }
+        }
+        String::from_utf8(miniz_oxide::inflate::decompress_to_vec(&data).unwrap_or_default()).unwrap_or_default()
+    }
+
+    /// A locked page over LoRa: a stranger gets "locked", a member gets the
+    /// page without the lock lines; a member writes on its notice board.
+    #[test]
+    fn locked_page_and_notice_board() {
+        let (mut a, mut b) = radio_pair("pagelock");
+        let pages = b.n.data_dir.join("pages");
+        fs::create_dir_all(&pages).unwrap();
+        fs::write(pages.join("crew.mu"), "@allow 00000000000000000000000000000001\n@title Crew\n# Crew\n@board 5\n").unwrap();
+        let get = |a: &mut Side, b: &mut Side, req: u16| {
+            a.n.command(1, Command::RequestPage { req, dest: b.n.addr, path: text(b"crew") });
+            let (ea, _, _, _) = run_radio(a, b, 120, &mut |ea, _| ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, .. })));
+            received_markup(&ea)
+        };
+        let m = get(&mut a, &mut b, 1);
+        assert!(m.contains("This page is locked"), "a stranger got: {m}");
+        assert!(!m.contains("@allow"), "the list left the host");
+        // A is put on the list.
+        let me: String = a.n.addr.0.iter().map(|x| format!("{x:02x}")).collect();
+        fs::write(pages.join("crew.mu"), format!("@allow {me} 00000000000000000000000000000001\n@title Crew\n# Crew\n@board 5\n")).unwrap();
+        let m = get(&mut a, &mut b, 2);
+        assert!(m.contains("# Crew") && m.contains("@lockinfo 3"), "a member got: {m}");
+        assert!(!m.contains("@allow"), "the list left the host");
+        // A writes a note; it is on the page next time.
+        a.n.command(1, Command::PostBoard { req: 3, dest: b.n.addr, path: text(b"crew"), text: text(b"Sail at 9?") });
+        run_radio(&mut a, &mut b, 60, &mut |_, _| pages.join("crew.board").is_file());
+        let m = get(&mut a, &mut b, 4);
+        assert!(m.contains("@boardpath crew") && m.contains("\tSail at 9?"), "no note on the page: {m}");
+        // A second note within a minute is not kept.
+        assert!(b.n.on_board_post(a.n.addr, "crew", b"again").is_err());
     }
 
     /// A page nobody asked for (an old answer) is refused: the reader never

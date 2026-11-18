@@ -1081,6 +1081,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 Some(plain) => self.send_content(req, dest, &plain),
                 None => err(req, error_code::TOO_LARGE, "Invalid path"),
             },
+            Command::PostBoard { req, dest, path, text } => match content::board_post(&path, &text) {
+                Some(plain) => self.send_content(req, dest, &plain),
+                None => err(req, error_code::TOO_LARGE, "Invalid path or note too long"),
+            },
             Command::SendChannel {
                 req,
                 channel,

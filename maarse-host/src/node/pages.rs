@@ -58,6 +58,8 @@ pub(super) struct Pages {
     /// are taken when offered. Anything else that looks like a page is
     /// refused, so it never turns up as a file in a chat.
     asked: HashMap<(Address, Vec<u8>), Instant>,
+    /// When each reader last wrote a note (unix seconds).
+    pub(super) noted: HashMap<Address, u64>,
 }
 
 /// How long an asked-for page may take to come.
@@ -296,7 +298,7 @@ pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bo
 }
 
 impl Node {
-    fn pages_dir(&self) -> PathBuf {
+    pub(super) fn pages_dir(&self) -> PathBuf {
         self.data_dir.join("pages")
     }
 
@@ -344,7 +346,7 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
 
         let path_s = String::from_utf8_lossy(path).into_owned();
         let lim = self.file_limit(&from);
-        let (data, mime) = self.page_answer(&path_s, lim.via_lora, lim.max_bytes as usize);
+        let (data, mime) = self.page_answer(Some(from), &path_s, lim.via_lora, lim.max_bytes as usize);
         let route = if lim.via_lora { "LoRa" } else { "internet" };
         self.log(format!("page '{path_s}' ({route}) to {} ({} bytes)", short(&from), data.len()));
         if let Err((_, e)) = self.send_page_reply(from, data, mime, path.clone()) {
@@ -355,9 +357,35 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
     /// The answer to a page request: the page (compressed markup) or a
     /// picture in the form the route allows; a short page saying so when it
     /// is missing or cannot be made to fit.
-    fn page_answer(&self, path_s: &str, via_lora: bool, max_bytes: usize) -> (Vec<u8>, Small) {
+    fn page_answer(&self, reader: Option<Address>, path_s: &str, via_lora: bool, max_bytes: usize) -> (Vec<u8>, Small) {
         let page_mime = || Small::from_slice(content::PAGE_MIME).unwrap_or_default();
+        let locked = |hidden: bool| {
+            let msg = if hidden {
+                format!("# Not found
+
+The page `{path_s}` does not exist here.
+
+[Front page](/)
+")
+            } else {
+                let me = reader.map(|a| a.0.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap_or_default();
+                format!("@title Locked page
+@locked-notice {me}
+# 🔒 This page is locked
+
+Only some people can open it. Your address is `{me}`; send it to the owner if you should be on the list.
+
+[Front page](/)
+")
+            };
+            (compress(msg.as_bytes()), page_mime())
+        };
         if let Some((style, rel)) = picture_path(path_s) {
+            match self.access(reader, rel, None) {
+                super::pagelock::Access::Locked => return locked(false),
+                super::pagelock::Access::Hidden => return locked(true),
+                _ => {}
+            }
             let made = fs::read(self.pages_dir().join(rel)).ok().and_then(|d| picture_for(&d, rel, style, via_lora, max_bytes));
             return match made {
                 Some((d, m)) if d.len() <= max_bytes => (d, Small::from_slice(m.as_bytes()).unwrap_or_default()),
@@ -370,7 +398,24 @@ The picture `{rel}` is missing here or could not be made small enough.
                 }
             };
         }
-        let data = compress(self.page_markup(path_s).as_bytes());
+        let root = self.pages_dir();
+        let file = find_page(&root, path_s);
+        let mut info = String::new();
+        if let Some(f) = &file {
+            match self.access(reader, path_s, Some(f)) {
+                super::pagelock::Access::Locked => return locked(false),
+                super::pagelock::Access::Hidden => return locked(true),
+                super::pagelock::Access::Member(n) => info = format!("@lockinfo {n}
+"),
+                super::pagelock::Access::Open => {}
+            }
+        }
+        let markup = self.page_markup(path_s);
+        let markup = match &file {
+            Some(f) => info + &self.with_notes(&super::pagelock::strip_locks(&markup), f, path_s),
+            None => markup,
+        };
+        let data = compress(markup.as_bytes());
         // Never over 8 KB when the page may go over LoRa (also an unknown
         // route, where it would otherwise wait in the mailbox).
         let max = if via_lora { max_bytes.min(LORA_PICTURE_MAX) } else { max_bytes };
@@ -390,7 +435,7 @@ The page `{path_s}` is {} KB compressed; the limit here is {} KB.
     /// would see them, without going over any link.
     fn own_page(&mut self, id: ClientId, req: u16, path: &Small) {
         let path_s = String::from_utf8_lossy(path).into_owned();
-        let (data, mime) = self.page_answer(&path_s, false, self.max_file as usize);
+        let (data, mime) = self.page_answer(None, &path_s, false, self.max_file as usize);
         self.send_client(id, &Event::Sent { req, msg_id: 0 });
         let mut b = [0u8; 8];
         rand_core::OsRng.fill_bytes(&mut b);
@@ -413,6 +458,24 @@ The page `{path_s}` is {} KB compressed; the limit here is {} KB.
     pub(super) fn page_command(&mut self, id: ClientId, cmd: Command) -> Option<Command> {
         if let Command::SendCall { dest, data } = cmd {
             self.send_call(id, dest, &data);
+            return None;
+        }
+        if let Command::PostBoard { req, dest, path, text: note } = cmd {
+            if dest == self.addr {
+                match self.on_board_post(self.addr, &String::from_utf8_lossy(&path), &note) {
+                    Ok(()) => self.send_client(id, &Event::Sent { req, msg_id: 0 }),
+                    Err(e) => self.send_client(id, &err_ev(req, error_code::TOO_LARGE, e)),
+                }
+                return None;
+            }
+            let Some(plain) = content::board_post(&path, &note) else {
+                self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "Invalid path or note too long (100 bytes)"));
+                return None;
+            };
+            match self.send_sealed(dest, &plain, super::Pending::Control) {
+                Ok(msg_id) => self.send_client(id, &Event::Sent { req, msg_id }),
+                Err(e) => self.send_client(id, &err_ev(req, error_code::UNKNOWN_DEST, e)),
+            }
             return None;
         }
         let Command::RequestPage { req, dest, path } = cmd else { return Some(cmd) };

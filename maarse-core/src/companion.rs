@@ -156,6 +156,8 @@ pub enum Command {
     /// `Sent`; the page arrives as a file with MIME
     /// [`crate::content::PAGE_MIME`]. An invalid path gives `Error`.
     RequestPage { req: u16, dest: Address, path: Text },
+    /// Writes a note on a page's notice board (`@board`) at `dest`.
+    PostBoard { req: u16, dest: Address, path: Text, text: Text },
     /// 0x27: call data to `dest` (signalling or Opus audio, the format
     /// belongs to the clients). TCP only: when `dest` can only be reached over LoRa,
     /// the reply is `Error` with `NOT_OVER_TCP`. No acknowledgement to the client and
@@ -1145,6 +1147,7 @@ impl Command {
             Command::SetModemKey { passphrase } => W::new(0x2d).b(passphrase).done(),
             Command::GetName => W::new(0x25).done(),
             Command::RequestPage { req, dest, path } => W::new(0x26).b(&req.to_le_bytes()).b(&dest.0).b(path).done(),
+            Command::PostBoard { req, dest, path, text } => W::new(0x2e).b(&req.to_le_bytes()).b(&dest.0).b(&[path.len() as u8]).b(path).b(text).done(),
             Command::SendCall { dest, data } => W::new(0x27).b(&dest.0).b(data).done(),
             Command::OtaBegin { req, flags, manifest } => {
                 W::new(0x18).b(&req.to_le_bytes()).b(&[*flags]).b(manifest).done()
@@ -1236,6 +1239,12 @@ impl Command {
             0x2d => Command::SetModemKey { passphrase: r.text()? },
             0x25 => Command::GetName,
             0x26 => Command::RequestPage { req: r.u16()?, dest: r.addr()?, path: r.text()? },
+            0x2e => {
+                let (req, dest) = (r.u16()?, r.addr()?);
+                let n = r.u8()? as usize;
+                let path = Text::from_slice(r.take(n)?).map_err(|_| FrameError::TooShort)?;
+                Command::PostBoard { req, dest, path, text: r.text()? }
+            }
             0x27 => Command::SendCall { dest: r.addr()?, data: r.text()? },
             0x18 => Command::OtaBegin { req: r.u16()?, flags: r.u8()?, manifest: r.text()? },
             0x19 => Command::OtaChunk { req: r.u16()?, offset: r.u32()?, data: r.text()? },
@@ -2153,6 +2162,7 @@ mod tests {
         roundtrip_ev(Event::NodeInfo { addr: Address([1; 16]), hops: 1, position: None, telemetry: None, name: None, caps: Some(0x20) });
         roundtrip_cmd(Command::GetName);
         roundtrip_cmd(Command::RequestPage { req: 9, dest: Address([3; 16]), path: text(b"vejr") });
+        roundtrip_cmd(Command::PostBoard { req: 9, dest: Address([3; 16]), path: text(b"crew"), text: text(b"hello board") });
         roundtrip_cmd(Command::SetName { name: text("Ida".as_bytes()) });
         roundtrip_cmd(Command::SetWifi(WifiSettings {
             enabled: true,

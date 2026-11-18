@@ -60,6 +60,12 @@ pub const FILE_CANCEL_BY_RECIPIENT: u8 = 2;
 /// missing. The sender sends up to `count` of the missing ones, back to
 /// back. `base` = the number of chunks: everything has arrived.
 pub const FILE_REQUEST: u8 = 0x0C;
+/// A note for a page's notice board (`@board`): path length (u8) | path |
+/// text (UTF-8, at most [`MAX_NOTE`] bytes). The host keeps it if the page
+/// has a board and the sender may read the page.
+pub const BOARD_POST: u8 = 0x0D;
+/// The longest note: it has to fit in one sealed message with the path.
+pub const MAX_NOTE: usize = 100;
 /// Chunks a request can describe after its base.
 pub const FILE_REQUEST_SPAN: u16 = 32;
 
@@ -152,6 +158,8 @@ pub enum Content<'a> {
     FileCancel(u64, bool),
     /// The recipient asks for chunks: (file id, base, count, missing).
     FileRequest(u64, u16, u8, u32),
+    /// A note for a page's notice board: (page path, text).
+    BoardPost(Small, &'a [u8]),
     Unknown(u8),
 }
 
@@ -219,6 +227,15 @@ pub fn parse(plain: &[u8]) -> Option<Content<'_>> {
             u64::from_le_bytes(plain[1..9].try_into().ok()?),
             plain[9] == FILE_CANCEL_BY_RECIPIENT,
         )),
+        BOARD_POST if plain.len() >= 3 => {
+            let n = plain[1] as usize;
+            let path = plain.get(2..2 + n).and_then(page_path);
+            let text = plain.get(2 + n..).unwrap_or(&[]);
+            Some(match path {
+                Some(p) if !text.is_empty() && text.len() <= MAX_NOTE => Content::BoardPost(p, text),
+                _ => Content::Unknown(BOARD_POST),
+            })
+        }
         PAGE_REQUEST => Some(match page_path(&plain[1..]) {
             Some(p) => Content::PageRequest(p),
             None => Content::Unknown(PAGE_REQUEST),
@@ -269,6 +286,21 @@ pub fn page_request(path: &[u8]) -> Option<heapless::Vec<u8, 64>> {
     let mut v = heapless::Vec::new();
     v.push(PAGE_REQUEST).ok()?;
     v.extend_from_slice(&p).ok()?;
+    Some(v)
+}
+
+/// Builds a note for a page's notice board. `None` if the path is invalid
+/// or the text is empty or too long.
+pub fn board_post(path: &[u8], text: &[u8]) -> Option<heapless::Vec<u8, 192>> {
+    let p = page_path(path)?;
+    if text.is_empty() || text.len() > MAX_NOTE {
+        return None;
+    }
+    let mut v = heapless::Vec::new();
+    v.push(BOARD_POST).ok()?;
+    v.push(p.len() as u8).ok()?;
+    v.extend_from_slice(&p).ok()?;
+    v.extend_from_slice(text).ok()?;
     Some(v)
 }
 
@@ -403,6 +435,10 @@ mod tests {
         assert_eq!(p(&"a".repeat(61)), None);
         let req = page_request(b"/vejr").unwrap();
         assert_eq!(parse(&req), Some(Content::PageRequest(Small::from_slice(b"vejr").unwrap())));
+        let note = board_post(b"crew", b"hello").unwrap();
+        assert_eq!(parse(&note), Some(Content::BoardPost(Small::from_slice(b"crew").unwrap(), b"hello")));
+        assert!(board_post(b"crew", &[b'x'; MAX_NOTE + 1]).is_none());
+        assert!(board_post(b"../x", b"hi").is_none());
         assert_eq!(parse(&[PAGE_REQUEST, b'.', b'.']), Some(Content::Unknown(PAGE_REQUEST)));
     }
 }

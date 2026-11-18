@@ -22,7 +22,7 @@ object Pages {
     }
 
     sealed class Pic {
-        data class Got(val data: ByteArray, val mime: String) : Pic()
+        data class Got(val data: ByteArray, val mime: String, val at: Long = System.currentTimeMillis()) : Pic()
         data class Failed(val why: String) : Pic()
         /** Asked for; nothing has come yet. */
         data object Asking : Pic()
@@ -30,7 +30,14 @@ object Pages {
         data class Busy(val percent: Int, val total: Int) : Pic()
     }
 
-    private class InFile(val key: String, val pic: Boolean, val mime: String, val buf: ByteArray)
+    private class InFile(val key: String, val pic: Boolean, val mime: String, val buf: ByteArray) {
+        /** Byte ranges that have come (offset to end), to draw a page while it comes. */
+        val got = java.util.TreeMap<Int, Int>()
+        fun prefix(): Int { var n = 0; for ((o, e) in got) { if (o > n) break; if (e > n) n = e }; return n }
+    }
+    /** A page still coming: what has come so far, by key. */
+    private val partials = HashMap<String, String>()
+    fun partial(u: Url): String? = partials[u.key]
 
     /** Bumped on every change, so the screen redraws. */
     val version = MutableStateFlow(0)
@@ -172,6 +179,14 @@ object Pages {
         val f = files[ev.fileId] ?: return false
         val n = minOf(ev.data.size, f.buf.size - ev.offset)
         if (ev.offset >= 0 && n > 0) System.arraycopy(ev.data, 0, f.buf, ev.offset, n)
+        // A page still coming: unpack what has come from the start, cut at the last whole line.
+        if (!f.pic && n > 0 && url?.key == f.key) {
+            f.got[ev.offset] = maxOf(f.got[ev.offset] ?: 0, ev.offset + n)
+            val len = f.prefix()
+            val text = runCatching { inflatePart(f.buf.copyOf(len)) }.getOrNull() ?: ""
+            val cut = text.lastIndexOf('\n')
+            if (cut > 0 && partials[f.key]?.length != cut) { partials[f.key] = text.substring(0, cut); bump() }
+        }
         return true
     }
 
@@ -191,6 +206,7 @@ object Pages {
             f.pic && f.mime == PAGE_MIME -> pics[f.key] = Pic.Failed("missing on the node")
             f.pic -> pics[f.key] = Pic.Got(f.buf, f.mime)
             else -> runCatching { inflate(f.buf) }.onSuccess { m ->
+                partials.remove(f.key)
                 cache[f.key] = m
                 while (cache.size > 30) cache.remove(cache.keys.first())
                 val from = f.key.substringBefore('/')
@@ -202,12 +218,41 @@ object Pages {
                 if (url?.key == f.key) {
                     status = ""; loading = false; pageBytes = f.buf.size; pageAt = System.currentTimeMillis()
                     url?.let { u -> recent.removeAll { it.first == u }; recent.add(0, u to title(m)); while (recent.size > 20) recent.removeAt(recent.lastIndex) }
+                    url?.let { prefetch(m, it) }
                 }
             }.onFailure { status = "Could not unpack the page" }
         }
         if (f.pic) next()
         bump()
         return true
+    }
+
+    /** Over the internet the pages this page links to are fetched in the
+     *  background (the first few), so they open at once. Never over LoRa. */
+    private fun prefetch(markup: String, base: Url) {
+        if (overLora(base.addr)) return
+        var n = 0
+        for (m in Regex("""\]\(([^)\s#]+)\)""").findAll(markup)) {
+            val p = parse(m.groupValues[1], base) ?: continue
+            if (p.addr != base.addr || p.path.startsWith("_") || Regex("""\.(png|jpe?g|webp|gif)$""", RegexOption.IGNORE_CASE).containsMatchIn(p.path)) continue
+            if (p.key == base.key || cache.containsKey(p.key) || p.key in waits) continue
+            waits.add(p.key)
+            Node.send(Cmd.requestPage(Node.req(), p.addr, p.path))
+            if (++n >= 6) break
+        }
+    }
+
+    /** Unpacks as much of a page as has come (stops quietly where it ends). */
+    private fun inflatePart(b: ByteArray): String {
+        val inf = java.util.zip.Inflater(true)
+        inf.setInput(b)
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(4096)
+        try {
+            while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
+        } catch (_: Exception) {}
+        inf.end()
+        return out.toString(Charsets.UTF_8.name())
     }
 
     private fun inflate(b: ByteArray): String {

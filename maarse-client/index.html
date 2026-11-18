@@ -341,6 +341,19 @@
   .page .mu-frame.empty { background: none; border: 1px dashed currentColor; opacity: .85; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; box-sizing: border-box; }
   .page .mu-chip { position: absolute; right: 6px; bottom: 6px; font-size: 12px; padding: 3px 10px; border-radius: 12px; background: #111c !important; color: #fff !important; border: 0 !important; }
   .page figure.mu-wide .mu-frame { max-width: none; }
+  .page .mu-frame .mu-blur { position: absolute; inset: 0; width: 100%; height: 100%; filter: blur(14px) saturate(1.2); transform: scale(1.15); image-rendering: auto; }
+  .page .mu-frame img { position: relative; }
+  .page .mu-picbar { position: absolute; left: 0; right: 0; bottom: 0; height: 26px; background: #000a; color: #fff; font-size: 12px; display: flex; align-items: center; padding: 0 10px; }
+  .page .mu-picbar i { position: absolute; left: 0; top: 0; bottom: 0; background: #6fd3a5aa; }
+  .page .mu-picbar.wait i { width: 30%; animation: mu-wait 1.2s ease-in-out infinite alternate; }
+  @keyframes mu-wait { from { left: 0; } to { left: 70%; } }
+  .page .mu-picbar span { position: relative; }
+  .page .mu-pichint { position: absolute; inset: auto 0 0 0; padding: 6px 10px; background: #000a; color: #fff; font-size: 12px; text-align: center; }
+  .page .mu-frame { cursor: pointer; }
+  .page .mu-picmenu { position: absolute; right: 8px; top: 8px; display: flex; flex-direction: column; gap: 2px; background: #111e; border-radius: 10px; padding: 6px; z-index: 2; min-width: 210px; }
+  .page .mu-picmenu button { text-align: left; background: none !important; color: #fff !important; border: 0 !important; padding: 6px 8px; border-radius: 6px; font-size: 13px; }
+  .page .mu-picmenu button:hover { background: #fff2 !important; }
+  .page .mu-picmenu small { opacity: .7; }
   .page .mu-write { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
   .page .mu-write input { flex: 1; min-width: 180px; }
   @media (max-width: 700px) {
@@ -1521,6 +1534,8 @@ function onEvent(ev) {
     case "fileChunk": {
       const m = state.files.get(ev.fileId);
       if (m) m.parts.push([ev.offset, ev.data]);
+      // A page that is still coming: draw what has come so far.
+      if (m?.page && !m.pic) pagePartial(m);
       break;
     }
     case "fileDone": {
@@ -3330,14 +3345,58 @@ function pageIncoming(ev) {
   return true;
 }
 
+// The part of a page that has come so far (pieces in order from the start),
+// unpacked as far as it goes and cut at the last whole line.
+let pagePartialBusy = false;
+async function pagePartial(m) {
+  const cur = parsePageUrl(pages.url);
+  if (!cur || pageKey(cur.addr, cur.path) !== m.key || pagePartialBusy) return;
+  pagePartialBusy = true;
+  try {
+    const parts = [...m.parts].sort((a, b) => a[0] - b[0]);
+    let len = 0; const bufs = [];
+    for (const [o, d] of parts) { if (o > len) break; if (o + d.length > len) { bufs.push(d.slice(len - o)); len = o + d.length; } }
+    if (!len) return;
+    const bytes = new Uint8Array(len); let k = 0;
+    for (const b of bufs) { bytes.set(b, k); k += b.length; }
+    let text = "";
+    try {
+      const ds = new DecompressionStream("deflate-raw"), w = ds.writable.getWriter();
+      w.write(bytes).catch(() => {}); w.close().catch(() => {});
+      const r = ds.readable.pipeThrough(new TextDecoderStream()).getReader();
+      for (;;) { const { value, done } = await r.read(); if (done) break; text += value; }
+    } catch {} // the rest has not come yet
+    const cut = text.lastIndexOf("\n");
+    if (cut > 0 && pages.partial?.markup?.length !== cut) { pages.partial = { key: m.key, markup: text.slice(0, cut) }; if (state.view === "pages") renderChat(); }
+  } finally { pagePartialBusy = false; }
+}
+
+// Over the internet the pages this page links to are fetched in the background
+// (a few, the first ones), so they open at once. Never over LoRa: air time.
+function prefetchLinks(markup, base) {
+  if (pages.lora.get(base.addr) !== false || !transport) return;
+  const seen = new Set();
+  for (const m of markup.matchAll(/\]\(([^)\s#]+)\)/g)) {
+    const p = parsePageUrl(m[1], base);
+    if (!p || p.addr !== base.addr || p.path.startsWith("_") || /\.(png|jpe?g|webp|gif)$/i.test(p.path)) continue;
+    const key = pageKey(p.addr, p.path);
+    if (seen.has(key) || pages.cache.has(key) || pages.waits.has(key) || key === pageKey(base.addr, base.path)) continue;
+    seen.add(key);
+    if (seen.size > 6) break;
+    pages.waits.set(key, Date.now());
+    transport.send(Cmd.requestPage(state.nextReq++ & 0xffff, p.addr, p.path));
+  }
+}
+
 async function pageDone(ev, m) {
   state.files.delete(ev.fileId);
+  if (!m.pic && pages.partial?.key === m.key) pages.partial = null;
   if (m.pic) {
     const buf = new Uint8Array(m.size);
     for (const [o, d] of m.parts) buf.set(d, o);
     if (!ev.ok) pages.pics.set(m.key, { error: ev.text });
     else if (m.mime === PAGE_MIME) pages.pics.set(m.key, { error: "missing on the node" });
-    else pages.pics.set(m.key, { url: URL.createObjectURL(new Blob([buf], { type: m.mime })), size: m.size, mime: m.mime });
+    else pages.pics.set(m.key, { url: URL.createObjectURL(new Blob([buf], { type: m.mime })), size: m.size, mime: m.mime, at: Date.now() });
     nextPicture();
     if (state.view === "pages") renderChat();
     return;
@@ -3361,6 +3420,7 @@ async function pageDone(ev, m) {
       pages.status = ""; pages.loading = false;
       const u = pageUrl(cur);
       pages.recent = [{ url: u, title: pageTitle(markup) }, ...pages.recent.filter(r => r.url !== u)].slice(0, 20);
+      prefetchLinks(markup, cur);
       store.set("pageRecent", pages.recent);
     }
   } catch (e) { pages.status = "Could not unpack the page: " + e.message; }
@@ -3413,55 +3473,92 @@ const PIC_STEPS = [
   // The original: over the internet only; over LoRa 8 KB is the most.
   { id: "_full", name: "Full size", time: "", net: true },
 ];
-function pagePicture(caption, src, style, base, forced = false) {
+// A picture on a page. The frame has the picture's own shape (from the
+// host's preview, `~WxH:…`) and shows the blurred preview at once; the best
+// copy that has come is drawn over it, and while another copy comes a
+// progress bar lies on top. A tap opens a menu: which copy to fetch, or full
+// screen. Over the internet the first copy loads by itself; over LoRa it
+// waits for a tap. The layout never changes, so nothing on the page moves.
+const PIC_CHOICES = [
+  { id: "_fdots", name: "Dots", note: "1–3 KB, sharp for drawings", time: "about 15 s" },
+  { id: "_fgrey", name: "Greyscale", note: "about 1.3 KB", time: "about 12 s" },
+  { id: "_c4", name: "Colour 4 KB", note: "4 KB", time: "about 35 s" },
+  { id: "_c8", name: "Colour 8 KB", note: "8 KB", time: "about 1 min" },
+  { id: "_full", name: "Full size", note: "the original", time: "", net: true },
+];
+function muPreview(hint) {
+  const m = (hint || "").match(/^~(\d+)x(\d+):([A-Za-z0-9_-]{24})$/);
+  if (!m) return null;
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const bits = [...m[3]].map(c => A.indexOf(c));
+  const bytes = [];
+  for (let i = 0; i + 3 < bits.length + 1; i += 4) {
+    const n = (bits[i] << 18) | (bits[i + 1] << 12) | ((bits[i + 2] ?? 0) << 6) | (bits[i + 3] ?? 0);
+    bytes.push(n >> 16 & 255, n >> 8 & 255, n & 255);
+  }
+  const nib = bytes.slice(0, 18).flatMap(b => [b >> 4, b & 15]);
+  return { w: +m[1], h: +m[2], rgb: Array.from({ length: 12 }, (_, i) => [nib[i * 3] * 17, nib[i * 3 + 1] * 17, nib[i * 3 + 2] * 17]) };
+}
+function pagePicture(caption, src, style, base, forced = false, words = {}) {
   const st = style === "color" ? "colour" : style || "grey";
   const rel = src.replace(/^\/+/, "").toLowerCase();
   const path = forced ? `_f${st}/${rel}` : `_${st}/${rel}`;
   const key = pageKey(base.addr, path);
-  const fig = el("figure", {});
-  Object.assign(fig.style, { margin: "12px 0", display: "flex", flexDirection: "column", gap: "6px" });
   const lora = pages.lora.get(base.addr) !== false;
-  const queued = (k, pth) => pages.picWaits.has(k) || pages.picQueue.some(q => q.addr === base.addr && q.path === pth);
-  // The best step that has come wins: Colour 8 KB, Colour 4 KB, then the first copy.
-  const steps = forced ? [] : PIC_STEPS.filter(s => !(s.net && lora)).map(s => ({ ...s, path: `${s.id}/${rel}`, key: pageKey(base.addr, `${s.id}/${rel}`) }));
-  steps.forEach(s => { s.got = pages.pics.get(s.key); s.busy = [...state.files.values()].find(f => f.pic && f.key === s.key); });
-  const top = [...steps].reverse().find(s => s.got?.url);
-  const first = pages.pics.get(key);
-  const got = top ? top.got : first;
-  const busy = [...state.files.values()].find(f => f.pic && f.key === key);
-  // The same layout before and after the picture comes, so nothing on the page
-  // moves (in columns everything would flow on): a fixed 3:2 frame and one
-  // caption line under it; the next size is a small button in the frame's corner.
+  const fig = el("figure", {});
+  Object.assign(fig.style, { margin: "12px 0", display: "flex", flexDirection: "column", gap: "4px" });
+  const pv = muPreview(words.hint);
   const frame = el("div", { className: "mu-frame" });
-  const cap = (t) => el("figcaption", { className: "muted", style: "font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }, t);
-  if (got?.url) {
-    const img = el("img", { src: got.url, alt: caption || rel, title: "Open full screen" });
-    if (got.mime === "image/png") img.style.imageRendering = "pixelated";
-    img.onclick = () => showImage(got.url, caption || rel); // full screen, zoom there
+  if (pv) frame.style.aspectRatio = `${Math.min(Math.max(pv.w / pv.h, 0.33), 3)}`;
+  // Every copy of this picture that may come: the page's own first, then the menu's.
+  const choices = (forced ? [] : PIC_CHOICES.filter(c => !(c.net && lora))).map(c => ({ ...c, path: `${c.id}/${rel}`, key: pageKey(base.addr, `${c.id}/${rel}`) }));
+  const all = [{ name: "first copy", path, key }, ...choices];
+  const got = all.map(c => ({ c, p: pages.pics.get(c.key) })).filter(x => x.p?.url).sort((a, b) => (b.p.at || 0) - (a.p.at || 0))[0];
+  const busy = all.map(c => ({ c, f: [...state.files.values()].find(f => f.pic && f.key === c.key) })).find(x => x.f);
+  const asking = all.find(c => pages.picWaits.has(c.key) || pages.picQueue.some(q => q.addr === base.addr && q.path === c.path));
+  const err = !got && pages.pics.get(key)?.error;
+  // Over the internet the first copy comes by itself.
+  if (!lora && !got && !busy && !asking && !err && transport) setTimeout(() => { requestPicture(base.addr, path); renderChat(); }, 0);
+  if (pv) {
+    const cv = el("canvas", { className: "mu-blur", width: 4, height: 3 });
+    const g = cv.getContext("2d"), img = g.createImageData(4, 3);
+    pv.rgb.forEach(([r, gg, b], i) => img.data.set([r, gg, b, 255], i * 4));
+    g.putImageData(img, 0, 0);
+    frame.append(cv);
+  } else frame.classList.add("empty");
+  if (got) {
+    const img = el("img", { src: got.p.url, alt: caption || rel });
+    if (got.p.mime === "image/png") img.style.imageRendering = "pixelated";
     frame.append(img);
-    const stepName = top ? top.name : got.mime === "image/png" ? "Dots" : forced && st === "colour" ? "Colour 8 KB" : "Greyscale";
-    if (!forced) {
-      const higher = steps.filter(s => !top || PIC_STEPS.findIndex(p => p.id === s.id) > PIC_STEPS.findIndex(p => p.id === top.id)).slice(0, 1);
-      const working = higher.find(s => s.busy || queued(s.key, s.path));
-      const chip = (t, fn) => { const b = el("button", { className: "mu-chip", textContent: t }); if (fn) b.onclick = (e) => { e.stopPropagation(); fn(); }; else b.disabled = true; return b; };
-      if (working?.busy) frame.append(chip(`${working.name} · ${Math.round((working.busy.progress || 0) * 100)} %`));
-      else if (working) frame.append(chip(`Asking for ${working.name}…`));
-      else if (higher.length) { const s2 = higher[0]; frame.append(chip(s2.got?.error ? `${s2.name}: try again` : lora ? `${s2.name} · ${s2.time}` : s2.name, () => { requestPicture(base.addr, s2.path); renderChat(); })); }
+  }
+  // What is happening, on top of the picture.
+  if (busy) {
+    const pct = Math.round((busy.f.progress || 0) * 100);
+    const bar = el("div", { className: "mu-picbar" }, el("i"), el("span", {}, `${busy.c.name === "first copy" ? "Receiving" : busy.c.name} · ${pct} %`));
+    bar.firstChild.style.width = pct + "%";
+    frame.append(bar);
+  } else if (asking) frame.append(el("div", { className: "mu-picbar wait" }, el("i"), el("span", {}, asking.name === "first copy" ? "Asking the node…" : `Asking for ${asking.name}…`)));
+  else if (!got) frame.append(el("div", { className: "mu-pichint" }, err ? `Tap to try again (${err})` : lora ? "Tap to fetch the picture" : "Loading…"));
+  // The menu: which copy, or full screen.
+  const open = pages.picMenu === key;
+  frame.onclick = (e) => {
+    if (e.target.closest(".mu-picmenu")) return;
+    if (forced) { if (got) showImage(got.p.url, caption || rel); else { requestPicture(base.addr, path); renderChat(); } return; }
+    pages.picMenu = open ? null : key; renderChat();
+  };
+  if (open && !forced) {
+    const menu = el("div", { className: "mu-picmenu" });
+    if (got) { const b = el("button", { textContent: "⤢ Full screen" }); b.onclick = () => { pages.picMenu = null; showImage(got.p.url, caption || rel); renderChat(); }; menu.append(b); }
+    for (const c of choices) {
+      const have = pages.pics.get(c.key)?.url;
+      const b = el("button", {}, el("b", {}, (have ? "✓ " : "") + c.name), el("small", {}, ` · ${c.note}${lora && c.time ? " · " + c.time : ""}`));
+      b.onclick = () => { pages.picMenu = null; if (have) pages.pics.get(c.key).at = Date.now(); else requestPicture(base.addr, c.path); renderChat(); };
+      menu.append(b);
     }
-    fig.append(frame, cap(`${caption ? caption + " · " : ""}${stepName} · ${(got.size / 1024).toFixed(1)} KB`));
-    return fig;
+    frame.append(menu);
   }
-  frame.classList.add("empty");
-  if (busy) frame.append(picProgress(busy, "Receiving"));
-  else if (pages.picWaits.has(key)) frame.append(el("div", { className: "muted" }, "Asking the node…"), el("progress", { className: "picbar" }));
-  else if (pages.picQueue.some(q => q.addr === base.addr && q.path === path)) frame.append(el("div", { className: "muted" }, "Waiting for the picture before it…"));
-  else {
-    const what = !forced ? "smallest size, about 1.3 KB" : st === "dots" ? "dots, set by the page" : st === "colour" ? "Colour 8 KB, set by the page" : "Greyscale, set by the page";
-    const b = el("button", { textContent: got?.error ? `Try again (${got.error})` : `Click here to see the picture · ${what}` });
-    b.onclick = () => { requestPicture(base.addr, path); renderChat(); };
-    frame.append(b);
-  }
-  fig.append(frame, cap(caption || rel));
+  const what = got ? (got.c.name === "first copy" ? (got.p.mime === "image/png" ? "Dots" : "Greyscale") : got.c.name) + ` · ${(got.p.size / 1024).toFixed(1)} KB` : "";
+  fig.append(frame, el("figcaption", { className: "muted", style: "font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }, [caption, what].filter(Boolean).join(" · ") || rel));
   return fig;
 }
 
@@ -3642,7 +3739,8 @@ const PIC_LINE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)\s*$/;
 function picWords(s) {
   const w = (s || "").toLowerCase().split(/[\s,]+/).filter(Boolean);
   const st = w.find(x => /^(grey|dots|colour|color)!?$/.test(x)) || "";
-  return { style: st.replace("!", ""), forced: st.endsWith("!"), place: w.find(x => ["left", "right", "wide"].includes(x)) || "", tape: w.includes("tape"), rec: w.includes("rec") };
+  const hint = (s || "").split(/\s+/).find(x => x.startsWith("~")) || "";
+  return { style: st.replace("!", ""), forced: st.endsWith("!"), place: w.find(x => ["left", "right", "wide"].includes(x)) || "", tape: w.includes("tape"), rec: w.includes("rec"), hint };
 }
 
 // A page's title, like <title> on a web page: "@title …", else the first heading.
@@ -3809,7 +3907,7 @@ function renderBlocks(lines, root, base, st) {
     if (/^@[a-z-]+(\s|$)/.test(line)) continue; // page settings: not shown
     if (grid) {
       // A grid page: every line is one row of the screen, spaces kept.
-      if (/^!\[/.test(line) && line.match(PIC_LINE)) { const p = line.match(PIC_LINE), w = picWords(p[3]); root.append(pagePicture(p[1], p[2], w.style, base, w.forced)); continue; }
+      if (/^!\[/.test(line) && line.match(PIC_LINE)) { const p = line.match(PIC_LINE), w = picWords(p[3]); root.append(pagePicture(p[1], p[2], w.style, base, w.forced, w)); continue; }
       root.append(el("div", { className: "mu-row" }, ...pageInline(line, base)));
       continue;
     }
@@ -3829,7 +3927,7 @@ function renderBlocks(lines, root, base, st) {
     if (pic && base) {
       flush();
       const w = picWords(pic[3]);
-      const fig = pagePicture(pic[1], pic[2], w.style, base, w.forced);
+      const fig = pagePicture(pic[1], pic[2], w.style, base, w.forced, w);
       if (w.place) fig.classList.add("mu-" + w.place);
       if (w.tape) fig.classList.add("mu-tape");
       if (w.rec) fig.classList.add("mu-rec");
@@ -4005,6 +4103,9 @@ function renderPages(box) {
   shell.append(body);
   if (!cur) {
     body.append(startPage());
+  } else if (pages.partial && cur && pages.partial.key === pageKey(cur.addr, cur.path)) {
+    // Still coming: what has come so far.
+    body.append(renderMarkup(pages.partial.markup, cur), el("div", { className: "muted", style: "margin-top:8px" }, "Receiving the rest of the page…"));
   } else if (cached) {
     if (pages.status) body.append(el("div", { className: "muted", style: "margin-bottom:8px" }, pages.status));
     body.append(renderMarkup(cached.markup, cur));

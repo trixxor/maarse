@@ -493,7 +493,7 @@ private fun MuGrid(blocks: List<MuBlock>, c: MuCtx, cols: Int, version: Int) {
             for (b in blocks) when (b) {
                 is MuBlock.GridRow -> MuText(b.text.ifEmpty { " " }, c, style.copy(), Modifier, null)
                 is MuBlock.Board -> MuBoard(b, c)
-                is MuBlock.Pic -> Picture(b.caption, b.src, picStyle(b.words), c.base, version, b.words.contains("!"))
+                is MuBlock.Pic -> Picture(b.caption, b.src, picStyle(b.words), c.base, version, Regex("""\b(grey|dots|colour|color)!""").containsMatchIn(b.words.lowercase()), b.words)
                 else -> {}
             }
         }
@@ -517,7 +517,7 @@ private fun MuBlocks(blocks: List<MuBlock>, c: MuCtx, version: Int, anchors: Has
             is MuBlock.Quote -> MuQuote(b, c)
             is MuBlock.Table -> PageTable(b.t, c.base) { t, head, align -> MuText(t, c, MaterialTheme.typography.bodyMedium, Modifier.fillMaxWidth(), align, bold = head) }
             is MuBlock.Code -> MuCode(b.text, c)
-            is MuBlock.Pic -> Picture(b.caption, b.src, picStyle(b.words), c.base, version, Regex("""\b(grey|dots|colour|color)!""").containsMatchIn(b.words.lowercase()))
+            is MuBlock.Pic -> Picture(b.caption, b.src, picStyle(b.words), c.base, version, Regex("""\b(grey|dots|colour|color)!""").containsMatchIn(b.words.lowercase()), b.words)
             is MuBlock.Rule -> if (b.double) Column(verticalArrangement = Arrangement.spacedBy(2.dp)) { Box(Modifier.fillMaxWidth().size(1.dp).background(c.ink)); Box(Modifier.fillMaxWidth().size(1.dp).background(c.ink)) }
                 else Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).size(1.dp).background(c.ink.copy(alpha = 0.35f)))
             // A phone: columns become one column.

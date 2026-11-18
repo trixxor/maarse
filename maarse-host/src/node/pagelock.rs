@@ -363,3 +363,89 @@ mod tests {
         assert_eq!(clean_note(b"   "), None);
     }
 }
+
+// ---------- picture previews ----------
+//
+// Every picture line a page is sent with gets a preview in its style words:
+// `~<width>x<height>:<24 characters>`, the picture's size (so the reader's
+// frame has the right shape before anything comes) and 4×3 colours (12 bits
+// each, base64url), drawn blurred until a real copy arrives. About 35 bytes
+// per picture, made once per file and kept in memory.
+
+/// The preview token of a picture file, e.g. `~1200x800:Aa0…`.
+pub(crate) fn preview_token(data: &[u8]) -> Option<String> {
+    let img = image::load_from_memory(data).ok()?;
+    let (w, h) = (img.width(), img.height());
+    let small = img.resize_exact(4, 3, image::imageops::FilterType::Triangle).to_rgb8();
+    let nibbles: Vec<u8> = small.pixels().flat_map(|p| [p[0] >> 4, p[1] >> 4, p[2] >> 4]).collect();
+    let bytes: Vec<u8> = nibbles.chunks(2).map(|c| c[0] << 4 | c.get(1).copied().unwrap_or(0)).collect();
+    Some(format!("~{w}x{h}:{}", b64url(&bytes)))
+}
+
+fn b64url(b: &[u8]) -> String {
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    for c in b.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        let k = c.len() + 1;
+        for i in 0..k {
+            out.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
+        }
+    }
+    out
+}
+
+/// Adds the preview token to every picture line outside code blocks.
+/// `token` gives the token for a picture path (relative to `pages/`).
+pub(super) fn with_previews(markup: &str, token: &mut dyn FnMut(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(markup.len() + 64);
+    let mut fence = false;
+    for line in markup.lines() {
+        let t = line.trim();
+        if t.starts_with("```") {
+            fence = !fence;
+        }
+        let pic = (!fence && t.starts_with("![") && t.ends_with(')')).then(|| t.find("](")).flatten();
+        if let Some(i) = pic {
+            let inner = &t[i + 2..t.len() - 1];
+            let (src, words) = match inner.find(char::is_whitespace) {
+                Some(k) => (&inner[..k], inner[k..].trim()),
+                None => (inner, ""),
+            };
+            let words = words.trim_matches('"');
+            if !words.contains('~')
+                && let Some(tok) = token(src.trim_start_matches('/'))
+            {
+                let w = if words.is_empty() { tok } else { format!("{words} {tok}") };
+                out.push_str(&format!("{}({src} \"{w}\")\n", &t[..i + 1]));
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn picture_lines_get_a_preview() {
+        let m = "# Hi\n![Cabin](demo/a.png \"dots wide\")\n![b](b.png)\n```\n![x](a.png)\n```\n";
+        let out = with_previews(m, &mut |p| Some(format!("~4x3:{p}")));
+        assert!(out.contains("![Cabin](demo/a.png \"dots wide ~4x3:demo/a.png\")"), "{out}");
+        assert!(out.contains("![b](b.png \"~4x3:b.png\")"), "{out}");
+        assert!(out.contains("```\n![x](a.png)\n```"), "an example in a code block was changed: {out}");
+    }
+
+    #[test]
+    fn preview_of_a_picture() {
+        let img = image::RgbImage::from_fn(120, 80, |x, _| image::Rgb([(x * 2) as u8, 0, 200]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let t = preview_token(&png).unwrap();
+        assert!(t.starts_with("~120x80:") && t.len() == "~120x80:".len() + 24, "{t}");
+    }
+}

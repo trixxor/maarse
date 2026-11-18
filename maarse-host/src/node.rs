@@ -2446,6 +2446,15 @@ impl Node {
         f.got += 1;
         f.active = Instant::now();
         let (got, total) = (f.got, f.offer.chunks);
+        // A page or a page picture: the clients get each piece at once, so
+        // they can draw the page while the rest comes (the whole file follows
+        // at the end as for any file; the clients place pieces by offset).
+        if pages::is_page_file(&f.offer.mime, &f.offer.name) {
+            let off = idx as usize * f.offer.chunk_size as usize;
+            for (k, part) in out[..n].chunks(MAX_TEXT).enumerate() {
+                self.broadcast(&Event::FileChunk { file_id, offset: (off + k * MAX_TEXT) as u32, data: text(part) });
+            }
+        }
         self.broadcast(&Event::FileProgress {
             file_id,
             done: got,

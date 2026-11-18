@@ -60,6 +60,8 @@ pub(super) struct Pages {
     asked: HashMap<(Address, Vec<u8>), Instant>,
     /// When each reader last wrote a note (unix seconds).
     pub(super) noted: HashMap<Address, u64>,
+    /// Picture previews by file, with the file's time (made once).
+    previews: std::cell::RefCell<HashMap<PathBuf, (std::time::SystemTime, Option<String>)>>,
 }
 
 /// How long an asked-for page may take to come.
@@ -412,7 +414,11 @@ The picture `{rel}` is missing here or could not be made small enough.
         }
         let markup = self.page_markup(path_s);
         let markup = match &file {
-            Some(f) => info + &self.with_notes(&super::pagelock::strip_locks(&markup), f, path_s),
+            Some(f) => {
+                let m = self.with_notes(&super::pagelock::strip_locks(&markup), f, path_s);
+                let mut token = |src: &str| self.preview(src);
+                info + &super::pagelock::with_previews(&m, &mut token)
+            }
             None => markup,
         };
         let data = compress(markup.as_bytes());
@@ -428,6 +434,24 @@ The page `{path_s}` is {} KB compressed; the limit here is {} KB.
             return (compress(msg.as_bytes()), page_mime());
         }
         (data, page_mime())
+    }
+
+    /// The preview token of a picture in `pages/` (cached until the file changes).
+    fn preview(&self, src: &str) -> Option<String> {
+        let path = self.pages_dir().join(src.to_lowercase());
+        if !path.starts_with(self.pages_dir()) || src.contains("..") {
+            return None;
+        }
+        let modified = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+        let mut cache = self.pages.previews.borrow_mut();
+        if let Some((t, tok)) = cache.get(&path)
+            && *t == modified
+        {
+            return tok.clone();
+        }
+        let tok = fs::read(&path).ok().and_then(|d| super::pagelock::preview_token(&d));
+        cache.insert(path, (modified, tok.clone()));
+        tok
     }
 
     /// Our own pages, asked for by one of our clients (the owner checking

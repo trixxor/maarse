@@ -36,6 +36,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
@@ -105,7 +107,9 @@ fun PagesPage(onExit: () -> Unit = {}) {
         else androidx.compose.foundation.layout.Spacer(Modifier.height(3.dp))
         androidx.compose.material3.HorizontalDivider()
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            val markup = cur?.let { Pages.markup(it) }
+            // A page still coming shows what has come so far.
+            val partial = cur?.let { if (Pages.markup(it) == null) Pages.partial(it) else null }
+            val markup = cur?.let { Pages.markup(it) } ?: partial
             when {
                 cur == null -> StartPage(v)
                 markup == null -> Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -119,6 +123,7 @@ fun PagesPage(onExit: () -> Unit = {}) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (Pages.status.isNotEmpty()) Text(Pages.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     MuPage(markup, cur, v, scroll)
+                    if (partial != null) Text("Receiving the rest of the page…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
                   }
                 }
@@ -554,105 +559,94 @@ private fun Inline(text: String, base: Pages.Url, style: androidx.compose.ui.tex
     Text(s, modifier, style = style, fontWeight = if (bold) FontWeight.SemiBold else null, textAlign = align)
 }
 
-// Pictures come in steps, all made by the host as WebP and the same on every
-// route: Greyscale (about 1.3 KB) first, then on request Colour 4 KB and
-// Colour 8 KB. Over LoRa the first waits for a tap; over the internet it loads
-// at once. Tapping the picture offers the next steps. `forced` ("dots!" on the page):
-// that copy on every route, no steps.
-private data class PicStep(val id: String, val name: String, val time: String, val net: Boolean = false)
-// Full size is the original: over the internet only; over LoRa 8 KB is the most.
-private val PIC_STEPS = listOf(PicStep("_c4", "Colour 4 KB", "about 35 s"), PicStep("_c8", "Colour 8 KB", "about 1 min"),
-    PicStep("_full", "Full size", "", net = true))
+/** The copies of a picture a reader can choose (the host makes them all). */
+private data class PicChoice(val id: String, val name: String, val note: String, val time: String, val net: Boolean = false)
+private val PIC_CHOICES = listOf(
+    PicChoice("_fdots", "Dots", "1–3 KB, sharp for drawings", "about 15 s"),
+    PicChoice("_fgrey", "Greyscale", "about 1.3 KB", "about 12 s"),
+    PicChoice("_c4", "Colour 4 KB", "4 KB", "about 35 s"),
+    PicChoice("_c8", "Colour 8 KB", "8 KB", "about 1 min"),
+    PicChoice("_full", "Full size", "the original", "", net = true),
+)
 
-/** A picture: over LoRa it waits for a tap; over the internet it loads at once.
- *  `version` is passed so a picture redraws when Pages changes. */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+/** The host's preview `~WxH:<24 chars>`: the picture's size and 4×3 colours. */
+private class Preview(val w: Int, val h: Int, val colours: List<Color>)
+private fun preview(hint: String): Preview? {
+    val m = Regex("""~(\d+)x(\d+):([A-Za-z0-9_-]{24})""").find(hint) ?: return null
+    val a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    val v = m.groupValues[3].map { a.indexOf(it) }
+    val bytes = (0 until 6).flatMap { g -> val n = (v[g * 4] shl 18) or (v[g * 4 + 1] shl 12) or (v[g * 4 + 2] shl 6) or v[g * 4 + 3]; listOf(n shr 16 and 255, n shr 8 and 255, n and 255) }
+    val nib = bytes.flatMap { listOf(it shr 4, it and 15) }
+    return Preview(m.groupValues[1].toInt(), m.groupValues[2].toInt(), (0 until 12).map { Color(nib[it * 3] * 17, nib[it * 3 + 1] * 17, nib[it * 3 + 2] * 17) })
+}
+
+/** A picture on a page. The frame has the picture's own shape (from the
+ *  host's preview) and shows the blurred preview at once; the best copy that
+ *  has come is drawn over it, and while another comes a progress bar lies on
+ *  top. A tap opens a menu: which copy to fetch, or full screen. Over the
+ *  internet the first copy loads by itself; over LoRa it waits for a tap. The
+ *  layout never changes, so nothing on the page moves. */
 @Composable
-internal fun Picture(caption: String, src: String, style: String, base: Pages.Url, @Suppress("UNUSED_PARAMETER") version: Int, forced: Boolean = false) {
-    // Read here too: a child given an unchanged-looking version may be skipped.
+internal fun Picture(caption: String, src: String, style: String, base: Pages.Url, @Suppress("UNUSED_PARAMETER") version: Int, forced: Boolean = false, words: String = "") {
     Pages.version.collectAsState().value
     val st = when (style) { "color", "colour" -> "colour"; "dots" -> "dots"; else -> "grey" }
     val rel = src.trimStart('/').lowercase()
     val path = if (forced) "_f$st/$rel" else "_$st/$rel"
-    val loadText = "Click here to see the picture · " + when {
-        !forced -> "smallest size, about 1.3 KB"
-        st == "dots" -> "dots, set by the page"
-        st == "colour" -> "Colour 8 KB, set by the page"
-        else -> "Greyscale, set by the page"
-    }
-    val key = "${base.addr}/$path"
     val lora = Pages.overLora(base.addr)
-    // The best step that has come wins: Colour 8 KB, Colour 4 KB, then the first copy.
-    val steps = if (forced) emptyList() else PIC_STEPS.filter { !(it.net && lora) }
-    val top = steps.lastOrNull { Pages.picture("${base.addr}/${it.id}/$rel") is Pages.Pic.Got }
-    val first = Pages.picture(key)
-    val pic = top?.let { Pages.picture("${base.addr}/${it.id}/$rel") } ?: first
-    var large by remember(key) { mutableStateOf(false) }
-    // The same layout before and after the picture comes, so nothing on the
-    // page moves (in columns everything would flow on): a fixed 3:2 frame and
-    // one caption line under it. The next size is a small button in the
-    // frame's corner.
-    val frame = Modifier.widthIn(max = 480.dp).fillMaxWidth().aspectRatio(1.5f)
+    val pv = remember(words) { preview(words) }
+    val choices = if (forced) emptyList() else PIC_CHOICES.filter { !(it.net && lora) }
+    val all = listOf("first copy" to path) + choices.map { it.name to "${it.id}/$rel" }
+    fun pic(c: Pair<String, String>) = Pages.picture("${base.addr}/${c.second}")
+    val got = all.mapNotNull { c -> (pic(c) as? Pages.Pic.Got)?.let { c to it } }.maxByOrNull { it.second.at }
+    val busy = all.firstNotNullOfOrNull { c -> (pic(c) as? Pages.Pic.Busy)?.let { c to it } }
+    val asking = all.firstOrNull { pic(it) is Pages.Pic.Asking || Pages.queued(base.addr, it.second) }
+    val failed = (pic(all[0]) as? Pages.Pic.Failed)?.takeIf { got == null }
+    // Over the internet the first copy comes by itself.
+    LaunchedEffect(lora, rel) { if (!lora && got == null && busy == null && asking == null && failed == null) Pages.requestPicture(base.addr, path) }
+    var menu by remember(rel) { mutableStateOf(false) }
+    var large by remember(rel) { mutableStateOf(false) }
+    val ratio = pv?.let { (it.w.toFloat() / it.h).coerceIn(0.33f, 3f) } ?: 1.5f
+    val bmp = remember(got?.second) { got?.second?.let { BitmapFactory.decodeByteArray(it.data, 0, it.data.size) } }
     val small = MaterialTheme.typography.labelSmall
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        when (pic) {
-            is Pages.Pic.Got -> {
-                val bmp = remember(pic) { BitmapFactory.decodeByteArray(pic.data, 0, pic.data.size) }
-                val stepName = top?.name ?: when { pic.mime == "image/png" -> "Dots"; forced && st == "colour" -> "Colour 8 KB"; else -> "Greyscale" }
-                Box(frame.clip(RoundedCornerShape(4.dp)).background(Color.White)) {
-                    if (bmp != null) Image(bmp.asImageBitmap(), caption.ifEmpty { rel },
-                        Modifier.fillMaxSize().clickable { large = true }, // a tap opens it full screen (zoom there)
-                        contentScale = ContentScale.Fit,
-                        filterQuality = if (pic.mime == "image/png") FilterQuality.None else FilterQuality.Low)
-                    if (!forced) {
-                        // Only the next step: smallest first, one size up at a time.
-                        val higher = steps.drop(if (top == null) 0 else steps.indexOf(top) + 1).take(1)
-                        val working = higher.firstOrNull { val p = Pages.picture("${base.addr}/${it.id}/$rel"); p is Pages.Pic.Busy || p is Pages.Pic.Asking || Pages.queued(base.addr, "${it.id}/$rel") }
-                        val wp = working?.let { Pages.picture("${base.addr}/${it.id}/$rel") }
-                        val chip = Modifier.align(Alignment.BottomEnd).padding(6.dp).background(Color(0xCC111111), RoundedCornerShape(12.dp))
-                        when {
-                            wp is Pages.Pic.Busy -> Text("${working.name} · ${wp.percent} %", chip.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White, style = small)
-                            working != null -> Text("Asking for ${working.name}…", chip.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White, style = small)
-                            higher.isNotEmpty() -> higher.first().let { s ->
-                                val sp = Pages.picture("${base.addr}/${s.id}/$rel")
-                                Text(if (sp is Pages.Pic.Failed) "${s.name}: try again" else if (lora) "${s.name} · ${s.time}" else s.name,
-                                    chip.clickable { Pages.requestPicture(base.addr, "${s.id}/$rel") }.padding(horizontal = 10.dp, vertical = 4.dp),
-                                    color = Color.White, style = small)
-                            }
-                        }
-                    }
-                }
-                if (large && bmp != null) ZoomImage(bmp.asImageBitmap(), caption.ifEmpty { rel }, pic.mime == "image/png") { large = false }
-                Text("${if (caption.isNotEmpty()) "$caption · " else ""}$stepName · " + "%.1f KB".format(pic.data.size / 1024f),
-                    style = small, color = LocalContentColor.current.copy(alpha = 0.7f), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        Box(Modifier.widthIn(max = 480.dp).fillMaxWidth().aspectRatio(ratio).clip(RoundedCornerShape(4.dp))
+            .then(if (pv == null) Modifier.border(1.dp, LocalContentColor.current.copy(alpha = 0.4f), RoundedCornerShape(4.dp)) else Modifier)
+            .clickable { if (forced) { if (bmp != null) large = true else Pages.requestPicture(base.addr, path) } else menu = true }) {
+            if (pv != null) androidx.compose.foundation.Canvas(Modifier.fillMaxSize().blur(18.dp)) {
+                val cw = size.width / 4; val ch = size.height / 3
+                pv.colours.forEachIndexed { i, c -> drawRect(c, androidx.compose.ui.geometry.Offset((i % 4) * cw, (i / 4) * ch), androidx.compose.ui.geometry.Size(cw + 1, ch + 1)) }
             }
-            else -> {
-                Column(frame.border(1.dp, LocalContentColor.current.copy(alpha = 0.4f), RoundedCornerShape(6.dp)).padding(12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)) {
-                    when (pic) {
-                        Pages.Pic.Asking -> {
-                            Text("Asking the node…", style = MaterialTheme.typography.bodySmall)
-                            androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
-                        }
-                        is Pages.Pic.Busy -> {
-                            androidx.compose.material3.LinearProgressIndicator(progress = { pic.percent / 100f }, modifier = Modifier.fillMaxWidth())
-                            Text("Receiving · %d %% · %.1f of %.1f KB".format(pic.percent, pic.total * pic.percent / 100f / 1024f, pic.total / 1024f),
-                                style = MaterialTheme.typography.bodySmall)
-                        }
-                        null -> if (Pages.queued(base.addr, path)) Text("Waiting for the picture before it…", style = MaterialTheme.typography.bodySmall)
-                            else OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) { Text(loadText) }
-                        else -> OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) {
-                            Text(if (pic is Pages.Pic.Failed) "Try again (${pic.why})" else loadText)
-                        }
-                    }
+            if (bmp != null) Image(bmp.asImageBitmap(), caption.ifEmpty { rel }, Modifier.fillMaxSize(), contentScale = ContentScale.Fit,
+                filterQuality = if (got?.second?.mime == "image/png") FilterQuality.None else FilterQuality.Low)
+            val barMod = Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xAA000000))
+            when {
+                busy != null -> Box(barMod.height(26.dp)) {
+                    Box(Modifier.fillMaxHeight().fillMaxWidth(busy.second.percent / 100f).background(Color(0xAA6FD3A5)))
+                    Text("${if (busy.first.first == "first copy") "Receiving" else busy.first.first} · ${busy.second.percent} %", Modifier.align(Alignment.CenterStart).padding(horizontal = 10.dp), color = Color.White, style = small)
                 }
-                Text(caption.ifEmpty { rel }, style = small, color = LocalContentColor.current.copy(alpha = 0.7f), maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                asking != null -> Column(barMod) {
+                    androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().height(3.dp))
+                    Text(if (asking.first == "first copy") "Asking the node…" else "Asking for ${asking.first}…", Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White, style = small)
+                }
+                got == null -> Text(if (failed != null) "Tap to try again (${failed.why})" else if (lora) "Tap to fetch the picture" else "Loading…",
+                    barMod.padding(6.dp), color = Color.White, style = small, textAlign = TextAlign.Center)
+            }
+            androidx.compose.material3.DropdownMenu(menu, { menu = false }) {
+                if (bmp != null) androidx.compose.material3.DropdownMenuItem({ Text("⤢ Full screen") }, { menu = false; large = true })
+                for (c in choices) {
+                    val have = Pages.picture("${base.addr}/${c.id}/$rel") is Pages.Pic.Got
+                    androidx.compose.material3.DropdownMenuItem(
+                        { Column { Text((if (have) "✓ " else "") + c.name); Text(c.note + if (lora && c.time.isNotEmpty()) " · ${c.time}" else "", style = small) } },
+                        { menu = false; if (!have) Pages.requestPicture(base.addr, "${c.id}/$rel") })
+                }
             }
         }
+        if (large && bmp != null) ZoomImage(bmp.asImageBitmap(), caption.ifEmpty { rel }, got?.second?.mime == "image/png") { large = false }
+        val what = got?.let { (c, p) -> (if (c.first == "first copy") (if (p.mime == "image/png") "Dots" else "Greyscale") else c.first) + " · " + "%.1f KB".format(p.data.size / 1024f) }
+        Text(listOfNotNull(caption.ifEmpty { null }, what).joinToString(" · ").ifEmpty { rel }, style = small,
+            color = LocalContentColor.current.copy(alpha = 0.7f), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
 }
-
 
 /** Full screen picture: pinch to zoom, drag to move, double-tap to zoom in
  *  and out; Back or Close closes. */

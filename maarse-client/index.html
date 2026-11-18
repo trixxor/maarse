@@ -184,6 +184,8 @@
   .page { max-width: 720px; line-height: 1.6; background: var(--raised); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 22px 16px; }
   .page h2, .page h3, .page h4 { margin: 18px 0 6px; text-wrap: balance; }
   .page pre { background: var(--bg); padding: 10px 12px; border-radius: 8px; overflow-x: auto; font-family: var(--mono); font-size: 13px; }
+  .picbar { width: 100%; height: 8px; accent-color: var(--accent); }
+  .page img { max-width: 100%; height: auto; }
   .page code { font-family: var(--mono); font-size: .92em; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
   .page blockquote { border-left: 3px solid var(--accent); margin: 10px 0; padding: 2px 12px; color: var(--muted); }
   .page a { color: var(--accent); font-weight: 600; }
@@ -248,7 +250,10 @@
     .form > span:empty { display: none; }
     .form label { margin-top: 6px; }
     .safety { grid-template-columns: repeat(3, max-content); font-size: 16px; gap: 4px 12px; }
-    .page { padding: 4px 14px 12px; }
+    .page { padding: 4px 12px 12px; }
+    /* ASCII art and tables keep their lines; the font shrinks with the screen. */
+    .page pre { font-size: clamp(7px, 2.3vw, 12px); line-height: 1.25; padding: 8px; }
+    .page h2 { font-size: 1.25rem; } .page h3 { font-size: 1.1rem; }
     /* </mobile> */
   }
 
@@ -3236,6 +3241,14 @@ function requestPicture(addr, path) {
     if (pages.picWaits.has(key)) { pages.picWaits.delete(key); pages.pics.set(key, { error: "no reply" }); nextPicture(); if (state.view === "pages") renderChat(); }
   }, 120000);
 }
+// How far a picture has come: a bar, the percent and the size.
+function picProgress(f, what) {
+  const w = el("div", {}); w.style.cssText = "display:flex;flex-direction:column;gap:4px;width:100%;max-width:320px";
+  const pct = Math.round((f.progress || 0) * 100);
+  const bar = el("progress", { className: "picbar", max: 100, value: pct });
+  w.append(bar, el("div", { className: "muted", style: "font-size:12px" }, `${what} · ${pct} % · ${(f.size * pct / 100 / 1024).toFixed(1)} of ${(f.size / 1024).toFixed(1)} KB`));
+  return w;
+}
 function pagePicture(caption, src, style, base) {
   const st = style === "color" ? "colour" : style || "grey";
   const rel = src.replace(/^\/+/, "").toLowerCase();
@@ -3258,8 +3271,8 @@ function pagePicture(caption, src, style, base) {
     // Over LoRa the small copy came first: a better one can be asked for.
     if (lora && !best?.url) {
       const bBusy = [...state.files.values()].find(f => f.pic && f.key === bestKey);
-      if (bBusy) fig.append(el("div", { className: "muted", style: "font-size:12px" }, `Better picture: ${Math.round(bBusy.progress * 100)} %`));
-      else if (pages.picWaits.has(bestKey) || pages.picQueue.some(q => q.addr === base.addr && q.path === bestPath)) fig.append(el("div", { className: "muted", style: "font-size:12px" }, "Asking for a better picture…"));
+      if (bBusy) fig.append(picProgress(bBusy, "Better picture"));
+      else if (pages.picWaits.has(bestKey) || pages.picQueue.some(q => q.addr === base.addr && q.path === bestPath)) fig.append(el("div", { className: "muted", style: "font-size:12px" }, "Asking for a better picture…"), el("progress", { className: "picbar" }));
       else {
         const more = el("button", { textContent: best?.error ? `Better picture: try again (${best.error})` : "Get a better picture · colour, up to 8 KB · about 1 min. over LoRa" });
         more.style.alignSelf = "flex-start";
@@ -3273,8 +3286,8 @@ function pagePicture(caption, src, style, base) {
   const box = el("div", {});
   Object.assign(box.style, { width: "320px", maxWidth: "100%", minHeight: "120px", border: "1px dashed var(--line)", borderRadius: "6px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", padding: "12px", boxSizing: "border-box" });
   box.append(el("div", {}, caption || rel));
-  if (busy) box.append(el("div", { className: "muted" }, `Receiving… ${Math.round(busy.progress * 100)} %`));
-  else if (pages.picWaits.has(key)) box.append(el("div", { className: "muted" }, "Asking the node…"));
+  if (busy) box.append(picProgress(busy, "Receiving"));
+  else if (pages.picWaits.has(key)) box.append(el("div", { className: "muted" }, "Asking the node…"), el("progress", { className: "picbar" }));
   else if (pages.picQueue.some(q => q.addr === base.addr && q.path === path)) box.append(el("div", { className: "muted" }, "Waiting for the picture before it…"));
   else {
     const b = el("button", { textContent: got?.error ? `Try again (${got.error})` : "Load picture · smallest version · about 10–20 sec. over LoRa" });

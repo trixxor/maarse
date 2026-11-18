@@ -49,6 +49,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import dk.maarse.app.Node
@@ -73,12 +75,17 @@ fun PagesPage() {
     @Suppress("UNUSED_VARIABLE") val v = Pages.version.collectAsState().value
     val cur = Pages.url
     var input by remember(cur) { mutableStateOf(cur?.toString() ?: "") }
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = { Pages.back() }, enabled = Pages.history.isNotEmpty()) { Text("←") }
-            OutlinedTextField(input, { input = it }, Modifier.weight(1f), singleLine = true, placeholder = { Text("maarse://<address>/path") },
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.IconButton(onClick = { Pages.back() }, enabled = Pages.history.isNotEmpty()) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, "Previous page")
+            }
+            OutlinedTextField(input, { input = it }, Modifier.weight(1f), singleLine = true, placeholder = { Text("maarse://address/path") },
+                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go), keyboardActions = KeyboardActions(onGo = { Pages.open(input) }))
-            Button(onClick = { Pages.open(input) }) { Text("Fetch") }
+            androidx.compose.material3.IconButton(onClick = { Pages.open(input) }) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Refresh, "Fetch")
+            }
         }
         if (Pages.status.isNotEmpty()) Text(Pages.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (Pages.sharing.isNotEmpty()) {
@@ -176,9 +183,18 @@ private fun Markup(markup: String, base: Pages.Url, version: Int) {
 
 @Composable
 private fun CodeBlock(t: String) {
-    Text(t, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall,
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
-            .horizontalScroll(rememberScrollState()).padding(10.dp), softWrap = false)
+    // ASCII art and tables keep their lines: the font shrinks so the longest
+    // line fits the screen (down to a readable minimum), then it scrolls.
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceContainer)) {
+        val longest = t.lines().maxOfOrNull { it.length }?.coerceAtLeast(1) ?: 1
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val widthPx = with(density) { (maxWidth - 20.dp).toPx() }
+        val fitSp = with(density) { (widthPx / (longest * 0.75f)).toSp().value }
+        val size = fitSp.coerceIn(6.5f, 13f)
+        Text(t, fontFamily = FontFamily.Monospace, fontSize = androidx.compose.ui.unit.TextUnit(size, androidx.compose.ui.unit.TextUnitType.Sp),
+            lineHeight = androidx.compose.ui.unit.TextUnit(size * 1.25f, androidx.compose.ui.unit.TextUnitType.Sp),
+            modifier = Modifier.horizontalScroll(rememberScrollState()).padding(10.dp), softWrap = false)
+    }
 }
 
 /** **bold**, `code` and [text](link): links to maarse:// pages open here; links out are shown as text. */
@@ -236,8 +252,15 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 // Over LoRa the small copy came first: a better one can be asked for.
                 if (Pages.overLora(base.addr) && best !is Pages.Pic.Got) when {
-                    best is Pages.Pic.Busy -> Text("Better picture: ${best.percent} %", style = MaterialTheme.typography.labelSmall)
-                    Pages.queued(base.addr, bestPath) -> Text("Asking for a better picture…", style = MaterialTheme.typography.labelSmall)
+                    best is Pages.Pic.Busy -> Column(Modifier.widthIn(max = 320.dp)) {
+                        androidx.compose.material3.LinearProgressIndicator(progress = { best.percent / 100f }, modifier = Modifier.fillMaxWidth())
+                        Text("Better picture · %d %% · %.1f of %.1f KB".format(best.percent, best.total * best.percent / 100f / 1024f, best.total / 1024f),
+                            style = MaterialTheme.typography.labelSmall)
+                    }
+                    best is Pages.Pic.Asking || Pages.queued(base.addr, bestPath) -> Column(Modifier.widthIn(max = 320.dp)) {
+                        Text("Asking for a better picture…", style = MaterialTheme.typography.labelSmall)
+                        androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+                    }
                     else -> OutlinedButton(onClick = { Pages.requestPicture(base.addr, bestPath) }) {
                         Text(if (best is Pages.Pic.Failed) "Better picture: try again (${best.why})" else "Get a better picture · colour, up to 8 KB · about 1 min")
                     }
@@ -249,7 +272,15 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
             ) {
                 Text(caption.ifEmpty { rel })
                 when (pic) {
-                    is Pages.Pic.Busy -> Text("Receiving… ${pic.percent} %", style = MaterialTheme.typography.bodySmall)
+                    Pages.Pic.Asking -> {
+                        Text("Asking the node…", style = MaterialTheme.typography.bodySmall)
+                        androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+                    }
+                    is Pages.Pic.Busy -> {
+                        androidx.compose.material3.LinearProgressIndicator(progress = { pic.percent / 100f }, modifier = Modifier.fillMaxWidth())
+                        Text("Receiving · %d %% · %.1f of %.1f KB".format(pic.percent, pic.total * pic.percent / 100f / 1024f, pic.total / 1024f),
+                            style = MaterialTheme.typography.bodySmall)
+                    }
                     null -> if (Pages.queued(base.addr, path)) Text("Waiting for the picture before it…", style = MaterialTheme.typography.bodySmall)
                         else OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) { Text("Load picture · smallest version · about 10–20 s over LoRa") }
                     else -> OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) {

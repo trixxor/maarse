@@ -21,7 +21,10 @@ object Pages {
     sealed class Pic {
         data class Got(val data: ByteArray, val mime: String) : Pic()
         data class Failed(val why: String) : Pic()
-        data class Busy(val percent: Int) : Pic()
+        /** Asked for; nothing has come yet. */
+        data object Asking : Pic()
+        /** Coming: `percent` done of `total` bytes. */
+        data class Busy(val percent: Int, val total: Int) : Pic()
     }
 
     private class InFile(val key: String, val pic: Boolean, val mime: String, val buf: ByteArray)
@@ -117,8 +120,12 @@ object Pages {
         if (key in waits) return
         if (busy(addr)) { if (!queued(addr, path)) queue.addLast(addr to path); bump(); return }
         waits.add(key)
-        pics[key] = Pic.Busy(0)
-        if (!Node.send(Cmd.requestPage(Node.req(), addr, path))) pics[key] = Pic.Failed("not connected")
+        pics[key] = Pic.Asking
+        if (!Node.send(Cmd.requestPage(Node.req(), addr, path))) { waits.remove(key); pics[key] = Pic.Failed("not connected") }
+        // No answer in two minutes: say so, so it can be tried again.
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (key in waits) { waits.remove(key); pics[key] = Pic.Failed("no answer"); next(); bump() }
+        }, 120_000)
         bump()
     }
 
@@ -132,6 +139,7 @@ object Pages {
         if (ev.size <= 0 || ev.size > 2 * 1024 * 1024) return false
         waits.remove(key)
         files[ev.fileId] = InFile(key, pic, ev.mime, ByteArray(ev.size))
+        if (pic) pics[key] = Pic.Busy(0, ev.size)
         bump()
         return true
     }
@@ -146,7 +154,7 @@ object Pages {
     fun onProgress(ev: Ev.FileProgress): Boolean {
         val f = files[ev.fileId] ?: return false
         val pct = 100 * ev.done / maxOf(1, ev.total)
-        if (f.pic) pics[f.key] = Pic.Busy(pct) else if (url?.key == f.key) status = "Receiving… $pct %"
+        if (f.pic) pics[f.key] = Pic.Busy(pct, f.buf.size) else if (url?.key == f.key) status = "Receiving… $pct %"
         bump()
         return true
     }

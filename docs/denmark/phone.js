@@ -103,7 +103,7 @@
     box.innerHTML = `<div class="ph-head"><b>Phones</b><span class="ph-note">The real web client, connected to a simulated node. Keeps running while you break the network.</span><button class="ph-x" title="Hide the phones">×</button></div>
       <div class="ph-row">${phones.map((p) => `<div class="ph-card" id="ph-${p.id}">
         <div class="ph-bar"><span class="ph-dot" title="Node state"></span><span>Phone ${p.id} is node</span><select class="ph-node"></select></div>
-        <div class="ph-device"><iframe title="Phone ${p.id}" class="ph-screen"></iframe></div>
+        <div class="ph-fit"><div class="ph-device"><div class="ph-notch"></div><iframe title="Phone ${p.id}" class="ph-screen"></iframe></div></div>
         <div class="ph-stat"></div></div>`).join("")}</div>`;
     wrap.appendChild(box);
     box.querySelector(".ph-x").onclick = () => show(false);
@@ -116,8 +116,21 @@
     if (side) side.querySelector("#ph-toggle").onclick = () => show(!shown);
   }
 
+  // The phone screen is a real Android size (412 x 892 dp, like a Pixel 7),
+  // so the client lays out as on the app; the whole device is scaled to fit
+  // the map's height.
+  const DEV_W = 412 + 2 * 10, DEV_H = 892 + 2 * 10;
+  function fit() {
+    const box = $("phones"), wrap = $("mapwrap");
+    if (!box || !wrap) return;
+    const avail = wrap.clientHeight - 120;
+    const k = Math.max(0.45, Math.min(1, avail / DEV_H));
+    box.style.setProperty("--ph-k", k.toFixed(3));
+  }
+  window.addEventListener("resize", fit);
   function show(on) {
     shown = on;
+    fit();
     $("phones").classList.toggle("hidden", !on);
     const t = $("ph-toggle");
     if (t) t.textContent = on ? "Hide the phones" : "Show the phones";

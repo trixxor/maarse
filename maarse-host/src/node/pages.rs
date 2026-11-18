@@ -42,17 +42,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// At most this many pages and pictures to the same node within [`WINDOW`]
-/// over LoRa, so nobody can make us fill the air, while one can still click a
-/// couple of links in quick succession.
-const BURST: usize = 5;
-/// The same over the internet, where only a runaway client is stopped: a page
-/// with a few pictures is several requests at once.
-const BURST_TCP: usize = 60;
 const WINDOW: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 pub(super) struct Pages {
+    /// The page server's settings (see `Config`).
+    pub(super) off: bool,
+    burst_lora: usize,
+    burst_net: usize,
+    pub(super) board_keep: usize,
+    pub(super) board_every: u64,
+    previews_off: bool,
     served: HashMap<Address, Vec<Instant>>,
     /// Pages and pictures we asked for (node, path) and when: only those
     /// are taken when offered. Anything else that looks like a page is
@@ -70,6 +70,20 @@ const ASKED_KEEP: Duration = Duration::from_secs(600);
 /// A page or a picture on a page (`_style/file`), by its offer.
 pub(super) fn is_page_file(mime: &[u8], name: &[u8]) -> bool {
     mime == content::PAGE_MIME || (name.first() == Some(&b'_') && name.contains(&b'/'))
+}
+
+impl Pages {
+    pub(super) fn new(cfg: &crate::Config) -> Self {
+        Pages {
+            off: cfg.no_pages,
+            burst_lora: cfg.pages_burst_lora.max(1),
+            burst_net: cfg.pages_burst_net.max(1),
+            board_keep: cfg.board_keep.max(1),
+            board_every: cfg.board_every,
+            previews_off: cfg.no_previews,
+            ..Default::default()
+        }
+    }
 }
 
 /// Finds the page's file in `root`. The path has already been cleaned with
@@ -307,8 +321,8 @@ impl Node {
     /// Markup for the answer to `path`.
     fn page_markup(&self, path: &str) -> String {
         let root = self.pages_dir();
-        if !root.is_dir() {
-            return "# No pages\n\nThis node has no pages.\n".into();
+        if !root.is_dir() || self.pages.off {
+            return "# No pages\n\nThis node does not share pages.\n".into();
         }
         match find_page(&root, path).and_then(|f| fs::read_to_string(f).ok()) {
             Some(m) => m,
@@ -324,7 +338,7 @@ impl Node {
             !v.is_empty()
         });
         let lora = self.file_limit(&from).via_lora;
-        let burst = if lora { BURST } else { BURST_TCP };
+        let burst = if lora { self.pages.burst_lora } else { self.pages.burst_net };
         let times = self.pages.served.entry(from).or_default();
         if times.len() >= burst {
             // Say so once, so the reader is not left waiting; then stay quiet.
@@ -349,6 +363,15 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
         let path_s = String::from_utf8_lossy(path).into_owned();
         let lim = self.file_limit(&from);
         let (data, mime) = self.page_answer(Some(from), &path_s, lim.via_lora, lim.max_bytes as usize);
+        // Statistics for the server's dashboard: which page, how, and whether a lock turned the reader away.
+        if self.tele.is_some() {
+            let picture = picture_path(&path_s).is_some_and(|(_, r)| r != path_s.as_str());
+            let (rel, file) = match picture_path(&path_s) { Some((_, r)) if picture => (r.to_string(), None), _ => (path_s.clone(), find_page(&self.pages_dir(), &path_s)) };
+            let refused = matches!(self.access(Some(from), &rel, file.as_deref()), super::pagelock::Access::Locked | super::pagelock::Access::Hidden);
+            if let Some(t) = self.tele.as_mut() {
+                t.page(&rel, &from, lim.via_lora, data.len(), picture, refused);
+            }
+        }
         let route = if lim.via_lora { "LoRa" } else { "internet" };
         self.log(format!("page '{path_s}' ({route}) to {} ({} bytes)", short(&from), data.len()));
         if let Err((_, e)) = self.send_page_reply(from, data, mime, path.clone()) {
@@ -416,8 +439,12 @@ The picture `{rel}` is missing here or could not be made small enough.
         let markup = match &file {
             Some(f) => {
                 let m = self.with_notes(&super::pagelock::strip_locks(&markup), f, path_s);
-                let mut token = |src: &str| self.preview(src);
-                info + &super::pagelock::with_previews(&m, &mut token)
+                if self.pages.previews_off {
+                    info + &m
+                } else {
+                    let mut token = |src: &str| self.preview(src);
+                    info + &super::pagelock::with_previews(&m, &mut token)
+                }
             }
             None => markup,
         };

@@ -27,6 +27,7 @@ mod links;
 mod meshcore;
 mod mqtt;
 mod node;
+mod pagefiles;
 mod sessions;
 mod service;
 mod settings;
@@ -172,6 +173,17 @@ pub struct Config {
     pub no_relay: bool,
     /// Most mail kept for others, MB (`--mail-quota-mb`; 0 = no limit).
     pub mail_quota_mb: u32,
+    /// The page server: do not share pages (`--no-pages`), pages per 30 s
+    /// per reader over LoRa and over the internet (`--pages-burst-lora`,
+    /// `--pages-burst-net`), notes kept per board (`--board-keep`), seconds
+    /// between two notes from one reader (`--board-every`), and no picture
+    /// previews in pages (`--no-previews`).
+    pub no_pages: bool,
+    pub pages_burst_lora: usize,
+    pub pages_burst_net: usize,
+    pub board_keep: usize,
+    pub board_every: u64,
+    pub no_previews: bool,
     /// Regions from the command line (`--region`); empty = use the saved ones.
     pub regions: Vec<String>,
     pub strict_region: bool,
@@ -469,6 +481,12 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         no_post_office: false,
         no_relay: false,
         mail_quota_mb: 0,
+        no_pages: false,
+        pages_burst_lora: 5,
+        pages_burst_net: 60,
+        board_keep: 50,
+        board_every: 60,
+        no_previews: false,
         modem_key: None,
         modem_ips: Vec::new(),
         modem_tcp: Vec::new(),
@@ -575,6 +593,12 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
                 c.modem_key = Some(k);
             }
             "--mail-quota-mb" => c.mail_quota_mb = val("--mail-quota-mb")?.parse().map_err(|_| "--mail-quota-mb: invalid number")?,
+            "--no-pages" => c.no_pages = true,
+            "--no-previews" => c.no_previews = true,
+            "--pages-burst-lora" => c.pages_burst_lora = val("--pages-burst-lora")?.parse().ok().filter(|n| (1..=100).contains(n)).ok_or("--pages-burst-lora: a number 1-100")?,
+            "--pages-burst-net" => c.pages_burst_net = val("--pages-burst-net")?.parse().ok().filter(|n| (1..=1000).contains(n)).ok_or("--pages-burst-net: a number 1-1000")?,
+            "--board-keep" => c.board_keep = val("--board-keep")?.parse().ok().filter(|n| (1..=1000).contains(n)).ok_or("--board-keep: a number 1-1000")?,
+            "--board-every" => c.board_every = val("--board-every")?.parse().ok().filter(|n| *n <= 86400).ok_or("--board-every: seconds, 0-86400")?,
             "--min-peers" => c.min_peers = val("--min-peers")?.parse().map_err(|_| "--min-peers: invalid number")?,
             "--region" => c.regions.push(val("--region")?.trim().to_lowercase()),
             "--strict-region" => c.strict_region = true,

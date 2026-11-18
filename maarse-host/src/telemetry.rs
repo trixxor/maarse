@@ -186,6 +186,22 @@ pub struct ModemStat {
 /// Keys of the modem counters kept as a series (see companion::stat).
 pub const MODEM_SERIES: [u8; 14] = [30, 31, 32, 33, 36, 37, 38, 39, 40, 41, 44, 49, 80, 88];
 
+/// One page (or picture) this server shares: how often and how it was read.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PageStat {
+    pub served: u64,
+    pub lora: u64,
+    pub net: u64,
+    pub pictures: u64,
+    pub bytes: u64,
+    pub notes: u64,
+    /// Readers turned away by a lock.
+    pub refused: u64,
+    pub last: u64,
+    /// Distinct readers (short addresses), at most 500.
+    pub readers: Vec<String>,
+}
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Telemetry {
     pub started: u64,
@@ -230,6 +246,11 @@ pub struct Telemetry {
     /// Journeys by message packet ID (hex).
     #[serde(default)]
     pub journeys: HashMap<String, Journey>,
+    /// The page server: per page path, and page loads per hour (unix hour, loads).
+    #[serde(default)]
+    pub pages: HashMap<String, PageStat>,
+    #[serde(default)]
+    pub page_hours: VecDeque<(u64, u32)>,
     #[serde(skip)]
     pending_data: HashMap<Address, (u64, Address, u8, u64)>,
     /// Carried message: notice token -> (first seen ms, message ID, handoffs).
@@ -605,6 +626,40 @@ impl Telemetry {
         }
     }
 
+    /// A page or picture was served (or refused) to `reader`.
+    pub fn page(&mut self, path: &str, reader: &Address, lora: bool, bytes: usize, picture: bool, refused: bool) {
+        let now = now_s();
+        let p = self.pages.entry(path.to_string()).or_default();
+        if refused {
+            p.refused += 1;
+        } else {
+            p.served += 1;
+            if lora { p.lora += 1 } else { p.net += 1 }
+            if picture { p.pictures += 1 }
+            p.bytes += bytes as u64;
+        }
+        p.last = now;
+        let r = reader.0[..4].iter().map(|b| format!("{b:02x}")).collect::<String>();
+        if !p.readers.contains(&r) && p.readers.len() < 500 {
+            p.readers.push(r);
+        }
+        if !refused && !picture {
+            let h = now / 3600;
+            match self.page_hours.back_mut() {
+                Some((hh, n)) if *hh == h => *n += 1,
+                _ => self.page_hours.push_back((h, 1)),
+            }
+            while self.page_hours.len() > 24 * 14 {
+                self.page_hours.pop_front();
+            }
+        }
+    }
+
+    /// A note was written on a page's board.
+    pub fn page_note(&mut self, path: &str) {
+        self.pages.entry(path.to_string()).or_default().notes += 1;
+    }
+
     pub fn router_event(&mut self, what: &str) {
         *self.router.entry(what.to_string()).or_default() += 1;
         let m = self.minute();
@@ -687,6 +742,9 @@ impl Telemetry {
             recent.into_iter().take(200).map(|(k, j)| json!({"id": k, "dest": j.dest, "first": j.first, "last": j.last, "done": j.done, "steps": j.steps})).collect();
         json!({
             "started": self.started,
+            "pages": self.pages.iter().map(|(k, p)| json!({"path": k, "served": p.served, "lora": p.lora, "net": p.net, "pictures": p.pictures,
+                "bytes": p.bytes, "notes": p.notes, "refused": p.refused, "last": p.last, "readers": p.readers.len()})).collect::<Vec<_>>(),
+            "page_hours": self.page_hours,
             "types": types,
             "minutes": self.minutes,
             "rx_by_type": self.rx_by_type,

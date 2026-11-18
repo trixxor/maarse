@@ -81,6 +81,21 @@
   .page { display: none; }
   .page.on { display: block; }
   a { color: var(--accent); }
+  .pg-hours { display: flex; align-items: flex-end; gap: 2px; height: 120px; padding-top: 8px; }
+  .pg-hours i { flex: 1; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 1px; position: relative; }
+  .pg-hours i:hover::after { content: attr(data-t); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: var(--raised); border: 1px solid var(--line); padding: 2px 6px; font-size: 11px; white-space: nowrap; border-radius: 4px; }
+  .pg-drop { border: 2px dashed var(--line); border-radius: 8px; padding: 8px; min-height: 260px; }
+  .pg-drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .pg-tools { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .pg-files div { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 13px; }
+  .pg-files div:hover, .pg-files div.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .pg-files small { margin-left: auto; color: var(--muted); }
+  .pg-files .x { visibility: hidden; border: 0; background: none; color: var(--bad); cursor: pointer; }
+  .pg-files div:hover .x { visibility: visible; }
+  .pg-hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .pg-editor textarea { width: 100%; min-height: 380px; font: 13px/1.5 ui-monospace, Consolas, monospace; tab-size: 2; }
+  .pg-editor .bar { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .pg-editor img { max-width: 100%; max-height: 380px; background: #fff; border-radius: 6px; }
 </style>
 </head>
 <body>
@@ -199,6 +214,28 @@
   </div>
 
   <!-- Post -->
+  <div class="page" data-page="pages">
+    <section><h2>Page server <small>maarse:// pages this server shares</small></h2><div class="tiles" id="pg-tiles"></div></section>
+    <section><h2>Page loads per hour <small>the last two days</small></h2><div id="pg-hours" class="pg-hours"></div></section>
+    <section><h2>Pages</h2><div class="tablewrap" id="pg-table"></div></section>
+    <div class="grid2">
+      <section><h2>Files <small>drag files here to upload · pages/</small></h2>
+        <div id="pg-drop" class="pg-drop">
+          <div class="pg-tools"><button id="pg-new">New page</button><button id="pg-dir">New folder</button><button id="pg-up">Upload…</button><input type="file" id="pg-file" multiple hidden></div>
+          <div id="pg-files" class="pg-files"></div>
+          <div class="pg-hint">Drop .mu pages, pictures (.png .jpg .webp .gif) or a .groups file. Files go into the folder you have open.</div>
+        </div>
+      </section>
+      <section><h2 id="pg-ed-title">Editor</h2>
+        <div id="pg-editor" class="pg-editor"><div class="pg-hint">Pick a file on the left, or make a new page.</div></div>
+      </section>
+    </div>
+    <section><h2>Page server settings <small>saved in settings.txt; the server restarts</small></h2>
+      <div class="form" id="pages-settings"></div>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button id="pages-save">Save and restart</button><span class="msg" id="pages-msg"></span></div>
+    </section>
+  </div>
+
   <div class="page" data-page="post">
     <div class="grid2">
       <section><h2>Post office operations</h2><div class="tablewrap" id="mail-ops"></div></section>
@@ -318,12 +355,13 @@ const names = () => { const m = new Map(); for (const n of T?.nodes || []) if (n
 let NAMES = new Map();
 
 // ---------- navigation ----------
-const PAGES = { overview: "Overview", live: "Live traffic", nodes: "Nodes & map", dests: "Destinations", routes: "Routes & repeaters", delivery: "Delivery & latency", journeys: "Journeys & carry", radio: "Radio & modem", links: "Links", backbone: "Backbone (DHT)", post: "Post office", counters: "Counters", conns: "Connections", settings: "Settings", log: "Log" };
+const PAGES = { overview: "Overview", live: "Live traffic", nodes: "Nodes & map", dests: "Destinations", routes: "Routes & repeaters", delivery: "Delivery & latency", journeys: "Journeys & carry", radio: "Radio & modem", links: "Links", backbone: "Backbone (DHT)", post: "Post office", pages: "Pages", counters: "Counters", conns: "Connections", settings: "Settings", log: "Log" };
 $("nav").innerHTML = Object.entries(PAGES).map(([k, v]) => `<button data-p="${k}">${v}</button>`).join("");
 $("nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) show(b.dataset.p); });
 function show(p) {
   page = PAGES[p] ? p : "overview"; history.replaceState(null, "", "#" + page);
-  if (page === "settings" && !settingsState) loadSettings();
+  if ((page === "settings" || page === "pages") && !settingsState) loadSettings();
+  if (page === "pages") loadFiles();
   if (page === "conns") get("/api/guard").then(x => { G = x; renderConns(); }).catch(() => {});
   for (const b of $("nav").children) b.classList.toggle("on", b.dataset.p === page);
   for (const d of document.querySelectorAll(".page")) d.classList.toggle("on", d.dataset.page === page);
@@ -454,7 +492,7 @@ function render() {
   if (!T) return;
   const m = T.minutes || [];
   try {
-    ({ overview, live: renderLive, nodes, dests, routes, delivery, journeys, radio, links, backbone, post, counters, conns: () => {}, settings: () => {}, log: () => {} })[page]?.(m);
+    ({ overview, live: renderLive, nodes, dests, routes, delivery, journeys, radio, links, backbone, post, pages: pagesTab, counters, conns: () => {}, settings: () => {}, log: () => {} })[page]?.(m);
   } catch (e) { console.error(e); }
 }
 function lastHour(m, f) { const t0 = Date.now() / 1000 - 3600; return sum(m.filter(x => x.t >= t0).map(f)); }
@@ -734,6 +772,12 @@ const FIELDS = [
   { f: "--modem-key", label: "Wi-Fi modem key", help: "passphrase Wi-Fi LoRa modems must prove (at least 12 characters; set the same in the modem). Without it no Wi-Fi modem is accepted", kind: "text" },
   { f: "--serial", label: "LoRa modem", help: "serial port of an attached modem (empty = none)", kind: "port" },
   { f: "--trunk", label: "LoRa trunks", help: "long-distance LoRa modems, port[:baud], one per line", kind: "list" },
+  { f: "--no-pages", label: "Do not share pages", help: "this server answers no page requests and does not announce pages", kind: "flag", group: "pages" },
+  { f: "--pages-burst-lora", label: "Pages per reader over LoRa", help: "per 30 seconds; more gets one 'slow down' page (default 5)", kind: "number", group: "pages" },
+  { f: "--pages-burst-net", label: "Pages per reader over the internet", help: "per 30 seconds (default 60)", kind: "number", group: "pages" },
+  { f: "--board-keep", label: "Notes kept per board", help: "the newest are kept (default 50)", kind: "number", group: "pages" },
+  { f: "--board-every", label: "Seconds between notes", help: "from one reader (default 60)", kind: "number", group: "pages" },
+  { f: "--no-previews", label: "No picture previews", help: "do not put the ~35-byte blurred preview in picture lines", kind: "flag", group: "pages" },
   { f: "--http", label: "Dashboard address", help: "address:port of this dashboard; after a change, open the new address", kind: "text" },
 ];
 let settingsState = null;
@@ -762,7 +806,7 @@ async function loadSettings() {
     const fromCli = f => cliVals[f] !== undefined;
     const cliText = f => { const v = cliVals[f]; return v === true ? "on" : Array.isArray(v) ? v.join(", ") : v; };
     const form = $("settings-form");
-    form.innerHTML = FIELDS.map(fd => {
+    const field = fd => {
       const id = "set" + fd.f.replace(/-/g, "_"), v = vals[fd.f];
       const ph = fromCli(fd.f) ? ` placeholder="command line: ${esc(cliText(fd.f))}"` : "";
       const note = fromCli(fd.f) ? `<small style="color:var(--tx)">set on the command line: ${esc(cliText(fd.f))} (wins over this field)</small>` : "";
@@ -773,7 +817,10 @@ async function loadSettings() {
       else if (fd.kind === "port") input = `<select id="${id}"><option value="">(none)</option>${[...new Set([...(st.ports || []), ...(v ? [v] : [])])].map(p => `<option ${p === v ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>`;
       else input = `<div><input type="${fd.kind === "number" ? "number" : "text"}" id="${id}" value="${esc(v ?? "")}"${ph}>${note}</div>`;
       return `<label for="${id}">${esc(fd.label)}<small>${esc(fd.help)}</small></label>${input}`;
-    }).join("") + `<label for="set_other">Other options<small>one per line, as on the command line (see --help)</small></label><textarea id="set_other">${esc(other.join("\n"))}</textarea>`;
+    };
+    // The page server's options live on the Pages tab.
+    $("pages-settings").innerHTML = FIELDS.filter(fd => fd.group === "pages").map(field).join("");
+    form.innerHTML = FIELDS.filter(fd => fd.group !== "pages").map(field).join("") + `<label for="set_other">Other options<small>one per line, as on the command line (see --help)</small></label><textarea id="set_other">${esc(other.join("\n"))}</textarea>`;
     $("settings-cli").textContent = "Command line: " + (st.cli || []).join(" ") + "\n\n" + (st.startup || []).join("\n");
   } catch (e) { $("settings-msg").className = "msg bad"; $("settings-msg").textContent = "Could not load the settings."; }
 }
@@ -823,6 +870,126 @@ function counters() {
   if (S) table("router-table", ["Counter", "Value"], [...Object.entries(S.router), ...Object.entries(S.counters)].map(([k, v]) => [k.replace(/_/g, " "), v ?? ""]), { num: [1] });
   table("region-table", ["Region ID", "Packets"], Object.entries(T.regions).map(([k, v]) => [{ h: `<span class="mono">${(+k).toString(16).padStart(4, "0")}</span>`, s: +k }, v]), { sort: { i: 1, d: true }, num: [1], empty: "No regional traffic yet." });
 }
+
+// ---------- the page server (Pages tab) ----------
+function pagesTab() {
+  const P = T.pages || [], hours = T.page_hours || [];
+  const nowH = Math.floor(Date.now() / 3600000);
+  const day = hours.filter(([h]) => h > nowH - 24).reduce((a, [, c]) => a + c, 0);
+  const pagesOnly = P.filter(p => !/\.(png|jpe?g|webp|gif)$/i.test(p.path));
+  tiles("pg-tiles", [
+    [n(sum(pagesOnly.map(p => p.served))), "page loads, all time"], [n(day), "page loads, last 24 hours"],
+    [n(sum(P.map(p => p.pictures))), "pictures sent"], [n(sum(P.map(p => p.lora))), "over LoRa"], [n(sum(P.map(p => p.net))), "over the internet"],
+    [n(sum(P.map(p => p.notes))), "notes written"], [n(sum(P.map(p => p.refused))), "turned away by a lock"], [n(P.length), "pages and pictures read"],
+  ]);
+  const box = $("pg-hours"); box.replaceChildren();
+  const max = Math.max(1, ...hours.map(([, c]) => c));
+  for (let h = nowH - 47; h <= nowH; h++) {
+    const c = hours.find(([x]) => x === h)?.[1] || 0;
+    const i = document.createElement("i"); i.style.height = (100 * c / max) + "%";
+    i.dataset.t = `${new Date(h * 3600000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}: ${c}`;
+    box.append(i);
+  }
+  table("pg-table", ["Page", "Loads", "LoRa", "Internet", "Pictures", "Notes", "Readers", "Turned away", "Last"],
+    P.map(p => [{ h: `<span class="mono">${esc(p.path)}</span>` }, p.served, p.lora, p.net, p.pictures, p.notes, p.readers, p.refused, { h: p.last ? new Date(p.last * 1000).toLocaleString() : "", s: p.last }]),
+    { sort: { i: 1, d: true }, num: [1, 2, 3, 4, 5, 6, 7], empty: "No page has been read yet." });
+}
+let pgFiles = [], pgDir = "", pgOpen = null;
+async function loadFiles() {
+  try { pgFiles = (await get("/api/pages/files")).files || []; } catch { pgFiles = []; }
+  drawFiles();
+}
+function drawFiles() {
+  const box = $("pg-files"); box.replaceChildren();
+  const row = (label, sub, onclick, del) => {
+    const d = document.createElement("div"); d.innerHTML = label; if (sub) { const s = document.createElement("small"); s.textContent = sub; d.append(s); }
+    d.onclick = onclick;
+    if (del) { const x = document.createElement("button"); x.className = "x"; x.textContent = "✕"; x.title = "Delete"; x.onclick = (e) => { e.stopPropagation(); del(); }; d.append(x); }
+    return d;
+  };
+  const here = pgFiles.filter(f => (f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "") === pgDir);
+  if (pgDir) box.append(row("📁 ..", "up", () => { pgDir = pgDir.includes("/") ? pgDir.slice(0, pgDir.lastIndexOf("/")) : ""; drawFiles(); }));
+  for (const f of here.filter(f => f.dir)) box.append(row(`📁 ${esc(f.path.split("/").pop())}`, "folder", () => { pgDir = f.path; drawFiles(); }, () => pgDelete(f.path, true)));
+  for (const f of here.filter(f => !f.dir)) {
+    const name = f.path.split("/").pop(), icon = /\.mu$/.test(name) ? "📄" : /\.(png|jpe?g|webp|gif)$/i.test(name) ? "🖼" : /\.board$/.test(name) ? "📝" : "·";
+    const r = row(`${icon} ${esc(name)}`, f.size < 1024 ? f.size + " B" : (f.size / 1024).toFixed(1) + " KB", () => pgEdit(f.path), () => pgDelete(f.path));
+    if (pgOpen === f.path) r.classList.add("on");
+    box.append(r);
+  }
+  if (!here.length && !pgDir) box.append(row("No pages yet. Make one, or drop files here.", "", () => {}));
+  $("pg-ed-title").textContent = "Editor" + (pgDir ? " · " + pgDir + "/" : "");
+}
+const pgUrl = (path) => "/api/pages/file?path=" + encodeURIComponent(path);
+async function pgSize(text) {
+  try { const z = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("deflate-raw"))).arrayBuffer(); return z.byteLength; } catch { return null; }
+}
+async function pgEdit(path) {
+  pgOpen = path; drawFiles();
+  const ed = $("pg-editor"); ed.replaceChildren();
+  $("pg-ed-title").textContent = "Editor · " + path;
+  const r = await fetch(pgUrl(path), { credentials: "same-origin", cache: "no-store" });
+  if (/\.(png|jpe?g|webp|gif)$/i.test(path)) {
+    const img = document.createElement("img"); img.src = URL.createObjectURL(await r.blob()); ed.append(img);
+    const hint = document.createElement("div"); hint.className = "pg-hint"; hint.textContent = `Use it on a page: ![caption](${path})`; ed.append(hint);
+    return;
+  }
+  const text = await r.text();
+  const ta = document.createElement("textarea"); ta.value = text; ta.spellcheck = false;
+  const bar = document.createElement("div"); bar.className = "bar";
+  const save = document.createElement("button"); save.textContent = "Save";
+  const info = document.createElement("span"); info.className = "pg-hint";
+  const msg = document.createElement("span"); msg.className = "msg";
+  const count = async () => {
+    const raw = new TextEncoder().encode(ta.value).length, z = await pgSize(ta.value);
+    info.textContent = `${raw} bytes · ${z ?? "?"} bytes on air` + (z > 8192 ? " · over 8 KB: too big for LoRa!" : z ? ` · about ${Math.ceil(z / 1024 * 8 * 1.2)} s over LoRa` : "");
+    info.style.color = z > 8192 ? "var(--bad)" : "";
+  };
+  ta.oninput = () => { msg.textContent = "not saved"; count(); };
+  ta.onkeydown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save.click(); } };
+  save.onclick = async () => {
+    const w = await fetch(pgUrl(path), { method: "PUT", credentials: "same-origin", body: ta.value });
+    msg.className = w.ok ? "msg good" : "msg bad"; msg.textContent = w.ok ? "Saved: readers get it on their next load." : await w.text();
+    if (w.ok) loadFiles();
+  };
+  bar.append(save, info, msg);
+  ed.append(ta, bar); count();
+}
+async function pgDelete(path, dir) {
+  if (!confirm(`Delete ${path}${dir ? " (only when the folder is empty)" : ""}?`)) return;
+  const r = await fetch(pgUrl(path), { method: "DELETE", credentials: "same-origin" });
+  if (!r.ok) alert(await r.text());
+  if (pgOpen === path) { pgOpen = null; $("pg-editor").innerHTML = '<div class="pg-hint">Pick a file on the left, or make a new page.</div>'; }
+  loadFiles();
+}
+async function pgUpload(files) {
+  for (const f of files) {
+    const path = (pgDir ? pgDir + "/" : "") + f.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+    const r = await fetch(pgUrl(path), { method: "PUT", credentials: "same-origin", body: f });
+    if (!r.ok) alert(`${f.name}: ${await r.text()}`);
+  }
+  loadFiles();
+}
+$("pg-new").onclick = async () => {
+  const name = prompt("Name of the new page (e.g. news):"); if (!name) return;
+  const path = (pgDir ? pgDir + "/" : "") + name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/\.mu$/, "") + ".mu";
+  const r = await fetch(pgUrl(path), { method: "PUT", credentials: "same-origin", body: `@title ${name}\n# ${name}\n\nWrite here.\n` });
+  if (!r.ok) { alert(await r.text()); return; }
+  await loadFiles(); pgEdit(path);
+};
+$("pg-dir").onclick = async () => {
+  const name = prompt("Name of the new folder:"); if (!name) return;
+  const path = (pgDir ? pgDir + "/" : "") + name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  const r = await fetch("/api/pages/mkdir?path=" + encodeURIComponent(path), { method: "POST", credentials: "same-origin" });
+  if (!r.ok) alert(await r.text());
+  pgDir = path; loadFiles();
+};
+$("pg-up").onclick = () => $("pg-file").click();
+$("pg-file").onchange = (e) => { pgUpload([...e.target.files]); e.target.value = ""; };
+const drop = $("pg-drop");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); pgUpload([...e.dataTransfer.files]); });
+$("pages-save").onclick = () => { $("settings-save").onclick(); const m = $("pages-msg"); const copy = () => { m.className = $("settings-msg").className; m.textContent = $("settings-msg").textContent; }; copy(); const iv = setInterval(copy, 700); setTimeout(() => clearInterval(iv), 65000); };
 
 addEventListener("resize", () => render());
 show(page);

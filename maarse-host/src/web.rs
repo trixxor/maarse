@@ -223,6 +223,52 @@ fn server_http(mut stream: TcpStream, data_dir: &Path) {
         }
         ("GET", "/api/service/status") => send(&mut stream, "200 OK", jsn, "", crate::service::status_json(data_dir).as_bytes()),
         ("GET", "/api/settings") => send(&mut stream, "200 OK", jsn, "", crate::settings::status_json(data_dir).as_bytes()),
+        // The page server's files (the dashboard's Pages tab).
+        ("GET", "/api/pages/files") => send(&mut stream, "200 OK", jsn, "", crate::pagefiles::list(data_dir).to_string().as_bytes()),
+        ("GET", "/api/pages/file") => {
+            let rel = url_decode(query.split('&').find_map(|kv| kv.strip_prefix("path=")).unwrap_or(""));
+            match crate::pagefiles::read(data_dir, &rel) {
+                Ok(d) => send(&mut stream, "200 OK", "application/octet-stream", "", &d),
+                Err(e) => send(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "", e.as_bytes()),
+            }
+        }
+        ("PUT", "/api/pages/file") | ("DELETE", "/api/pages/file") | ("POST", "/api/pages/mkdir") => {
+            let host = header(&head, "host").unwrap_or("");
+            if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
+                return send(&mut stream, "403 Forbidden", "text/plain; charset=utf-8", "", b"wrong origin");
+            }
+            let rel = url_decode(query.split('&').find_map(|kv| kv.strip_prefix("path=")).unwrap_or(""));
+            let result = match method.as_str() {
+                "PUT" => {
+                    let len: usize = header(&head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
+                    if len > crate::pagefiles::MAX_FILE {
+                        return send(&mut stream, "413 Payload Too Large", "text/plain; charset=utf-8", "", b"larger than 2 MB");
+                    }
+                    let mut body = req[head_end.min(req.len())..].to_vec();
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+                    while body.len() < len {
+                        match stream.read(&mut buf) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => body.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    if body.len() < len {
+                        Err("the upload was cut short".to_string())
+                    } else {
+                        crate::pagefiles::write(data_dir, &rel, &body[..len])
+                    }
+                }
+                "DELETE" => crate::pagefiles::delete(data_dir, &rel),
+                _ => crate::pagefiles::mkdir(data_dir, &rel),
+            };
+            match result {
+                Ok(()) => {
+                    crate::debug::push("admin", serde_json::json!({"op": format!("pages: {method} {rel}"), "ip": ip.to_string()}));
+                    send(&mut stream, "200 OK", "text/plain; charset=utf-8", "", b"ok")
+                }
+                Err(e) => send(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", "", e.as_bytes()),
+            }
+        }
         ("GET", "/api/guard") => {
             let devices: serde_json::Value = serde_json::from_str(&crate::links::devices_json()).unwrap_or_default();
             let body = serde_json::json!({"guard": crate::guard::json(), "links": devices["devices"]});

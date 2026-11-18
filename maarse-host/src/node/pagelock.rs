@@ -21,7 +21,7 @@
 //!
 //! **Notice boards.** A line `@board [n] [style]` marks a board. Readers
 //! write notes ([`maarse_core::content::BOARD_POST`], at most 100 bytes);
-//! the host keeps the newest [`KEEP_NOTES`] in `<page>.board` beside the
+//! the host keeps the newest (`--board-keep`, 50) in `<page>.board` beside the
 //! page, at most one note a minute from each reader, and serves the page
 //! with the newest notes after the `@board` line as
 //! `@note <unix time>\t<name>\t<short address>\t<text>`.
@@ -32,10 +32,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Notes kept for a board.
-pub(super) const KEEP_NOTES: usize = 50;
-/// Seconds between two notes from the same reader.
-pub(super) const NOTE_EVERY: u64 = 60;
 
 /// The lock lines of one page.
 #[derive(Default, Debug, PartialEq)]
@@ -261,7 +257,7 @@ impl Node {
                     continue;
                 }
                 // `@board [n] [style]`: n newest (all kept ones without n).
-                let n = rest.split_whitespace().find_map(|w| w.parse::<usize>().ok()).unwrap_or(KEEP_NOTES);
+                let n = rest.split_whitespace().find_map(|w| w.parse::<usize>().ok()).unwrap_or(self.pages.board_keep);
                 out.push_str(&format!("@boardpath {path}\n"));
                 for note in notes.iter().rev().take(n) {
                     let mut f = note.splitn(4, '\t');
@@ -287,7 +283,7 @@ impl Node {
         }
         let now = unix_now();
         if let Some(t) = self.pages.noted.get(&from)
-            && now.saturating_sub(*t) < NOTE_EVERY
+            && now.saturating_sub(*t) < self.pages.board_every
         {
             return Err("one note a minute");
         }
@@ -297,10 +293,13 @@ impl Node {
         let file = board_file(&page);
         let mut notes = read_notes(&file);
         notes.push(format!("{now}\t{}\t{name}\t{text}", hex(&from)));
-        let skip = notes.len().saturating_sub(KEEP_NOTES);
+        let skip = notes.len().saturating_sub(self.pages.board_keep);
         let body = notes[skip..].join("\n") + "\n";
         fs::write(&file, body).map_err(|_| "could not save the note")?;
         self.pages.noted.insert(from, now);
+        if let Some(t) = self.tele.as_mut() {
+            t.page_note(path);
+        }
         self.log(format!("note on '{path}' from {}", short(&from)));
         Ok(())
     }

@@ -61,7 +61,7 @@ impl Node {
         let flags = if self.router.hears_repeater(self.now_ms()) { appdata::ROLE_HEARS_REPEATER } else { 0 };
         appdata::push_role(&mut v, self.router.role.as_u8(), flags);
         // Pages: announced on every announce while pages/index.mu exists.
-        let pages = if super::pages::find_page(&self.data_dir.join("pages"), "index").is_some() { appdata::CAP_PAGES } else { 0 };
+        let pages = if !self.pages.off && super::pages::find_page(&self.data_dir.join("pages"), "index").is_some() { appdata::CAP_PAGES } else { 0 };
         appdata::push_caps(&mut v, appdata::MY_CAPS | appdata::CAP_SEQ | appdata::CAP_CALL_DG | appdata::CAP_FILE_PULL | pages);
         self.person_app_data(&mut v);
         v.to_vec()

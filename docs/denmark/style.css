@@ -139,3 +139,5 @@ button.primary { font-weight:600; }
 .kpi b { font-size:20px; }
 h3 { font-weight:600; }
 @media (max-width: 760px) { #mapwrap { margin:0; border-radius:0; } }
+.where-dot span { display:block; width:22px; height:22px; border-radius:50%; background:var(--c, #94a3b8); border:3px solid #fff; box-shadow:0 0 0 0 var(--c, #94a3b8); animation:where 1.6s infinite; box-sizing:border-box; }
+@keyframes where { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--c, #94a3b8) 60%, transparent); } 100% { box-shadow:0 0 0 18px transparent; } }

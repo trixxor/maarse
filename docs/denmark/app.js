@@ -893,7 +893,7 @@
   function clearJourney() {
     followMsg = -1; journeyKey = ""; replay.playing = false; replay.t = null;
     overlay = null; hiLayer.clearLayers(); restyle();
-    $("journey").innerHTML = ""; $("follow").classList.add("hidden"); $("mapwrap").classList.remove("following"); $("fd-msg").checked = false; renderFeed(true);
+    $("journey").innerHTML = ""; $("follow").classList.add("hidden"); $("mapwrap").classList.remove("following"); if (whereMarker) { whereMarker.remove(); whereMarker = null; } $("fd-msg").checked = false; renderFeed(true);
   }
   // Where the followed message is now, in plain words, from its last event.
   function followStatus(f) {
@@ -924,8 +924,20 @@
     if (idle > 20 && v[0] !== "post" && v[0] !== "warn") return { cls: "bad", title: "No progress", text: `Nothing has happened to it for ${fmtTime(idle)}. Last: ${v[1].toLowerCase()}${at}. No route, no post office and no carrier has it.` };
     return { cls: v[0], title: v[1], text: v[2] };
   }
+  // A pulsing dot on the map where the followed message is now.
+  let whereMarker = null;
+  function placeWhere(f, st) {
+    const info = f.info;
+    let n = info.delivered_ms !== null ? info.to : -1;
+    if (n < 0) { const evs = f.events.filter(e => e.n !== undefined && !(e.ev === "cancel" && e.n !== info.from)); n = evs.length ? evs[evs.length - 1].n : info.from; }
+    const col = { ok: "#22c55e", post: "#a78bfa", bad: "#ef4444", warn: "#f59e0b", air: "#60a5fa" }[st.cls] || "#94a3b8";
+    if (!whereMarker) whereMarker = L.marker(pos(n), { interactive: false, icon: L.divIcon({ className: "where-dot", html: '<span></span>', iconSize: [22, 22] }) }).addTo(map);
+    whereMarker.setLatLng(pos(n));
+    whereMarker.getElement() && whereMarker.getElement().style.setProperty("--c", col);
+  }
   function renderFollowHead(f) {
     const st = followStatus(f), info = f.info;
+    placeWhere(f, st);
     $("follow-head").innerHTML = `<div class="fh-top"><div><div class="fh-kicker">Following</div><b>Message #${followMsg}</b></div><button class="x" id="fh-close" aria-label="Stop following">✕</button></div>
       <div class="fh-ends">${nameH(info.from)} <span class="mute">→</span> ${nameH(info.to)}</div>
       <div class="fh-status ${st.cls}"><b>${st.title}</b><div>${st.text}</div></div>`;

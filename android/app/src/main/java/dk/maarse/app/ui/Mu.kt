@@ -415,9 +415,10 @@ internal fun MuText(text: String, c: MuCtx, style: TextStyle, modifier: Modifier
     // {right:…} at the top level: the rest left, that part right.
     val right = Regex("""\{right:((?:[^{}]|\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})*)\}""").find(text)
     if (right != null) {
-        Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            MuText(text.removeRange(right.range).trim(), c, style, Modifier.weight(1f, fill = false))
-            MuText(right.groupValues[1], c, style, align = TextAlign.End)
+        // Both sides share the width; on a narrow screen each wraps on its own side.
+        Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            MuText(text.removeRange(right.range).trim(), c, style, Modifier.weight(1f))
+            MuText(right.groupValues[1], c, style, Modifier.weight(1f), align = TextAlign.End)
         }
         return
     }
@@ -425,7 +426,8 @@ internal fun MuText(text: String, c: MuCtx, style: TextStyle, modifier: Modifier
     val widgets = mutableListOf<MuWidget>()
     val s = buildAnnotatedString { mu(text, c, widgets) }
     Text(s, modifier.then(if (tilt != null) Modifier.padding(vertical = 6.dp).rotate(tilt.groupValues[1].toFloatOrNull()?.coerceIn(-20f, 20f) ?: 0f) else Modifier),
-        style = style, color = c.ink, fontFamily = c.font, fontWeight = if (bold) FontWeight.SemiBold else null, textAlign = align,
+        // Line height follows the biggest letters in the line ({big:}, {huge:}), never a fixed one.
+        style = style.copy(lineHeight = TextUnit.Unspecified), color = c.ink, fontFamily = c.font, fontWeight = if (bold) FontWeight.SemiBold else null, textAlign = align,
         inlineContent = widgetContent(widgets))
 }
 
@@ -513,7 +515,7 @@ private fun MuBlocks(blocks: List<MuBlock>, c: MuCtx, version: Int, anchors: Has
                 if (b.centre) TextAlign.Center else null, bold = true)
             is MuBlock.Item -> Row { Text("•  ", color = c.ink); MuText(b.text, c, body) }
             is MuBlock.Quote -> MuQuote(b, c)
-            is MuBlock.Table -> PageTable(b.t, c.base)
+            is MuBlock.Table -> PageTable(b.t, c.base) { t, head, align -> MuText(t, c, MaterialTheme.typography.bodyMedium, Modifier.fillMaxWidth(), align, bold = head) }
             is MuBlock.Code -> MuCode(b.text, c)
             is MuBlock.Pic -> Picture(b.caption, b.src, picStyle(b.words), c.base, version, Regex("""\b(grey|dots|colour|color)!""").containsMatchIn(b.words.lowercase()))
             is MuBlock.Rule -> if (b.double) Column(verticalArrangement = Arrangement.spacedBy(2.dp)) { Box(Modifier.fillMaxWidth().size(1.dp).background(c.ink)); Box(Modifier.fillMaxWidth().size(1.dp).background(c.ink)) }
@@ -584,7 +586,7 @@ private fun MuCards(b: MuBlock.Cards, c: MuCtx, version: Int, anchors: HashMap<S
 @Composable
 private fun MuBoard(b: MuBlock.Board, c: MuCtx) {
     val small = MaterialTheme.typography.bodySmall
-    val fmt = remember { java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale.ROOT) }
+    val fmt = remember { java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale.ENGLISH) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (b.notes.isEmpty()) Text("No notes yet. Be the first.", style = small, color = c.ink.copy(alpha = 0.6f))
         for ((at, name, text) in b.notes) {
@@ -599,7 +601,11 @@ private fun MuBoard(b: MuBlock.Board, c: MuCtx) {
         var note by remember { mutableStateOf("") }
         var msg by remember { mutableStateOf("") }
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(note, { if (it.toByteArray().size <= 100) note = it }, Modifier.weight(1f), placeholder = { Text("Write a note (100 characters)") }, singleLine = true)
+            // In the page's own colours (a light paper page has dark text).
+            OutlinedTextField(note, { if (it.toByteArray().size <= 100) note = it }, Modifier.weight(1f),
+                placeholder = { Text("Write a note (100 characters)", color = c.ink.copy(alpha = 0.5f)) }, singleLine = true,
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(focusedTextColor = c.ink, unfocusedTextColor = c.ink,
+                    focusedBorderColor = c.ink, unfocusedBorderColor = c.ink.copy(alpha = 0.5f), cursorColor = c.ink))
             OutlinedButton(onClick = {
                 val t = note.trim()
                 if (t.isNotEmpty() && Node.send(Cmd.postBoard(Node.req(), c.base.addr, path, t))) {

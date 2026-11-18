@@ -48,7 +48,7 @@ nodes heard
 +++ 2
 {small:HARBOUR CAMERA}
 
-![Harbour at dusk](demo/solnedgang.jpg "rec wide")
+![Harbour at dusk](demo/dusk.png "colour rec wide")
 +++ 2
 {small:NOTICE BOARD · NEWEST}
 @board 4 list

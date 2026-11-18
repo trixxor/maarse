@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -21,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -438,7 +440,7 @@ private fun pageDark() = MaterialTheme.colorScheme.surface.luminance() < 0.5f
  *  else they share the width like a browser does (text wraps), and when even the
  *  longest words do not fit, the table scrolls sideways on its own, never the page. */
 @Composable
-internal fun PageTable(t: Block.Table, base: Pages.Url) {
+internal fun PageTable(t: Block.Table, base: Pages.Url, cell: (@Composable (String, Boolean, TextAlign) -> Unit)? = null) {
     val line = MaterialTheme.colorScheme.outlineVariant
     val headBg = MaterialTheme.colorScheme.surfaceContainer
     val n = t.aligns.size
@@ -449,10 +451,12 @@ internal fun PageTable(t: Block.Table, base: Pages.Url) {
             androidx.compose.ui.layout.Layout(content = {
                 rows.forEachIndexed { r, row ->
                     val head = t.head != null && r == 0
-                    row.forEachIndexed { i, cell ->
-                        Box((if (head) Modifier.background(headBg) else Modifier).border(0.5.dp, line).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                            Inline(cell, base, MaterialTheme.typography.bodyMedium, bold = head, modifier = Modifier.fillMaxWidth(),
-                                align = when (t.aligns[i]) { 1 -> TextAlign.Center; 2 -> TextAlign.End; else -> TextAlign.Start })
+                    row.forEachIndexed { i, text ->
+                        Box((if (head) Modifier.background(if (cell != null) Color(0x22888888) else headBg) else Modifier).border(0.5.dp, if (cell != null) Color(0x66888888) else line).padding(horizontal = 8.dp, vertical = 4.dp)) {
+                            val al = when (t.aligns[i]) { 1 -> TextAlign.Center; 2 -> TextAlign.End; else -> TextAlign.Start }
+                            // The page's own renderer (its colours), or the plain one.
+                            if (cell != null) cell(text, head, al)
+                            else Inline(text, base, MaterialTheme.typography.bodyMedium, bold = head, modifier = Modifier.fillMaxWidth(), align = al)
                         }
                     }
                 }
@@ -584,68 +588,66 @@ internal fun Picture(caption: String, src: String, style: String, base: Pages.Ur
     val first = Pages.picture(key)
     val pic = top?.let { Pages.picture("${base.addr}/${it.id}/$rel") } ?: first
     var large by remember(key) { mutableStateOf(false) }
+    // The same layout before and after the picture comes, so nothing on the
+    // page moves (in columns everything would flow on): a fixed 3:2 frame and
+    // one caption line under it. The next size is a small button in the
+    // frame's corner.
+    val frame = Modifier.widthIn(max = 480.dp).fillMaxWidth().aspectRatio(1.5f)
+    val small = MaterialTheme.typography.labelSmall
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         when (pic) {
             is Pages.Pic.Got -> {
                 val bmp = remember(pic) { BitmapFactory.decodeByteArray(pic.data, 0, pic.data.size) }
                 val stepName = top?.name ?: when { pic.mime == "image/png" -> "Dots"; forced && st == "colour" -> "Colour 8 KB"; else -> "Greyscale" }
-                if (bmp != null) Image(bmp.asImageBitmap(), caption.ifEmpty { rel },
-                    Modifier.widthIn(max = 320.dp).fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(Color.White)
-                        // A tap opens the picture full screen (zoom there).
-                        .clickable { large = true },
-                    contentScale = ContentScale.FillWidth,
-                    filterQuality = if (pic.mime == "image/png") FilterQuality.None else FilterQuality.Low)
-                if (large && bmp != null) ZoomImage(bmp.asImageBitmap(), caption.ifEmpty { rel }, pic.mime == "image/png") { large = false }
-                Text("${if (caption.isNotEmpty()) "$caption · " else ""}$stepName · " + "%.1f KB".format(pic.data.size / 1024f),
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (!forced) {
-                    // Only the next step: smallest first, one size up at a time.
-                    val higher = steps.drop(if (top == null) 0 else steps.indexOf(top) + 1).take(1)
-                    val working = higher.firstOrNull { val p = Pages.picture("${base.addr}/${it.id}/$rel"); p is Pages.Pic.Busy || p is Pages.Pic.Asking || Pages.queued(base.addr, "${it.id}/$rel") }
-                    val wp = working?.let { Pages.picture("${base.addr}/${it.id}/$rel") }
-                    when {
-                        wp is Pages.Pic.Busy -> Column(Modifier.widthIn(max = 320.dp)) {
-                            androidx.compose.material3.LinearProgressIndicator(progress = { wp.percent / 100f }, modifier = Modifier.fillMaxWidth())
-                            Text("${working.name} · %d %% · %.1f of %.1f KB".format(wp.percent, wp.total * wp.percent / 100f / 1024f, wp.total / 1024f),
-                                style = MaterialTheme.typography.labelSmall)
-                        }
-                        working != null -> Column(Modifier.widthIn(max = 320.dp)) {
-                            Text("Asking for ${working.name}…", style = MaterialTheme.typography.labelSmall)
-                            androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
-                        }
-                        // The next steps, under the picture.
-                        higher.isNotEmpty() -> androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            higher.forEach { s ->
+                Box(frame.clip(RoundedCornerShape(4.dp)).background(Color.White)) {
+                    if (bmp != null) Image(bmp.asImageBitmap(), caption.ifEmpty { rel },
+                        Modifier.fillMaxSize().clickable { large = true }, // a tap opens it full screen (zoom there)
+                        contentScale = ContentScale.Fit,
+                        filterQuality = if (pic.mime == "image/png") FilterQuality.None else FilterQuality.Low)
+                    if (!forced) {
+                        // Only the next step: smallest first, one size up at a time.
+                        val higher = steps.drop(if (top == null) 0 else steps.indexOf(top) + 1).take(1)
+                        val working = higher.firstOrNull { val p = Pages.picture("${base.addr}/${it.id}/$rel"); p is Pages.Pic.Busy || p is Pages.Pic.Asking || Pages.queued(base.addr, "${it.id}/$rel") }
+                        val wp = working?.let { Pages.picture("${base.addr}/${it.id}/$rel") }
+                        val chip = Modifier.align(Alignment.BottomEnd).padding(6.dp).background(Color(0xCC111111), RoundedCornerShape(12.dp))
+                        when {
+                            wp is Pages.Pic.Busy -> Text("${working.name} · ${wp.percent} %", chip.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White, style = small)
+                            working != null -> Text("Asking for ${working.name}…", chip.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White, style = small)
+                            higher.isNotEmpty() -> higher.first().let { s ->
                                 val sp = Pages.picture("${base.addr}/${s.id}/$rel")
-                                OutlinedButton(onClick = { Pages.requestPicture(base.addr, "${s.id}/$rel") }) {
-                                    Text(if (sp is Pages.Pic.Failed) "${s.name}: try again" else if (lora) "${s.name} · ${s.time}" else s.name)
-                                }
+                                Text(if (sp is Pages.Pic.Failed) "${s.name}: try again" else if (lora) "${s.name} · ${s.time}" else s.name,
+                                    chip.clickable { Pages.requestPicture(base.addr, "${s.id}/$rel") }.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    color = Color.White, style = small)
                             }
                         }
                     }
                 }
+                if (large && bmp != null) ZoomImage(bmp.asImageBitmap(), caption.ifEmpty { rel }, pic.mime == "image/png") { large = false }
+                Text("${if (caption.isNotEmpty()) "$caption · " else ""}$stepName · " + "%.1f KB".format(pic.data.size / 1024f),
+                    style = small, color = LocalContentColor.current.copy(alpha = 0.7f), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
-            else -> Column(
-                Modifier.widthIn(max = 320.dp).fillMaxWidth().heightIn(min = 110.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp)).padding(12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
-            ) {
-                Text(caption.ifEmpty { rel })
-                when (pic) {
-                    Pages.Pic.Asking -> {
-                        Text("Asking the node…", style = MaterialTheme.typography.bodySmall)
-                        androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
-                    }
-                    is Pages.Pic.Busy -> {
-                        androidx.compose.material3.LinearProgressIndicator(progress = { pic.percent / 100f }, modifier = Modifier.fillMaxWidth())
-                        Text("Receiving · %d %% · %.1f of %.1f KB".format(pic.percent, pic.total * pic.percent / 100f / 1024f, pic.total / 1024f),
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                    null -> if (Pages.queued(base.addr, path)) Text("Waiting for the picture before it…", style = MaterialTheme.typography.bodySmall)
-                        else OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) { Text(loadText) }
-                    else -> OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) {
-                        Text(if (pic is Pages.Pic.Failed) "Try again (${pic.why})" else loadText)
+            else -> {
+                Column(frame.border(1.dp, LocalContentColor.current.copy(alpha = 0.4f), RoundedCornerShape(6.dp)).padding(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)) {
+                    when (pic) {
+                        Pages.Pic.Asking -> {
+                            Text("Asking the node…", style = MaterialTheme.typography.bodySmall)
+                            androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+                        }
+                        is Pages.Pic.Busy -> {
+                            androidx.compose.material3.LinearProgressIndicator(progress = { pic.percent / 100f }, modifier = Modifier.fillMaxWidth())
+                            Text("Receiving · %d %% · %.1f of %.1f KB".format(pic.percent, pic.total * pic.percent / 100f / 1024f, pic.total / 1024f),
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        null -> if (Pages.queued(base.addr, path)) Text("Waiting for the picture before it…", style = MaterialTheme.typography.bodySmall)
+                            else OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) { Text(loadText) }
+                        else -> OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) {
+                            Text(if (pic is Pages.Pic.Failed) "Try again (${pic.why})" else loadText)
+                        }
                     }
                 }
+                Text(caption.ifEmpty { rel }, style = small, color = LocalContentColor.current.copy(alpha = 0.7f), maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
         }
     }

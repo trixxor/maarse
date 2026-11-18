@@ -17,7 +17,7 @@
 @dropcap
 The new repeater on the mast heard the warning before the radio did. Two hops to Øster Hurup and everybody knew. That is the whole point of this thing.
 
-![fig. 1, the cabin in dots, 0.8 KB](demo/hytte.jpg "dots tape")
+![fig. 1, the storm in dots](demo/storm.png "dots tape")
 
 {big:{#ff3b6b:*"We heard it on the water first."*}}
 
@@ -26,7 +26,7 @@ Diesel and petrol at the pier from Thursday, card only. Two weeks of rowing are 
 
 >!#5ad1ff [tilt 1.2, shadow] **DIY:** write a .mu file, put it in pages/, done. No HTML, no ads, no tracking. 1 KB goes a long way.
 
-![fig. 2, the poster, flat colours](demo/demo-lighthouse.png "colour tape")
+![fig. 2, sunday's race](demo/regatta.png "colour tape")
 
 ## {huge:{marker #ffe14d:SLIPS}}
 @board 8 slips

@@ -58,7 +58,7 @@ Everything a Må:rse page can do, each with the plain text that makes it. Press 
 ```
 +++ 2
 ## Pictures
-![steps: grey first, then colour on a tap](demo/hytte.jpg "right")
+![steps: grey first, then colour on a tap](demo/dusk.png "right")
 The picture only costs bytes when someone taps it. Over LoRa the smallest copy comes first.
 ```
 ![The cabin](hytte.jpg)                 steps from grey to colour

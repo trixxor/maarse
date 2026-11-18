@@ -303,7 +303,6 @@
   .page hr.mu-double { border: 0; border-top: 3px double currentColor; }
   .page figure.mu-right { float: right; margin: 4px 0 10px 16px !important; max-width: 45%; }
   .page figure.mu-left { float: left; margin: 4px 16px 10px 0 !important; max-width: 45%; }
-  .page figure.mu-wide img { width: 100% !important; }
   .page figure.mu-tape { position: relative; transform: rotate(1deg); }
   .page figure.mu-tape::before { content: ""; position: absolute; top: -8px; left: 20px; width: 70px; height: 18px; background: #fff8; border: 1px solid #0002; transform: rotate(-8deg); z-index: 1; }
   .page figure.mu-rec { position: relative; }
@@ -337,6 +336,11 @@
   .page .mu-board.ads .mu-note b { display: block; font-size: .8em; letter-spacing: .06em; text-transform: uppercase; }
   .page .mu-board.ads .mu-note small { display: block; font-style: italic; opacity: .7; }
   .page .mu-board.ads .mu-write { column-span: all; }
+  .page .mu-frame { position: relative; width: 100%; max-width: 480px; aspect-ratio: 3 / 2; border-radius: 4px; overflow: hidden; background: #fff; }
+  .page .mu-frame img { width: 100%; height: 100%; object-fit: contain; display: block; cursor: zoom-in; }
+  .page .mu-frame.empty { background: none; border: 1px dashed currentColor; opacity: .85; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; box-sizing: border-box; }
+  .page .mu-chip { position: absolute; right: 6px; bottom: 6px; font-size: 12px; padding: 3px 10px; border-radius: 12px; background: #111c !important; color: #fff !important; border: 0 !important; }
+  .page figure.mu-wide .mu-frame { max-width: none; }
   .page .mu-write { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
   .page .mu-write input { flex: 1; min-width: 180px; }
   @media (max-width: 700px) {
@@ -3425,48 +3429,39 @@ function pagePicture(caption, src, style, base, forced = false) {
   const first = pages.pics.get(key);
   const got = top ? top.got : first;
   const busy = [...state.files.values()].find(f => f.pic && f.key === key);
+  // The same layout before and after the picture comes, so nothing on the page
+  // moves (in columns everything would flow on): a fixed 3:2 frame and one
+  // caption line under it; the next size is a small button in the frame's corner.
+  const frame = el("div", { className: "mu-frame" });
+  const cap = (t) => el("figcaption", { className: "muted", style: "font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }, t);
   if (got?.url) {
-    const img = el("img", { src: got.url, alt: caption || rel });
-    Object.assign(img.style, { maxWidth: "100%", width: "320px", background: "#fff", borderRadius: "4px", cursor: !forced ? "pointer" : "zoom-in" });
+    const img = el("img", { src: got.url, alt: caption || rel, title: "Open full screen" });
     if (got.mime === "image/png") img.style.imageRendering = "pixelated";
+    img.onclick = () => showImage(got.url, caption || rel); // full screen, zoom there
+    frame.append(img);
     const stepName = top ? top.name : got.mime === "image/png" ? "Dots" : forced && st === "colour" ? "Colour 8 KB" : "Greyscale";
-    // A tap opens the picture full screen (zoom there).
-    img.onclick = () => showImage(got.url, caption || rel);
-    img.title = "Open full screen";
-    img.style.cursor = "zoom-in";
-    fig.append(img, el("figcaption", { className: "muted", style: "font-size:12px" }, `${caption ? caption + " · " : ""}${stepName} · ${(got.size / 1024).toFixed(1)} KB`));
     if (!forced) {
-      // Only the next step: smallest first, one size up at a time.
       const higher = steps.filter(s => !top || PIC_STEPS.findIndex(p => p.id === s.id) > PIC_STEPS.findIndex(p => p.id === top.id)).slice(0, 1);
       const working = higher.find(s => s.busy || queued(s.key, s.path));
-      if (working?.busy) fig.append(picProgress(working.busy, working.name));
-      else if (working) fig.append(el("div", { className: "muted", style: "font-size:12px" }, `Asking for ${working.name}…`), el("progress", { className: "picbar" }));
-      else if (higher.length) {
-        // The next steps, under the picture.
-        const row = el("div", { className: "row" }); row.style.flexWrap = "wrap"; row.style.gap = "6px";
-        for (const s of higher) {
-          const b = el("button", { textContent: s.got?.error ? `${s.name}: try again (${s.got.error})` : lora ? `${s.name} · ${s.time}` : s.name });
-          b.onclick = () => { requestPicture(base.addr, s.path); renderChat(); };
-          row.append(b);
-        }
-        fig.append(row);
-      }
+      const chip = (t, fn) => { const b = el("button", { className: "mu-chip", textContent: t }); if (fn) b.onclick = (e) => { e.stopPropagation(); fn(); }; else b.disabled = true; return b; };
+      if (working?.busy) frame.append(chip(`${working.name} · ${Math.round((working.busy.progress || 0) * 100)} %`));
+      else if (working) frame.append(chip(`Asking for ${working.name}…`));
+      else if (higher.length) { const s2 = higher[0]; frame.append(chip(s2.got?.error ? `${s2.name}: try again` : lora ? `${s2.name} · ${s2.time}` : s2.name, () => { requestPicture(base.addr, s2.path); renderChat(); })); }
     }
+    fig.append(frame, cap(`${caption ? caption + " · " : ""}${stepName} · ${(got.size / 1024).toFixed(1)} KB`));
     return fig;
   }
-  const box = el("div", {});
-  Object.assign(box.style, { width: "320px", maxWidth: "100%", minHeight: "120px", border: "1px dashed var(--line)", borderRadius: "6px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", padding: "12px", boxSizing: "border-box" });
-  box.append(el("div", {}, caption || rel));
-  if (busy) box.append(picProgress(busy, "Receiving"));
-  else if (pages.picWaits.has(key)) box.append(el("div", { className: "muted" }, "Asking the node…"), el("progress", { className: "picbar" }));
-  else if (pages.picQueue.some(q => q.addr === base.addr && q.path === path)) box.append(el("div", { className: "muted" }, "Waiting for the picture before it…"));
+  frame.classList.add("empty");
+  if (busy) frame.append(picProgress(busy, "Receiving"));
+  else if (pages.picWaits.has(key)) frame.append(el("div", { className: "muted" }, "Asking the node…"), el("progress", { className: "picbar" }));
+  else if (pages.picQueue.some(q => q.addr === base.addr && q.path === path)) frame.append(el("div", { className: "muted" }, "Waiting for the picture before it…"));
   else {
     const what = !forced ? "smallest size, about 1.3 KB" : st === "dots" ? "dots, set by the page" : st === "colour" ? "Colour 8 KB, set by the page" : "Greyscale, set by the page";
     const b = el("button", { textContent: got?.error ? `Try again (${got.error})` : `Click here to see the picture · ${what}` });
     b.onclick = () => { requestPicture(base.addr, path); renderChat(); };
-    box.append(b);
+    frame.append(b);
   }
-  fig.append(box);
+  fig.append(frame, cap(caption || rel));
   return fig;
 }
 

@@ -21,13 +21,15 @@ A northwesterly gale of 18 metres a second is expected to reach Aalborg Bugt thi
 
 The warning went out over the new repeater on the mast and reached Øster Hurup in two hops, before the radio forecast mentioned it. "We heard it on the water first," said one skipper.
 
-![The cabin at the harbour mouth, as it looked on Tuesday.](demo/hytte.jpg "wide")
+![The gale building over the harbour mouth on Wednesday afternoon.](demo/storm.png "colour wide")
 
 >! [rules] {big:*"We heard the gale warning on the water before the radio said it."*}
 >{small:Anna, skipper of Mågen}
 
 ### Fuel pier open again
 Diesel and petrol are back at the fuel pier from Thursday 07:00, card only. The pump was out for two weeks while the tank was replaced.
+
+![The fuel pier, open again.](demo/fuelpier.png "colour wide")
 
 {small:**WEATHER · TONIGHT**}
 | | Wind | Sea |

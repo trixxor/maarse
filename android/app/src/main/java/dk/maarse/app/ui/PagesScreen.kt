@@ -48,6 +48,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.graphics.graphicsLayer
@@ -275,24 +280,74 @@ private val PIC_LINE = Regex("""^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"(grey|dots|colou
 
 /** One block of a page, parsed from the markup. */
 private sealed class Block {
-    data class Para(val text: String) : Block()
-    data class Heading(val level: Int, val text: String) : Block()
+    data class Para(val text: String, val centre: Boolean = false) : Block()
+    data class Heading(val level: Int, val text: String, val centre: Boolean) : Block()
     data class Item(val text: String) : Block()
-    data class Quote(val text: String) : Block()
+    /** Quote lines in a row; with a colour it is a callout box (`>!red …`). */
+    data class Quote(val lines: List<String>, val colour: String?) : Block()
     data class Code(val text: String) : Block()
     data class Pic(val caption: String, val src: String, val style: String, val forced: Boolean) : Block()
+    /** A pipe table; `aligns` is 0 left, 1 centre, 2 right per column. */
+    data class Table(val head: List<String>?, val aligns: List<Int>, val rows: List<List<String>>) : Block()
     data object Rule : Block()
 }
 
 private val HEADING = Regex("""^(#{1,3})\s+(.*)$""")
 private val ITEM = Regex("""^\s*[-*]\s+(.*)$""")
 private val RULE = Regex("""^---+\s*$""")
+private val TABLE_ROW = Regex("""^\s*\|""")
+private val TABLE_SEP = Regex("""^:?-+:?$""")
+private val CELL_SPLIT = Regex("""(?<!\\)\|""")
+/** A centred line: `-> text <-`. */
+private val CENTRE = Regex("""^->\s*(.*?)\s*<-\s*$""")
+/** A quote line; `>!colour` starts a coloured box (callout). */
+private val QUOTE = Regex("""^>(?:!([a-z]+)(?=\s|$))?\s?(.*)$""")
+
+/** Page colours: text colour and soft background, light and dark (the web client's --pf-* and --pb-*). */
+private class PageColour(val fgLight: Long, val bgLight: Long, val fgDark: Long, val bgDark: Long)
+private val PAGE_COLOURS = mapOf(
+    "red" to PageColour(0xFFB3261E, 0xFFFBDAD6, 0xFFFF8A80, 0xFF4A1D1A),
+    "orange" to PageColour(0xFFB55400, 0xFFFDE2C8, 0xFFFFB46B, 0xFF4A2C10),
+    "yellow" to PageColour(0xFF8A6A00, 0xFFFFF0A8, 0xFFFFD95A, 0xFF443A0E),
+    "green" to PageColour(0xFF2E7D32, 0xFFD6EFD8, 0xFF7FD68A, 0xFF1B3A1F),
+    "blue" to PageColour(0xFF1F5FBF, 0xFFDBE6FB, 0xFF8AB4FF, 0xFF1B2B4A),
+    "purple" to PageColour(0xFF7A3DB0, 0xFFEBDCF7, 0xFFCDA2FF, 0xFF34234A),
+    "grey" to PageColour(0xFF5F6B66, 0xFFE4E9E6, 0xFFA3AFA9, 0xFF2B3430),
+)
+private fun pageColour(name: String?): PageColour? = PAGE_COLOURS[if (name == "gray") "grey" else name]
+
+/** Splits pipe-table lines into a header (when the second row is `|---|:--:|`), alignments and rows. */
+private fun parseTable(lines: List<String>): Block.Table {
+    fun cells(l: String): List<String> {
+        var s = l.trim().removePrefix("|")
+        if (s.endsWith("|") && !s.endsWith("\\|")) s = s.dropLast(1)
+        return s.split(CELL_SPLIT).map { it.trim().replace("\\|", "|") }
+    }
+    var rows = lines.map(::cells)
+    var head: List<String>? = null
+    var aligns = emptyList<Int>()
+    if (rows.size > 1 && rows[1].all { TABLE_SEP.matches(it) }) {
+        aligns = rows[1].map { if (it.endsWith(":")) (if (it.startsWith(":")) 1 else 2) else 0 }
+        head = rows[0]
+        rows = rows.drop(2)
+    }
+    val n = minOf(20, maxOf(head?.size ?: 0, rows.maxOfOrNull { it.size } ?: 0)).coerceAtLeast(1)
+    fun fit(r: List<String>) = List(n) { r.getOrElse(it) { "" } }
+    return Block.Table(head?.let(::fit), List(n) { aligns.getOrElse(it) { 0 } }, rows.map(::fit))
+}
 
 /** Splits markup into blocks (the same rules as the web client's renderMarkup). */
 private fun parseMarkup(markup: String): List<Block> {
     val out = mutableListOf<Block>()
     val para = StringBuilder()
-    fun flush() { if (para.isNotEmpty()) { out += Block.Para(para.toString()); para.clear() } }
+    var table: MutableList<String>? = null
+    var quote: MutableList<String>? = null
+    var quoteColour: String? = null
+    fun flush() {
+        if (para.isNotEmpty()) { out += Block.Para(para.toString()); para.clear() }
+        table?.let { out += parseTable(it); table = null }
+        quote?.let { out += Block.Quote(it, quoteColour); quote = null }
+    }
     var code: MutableList<String>? = null
     for (line in markup.replace("\r", "").split("\n")) {
         val c = code
@@ -300,19 +355,36 @@ private fun parseMarkup(markup: String): List<Block> {
             if (line.startsWith("```")) { out += Block.Code(c.joinToString("\n")); code = null } else c += line
             continue
         }
+        if (table != null && !TABLE_ROW.containsMatchIn(line)) flush()
         val h = HEADING.find(line)
         val pic = PIC_LINE.find(line)
         val item = ITEM.find(line)
+        val q = QUOTE.find(line)
+        val centre = CENTRE.find(line)
         when {
             line.startsWith("```") -> { flush(); code = mutableListOf() }
-            h != null -> { flush(); out += Block.Heading(h.groupValues[1].length, h.groupValues[2]) }
+            h != null -> {
+                flush()
+                val hc = CENTRE.find(h.groupValues[2])
+                out += Block.Heading(h.groupValues[1].length, hc?.groupValues?.get(1) ?: h.groupValues[2], hc != null)
+            }
             line.isBlank() -> flush()
             line.startsWith("@title ") -> {}
             RULE.matches(line) -> { flush(); out += Block.Rule }
             pic != null -> { flush(); out += Block.Pic(pic.groupValues[1], pic.groupValues[2], pic.groupValues[3], pic.groupValues[4] == "!") }
+            TABLE_ROW.containsMatchIn(line) -> { if (table == null) { flush(); table = mutableListOf() }; table!! += line }
             item != null -> { flush(); out += Block.Item(item.groupValues[1]) }
-            line.startsWith(">") -> { flush(); out += Block.Quote(line.removePrefix(">").trimStart()) }
-            else -> { if (para.isNotEmpty()) para.append(' '); para.append(line.trim()) }
+            q != null -> {
+                // Quote lines in a row make one box; `>!colour` starts a new, coloured one.
+                val colour = q.groupValues[1]
+                if (quote == null || colour.isNotEmpty()) { flush(); quote = mutableListOf(); quoteColour = pageColour(colour)?.let { colour } }
+                quote!! += q.groupValues[2]
+            }
+            centre != null -> { flush(); out += Block.Para(centre.groupValues[1], centre = true) }
+            else -> {
+                quote?.let { out += Block.Quote(it, quoteColour); quote = null }
+                if (para.isNotEmpty()) para.append(' '); para.append(line.trim())
+            }
         }
     }
     code?.let { out += Block.Code(it.joinToString("\n")) }
@@ -320,21 +392,87 @@ private fun parseMarkup(markup: String): List<Block> {
     return out
 }
 
-/** The page's markup as Compose: headings, paragraphs, lists, quotes, code, rules and pictures. */
+/** The page's markup as Compose: headings, paragraphs, lists, quotes, callouts, tables, code, rules and pictures. */
 @Composable
 private fun Markup(markup: String, base: Pages.Url, version: Int) {
     // Read here too: a child given an unchanged-looking version may be skipped.
     Pages.version.collectAsState().value
     val blocks = remember(markup) { parseMarkup(markup) }
+    val body = MaterialTheme.typography.bodyLarge
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (b in blocks) when (b) {
-            is Block.Para -> Inline(b.text, base, MaterialTheme.typography.bodyLarge)
-            is Block.Heading -> Inline(b.text, base, when (b.level) { 1 -> MaterialTheme.typography.headlineSmall; 2 -> MaterialTheme.typography.titleLarge; else -> MaterialTheme.typography.titleMedium }, bold = true)
-            is Block.Item -> Row { Text("•  "); Inline(b.text, base, MaterialTheme.typography.bodyLarge) }
-            is Block.Quote -> Box(Modifier.padding(start = 8.dp).background(MaterialTheme.colorScheme.surfaceContainer).padding(8.dp)) { Inline(b.text, base, MaterialTheme.typography.bodyLarge) }
+            is Block.Para -> if (b.centre) Inline(b.text, base, body, align = TextAlign.Center, modifier = Modifier.fillMaxWidth()) else Inline(b.text, base, body)
+            is Block.Heading -> Inline(b.text, base, when (b.level) { 1 -> MaterialTheme.typography.headlineSmall; 2 -> MaterialTheme.typography.titleLarge; else -> MaterialTheme.typography.titleMedium }, bold = true,
+                align = if (b.centre) TextAlign.Center else null, modifier = if (b.centre) Modifier.fillMaxWidth() else Modifier)
+            is Block.Item -> Row { Text("•  "); Inline(b.text, base, body) }
+            is Block.Quote -> {
+                val pc = pageColour(b.colour)
+                if (pc == null) Box(Modifier.padding(start = 8.dp).background(MaterialTheme.colorScheme.surfaceContainer).padding(8.dp)) { Inline(b.lines.joinToString("\n"), base, body) }
+                else {
+                    val dark = pageDark()
+                    val bar = Color(if (dark) pc.fgDark else pc.fgLight)
+                    Box(Modifier.fillMaxWidth().background(Color(if (dark) pc.bgDark else pc.bgLight), RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
+                        .drawBehind { drawRect(bar, size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height)) }
+                        .padding(start = 13.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)) { Inline(b.lines.joinToString("\n"), base, body) }
+                }
+            }
+            is Block.Table -> PageTable(b, base)
             is Block.Code -> CodeBlock(b.text)
             is Block.Pic -> Picture(b.caption, b.src, b.style, base, version, b.forced)
             Block.Rule -> HorizontalDivider()
+        }
+    }
+}
+
+@Composable
+private fun pageDark() = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+
+/** A pipe table. Columns get their natural width when the table fits the screen,
+ *  else they share the width like a browser does (text wraps), and when even the
+ *  longest words do not fit, the table scrolls sideways on its own, never the page. */
+@Composable
+private fun PageTable(t: Block.Table, base: Pages.Url) {
+    val line = MaterialTheme.colorScheme.outlineVariant
+    val headBg = MaterialTheme.colorScheme.surfaceContainer
+    val n = t.aligns.size
+    val rows = listOfNotNull(t.head) + t.rows
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val avail = constraints.maxWidth
+        Box(Modifier.horizontalScroll(rememberScrollState())) {
+            androidx.compose.ui.layout.Layout(content = {
+                rows.forEachIndexed { r, row ->
+                    val head = t.head != null && r == 0
+                    row.forEachIndexed { i, cell ->
+                        Box((if (head) Modifier.background(headBg) else Modifier).border(0.5.dp, line).padding(horizontal = 8.dp, vertical = 4.dp)) {
+                            Inline(cell, base, MaterialTheme.typography.bodyMedium, bold = head, modifier = Modifier.fillMaxWidth(),
+                                align = when (t.aligns[i]) { 1 -> TextAlign.Center; 2 -> TextAlign.End; else -> TextAlign.Start })
+                        }
+                    }
+                }
+            }) { ms, _ ->
+                val count = ms.size / n
+                val nat = IntArray(n); val min = IntArray(n)
+                ms.forEachIndexed { k, m ->
+                    nat[k % n] = maxOf(nat[k % n], m.maxIntrinsicWidth(androidx.compose.ui.unit.Constraints.Infinity))
+                    min[k % n] = maxOf(min[k % n], m.minIntrinsicWidth(androidx.compose.ui.unit.Constraints.Infinity))
+                }
+                val sn = nat.sum(); val sm = min.sum()
+                val w = when {
+                    sn <= avail -> nat
+                    sm >= avail -> min
+                    else -> IntArray(n) { min[it] + ((nat[it] - min[it]).toLong() * (avail - sm) / (sn - sm)).toInt() }
+                }
+                val h = IntArray(count) { r -> (0 until n).maxOf { i -> ms[r * n + i].maxIntrinsicHeight(w[i]) } }
+                val ps = ms.mapIndexed { k, m -> m.measure(androidx.compose.ui.unit.Constraints.fixed(w[k % n], h[k / n])) }
+                layout(w.sum(), h.sum()) {
+                    var y = 0
+                    for (r in 0 until count) {
+                        var x = 0
+                        for (i in 0 until n) { ps[r * n + i].place(x, y); x += w[i] }
+                        y += h[r]
+                    }
+                }
+            }
         }
     }
 }
@@ -355,31 +493,54 @@ private fun CodeBlock(t: String) {
     }
 }
 
-/** **bold**, `code` and [text](link): links to maarse:// pages open here; links out are shown as text. */
-@Composable
-private fun Inline(text: String, base: Pages.Url, style: androidx.compose.ui.text.TextStyle, bold: Boolean = false) {
-    val accent = MaterialTheme.colorScheme.primary
-    val s: AnnotatedString = buildAnnotatedString {
-        val re = Regex("""\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)""")
-        var last = 0
-        for (m in re.findAll(text)) {
-            append(text.substring(last, m.range.first))
-            when {
-                m.groupValues[1].isNotEmpty() -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(m.groupValues[1]) }
-                m.groupValues[2].isNotEmpty() -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(m.groupValues[2]) }
-                else -> {
-                    val target = m.groupValues[4]
-                    val p = Pages.parse(target, base)
-                    if (p != null) withLink(LinkAnnotation.Clickable(p.toString(), TextLinkStyles(SpanStyle(color = accent))) { Pages.open(p.toString()) }) { append(m.groupValues[3]) }
-                    else if (Regex("^https?://", RegexOption.IGNORE_CASE).containsMatchIn(target)) append("${m.groupValues[3]} <$target>")
-                    else append(m.groupValues[3])
+/** Inline markup: `code`, **bold**, ~~struck~~, *italic*, {red:colour}, {!red:highlight}
+ *  and [text](link). Bold, struck, italic and colour may hold other inline markup;
+ *  an unknown colour is plain text. The same rules as the web client's pageInline. */
+private val INLINE = Regex("""`([^`]+)`|\*\*(.+?)\*\*|~~(.+?)~~|\*([^*\s](?:[^*]*[^*\s])?)\*|\{(!?)([a-z]+):([^{}]+)\}|\[([^\]]+)\]\(([^)\s]+)\)""")
+private val LINK_OUT = Regex("^https?://", RegexOption.IGNORE_CASE)
+
+private fun AnnotatedString.Builder.inline(text: String, base: Pages.Url, accent: Color, ink: Color, dark: Boolean, depth: Int = 0) {
+    if (depth > 4) { append(text); return }
+    var last = 0
+    for (m in INLINE.findAll(text)) {
+        append(text.substring(last, m.range.first))
+        val g = m.groupValues
+        when {
+            g[1].isNotEmpty() -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(g[1]) }
+            g[2].isNotEmpty() -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { inline(g[2], base, accent, ink, dark, depth + 1) }
+            g[3].isNotEmpty() -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { inline(g[3], base, accent, ink, dark, depth + 1) }
+            g[4].isNotEmpty() -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { inline(g[4], base, accent, ink, dark, depth + 1) }
+            g[6].isNotEmpty() -> {
+                val pc = pageColour(g[6])
+                val st = when {
+                    pc == null -> SpanStyle()
+                    g[5] == "!" -> SpanStyle(color = ink, background = Color(if (dark) pc.bgDark else pc.bgLight))
+                    else -> SpanStyle(color = Color(if (dark) pc.fgDark else pc.fgLight))
                 }
+                withStyle(st) { inline(g[7], base, accent, ink, dark, depth + 1) }
             }
-            last = m.range.last + 1
+            else -> {
+                val target = g[9]
+                val p = Pages.parse(target, base)
+                if (p != null) withLink(LinkAnnotation.Clickable(p.toString(), TextLinkStyles(SpanStyle(color = accent))) { Pages.open(p.toString()) }) { append(g[8]) }
+                else if (LINK_OUT.containsMatchIn(target)) append("${g[8]} <$target>")
+                else append(g[8])
+            }
         }
-        append(text.substring(last))
+        last = m.range.last + 1
     }
-    Text(s, style = style, fontWeight = if (bold) FontWeight.SemiBold else null)
+    append(text.substring(last))
+}
+
+/** A line of inline markup: links to maarse:// pages open here; links out are shown as text. */
+@Composable
+private fun Inline(text: String, base: Pages.Url, style: androidx.compose.ui.text.TextStyle, bold: Boolean = false,
+                   align: TextAlign? = null, modifier: Modifier = Modifier) {
+    val accent = MaterialTheme.colorScheme.primary
+    val ink = MaterialTheme.colorScheme.onSurface
+    val dark = pageDark()
+    val s: AnnotatedString = buildAnnotatedString { inline(text, base, accent, ink, dark) }
+    Text(s, modifier, style = style, fontWeight = if (bold) FontWeight.SemiBold else null, textAlign = align)
 }
 
 // Pictures come in steps, all made by the host as WebP and the same on every

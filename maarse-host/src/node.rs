@@ -1717,8 +1717,12 @@ impl Node {
                     "message from {} could not be read (the session is lost or out of step)",
                     short(&a)
                 ));
-                // Show it in the conversation too, so the loss is not silent.
-                self.broadcast(&Event::DirectReceived { from: a, hops, text: text(UNREADABLE_NOTICE.as_bytes()) });
+                // Show it in the conversation too, so the loss is not silent,
+                // but once per new session: a burst of old packets (a file
+                // transfer, queued messages) gives one notice, not one each.
+                if !self.resynced.get(&a).is_some_and(|t| t.elapsed() < RESYNC_EVERY) {
+                    self.broadcast(&Event::DirectReceived { from: a, hops, text: text(UNREADABLE_NOTICE.as_bytes()) });
+                }
                 self.resync(a);
             }
             Err(e) => {
@@ -4975,6 +4979,26 @@ mod radio_file_e2e_tests {
             b.n.on_file_offer(sender, offer);
             assert!(b.n.in_files.is_empty(), "a late offer started the file again (by_recipient {by_recipient})");
         }
+    }
+
+    /// A lost session shows one notice in the chat, however many messages
+    /// arrive that cannot be read.
+    #[test]
+    fn lost_session_gives_one_notice_not_one_per_message() {
+        let (mut a, mut b) = radio_pair("lostsess");
+        let notices = |e: &[Event]| e.iter().filter(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.as_slice() == UNREADABLE_NOTICE.as_bytes())).count();
+        // A first message sets up the session both ways.
+        a.n.command(1, Command::SendDirect { req: 1, dest: b.n.addr, text: text(b"hello") });
+        run_radio(&mut a, &mut b, 60, &mut |_, eb| eb.iter().any(|e| matches!(e, Event::DirectReceived { .. })));
+        b.n.command(1, Command::SendDirect { req: 2, dest: a.n.addr, text: text(b"hi") });
+        run_radio(&mut a, &mut b, 60, &mut |ea, _| ea.iter().any(|e| matches!(e, Event::DirectReceived { .. })));
+        // B loses its sessions (a reinstall, say); A sends three more.
+        b.n.sessions = crate::sessions::Sessions::load(b.n.data_dir.join("gone.bin"));
+        for (i, m) in [b"one".as_slice(), b"two", b"three"].into_iter().enumerate() {
+            a.n.command(1, Command::SendDirect { req: 10 + i as u16, dest: b.n.addr, text: text(m) });
+        }
+        let (_, eb, _, _) = run_radio(&mut a, &mut b, 90, &mut |_, _| false);
+        assert_eq!(notices(&eb), 1, "one notice for the lost session");
     }
 
     /// A picture on a page over LoRa: B makes the small copy in the style

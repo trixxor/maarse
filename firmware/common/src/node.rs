@@ -1542,8 +1542,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     }
                     Err(CryptoError::NoSession(a) | CryptoError::Desync(a)) => {
                         log("Message could not be read (the encryption session is lost)");
-                        // Show it in the conversation too, so the loss is not silent.
-                        emit(&Event::DirectReceived { from: a, hops, text: text(UNREADABLE_NOTICE.as_bytes()) });
+                        // Show it in the conversation too, so the loss is not
+                        // silent, but once per new session, not once per packet.
+                        if !self.resynced.get(&a).is_some_and(|t| t.elapsed() < RESYNC_EVERY) {
+                            emit(&Event::DirectReceived { from: a, hops, text: text(UNREADABLE_NOTICE.as_bytes()) });
+                        }
                         self.resync(a);
                     }
                     Err(_) => {}

@@ -35,6 +35,9 @@ fn d_pinned() -> usize {
 #[serde(default)]
 pub struct Scenario {
     pub name: String,
+    /// The host's rules (post office, files, Pages, tunnel); default
+    /// "Standard (as built)" from maarse-hostrules.
+    pub rules: maarse_hostrules::rules::Rules,
     pub seed: u64,
     /// Default spreading factor (a node can override it).
     #[serde(default = "d_sf")]
@@ -239,6 +242,7 @@ impl Default for Scenario {
     fn default() -> Self {
         Scenario {
             name: String::new(),
+            rules: Default::default(),
             seed: 1,
             sf: 9,
             duty_permille: 100,

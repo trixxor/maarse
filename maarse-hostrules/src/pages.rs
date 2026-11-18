@@ -9,6 +9,11 @@ use maarse_core::content;
 pub const WINDOW_MS: u64 = 30_000;
 /// How long an asked-for page may take to come.
 pub const ASKED_KEEP_MS: u64 = 600_000;
+/// Page requests served per reader within [`WINDOW_MS`] when the reader
+/// may be reached over LoRa (`--pages-burst-lora`) ...
+pub const BURST_LORA: usize = 5;
+/// ... and over the internet (`--pages-burst-net`).
+pub const BURST_NET: usize = 60;
 /// The most a picture (or page) may be over LoRa, whatever the page asks.
 pub const LORA_PICTURE_MAX: usize = 8 * 1024;
 /// The greyscale step aims at this size.

@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=32">
-<link rel="stylesheet" href="phone.css?v=32">
+<link rel="stylesheet" href="style.css?v=33">
+<link rel="stylesheet" href="phone.css?v=33">
 </head>
 <body>
 <header id="top">
@@ -40,6 +40,7 @@
       <datalist id="town-list"></datalist>
       <label><input type="checkbox" id="jr-quiet"> Quiet network (stop other traffic while it travels)</label>
       <button id="btn-journey" class="primary">Send and follow</button>
+      <div id="send-what"></div>
       <h3>Any message</h3>
       <p class="hint">Messages from the traffic generator. Click one to follow it.</p>
       <div id="msg-list" class="scroll"></div>
@@ -251,10 +252,11 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="scenarios.js?v=32"></script>
-<script src="maarse-sim.js?v=32"></script>
-<script src="app.js?v=32"></script>
-<script src="store.js?v=32"></script>
-<script src="phone.js?v=32"></script>
+<script src="scenarios.js?v=33"></script>
+<script src="maarse-sim.js?v=33"></script>
+<script src="app.js?v=33"></script>
+<script src="store.js?v=33"></script>
+<script src="phone.js?v=33"></script>
+<script src="send.js?v=33"></script>
 </body>
 </html>

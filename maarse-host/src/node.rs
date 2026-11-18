@@ -435,6 +435,9 @@ pub struct Node {
     beacon_deferred_since: Option<Instant>,
     /// Incoming files completed lately (a late offer is answered, not taken again).
     files_done: HashMap<u64, Instant>,
+    /// Incoming files stopped lately, by us or the sender: a late offer must
+    /// not start them again (the sender is told to stop once more).
+    files_cancelled: HashMap<u64, Instant>,
     /// Pull transfers over LoRa on (off only to compare in tests).
     file_pull: bool,
     /// Answers calls by itself when `<data>/calltest/` exists.
@@ -685,6 +688,7 @@ impl Node {
             file_wait_logged: HashSet::new(),
             beacon_deferred_since: None,
             files_done: HashMap::new(),
+            files_cancelled: HashMap::new(),
             file_pull: true,
             call_test: calltest::CallTest::load(&cfg.data_dir),
             link_up: HashMap::new(),
@@ -2067,6 +2071,7 @@ impl Node {
         }
         // Incoming: drop what we have and ask the sender to stop.
         if let Some(f) = self.in_files.remove(&file_id) {
+            self.files_cancelled.insert(file_id, Instant::now());
             self.log(format!("file {file_id:016x} from {} cancelled by the user", short(&f.from)));
             let _ = self.send_sealed(f.from, &content::file_cancel(file_id, true), Pending::Control);
             self.broadcast(&Event::FileDone { file_id, ok: false, outgoing: false, text: text(b"cancelled") });
@@ -2085,6 +2090,7 @@ impl Node {
             }
         } else if self.in_files.get(&file_id).is_some_and(|f| f.from == from || f.from == self.person_peer(&from)) {
             self.in_files.remove(&file_id);
+            self.files_cancelled.insert(file_id, Instant::now());
             self.log(format!("file {file_id:016x} cancelled by the sender {}", short(&from)));
             self.broadcast(&Event::FileDone { file_id, ok: false, outgoing: false, text: text(b"cancelled by the sender") });
         }
@@ -2103,6 +2109,13 @@ impl Node {
         }
         let sender = from;
         let file_id = offer.file_id;
+        // Stopped (an offer resent before the stop reached the sender, or the
+        // sender missed our stop): tell it to stop again, do not start over.
+        if self.files_cancelled.contains_key(&file_id) {
+            self.log(format!("file {file_id:016x} offered again after it was stopped; telling {} to stop", short(&sender)));
+            let _ = self.send_sealed(sender, &content::file_cancel(file_id, true), Pending::Control);
+            return;
+        }
         // Already received (the sender missed our final request): tell it again.
         if self.files_done.contains_key(&file_id) {
             if self.pull_capable(&sender) {
@@ -3061,6 +3074,7 @@ impl Node {
             self.log(format!("file mailbox: file {id:016x} for {} expired after 7 days", short(&r)));
         }
         self.files_done.retain(|_, t| now.duration_since(*t) < Duration::from_secs(24 * 3600));
+        self.files_cancelled.retain(|_, t| now.duration_since(*t) < Duration::from_secs(24 * 3600));
         // Half-finished incoming files.
         let stale: Vec<u64> = self
             .in_files
@@ -4941,6 +4955,25 @@ mod radio_file_e2e_tests {
         assert_eq!(file_done_text(&ea, true).as_deref(), Some("cancelled by the recipient"));
         assert!(a.n.out_files.is_empty() && b.n.in_files.is_empty());
         assert!(a.n.filebox.recipient(id).is_none(), "still in the file mailbox");
+    }
+
+    /// An offer that arrives after the file was stopped (resent before the
+    /// stop got through) does not start it again, from either end.
+    #[test]
+    fn late_offer_after_stop_is_refused() {
+        for by_recipient in [true, false] {
+            let (mut a, mut b, id) = half_sent(if by_recipient { "late-r" } else { "late-s" });
+            let offer = b.n.in_files[&id].offer.clone();
+            if by_recipient {
+                b.n.command(1, Command::CancelFile { file_id: id });
+            } else {
+                a.n.command(1, Command::CancelFile { file_id: id });
+                run_radio(&mut a, &mut b, 60, &mut |_, eb| file_done_text(eb, false).is_some());
+            }
+            let sender = a.n.addr;
+            b.n.on_file_offer(sender, offer);
+            assert!(b.n.in_files.is_empty(), "a late offer started the file again (by_recipient {by_recipient})");
+        }
     }
 
     /// The phone node's case: a 7.5 KB picture over one LoRa hop through

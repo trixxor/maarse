@@ -1137,10 +1137,27 @@ function renderChat() {
     // or kept in the file mailbox) or incoming. The other side is told.
     if (m.fileId !== undefined && state.files.get(m.fileId) === m && !m.page) {
       const what = m.mine ? "Stop sending" : "Stop receiving";
-      const stop = el("a", { href: "#", className: "del", textContent: what, title: what + " this file (the other side is told)" });
-      stop.style.marginLeft = "8px";
-      stop.onclick = (e) => { e.preventDefault(); if (confirm(what + " this file?")) transport.send(Cmd.cancelFile(m.fileId)); };
-      meta.append(stop);
+      // Asked in place, not with confirm() (a browser dialog blocks the page
+      // and some embedded views never show it). The question is kept on the
+      // message, so progress updates that redraw the chat do not lose it.
+      if (m.stopAsk === "stopping") {
+        meta.append(el("span", { className: "muted", textContent: " · stopping…" }));
+      } else if (m.stopAsk) {
+        const ask = el("span", { className: "del", textContent: what + "? " });
+        ask.style.marginLeft = "8px";
+        const yes = el("a", { href: "#", className: "del", textContent: "Yes" });
+        const no = el("a", { href: "#", textContent: "No" });
+        no.style.marginLeft = "8px";
+        yes.onclick = (ev) => { ev.preventDefault(); m.stopAsk = "stopping"; transport.send(Cmd.cancelFile(m.fileId)); renderChat(); };
+        no.onclick = (ev) => { ev.preventDefault(); m.stopAsk = false; renderChat(); };
+        ask.append(yes, no);
+        meta.append(ask);
+      } else {
+        const stop = el("a", { href: "#", className: "del", textContent: what, title: what + " this file (the other side is told)" });
+        stop.style.marginLeft = "8px";
+        stop.onclick = (e) => { e.preventDefault(); m.stopAsk = true; renderChat(); };
+        meta.append(stop);
+      }
     }
     if (hist.on && !m.url) {
       const del = el("a", { href: "#", className: "del", textContent: "Delete", title: "Delete from your node's history (not from the other person)" });

@@ -544,6 +544,7 @@ pub struct Stats {
     pub wakeups: u64,
     pub mail_deposits: u64,
     pub backbone_reconnects: u64,
+    pub mail_radio_ops: u64,
     pub mail_stored: u64,
     pub mail_full: u64,
     pub mail_ops: u64,
@@ -2638,6 +2639,12 @@ impl Engine {
             if self.on_backbone(node) && self.on_backbone(office) {
                 self.stats.mail_tcp += 1;
                 self.schedule(self.now + 50, Ev::MailTcp { to: office, payload: p.to_vec() });
+            } else if !self.sc.mail_tcp_only {
+                // No TCP between the two hosts (e.g. an island host behind a
+                // LoRa trunk): the mail op goes routed over the radio and
+                // trunks instead of waiting for TCP that may never come.
+                self.stats.mail_radio_ops += 1;
+                self.send_deposit_lora(node, office, recipient, op, body);
             } else if self.mail_deferred.len() < 10_000 {
                 self.stats.mail_deferred += 1;
                 self.mail_deferred.push((node, office, p.to_vec()));
@@ -4351,6 +4358,7 @@ impl Engine {
             "contacts_heard": self.contacts_heard(),
             "mail_deposits": self.stats.mail_deposits,
             "backbone_reconnects": self.stats.backbone_reconnects,
+            "mail_radio_ops": self.stats.mail_radio_ops,
             "mail_stored": self.stats.mail_stored,
             "mail_full": self.stats.mail_full,
             "mail_ops": self.stats.mail_ops,

@@ -135,6 +135,10 @@ pub struct Scenario {
     /// host copies, MailSync, "mail waiting" in hellos, fetch on presence,
     /// sync to the previous home office.
     pub mail: String,
+    /// The old rule: host-to-host mail ops only over TCP (before
+    /// 2026-11-19). Off: sync/fetch/delivered go routed over radio and
+    /// trunks when two hosts have no TCP between them.
+    pub mail_tcp_only: bool,
     /// Repeaters are small post offices (class 1, a few messages each).
     pub repeater_mail: bool,
     /// Hosts remember the nodes they heard over their radio in the last 24 h
@@ -266,6 +270,7 @@ impl Default for Scenario {
             mobile_route_s: 0.0,
             trunk_policy: String::new(),
             mail: String::new(),
+            mail_tcp_only: false,
             repeater_mail: false,
             mail_refetch: false,
             mail_long_retry: false,

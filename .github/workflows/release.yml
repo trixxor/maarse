@@ -110,6 +110,7 @@ jobs:
           cp docs/site/*.html site/   # docs pages, e.g. pages.html (how maarse:// pages work)
           cp -r docs/simulator site/simulator   # the network simulator, in the browser (no server needed)
           cp -r docs/denmark site/denmark       # the Denmark simulator (the real routing code as WebAssembly)
+          cp maarse-client/index.html site/denmark/client.html   # its phones run the current web client
           cp fw/* site/firmware/
           cat > site/firmware/index.json <<EOF
           {"version":"$V","commit":"$GITHUB_SHA","built":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}

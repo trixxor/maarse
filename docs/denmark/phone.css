@@ -1,0 +1,17 @@
+/* Phones panel (phone.js): two phones running the real web client, over the map. */
+.ph-panel { position:absolute; top:12px; right:12px; z-index:1200; background:var(--ov); border:1px solid var(--ovline); border-radius:16px; padding:10px 12px 12px; box-shadow:0 6px 24px rgba(0,0,0,.18); max-width:calc(100% - 24px); max-height:calc(100% - 24px); overflow:auto; }
+.ph-head { display:flex; gap:10px; align-items:baseline; margin-bottom:8px; }
+.ph-head b { font-size:14px; }
+.ph-note { color:var(--mute); font-size:12px; flex:1; }
+.ph-x { border:none; background:none; font-size:18px; line-height:1; padding:0 4px; color:var(--mute); }
+.ph-row { display:flex; gap:14px; flex-wrap:wrap; }
+.ph-card { display:flex; flex-direction:column; gap:6px; width:300px; }
+.ph-bar { display:flex; gap:6px; align-items:center; font-size:12px; color:var(--mute); }
+.ph-bar select { flex:1; min-width:0; padding:3px 6px; font-size:12px; }
+.ph-dot { width:9px; height:9px; border-radius:50%; background:var(--ok); flex:none; }
+.ph-dot.down { background:var(--bad); }
+.ph-device { border:9px solid #16191d; border-radius:30px; overflow:hidden; background:#fff; height:560px; box-shadow:0 2px 10px rgba(0,0,0,.2); }
+.ph-screen { width:100%; height:100%; border:0; display:block; background:#fff; }
+.ph-stat { font-size:11px; color:var(--mute); min-height:1.4em; }
+#ph-side .ph-list { margin:6px 0 0 18px; padding:0; font-size:12px; color:var(--mute); }
+@media (max-width: 700px) { .ph-card { width:100%; } .ph-device { height:480px; } }

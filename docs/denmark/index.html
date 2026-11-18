@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
 <link rel="stylesheet" href="style.css?v=14">
+<link rel="stylesheet" href="phone.css?v=1">
 </head>
 <body>
 <header id="top">
@@ -18,6 +19,7 @@
     <button data-mode="send" class="on">Send</button>
     <button data-mode="break">Break</button>
     <button data-mode="results">Results</button>
+    <button data-mode="phones">Phones</button>
   </nav>
   <div class="ctrl">
     <select id="preset" title="Scenario preset"></select>
@@ -181,6 +183,19 @@
     </section>
 
     <section id="inspector" class="hidden"></section>
+    <!-- Phones (phone.js): the real web client on a simulated node -->
+    <section id="tab-phones" class="tab" data-title="Phones">
+      <div id="ph-side">
+        <h3>Phones</h3>
+        <p class="hint">Two phones run the real Må:rse web client. Each is bound to a node in this world (pick it above each phone); what you send travels through the simulated radio, hosts and internet. Press play: nothing moves while the clock is stopped. The phones stay open in every mode, so you can cut links or the internet in Break and watch them.</p>
+        <button id="ph-toggle" class="primary">Show the phones</button>
+        <h3>Simulated</h3>
+        <ul class="ph-list"><li>Direct messages, acks, post office deposits</li><li>Channels (public and #hashtag)</li><li>Announce, contacts heard, routes learned</li><li>Status and neighbours</li></ul>
+        <h3>Not simulated yet</h3>
+        <ul class="ph-list"><li>Files, pictures and voice messages</li><li>Calls, Pages, IP tunnel</li><li>Trace route, remote admin, node settings</li><li>maarse-host pages (settings, account, history, MeshCore)</li></ul>
+        <p class="hint">These answer with a clear error in the phone instead of doing nothing.</p>
+      </div>
+    </section>
   </aside>
 
   <div id="mapwrap">
@@ -217,5 +232,6 @@
 <script src="scenarios.js?v=13"></script>
 <script src="maarse-sim.js?v=13"></script>
 <script src="app.js?v=14"></script>
+<script src="phone.js?v=1"></script>
 </body>
 </html>

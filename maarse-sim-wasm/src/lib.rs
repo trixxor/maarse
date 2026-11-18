@@ -45,7 +45,8 @@ pub fn create(json: &str) -> Result<Engine, String> {
 /// step {ms, max_events?} | run_to_end | summary | state | inspect {node} |
 /// events {since, max, node?, ptype?, msg?} | reach {pid} | announce {node} |
 /// send {from, to} | inject {event} | msgs {from?, max?} | follow {msg} |
-/// alert {index} | components
+/// alert {index} | components | phone_cmd {node, frame} |
+/// phone_events {node} | phone_detach {node} (see phone.rs)
 pub fn call(e: &mut Engine, cmd: &Value) -> Value {
     let u = |k: &str| cmd[k].as_u64().unwrap_or(0) as usize;
     match cmd["cmd"].as_str().unwrap_or("") {
@@ -95,6 +96,15 @@ pub fn call(e: &mut Engine, cmd: &Value) -> Value {
         },
         "msgs" => e.msg_list(u("from"), cmd["max"].as_u64().unwrap_or(500) as usize),
         "follow" => e.follow(u("msg")),
+        "phone_cmd" if u("node") < e.nodes.len() => {
+            let bytes: Vec<u8> = cmd["frame"].as_array().map(|a| a.iter().map(|b| b.as_u64().unwrap_or(0) as u8).collect()).unwrap_or_default();
+            e.phone_cmd(u("node"), &bytes)
+        }
+        "phone_events" if u("node") < e.nodes.len() => e.phone_events(u("node")),
+        "phone_detach" if u("node") < e.nodes.len() => {
+            e.phone_detach(u("node"));
+            json!({"ok": true})
+        }
         "alert" if u("index") < e.alerts.len() => e.alert_summary(u("index"), true),
         other => json!({"error": format!("unknown or invalid command: {other}")}),
     }

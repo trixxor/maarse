@@ -424,6 +424,9 @@ object Node : LinkListener {
             // Pages and pictures we asked for go to the Pages screen, not a chat.
             is Ev.FileIncoming -> if (!Pages.onIncoming(ev)) {
                 if (ev.size <= 0 || ev.size > 16 * 1024 * 1024) return
+                // A page or page picture we did not (or no longer) wait
+                // for: never a file in a chat.
+                if (Pages.isPageFile(ev.mime, ev.name)) return
                 heard(ev.from) { it }
                 val conv = "dm:${ev.from}"
                 val row = db.insert(Msg(0, conv, false, ev.from, fileLabel(ev.mime, ev.name, null) + " — receiving…", System.currentTimeMillis(), "", 0, 0))

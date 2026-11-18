@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 object Pages {
     const val PAGE_MIME = "text/x-maarse-page;deflate"
 
+    /** A page, or a picture on a page (`_style/file`): Pages only, never a chat. */
+    fun isPageFile(mime: String, name: String) = mime == PAGE_MIME || (name.startsWith("_") && '/' in name)
+
     data class Url(val addr: String, val path: String) {
         override fun toString() = "maarse://$addr/" + if (path == "index") "" else path
         val key get() = "$addr/$path"

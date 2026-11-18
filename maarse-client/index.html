@@ -1365,6 +1365,9 @@ function onEvent(ev) {
     }
     case "fileIncoming": {
       if (pageIncoming(ev)) break;
+      // A page or page picture we did not (or no longer) wait for: Pages
+      // only, never a file in a chat.
+      if (ev.mime === PAGE_MIME || (ev.name.startsWith("_") && ev.name.includes("/"))) break;
       state.contacts.set(ev.from, { heard: true });
       const m = { from: ev.from, name: ev.name, mime: ev.mime, size: ev.size, parts: [], progress: 0, fileId: ev.fileId,
                   text: `${ev.name} (${Math.ceil(ev.size / 1024)} KB) – receiving…`, time: now() };

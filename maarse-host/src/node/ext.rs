@@ -130,8 +130,10 @@ impl Node {
     /// Position and telemetry from a verified announce.
     pub(super) fn on_app_data(&mut self, from: Address, hops: u8, app_data: &[u8]) {
         let a = appdata::parse(app_data);
-        if let Some(c) = a.caps {
-            self.caps.insert(from, c);
+        if let Some(c) = a.caps
+            && self.caps.insert(from, c) != Some(c)
+        {
+            self.save_caps();
         }
         if hops == 0
             && let Some(role) = a.role.and_then(maarse_core::router::Role::from_u8)

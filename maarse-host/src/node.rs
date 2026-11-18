@@ -97,6 +97,9 @@ const PULL_STALL: Duration = Duration::from_secs(30);
 const BEACON_DEFER_MAX: Duration = Duration::from_secs(120);
 /// A file is abandoned after this time.
 const FILE_TIMEOUT: Duration = Duration::from_secs(600);
+/// A page answer the reader has not taken by then is dropped (the app
+/// stops waiting for a page after a minute, for a picture after two).
+const PAGE_REPLY_TIMEOUT: Duration = Duration::from_secs(150);
 /// Without an acknowledgement within this time a message is put in the recipient's mailbox.
 const DEPOSIT_AFTER: Duration = Duration::from_secs(45);
 /// The mailbox keeps at most this many messages per recipient, for this long.
@@ -204,6 +207,11 @@ struct OutFile {
     sealed_chunks: Option<Vec<Vec<u8>>>,
     /// Delivered from the file mailbox.
     from_box: bool,
+    /// An answer to a page request (a page or a page picture): never put
+    /// in the file mailbox, and dropped when the reader does not take it
+    /// soon (the reader has stopped waiting; later it would only turn up
+    /// as a stray file).
+    page: bool,
 }
 
 /// How an outgoing file is sent.
@@ -713,6 +721,18 @@ impl Node {
                 if let Some(p) = PublicIdentity::from_bytes(chunk) {
                     node.known.insert(p.address(), p);
                 }
+            }
+        }
+        // What other nodes can do (file pull, compressed text, ...), from
+        // their announces. Kept on disk: announces come every 10 minutes
+        // (later during a file transfer), and without the caps a restarted
+        // node took files the slow push way until it heard one.
+        let saved = fs::read_to_string(node.data_dir.join(CAPS_FILE)).unwrap_or_default();
+        for line in saved.lines() {
+            if let Some((a, c)) = line.split_once(' ')
+                && let (Some(a), Ok(c)) = (parse_addr(a), c.trim().parse::<u8>())
+            {
+                node.caps.insert(a, c);
             }
         }
         let saved = fs::read_to_string(node.data_dir.join("channels.txt")).unwrap_or_default();
@@ -1880,6 +1900,7 @@ impl Node {
                 sealed_offer: std::mem::take(&mut self.last_sealed),
                 sealed_chunks: None,
                 from_box: false,
+                page: false,
             },
         );
         self.log(format!("sending file ({chunks} chunks) to {}", short(&dest)));
@@ -2114,6 +2135,17 @@ impl Node {
         }
         let sender = from;
         let file_id = offer.file_id;
+        // A page we did not ask for (an old answer, say from the sender's
+        // file mailbox): pages belong on the Pages screen, never in a chat
+        // as a file. Tell the sender to stop, so it drops it.
+        if pages::is_page_file(&offer.mime, &offer.name) && !self.page_was_asked(&sender, &offer.name) {
+            if !self.files_cancelled.contains_key(&file_id) {
+                self.log(format!("page '{}' from {} not asked for; refused", String::from_utf8_lossy(&offer.name), short(&sender)));
+            }
+            self.files_cancelled.insert(file_id, Instant::now());
+            let _ = self.send_sealed(sender, &content::file_cancel(file_id, true), Pending::Control);
+            return;
+        }
         // Stopped (an offer resent before the stop reached the sender, or the
         // sender missed our stop): tell it to stop again, do not start over.
         if self.files_cancelled.contains_key(&file_id) {
@@ -2486,7 +2518,12 @@ impl Node {
         // nothing on the way can be LoRa.
         let no_radio = !self.links.values().any(|(n, _)| !crate::extra_links::is_backbone(n));
         let heard = self.heard_via.get(dest);
-        if self.dht_hosts.contains(dest) || (no_radio && heard.is_some()) {
+        // Last heard on our own radio: not a TCP host, whatever the DHT
+        // says. A DHT record outlives the internet connection (a phone that
+        // was online earlier and is now only on LoRa); trusting it kept
+        // file chunks off the radio, so pages never arrived.
+        let on_our_radio = heard.is_some_and(|(l, tcp, _)| !*tcp && self.links.contains_key(l));
+        if (self.dht_hosts.contains(dest) && !on_our_radio) || (no_radio && heard.is_some()) {
             return PathKind::Tcp;
         }
         if heard.is_none() {
@@ -2613,6 +2650,7 @@ impl Node {
                     sealed_offer: b.offer,
                     sealed_chunks: Some(b.chunks),
                     from_box: true,
+                    page: false,
                 },
             );
             self.awaiting.insert(msg_id, Pending::FileOffer(file_id));
@@ -3015,7 +3053,14 @@ impl Node {
             };
             let age = now.duration_since(f.created);
             let late = !f.offer_acked && age > after;
-            if !f.from_box && self.filebox.enabled() && (late || age > FILE_TIMEOUT) && self.deposit_file(file_id) {
+            if f.page && age > PAGE_REPLY_TIMEOUT {
+                let dest = f.dest;
+                self.out_files.remove(&file_id);
+                self.log(format!("page to {} not taken; dropped", short(&dest)));
+                self.broadcast(&Event::FileDone { file_id, ok: false, outgoing: true, text: text(b"page not taken") });
+                continue;
+            }
+            if !f.from_box && !f.page && self.filebox.enabled() && (late || age > FILE_TIMEOUT) && self.deposit_file(file_id) {
                 continue;
             }
             if age > FILE_TIMEOUT {
@@ -3510,7 +3555,15 @@ fn parse_addr(s: &str) -> Option<Address> {
     Address::from_slice(&b)
 }
 
+/// Other nodes' capabilities: one "address caps" line each.
+const CAPS_FILE: &str = "caps.txt";
+
 impl Node {
+    fn save_caps(&self) {
+        let lines: Vec<String> = self.caps.iter().map(|(a, c)| format!("{a} {c}")).collect();
+        let _ = fs::write(self.data_dir.join(CAPS_FILE), lines.join("\n"));
+    }
+
     fn admins_event(&self) -> Event {
         Event::Admins { admins: self.admins.iter().copied().take(4).collect() }
     }
@@ -4227,6 +4280,34 @@ mod filebox_node_tests {
         let id = n.heard_via[&tcp].0;
         n.handle(In::LinkDown { id });
         assert_eq!(n.path_kind(&tcp), PathKind::Unknown);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn old_dht_record_does_not_keep_a_radio_node_off_the_radio() {
+        let (mut n, _rx, dir) = node("dht-radio");
+        let phone = Address([5; 16]);
+        // The phone was online: found in the DHT, heard over the backbone.
+        heard(&mut n, phone, "tcp out 127.0.0.1:4242", 1);
+        n.dht_hosts.insert(phone);
+        assert_eq!(n.path_kind(&phone), PathKind::Tcp);
+        // It lost the internet and is now heard on our radio only.
+        heard(&mut n, phone, "serial COM3", 0);
+        assert_eq!(n.path_kind(&phone), PathKind::Lora);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn caps_survive_a_restart() {
+        let (mut n, _rx, dir) = node("caps-restart");
+        let pc = Address([6; 16]);
+        n.caps.insert(pc, maarse_core::appdata::CAP_FILE_PULL);
+        n.save_caps();
+        drop(n);
+        let mut c = file_interop_tests::cfg(dir.clone());
+        c.data_dir = dir.clone();
+        let n = Node::new(&c).unwrap();
+        assert_eq!(n.caps.get(&pc), Some(&maarse_core::appdata::CAP_FILE_PULL), "pull still known after a restart");
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -5000,6 +5081,29 @@ mod radio_file_e2e_tests {
         let (ea, _, _, _) = run_radio(&mut a, &mut b, 240, &mut |_, _| false);
         let done = ea.iter().filter(|e| matches!(e, Event::FileDone { outgoing: false, ok: true, .. })).count();
         assert_eq!(done, 6, "five pages and one slow-down notice");
+    }
+
+    /// A page nobody asked for (an old answer) is refused: the reader never
+    /// sees it as a file, and the sender drops it instead of keeping it in
+    /// the file mailbox.
+    #[test]
+    fn page_not_asked_for_is_refused_and_dropped() {
+        let (mut a, mut b) = radio_pair("pageunasked");
+        let pages = b.n.data_dir.join("pages");
+        fs::create_dir_all(&pages).unwrap();
+        fs::write(pages.join("index.mu"), "# Front\n").unwrap();
+        // Asked for: it arrives.
+        a.n.command(1, Command::RequestPage { req: 1, dest: b.n.addr, path: text(b"index") });
+        let (ea, _, _, _) = run_radio(&mut a, &mut b, 120, &mut |ea, _| ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, .. })));
+        assert!(ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, ok: true, .. })), "the asked page came");
+        // Sent again without A asking (A no longer waits): refused.
+        a.n.pages = Default::default();
+        b.n.on_page_request(a.n.addr, &content::Small::from_slice(b"index").unwrap());
+        assert!(b.n.out_files.values().any(|f| f.page), "page answer marked");
+        let (ea, _, _, _) = run_radio(&mut a, &mut b, 120, &mut |_, _| false);
+        assert!(!ea.iter().any(|e| matches!(e, Event::FileIncoming { .. })), "an unasked page reached the client");
+        assert!(b.n.out_files.is_empty(), "the sender still holds the page");
+        assert_eq!(b.n.filebox.len(), 0, "a page went to the file mailbox");
     }
 
     /// A lost session shows one notice in the chat, however many messages

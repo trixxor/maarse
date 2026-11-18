@@ -53,6 +53,18 @@ const WINDOW: Duration = Duration::from_secs(30);
 #[derive(Default)]
 pub(super) struct Pages {
     served: HashMap<Address, Vec<Instant>>,
+    /// Pages and pictures we asked for (node, path) and when: only those
+    /// are taken when offered. Anything else that looks like a page is
+    /// refused, so it never turns up as a file in a chat.
+    asked: HashMap<(Address, Vec<u8>), Instant>,
+}
+
+/// How long an asked-for page may take to come.
+const ASKED_KEEP: Duration = Duration::from_secs(600);
+
+/// A page or a picture on a page (`_style/file`), by its offer.
+pub(super) fn is_page_file(mime: &[u8], name: &[u8]) -> bool {
+    mime == content::PAGE_MIME || (name.first() == Some(&b'_') && name.contains(&b'/'))
 }
 
 /// Finds the page's file in `root`. The path has already been cleaned with
@@ -323,7 +335,7 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
 
 [Front page](/)
 ", WINDOW.as_secs());
-                let _ = self.send_file_bytes(from, compress(msg.as_bytes()), Small::from_slice(content::PAGE_MIME).unwrap_or_default(), path.clone());
+                let _ = self.send_page_reply(from, compress(msg.as_bytes()), Small::from_slice(content::PAGE_MIME).unwrap_or_default(), path.clone());
             }
             return;
         }
@@ -347,7 +359,7 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
         }
         let mime = Small::from_slice(content::PAGE_MIME).unwrap_or_default();
         self.log(format!("page '{path_s}' to {} ({} bytes)", short(&from), data.len()));
-        if let Err((_, e)) = self.send_file_bytes(from, data, mime, path.clone()) {
+        if let Err((_, e)) = self.send_page_reply(from, data, mime, path.clone()) {
             self.log(format!("page to {}: {e}", short(&from)));
         }
     }
@@ -367,7 +379,7 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
         };
         let route = if lim.via_lora { "LoRa" } else { "internet" };
         self.log(format!("picture '{rel}' ({style:?}, {route}) to {} ({} bytes)", short(&from), data.len()));
-        if let Err((_, e)) = self.send_file_bytes(from, data, mime, path.clone()) {
+        if let Err((_, e)) = self.send_page_reply(from, data, mime, path.clone()) {
             self.log(format!("picture to {}: {e}", short(&from)));
         }
     }
@@ -385,6 +397,9 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
             return None;
         };
         self.log(format!("asking {} for the page '{}'", short(&dest), String::from_utf8_lossy(&plain[1..])));
+        let now = Instant::now();
+        self.pages.asked.retain(|_, t| now.duration_since(*t) < ASKED_KEEP);
+        self.pages.asked.insert((dest, plain[1..].to_vec()), now);
         match self.send_sealed(dest, &plain, super::Pending::Control) {
             Ok(msg_id) => self.send_client(id, &Event::Sent { req, msg_id }),
             Err(e) => self.send_client(id, &err_ev(req, error_code::UNKNOWN_DEST, e)),
@@ -394,6 +409,23 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
 }
 
 impl Node {
+    /// Sends an answer to a page request: marked so it never goes to the
+    /// file mailbox.
+    fn send_page_reply(&mut self, dest: Address, data: Vec<u8>, mime: Small, name: Small) -> Result<(u64, u16), (u8, &'static str)> {
+        let r = self.send_file_bytes(dest, data, mime, name);
+        if let Ok((id, _)) = r
+            && let Some(f) = self.out_files.get_mut(&id)
+        {
+            f.page = true;
+        }
+        r
+    }
+
+    /// An offered page or page picture: did we ask that node for it?
+    pub(super) fn page_was_asked(&self, from: &Address, name: &[u8]) -> bool {
+        self.pages.asked.get(&(*from, name.to_vec())).is_some_and(|t| t.elapsed() < ASKED_KEEP)
+    }
+
     /// Call data: only when the recipient is reached over TCP all the way.
     fn send_call(&mut self, id: ClientId, dest: Address, data: &[u8]) {
         if self.file_limit(&dest).via_lora {

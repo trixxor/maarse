@@ -66,6 +66,9 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 2) {
         // A fresh install creates version 2 through onCreate: add the columns there too.
         runCatching { db.execSQL("ALTER TABLE msg ADD COLUMN file TEXT") }
         runCatching { db.execSQL("ALTER TABLE msg ADD COLUMN mime TEXT") }
+        // Pages belong on the Pages screen only; remove any that once
+        // ended up in a chat as a file.
+        runCatching { db.delete("msg", "mime = ?", arrayOf(Pages.PAGE_MIME)) }
     }
 
     fun setFile(id: Long, path: String?, mime: String?, text: String? = null) {

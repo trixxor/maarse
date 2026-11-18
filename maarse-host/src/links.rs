@@ -639,7 +639,15 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
                     }
                 }
             }
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {}
+            // Interrupted: a signal hit the read (common on Android, where
+            // the app's runtime sends them); nothing is wrong, read again.
+            // Ending the link on it dropped the phone's Bluetooth modem
+            // every few seconds.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) => {}
             Err(e) => {
                 eprintln!("[modem] {kind}: read error: {e}");
                 break;

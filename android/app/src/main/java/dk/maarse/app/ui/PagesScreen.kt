@@ -49,6 +49,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.ui.semantics.contentDescription
@@ -68,50 +74,171 @@ fun FavStar(kind: Char, addr: String) {
     }
 }
 
-/** maarse:// pages from other nodes, with pictures (same markup as the web client). */
+/** maarse:// pages, like a small web browser: a toolbar (back, forward,
+ *  reload, an address pill with the page's title, bookmark star, home), a
+ *  loading bar, the page, and a status bar at the bottom. With no page open
+ *  it shows a start page: bookmarks, nodes sharing pages, recently visited. */
 @Composable
-fun PagesPage() {
+fun PagesPage(onExit: () -> Unit = {}) {
     // Read here, so every change in Pages redraws this screen.
     @Suppress("UNUSED_VARIABLE") val v = Pages.version.collectAsState().value
     val cur = Pages.url
-    var input by remember(cur) { mutableStateOf(cur?.toString() ?: "") }
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            androidx.compose.material3.IconButton(onClick = { Pages.back() }, enabled = Pages.history.isNotEmpty()) {
-                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, "Previous page")
-            }
-            OutlinedTextField(input, { input = it }, Modifier.weight(1f), singleLine = true, placeholder = { Text("maarse://address/path") },
-                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go), keyboardActions = KeyboardActions(onGo = { Pages.open(input) }))
-            androidx.compose.material3.IconButton(onClick = { Pages.open(input) }) {
-                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Refresh, "Fetch")
-            }
-        }
-        if (Pages.status.isNotEmpty()) Text(Pages.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (Pages.sharing.isNotEmpty()) {
-            Text("Nodes sharing pages", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            val nodes = Node.nodes.value
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Pages.sharing.forEach { a ->
-                    val name = nodes[a]?.name?.let { "~$it" } ?: a.take(8)
-                    if (cur?.addr == a) Button(onClick = { Pages.open("maarse://$a/") }) { Text(name) }
-                    else OutlinedButton(onClick = { Pages.open("maarse://$a/") }) { Text(name) }
+    androidx.activity.compose.BackHandler(Pages.history.isNotEmpty() || cur != null) {
+        if (Pages.history.isNotEmpty()) Pages.back() else Pages.home()
+    }
+    Column(Modifier.fillMaxSize()) {
+        BrowserBar(cur, onExit, v)
+        if (Pages.loading) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().height(3.dp))
+        else androidx.compose.foundation.layout.Spacer(Modifier.height(3.dp))
+        androidx.compose.material3.HorizontalDivider()
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            val markup = cur?.let { Pages.markup(it) }
+            when {
+                cur == null -> StartPage(v)
+                markup == null -> Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (Pages.loading) "Loading the page…" else Pages.status.ifEmpty { "This page is not here yet." },
+                        style = MaterialTheme.typography.bodyLarge)
+                    if (!Pages.loading) OutlinedButton(onClick = { Pages.reload() }) { Text("Try again") }
+                }
+                else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (Pages.status.isNotEmpty()) Text(Pages.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    Markup(markup, cur, v)
+                    androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
                 }
             }
         }
-        if (cur == null) {
-            Text("A maarse-host shares pages from the folder pages/ in its data folder (index.mu is the front page). " +
-                "Write a node's address above. Pages are only text, headings, lists, links and pictures – never HTML.",
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            return@Column
+        StatusBar(cur, v)
+    }
+}
+
+/** The toolbar: back, forward, reload; the address pill; bookmark; home. */
+@Composable
+// `version` is passed so the bar redraws when Pages changes.
+private fun BrowserBar(cur: Pages.Url?, onExit: () -> Unit, @Suppress("UNUSED_PARAMETER") version: Int) {
+    // Read here too: a child given an unchanged-looking version may be skipped.
+    Pages.version.collectAsState().value
+    var editing by remember(cur) { mutableStateOf(cur == null) }
+    var input by remember(cur) { mutableStateOf(cur?.toString() ?: "") }
+    val title = cur?.let { u -> Pages.markup(u)?.let { Pages.title(it) } }?.ifEmpty { null }
+    Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(horizontal = 2.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.material3.IconButton(onClick = { if (Pages.history.isNotEmpty()) Pages.back() else onExit() }) {
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, "Back")
         }
-        val markup = Pages.markup(cur) ?: return@Column
-        // The page's title, like a web page's <title>, and its favourite star.
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(Pages.title(markup).ifEmpty { "Untitled page" }, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            FavStar('p', cur.addr)
+        androidx.compose.material3.IconButton(onClick = { Pages.forward() }, enabled = Pages.forwardStack.isNotEmpty()) {
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward, "Forward")
         }
-        Markup(markup, cur, v)
+        // The address pill: the page's title and node when shown; tap to type.
+        Row(Modifier.weight(1f).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surface)
+            .clickable { editing = true }.padding(horizontal = 12.dp, vertical = if (editing) 0.dp else 8.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (cur != null) RouteBadge(Pages.overLora(cur.addr))
+            if (editing) {
+                androidx.compose.foundation.text.BasicTextField(
+                    input, { input = it }, Modifier.weight(1f).padding(vertical = 10.dp), singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface, fontFamily = FontFamily.Monospace),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { Pages.open(input); editing = false }),
+                    decorationBox = { inner -> Box { if (input.isEmpty()) Text("maarse://address/path", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium); inner() } },
+                )
+            } else Column(Modifier.weight(1f)) {
+                Text(title ?: cur?.toString() ?: "", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                if (cur != null) Text(Node.label(cur.addr) + if (cur.path == "index") "" else " / ${cur.path}", maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (Pages.loading) androidx.compose.material3.IconButton(onClick = { Pages.home() }) {
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Close, "Stop")
+        } else androidx.compose.material3.IconButton(onClick = { if (editing && input.isNotBlank()) { Pages.open(input); editing = false } else Pages.reload() }) {
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Refresh, "Reload")
+        }
+        if (cur != null) FavStar('p', cur.addr)
+        androidx.compose.material3.IconButton(onClick = { Pages.home() }) {
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Home, "Start page")
+        }
+    }
+}
+
+/** "LoRa" or "Net": how the page comes (pictures wait for a tap over LoRa). */
+@Composable
+private fun RouteBadge(lora: Boolean) {
+    Text(if (lora) "LoRa" else "Net", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold,
+        color = if (lora) Color(0xFF8A5A00) else MaterialTheme.colorScheme.primary,
+        modifier = Modifier.clip(RoundedCornerShape(6.dp))
+            .background(if (lora) Color(0x33E7A94B) else MaterialTheme.colorScheme.primaryContainer).padding(horizontal = 6.dp, vertical = 2.dp))
+}
+
+/** The bottom bar: route, size and when the page was fetched. */
+@Composable
+private fun StatusBar(cur: Pages.Url?, @Suppress("UNUSED_PARAMETER") version: Int) {
+    // Read here too: a child given an unchanged-looking version may be skipped.
+    Pages.version.collectAsState().value
+    if (cur == null) return
+    val text = when {
+        Pages.loading -> "Loading from ${Node.label(cur.addr)}…"
+        Pages.pageBytes > 0 -> "${if (Pages.overLora(cur.addr)) "Over LoRa" else "Over the internet"} · ${Pages.pageBytes} bytes · fetched " +
+            java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(Pages.pageAt))
+        else -> ""
+    }
+    if (text.isEmpty()) return
+    Text(text, Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(horizontal = 14.dp, vertical = 6.dp),
+        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+/** The start page: bookmarks as tiles, nodes sharing pages, recently visited. */
+@Composable
+private fun StartPage(@Suppress("UNUSED_PARAMETER") version: Int) {
+    // Read here too: a child given an unchanged-looking version may be skipped.
+    Pages.version.collectAsState().value
+    val nodes = Node.nodes.value
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Bookmarks", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        if (Pages.favPages.isEmpty()) Text("Star a page to keep it here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Pages.favPages.chunked(2).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                row.forEach { a ->
+                    val t = Pages.siteTitle(a).ifEmpty { Node.label(a) }
+                    Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
+                        .clickable { Pages.open("maarse://$a/") }.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Avatar(t, a, 36.dp)
+                        Text(t, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        Text(Node.label(a), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    }
+                }
+                if (row.size == 1) androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+            }
+        }
+        val others = Pages.sharing.filter { it !in Pages.favPages }
+        if (others.isNotEmpty()) {
+            Text("Nodes sharing pages", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            others.forEach { a ->
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { Pages.open("maarse://$a/") }.padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Avatar(Node.label(a), a)
+                    Column(Modifier.weight(1f)) {
+                        Text(Pages.siteTitle(a).ifEmpty { nodes[a]?.name?.let { "~$it" } ?: a.take(8) }, fontWeight = FontWeight.SemiBold)
+                        Text("maarse://${a.take(8)}…/", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+        if (Pages.recent.isNotEmpty()) {
+            Text("Recently visited", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Pages.recent.forEach { (u, t) ->
+                Row(Modifier.fillMaxWidth().clickable { Pages.open(u.toString()) }.padding(vertical = 6.dp)) {
+                    Column {
+                        Text(t.ifEmpty { u.path }, fontWeight = FontWeight.Medium)
+                        Text(u.toString(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+        Text("Type a node's address in the bar above (maarse://<32 hex characters>/). Pages are text, links and small pictures – never HTML.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -167,6 +294,8 @@ private fun parseMarkup(markup: String): List<Block> {
 /** The page's markup as Compose: headings, paragraphs, lists, quotes, code, rules and pictures. */
 @Composable
 private fun Markup(markup: String, base: Pages.Url, version: Int) {
+    // Read here too: a child given an unchanged-looking version may be skipped.
+    Pages.version.collectAsState().value
     val blocks = remember(markup) { parseMarkup(markup) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (b in blocks) when (b) {
@@ -230,6 +359,8 @@ private fun Inline(text: String, base: Pages.Url, style: androidx.compose.ui.tex
 // `forced` ("dots!" on the page): this quality on every route; over LoRa
 // never over 8 KB, and no "better picture".
 private fun Picture(caption: String, src: String, style: String, base: Pages.Url, @Suppress("UNUSED_PARAMETER") version: Int, forced: Boolean = false) {
+    // Read here too: a child given an unchanged-looking version may be skipped.
+    Pages.version.collectAsState().value
     val st = when (style) { "color", "colour" -> "colour"; "dots" -> "dots"; else -> "grey" }
     val rel = src.trimStart('/').lowercase()
     val path = if (forced) "_f$st/$rel" else "_$st/$rel"

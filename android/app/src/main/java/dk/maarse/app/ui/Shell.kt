@@ -118,7 +118,9 @@ fun AppShell(nav: Nav) {
             }
             Screen.Me -> SubPage("You", nav::back) { MeScreen(nav) }
             is Screen.Page -> SubPage(s.page.title, nav::back) { MePageContent(s.page) }
-            is Screen.Net -> SubPage(s.page.title, nav::back) { NetPageContent(s.page) }
+            // Pages is a browser with its own toolbar; the rest have the usual header.
+            is Screen.Net -> if (s.page == NetPage.PAGES) Box(Modifier.statusBarsPadding().navigationBarsPadding()) { PagesPage(onExit = nav::back) }
+                else SubPage(s.page.title, nav::back) { NetPageContent(s.page) }
             Screen.Welcome -> Welcome(nav)
             Screen.WelcomeAccount -> WelcomeAccount(nav)
         }

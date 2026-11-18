@@ -185,6 +185,37 @@
   .page h2, .page h3, .page h4 { margin: 18px 0 6px; text-wrap: balance; }
   .page pre { background: var(--bg); padding: 10px 12px; border-radius: 8px; overflow-x: auto; font-family: var(--mono); font-size: 13px; }
   .picbar { width: 100%; height: 8px; accent-color: var(--accent); }
+  /* Pages as a browser. */
+  .browser { display: flex; flex-direction: column; flex: 0 0 auto; width: 100%; min-width: 0; max-width: 860px; min-height: 100%; margin: -4px auto 0; align-self: center; }
+  .bbody { min-width: 0; }
+  /* The toolbar sits flush at the top and the status bar at the bottom. */
+  .messages:has(> .browser) { padding-top: 0; padding-bottom: 0; }
+  .messages > .browser { margin-top: 0; }
+  .bbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 2px; padding: 6px 4px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .bicon { background: none; border: 0; min-width: 38px; height: 38px; border-radius: 50%; font-size: 18px; color: var(--ink); padding: 0; cursor: pointer; }
+  .bicon:hover:not(:disabled) { background: var(--accent-soft); }
+  .bicon:disabled { opacity: .35; cursor: default; }
+  .bpill { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; margin: 0 4px; border-radius: 20px; background: var(--bg); border: 1px solid var(--line); }
+  .bpill input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-family: var(--mono); font-size: 13px; color: var(--ink); padding: 0; }
+  .bshown { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.15; cursor: text; }
+  .bshown b, .bshown small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bshown small { color: var(--muted); font-size: 11px; }
+  .broute { font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 6px; }
+  .broute.lora { color: var(--signal); background: var(--signal-soft); }
+  .broute.net { color: var(--accent); background: var(--accent-soft); }
+  .bload { height: 3px; background: transparent; overflow: hidden; position: sticky; top: 53px; z-index: 2; }
+  .bload.on { background: linear-gradient(90deg, transparent 0, var(--accent) 40%, transparent 80%) 0 0 / 50% 100% no-repeat var(--accent-soft); animation: bload 1.1s linear infinite; }
+  @keyframes bload { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+  .bbody { flex: 1; padding: 14px 16px 24px; }
+  .bstatus { position: sticky; bottom: 0; font-size: 12px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); padding: 6px 14px; }
+  .bstart h3 { margin: 6px 0 10px; font-size: 1rem; }
+  .btiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .btile { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 12px; border-radius: 14px; background: var(--raised); border: 1px solid var(--line); cursor: pointer; }
+  .btile small, .brow small { color: var(--muted); font-size: 11px; }
+  .bmono { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+  .brow { display: flex; flex-direction: column; align-items: flex-start; width: 100%; text-align: left; background: none; border: 0; border-radius: 10px; padding: 8px 6px; cursor: pointer; color: var(--ink); }
+  .brow:hover { background: var(--accent-soft); }
+  .brow small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .page img { max-width: 100%; height: auto; }
   .page code { font-family: var(--mono); font-size: .92em; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
   .page blockquote { border-left: 3px solid var(--accent); margin: 10px 0; padding: 2px 12px; color: var(--muted); }
@@ -251,6 +282,8 @@
     .form label { margin-top: 6px; }
     .safety { grid-template-columns: repeat(3, max-content); font-size: 16px; gap: 4px 12px; }
     .page { padding: 4px 12px 12px; }
+    .bicon { min-width: 34px; height: 34px; font-size: 17px; }
+    .bbody { padding: 12px 10px 20px; }
     /* ASCII art and tables keep their lines; the font shrinks with the screen. */
     .page pre { font-size: clamp(7px, 2.3vw, 12px); line-height: 1.25; padding: 8px; }
     .page h2 { font-size: 1.25rem; } .page h3 { font-size: 1.1rem; }
@@ -1385,7 +1418,7 @@ function onEvent(ev) {
       if (ev.req === 0 && limitWaiters.length) limitAnswer(null); // the firmware does not know 0x14
       const m = state.pending.get(ev.req);
       if (m) { m.status = "error: " + ev.text; state.pending.delete(ev.req); renderChat(); }
-      if (pages.reqs.has(ev.req)) { pages.reqs.delete(ev.req); pages.status = "Error: " + ev.text; if (state.view === "pages") renderChat(); }
+      if (pages.reqs.has(ev.req)) { pages.reqs.delete(ev.req); pages.status = "Error: " + ev.text; pages.loading = false; if (state.view === "pages") renderChat(); }
       if (ev.code === 9 && call.state !== "idle") callStop(ev.text);
       log("Error: " + ev.text);
       break;
@@ -3075,7 +3108,9 @@ function leavePrivateMemory(ch) {
 const PAGE_MIME = "text/x-maarse-page;deflate";
 const pages = { url: "", status: "", waits: new Map(), cache: new Map(Object.entries(store.get("pageCache", {}))), history: [], reqs: new Set(),
   // Pictures on pages: key (addr/_style/file) -> { url } | { error }; routes: addr -> true when over LoRa.
-  pics: new Map(), picWaits: new Set(), lora: new Map(), picQueue: [] };
+  pics: new Map(), picWaits: new Set(), lora: new Map(), picQueue: [],
+  // Browser state: pages to go forward to, the page is loading, recently visited.
+  forward: [], loading: false, recent: store.get("pageRecent", []) };
 
 function parsePageUrl(s, base) {
   s = (s || "").trim();
@@ -3111,8 +3146,9 @@ function openPage(input, push = true) {
   const cur = parsePageUrl(pages.url);
   const p = parsePageUrl(input, cur);
   if (!p) { pages.status = "Invalid address. Write maarse://<32 hex characters>/path"; setView("pages"); return; }
-  if (push && pages.url && pages.url !== pageUrl(p)) pages.history.push(pages.url);
+  if (push && pages.url && pages.url !== pageUrl(p)) { pages.history.push(pages.url); pages.forward = []; }
   pages.url = pageUrl(p);
+  pages.loading = !!transport;
   const key = pageKey(p.addr, p.path);
   const cached = pages.cache.get(key);
   // Pictures load at once only when the node is reached over the internet.
@@ -3127,6 +3163,7 @@ function openPage(input, push = true) {
     setTimeout(() => {
       if (pages.waits.get(key) && pages.url === pageUrl(p) && ![...state.files.values()].some(f => f.page && f.key === key)) {
         pages.status = (cached ? "From cache. " : "") + "No reply from the node (is it online, and does it have pages?)";
+        pages.loading = false;
         if (state.view === "pages") renderChat();
       }
     }, 60000);
@@ -3163,7 +3200,7 @@ async function pageDone(ev, m) {
     if (state.view === "pages") renderChat();
     return;
   }
-  if (!ev.ok) { pages.status = "Error: " + ev.text; if (state.view === "pages") renderChat(); return; }
+  if (!ev.ok) { pages.status = "Error: " + ev.text; pages.loading = false; if (state.view === "pages") renderChat(); return; }
   try {
     const buf = new Uint8Array(m.size);
     for (const [o, d] of m.parts) buf.set(d, o);
@@ -3178,7 +3215,12 @@ async function pageDone(ev, m) {
     // learned just after the page has come.
     pageRoute(from); setTimeout(() => pageRoute(from), 5000);
     const cur = parsePageUrl(pages.url);
-    if (cur && pageKey(cur.addr, cur.path) === m.key) pages.status = `Fetched ${new Date().toLocaleTimeString()} (${m.size} bytes compressed)`;
+    if (cur && pageKey(cur.addr, cur.path) === m.key) {
+      pages.status = ""; pages.loading = false;
+      const u = pageUrl(cur);
+      pages.recent = [{ url: u, title: pageTitle(markup) }, ...pages.recent.filter(r => r.url !== u)].slice(0, 20);
+      store.set("pageRecent", pages.recent);
+    }
   } catch (e) { pages.status = "Could not unpack the page: " + e.message; }
   if (state.view === "pages") renderChat();
 }
@@ -3340,57 +3382,103 @@ function renderMarkup(markup, base) {
   return root;
 }
 
+// Pages look like a small web browser: a toolbar (back, forward, reload or
+// stop, an address pill with the page's title and route, bookmark, home), a
+// loading bar, the page, and a status bar. No page open: the start page.
+function pageBack() { const u = pages.history.pop(); if (u) { if (pages.url) pages.forward.push(pages.url); openPage(u, false); } }
+function pageForward() { const u = pages.forward.pop(); if (u) { if (pages.url) pages.history.push(pages.url); openPage(u, false); } }
+function pageHome() { if (pages.url) { pages.history.push(pages.url); pages.forward = []; } pages.url = ""; pages.status = ""; pages.loading = false; renderChat(); }
+
 function renderPages(box) {
   $("chat-title").textContent = "Pages"; $("chat-sub").textContent = "maarse:// pages from other nodes";
-  const bar = el("div", { className: "row" }); bar.style.maxWidth = "760px";
-  const back = el("button", { textContent: "←", title: "Back", disabled: !pages.history.length });
-  back.onclick = () => { const u = pages.history.pop(); if (u) openPage(u, false); };
-  const input = el("input", { value: pages.url, placeholder: "maarse://<address>/path" }); input.style.flex = "1";
-  input.onkeydown = (e) => { if (e.key === "Enter") openPage(input.value); };
-  const go = el("button", { textContent: "Fetch", className: "primary" });
-  go.onclick = () => openPage(input.value);
-  bar.append(back, input, go);
-  box.append(bar);
   const cur = parsePageUrl(pages.url);
-  const busy = [...state.files.values()].find(f => f.page && cur && f.key === pageKey(cur.addr, cur.path));
-  const st = el("div", { className: "muted" }, busy ? `Receiving… ${Math.round(busy.progress * 100)} %` : pages.status);
-  st.style.margin = "6px 0 12px";
-  box.append(st);
-  // Nodes sharing pages (heard in announces or visited), always at hand.
-  if (pages.sharing.size) {
-    const pw = el("div", {}); pw.style.maxWidth = "760px"; pw.style.margin = "0 0 14px";
-    pw.append(el("span", { className: "muted" }, "Nodes sharing pages: "));
-    for (const a of pages.sharing) {
-      const b = el("button", { textContent: label(a), className: cur?.addr === a ? "primary" : "" }); b.style.margin = "4px 6px 0 0";
-      b.onclick = () => openPage("maarse://" + a + "/");
-      pw.append(b);
-    }
-    box.append(pw);
+  const cached = cur && pages.cache.get(pageKey(cur.addr, cur.path));
+  const title = cached ? pageTitle(cached.markup) : "";
+  document.title = (title ? title + " – " : "") + "Må:rse";
+  const shell = el("div", { className: "browser" });
+
+  // The toolbar.
+  const bar = el("div", { className: "bbar" });
+  const iconBtn = (txt, tip, fn, off) => { const b = el("button", { className: "bicon", textContent: txt, title: tip, disabled: !!off }); b.onclick = fn; return b; };
+  bar.append(iconBtn("←", "Back", pageBack, !pages.history.length), iconBtn("→", "Forward", pageForward, !pages.forward.length));
+  const pill = el("div", { className: "bpill" });
+  if (cur) {
+    const lora = pages.lora.get(cur.addr) !== false;
+    pill.append(el("span", { className: "broute " + (lora ? "lora" : "net"), textContent: lora ? "LoRa" : "Net", title: lora ? "Over LoRa: pictures wait for a tap" : "Over the internet" }));
   }
+  const input = el("input", { value: pages.url, placeholder: "maarse://address/path", spellcheck: false });
+  input.onkeydown = (e) => { if (e.key === "Enter") openPage(input.value); };
+  const shown = el("div", { className: "bshown" });
+  if (cur && title) {
+    shown.append(el("b", {}, title), el("small", {}, label(cur.addr) + (cur.path === "index" ? "" : " / " + cur.path)));
+    shown.onclick = () => { shown.remove(); pill.append(input); input.focus(); input.select(); };
+    pill.append(shown);
+  } else pill.append(input);
+  bar.append(pill);
+  bar.append(pages.loading ? iconBtn("✕", "Stop", pageHome) : iconBtn("↻", "Reload", () => { const v = input.isConnected && input.value.trim() ? input.value : pages.url; if (v) openPage(v, false); }));
+  if (cur) { const f = favButton("p", cur.addr); f.classList.add("bicon"); bar.append(f); }
+  bar.append(iconBtn("⌂", "Start page", pageHome));
+  shell.append(bar, el("div", { className: "bload" + (pages.loading ? " on" : "") }));
+
+  const body = el("div", { className: "bbody" });
+  shell.append(body);
   if (!cur) {
-    const known = [...new Set([...state.contacts.keys(), ...state.nodeInfo.keys()])].filter(a => /^[0-9a-f]{32}$/.test(a));
-    const w = el("div", { className: "warn" }); w.style.maxWidth = "640px";
-    w.append(el("b", {}, "How it works"), el("div", { className: "muted" },
-      "A maarse-host shares pages from the folder pages/ in its data folder (index.mu is the front page). Write the node's address above, or choose a known node. " +
-      "Pages are only shown as text, headings, lists and links – never as HTML – and are cached so they can be read without a connection."));
-    for (const a of known.slice(0, 20)) {
-      const b = el("button", { textContent: label(a) }); b.style.margin = "6px 6px 0 0";
-      b.onclick = () => openPage("maarse://" + a + "/");
-      w.append(b);
+    body.append(startPage());
+  } else if (cached) {
+    if (pages.status) body.append(el("div", { className: "muted", style: "margin-bottom:8px" }, pages.status));
+    body.append(renderMarkup(cached.markup, cur));
+  } else {
+    body.append(el("p", {}, pages.loading ? "Loading the page…" : (pages.status || "This page is not here yet.")));
+    if (!pages.loading) { const t = el("button", { textContent: "Try again" }); t.onclick = () => openPage(pages.url, false); body.append(t); }
+  }
+  // The status bar: route, size and when the page was fetched.
+  if (cur) {
+    const busy = [...state.files.values()].find(f => f.page && f.key === pageKey(cur.addr, cur.path));
+    const lora = pages.lora.get(cur.addr) !== false;
+    const txt = busy ? `Receiving from ${label(cur.addr)} · ${Math.round(busy.progress * 100)} %`
+      : pages.loading ? `Loading from ${label(cur.addr)}…`
+      : cached ? `${lora ? "Over LoRa" : "Over the internet"} · ${cached.size || "?"} bytes · fetched ${new Date(cached.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+    if (txt) shell.append(el("div", { className: "bstatus" }, txt));
+  }
+  box.append(shell);
+}
+
+// The browser's start page: bookmarks as tiles, nodes sharing pages, recent.
+function startPage() {
+  const w = el("div", { className: "bstart" });
+  w.append(el("h3", {}, "Bookmarks"));
+  const favs = state.favs.p.filter(a => /^[0-9a-f]{32}$/.test(a));
+  if (!favs.length) w.append(el("div", { className: "muted" }, "Star a page to keep it here."));
+  const tiles = el("div", { className: "btiles" });
+  for (const a of favs) {
+    const t = siteTitle(a) || label(a);
+    const tile = el("button", { className: "btile" });
+    tile.append(el("span", { className: "bmono", textContent: t.replace(/^~/, "").slice(0, 2).toUpperCase() }), el("b", {}, t), el("small", {}, label(a)));
+    tile.onclick = () => openPage("maarse://" + a + "/");
+    tiles.append(tile);
+  }
+  w.append(tiles);
+  const others = [...pages.sharing].filter(a => !favs.includes(a));
+  if (others.length) {
+    w.append(el("h3", {}, "Nodes sharing pages"));
+    for (const a of others) {
+      const r = el("button", { className: "brow" });
+      r.append(el("b", {}, siteTitle(a) || label(a)), el("small", {}, `maarse://${a.slice(0, 8)}…/`));
+      r.onclick = () => openPage("maarse://" + a + "/");
+      w.append(r);
     }
-    box.append(w);
-    return;
   }
-  const cached = pages.cache.get(pageKey(cur.addr, cur.path));
-  if (cached) {
-    const t = pageTitle(cached.markup);
-    $("chat-title").textContent = t || "Pages";
-    $("chat-sub").textContent = pageUrl(cur) + " · " + label(cur.addr);
-    document.title = (t ? t + " – " : "") + "Må:rse";
-    const fr = el("div", { className: "row" }); fr.style.margin = "0 0 10px";
-    fr.append(favButton("p", cur.addr), el("span", { className: "muted", textContent: isFav("p", cur.addr) ? "In your favourite pages" : "Add to your favourite pages" }));
-    box.append(fr, renderMarkup(cached.markup, cur));
+  if (pages.recent.length) {
+    w.append(el("h3", {}, "Recently visited"));
+    for (const it of pages.recent) {
+      const r = el("button", { className: "brow" });
+      r.append(el("b", {}, it.title || it.url), el("small", {}, it.url));
+      r.onclick = () => openPage(it.url);
+      w.append(r);
+    }
   }
+  w.append(el("p", { className: "muted" }, "Type a node's address in the bar above (maarse://<32 hex characters>/). Pages are text, links and small pictures – never HTML – and are kept so they can be read without a connection."));
+  return w;
 }
 
 // ---------- voice messages (Codec2) ----------

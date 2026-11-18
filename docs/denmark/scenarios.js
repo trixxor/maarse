@@ -166,21 +166,61 @@
       }
     }
     // Users, weighted by population^0.8, scattered around their town on land.
-    const w = towns.map(t => Math.pow(t[3], 0.8));
-    const sum = w.reduce((a, b) => a + b, 0);
-    for (let k = 0; k < o.users; k++) {
-      let r = R() * sum, t = towns[0];
-      for (let i = 0; i < towns.length; i++) { r -= w[i]; if (r <= 0) { t = towns[i]; break; } }
+    // With `o.regions` ({region: {users, lora, both, app, cars, relays}} in
+    // per cent), each region gets its own count and connection mix:
+    //   lora = handheld radio only, both = handheld + internet to its nearest
+    //   host, app = phone with the app only (no radio, TCP to its host).
+    const netHosts = hosts.filter(h => sc.nodes[h].internet);
+    const nearestNetHost = (lat, lon) => {
+      let best = -1, bd = 1e9;
+      for (const h of netHosts) { const d = km([sc.nodes[h].lat, sc.nodes[h].lon], [lat, lon]); if (d < bd) { bd = d; best = h; } }
+      return best;
+    };
+    const placeAround = (t) => {
       const spread = Math.min(12, 1 + Math.sqrt(t[3]) / 60);
       for (let tries = 0; tries < 10; tries++) {
         const ang = R() * Math.PI * 2, d = Math.sqrt(R()) * spread;
         const [la, lo] = offset(t[1], t[2], Math.cos(ang) * d, Math.sin(ang) * d);
         if (L.island(la, lo) < 0 && tries < 9) continue;
-        add({ kind: "handheld", lat: +la.toFixed(5), lon: +lo.toFixed(5), region: t[4] });
-        break;
+        return [+la.toFixed(5), +lo.toFixed(5)];
+      }
+      return [t[1], t[2]];
+    };
+    const pickTown = (list) => {
+      const w = list.map(t => Math.pow(t[3], 0.8));
+      let r = R() * w.reduce((a, b) => a + b, 0);
+      for (let i = 0; i < list.length; i++) { r -= w[i]; if (r <= 0) return list[i]; }
+      return list[0];
+    };
+    const plan = o.regions
+      ? Object.entries(o.regions).map(([region, m]) => ({ region, towns: towns.filter(t => t[4] === region), ...m }))
+      : [{ region: null, towns, users: o.users, lora: 100, both: 0, app: 0, cars: 0, relays: 0 }];
+    let total = 0;
+    for (const g of plan) {
+      if (!g.towns.length) continue;
+      for (let k = 0; k < (g.users || 0); k++) {
+        const t = pickTown(g.towns);
+        const [la, lo] = placeAround(t);
+        const r = R() * 100;
+        const cut1 = g.relays || 0, cut2 = cut1 + (g.cars || 0);
+        if (r < cut1) { add({ kind: "relay", lat: la, lon: lo, region: t[4] }); total++; continue; }
+        if (r < cut2) {
+          // A car driving between this town and another one in the region.
+          const t2 = pickTown(g.towns);
+          const end = placeAround(t2);
+          add({ kind: "mobile", lat: la, lon: lo, region: t[4], route: [[la, lo], end], speed_kmh: 70, route_end: "back", label: "Car" });
+          total++; continue;
+        }
+        const m = R() * ((g.lora || 0) + (g.both || 0) + (g.app || 0) || 1);
+        const kind = m < (g.lora || 0) ? "lora" : m < (g.lora || 0) + (g.both || 0) ? "both" : "app";
+        const h = kind === "lora" ? -1 : nearestNetHost(la, lo);
+        if (kind !== "lora" && h < 0) { add({ kind: "handheld", lat: la, lon: lo, region: t[4] }); total++; continue; }
+        const i = add(kind === "app" ? { kind: "app", lat: la, lon: lo, region: t[4], internet: true } : { kind: "handheld", lat: la, lon: lo, region: t[4], internet: kind === "both" });
+        if (h >= 0) sc.links.push({ a: i, b: h, kind: "tcp", up: true });
+        total++;
       }
     }
-    sc.traffic.direct_per_min = Math.max(2, Math.round(o.users / 60));
+    sc.traffic.direct_per_min = Math.max(2, Math.round(total / 60));
     return sc;
   }
 

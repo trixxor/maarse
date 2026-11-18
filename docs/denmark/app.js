@@ -1326,10 +1326,31 @@
   };
 
   // ---------- build tab ----------
-  for (const id of ["g-users", "g-rep", "g-net"]) { const i = $(id); const show = () => i.nextElementSibling.textContent = i.value; i.oninput = show; show(); }
+  for (const id of ["g-rep", "g-net"]) { const i = $(id); const show = () => i.nextElementSibling.textContent = i.value; i.oninput = show; show(); }
+  // Generator: users and connection mix per region (defaults from the mockup).
+  const GEN_REGIONS = [["hovedstaden", "Hovedstaden", 160, 20, 45, 35, 6, 4], ["sjaelland", "Sjælland", 80, 35, 45, 20, 8, 6], ["syddanmark", "Syddanmark", 110, 35, 45, 20, 8, 6], ["midtjylland", "Midtjylland", 110, 30, 45, 25, 8, 5], ["nordjylland", "Nordjylland", 70, 45, 40, 15, 10, 8]];
+  const genCols = ["users", "lora", "both", "app", "cars", "relays"];
+  $("g-regions").insertAdjacentHTML("beforeend", GEN_REGIONS.map(([id, label, ...v]) => `<tr data-r="${id}"><td>${label}</td>${v.map((x, k) => `<td><input type="number" min="0" ${k ? 'max="100"' : ""} data-c="${genCols[k]}" value="${x}" style="width:${k ? 46 : 58}px" aria-label="${label} ${genCols[k]}"></td>`).join("")}</tr>`).join(""));
+  function genRegions() {
+    const out = {};
+    $("g-regions").querySelectorAll("tr[data-r]").forEach(tr => { const m = {}; tr.querySelectorAll("input").forEach(i => m[i.dataset.c] = +i.value || 0); out[tr.dataset.r] = m; });
+    return out;
+  }
+  function genTotal() { const t = Object.values(genRegions()).reduce((a, m) => a + m.users, 0); $("g-total").textContent = `${t} users in all${t > 1800 ? " — near the 2,000 node limit with infrastructure" : ""}.`; }
+  $("g-regions").addEventListener("input", genTotal); genTotal();
   $("btn-generate").onclick = () => {
-    scenario = DK.generateDenmark({ users: +$("g-users").value, repeaterKm: +$("g-rep").value, internetPct: +$("g-net").value, seed: +$("g-seed").value }, window.DK_LAND, window.DK_TOWNS);
+    scenario = DK.generateDenmark({ regions: genRegions(), repeaterKm: +$("g-rep").value, internetPct: +$("g-net").value, seed: +$("g-seed").value }, window.DK_LAND, window.DK_TOWNS);
     syncForm(); edited(); fitScenario();
+    // Before you run: what was made, and users cut off from everyone else.
+    setTimeout(() => {
+      if (!sim) return;
+      const c = {}; scenario.nodes.forEach(n => c[n.kind] = (c[n.kind] || 0) + 1);
+      const comp = sim.call({ cmd: "components" });
+      const size = new Map(); comp.forEach(x => size.set(x, (size.get(x) || 0) + 1));
+      const main = [...size.entries()].sort((a, b) => b[1] - a[1])[0];
+      const cut = scenario.nodes.filter((n, i) => ["handheld", "app", "relay", "mobile"].includes(n.kind) && comp[i] !== (main ? main[0] : -2)).length;
+      $("g-total").textContent = `${scenario.nodes.length} nodes (limit 2,000): ${Object.entries(c).map(([k, v]) => `${v} ${k}`).join(", ")}. ${cut ? `${cut} users have no path to the main network right now (islands without radio or internet).` : "Every user can reach the main network."}`;
+    }, 300);
   };
   $("btn-clear").onclick = () => { scenario = DK.base("Empty map", 1); syncForm(); edited(); };
   $("features").innerHTML = FEATURES.map(([k2, l]) => `<label><input type="checkbox" data-f="${k2}"> ${l}</label>`).join("");

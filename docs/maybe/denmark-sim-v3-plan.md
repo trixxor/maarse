@@ -129,8 +129,8 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
 |---|---|---|---|
 | 0 | Remove Ask Claude (`ask.js`, `tools/sim-bridge`, tab) | **done 2026-11-18** (also artifact build, README section, start scripts now plain http.server) | — |
 | 1 | New layout: modes, clickable map, follow panel, timeline, light/dark | **done 2026-11-19**: 4 modes, theme remembered, right-click menus, hover hints, follow panel on the map (plain status: queued/on air/backbone/post office/carried/held/delivered/no progress), coloured timeline markers + followed message dots | Control room mode moved to step 6 (needs the phones) |
-| 2 | Device palette with every kind, mobile/stationary flag, people with routes/waypoints/speed/device | designed (board 9) | engine: waypoint routes for any node, new kinds (server, app phone, MeshCore gateway); UI |
-| 3 | Generator per region + connection mix + app users | designed (board 3) | `generateNetwork(spec)`, `Kind::App` in the engine |
+| 2 | Device palette, mobile/stationary, people with routes | **done 2026-11-19**: kinds server (no radio) and app (no radio, TCP to host), radio on/off per node, routes with start time, pause per waypoint, end mode (back/stay/repeat), mobile/stationary flag; Build tools + inspector; engine tests | MeshCore gateway kind; group of people at once |
+| 3 | Generator per region + connection mix + app users | **done 2026-11-19**: users per region with LoRa/both/app/cars/relays per cent; both + app get a TCP link to the nearest host with internet; summary of what was made and users cut off | warning list per island with "add a trunk" button |
 | 4 | Shared host rules library + transfer model (files, voice, pictures, Pages) | proposed | library split, engine transfer model |
 | 5 | Live item state on the map (queued/air/backbone/post office/carried/held/delivered/given up) | designed (boards 1, 4) | per-item state machine in the engine, `item_state` call |
 | 6 | Phone simulators on the real web client | designed (boards 5, 6) | fake WebSocket, engine answering companion commands |

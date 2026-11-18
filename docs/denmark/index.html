@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=14">
+<link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
 <header id="top">
@@ -70,7 +70,9 @@
       <p class="hint" id="tool-hint">Click a node to inspect it; drag to move.</p>
 
       <h3>Generate Denmark</h3>
-      <label>Users <input type="range" id="g-users" min="50" max="3000" step="50" value="600"><span></span></label>
+      <p class="hint">Users per region and how they connect (per cent): LoRa only, LoRa + internet, app only (no radio). Cars and relay boxes come out of the same count.</p>
+      <div class="scroll" style="max-height:none"><table id="g-regions"><tr><th>Region</th><th>Users</th><th>LoRa</th><th>Both</th><th>App</th><th>Cars</th><th>Relays</th></tr></table></div>
+      <p class="hint" id="g-total"></p>
       <label>Repeater spacing (km) <input type="range" id="g-rep" min="8" max="40" step="1" value="18"><span></span></label>
       <label>Hosts with internet (%) <input type="range" id="g-net" min="0" max="100" step="5" value="70"><span></span></label>
       <label>Seed <input type="number" id="g-seed" value="1" min="1"></label>
@@ -214,8 +216,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="scenarios.js?v=13"></script>
-<script src="maarse-sim.js?v=13"></script>
-<script src="app.js?v=14"></script>
+<script src="scenarios.js?v=17"></script>
+<script src="maarse-sim.js?v=17"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>

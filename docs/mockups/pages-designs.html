@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pages designs</title>
+<style>
+  :root { --bg: #0f1214; --panel: #171b1e; --raised: #1d2226; --line: #2b3237; --ink: #e8ecef; --muted: #8b969e; --acc: #6fd3a5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, "Segoe UI", sans-serif; }
+  header.top { position: sticky; top: 0; z-index: 10; display: flex; gap: 6px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header.top h1 { font-size: 15px; margin: 0 14px 0 0; }
+  header.top button { background: var(--raised); color: var(--ink); border: 1px solid var(--line); border-radius: 18px; padding: 6px 14px; cursor: pointer; font: inherit; }
+  header.top button.on { background: var(--acc); color: #06251a; border-color: var(--acc); font-weight: 600; }
+  section.tab { display: none; padding: 18px 16px 60px; }
+  section.tab.on { display: block; }
+  .intro { max-width: 980px; color: var(--muted); margin: 0 0 16px; }
+  .intro b { color: var(--ink); }
+  .row { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; }
+  .lbl { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 6px; }
+
+  /* ---------- the PC browser frame (full width toolbar) ---------- */
+  .pc { flex: 1 1 760px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+  .bbar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .bbar .ic { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 17px; color: var(--muted); font-size: 17px; }
+  .bbar .pill { flex: 1; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 14px; border-radius: 18px; background: var(--bg); border: 1px solid var(--line); min-width: 0; }
+  .bbar .route { font-size: 11px; padding: 2px 7px; border-radius: 9px; background: #1d3b30; color: var(--acc); font-weight: 600; }
+  .bbar .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bbar .t b { font-weight: 600; } .bbar .t small { color: var(--muted); margin-left: 8px; }
+  .bstatus { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding: 5px 12px; background: var(--panel); }
+  .viewport { height: 640px; overflow: auto; }
+
+  /* ---------- the phone frame ---------- */
+  .phone { flex: 0 0 auto; width: 380px; border: 10px solid #000; border-radius: 34px; background: #000; overflow: hidden; box-shadow: 0 0 0 1px #333; }
+  .phone .sb { height: 22px; background: #000; color: #ddd; font-size: 11px; display: flex; justify-content: space-between; padding: 3px 16px; }
+  .phone .bbar .ic { width: 28px; height: 28px; font-size: 15px; }
+  .phone .bbar .pill { height: 32px; padding: 0 10px; }
+  .phone .viewport { height: 640px; }
+  .src { flex: 1 1 380px; min-width: 300px; }
+  .src pre { margin: 0; background: #0a0c0d; border: 1px solid var(--line); border-radius: 8px; padding: 12px; font: 12px/1.45 ui-monospace, Consolas, monospace; white-space: pre-wrap; color: #cfd8dc; max-height: 640px; overflow: auto; }
+  .src .bytes { color: var(--acc); font-size: 12px; margin: 6px 0 0; }
+  .src .new { color: #ffcf6b; }
+
+  /* ================= A: THE NEWSPAPER (@theme paper) ================= */
+  .paper { background: #fbfaf6; color: #151515; font-family: Georgia, "Times New Roman", serif; padding: 18px 28px 28px; min-height: 100%; }
+  .paper a { color: #151515; text-decoration: underline; text-decoration-color: #999; }
+  .paper .ear { display: flex; justify-content: space-between; font: 11px/1.3 "Segoe UI", system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; color: #555; }
+  .paper .mast { text-align: center; font-size: 64px; line-height: 1; font-weight: 700; letter-spacing: -1px; margin: 8px 0 6px; font-family: "Times New Roman", Georgia, serif; }
+  .paper .dateline { display: flex; justify-content: space-between; border-top: 1px solid #151515; border-bottom: 3px double #151515; padding: 5px 2px; font-size: 13px; font-style: italic; margin-bottom: 14px; }
+  .paper h2.lead { font-size: 38px; line-height: 1.08; margin: 4px 0 6px; font-weight: 700; }
+  .paper .deck { font-size: 18px; font-style: italic; color: #333; margin: 0 0 12px; }
+  .paper .cols { column-count: 3; column-gap: 26px; column-rule: 1px solid #cfcac0; }
+  .paper .cols p { margin: 0 0 10px; text-align: justify; hyphens: auto; font-size: 15px; line-height: 1.5; }
+  .paper .byline { font: 600 11px/1.3 "Segoe UI", system-ui, sans-serif; text-transform: uppercase; letter-spacing: .08em; color: #666; margin: 0 0 8px; }
+  .paper .drop::first-letter { float: left; font-size: 54px; line-height: .86; padding: 4px 6px 0 0; font-weight: 700; }
+  .paper figure { margin: 4px 0 10px; break-inside: avoid; }
+  .paper figure .ph { height: 150px; background: repeating-linear-gradient(45deg, #ddd8cc 0 6px, #e9e5db 6px 12px); display: grid; place-items: center; color: #666; font: 12px system-ui; }
+  .paper figure.wide .ph { height: 210px; }
+  .paper figcaption { font-size: 12px; font-style: italic; color: #555; border-bottom: 1px solid #cfcac0; padding: 3px 0 5px; }
+  .paper blockquote { margin: 8px 0 12px; padding: 8px 0; border-top: 2px solid #151515; border-bottom: 2px solid #151515; font-size: 21px; line-height: 1.25; font-style: italic; text-align: center; break-inside: avoid; }
+  .paper blockquote small { display: block; font-size: 12px; font-style: normal; margin-top: 6px; color: #555; }
+  .paper h3 { font-size: 20px; margin: 4px 0 6px; line-height: 1.15; }
+  .paper .box { border: 1px solid #151515; padding: 8px 10px; margin: 0 0 12px; break-inside: avoid; }
+  .paper .box h4 { margin: 0 0 6px; font: 700 12px/1.2 "Segoe UI", system-ui, sans-serif; text-transform: uppercase; letter-spacing: .1em; }
+  .paper table { width: 100%; border-collapse: collapse; font: 12.5px/1.35 "Segoe UI", system-ui, sans-serif; }
+  .paper td, .paper th { border-bottom: 1px solid #ddd8cc; padding: 3px 4px; text-align: left; }
+  .paper .red { color: #b3261e; font-weight: 600; }
+  .paper .rule2 { border-top: 3px double #151515; margin: 16px 0 8px; }
+  .paper .sect { display: flex; justify-content: space-between; align-items: baseline; }
+  .paper .sect h3 { font: 700 13px/1.2 "Segoe UI", system-ui, sans-serif; text-transform: uppercase; letter-spacing: .14em; margin: 0; }
+  .paper .ads { column-count: 4; column-gap: 14px; column-rule: 1px solid #cfcac0; margin-top: 8px; font-size: 12.5px; line-height: 1.4; }
+  .paper .ad { break-inside: avoid; border-bottom: 1px solid #cfcac0; padding: 0 0 6px; margin: 0 0 8px; }
+  .paper .ad b { display: block; font: 700 11px/1.3 "Segoe UI", system-ui, sans-serif; text-transform: uppercase; letter-spacing: .06em; }
+  .paper .ad i { color: #666; font-size: 11.5px; }
+  .paper .write { display: flex; gap: 8px; margin-top: 6px; }
+  .paper .write input { flex: 1; font: 14px Georgia, serif; padding: 7px 9px; border: 1px solid #151515; background: #fff; }
+  .paper .write button { font: 700 12px system-ui; text-transform: uppercase; letter-spacing: .08em; background: #151515; color: #fff; border: 0; padding: 0 14px; }
+  .paper .foot { margin-top: 14px; font-size: 12px; color: #666; text-align: center; border-top: 1px solid #151515; padding-top: 6px; }
+  /* Phone: the same page, one column. */
+  .phone .paper { padding: 12px 14px 20px; }
+  .phone .paper .mast { font-size: 34px; }
+  .phone .paper h2.lead { font-size: 26px; }
+  .phone .paper .cols, .phone .paper .ads { column-count: 1; }
+  .phone .paper .dateline { font-size: 11px; }
+  .phone .paper .ads { column-count: 2; }
+
+  /* ================= B: TELETEXT (@theme teletext) ================= */
+  .ttx-wrap { background: #000; min-height: 100%; display: grid; place-items: start center; padding: 16px 0; }
+  .ttx { --c: 17px; width: calc(var(--c) * 40); background: #000; color: #fff; font: 700 calc(var(--c) * 1.25)/1 "Lucida Console", Consolas, ui-monospace, monospace; letter-spacing: 0; image-rendering: pixelated; }
+  .ttx .r { display: flex; height: calc(var(--c) * 1.5); white-space: pre; overflow: hidden; }
+  .ttx .r > span { display: inline-block; height: 100%; line-height: calc(var(--c) * 1.5); }
+  .ttx .r.dh { height: calc(var(--c) * 3); }
+  .ttx .r.dh > span { line-height: calc(var(--c) * 1.5); transform: scaleY(2); transform-origin: top; }
+  .ttx .k { color: #000; } .ttx .R { color: #f00; } .ttx .G { color: #0f0; } .ttx .Y { color: #ff0; } .ttx .B { color: #00f; } .ttx .M { color: #f0f; } .ttx .C { color: #0ff; } .ttx .W { color: #fff; }
+  .ttx .bR { background: #f00; } .ttx .bG { background: #0f0; } .ttx .bY { background: #ff0; } .ttx .bB { background: #00f; } .ttx .bM { background: #f0f; } .ttx .bC { background: #0ff; } .ttx .bW { background: #fff; }
+  .ttx canvas { display: block; }
+  .ttx .fl { animation: fl 1s steps(1) infinite; } @keyframes fl { 50% { visibility: hidden; } }
+  .phone .ttx-wrap { padding: 8px 0; }
+  .phone .ttx { --c: 9px; }
+
+  /* ================= C: THE PATTERN BOOK ================= */
+  .pb { background: #f6f7f9; color: #1b1f24; font: 14px/1.55 "Segoe UI", system-ui, sans-serif; min-height: 100%; display: grid; grid-template-columns: 220px 1fr; }
+  .pb nav { position: sticky; top: 0; align-self: start; padding: 22px 14px; border-right: 1px solid #e1e4e8; height: 640px; background: #fff; }
+  .pb nav b { display: block; font-size: 13px; margin-bottom: 10px; }
+  .pb nav a { display: flex; justify-content: space-between; padding: 5px 8px; border-radius: 6px; color: #1b1f24; text-decoration: none; font-size: 13px; }
+  .pb nav a:hover, .pb nav a.on { background: #eef1f5; }
+  .pb nav a small { color: #8a94a0; }
+  .pb main { padding: 22px 26px 40px; }
+  .pb .hero h2 { font-size: 30px; margin: 0 0 4px; letter-spacing: -.5px; }
+  .pb .hero p { margin: 0 0 6px; color: #57606a; max-width: 680px; }
+  .pb .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 18px; }
+  .pb .chip { font-size: 12px; padding: 3px 9px; border-radius: 12px; background: #e7f6ee; color: #11683f; }
+  .pb .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .pb .card { background: #fff; border: 1px solid #e1e4e8; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+  .pb .card .hd { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px 0; }
+  .pb .card .hd b { font-size: 14px; } .pb .card .hd span { font-size: 11px; color: #8a94a0; }
+  .pb .card .look { padding: 10px 14px 12px; flex: 1; }
+  .pb .card pre { margin: 0; background: #0d1117; color: #c9d1d9; font: 12px/1.5 ui-monospace, Consolas, monospace; padding: 10px 14px; position: relative; white-space: pre-wrap; }
+  .pb .card pre .cp { position: absolute; top: 6px; right: 8px; font: 11px system-ui; color: #8b949e; border: 1px solid #30363d; border-radius: 5px; padding: 1px 7px; }
+  .pb .co { border-left: 4px solid; padding: 7px 10px; border-radius: 4px; margin: 4px 0; }
+  .pb table { border-collapse: collapse; font-size: 13px; } .pb td, .pb th { border-bottom: 1px solid #e1e4e8; padding: 4px 10px 4px 0; text-align: left; }
+  .pb .pic { height: 74px; border-radius: 6px; background: linear-gradient(135deg, #cfd8e3, #9fb2c8); display: grid; place-items: center; font-size: 12px; color: #33475b; }
+  .pb .pics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .pb .pics div small { display: block; font-size: 11px; color: #57606a; text-align: center; margin-top: 3px; }
+  .pb .wide { grid-column: 1 / -1; }
+  .pb .note { display: grid; grid-template-columns: 90px 70px 1fr; gap: 6px 12px; font-size: 13px; }
+  .pb .note div { border-bottom: 1px solid #eef1f5; padding: 3px 0; }
+  .pb .write { display: flex; gap: 8px; margin-top: 8px; } .pb .write input { flex: 1; border: 1px solid #d0d7de; border-radius: 6px; padding: 7px 10px; font: inherit; } .pb .write button { border: 0; background: #1f883d; color: #fff; border-radius: 6px; padding: 0 14px; font-weight: 600; }
+  .phone .pb { grid-template-columns: 1fr; }
+  .phone .pb nav { position: static; height: auto; display: flex; gap: 4px; overflow-x: auto; padding: 10px; border-right: 0; border-bottom: 1px solid #e1e4e8; }
+  .phone .pb nav b { display: none; } .phone .pb nav a { white-space: nowrap; background: #eef1f5; } .phone .pb nav a small { display: none; }
+  .phone .pb main { padding: 14px 12px 30px; } .phone .pb .grid { grid-template-columns: 1fr; } .phone .pb .hero h2 { font-size: 24px; }
+  .phone .pb .pics { grid-template-columns: repeat(2, 1fr); }
+
+  /* ---------- MU additions table ---------- */
+  table.mu { border-collapse: collapse; width: 100%; max-width: 1200px; font-size: 13.5px; }
+  table.mu th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--line); padding: 8px; }
+  table.mu td { border-bottom: 1px solid var(--line); padding: 10px 8px; vertical-align: top; }
+  table.mu code { font: 12.5px ui-monospace, Consolas, monospace; background: #0a0c0d; border: 1px solid var(--line); padding: 1px 5px; border-radius: 4px; color: #ffcf6b; white-space: pre; }
+  table.mu .need { font-size: 11px; padding: 2px 7px; border-radius: 9px; background: #2a2340; color: #c9b6ff; white-space: nowrap; }
+  .layout-demo { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .layout-demo .shot { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .layout-demo .shot .cap { padding: 6px 10px; font-size: 12px; color: var(--muted); background: var(--panel); }
+  .fake { height: 300px; display: grid; grid-template-columns: 70px 200px 1fr; background: #111; }
+  .fake .a { background: #15191c; border-right: 1px solid #23292d; } .fake .b { background: #171b1e; border-right: 1px solid #23292d; }
+  .fake .c { display: flex; flex-direction: column; }
+  .fake .tb { height: 34px; border-bottom: 1px solid #2b3237; display: flex; align-items: center; gap: 6px; padding: 0 8px; background: #171b1e; }
+  .fake .tb i { flex: 1; height: 22px; border-radius: 11px; background: #0f1214; border: 1px solid #2b3237; }
+  .fake .tb s { width: 18px; height: 18px; border-radius: 9px; background: #2b3237; }
+  .fake .pg { flex: 1; background: #fbfaf6; }
+  .fake .pg.narrow { background: #111; display: grid; justify-items: center; }
+  .fake .pg.narrow div { width: 46%; background: #1d2226; border: 1px solid #2b3237; margin: 10px 0; border-radius: 6px; }
+  .fake .tb.narrow { width: 52%; margin: 0 auto; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Pages: browser and three designs</h1>
+  <button data-t="layout" class="on">1 · Browser layout</button>
+  <button data-t="a">A · Newspaper</button>
+  <button data-t="b">B · Teletext</button>
+  <button data-t="c">C · Pattern book</button>
+  <button data-t="mu">MU additions (decide)</button>
+</header>
+
+<!-- ======================= 1: BROWSER LAYOUT ======================= -->
+<section class="tab on" id="t-layout">
+  <p class="intro"><b>The browser on the PC host.</b> Today the browser is locked to 860 px and the page to 720 px, so it sits as a narrow strip in the middle. Proposal: the toolbar runs across the whole top of the pane, and the page fills the rest. The page decides how it uses the room: a newspaper sets columns, teletext sets its 40×25 grid and scales it to fit, plain text stays plain. A page with no layout of its own keeps a comfortable reading width (about 75 characters), so a plain text page never becomes one endless line.</p>
+  <div class="layout-demo">
+    <div class="shot"><div class="fake"><div class="a"></div><div class="b"></div><div class="c"><div class="tb narrow"><s></s><i></i><s></s></div><div class="pg narrow"><div></div></div></div></div><div class="cap">Today: toolbar and page in a narrow strip</div></div>
+    <div class="shot"><div class="fake"><div class="a"></div><div class="b"></div><div class="c"><div class="tb"><s></s><s></s><i></i><s></s><s></s><s></s></div><div class="pg"></div></div></div><div class="cap">Proposal: toolbar across the top, the page fills the pane (here a paper page)</div></div>
+  </div>
+  <p class="intro" style="margin-top:18px"><b>Android</b> keeps the toolbar at the top as today. Columns become one column (two on a tablet), side pictures go full width, teletext scales its grid to the screen width (40 columns always fit, it was made for small screens), and the paper look stays white.</p>
+</section>
+
+<!-- ======================= A: NEWSPAPER ======================= -->
+<section class="tab" id="t-a">
+  <p class="intro"><b>A · The Harbour Gazette.</b> A real newspaper: white paper, serif type, masthead with double rules, a lead headline over three columns, drop cap, a picture in a column, a pull quote, a weather box, and the notice board as classified ads in four narrow columns, with a line to place your own. On a phone the same page runs in one column.</p>
+  <div class="row">
+    <div class="pc"><div class="lbl" style="padding:8px 10px 0">PC host</div><div id="a-pc"></div></div>
+  </div>
+  <div class="row" style="margin-top:22px">
+    <div><div class="lbl">Android</div><div id="a-ph"></div></div>
+    <div class="src"><div class="lbl">The page in MU (new markup in yellow)</div><pre id="a-src"></pre><div class="bytes" id="a-bytes"></div></div>
+  </div>
+</section>
+
+<!-- ======================= B: TELETEXT ======================= -->
+<section class="tab" id="t-b">
+  <p class="intro"><b>B · Må:rse Text 100.</b> Teletext as it was: black screen, the seven hard colours, a 40×25 character grid, page number and a running clock in the header row, block-graphic (mosaic) logo, double-height headlines, dotted leaders to page numbers, a flashing warning, and the four coloured Fastext keys at the bottom. On the PC keys 1–4 (or typing a page number) jump; on a phone the grid scales to the screen width.</p>
+  <div class="row">
+    <div class="pc"><div class="lbl" style="padding:8px 10px 0">PC host</div><div id="b-pc"></div></div>
+  </div>
+  <div class="row" style="margin-top:22px">
+    <div><div class="lbl">Android</div><div id="b-ph"></div></div>
+    <div class="src"><div class="lbl">The page in MU (new markup in yellow)</div><pre id="b-src"></pre><div class="bytes" id="b-bytes"></div></div>
+  </div>
+</section>
+
+<!-- ======================= C: PATTERN BOOK ======================= -->
+<section class="tab" id="t-c">
+  <p class="intro"><b>C · Pattern book.</b> A reference people actually use: a contents list down the side (made from the headings by <code>@toc</code>), every feature as a card with the live result on top and the MU that makes it underneath, a copy button on every code block, the byte cost on each card, and the notice board where readers post their own tips. On a phone the contents become a row of chips and the cards stack.</p>
+  <div class="row">
+    <div class="pc"><div class="lbl" style="padding:8px 10px 0">PC host</div><div id="c-pc"></div></div>
+  </div>
+  <div class="row" style="margin-top:22px">
+    <div><div class="lbl">Android</div><div id="c-ph"></div></div>
+    <div class="src"><div class="lbl">The page in MU (new markup in yellow)</div><pre id="c-src"></pre><div class="bytes" id="c-bytes"></div></div>
+  </div>
+</section>
+
+<!-- ======================= MU ADDITIONS ======================= -->
+<section class="tab" id="t-mu">
+  <p class="intro"><b>What MU is missing for these three pages.</b> Each addition is one short line or a word, so it costs almost nothing on air, and an older client shows it as plain text that still reads. Pick what we build; nothing here is built yet.</p>
+  <table class="mu">
+    <tr><th>Addition</th><th>Write</th><th>Cost</th><th>PC host</th><th>Android</th><th>Needed by</th></tr>
+    <tr><td><b>Page theme</b><br>the whole page's look</td><td><code>@theme paper</code><br><code>@theme teletext</code></td><td>14 bytes</td><td>paper: white, serif, black rules. teletext: black, 7 hard colours, 40×25 grid</td><td>same look; teletext scaled to the width</td><td><span class="need">A</span> <span class="need">B</span></td></tr>
+    <tr><td><b>Columns</b><br>text flows from column to column</td><td><code>::: 3</code><br>…text…<br><code>:::</code></td><td>10 bytes</td><td>3 columns with a rule between; a <code>#</code> heading inside spans them all</td><td>1 column (2 on a tablet)</td><td><span class="need">A</span> <span class="need">C</span></td></tr>
+    <tr><td><b>Cards</b><br>a grid of boxes</td><td><code>::: cards</code><br>…<code>+++</code> between cards…<br><code>:::</code></td><td>3 bytes per card</td><td>2–3 cards per row</td><td>stacked</td><td><span class="need">C</span></td></tr>
+    <tr><td><b>Picture placement</b></td><td><code>![x](a.jpg "grey right")</code><br><code>"left"</code> <code>"wide"</code></td><td>5 bytes</td><td>in the column beside the text, or across</td><td>full width</td><td><span class="need">A</span></td></tr>
+    <tr><td><b>Text size</b></td><td><code>{big:…}</code> <code>{small:…}</code></td><td>6–7 bytes</td><td>headline sizes, fine print</td><td>same</td><td><span class="need">A</span> <span class="need">C</span></td></tr>
+    <tr><td><b>Contents</b></td><td><code>@toc</code></td><td>4 bytes</td><td>a side list made from the headings</td><td>a row of chips</td><td><span class="need">C</span></td></tr>
+    <tr><td><b>Teletext set</b><br>only with <code>@theme teletext</code></td><td><code>```mosaic</code> block art<br><code>{cyan:}</code> <code>{magenta:}</code> <code>{white:}</code><br><code>{flash:…}</code><br><code>@fastext red:[News](n) green:[…](…) …</code></td><td>mosaic ≈ 1 byte per pixel, compresses well</td><td>sextant block graphics (2×3 per cell), double-height <code>#</code> lines, header row with page number and clock, coloured keys 1–4</td><td>same, scaled; keys become the four buttons</td><td><span class="need">B</span></td></tr>
+    <tr><td><b>Notice board</b><br>readers write on the page</td><td><code>@board</code></td><td>6 bytes</td><td>the notes (newest first) and a write line; the host keeps them (limits: 200 characters, 30 notes, one note per minute per person)</td><td>same</td><td><span class="need">A</span> <span class="need">B</span> <span class="need">C</span></td></tr>
+    <tr><td><b>Copy button</b> on code blocks</td><td>nothing (client only)</td><td>0</td><td>copies the block</td><td>copies the block</td><td><span class="need">C</span></td></tr>
+  </table>
+  <p class="intro" style="margin-top:14px">Fonts: everything uses fonts already on the machine (Georgia/Times for paper, Consolas for teletext), so a page never downloads anything. A real teletext pixel font could be built into the client later (about 20 KB, once) if the system font is not convincing enough.</p>
+</section>
+
+<script>
+// ---------- tabs ----------
+document.querySelectorAll("header.top button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("header.top button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll("section.tab").forEach(s => s.classList.toggle("on", s.id === "t-" + b.dataset.t));
+});
+
+// ---------- frames ----------
+function bar(title, path, small) {
+  return `<div class="bbar"><span class="ic">←</span>${small ? "" : '<span class="ic">→</span>'}<div class="pill"><span class="route">Net</span><div class="t"><b>${title}</b><small>${path}</small></div></div><span class="ic">↻</span>${small ? "" : '<span class="ic">☆</span><span class="ic">⌂</span>'}</div>`;
+}
+function frames(id, title, path, body, status) {
+  document.getElementById(id + "-pc").innerHTML = bar(title, path) + `<div class="viewport">${body}</div><div class="bstatus">${status}</div>`;
+  document.getElementById(id + "-ph").innerHTML = `<div class="phone"><div class="sb"><span>18:26</span><span>LoRa ▂▄▆</span></div>${bar(title, path, true)}<div class="viewport">${body}</div></div>`;
+}
+async function deflated(s) {
+  try {
+    const cs = new Blob([s]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+    return (await new Response(cs).arrayBuffer()).byteLength;
+  } catch { return null; }
+}
+async function source(id, mu) {
+  const esc = mu.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  document.getElementById(id + "-src").innerHTML = esc.replace(/⟦(.*?)⟧/gs, '<span class="new">$1</span>');
+  const plain = mu.replace(/[⟦⟧]/g, "");
+  const raw = new TextEncoder().encode(plain).length, z = await deflated(plain);
+  document.getElementById(id + "-bytes").textContent = `${raw} bytes raw · ${z ?? "?"} bytes deflated · ${z ? (z / 1024 * 8 * 1.18).toFixed(0) : "?"} s on air at SF9 (pictures load on a tap)`;
+}
+
+// ======================= A =======================
+const A = `<div class="paper">
+  <div class="ear"><span>maarse://3eb445ec · over LoRa and the backbone</span><span>No. 1 · Free on every node</span></div>
+  <div class="mast">The Harbour Gazette</div>
+  <div class="dateline"><span>Hals, Wednesday 18 November 2026</span><span>Wind NW 18 m/s · High water 06:52</span></div>
+  <h2 class="lead">Gale tonight: boats stay in from 20:00</h2>
+  <p class="deck">Harbour master asks skippers to double their lines before dark; the fuel pier reopens in the morning.</p>
+  <div class="cols">
+    <p class="byline">By the harbour office</p>
+    <p class="drop">A northwesterly gale of 18 metres a second is expected to reach Aalborg Bugt this evening, the harbour office said on Wednesday. Boats are asked to stay in from 20:00 until the wind falls below 12 m/s, probably before noon on Thursday.</p>
+    <p>The warning went out over the new repeater on the mast, and reached Øster Hurup in two hops before the radio forecast mentioned it. “We heard it on the water first,” said one skipper.</p>
+    <figure><div class="ph">picture · tap for colour</div><figcaption>The cabin at the harbour mouth, as it looked on Tuesday.</figcaption></figure>
+    <blockquote>“We heard the gale warning on the water before the radio said it.”<small>Anna, skipper of Mågen</small></blockquote>
+    <h3>Fuel pier open again</h3>
+    <p>Diesel and petrol are back at the fuel pier from Thursday 07:00, card only. The pump was out for two weeks while the tank was replaced.</p>
+    <div class="box"><h4>Weather</h4><table><tr><th></th><th>Wind</th><th>Sea</th></tr><tr><td>Morning</td><td>8 W</td><td>calm</td></tr><tr><td>Afternoon</td><td>14 W</td><td>choppy</td></tr><tr><td>Night</td><td class="red">18 NW</td><td class="red">rough</td></tr></table></div>
+    <h3>Repeater covers the bay</h3>
+    <p>The new repeater on the mast now hears nodes across the whole bay. A page like this one takes about twenty seconds over LoRa, and its pictures come when you tap them.</p>
+    <figure><div class="ph">chart · dots</div><figcaption>Chart of the bay, drawn in dots: sharp at 2 KB.</figcaption></figure>
+    <p>Readers who want to test their antenna can write their signal strength on the notice board below; the harbour office collects the numbers for a coverage map.</p>
+  </div>
+  <div class="rule2"></div>
+  <div class="sect"><h3>Notices &amp; classifieds</h3><span style="font-size:12px;font-style:italic">Readers write here · newest first</span></div>
+  <div class="ads">
+    <div class="ad"><b>Lost</b>Blue fender with “IDA” on it, pier 3. <i>Carl · 17:40</i></div>
+    <div class="ad"><b>For sale</b>15 hp outboard, runs well. Ask at the café. <i>Café · 12:15</i></div>
+    <div class="ad"><b>Who hears me?</b>Testing a new antenna; write your signal here. <i>dennis · yesterday</i></div>
+    <div class="ad"><b>Saturday</b>Beach clean-up from 10:00, coffee after. <i>Harbour office</i></div>
+    <div class="ad"><b>Wanted</b>Crew for Sunday’s race, no experience needed. <i>Tern · Bo</i></div>
+    <div class="ad"><b>Found</b>Keys with a cork float, at the slipway. <i>Anna</i></div>
+  </div>
+  <div class="write"><input placeholder="Place a notice (200 characters)"><button>Post</button></div>
+  <div class="foot">The Harbour Gazette is a Må:rse page · 1.6 KB · <a>front page</a> · <a>the backbone</a></div>
+</div>`;
+frames("a", "The Harbour Gazette", "3eb445ec / gazette", A, "Over the internet · 1.6 KB · fetched 18:26");
+source("a", `@title The Harbour Gazette
+⟦@theme paper⟧
+{small:maarse://3eb445ec · No. 1 · Free on every node}
+# -> The Harbour Gazette <-
+---
+{small:Hals, Wednesday 18 November 2026 · Wind NW 18 m/s}
+---
+
+⟦::: 3⟧
+## Gale tonight: boats stay in from 20:00
+*Harbour master asks skippers to double their lines before dark.*
+
+{small:BY THE HARBOUR OFFICE}
+A northwesterly gale of 18 metres a second is expected
+to reach Aalborg Bugt this evening ...
+
+![The cabin at the harbour mouth](hytte.jpg ⟦"right"⟧)
+
+> "We heard the gale warning on the water before the
+> radio said it." {small:Anna, skipper of Mågen}
+
+### Fuel pier open again
+Diesel and petrol are back from Thursday 07:00, card only.
+
+>!grey **WEATHER**
+>| | Wind | Sea |
+>| Night | {red:18 NW} | {red:rough} |
+
+![Chart of the bay](demo-chart.png "dots ⟦right⟧")
+⟦:::⟧
+
+---
+## Notices & classifieds
+⟦@board⟧
+
+{small:[front page](/) · [the backbone](maarse://43916f06…/)}`);
+
+// ======================= B: teletext =======================
+// Rows: [text, colour classes per run]. Each row is 40 cells. Runs: "f:b:text" (f = fg, b = bg).
+function runs(...rs) { return rs.map(([f, b, t]) => `<span class="${f || "W"} ${b ? "b" + b : ""}">${t.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</span>`).join(""); }
+function pad(s, n) { return (s + " ".repeat(n)).slice(0, n); }
+const clock = () => new Date().toTimeString().slice(0, 8);
+function ttxRows() {
+  const day = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short" });
+  return [
+    ["", runs(["W", "", " P100  "], ["Y", "", "MÅ:RSE"], ["W", "", pad("  100  " + day + " ", 19)], ["Y", "", clock()])],
+    ["logo", ""],
+    ["dh", runs(["C", "", pad(" HARBOUR NEWS", 40)])],
+    ["", runs(["W", "", pad(" Gale tonight: boats in by 20:00 ....", 36)], ["Y", "", "101 "])],
+    ["", runs(["C", "", pad(" Fuel pier open again .............", 36)], ["Y", "", "102 "])],
+    ["", runs(["W", "", pad(" Repeater on the mast covers the bay.", 36)], ["Y", "", "103 "])],
+    ["", runs(["C", "", pad(" Notice board: 6 new messages .....", 36)], ["Y", "", "104 "])],
+    ["", " ".repeat(40)],
+    ["", runs(["W", "R", pad("  WEATHER  ", 11)], ["W", "", pad("  Hals, tonight", 29)])],
+    ["", runs(["W", "", pad("  06  8 m/s W   ", 18)], ["G", "", pad("calm", 22)])],
+    ["", runs(["W", "", pad("  12 14 m/s W   ", 18)], ["Y", "", pad("choppy", 22)])],
+    ["", runs(["W", "", pad("  18 ", 5)], ["R", "", pad("18 m/s NW   ", 13)], ["R fl", "", pad("GALE WARNING", 22)])],
+    ["", " ".repeat(40)],
+    ["", runs(["k", "B", pad("  NETWORK  ", 11)], ["W", "", pad("", 29)])],
+    ["", runs(["W", "", pad("  Hals Havn     0 hops  ", 24)], ["G", "", pad("█████", 16)])],
+    ["", runs(["W", "", pad("  Øster Hurup   2 hops  ", 24)], ["Y", "", "███"], ["B", "", pad("██", 13)])],
+    ["", runs(["W", "", pad("  Backbone      internet", 24)], ["C", "", pad(" ◆ online", 16)])],
+    ["", " ".repeat(40)],
+    ["", runs(["k", "Y", pad("  MESSAGES 104  ", 16)], ["W", "", pad("  newest first", 24)])],
+    ["", runs(["G", "", pad("  CARL ", 8)], ["W", "", pad("Lost: blue fender IDA, pier 3", 32)])],
+    ["", runs(["G", "", pad("  CAFE ", 8)], ["W", "", pad("For sale: 15 hp outboard", 32)])],
+    ["", runs(["G", "", pad("  DENNIS ", 10)], ["W", "", pad("Who hears the new antenna?", 30)])],
+    ["", " ".repeat(40)],
+    ["", runs(["W", "R", pad(" News", 10)], ["k", "G", pad(" Weather", 10)], ["k", "Y", pad(" Board", 10)], ["k", "C", pad(" Index", 10)])],
+  ];
+}
+// A 5x7 pixel font for the mosaic logo (drawn as teletext sextant pixels: 2 wide x 3 high per cell).
+const FONT = { M: ["10001","11011","10101","10001","10001","10001","10001"], A: ["01110","10001","10001","11111","10001","10001","10001"],
+  R: ["11110","10001","10001","11110","10100","10010","10001"], S: ["01111","10000","10000","01110","00001","00001","11110"],
+  E: ["11111","10000","10000","11110","10000","10000","11111"], T: ["11111","00100","00100","00100","00100","00100","00100"],
+  X: ["10001","10001","01010","00100","01010","10001","10001"], ":": ["0","0","1","0","1","0","0"], " ": ["00","00","00","00","00","00","00"] };
+// One font pixel = one sextant pixel (half a cell wide, a third of a cell high), as on real teletext.
+function logo(canvas, cell) {
+  const px = cell / 2, py = cell * 1.5 / 3, rows = 9;
+  canvas.width = 40 * cell; canvas.height = 3 * cell * 1.5;
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#00f"; g.fillRect(0, 0, canvas.width, canvas.height);
+  const draw = (word, x0, colour) => {
+    for (const ch of word) {
+      const f = FONT[ch];
+      g.fillStyle = colour;
+      for (let r = 0; r < 7; r++) for (let c = 0; c < f[r].length; c++) if (f[r][c] === "1") g.fillRect((x0 + c) * px, (1.5 + r) * py, px, py);
+      if (ch === "A" && colour === "#ff0" && word.startsWith("MA")) g.fillRect((x0 + 2) * px, 0.2 * py, px, py); // the ring of Å
+      x0 += f[0].length + 1;
+    }
+    return x0;
+  };
+  draw("MA:RSE", 4, "#ff0");
+  draw("TEXT", 52, "#fff");
+  void rows;
+}
+function ttxHTML(id) { return `<div class="ttx-wrap"><div class="ttx" id="${id}"></div></div>`; }
+function drawTtx(el, cell) {
+  el.innerHTML = "";
+  for (const [kind, html] of ttxRows()) {
+    if (kind === "logo") { const c = document.createElement("canvas"); logo(c, cell); el.append(c); continue; }
+    const r = document.createElement("div"); r.className = "r" + (kind === "dh" ? " dh" : ""); r.innerHTML = html; el.append(r);
+  }
+}
+frames("b", "Må:rse Text 100", "3eb445ec / text", ttxHTML("ttx-pc"), "Over the internet · 1.1 KB · keys 1–4 or a page number");
+document.getElementById("b-ph").querySelector(".ttx").id = "ttx-ph";
+const tick = () => { drawTtx(document.getElementById("ttx-pc"), 17); drawTtx(document.getElementById("ttx-ph"), 9); };
+tick(); setInterval(tick, 1000);
+source("b", `@title Må:rse Text 100
+⟦@theme teletext⟧
+⟦@fastext red:[News](news) green:[Weather](weather) yellow:[Board](board) cyan:[Index](/)⟧
+⟦\`\`\`mosaic
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbbyb...y..yyy....yyyy...yyyy.yyyyy....wwwww.wwwww.w...w.wwwww...............bb
+bbbbyy.yy.y...y.y..y...y.y.....y..........w...w......w.w....w.................bb
+...  (6 rows: 1 byte per pixel, compresses to ~90 bytes)
+\`\`\`⟧
+# ⟦{cyan:⟧HARBOUR NEWS⟦}⟧
+Gale tonight: boats in by 20:00 .... {yellow:[101](news)}
+⟦{cyan:⟧Fuel pier open again ......⟦}⟧ {yellow:[102](fuel)}
+Repeater on the mast covers the bay. {yellow:[103](net)}
+
+{!red: WEATHER } Hals, tonight
+  06  8 m/s W   {green:calm}
+  12 14 m/s W   {yellow:choppy}
+  18 {red:18 m/s NW}  ⟦{flash:⟧{red:GALE WARNING}⟦}⟧
+
+{!yellow: MESSAGES 104 } newest first
+⟦@board⟧`);
+
+// ======================= C: pattern book =======================
+const C = `<div class="pb">
+  <nav><b>Pattern book</b><a class="on">Text <small>4</small></a><a>Colours <small>2</small></a><a>Boxes <small>3</small></a><a>Tables <small>1</small></a><a>Columns <small>2</small></a><a>Pictures <small>4</small></a><a>Links <small>3</small></a><a>Themes <small>2</small></a><a>Notice board <small>6</small></a></nav>
+  <main>
+    <div class="hero"><h2>Pattern book</h2><p>Everything a Må:rse page can do, each with the plain text that makes it. Press copy, paste it in your own <code>.mu</code> file, change the words.</p>
+    <div class="chips"><span class="chip">whole page 2.1 KB · 1.0 KB on air</span><span class="chip">works on LoRa</span><span class="chip">PC and Android alike</span></div></div>
+    <div class="grid">
+      <div class="card"><div class="hd"><b>Text</b><span>+2–4 bytes</span></div><div class="look"><b>bold</b> · <i>italic</i> · <s>struck</s> · <code>code</code> · <mark style="background:#fff0a8">highlight</mark></div><pre><span class="cp">copy</span>**bold** · *italic* · ~~struck~~
+\`code\` · {!yellow:highlight}</pre></div>
+      <div class="card"><div class="hd"><b>Colours</b><span>+6 bytes</span></div><div class="look"><span style="color:#b3261e">red</span> <span style="color:#b55400">orange</span> <span style="color:#8a6a00">yellow</span> <span style="color:#1e7a3c">green</span> <span style="color:#1b5fb8">blue</span> <span style="color:#7a3fb0">purple</span> <span style="color:#666">grey</span></div><pre><span class="cp">copy</span>{red:red} {blue:blue}
+{!yellow:on yellow}</pre></div>
+      <div class="card"><div class="hd"><b>Boxes</b><span>+6 bytes</span></div><div class="look"><div class="co" style="border-color:#1e7a3c;background:#e3f4e8"><b>Good news</b> in green</div><div class="co" style="border-color:#b3261e;background:#fbdad6"><b>Warning</b> in red</div></div><pre><span class="cp">copy</span>>!green **Good news** in green
+>!red **Warning** in red</pre></div>
+      <div class="card"><div class="hd"><b>Tables</b><span>+3 bytes per cell</span></div><div class="look"><table><tr><th>Left</th><th style="text-align:center">Centre</th><th style="text-align:right">Right</th></tr><tr><td>apples</td><td style="text-align:center;color:#1e7a3c">in stock</td><td style="text-align:right">12 kr</td></tr></table></div><pre><span class="cp">copy</span>| Left | Centre | Right |
+|---|:---:|---:|
+| apples | {green:in stock} | 12 kr |</pre></div>
+      <div class="card wide"><div class="hd"><b>Pictures</b><span>nothing on the page; the picture comes on a tap</span></div><div class="look"><div class="pics"><div><div class="pic">grey → colour</div><small>steps · 1.3 KB first</small></div><div><div class="pic" style="background:repeating-conic-gradient(#333 0 25%,#fff 0 50%) 0 0/6px 6px;color:#000"><span style="background:#fff;padding:0 4px">dots</span></div><small>dots · drawings, 1–3 KB</small></div><div><div class="pic" style="background:linear-gradient(135deg,#ffb36b,#c45c76,#30466e);color:#fff">colour</div><small>colour · up to 8 KB</small></div><div><div class="pic" style="filter:grayscale(1)">grey!</div><small>forced · that copy only</small></div></div></div><pre><span class="cp">copy</span>![The cabin](hytte.jpg)                 steps
+![Chart](chart.png "dots")              dots
+![Poster](poster.png "colour right")    colour, beside the text</pre></div>
+      <div class="card"><div class="hd"><b>Columns</b><span>+10 bytes</span></div><div class="look" style="column-count:2;column-rule:1px solid #e1e4e8;font-size:13px">Text runs down the first column and on into the next, like a newspaper. On a phone it is one column.</div><pre><span class="cp">copy</span>::: 2
+Text runs down the first column ...
+:::</pre></div>
+      <div class="card"><div class="hd"><b>Themes</b><span>+14 bytes</span></div><div class="look" style="display:flex;gap:8px"><div style="flex:1;background:#fbfaf6;border:1px solid #ddd;padding:6px;font-family:Georgia;font-size:13px"><b>paper</b><br>white, serif, rules</div><div style="flex:1;background:#000;color:#ff0;padding:6px;font:700 13px Consolas"><span style="color:#0ff">teletext</span><br>black, 40×25</div></div><pre><span class="cp">copy</span>@theme paper
+@theme teletext</pre></div>
+      <div class="card wide"><div class="hd"><b>Notice board</b><span>readers write here · newest first</span></div><div class="look"><div class="note"><div><b>Carl</b></div><div>17:40</div><div>Lost a blue fender, "IDA"</div><div><b>Café</b></div><div>12:15</div><div><span style="color:#1e7a3c">For sale:</span> 15 hp outboard</div><div><b>dennis</b></div><div>yesterday</div><div>Tip: <code>"dots"</code> makes maps sharp at 2 KB</div></div><div class="write"><input placeholder="Share a tip (200 characters)"><button>Post</button></div></div><pre><span class="cp">copy</span>@board</pre></div>
+    </div>
+  </main>
+</div>`;
+frames("c", "Pattern book", "3eb445ec / patterns", C, "Over the internet · 1.0 KB · fetched 18:26");
+source("c", `@title Pattern book
+⟦@toc⟧
+# Pattern book
+Everything a page can do, with the text that makes it.
+
+⟦::: cards⟧
+## Text
+**bold** · *italic* · ~~struck~~ · \`code\`
+\`\`\`
+**bold** · *italic* · ~~struck~~ · \`code\`
+\`\`\`
+⟦+++⟧
+## Colours
+{red:red} {blue:blue} {!yellow:on yellow}
+\`\`\`
+{red:red} {!yellow:on yellow}
+\`\`\`
+⟦+++⟧
+## Boxes
+>!green **Good news** in green
+\`\`\`
+>!green **Good news** in green
+\`\`\`
+⟦+++⟧
+...   (tables, columns, themes the same way)
+⟦:::⟧
+
+## Pictures
+![The cabin](hytte.jpg) ...
+
+## Notice board
+⟦@board⟧`);
+</script>
+</body>
+</html>

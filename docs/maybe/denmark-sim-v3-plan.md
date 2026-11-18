@@ -128,7 +128,7 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
 | # | Step | Status | What is missing |
 |---|---|---|---|
 | 0 | Remove Ask Claude (`ask.js`, `tools/sim-bridge`, tab) | **done 2026-11-18** (also artifact build, README section, start scripts now plain http.server) | — |
-| 1 | New layout: 5 modes (Build, Send, Break, Results, Control room), clickable map, follow panel, timeline, light/dark | **in progress**: 4 modes in the header (Build/Send/Break/Results, old sections stacked per mode), light/dark button remembered, right-click menus on nodes (inspect, send from/to, announce, stop/start, reboot, cut internet, delete) and links (cut/restore, inspect ends, delete), hover hints, map hint bar | follow panel on the right, timeline markers, Control room mode, mockup look (spacing, cards) |
+| 1 | New layout: modes, clickable map, follow panel, timeline, light/dark | **done 2026-11-19**: 4 modes, theme remembered, right-click menus, hover hints, follow panel on the map (plain status: queued/on air/backbone/post office/carried/held/delivered/no progress), coloured timeline markers + followed message dots | Control room mode moved to step 6 (needs the phones) |
 | 2 | Device palette with every kind, mobile/stationary flag, people with routes/waypoints/speed/device | designed (board 9) | engine: waypoint routes for any node, new kinds (server, app phone, MeshCore gateway); UI |
 | 3 | Generator per region + connection mix + app users | designed (board 3) | `generateNetwork(spec)`, `Kind::App` in the engine |
 | 4 | Shared host rules library + transfer model (files, voice, pictures, Pages) | proposed | library split, engine transfer model |

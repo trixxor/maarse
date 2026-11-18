@@ -36,7 +36,6 @@
       <datalist id="town-list"></datalist>
       <label><input type="checkbox" id="jr-quiet"> Quiet network (stop other traffic while it travels)</label>
       <button id="btn-journey" class="primary">Send and follow</button>
-      <div id="journey"></div>
       <h3>Any message</h3>
       <p class="hint">Messages from the traffic generator. Click one to follow it.</p>
       <div id="msg-list" class="scroll"></div>
@@ -179,6 +178,7 @@
     <div id="hud" class="ov"></div>
     <div id="legend" class="ov"><button id="lg-toggle" title="Legend">Legend ▸</button><div id="legend-body" class="closed"></div></div>
     <div id="card" class="ov hidden"></div>
+    <aside id="follow" class="ov hidden" aria-label="Followed message"><div id="follow-head"></div><div id="journey"></div></aside>
     <div id="ctx" class="ov hidden" role="menu"></div>
     <div id="maphint" class="ov">Click a node or link to inspect · right-click for actions · drag to move</div>
     <div id="feed" class="ov">

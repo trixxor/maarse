@@ -112,3 +112,17 @@ tr.click { cursor:pointer; } tr.click:hover { background:rgba(127,127,127,.12); 
 #maphint { right:10px; bottom:58px; padding:4px 12px; border-radius:99px; font-size:12px; color:var(--mute); pointer-events:none; white-space:nowrap; }
 .tip-hint { color:#94a3b8; font-size:11px; }
 @media (max-width: 760px) { #maphint { display:none; } #modes { order:3; flex-basis:100%; } }
+#follow { top:52px; right:10px; width:360px; max-height:calc(100% - 130px); overflow:auto; padding:10px 12px; font-size:13px; }
+#follow .fh-top { display:flex; justify-content:space-between; align-items:flex-start; }
+#follow .fh-kicker { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); }
+#follow .fh-top b { font-size:17px; }
+#follow .x { border:0; background:transparent; font-size:15px; }
+#follow .fh-ends { margin:6px 0; }
+#follow .fh-status { border-radius:8px; padding:8px 10px; margin:6px 0 4px; background:rgba(127,127,127,.12); }
+#follow .fh-status b { display:block; font-size:14px; margin-bottom:2px; }
+#follow .fh-status.ok { background:rgba(21,128,61,.14); } #follow .fh-status.ok b { color:var(--ok); }
+#follow .fh-status.post { background:rgba(124,58,237,.14); } #follow .fh-status.post b { color:#a78bfa; }
+#follow .fh-status.bad { background:rgba(185,28,28,.12); } #follow .fh-status.bad b { color:var(--bad); }
+#follow .fh-status.warn b { color:var(--warn); } #follow .fh-status.air b { color:var(--acc); }
+#follow #journey h3:first-child { display:none; }
+#mapwrap.following #card { right:380px; } #mapwrap.following #legend { display:none; }

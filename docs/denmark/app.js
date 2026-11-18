@@ -481,12 +481,24 @@
     for (const ev of scenario ? scenario.events : []) {
       const b = Math.floor(ev.t_s / 10);
       if (b < first || b > curB + 60) continue;
-      ctx.fillStyle = ev.t_s * 1000 <= lastT ? "#ef4444" : "#ef444466";
+      const fix = ev.up === true || ["revive", "power_restore", "internet_up", "degrade_clear"].includes(ev.type);
+      const col = fix ? "#22c55e" : "#ef4444";
+      ctx.fillStyle = ev.t_s * 1000 <= lastT ? col : col + "66";
       ctx.fillRect((b - first) * bw, 0, 2, hgt);
+    }
+    // The followed message: sent (blue) and delivered (green), as dots on top.
+    if (followMsg >= 0 && replay.f && replay.f.info) {
+      const info = replay.f.info;
+      for (const [t, col] of [[info.sent_ms, "#60a5fa"], [info.delivered_ms, "#22c55e"]]) {
+        if (t === null || t === undefined) continue;
+        const b = Math.floor(t / 10000);
+        if (b < first || b > curB) continue;
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc((b - first) * bw + 1, 5, 4, 0, 7); ctx.fill();
+      }
     }
     ctx.fillStyle = isDark() ? "#e5e7eb" : "#111827";
     ctx.fillRect((curB - first) * bw + bw, 0, 1, hgt);
-    cv.title = `Transmissions per 10 s (max ${max}); red marks = timeline events. ${PTYPES.map(p => p).join(", ")}`;
+    cv.title = `Transmissions per 10 s (max ${max}); red = damage, green = repair; blue/green dots = the followed message sent/delivered. ${PTYPES.map(p => p).join(", ")}`;
   }
 
   function renderHud() {
@@ -869,8 +881,47 @@
   function clearJourney() {
     followMsg = -1; journeyKey = ""; replay.playing = false; replay.t = null;
     overlay = null; hiLayer.clearLayers(); restyle();
-    $("journey").innerHTML = ""; $("fd-msg").checked = false; renderFeed(true);
+    $("journey").innerHTML = ""; $("follow").classList.add("hidden"); $("mapwrap").classList.remove("following"); $("fd-msg").checked = false; renderFeed(true);
   }
+  // Where the followed message is now, in plain words, from its last event.
+  function followStatus(f) {
+    const info = f.info;
+    if (info.acked_ms !== null) return { cls: "ok", title: "Delivered and acknowledged", text: `Delivered after ${((info.delivered_ms - info.sent_ms) / 1000).toFixed(1)} s; the sender has the acknowledgement.` };
+    if (info.delivered_ms !== null) return { cls: "ok", title: "Delivered", text: `Arrived after ${((info.delivered_ms - info.sent_ms) / 1000).toFixed(1)} s; waiting for the acknowledgement.` };
+    // Relays cancelling their flood copy (neighbours covered it) is no news.
+    const evs = f.events.filter(e => !["rx", "dht", "lookup_answer"].includes(e.ev) && !(e.ev === "cancel" && e.n !== info.from));
+    const e = evs[evs.length - 1];
+    const at = e && e.n !== undefined ? ` at ${nameH(e.n)}` : "";
+    const S = {
+      mail_send: ["post", "Waiting in a post office", `Kept${at} for the receiver; sent on when the receiver is heard again.`],
+      mail_op: ["post", "Waiting in a post office", `Kept${at}; the post office is syncing it.`],
+      carry: ["post", "Carried", `A node keeps a copy${at} and passes it on when it meets a way forward.`],
+      held: ["warn", "Held", `The receiver has it but does not know the sender yet; it waits for an announce.`],
+      bb: ["air", "On the backbone", `Between hosts over the internet or a trunk${at}.`],
+      tx: ["air", "On air", `A radio hop is being sent${at}.`],
+      send: ["wait", "Searching for a route", `Sent${at}; the route search is running.`],
+      lookup: ["wait", "Looking up where the receiver is", `A host asks the backbone${at}.`],
+      defer: ["wait", "Queued", `Waiting for a free channel or duty cycle${at}.`],
+      retry: ["wait", "Trying again", `No acknowledgement from the next hop yet${at}.`],
+      drop: ["bad", "A copy was lost", `Dropped${at}${e && e.why ? ": " + esc(e.why) : ""}. Other copies or a post office may still carry it.`],
+      cancel: ["bad", "Given up", `The sender stopped trying${e && e.why ? ": " + esc(e.why) : ""}.`],
+    };
+    const v = e && S[e.ev];
+    if (!v) return { cls: "wait", title: "On its way", text: "No news from it yet." };
+    const idle = (now() - (e.end || e.t)) / 1000;
+    if (idle > 20 && v[0] !== "post" && v[0] !== "warn") return { cls: "bad", title: "No progress", text: `Nothing has happened to it for ${fmtTime(idle)}. Last: ${v[1].toLowerCase()}${at}. No route, no post office and no carrier has it.` };
+    return { cls: v[0], title: v[1], text: v[2] };
+  }
+  function renderFollowHead(f) {
+    const st = followStatus(f), info = f.info;
+    $("follow-head").innerHTML = `<div class="fh-top"><div><div class="fh-kicker">Following</div><b>Message #${followMsg}</b></div><button class="x" id="fh-close" aria-label="Stop following">✕</button></div>
+      <div class="fh-ends">${nameH(info.from)} <span class="mute">→</span> ${nameH(info.to)}</div>
+      <div class="fh-status ${st.cls}"><b>${st.title}</b><div>${st.text}</div></div>`;
+    $("fh-close").onclick = clearJourney;
+    $("follow").classList.remove("hidden");
+    $("mapwrap").classList.add("following");
+  }
+  setInterval(() => { if (followMsg >= 0 && replay.f && !$("follow").classList.contains("hidden")) renderFollowHead(replay.f); }, 1000);
   function followMessage(m) {
     followMsg = m; journeyKey = "";
     replay.t = null;
@@ -900,6 +951,7 @@
     replay.t1 = Math.max(info.sent_ms + 1, ...f.events.map(e => e.end || e.t));
     const story = narrate(f);
     const done = info.acked_ms !== null;
+    renderFollowHead(f);
     $("journey").innerHTML = `<h3>Message #${followMsg}: ${nameH(info.from)} → ${nameH(info.to)}</h3>
       <ol class="story">${story.steps.map(s => `<li class="${s.cls || ""}">${s.html}</li>`).join("")}</ol>
       ${story.diag.map(d => `<div class="diag ${d.good ? "good" : ""}">${d.html}</div>`).join("")}

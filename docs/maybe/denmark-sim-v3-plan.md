@@ -156,9 +156,18 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
   backbone up an office does not retry (node.rs ~3028, "presence and syncs
   deliver more cheaply"), so delivery waits for the recipient's announce
   (firmware default every 12 h) or MailSync, and in the sim the recipient
-  never syncs. mail_refetch and hourly announces did not help. Next: check
-  the handheld's MailSync timer in the sim vs firmware (6 h), and whether
-  Roenne host should fetch for radio-heard nodes when its backbone returns.
+  never syncs. mail_refetch and hourly announces did not help.
+  **Root cause found (2026-11-19):** the recipient does sync (650 syncs) to
+  its home office, Roenne host, which then asks the replicas in Copenhagen
+  for the mail (OP_FETCH). Roenne host has no internet, only the LoRa trunk,
+  and host-to-host mail ops go only over TCP (sim `send_deposit`, host:
+  replicas via DHT contacts), so the fetch waits forever ("mail_deferred").
+  A host reachable only over a trunk can never get mail held elsewhere.
+  **Proposal (needs the user's yes, touches maarse-host):** when two hosts
+  have no TCP between them but a route over radio/trunk exists, send the
+  host-to-host Deposit ops (STORE/FETCH/DELIVERED) as routed Deposit
+  packets over the radio, as consolidation already does
+  (`send_deposit_lora`), and do the same in the sim.
 - The Great Belt does not cut the radio: repeaters on Funen and Zealand hear
   each other across 18 km, so messages cross with every link down.
 

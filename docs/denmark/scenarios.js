@@ -310,7 +310,8 @@
         return [
           [m2 && m2[4] !== null && m2[4] < 600000, "a message inside Bornholm is delivered while the island is cut off"],
           // Known gap 2026-11-19: the mail is stored at the Copenhagen office
-          // and 2 replicas but not delivered after the repair (see the plan).
+          // and 2 replicas; Roenne host (trunk only, no internet) asks for it,
+          // but host-to-host mail goes only over TCP (see the plan).
           [m1 && m1[4] !== null && m1[4] >= 900000, "the message from Copenhagen arrives after the repair at 15 min", "known"],
         ];
       },

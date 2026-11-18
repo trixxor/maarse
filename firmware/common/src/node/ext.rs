@@ -162,8 +162,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 self.router.note_bridge(from.path_id(), hops, now_ms());
             }
         }
-        if a.position.is_some() || a.telemetry.is_some() || a.name.is_some() {
-            emit(&Event::NodeInfo { addr: from, hops, position: a.position, telemetry: a.telemetry, name: a.name });
+        let pages = a.caps.is_some_and(|c| c & maarse_core::appdata::CAP_PAGES != 0);
+        if a.position.is_some() || a.telemetry.is_some() || a.name.is_some() || pages {
+            emit(&Event::NodeInfo { addr: from, hops, position: a.position, telemetry: a.telemetry, name: a.name, caps: a.caps });
         }
     }
 

@@ -707,6 +707,7 @@ function parseAppData(b) {
     if (t === 0x04 && n >= 10) r.telemetry = { mv: d[0] | d[1] << 8, usb: !!(d[2] & 1), energy: d[3], uptime: rd32(d, 4),
       temp: d[2] & 2 ? s16(d, 8) / 10 : null };
     if (t === 0x05 && n > 0) r.name = dec.decode(d).replace(/[\x00-\x1f\x7f]/g, "").trim();
+    if (t === 0x07 && n >= 1) r.caps = d[0];
     i += 2 + n;
   }
   return r;
@@ -1392,6 +1393,12 @@ function onEvent(ev) {
       const old = state.nodeInfo.get(ev.addr) || {};
       const nameChanged = old.name !== ev.name;
       state.nodeInfo.set(ev.addr, { ...old, ...ev, name: ev.name, at: new Date() });
+      // Nodes that share pages say so in every announce (CAP_PAGES 0x20).
+      if (ev.caps !== undefined) {
+        const pages = !!(ev.caps & 0x20);
+        state.nodeInfo.get(ev.addr).pages = pages;
+        if (old.pages !== pages && state.view === "pages") renderChat();
+      }
       rememberHeard(ev.addr, ev.name);
       if (nameChanged) { renderSide(); renderChat(); }
       else if (state.view === "diag") renderChat();
@@ -3273,6 +3280,18 @@ function renderPages(box) {
   box.append(st);
   if (!cur) {
     const known = [...new Set([...state.contacts.keys(), ...state.nodeInfo.keys()])].filter(a => /^[0-9a-f]{32}$/.test(a));
+    // Nodes whose announces say they share pages come first, in their own list.
+    const withPages = known.filter(a => state.nodeInfo.get(a)?.pages);
+    if (withPages.length) {
+      const pw = el("div", {}); pw.style.maxWidth = "640px"; pw.style.marginBottom = "14px";
+      pw.append(el("b", {}, "Nodes sharing pages"), el("div", { className: "muted" }, "Heard in their announces."));
+      for (const a of withPages) {
+        const b = el("button", { textContent: label(a), className: "primary" }); b.style.margin = "6px 6px 0 0";
+        b.onclick = () => openPage("maarse://" + a + "/");
+        pw.append(b);
+      }
+      box.append(pw);
+    }
     const w = el("div", { className: "warn" }); w.style.maxWidth = "640px";
     w.append(el("b", {}, "How it works"), el("div", { className: "muted" },
       "A maarse-host shares pages from the folder pages/ in its data folder (index.mu is the front page). Write the node's address above, or choose a known node. " +

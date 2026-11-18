@@ -610,6 +610,7 @@ object Node : LinkListener {
             is Ev.Heard -> heard(ev.addr) { it.copy(hops = ev.hops) }
             is Ev.Route -> heard(ev.dest) { it.copy(hops = ev.hops) }
             is Ev.NodeInfo -> heard(ev.addr) {
+                ev.caps?.let { Pages.noteCaps(ev.addr, it) }
                 it.copy(hops = ev.hops, name = ev.name ?: it.name, mv = ev.mv ?: it.mv, usb = ev.usb ?: it.usb, lat = ev.lat ?: it.lat, lon = ev.lon ?: it.lon)
             }
             is Ev.Sent -> pending.remove(ev.req)?.let { setStatus(it, "sent", ev.msgId) }

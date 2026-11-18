@@ -60,7 +60,9 @@ impl Node {
         let mut v = appdata::build(self.my_postbox.as_ref(), true, s.position(), tel.as_ref(), name);
         let flags = if self.router.hears_repeater(self.now_ms()) { appdata::ROLE_HEARS_REPEATER } else { 0 };
         appdata::push_role(&mut v, self.router.role.as_u8(), flags);
-        appdata::push_caps(&mut v, appdata::MY_CAPS | appdata::CAP_SEQ | appdata::CAP_CALL_DG | appdata::CAP_FILE_PULL);
+        // Pages: announced on every announce while pages/index.mu exists.
+        let pages = if super::pages::find_page(&self.data_dir.join("pages"), "index").is_some() { appdata::CAP_PAGES } else { 0 };
+        appdata::push_caps(&mut v, appdata::MY_CAPS | appdata::CAP_SEQ | appdata::CAP_CALL_DG | appdata::CAP_FILE_PULL | pages);
         self.person_app_data(&mut v);
         v.to_vec()
     }
@@ -146,7 +148,8 @@ impl Node {
                 self.ext.names.remove(&from);
             }
         }
-        if a.position.is_none() && a.telemetry.is_none() && a.name.is_none() {
+        let pages = a.caps.is_some_and(|c| c & appdata::CAP_PAGES != 0);
+        if a.position.is_none() && a.telemetry.is_none() && a.name.is_none() && !pages {
             return;
         }
         self.broadcast(&Event::NodeInfo {
@@ -155,6 +158,7 @@ impl Node {
             position: a.position,
             telemetry: a.telemetry,
             name: a.name.clone(),
+            caps: a.caps,
         });
         if let Some(m) = self.ext.mqtt.as_mut() {
             if let Some(t) = &a.telemetry {
@@ -183,7 +187,7 @@ impl Node {
     /// Known display names for a client that has just connected.
     pub(super) fn send_known_names(&self, id: ClientId) {
         for (addr, (n, hops)) in &self.ext.names {
-            let ev = Event::NodeInfo { addr: *addr, hops: *hops, position: None, telemetry: None, name: Some(n.clone()) };
+            let ev = Event::NodeInfo { addr: *addr, hops: *hops, position: None, telemetry: None, name: Some(n.clone()), caps: None };
             self.send_client(id, &ev);
         }
     }

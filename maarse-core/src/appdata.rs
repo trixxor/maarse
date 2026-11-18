@@ -67,6 +67,9 @@ pub const CAP_CALL_DG: u8 = 0x08;
 /// recipient asks for batches of chunks, which come as datagrams without
 /// end-to-end acknowledgement; maarse-host only.
 pub const CAP_FILE_PULL: u8 = 0x10;
+/// Shares maarse:// pages (has `pages/index.mu`); maarse-host only. Rides
+/// on every announce, so nodes with pages are known without extra packets.
+pub const CAP_PAGES: u8 = 0x20;
 /// Leads a datagram that carries sealed call audio instead of IP-tunnel
 /// data (tunnel datagrams start with a random 8-byte session id).
 pub const CALL_DATAGRAM: [u8; 8] = *b"mrsCALL1";

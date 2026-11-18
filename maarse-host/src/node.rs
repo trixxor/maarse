@@ -1948,11 +1948,12 @@ impl Node {
                     continue;
                 }
             }
-            // Over LoRa one file at a time to each recipient, the oldest
-            // first: two files in parallel put two chunks on the air and the
-            // radio talks over the acks again. The rest follow (housekeeping
-            // pumps every file).
-            if !tcp {
+            // One file at a time to each recipient, the oldest first, over
+            // any route. Over LoRa two files in parallel put two chunks on the
+            // air and the radio talks over the acks; over TCP several big
+            // files at once overfill the router's send queue and stall. The
+            // rest follow (housekeeping pumps every file).
+            {
                 let mine = (f.created, file_id);
                 let dest = f.dest;
                 if self.out_files.iter().any(|(id, o)| *id != file_id && o.dest == dest && (o.created, *id) < mine) {

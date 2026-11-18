@@ -68,6 +68,14 @@ fun PagesPage() {
         }
         if (Pages.status.isNotEmpty()) Text(Pages.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (cur == null) {
+            if (Pages.sharing.isNotEmpty()) {
+                Text("Nodes sharing pages", fontWeight = FontWeight.SemiBold)
+                Text("Heard in their announces.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val nodes = Node.nodes.value
+                Pages.sharing.forEach { a ->
+                    Button(onClick = { Pages.open("maarse://$a/") }) { Text(nodes[a]?.name?.let { "~$it" } ?: a.take(8)) }
+                }
+            }
             Text("A maarse-host shares pages from the folder pages/ in its data folder (index.mu is the front page). " +
                 "Write a node's address above. Pages are only text, headings, lists, links and pictures – never HTML.",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

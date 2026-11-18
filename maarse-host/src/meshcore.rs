@@ -1855,6 +1855,7 @@ mod tests {
             position: None,
             telemetry: None,
             name: n.and_then(|n| maarse_core::appdata::clean_name(n.as_bytes())),
+            caps: None,
         };
         b.on_node(named(Some("Dennis")), 100);
         assert_eq!(sent_texts(&b.on_node(ev("hi!", addr(0x1a)), 110)), vec!["[Må Dennis] hi!"]);

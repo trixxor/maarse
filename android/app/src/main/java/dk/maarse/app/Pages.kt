@@ -47,6 +47,13 @@ object Pages {
         return Url(m.groupValues[1].lowercase(), m.groupValues[2].trim('/').ifEmpty { "index" })
     }
 
+    /** Nodes whose announces say they share pages (CAP_PAGES 0x20). */
+    val sharing = LinkedHashSet<String>()
+    fun noteCaps(addr: String, caps: Int) {
+        val changed = if (caps and 0x20 != 0) sharing.add(addr) else sharing.remove(addr)
+        if (changed) bump()
+    }
+
     fun markup(u: Url): String? = cache[u.key]
     fun picture(key: String): Pic? = pics[key]
     fun overLora(addr: String) = lora[addr] != false

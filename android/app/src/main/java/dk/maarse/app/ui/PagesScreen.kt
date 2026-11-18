@@ -111,11 +111,14 @@ fun PagesPage(onExit: () -> Unit = {}) {
                         style = MaterialTheme.typography.bodyLarge)
                     if (!Pages.loading) OutlinedButton(onClick = { Pages.reload() }) { Text("Try again") }
                 }
-                else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 12.dp),
+                else -> {
+                  val scroll = rememberScrollState()
+                  Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (Pages.status.isNotEmpty()) Text(Pages.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    Markup(markup, cur, v)
+                    MuPage(markup, cur, v, scroll)
                     androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
+                  }
                 }
             }
         }
@@ -155,6 +158,10 @@ private fun BrowserBar(cur: Pages.Url?, onExit: () -> Unit, @Suppress("UNUSED_PA
             .clickable { editing = true }.padding(horizontal = 12.dp, vertical = if (editing) 0.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (cur != null && !editing) RouteBadge(Pages.overLora(cur.addr))
+            // A locked page: how many may read it.
+            val lk = cur?.let { Pages.markup(it) }?.let { muSettings(it).lock } ?: 0
+            if (cur != null && !editing && lk > 0) Text("🔒 $lk", style = MaterialTheme.typography.labelMedium, color = Color(0xFFFFCF6B),
+                modifier = Modifier.background(Color(0xFF3A2A10), RoundedCornerShape(9.dp)).padding(horizontal = 7.dp, vertical = 2.dp))
             if (editing) {
                 androidx.compose.foundation.text.BasicTextField(
                     input, { input = it }, Modifier.weight(1f).padding(vertical = 12.dp).focusRequester(focus), singleLine = true,
@@ -279,7 +286,7 @@ private fun StartPage(@Suppress("UNUSED_PARAMETER") version: Int) {
 private val PIC_LINE = Regex("""^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"(grey|dots|colour|color)(!?)")?\)\s*$""")
 
 /** One block of a page, parsed from the markup. */
-private sealed class Block {
+internal sealed class Block {
     data class Para(val text: String, val centre: Boolean = false) : Block()
     data class Heading(val level: Int, val text: String, val centre: Boolean) : Block()
     data class Item(val text: String) : Block()
@@ -317,7 +324,7 @@ private val PAGE_COLOURS = mapOf(
 private fun pageColour(name: String?): PageColour? = PAGE_COLOURS[if (name == "gray") "grey" else name]
 
 /** Splits pipe-table lines into a header (when the second row is `|---|:--:|`), alignments and rows. */
-private fun parseTable(lines: List<String>): Block.Table {
+internal fun parseTable(lines: List<String>): Block.Table {
     fun cells(l: String): List<String> {
         var s = l.trim().removePrefix("|")
         if (s.endsWith("|") && !s.endsWith("\\|")) s = s.dropLast(1)
@@ -431,7 +438,7 @@ private fun pageDark() = MaterialTheme.colorScheme.surface.luminance() < 0.5f
  *  else they share the width like a browser does (text wraps), and when even the
  *  longest words do not fit, the table scrolls sideways on its own, never the page. */
 @Composable
-private fun PageTable(t: Block.Table, base: Pages.Url) {
+internal fun PageTable(t: Block.Table, base: Pages.Url) {
     val line = MaterialTheme.colorScheme.outlineVariant
     val headBg = MaterialTheme.colorScheme.surfaceContainer
     val n = t.aligns.size
@@ -478,7 +485,7 @@ private fun PageTable(t: Block.Table, base: Pages.Url) {
 }
 
 @Composable
-private fun CodeBlock(t: String) {
+internal fun CodeBlock(t: String) {
     // ASCII art and tables keep their lines: the font shrinks so the longest
     // line fits the screen (down to a readable minimum), then it scrolls.
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceContainer)) {
@@ -557,7 +564,7 @@ private val PIC_STEPS = listOf(PicStep("_c4", "Colour 4 KB", "about 35 s"), PicS
  *  `version` is passed so a picture redraws when Pages changes. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun Picture(caption: String, src: String, style: String, base: Pages.Url, @Suppress("UNUSED_PARAMETER") version: Int, forced: Boolean = false) {
+internal fun Picture(caption: String, src: String, style: String, base: Pages.Url, @Suppress("UNUSED_PARAMETER") version: Int, forced: Boolean = false) {
     // Read here too: a child given an unchanged-looking version may be skipped.
     Pages.version.collectAsState().value
     val st = when (style) { "color", "colour" -> "colour"; "dots" -> "dots"; else -> "grey" }

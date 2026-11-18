@@ -92,6 +92,10 @@ object Cmd {
     fun getFileLimit(dest: String) = frame(0x14) { addr(dest) }
     /** Asks a node for a maarse:// page or a picture on one (0x26). */
     fun requestPage(req: Int, dest: String, path: String) = frame(0x26) { u16(req); addr(dest); text(path) }
+    /** A note for a page's notice board (`@board`): at most 100 bytes. */
+    fun postBoard(req: Int, dest: String, path: String, note: String) = frame(0x2e) {
+        val p = path.toByteArray(); u16(req); addr(dest); u8(p.size); bytes(p); text(note)
+    }
     /** Call signalling and audio (0x27): content belongs to the clients, see Calls.kt. */
     fun sendCall(dest: String, data: ByteArray) = frame(0x27) { addr(dest); bytes(data) }
     // Linked devices (maarse-host only).

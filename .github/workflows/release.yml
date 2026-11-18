@@ -108,6 +108,7 @@ jobs:
           cp maarse-client/flash.html site/index.html
           cp maarse-client/icon.svg site/
           cp docs/site/*.html site/   # docs pages, e.g. pages.html (how maarse:// pages work)
+          cp -r docs/simulator site/simulator   # the network simulator, in the browser (no server needed)
           cp fw/* site/firmware/
           cat > site/firmware/index.json <<EOF
           {"version":"$V","commit":"$GITHUB_SHA","built":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}

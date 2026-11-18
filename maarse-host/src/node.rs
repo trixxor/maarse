@@ -4981,6 +4981,27 @@ mod radio_file_e2e_tests {
         }
     }
 
+    /// Over LoRa a node gets five pages in half a minute; the sixth request
+    /// gets one "Slow down" page and the seventh nothing.
+    #[test]
+    fn page_requests_over_lora_are_limited_with_one_notice() {
+        let (mut a, mut b) = radio_pair("pageburst");
+        let pages = b.n.data_dir.join("pages");
+        fs::create_dir_all(&pages).unwrap();
+        for i in 0..7 {
+            fs::write(pages.join(format!("p{i}.mu")), format!("# Page {i}
+")).unwrap();
+        }
+        fs::write(pages.join("index.mu"), "# Front
+").unwrap();
+        for i in 0..7u16 {
+            a.n.command(1, Command::RequestPage { req: 20 + i, dest: b.n.addr, path: text(format!("p{i}").as_bytes()) });
+        }
+        let (ea, _, _, _) = run_radio(&mut a, &mut b, 240, &mut |_, _| false);
+        let done = ea.iter().filter(|e| matches!(e, Event::FileDone { outgoing: false, ok: true, .. })).count();
+        assert_eq!(done, 6, "five pages and one slow-down notice");
+    }
+
     /// A lost session shows one notice in the chat, however many messages
     /// arrive that cannot be read.
     #[test]

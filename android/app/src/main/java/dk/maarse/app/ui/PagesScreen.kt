@@ -49,6 +49,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
@@ -119,45 +120,68 @@ private fun BrowserBar(cur: Pages.Url?, onExit: () -> Unit, @Suppress("UNUSED_PA
     // Read here too: a child given an unchanged-looking version may be skipped.
     Pages.version.collectAsState().value
     var editing by remember(cur) { mutableStateOf(cur == null) }
-    var input by remember(cur) { mutableStateOf(cur?.toString() ?: "") }
+    val full = cur?.toString() ?: ""
+    var input by remember(cur) { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(full, androidx.compose.ui.text.TextRange(0, full.length))) }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     val title = cur?.let { u -> Pages.markup(u)?.let { Pages.title(it) } }?.ifEmpty { null }
+    fun go() { if (input.text.isNotBlank()) { Pages.open(input.text); editing = false } }
     Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(horizontal = 2.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        androidx.compose.material3.IconButton(onClick = { if (Pages.history.isNotEmpty()) Pages.back() else onExit() }) {
-            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, "Back")
-        }
-        androidx.compose.material3.IconButton(onClick = { Pages.forward() }, enabled = Pages.forwardStack.isNotEmpty()) {
-            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward, "Forward")
+        if (editing && cur != null) {
+            // Typing an address: the field takes the whole bar, like a browser.
+            androidx.compose.material3.IconButton(onClick = { editing = false }) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Close, "Cancel")
+            }
+        } else {
+            androidx.compose.material3.IconButton(onClick = { if (Pages.history.isNotEmpty()) Pages.back() else onExit() }) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, "Back")
+            }
+            if (!editing) androidx.compose.material3.IconButton(onClick = { Pages.forward() }, enabled = Pages.forwardStack.isNotEmpty()) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward, "Forward")
+            }
         }
         // The address pill: the page's title and node when shown; tap to type.
         Row(Modifier.weight(1f).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surface)
             .clickable { editing = true }.padding(horizontal = 12.dp, vertical = if (editing) 0.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (cur != null) RouteBadge(Pages.overLora(cur.addr))
+            if (cur != null && !editing) RouteBadge(Pages.overLora(cur.addr))
             if (editing) {
                 androidx.compose.foundation.text.BasicTextField(
-                    input, { input = it }, Modifier.weight(1f).padding(vertical = 10.dp), singleLine = true,
+                    input, { input = it }, Modifier.weight(1f).padding(vertical = 12.dp).focusRequester(focus), singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface, fontFamily = FontFamily.Monospace),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { Pages.open(input); editing = false }),
-                    decorationBox = { inner -> Box { if (input.isEmpty()) Text("maarse://address/path", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium); inner() } },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go, autoCorrectEnabled = false,
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri),
+                    keyboardActions = KeyboardActions(onGo = { go() }),
+                    decorationBox = { inner -> Box { if (input.text.isEmpty()) Text("maarse://address/path", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium); inner() } },
                 )
+                if (input.text.isNotEmpty()) Text("✕", Modifier.clip(RoundedCornerShape(12.dp)).clickable { input = androidx.compose.ui.text.input.TextFieldValue("") }.padding(6.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Focus the field (keyboard up, whole address selected) when typing starts.
+                androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
             } else Column(Modifier.weight(1f)) {
-                Text(title ?: cur?.toString() ?: "", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                Text(title ?: full, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                 if (cur != null) Text(Node.label(cur.addr) + if (cur.path == "index") "" else " / ${cur.path}", maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (Pages.loading) androidx.compose.material3.IconButton(onClick = { Pages.home() }) {
-            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Close, "Stop")
-        } else androidx.compose.material3.IconButton(onClick = { if (editing && input.isNotBlank()) { Pages.open(input); editing = false } else Pages.reload() }) {
-            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Refresh, "Reload")
+        when {
+            editing -> androidx.compose.material3.IconButton(onClick = { go() }) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward, "Go")
+            }
+            Pages.loading -> androidx.compose.material3.IconButton(onClick = { Pages.home() }) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Close, "Stop")
+            }
+            else -> androidx.compose.material3.IconButton(onClick = { Pages.reload() }) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Refresh, "Reload")
+            }
         }
-        if (cur != null) FavStar('p', cur.addr)
-        androidx.compose.material3.IconButton(onClick = { Pages.home() }) {
-            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Home, "Start page")
+        if (!editing) {
+            if (cur != null) FavStar('p', cur.addr)
+            androidx.compose.material3.IconButton(onClick = { Pages.home() }) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Home, "Start page")
+            }
         }
     }
 }

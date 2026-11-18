@@ -195,6 +195,8 @@
   .bicon { background: none; border: 0; min-width: 38px; height: 38px; border-radius: 50%; font-size: 18px; color: var(--ink); padding: 0; cursor: pointer; }
   .bicon:hover:not(:disabled) { background: var(--accent-soft); }
   .bicon:disabled { opacity: .35; cursor: default; }
+  /* Typing an address: the field takes the bar, like a browser. */
+  .bbar:focus-within .bside, .bbar:focus-within .broute { display: none; }
   .bpill { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; margin: 0 4px; border-radius: 20px; background: var(--bg); border: 1px solid var(--line); }
   .bpill input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-family: var(--mono); font-size: 13px; color: var(--ink); padding: 0; }
   .bshown { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.15; cursor: text; }
@@ -3400,14 +3402,16 @@ function renderPages(box) {
   // The toolbar.
   const bar = el("div", { className: "bbar" });
   const iconBtn = (txt, tip, fn, off) => { const b = el("button", { className: "bicon", textContent: txt, title: tip, disabled: !!off }); b.onclick = fn; return b; };
-  bar.append(iconBtn("←", "Back", pageBack, !pages.history.length), iconBtn("→", "Forward", pageForward, !pages.forward.length));
+  const fwd = iconBtn("→", "Forward", pageForward, !pages.forward.length); fwd.classList.add("bside");
+  bar.append(iconBtn("←", "Back", pageBack, !pages.history.length), fwd);
   const pill = el("div", { className: "bpill" });
   if (cur) {
     const lora = pages.lora.get(cur.addr) !== false;
     pill.append(el("span", { className: "broute " + (lora ? "lora" : "net"), textContent: lora ? "LoRa" : "Net", title: lora ? "Over LoRa: pictures wait for a tap" : "Over the internet" }));
   }
   const input = el("input", { value: pages.url, placeholder: "maarse://address/path", spellcheck: false });
-  input.onkeydown = (e) => { if (e.key === "Enter") openPage(input.value); };
+  input.onkeydown = (e) => { if (e.key === "Enter") openPage(input.value); if (e.key === "Escape") renderChat(); };
+  input.inputMode = "url";
   const shown = el("div", { className: "bshown" });
   if (cur && title) {
     shown.append(el("b", {}, title), el("small", {}, label(cur.addr) + (cur.path === "index" ? "" : " / " + cur.path)));
@@ -3416,8 +3420,9 @@ function renderPages(box) {
   } else pill.append(input);
   bar.append(pill);
   bar.append(pages.loading ? iconBtn("✕", "Stop", pageHome) : iconBtn("↻", "Reload", () => { const v = input.isConnected && input.value.trim() ? input.value : pages.url; if (v) openPage(v, false); }));
-  if (cur) { const f = favButton("p", cur.addr); f.classList.add("bicon"); bar.append(f); }
-  bar.append(iconBtn("⌂", "Start page", pageHome));
+  if (cur) { const f = favButton("p", cur.addr); f.classList.add("bicon", "bside"); bar.append(f); }
+  const home = iconBtn("⌂", "Start page", pageHome); home.classList.add("bside");
+  bar.append(home);
   shell.append(bar, el("div", { className: "bload" + (pages.loading ? " on" : "") }));
 
   const body = el("div", { className: "bbody" });

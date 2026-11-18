@@ -34,10 +34,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// At most this many pages to the same node within [`WINDOW`], so nobody can
-/// make us fill the air with pages, while one can still click a couple of links
-/// in quick succession.
+/// At most this many pages and pictures to the same node within [`WINDOW`]
+/// over LoRa, so nobody can make us fill the air, while one can still click a
+/// couple of links in quick succession.
 const BURST: usize = 5;
+/// The same over the internet, where only a runaway client is stopped: a page
+/// with a few pictures is several requests at once.
+const BURST_TCP: usize = 60;
 const WINDOW: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
@@ -285,9 +288,25 @@ impl Node {
             v.retain(|t| now.duration_since(*t) < WINDOW);
             !v.is_empty()
         });
-        let times = served.entry(from).or_default();
-        if times.len() >= BURST {
+        let lora = self.file_limit(&from).via_lora;
+        let burst = if lora { BURST } else { BURST_TCP };
+        let times = self.pages.served.entry(from).or_default();
+        if times.len() >= burst {
+            // Say so once, so the reader is not left waiting; then stay quiet.
+            let first = times.len() == burst;
+            if first {
+                times.push(now);
+            }
             self.log(format!("page request from {} rejected (too many)", short(&from)));
+            if first {
+                let msg = format!("# Slow down
+
+Too many pages at once: at most {burst} in {} seconds. Wait a moment and try again.
+
+[Front page](/)
+", WINDOW.as_secs());
+                let _ = self.send_file_bytes(from, compress(msg.as_bytes()), Small::from_slice(content::PAGE_MIME).unwrap_or_default(), path.clone());
+            }
             return;
         }
         times.push(now);

@@ -523,8 +523,11 @@ object Node : LinkListener {
     }
 
     fun markRead(conv: String) {
-        if ((unread.value[conv] ?: 0) == 0) return
-        unread.update { it - conv }
+        if ((unread.value[conv] ?: 0) > 0) unread.update { it - conv }
+        // Always tell the host, also when nothing is unread here: messages
+        // that arrive while the chat is open never count as unread in the
+        // app, but the host counts them until it is told, and its count
+        // came back as "61 unread" the next time the app opened.
         if (hostHistory) send(Cmd.histMarkRead(conv.substringAfter(":"), 0))
         Notify.cancel(app, conv)
     }

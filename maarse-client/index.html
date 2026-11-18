@@ -1516,6 +1516,10 @@ function scheduleWsRetry() {
 }
 
 async function connect(kind, quiet = false) {
+  // A new connection: history is on only if this host says so (historyInfo).
+  // (try: on the very first connect `hist` may not be declared yet; it
+  // starts switched off then anyway.)
+  try { hist.on = false; hist.loading = false; hist.busy = false; } catch {}
   try {
     if (kind === "ws") {
       transport = new WsTransport(onBytes, onClose); await transport.ready;
@@ -5208,7 +5212,11 @@ function histLoadOlder() {
 // Returns true if the event is handled here.
 function histOnEvent(ev) {
   switch (ev.type) {
-    case "info": hist.on = false; hist.loading = false; hist.busy = false; return false;
+    // Not on "info": the client asks for info again just after connecting,
+    // and the answer came after historyInfo, so history was switched off
+    // and read marks never reached the host (old unread counts came back
+    // on every reload). History is reset when a connection starts.
+    case "info": return false;
     case "historyInfo":
       hist.on = true; hist.loading = true; hist.busy = true; hist.items = []; hist.more.clear();
       state.convs.clear(); state.unread.clear(); state.byMsgId.clear();

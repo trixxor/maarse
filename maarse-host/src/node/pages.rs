@@ -34,7 +34,8 @@
 use super::{Node, err_ev, short};
 use crate::ClientId;
 use maarse_core::Address;
-use maarse_core::companion::{Command, Event, error_code};
+use maarse_core::companion::{Command, Event, MAX_TEXT, error_code, text};
+use rand_core::RngCore;
 use maarse_core::content::{self, Small};
 use std::collections::HashMap;
 use std::fs;
@@ -342,46 +343,69 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
         times.push(now);
 
         let path_s = String::from_utf8_lossy(path).into_owned();
-        if let Some((style, rel)) = picture_path(&path_s) {
-            let rel = rel.to_string();
-            self.serve_picture(from, path, style, rel);
-            return;
-        }
-        let mut data = compress(self.page_markup(&path_s).as_bytes());
         let lim = self.file_limit(&from);
-        // Never over 8 KB when the page may go over LoRa (also an unknown
-        // route, where it would otherwise wait in the mailbox).
-        let max = if lim.via_lora { (lim.max_bytes as usize).min(LORA_PICTURE_MAX) } else { lim.max_bytes as usize };
-        if data.len() > max {
-            let msg = format!("# Too large\n\nThe page `{path_s}` is {} KB compressed; the limit here is {} KB.\n",
-                data.len().div_ceil(1024), max / 1024);
-            data = compress(msg.as_bytes());
-        }
-        let mime = Small::from_slice(content::PAGE_MIME).unwrap_or_default();
-        self.log(format!("page '{path_s}' to {} ({} bytes)", short(&from), data.len()));
+        let (data, mime) = self.page_answer(&path_s, lim.via_lora, lim.max_bytes as usize);
+        let route = if lim.via_lora { "LoRa" } else { "internet" };
+        self.log(format!("page '{path_s}' ({route}) to {} ({} bytes)", short(&from), data.len()));
         if let Err((_, e)) = self.send_page_reply(from, data, mime, path.clone()) {
             self.log(format!("page to {}: {e}", short(&from)));
         }
     }
 
-    /// Sends a picture from `pages/` in the form the route allows; a short
-    /// page saying so when the picture is missing or cannot be made to fit.
-    fn serve_picture(&mut self, from: Address, path: &Small, style: PicStyle, rel: String) {
-        let lim = self.file_limit(&from);
-        let max = lim.max_bytes as usize;
-        let made = fs::read(self.pages_dir().join(&rel)).ok().and_then(|d| picture_for(&d, &rel, style, lim.via_lora, max));
-        let (data, mime) = match made {
-            Some((d, m)) if d.len() <= max => (d, Small::from_slice(m.as_bytes()).unwrap_or_default()),
-            _ => {
-                let msg = format!("# No picture\n\nThe picture `{rel}` is missing here or could not be made small enough.\n");
-                (compress(msg.as_bytes()), Small::from_slice(content::PAGE_MIME).unwrap_or_default())
-            }
-        };
-        let route = if lim.via_lora { "LoRa" } else { "internet" };
-        self.log(format!("picture '{rel}' ({style:?}, {route}) to {} ({} bytes)", short(&from), data.len()));
-        if let Err((_, e)) = self.send_page_reply(from, data, mime, path.clone()) {
-            self.log(format!("picture to {}: {e}", short(&from)));
+    /// The answer to a page request: the page (compressed markup) or a
+    /// picture in the form the route allows; a short page saying so when it
+    /// is missing or cannot be made to fit.
+    fn page_answer(&self, path_s: &str, via_lora: bool, max_bytes: usize) -> (Vec<u8>, Small) {
+        let page_mime = || Small::from_slice(content::PAGE_MIME).unwrap_or_default();
+        if let Some((style, rel)) = picture_path(path_s) {
+            let made = fs::read(self.pages_dir().join(rel)).ok().and_then(|d| picture_for(&d, rel, style, via_lora, max_bytes));
+            return match made {
+                Some((d, m)) if d.len() <= max_bytes => (d, Small::from_slice(m.as_bytes()).unwrap_or_default()),
+                _ => {
+                    let msg = format!("# No picture
+
+The picture `{rel}` is missing here or could not be made small enough.
+");
+                    (compress(msg.as_bytes()), page_mime())
+                }
+            };
         }
+        let data = compress(self.page_markup(path_s).as_bytes());
+        // Never over 8 KB when the page may go over LoRa (also an unknown
+        // route, where it would otherwise wait in the mailbox).
+        let max = if via_lora { max_bytes.min(LORA_PICTURE_MAX) } else { max_bytes };
+        if data.len() > max {
+            let msg = format!("# Too large
+
+The page `{path_s}` is {} KB compressed; the limit here is {} KB.
+",
+                data.len().div_ceil(1024), max / 1024);
+            return (compress(msg.as_bytes()), page_mime());
+        }
+        (data, page_mime())
+    }
+
+    /// Our own pages, asked for by one of our clients (the owner checking
+    /// a page before others read it): answered at once, as the internet
+    /// would see them, without going over any link.
+    fn own_page(&mut self, id: ClientId, req: u16, path: &Small) {
+        let path_s = String::from_utf8_lossy(path).into_owned();
+        let (data, mime) = self.page_answer(&path_s, false, self.max_file as usize);
+        self.send_client(id, &Event::Sent { req, msg_id: 0 });
+        let mut b = [0u8; 8];
+        rand_core::OsRng.fill_bytes(&mut b);
+        let file_id = u64::from_le_bytes(b);
+        self.send_client(id, &Event::FileIncoming {
+            file_id,
+            from: self.addr,
+            size: data.len() as u32,
+            mime: text(&mime),
+            name: text(path),
+        });
+        for (i, part) in data.chunks(MAX_TEXT).enumerate() {
+            self.send_client(id, &Event::FileChunk { file_id, offset: (i * MAX_TEXT) as u32, data: text(part) });
+        }
+        self.send_client(id, &Event::FileDone { file_id, ok: true, outgoing: false, text: text(path) });
     }
 
     /// `RequestPage` and `SendCall`. Returns the command if it does not
@@ -396,6 +420,12 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
             self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "Invalid path"));
             return None;
         };
+        if dest == self.addr {
+            if let Ok(p) = Small::from_slice(&plain[1..]) {
+                self.own_page(id, req, &p);
+            }
+            return None;
+        }
         self.log(format!("asking {} for the page '{}'", short(&dest), String::from_utf8_lossy(&plain[1..])));
         let now = Instant::now();
         self.pages.asked.retain(|_, t| now.duration_since(*t) < ASKED_KEEP);

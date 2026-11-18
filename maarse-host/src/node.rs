@@ -2516,6 +2516,11 @@ impl Node {
         // never have heard its announce), or any node heard when we have
         // no radio at all (a phone node) and have heard over the backbone:
         // nothing on the way can be LoRa.
+        // Ourselves (the owner looking at their own pages): no link at all,
+        // nothing on the way is LoRa.
+        if *dest == self.addr {
+            return PathKind::Tcp;
+        }
         let no_radio = !self.links.values().any(|(n, _)| !crate::extra_links::is_backbone(n));
         let heard = self.heard_via.get(dest);
         // Last heard on our own radio: not a TCP host, whatever the DHT
@@ -4294,6 +4299,22 @@ mod filebox_node_tests {
         // It lost the internet and is now heard on our radio only.
         heard(&mut n, phone, "serial COM3", 0);
         assert_eq!(n.path_kind(&phone), PathKind::Lora);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn own_page_is_answered_at_once() {
+        let (mut n, rx, dir) = node("own-page");
+        fs::create_dir_all(dir.join("pages")).unwrap();
+        fs::write(dir.join("pages").join("demo.mu"), "# Demo\n").unwrap();
+        n.command(1, Command::RequestPage { req: 7, dest: n.addr, path: text(b"demo") });
+        let ev = events(&rx);
+        let me = n.addr;
+        assert!(ev.iter().any(|e| matches!(e, Event::FileIncoming { from, name, .. } if *from == me && name.as_slice() == b"demo")), "no page from ourselves");
+        assert!(ev.iter().any(|e| matches!(e, Event::FileDone { ok: true, outgoing: false, .. })), "page not finished");
+        assert!(n.out_files.is_empty(), "nothing goes over a link");
+        // Our own pages are not "over LoRa" (pictures load at once).
+        assert!(!n.file_limit(&me).via_lora, "own node counted as LoRa");
         let _ = fs::remove_dir_all(dir);
     }
 

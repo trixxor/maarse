@@ -136,35 +136,79 @@
   .phone .pb .pics { grid-template-columns: repeat(2, 1fr); }
 
   /* ================= D: DASHBOARD ================= */
-  .db { background: #0e1726; color: #e6edf6; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; min-height: 100%; padding: 20px 24px 30px; }
-  .db .top { display: flex; justify-content: space-between; align-items: end; margin-bottom: 16px; }
-  .db .top h2 { margin: 0; font-size: 26px; letter-spacing: -.3px; } .db .top small { color: #8da2bd; }
-  .db .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-  .db .tile { background: #16233a; border: 1px solid #22324f; border-radius: 12px; padding: 12px 14px; }
-  .db .tile.w2 { grid-column: span 2; } .db .tile.alert { background: #4a1418; border-color: #8a2a30; }
-  .db .k { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: #8da2bd; }
-  .db .big { font-size: 38px; font-weight: 700; line-height: 1.1; margin: 4px 0 2px; }
-  .db .g { color: #5fe0a0; } .db .y { color: #ffd166; } .db .r { color: #ff6b6b; } .db .b { color: #6cb6ff; }
-  .db table { width: 100%; border-collapse: collapse; font-size: 13px; } .db td { padding: 4px 0; border-bottom: 1px solid #22324f; }
-  .db .bar { height: 6px; border-radius: 3px; background: #22324f; margin-top: 6px; overflow: hidden; } .db .bar i { display: block; height: 100%; }
-  .db .note { padding: 6px 0; border-bottom: 1px solid #22324f; font-size: 13px; } .db .note b { color: #6cb6ff; margin-right: 6px; }
-  .db .pic { height: 120px; border-radius: 8px; background: linear-gradient(160deg, #2b4a73, #0e1726); display: grid; place-items: center; color: #8da2bd; font-size: 12px; }
-  .phone .db { padding: 14px 12px; } .phone .db .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .phone .db .big { font-size: 28px; }
+  .db { background: radial-gradient(1200px 500px at 15% -10%, #1f3a66 0%, transparent 60%), radial-gradient(900px 500px at 110% 10%, #3a1f5c 0%, transparent 55%), linear-gradient(180deg, #0b1220, #0e1726); color: #e6edf6; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; min-height: 100%; padding: 0 0 30px; }
+  .db .tick { overflow: hidden; white-space: nowrap; background: #ff3b5c; color: #fff; font: 700 13px/28px "Segoe UI", sans-serif; letter-spacing: .04em; }
+  .db .tick span { display: inline-block; padding-left: 100%; animation: tick 22s linear infinite; }
+  @keyframes tick { to { transform: translateX(-100%); } }
+  .db .top { display: flex; justify-content: space-between; align-items: end; margin: 18px 24px 16px; }
+  .db .top h2 { margin: 0; font-size: 30px; letter-spacing: -.5px; background: linear-gradient(90deg, #fff, #8fd3ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .db .top small { color: #8da2bd; }
+  .db .clock { font: 700 34px/1 Consolas, monospace; color: #8fd3ff; text-shadow: 0 0 12px #3aa0ff99; }
+  .db .live { display: inline-block; width: 8px; height: 8px; border-radius: 4px; background: #5fe0a0; box-shadow: 0 0 10px #5fe0a0; margin-right: 6px; animation: pulse 1.6s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .db .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 0 24px; }
+  .db .tile { position: relative; background: linear-gradient(160deg, #1a2a46cc, #121d33cc); border: 1px solid #2a3d63; border-radius: 16px; padding: 14px 16px; box-shadow: 0 10px 30px #0006, inset 0 1px 0 #ffffff12; overflow: hidden; }
+  .db .tile.w2 { grid-column: span 2; }
+  .db .tile.alert { background: linear-gradient(135deg, #7a1020, #3a0c18); border-color: #ff4d6d; animation: alarm 2s ease-in-out infinite; }
+  @keyframes alarm { 50% { box-shadow: 0 0 34px #ff2d55aa, inset 0 1px 0 #fff2; } }
+  .db .k { font-size: 11px; text-transform: uppercase; letter-spacing: .14em; color: #8da2bd; }
+  .db .big { font-size: 44px; font-weight: 800; line-height: 1.05; margin: 6px 0 2px; letter-spacing: -1px; }
+  .db .g { color: #5fe0a0; text-shadow: 0 0 18px #5fe0a066; } .db .y { color: #ffd166; text-shadow: 0 0 18px #ffd16655; } .db .r { color: #ff6b81; text-shadow: 0 0 22px #ff2d5588; } .db .b { color: #6cc4ff; text-shadow: 0 0 18px #3aa0ff66; }
+  .db .ring { width: 92px; height: 92px; border-radius: 50%; background: conic-gradient(#5fe0a0 0 80%, #22324f 0); display: grid; place-items: center; float: right; margin-top: -4px; }
+  .db .ring b { width: 70px; height: 70px; border-radius: 50%; background: #121d33; display: grid; place-items: center; font-size: 18px; }
+  .db svg.spark { width: 100%; height: 46px; display: block; margin-top: 6px; }
+  .db table { width: 100%; border-collapse: collapse; font-size: 13px; } .db td { padding: 6px 0; border-bottom: 1px solid #22324f; }
+  .db .bars { display: flex; gap: 3px; align-items: end; height: 18px; } .db .bars i { width: 5px; border-radius: 2px; background: #2a3d63; } .db .bars i.on { background: #5fe0a0; box-shadow: 0 0 6px #5fe0a0; }
+  .db .note { padding: 8px 0; border-bottom: 1px solid #22324f; font-size: 13px; display: flex; gap: 10px; align-items: center; }
+  .db .av { width: 26px; height: 26px; border-radius: 13px; display: grid; place-items: center; font: 700 11px system-ui; color: #0b1220; flex: none; }
+  .db .pic { height: 150px; border-radius: 10px; background: linear-gradient(180deg, #ff9a5a 0%, #c24f6e 45%, #263f6b 46%, #0e1726 100%); position: relative; }
+  .db .pic::after { content: "● REC 18:26"; position: absolute; top: 8px; left: 10px; font: 700 11px Consolas; color: #ff6b81; animation: pulse 1.2s infinite; }
+  .db .compass { width: 70px; height: 70px; border-radius: 50%; border: 2px solid #2a3d63; position: absolute; right: 14px; top: 14px; }
+  .db .compass i { position: absolute; left: 33px; top: 6px; width: 4px; height: 30px; background: linear-gradient(#ffd166, transparent); transform-origin: 2px 29px; transform: rotate(290deg); border-radius: 2px; }
+  .phone .db .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 12px; gap: 10px; } .phone .db .top { margin: 14px 12px; } .phone .db .big { font-size: 30px; } .phone .db .clock { font-size: 22px; }
+  .phone .db .ring { width: 64px; height: 64px; } .phone .db .ring b { width: 48px; height: 48px; font-size: 13px; } .phone .db .compass { display: none; }
   /* ================= E: ZINE ================= */
-  .zn { background: #f2efe6; color: #111; font: 15px/1.45 Georgia, serif; min-height: 100%; padding: 22px 26px 34px; overflow: hidden; }
-  .zn .mast { font: italic 900 72px/0.9 Impact, "Arial Black", sans-serif; letter-spacing: -2px; margin: 10px 0 8px; }
-  .zn .mast span { background: #ff3b6b; color: #fff; padding: 0 10px; }
-  .zn .tag { display: table; margin: 4px 0; font: 700 12px "Courier New", monospace; background: #111; color: #f2efe6; padding: 2px 8px; }
-  .zn .cols { column-count: 3; column-gap: 22px; margin-top: 18px; }
-  .zn h3 { font: italic 900 30px/1 Impact, "Arial Black", sans-serif; margin: 0 0 6px; break-after: avoid; }
-  .zn .blk { background: #ffe14d; padding: 10px 12px; margin: 0 0 12px; break-inside: avoid; border: 3px solid #111; }
-  .zn .blk.c { background: #5ad1ff; }
+  .zn { background: #f2efe6 radial-gradient(#0000000d 1px, transparent 1px) 0 0/6px 6px; color: #111; font: 15px/1.45 Georgia, serif; min-height: 100%; padding: 22px 26px 34px; overflow: hidden; position: relative; }
+  .zn .mast { font: italic 900 96px/0.85 Impact, "Arial Black", sans-serif; letter-spacing: -3px; margin: 30px 0 30px; transform: rotate(-3deg); transform-origin: left; }
+  .zn .mast span { background: #ff3b6b; color: #fff; padding: 0 14px; box-shadow: 8px 8px 0 #111; }
+  .zn .mast em { -webkit-text-stroke: 3px #111; color: transparent; font-style: italic; }
+  .zn .tag { display: table; font: 700 12px "Courier New", monospace; background: #111; color: #f2efe6; padding: 3px 9px; margin: 4px 0; transform: rotate(1.5deg); }
+  .zn .stamp { position: absolute; right: 40px; top: 30px; font: 900 34px/1 Impact, sans-serif; color: #e0102f; border: 5px solid #e0102f; padding: 6px 14px; transform: rotate(14deg); opacity: .82; letter-spacing: 2px; mix-blend-mode: multiply; }
+  .zn .cols { column-count: 3; column-gap: 26px; column-rule: 2px dashed #111; margin-top: 22px; }
+  .zn h3 { font: italic 900 40px/0.95 Impact, "Arial Black", sans-serif; margin: 2px 0 8px; break-after: avoid; }
+  .zn h3.hl { background: linear-gradient(transparent 55%, #ffe14d 55%); display: inline; }
+  .zn .blk { background: #ffe14d; padding: 12px 14px; margin: 6px 4px 16px; break-inside: avoid; transform: rotate(-1.5deg); box-shadow: 6px 6px 0 #111; border: 2px solid #111; }
+  .zn .blk.c { background: #5ad1ff; transform: rotate(1.2deg); }
   .zn p { margin: 0 0 10px; }
-  .zn .ph { height: 140px; background: repeating-radial-gradient(circle at 30% 40%, #222 0 1px, #f2efe6 1px 4px); margin: 0 0 4px; }
-  .zn .cap { font: 12px "Courier New", monospace; margin-bottom: 12px; }
-  .zn .tear { background: #fff; padding: 8px 10px; margin: 0 0 10px; break-inside: avoid; font: 13px/1.35 "Courier New", monospace; border-bottom: 3px dashed #111; }
-  
-  .phone .zn { padding: 14px; } .phone .zn .mast { font-size: 44px; } .phone .zn .cols { column-count: 1; }
+  .zn p.drop::first-letter { float: left; font: 900 64px/.8 Impact, sans-serif; color: #ff3b6b; padding: 4px 6px 0 0; }
+  .zn .ph { height: 150px; background: repeating-radial-gradient(circle at 30% 40%, #111 0 1.2px, #f2efe6 1.2px 4px); margin: 6px 0 4px; border: 3px solid #111; transform: rotate(1deg); position: relative; }
+  .zn .ph::before, .zn .ph::after { content: ""; position: absolute; width: 70px; height: 20px; background: #fff7; border: 1px solid #0002; top: -10px; }
+  .zn .ph::before { left: -14px; transform: rotate(-30deg); } .zn .ph::after { right: -14px; transform: rotate(30deg); }
+  .zn .cap { font: 12px "Courier New", monospace; margin-bottom: 14px; }
+  .zn .quote { font: italic 900 26px/1.05 Impact, sans-serif; color: #ff3b6b; margin: 6px 0 14px; break-inside: avoid; }
+  .zn .tear { background: #fff; padding: 9px 10px; margin: 0 0 12px; break-inside: avoid; font: 13px/1.35 "Courier New", monospace; transform: rotate(-.8deg); box-shadow: 3px 3px 0 #0003; clip-path: polygon(0 0, 100% 0, 100% 86%, 95% 100%, 88% 86%, 80% 100%, 72% 86%, 64% 100%, 56% 86%, 48% 100%, 40% 86%, 32% 100%, 24% 86%, 16% 100%, 8% 86%, 0 100%); padding-bottom: 16px; }
+  .zn .tear:nth-child(2n) { transform: rotate(1deg); }
+  .zn .tear.y { background: #ffe14d; }
+  .zn .scribble { font: italic 700 18px "Segoe Print", "Comic Sans MS", cursive; color: #1b5fb8; transform: rotate(-4deg); display: inline-block; }
+  .phone .zn { padding: 14px; } .phone .zn .mast { font-size: 54px; } .phone .zn .cols { column-count: 1; } .phone .zn .stamp { font-size: 20px; right: 14px; top: 16px; }
+  /* ================= F: LOCKED PAGES ================= */
+  .lk-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+  .lk-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+  .lk-card .lbl { padding: 8px 12px 0; }
+  .lk-card .viewport { height: 380px; }
+  .lockbadge { font-size: 11px; padding: 2px 8px; border-radius: 9px; background: #3a2a10; color: #ffcf6b; font-weight: 600; white-space: nowrap; }
+  .crew { background: #10161b; color: #e8ecef; min-height: 100%; padding: 18px 20px; font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
+  .crew h2 { margin: 0 0 4px; } .crew .who { color: #8b969e; font-size: 12px; margin-bottom: 12px; }
+  .crew .co { border-left: 4px solid #6fd3a5; background: #13261e; padding: 8px 10px; border-radius: 4px; margin: 8px 0; }
+  .crew table { border-collapse: collapse; width: 100%; font-size: 13px; } .crew td { border-bottom: 1px solid #2b3237; padding: 5px 0; }
+  .locked { background: #10161b; color: #e8ecef; min-height: 100%; display: grid; place-items: center; text-align: center; padding: 20px; font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
+  .locked .pad { font-size: 54px; } .locked h3 { margin: 6px 0; } .locked p { color: #8b969e; margin: 4px 0; max-width: 300px; }
+  .locked code { font: 12px Consolas, monospace; background: #0a0c0d; border: 1px solid #2b3237; padding: 2px 6px; border-radius: 4px; color: #ffcf6b; }
+  .locked button { margin-top: 12px; background: #6fd3a5; color: #06251a; border: 0; border-radius: 16px; padding: 7px 16px; font-weight: 600; }
+  .flow { counter-reset: f; list-style: none; padding: 0; margin: 0; max-width: 1100px; }
+  .flow li { counter-increment: f; position: relative; padding: 10px 12px 10px 48px; border-bottom: 1px solid var(--line); }
+  .flow li::before { content: counter(f); position: absolute; left: 10px; top: 10px; width: 26px; height: 26px; border-radius: 13px; background: var(--acc); color: #06251a; font-weight: 700; display: grid; place-items: center; }
+  .flow b { color: var(--ink); } .flow span { color: var(--muted); }
   /* ---------- MU additions table ---------- */
   table.mu { border-collapse: collapse; width: 100%; max-width: 1200px; font-size: 13.5px; }
   table.mu th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--line); padding: 8px; }
@@ -195,6 +239,7 @@
   <button data-t="c">C · Pattern book</button>
   <button data-t="d">D · Dashboard</button>
   <button data-t="e">E · Zine</button>
+  <button data-t="f">F · Locked pages</button>
   <button data-t="mu">MU additions (decide)</button>
 </header>
 
@@ -255,6 +300,50 @@
   <div class="row"><div class="pc"><div class="lbl" style="padding:8px 10px 0">PC host</div><div id="e-pc"></div></div></div>
   <div class="row" style="margin-top:22px"><div><div class="lbl">Android</div><div id="e-ph"></div></div>
   <div class="src"><div class="lbl">The page in MU (new markup in yellow)</div><pre id="e-src"></pre><div class="bytes" id="e-bytes"></div></div></div>
+</section>
+
+<section class="tab" id="t-f">
+  <p class="intro"><b>F · Locked pages.</b> A page (or a whole folder of pages and pictures) that only some people can open. The lock is written in the .mu file itself, like everything else, but it is the <b>host</b> that keeps it: the host reads the lock lines before it answers, and someone not on the list never gets the page at all. Nobody can fake who they are: a page request is a sealed message signed with the sender's own key, and the address <i>is</i> the fingerprint of that key (their certificate, in effect).</p>
+  <div class="row" style="align-items:stretch">
+    <div class="src" style="flex:1 1 420px"><div class="lbl">pages/crew/index.mu (new markup in yellow)</div><pre id="f-src"></pre><div class="bytes" id="f-bytes" style="display:none"></div><div class="bytes">The lock lines are removed before the page is sent, so the list of members never leaves the host.</div></div>
+    <div style="flex:1 1 420px">
+      <div class="lbl">Who may open it</div>
+      <table class="mu">
+        <tr><td><code>@allow 256665f1e0c94b7d8a1f3c22b9d04e57</code></td><td>one person, by their full address (32 hex characters = the key's fingerprint)</td></tr>
+        <tr><td><code>@allow ~anna ~carl</code></td><td>people by the name in your contacts (the host stores the full address)</td></tr>
+        <tr><td><code>@allow contacts</code></td><td>everyone you have marked as a verified contact (✓)</td></tr>
+        <tr><td><code>@allow group crew</code></td><td>a group you keep on the host (Settings › Groups), so ten pages can share one list</td></tr>
+        <tr><td><code>@allow admins</code></td><td>the host's administrators</td></tr>
+        <tr><td><code>@locked hidden</code></td><td>others get "Not found" instead of "Locked", so they do not even learn the page exists</td></tr>
+        <tr><td><code>@locked until 2026-12-24</code></td><td>opens for everyone on a date (an advent calendar, a surprise)</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="lbl" style="margin-top:22px">What people see</div>
+  <div class="lk-grid">
+    <div class="lk-card"><div class="lbl">Anna (on the list) · PC</div>
+      <div class="bbar"><span class="ic">←</span><div class="pill"><span class="lockbadge">🔒 4 people</span><div class="t"><b>Crew of Mågen</b><small>3eb445ec / crew</small></div></div><span class="ic">↻</span></div>
+      <div class="viewport"><div class="crew"><h2>Crew of Mågen</h2><div class="who">🔒 Only for the crew · you are signed in as ~anna (256665f1…)</div>
+      <div class="co"><b>Sunday:</b> we sail at 09:00 if the wind is under 10 m/s.</div>
+      <table><tr><td>Skipper</td><td>Anna</td></tr><tr><td>Mooring</td><td>pier 2, berth 14</td></tr><tr><td>Key box</td><td>code 4471</td></tr></table>
+      <p style="color:#8b969e;font-size:12px">Pictures in this folder are locked the same way.</p></div></div></div>
+    <div class="lk-card"><div class="lbl">A stranger · PC</div>
+      <div class="bbar"><span class="ic">←</span><div class="pill"><span class="lockbadge">🔒 locked</span><div class="t"><b>Locked page</b><small>3eb445ec / crew</small></div></div><span class="ic">↻</span></div>
+      <div class="viewport"><div class="locked"><div><div class="pad">🔒</div><h3>This page is locked</h3><p>Only some people can open it. Your address is <code>7ad852b7…</code>.</p><p>Send it to the owner if you should be on the list.</p><button>Copy my address</button></div></div></div></div>
+    <div class="lk-card"><div class="lbl">With <code style="color:#ffcf6b">@locked hidden</code> · Android</div>
+      <div class="bbar"><span class="ic">←</span><div class="pill"><span class="route">LoRa</span><div class="t"><b>Not found</b><small>3eb445ec / crew</small></div></div></div>
+      <div class="viewport"><div class="locked"><div><div class="pad" style="font-size:40px">∅</div><h3>Not found</h3><p>The page <code>crew</code> does not exist here.</p></div></div></div></div>
+  </div>
+
+  <div class="lbl" style="margin-top:22px">How the host keeps the lock</div>
+  <ol class="flow">
+    <li><b>The request is signed.</b> <span>A page request is a sealed message: only the host can read it, and only the sender's own key can have made it. The address is the fingerprint of that key, so it cannot be borrowed.</span></li>
+    <li><b>The host checks before it answers.</b> <span>It reads the <code>@allow</code> lines of the page (or of the folder's <code>index.mu</code>, which covers every page and picture in the folder) and compares the sender. A linked device counts as its person.</span></li>
+    <li><b>On the list: the page goes out sealed.</b> <span>Encrypted to that one person, over LoRa or the backbone; a relay or a listener on the air sees nothing. The <code>@allow</code> lines are cut out first.</span></li>
+    <li><b>Not on the list: one short answer.</b> <span>"Locked" (a few bytes) or, with <code>@locked hidden</code>, the ordinary "Not found". Pictures in a locked folder answer the same way.</span></li>
+    <li><b>The reader's copy stays private.</b> <span>The browser keeps a locked page only in memory (not in the offline cache), and marks it 🔒 in the address bar with how many may read it.</span></li>
+  </ol>
 </section>
 
 <!-- ======================= MU ADDITIONS ======================= -->
@@ -503,92 +592,122 @@ Everything a page can do, with the text that makes it.
 ⟦@board⟧`);
 
 // ======================= D: dashboard =======================
+const spark = (pts, col) => { const w = 200, h = 46, mx = Math.max(...pts); const p = pts.map((v, i) => `${(i / (pts.length - 1) * w).toFixed(1)},${(h - 4 - v / mx * (h - 8)).toFixed(1)}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="g${col.slice(1)}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".45"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs><polygon points="0,${h} ${p} ${w},${h}" fill="url(#g${col.slice(1)})"/><polyline points="${p}" fill="none" stroke="${col}" stroke-width="2.5"/></svg>`; };
+const bars = n => `<div class="bars">${[4, 7, 10, 13, 16].map((h, i) => `<i class="${i < n ? "on" : ""}" style="height:${h}px"></i>`).join("")}</div>`;
 const D = `<div class="db">
-  <div class="top"><div><h2>Hals Havn · now</h2><small>Updated 18:26 · over LoRa and the backbone</small></div><small>3eb445ec</small></div>
+  <div class="tick"><span>⚠ GALE WARNING 18 m/s NW FROM 20:00 · BOATS STAY IN · FUEL PIER OPEN FROM 07:00 · NEW REPEATER ON THE MAST COVERS THE BAY · ⚠ GALE WARNING 18 m/s NW FROM 20:00</span></div>
+  <div class="top"><div><h2>Hals Havn · now</h2><small><span class="live"></span>live · over LoRa and the backbone</small></div><div class="clock" data-clock>18:26:00</div></div>
   <div class="grid">
-    <div class="tile alert w2"><div class="k">Warning</div><div class="big r">Gale 18 m/s</div>Northwest from 20:00. Boats stay in, double your lines.</div>
-    <div class="tile"><div class="k">Wind</div><div class="big y">14 <small style="font-size:16px">m/s W</small></div>rising</div>
-    <div class="tile"><div class="k">Water</div><div class="big b">+0.4 m</div>high 06:52 · low 13:07</div>
+    <div class="tile alert w2"><div class="k">⚠ Warning</div><div class="big r">Gale 18 m/s</div>Northwest from 20:00. Boats stay in, double your lines.</div>
+    <div class="tile"><div class="k">Wind</div><div class="compass"><i></i></div><div class="big y">14<small style="font-size:16px"> m/s</small></div>WNW · rising ↑${spark([6, 7, 7, 9, 10, 12, 14], "#ffd166")}</div>
+    <div class="tile"><div class="k">Water</div><div class="big b">+0.4<small style="font-size:16px"> m</small></div>high 06:52 · low 13:07${spark([2, 5, 9, 7, 3, 1, 4], "#6cc4ff")}</div>
     <div class="tile"><div class="k">Fuel pier</div><div class="big g">Open</div>card only, from 07:00</div>
-    <div class="tile"><div class="k">Network</div><div class="big g">6 nodes</div><div class="bar"><i style="width:80%;background:#5fe0a0"></i></div></div>
-    <div class="tile w2"><div class="k">Nodes nearby</div><table><tr><td>Hals Havn</td><td>0 hops</td><td class="g">strong</td></tr><tr><td>Øster Hurup</td><td>2 hops</td><td class="y">fair</td></tr><tr><td>Backbone</td><td>internet</td><td class="b">online</td></tr></table></div>
-    <div class="tile w2"><div class="k">Notice board · newest</div><div class="note"><b>Carl</b>Lost: blue fender IDA, pier 3</div><div class="note"><b>Café</b>For sale: 15 hp outboard</div><div class="note"><b>dennis</b>Who hears the new antenna?</div></div>
-    <div class="tile w2"><div class="k">Harbour camera</div><div class="pic">picture · tap for colour</div></div>
+    <div class="tile"><div class="k">Network</div><div class="ring"><b class="g">80%</b></div><div class="big g">6</div>nodes heard</div>
+    <div class="tile w2"><div class="k">Nodes nearby</div><table><tr><td>Hals Havn</td><td>0 hops</td><td>${bars(5)}</td></tr><tr><td>Øster Hurup</td><td>2 hops</td><td>${bars(3)}</td></tr><tr><td>Backbone</td><td>internet</td><td class="b">◆ online</td></tr></table></div>
+    <div class="tile w2"><div class="k">Notice board · newest</div><div class="note"><span class="av" style="background:#6cc4ff">CA</span>Lost: blue fender IDA, pier 3</div><div class="note"><span class="av" style="background:#ffd166">CF</span>For sale: 15 hp outboard</div><div class="note"><span class="av" style="background:#5fe0a0">DE</span>Who hears the new antenna?</div></div>
+    <div class="tile w2"><div class="k">Harbour camera</div><div class="pic"></div></div>
   </div>
 </div>`;
-frames("d", "Hals Havn · now", "3eb445ec / now", D, "Over the internet · 0.9 KB · fetched 18:26");
+frames("d", "Hals Havn · now", "3eb445ec / now", D, "Over the internet · 1.0 KB · fetched 18:26");
+setInterval(() => document.querySelectorAll("[data-clock]").forEach(e => e.textContent = new Date().toTimeString().slice(0, 8)), 1000);
 source("d", `@title Hals Havn · now
-⟦@bg #0e1726⟧
-⟦@fg #e6edf6⟧
-⟦@font sans⟧
-## Hals Havn · now
-{⟦#8da2bd⟧:Updated 18:26 · over LoRa and the backbone}
+⟦@bg #0b1220..#0e1726 glow #1f3a66 #3a1f5c⟧
+@fg #e6edf6
+@font sans
+⟦@ticker⟧ {!red:⚠ GALE WARNING 18 m/s NW FROM 20:00 · BOATS STAY IN · ...}
 
-⟦::: cards 4⟧
->!red {small:WARNING}
->⟦{big:⟧{⟦#ff6b6b⟧:Gale 18 m/s}⟦}⟧
->Northwest from 20:00. Boats stay in.
-⟦+++⟧
-{small:WIND}
-⟦{big:⟧{⟦#ffd166⟧:14 m/s W}⟦}⟧
-rising
-⟦+++⟧
+## ⟦{gradient #fff #8fd3ff:⟧Hals Havn · now⟦}⟧
+⟦{live}⟧ live · over LoRa and the backbone  ⟦{clock}⟧
+
+::: cards 4
+>!red ⟦[pulse]⟧ {small:⚠ WARNING}
+>{big:⟦{glow⟧ #ff6b81:Gale 18 m/s}}
++++
+{small:WIND} ⟦{compass:290}⟧
+{big:⟦{glow⟧ #ffd166:14 m/s}} WNW · rising ↑
+⟦{spark #ffd166:6 7 7 9 10 12 14}⟧
++++
 {small:WATER}
-⟦{big:⟧{⟦#6cb6ff⟧:+0.4 m}⟦}⟧
-high 06:52 · low 13:07
-⟦+++⟧
-...
-⟦+++⟧
-{small:NOTICE BOARD · NEWEST}
-⟦@board 3⟧
-⟦+++⟧
-![Harbour camera](cam.jpg)
-⟦:::⟧`);
+{big:⟦{glow⟧ #6cc4ff:+0.4 m}}
+⟦{spark #6cc4ff:2 5 9 7 3 1 4}⟧
++++
+{small:NETWORK} ⟦{ring #5fe0a0:80}⟧
+{big:6} nodes heard
++++ 2
+| Hals Havn | 0 hops | ⟦{signal:5}⟧ |
+| Øster Hurup | 2 hops | ⟦{signal:3}⟧ |
++++ 2
+@board 3
++++ 2
+![Harbour camera](cam.jpg ⟦"rec"⟧)
+:::`);
 
 // ======================= E: zine =======================
 const E = `<div class="zn">
+  <div class="stamp">LORA ONLY</div>
   <span class="tag">ISSUE #01 · FREE · PASS IT ON</span>
-  <div class="mast"><span>HARBOUR</span> ZINE</div>
-  <span class="tag" style="background:#ff3b6b">made on a LoRa radio in Hals</span>
+  <div class="mast"><span>HARBOUR</span> <em>ZINE</em></div>
+  <span class="tag" style="background:#ff3b6b">made on a LoRa radio in Hals · no ads · no tracking</span>
   <div class="cols">
-    <h3>GALE!</h3>
+    <h3 class="hl">GALE!</h3>
     <div class="blk"><b>Tonight 20:00.</b> Northwest, 18 m/s. Boats stay in. Tie it down, then tie it down again.</div>
-    <p>The new repeater on the mast heard the warning before the radio did. Two hops to Øster Hurup and everybody knew. That is the whole point.</p>
+    <p class="drop">The new repeater on the mast heard the warning before the radio did. Two hops to Øster Hurup and everybody knew. That is the whole point of this thing.</p>
     <div class="ph"></div><div class="cap">fig. 1 — the cabin, in dots, 0.8 KB</div>
+    <div class="quote">“We heard it on the water first.”</div>
     <h3>FUEL IS BACK</h3>
-    <p>Diesel and petrol at the pier from Thursday, card only. Two weeks of rowing are over.</p>
-    <div class="blk c"><b>How to make a page like this:</b> write a .mu file, put it in pages/, done. No HTML, no ads, no tracking.</div>
-    <h3>SLIPS</h3>
+    <p>Diesel and petrol at the pier from Thursday, card only. Two weeks of rowing are over. <span class="scribble">finally!!</span></p>
+    <div class="blk c"><b>DIY:</b> write a .mu file, put it in pages/, done. No HTML, no ads, no tracking. 1 KB goes a long way.</div>
+    <h3 class="hl">SLIPS</h3>
     <div class="tear">LOST: blue fender, "IDA", pier 3. — Carl</div>
     <div class="tear">FOR SALE: 15 hp outboard, runs. — the café</div>
     <div class="tear">WHO HEARS ME? new antenna, tell me your signal. — dennis</div>
-    <div class="tear" style="background:#ffe14d">WRITE YOURS ↓ (200 characters)</div>
+    <div class="tear y">WRITE YOURS ↓ (200 characters)</div>
   </div>
 </div>`;
-frames("e", "Harbour Zine #01", "3eb445ec / zine", E, "Over the internet · 1.1 KB · fetched 18:26");
+frames("e", "Harbour Zine #01", "3eb445ec / zine", E, "Over the internet · 1.2 KB · fetched 18:26");
 source("e", `@title Harbour Zine #01
-⟦@bg #f2efe6⟧
-⟦@fg #111⟧
-⟦@font serif⟧
+@bg #f2efe6 ⟦dots⟧
+@fg #111
+@font serif
+⟦{stamp red 14:LORA ONLY}⟧
 {!#111:{#f2efe6:ISSUE #01 · FREE · PASS IT ON}}
-# ⟦{big:⟧{!#ff3b6b:{#fff:HARBOUR}} ZINE⟦}⟧
+# ⟦{tilt -3:⟧{huge:{!#ff3b6b:{#fff:HARBOUR}} ⟦{outline:⟧ZINE⟦}⟧}⟦}⟧
 
-⟦::: 3⟧
-## GALE!
->!yellow **Tonight 20:00.** Northwest, 18 m/s. Boats stay in.
+::: 3 ⟦dashed⟧
+## ⟦{marker #ffe14d:⟧GALE!⟦}⟧
+>!yellow ⟦[tilt -1.5, shadow]⟧ **Tonight 20:00.** Boats stay in.
 
-The new repeater on the mast heard the warning first.
+⟦@dropcap⟧ The new repeater on the mast heard the warning first.
 
-![the cabin, in dots, 0.8 KB](hytte.jpg "dots")
+![the cabin, in dots](hytte.jpg "dots ⟦tape⟧")
+
+⟦{big:⟧{#ff3b6b:*"We heard it on the water first."*}⟦}⟧
 
 ## FUEL IS BACK
-Diesel and petrol at the pier from Thursday.
+Diesel and petrol at the pier. ⟦{hand #1b5fb8:⟧finally!!⟦}⟧
 
->!⟦#5ad1ff⟧ **How to make a page like this:** write a .mu file.
+>!#5ad1ff ⟦[tilt 1.2, shadow]⟧ **DIY:** write a .mu file.
 
-## SLIPS
-⟦@board⟧
-⟦:::⟧`);
+## ⟦{marker #ffe14d:⟧SLIPS⟦}⟧
+@board ⟦slips⟧
+:::`);
+
+source("f", `@title Crew of Mågen
+⟦@allow ~anna ~carl ~bo⟧
+⟦@allow 256665f1e0c94b7d8a1f3c22b9d04e57⟧
+⟦@locked hidden⟧
+@bg #10161b
+@fg #e8ecef
+
+## Crew of Mågen
+{grey:🔒 Only for the crew}
+
+>!green **Sunday:** we sail at 09:00 if the wind is under 10 m/s.
+
+| Skipper | Anna |
+| Mooring | pier 2, berth 14 |
+| Key box | code 4471 |`);
 </script>
 </body>
 </html>

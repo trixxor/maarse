@@ -440,6 +440,10 @@ pub struct NodeSpec {
     /// Has a LoRa radio. None: yes, except kinds "server" (a VPS host)
     /// and "app" (a phone with the app only, reached over the internet).
     pub radio: Option<bool>,
+    /// Backbone upkeep (maarse-host `--min-peers`): keep this many TCP
+    /// backbone links, connecting to other hosts when links fail. None: 6
+    /// for a server (as maarse-server), 0 otherwise.
+    pub min_peers: Option<usize>,
 }
 
 impl Default for NodeSpec {
@@ -464,6 +468,7 @@ impl Default for NodeSpec {
             route_end: String::new(),
             mobile: None,
             radio: None,
+            min_peers: None,
         }
     }
 }

@@ -319,4 +319,24 @@ mod tests {
         assert!(day_factor(3.0, 0.0) < 0.2 && day_factor(19.0, 0.0) > 1.5);
         assert_eq!(day_factor(-1.0, 5000.0), 1.0);
     }
+
+    /// A server keeps its backbone links: when its only link is cut, it
+    /// connects to other hosts within a minute (maarse-host --min-peers).
+    #[test]
+    fn server_reconnects_when_a_link_fails() {
+        let sc = json!({"seed": 2, "nodes": [
+            {"kind": "server", "lat": 55.7, "lon": 12.5, "min_peers": 2},
+            {"kind": "host", "lat": 56.1, "lon": 10.2},
+            {"kind": "host", "lat": 57.0, "lon": 9.9},
+            {"kind": "host", "lat": 55.4, "lon": 10.4}
+        ], "links": [{"a": 0, "b": 1, "kind": "tcp"}],
+           "traffic": {"direct_per_min": 0, "channel_per_min": 0},
+           "events": [{"t_s": 30, "type": "link", "index": 0, "up": false}]});
+        let mut e = create(&sc.to_string()).unwrap();
+        e.run_until(200_000, usize::MAX);
+        let s = e.summary();
+        assert!(s["backbone_reconnects"].as_u64().unwrap() >= 2, "{s}");
+        let up = e.nodes[0].links.iter().filter(|&&k| e.link_ok(k)).count();
+        assert!(up >= 2, "server has {up} working links");
+    }
 }

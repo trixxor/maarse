@@ -247,7 +247,9 @@ pub struct SimNode {
     pause_until: u64,
     /// Has a LoRa radio (servers and app-only phones do not).
     pub radio: bool,
-    links: Vec<usize>,
+    /// Backbone links to keep (see `NodeSpec::min_peers`).
+    min_peers: usize,
+    pub(crate) links: Vec<usize>,
     pub label: String,
     /// Wandering: radius (m) around `home`, and the current target point.
     wander: f64,
@@ -541,6 +543,7 @@ pub struct Stats {
     pub dup_queued: u64,
     pub wakeups: u64,
     pub mail_deposits: u64,
+    pub backbone_reconnects: u64,
     pub mail_stored: u64,
     pub mail_full: u64,
     pub mail_ops: u64,
@@ -833,6 +836,7 @@ impl Engine {
                 route_end: match spec.route_end.as_str() { "stay" => 1, "repeat" => 2, _ => 0 },
                 pause_until: 0,
                 radio: spec.radio.unwrap_or(!matches!(spec.kind.as_str(), "server" | "app")),
+                min_peers: spec.min_peers.unwrap_or(if spec.kind == "server" { 6 } else { 0 }),
                 route,
                 links: Vec::new(),
                 label: spec.label.clone(),
@@ -1282,6 +1286,9 @@ impl Engine {
             }
             Ev::Move => {
                 self.move_nodes();
+                if self.now % 60_000 < 2000 {
+                    self.backbone_upkeep();
+                }
                 self.schedule(self.now + 2000, Ev::Move);
             }
             Ev::Energy => {
@@ -1592,7 +1599,7 @@ impl Engine {
         self.has_internet(i) && self.nodes[i].links.iter().any(|&k| !self.links[k].lora && !self.links[k].wifi && self.link_ok(k))
     }
 
-    fn link_ok(&self, k: usize) -> bool {
+    pub(crate) fn link_ok(&self, k: usize) -> bool {
         let l = &self.links[k];
         if !l.up || l.a >= self.nodes.len() || l.b >= self.nodes.len() {
             return false;
@@ -4255,6 +4262,35 @@ impl Engine {
         }
     }
 
+    /// Backbone upkeep, as maarse-host every minute: a node with `min_peers`
+    /// and fewer working TCP links connects to more hosts (spread at random,
+    /// as the DHT's buckets spread over the ID space).
+    fn backbone_upkeep(&mut self) {
+        for i in 0..self.nodes.len() {
+            let want = self.nodes[i].min_peers;
+            if want == 0 || !self.nodes[i].alive() || !self.has_internet(i) {
+                continue;
+            }
+            let up = self.nodes[i].links.iter().filter(|&&k| !self.links[k].lora && !self.links[k].wifi && self.link_ok(k)).count();
+            if up >= want {
+                continue;
+            }
+            let linked: Vec<usize> = self.nodes[i].links.iter().map(|&k| if self.links[k].a == i { self.links[k].b } else { self.links[k].a }).collect();
+            let mut cands: Vec<usize> = (0..self.nodes.len())
+                .filter(|&j| j != i && self.nodes[j].kind == Kind::Host && self.nodes[j].alive() && self.has_internet(j) && !linked.contains(&j))
+                .collect();
+            for _ in 0..(want - up).min(cands.len()) {
+                let j = cands.swap_remove(self.rng.gen_range(0..cands.len()));
+                let k = self.links.len();
+                self.links.push(Link { a: i, b: j, wifi: false, up: true, lora: false, sf: 9, snr: 10, loss: 0.0, duty: 100, busy_until: 0, label: "auto (min-peers)".into(), group: String::new(), packets: 0, airtime_ms: 0, dropped: 0 });
+                self.nodes[i].links.push(k);
+                self.nodes[j].links.push(k);
+                self.stats.backbone_reconnects += 1;
+                self.tr(format!("{{\"t\":{},\"ev\":\"event\",\"n\":{i},\"text\":\"backbone: connects to {j} to keep {want} links\"}}", self.now));
+            }
+        }
+    }
+
     /// Moves node `i` to `p` and recomputes its links.
     fn place(&mut self, i: usize, p: (f64, f64)) {
         let n = &mut self.nodes[i];
@@ -4314,6 +4350,7 @@ impl Engine {
             "role_switches": self.stats.role_switches,
             "contacts_heard": self.contacts_heard(),
             "mail_deposits": self.stats.mail_deposits,
+            "backbone_reconnects": self.stats.backbone_reconnects,
             "mail_stored": self.stats.mail_stored,
             "mail_full": self.stats.mail_full,
             "mail_ops": self.stats.mail_ops,

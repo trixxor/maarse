@@ -3481,8 +3481,7 @@ const PIC_STEPS = [
 // host's preview, `~WxH:…`) and shows the blurred preview at once; the best
 // copy that has come is drawn over it, and while another copy comes a
 // progress bar lies on top. A tap opens a menu: which copy to fetch, or full
-// screen. Over the internet the first copy loads by itself; over LoRa it
-// waits for a tap. The layout never changes, so nothing on the page moves.
+// screen. Nothing is fetched until the reader taps and picks a copy. The layout never changes, so nothing on the page moves.
 const PIC_CHOICES = [
   { id: "_fdots", name: "Dots", note: "1–3 KB, sharp for drawings", time: "about 15 s" },
   { id: "_fgrey", name: "Greyscale", note: "about 1.3 KB", time: "about 12 s" },
@@ -3521,8 +3520,6 @@ function pagePicture(caption, src, style, base, forced = false, words = {}) {
   const busy = all.map(c => ({ c, f: [...state.files.values()].find(f => f.pic && f.key === c.key) })).find(x => x.f);
   const asking = all.find(c => pages.picWaits.has(c.key) || pages.picQueue.some(q => q.addr === base.addr && q.path === c.path));
   const err = !got && pages.pics.get(key)?.error;
-  // Over the internet the first copy comes by itself.
-  if (!lora && !got && !busy && !asking && !err && transport) setTimeout(() => { requestPicture(base.addr, path); renderChat(); }, 0);
   if (pv) {
     const cv = el("canvas", { className: "mu-blur", width: 4, height: 3 });
     const g = cv.getContext("2d"), img = g.createImageData(4, 3);
@@ -3542,7 +3539,7 @@ function pagePicture(caption, src, style, base, forced = false, words = {}) {
     bar.firstChild.style.width = pct + "%";
     frame.append(bar);
   } else if (asking) frame.append(el("div", { className: "mu-picbar wait" }, el("i"), el("span", {}, asking.name === "first copy" ? "Asking the node…" : `Asking for ${asking.name}…`)));
-  else if (!got) frame.append(el("div", { className: "mu-pichint" }, err ? `Tap to try again (${err})` : lora ? "Tap to fetch the picture" : "Loading…"));
+  else if (!got) frame.append(el("div", { className: "mu-pichint" }, err ? `Tap to try again (${err})` : "Tap to fetch the picture"));
   // The menu: which copy, or full screen.
   const open = pages.picMenu === key;
   frame.onclick = (e) => {

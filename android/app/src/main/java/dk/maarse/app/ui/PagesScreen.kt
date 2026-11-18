@@ -584,9 +584,8 @@ private fun preview(hint: String): Preview? {
 /** A picture on a page. The frame has the picture's own shape (from the
  *  host's preview) and shows the blurred preview at once; the best copy that
  *  has come is drawn over it, and while another comes a progress bar lies on
- *  top. A tap opens a menu: which copy to fetch, or full screen. Over the
- *  internet the first copy loads by itself; over LoRa it waits for a tap. The
- *  layout never changes, so nothing on the page moves. */
+ *  top. A tap opens a menu: which copy to fetch, or full screen. Nothing is
+ *  fetched until the reader picks a copy. The layout never changes, so nothing on the page moves. */
 @Composable
 internal fun Picture(caption: String, src: String, style: String, base: Pages.Url, @Suppress("UNUSED_PARAMETER") version: Int, forced: Boolean = false, words: String = "") {
     Pages.version.collectAsState().value
@@ -602,8 +601,6 @@ internal fun Picture(caption: String, src: String, style: String, base: Pages.Ur
     val busy = all.firstNotNullOfOrNull { c -> (pic(c) as? Pages.Pic.Busy)?.let { c to it } }
     val asking = all.firstOrNull { pic(it) is Pages.Pic.Asking || Pages.queued(base.addr, it.second) }
     val failed = (pic(all[0]) as? Pages.Pic.Failed)?.takeIf { got == null }
-    // Over the internet the first copy comes by itself.
-    LaunchedEffect(lora, rel) { if (!lora && got == null && busy == null && asking == null && failed == null) Pages.requestPicture(base.addr, path) }
     var menu by remember(rel) { mutableStateOf(false) }
     var large by remember(rel) { mutableStateOf(false) }
     val ratio = pv?.let { (it.w.toFloat() / it.h).coerceIn(0.33f, 3f) } ?: 1.5f
@@ -629,7 +626,7 @@ internal fun Picture(caption: String, src: String, style: String, base: Pages.Ur
                     androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().height(3.dp))
                     Text(if (asking.first == "first copy") "Asking the node…" else "Asking for ${asking.first}…", Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White, style = small)
                 }
-                got == null -> Text(if (failed != null) "Tap to try again (${failed.why})" else if (lora) "Tap to fetch the picture" else "Loading…",
+                got == null -> Text(if (failed != null) "Tap to try again (${failed.why})" else "Tap to fetch the picture",
                     barMod.padding(6.dp), color = Color.White, style = small, textAlign = TextAlign.Center)
             }
             androidx.compose.material3.DropdownMenu(menu, { menu = false }) {

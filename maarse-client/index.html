@@ -535,7 +535,10 @@
       <div class="pane" id="pane-nodes" hidden>
         <div class="pane-head"><h2>Nodes</h2></div>
         <div class="filters" id="node-view"><button data-nv="list" class="on">List</button><button data-nv="map">Map</button></div>
-        <nav class="tools list" aria-label="Pages"><button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg><span>Pages<small>Browse maarse:// pages</small></span></button></nav>
+        <nav class="tools list" aria-label="Announces and pages">
+          <button id="btn-announces" data-view="announces"><svg class="i"><use href="#i-wave"/></svg><span>Announces<small id="ann-sub">Who announces themselves, live</small></span></button>
+          <button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg><span>Pages<small>Browse maarse:// pages</small></span></button>
+        </nav>
         <div class="filters" id="node-filters"><button data-f="all" class="on">All</button><button data-f="contacts">Contacts</button><button data-f="heard">Heard</button><button data-f="pos">With position</button></div>
         <div id="nodes-list"></div>
       </div>
@@ -1221,6 +1224,7 @@ function onEvent(ev) {
   if (histOnEvent(ev)) return;
   switch (ev.type) {
     case "info":
+      state.infoAt = Date.now();
       state.me = ev.addr; state.maxText = ev.maxText; state.maxFile = ev.maxFile;
       $("me").textContent = ev.addr;
       onIdentityInfo(ev); updateMe();
@@ -1234,6 +1238,7 @@ function onEvent(ev) {
       break;
     case "heard":
       if (ev.addr !== state.me) {
+        noteAnnounce(ev.addr, ev.hops);
         onIdentityHeard(ev);
         const isNew = !state.contacts.has(ev.addr);
         state.contacts.set(ev.addr, { heard: true });
@@ -4757,6 +4762,7 @@ $("btn-radio").onclick = () => setView("radio");
 $("btn-diag").onclick = () => { state.target = null; setView("diag"); };
 $("btn-range").onclick = () => { state.target = null; setView("range"); };
 $("btn-pages").onclick = () => { state.target = null; setView("pages"); };
+$("btn-announces").onclick = () => { state.target = null; setView("announces"); };
 $("btn-firmware").onclick = () => setView("firmware");
 $("btn-file").onclick = () => $("file").click();
 $("btn-voice").onclick = () => rec.on ? voiceStop() : voiceStart();
@@ -4986,7 +4992,7 @@ function pwaTitle() {
 // so the navigation always shows where you are. See docs/mockups/README.md.
 
 Object.assign(state, { tab: "chats", activity: [], airHist: [], nodeSel: null, chatFilter: "all", nodeFilter: "all", stripTimer: null });
-var VIEW_TAB = { chat: "chats", mc: "chats", remote: "chats", alerts: "chats", node: "nodes", map: "nodes", pages: "nodes",
+var VIEW_TAB = { chat: "chats", mc: "chats", remote: "chats", alerts: "chats", node: "nodes", map: "nodes", pages: "nodes", announces: "nodes",
   network: "network", activity: "network", status: "network", range: "settings", radio: "settings", firmware: "settings",
   settings: "settings", connections: "settings", computer: "settings", service: "settings", backup: "settings", myqr: "settings", account: "settings" };
 
@@ -5134,6 +5140,73 @@ document.querySelectorAll("#node-filters button").forEach(b => b.onclick = () =>
   document.querySelectorAll("#node-filters button").forEach(x => x.classList.toggle("on", x === b));
   renderNodes();
 });
+// ---------- announces: who announces themselves, live ----------
+// Every announce the node passes on (Heard), newest first. Names and the
+// pages flag come with the announce's NodeInfo. Kept for this browser (the
+// last 200), so the list is there again after a reload.
+state.announces = store.get("announces", []);
+state.annTab = "users";
+function noteAnnounce(addr, hops) {
+  const now = Date.now();
+  // Right after connecting the node lists every node it knows (as Heard with
+  // 0 hops); those are not new announces.
+  if (now - (state.infoAt || 0) < 3000) return;
+  // The same node again within a minute (the announce came over several
+  // links, or a node announcing often) only moves its line to the top.
+  const i = state.announces.findIndex(r => r.addr === addr && now - r.at < 60000);
+  if (i >= 0) state.announces.splice(i, 1);
+  state.announces.unshift({ addr, hops, at: now });
+  if (state.announces.length > 200) state.announces.length = 200;
+  store.set("announces", state.announces);
+  $("ann-sub").textContent = `Latest: ${label(addr)}`;
+  if (state.view === "announces") renderChat();
+}
+function renderAnnounces(box) {
+  $("chat-title").textContent = "Announces";
+  $("chat-sub").textContent = "Nodes announce themselves every few minutes; newest first";
+  const tabs = el("div", { className: "filters" }); tabs.style.margin = "4px 0 12px";
+  for (const [k, t] of [["users", "Users"], ["pages", "Pages"]]) {
+    const b = el("button", { textContent: t, className: state.annTab === k ? "on" : "" });
+    b.onclick = () => { state.annTab = k; renderChat(); };
+    tabs.append(b);
+  }
+  box.append(tabs);
+  const list = el("div", { className: "ov" });
+  box.append(list);
+  const sharing = a => pages.sharing.has(a) || state.nodeInfo.get(a)?.pages;
+  if (state.annTab === "users") {
+    if (!state.announces.length) { list.append(el("p", { className: "muted", textContent: "No announces yet. They come in while you are connected." })); return; }
+    for (const r of state.announces.slice(0, 100)) {
+      const k = state.nodeInfo.get(r.addr) || {};
+      const row = el("div", { className: "card" });
+      row.style.cssText = "display:flex;align-items:center;gap:12px;padding:10px 14px;margin:0 0 8px;cursor:pointer";
+      const tags = [r.hops === 0 ? "direct" : `${r.hops} hop${r.hops === 1 ? "" : "s"}`];
+      if (k.position) tags.push("shares position");
+      if (sharing(r.addr)) tags.push("has pages");
+      row.append(el("div", { style: "flex:1;min-width:0" }, el("b", { textContent: label(r.addr) }), el("div", { className: "muted", textContent: tags.join(" · ") })),
+        el("span", { className: "muted", textContent: ago(new Date(r.at)) }));
+      row.onclick = () => { state.nodeSel = r.addr; markTab("nodes"); setView("node"); renderNodes(); };
+      list.append(row);
+    }
+    return;
+  }
+  // Pages: nodes that share pages, with when they last announced.
+  const lastAt = new Map();
+  for (const r of state.announces) if (!lastAt.has(r.addr)) lastAt.set(r.addr, r.at);
+  const nodes = [...new Set([...pages.sharing, ...[...state.nodeInfo.keys()].filter(a => state.nodeInfo.get(a)?.pages)])]
+    .sort((a, b) => (lastAt.get(b) || 0) - (lastAt.get(a) || 0));
+  if (!nodes.length) { list.append(el("p", { className: "muted", textContent: "No node sharing pages heard yet. A host with pages/index.mu says so in every announce." })); return; }
+  for (const a of nodes) {
+    const row = el("div", { className: "card" });
+    row.style.cssText = "display:flex;align-items:center;gap:12px;padding:10px 14px;margin:0 0 8px";
+    const open = el("button", { textContent: "Open pages", className: "primary" });
+    open.onclick = () => openPage("maarse://" + a + "/");
+    row.append(el("div", { style: "flex:1;min-width:0" }, el("b", { textContent: label(a) }),
+      el("div", { className: "muted", textContent: lastAt.has(a) ? "announced " + ago(new Date(lastAt.get(a))) : "visited earlier" })), open);
+    list.append(row);
+  }
+}
+
 function ago(d) {
   if (!d) return "";
   const s = Math.round((Date.now() - d) / 1000);
@@ -5447,6 +5520,7 @@ function renderShellView(box) {
   if (state.view === "network") { renderNetwork(box); return true; }
   if (state.view === "activity") { renderActivity(box); return true; }
   if (state.view === "map") { renderMap(box); return true; }
+  if (state.view === "announces") { renderAnnounces(box); return true; }
   if (state.view === "node") { renderNode(box); return true; }
   return false;
 }

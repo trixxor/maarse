@@ -105,6 +105,7 @@ class Nav(start: Screen) {
 @Composable
 fun AppShell(nav: Nav) {
     BackHandler(nav.stack.size > 1) { nav.back() }
+    PagesNav.open = { nav.go(Screen.Net(NetPage.PAGES)) }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when (val s = nav.top) {
             Screen.Home -> Home(nav)
@@ -157,7 +158,7 @@ private fun Home(nav: Nav) {
         Box(Modifier.weight(1f)) {
             when (nav.tab) {
                 Tab.CHATS -> ChatsScreen(onOpen = { nav.go(Screen.Chat(it)) }, onAlerts = { nav.go(Screen.Net(NetPage.ALERTS)) })
-                Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onPages = { nav.go(Screen.Net(NetPage.PAGES)) })
+                Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onPages = { nav.go(Screen.Net(NetPage.PAGES)) }, onAnnounces = { nav.go(Screen.Net(NetPage.ANNOUNCES)) })
                 Tab.NETWORK -> NetworkScreen(onPage = { nav.go(Screen.Net(it)) })
                 Tab.SETTINGS -> MeScreen(nav)
             }

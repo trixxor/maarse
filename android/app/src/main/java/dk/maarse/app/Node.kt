@@ -36,6 +36,9 @@ object Node : LinkListener {
     val me = MutableStateFlow<Me?>(null)
     val channels = MutableStateFlow<Map<String, String>>(emptyMap())
     val nodes = MutableStateFlow<Map<String, NodeEntry>>(emptyMap())
+    /** Every announce passed on to us (Heard), newest first: (address, hops, time). */
+    val announces = MutableStateFlow<List<Triple<String, Int, Long>>>(emptyList())
+    private var infoAt = 0L
     val nicknames = MutableStateFlow<Map<String, String>>(emptyMap())
     val stats = MutableStateFlow<Map<Int, Int>>(emptyMap())
     val radio = MutableStateFlow<RadioCfg?>(null)
@@ -599,6 +602,7 @@ object Node : LinkListener {
         if (link !== this.link) return
         when (val ev = decodeEvent(frame)) {
             is Ev.Info -> {
+                infoAt = System.currentTimeMillis()
                 me.value = Me(ev.addr, ev.maxText, ev.maxFile, ev.repeater, ev.version, me.value?.name ?: "")
                 note("Node ${shortAddr(ev.addr)} (protocol v${ev.version}, ${ev.maxText} bytes per message)")
             }
@@ -607,7 +611,17 @@ object Node : LinkListener {
                 channels.update { it + (ev.channel to ev.name) }
                 db.saveChannel(ev.channel, ev.name)
             }
-            is Ev.Heard -> heard(ev.addr) { it.copy(hops = ev.hops) }
+            is Ev.Heard -> {
+                // Right after connecting the node lists every node it knows
+                // (as Heard with 0 hops); those are not new announces.
+                if (ev.addr != me.value?.addr && System.currentTimeMillis() - infoAt > 3000) announces.update { l ->
+                    val now = System.currentTimeMillis()
+                    // The same node again within a minute only moves its line to the top.
+                    val rest = l.filterNot { it.first == ev.addr && now - it.third < 60_000 }
+                    (listOf(Triple(ev.addr, ev.hops, now)) + rest).take(200)
+                }
+                heard(ev.addr) { it.copy(hops = ev.hops) }
+            }
             is Ev.Route -> heard(ev.dest) { it.copy(hops = ev.hops) }
             is Ev.NodeInfo -> heard(ev.addr) {
                 ev.caps?.let { Pages.noteCaps(ev.addr, it) }

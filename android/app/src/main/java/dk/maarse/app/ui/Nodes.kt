@@ -49,7 +49,7 @@ private fun reach(n: NodeEntry): String = buildList {
 
 /** People and nodes heard, newest first. */
 @Composable
-fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}) {
+fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}, onAnnounces: () -> Unit = {}) {
     val nodes by Node.nodes.collectAsState()
     Node.nicknames.collectAsState().value
     var filter by remember { mutableStateOf("") }
@@ -66,7 +66,12 @@ fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}) {
             Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         val saved = list.filter { Node.nicknames.value.containsKey(it.addr) }
         LazyColumn {
-            item { Group { GroupRow("Pages", "Browse maarse:// pages", last = true) { onPages() } } }
+            item {
+                Group {
+                    GroupRow("Announces", "Who announces themselves, live") { onAnnounces() }
+                    GroupRow("Pages", "Browse maarse:// pages", last = true) { onPages() }
+                }
+            }
             if (saved.isNotEmpty()) item { GroupTitle("Saved (${saved.size})") }
             items(saved, key = { "s" + it.addr }) { n -> ContactRow(n, onContact) }
             if (list.size > saved.size) item { GroupTitle("Heard recently") }

@@ -144,6 +144,12 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
 | 14 | CPU limits + benchmark | **done 2026-11-19**: Build > Performance: max events per frame, max speed, node warning (saved per browser); benchmark runs the scenario flat out and sets the limits | — |
 | 15 | Tracking a node/person | **done 2026-11-19**: right-click > Track; track line coloured by best contact (green repeater/anchor/host, yellow only handhelds/relays, red none); watch list with contact now, lost-for time, role (forest mode), battery, messages got/sent, contact changes | timeline of received messages on the track line |
 
+**Phones, user's wish 2026-11-19 (given to the phone agent)**: no phones at
+start; "+ Add phone" up to 10; floating windows that can be dragged, docked or
+minimised; setup per phone: where in Denmark (new node on the map or an
+existing node), internet yes/no, LoRa modem yes/no, then Start; the phone
+announces itself and shows the announces it hears around it (real router).
+
 **Findings from the simulator (2026-11-19)**
 
 - Presets ran without post offices (`mail: ""`) although hosts and firmware

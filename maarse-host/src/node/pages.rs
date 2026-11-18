@@ -42,7 +42,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const WINDOW: Duration = Duration::from_secs(30);
+// Page paths, picture copy sizes, dithering, the burst window and the call
+// rule live in maarse-hostrules (shared with the simulator).
+pub(crate) use maarse_hostrules::pages::{LORA_PICTURE_MAX, PicStyle, is_page_file, picture_path};
+use maarse_hostrules::pages::{self as rules, COLOUR4_MAX, GREY_TARGET};
 
 #[derive(Default)]
 pub(super) struct Pages {
@@ -53,7 +56,8 @@ pub(super) struct Pages {
     pub(super) board_keep: usize,
     pub(super) board_every: u64,
     previews_off: bool,
-    served: HashMap<Address, Vec<Instant>>,
+    /// When each reader was served (node clock, ms).
+    served: HashMap<Address, Vec<u64>>,
     /// Pages and pictures we asked for (node, path) and when: only those
     /// are taken when offered. Anything else that looks like a page is
     /// refused, so it never turns up as a file in a chat.
@@ -65,12 +69,7 @@ pub(super) struct Pages {
 }
 
 /// How long an asked-for page may take to come.
-const ASKED_KEEP: Duration = Duration::from_secs(600);
-
-/// A page or a picture on a page (`_style/file`), by its offer.
-pub(super) fn is_page_file(mime: &[u8], name: &[u8]) -> bool {
-    mime == content::PAGE_MIME || (name.first() == Some(&b'_') && name.contains(&b'/'))
-}
+const ASKED_KEEP: Duration = Duration::from_millis(rules::ASKED_KEEP_MS);
 
 impl Pages {
     pub(super) fn new(cfg: &crate::Config) -> Self {
@@ -101,52 +100,6 @@ pub(crate) fn find_page(root: &Path, path: &str) -> Option<PathBuf> {
 /// Compresses a page (raw deflate, like `DecompressionStream("deflate-raw")`).
 pub(crate) fn compress(markup: &[u8]) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec(markup, 9)
-}
-
-/// Which copy of a picture is asked for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PicStyle {
-    Grey,
-    Dots,
-    Colour,
-    /// Colour 4 KB and Colour 8 KB: asked for when the reader wants a better
-    /// picture than the greyscale one.
-    Colour4,
-    Colour8,
-    /// Full size: the original over the internet (scaled to the limit only
-    /// if it is larger); over LoRa never more than Colour 8 KB.
-    Full,
-    /// Forced by the page ("grey!", "dots!", "colour!"): this copy on any
-    /// route, never over 8 KB over LoRa.
-    ForceGrey,
-    ForceDots,
-    ForceColour,
-}
-
-/// The most a picture may be over LoRa, whatever the page asks.
-pub(crate) const LORA_PICTURE_MAX: usize = 8 * 1024;
-/// The greyscale step aims at this size.
-const GREY_TARGET: usize = 1400;
-/// The middle colour step.
-const COLOUR4_MAX: usize = 4 * 1024;
-
-/// Splits `_dots/hytte.jpg` into (style, `hytte.jpg`) when the rest is a
-/// picture; `None` for pages.
-pub(crate) fn picture_path(path: &str) -> Option<(PicStyle, &str)> {
-    let (style, rest) = match path.split_once('/') {
-        Some(("_grey", r)) => (PicStyle::Grey, r),
-        Some(("_dots", r)) => (PicStyle::Dots, r),
-        Some(("_colour", r)) => (PicStyle::Colour, r),
-        Some(("_c4", r)) => (PicStyle::Colour4, r),
-        Some(("_c8" | "_best", r)) => (PicStyle::Colour8, r),
-        Some(("_full", r)) => (PicStyle::Full, r),
-        Some(("_fgrey", r)) => (PicStyle::ForceGrey, r),
-        Some(("_fdots", r)) => (PicStyle::ForceDots, r),
-        Some(("_fcolour", r)) => (PicStyle::ForceColour, r),
-        _ => (PicStyle::Grey, path),
-    };
-    let ext = rest.rsplit_once('.')?.1;
-    ["jpg", "jpeg", "png", "webp"].contains(&ext).then_some((style, rest))
 }
 
 /// Lossy WebP of `img` (grey pictures as RGB with equal channels: the
@@ -193,8 +146,6 @@ pub(crate) fn colour_picture(img: &image::DynamicImage, limit: usize) -> Option<
     (b.len() <= limit && !b.is_empty()).then_some(b)
 }
 
-const BAYER4: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
-
 /// Dots: longest side 256, contrast stretched (2 % cut at each end), 4×4
 /// ordered dithering, written as a 1-bit grey PNG.
 pub(crate) fn dots_picture(img: &image::DynamicImage) -> Vec<u8> {
@@ -226,8 +177,7 @@ pub(crate) fn dots_picture(img: &image::DynamicImage) -> Vec<u8> {
     let mut raw = vec![0u8; stride * h as usize];
     for (x, y, p) in g.enumerate_pixels() {
         let v = ((p.0[0] as i32 - lo as i32) * 255 / span).clamp(0, 255) as f32;
-        let t = (BAYER4[(y % 4 * 4 + x % 4) as usize] as f32 + 0.5) * 16.0;
-        if v > t {
+        if rules::dot_on(v, x, y) {
             raw[y as usize * stride + 1 + (x as usize >> 3)] |= 0x80 >> (x & 7);
         }
     }
@@ -331,34 +281,28 @@ impl Node {
     }
 
     pub(super) fn on_page_request(&mut self, from: Address, path: &Small) {
-        let now = Instant::now();
-        let served = &mut self.pages.served;
-        served.retain(|_, v| {
-            v.retain(|t| now.duration_since(*t) < WINDOW);
+        let now = self.now_ms();
+        self.pages.served.retain(|_, v| {
+            v.retain(|t| now.saturating_sub(*t) < rules::WINDOW_MS);
             !v.is_empty()
         });
         let lora = self.file_limit(&from).via_lora;
         let burst = if lora { self.pages.burst_lora } else { self.pages.burst_net };
         let times = self.pages.served.entry(from).or_default();
-        if times.len() >= burst {
-            // Say so once, so the reader is not left waiting; then stay quiet.
-            let first = times.len() == burst;
-            if first {
-                times.push(now);
-            }
+        let verdict = rules::burst(times, now, burst);
+        if verdict != rules::Burst::Serve {
             self.log(format!("page request from {} rejected (too many)", short(&from)));
-            if first {
+            if verdict == rules::Burst::SlowDown {
                 let msg = format!("# Slow down
 
 Too many pages at once: at most {burst} in {} seconds. Wait a moment and try again.
 
 [Front page](/)
-", WINDOW.as_secs());
+", rules::WINDOW_MS / 1000);
                 let _ = self.send_page_reply(from, compress(msg.as_bytes()), Small::from_slice(content::PAGE_MIME).unwrap_or_default(), path.clone());
             }
             return;
         }
-        times.push(now);
 
         let path_s = String::from_utf8_lossy(path).into_owned();
         let lim = self.file_limit(&from);
@@ -451,7 +395,7 @@ The picture `{rel}` is missing here or could not be made small enough.
         let data = compress(markup.as_bytes());
         // Never over 8 KB when the page may go over LoRa (also an unknown
         // route, where it would otherwise wait in the mailbox).
-        let max = if via_lora { max_bytes.min(LORA_PICTURE_MAX) } else { max_bytes };
+        let max = rules::page_max(via_lora, max_bytes);
         if data.len() > max {
             let msg = format!("# Too large
 
@@ -572,8 +516,8 @@ impl Node {
 
     /// Call data: only when the recipient is reached over TCP all the way.
     fn send_call(&mut self, id: ClientId, dest: Address, data: &[u8]) {
-        if self.file_limit(&dest).via_lora {
-            self.send_client(id, &err_ev(0, error_code::NOT_OVER_TCP, "Calls require a connection over the internet all the way"));
+        if let Some((code, why)) = maarse_hostrules::calls::call_refusal(self.path_kind(&dest)) {
+            self.send_client(id, &err_ev(0, code, why));
             return;
         }
         let mut plain = Vec::with_capacity(1 + data.len());
@@ -615,20 +559,6 @@ mod tests {
         assert_eq!(find_page(&dir, "weather"), Some(dir.join("weather").join("index.mu")));
         assert_eq!(find_page(&dir, "missing"), None);
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn picture_paths_and_styles() {
-        assert_eq!(picture_path("_dots/hytte.jpg"), Some((PicStyle::Dots, "hytte.jpg")));
-        assert_eq!(picture_path("vejr/kort.png"), Some((PicStyle::Grey, "vejr/kort.png")));
-        assert_eq!(picture_path("_colour/a.webp"), Some((PicStyle::Colour, "a.webp")));
-        assert_eq!(picture_path("_c4/a.jpg"), Some((PicStyle::Colour4, "a.jpg")));
-        assert_eq!(picture_path("_c8/a.jpg"), Some((PicStyle::Colour8, "a.jpg")));
-        assert_eq!(picture_path("_best/a.jpg"), Some((PicStyle::Colour8, "a.jpg")));
-        assert_eq!(picture_path("_fdots/a.jpg"), Some((PicStyle::ForceDots, "a.jpg")));
-        assert_eq!(picture_path("_fcolour/a.jpg"), Some((PicStyle::ForceColour, "a.jpg")));
-        assert_eq!(picture_path("weather/index"), None);
-        assert_eq!(picture_path("_dots/readme"), None);
     }
 
     fn is_webp(b: &[u8]) -> bool {

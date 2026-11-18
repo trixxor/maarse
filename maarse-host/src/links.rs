@@ -365,19 +365,19 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
         }
         if let (Some(r), Some(ip)) = (rate.as_mut(), ip) {
             if maarse_core::Packet::decode(&data).is_err() {
-                r.invalid += 1;
-                if r.invalid > crate::guard::INVALID_BEFORE_BAN {
-                    crate::guard::ban(ip, crate::guard::BAN_INVALID, "too many invalid packets");
+                if let Some(b) = r.on_invalid() {
+                    crate::guard::ban(ip, std::time::Duration::from_millis(b.ms), b.why);
                     break;
                 }
                 continue;
             }
-            if !r.allow(data.len()) {
-                if r.drops > crate::guard::DROPS_BEFORE_BAN {
-                    crate::guard::ban(ip, crate::guard::BAN_RATE, "kept sending over the rate limit");
+            match r.on_packet(data.len()) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(b) => {
+                    crate::guard::ban(ip, std::time::Duration::from_millis(b.ms), b.why);
                     break;
                 }
-                continue;
             }
         }
         note_rx(id, None);

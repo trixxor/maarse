@@ -698,6 +698,7 @@ dependencies = [
  "maarse-core",
  "maarse-crypto",
  "maarse-fuzz",
+ "maarse-hostrules",
  "miniz_oxide 0.8.9",
  "rand_core",
  "serde",
@@ -708,6 +709,16 @@ dependencies = [
  "tun-rs",
  "tungstenite",
  "webp",
+]
+
+[[package]]
+name = "maarse-hostrules"
+version = "0.1.0"
+dependencies = [
+ "maarse-core",
+ "maarse-crypto",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

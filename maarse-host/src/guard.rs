@@ -12,68 +12,15 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Incoming backbone connections from one IP address at the same time.
-pub const MAX_PER_IP: usize = 8;
-/// Incoming backbone connections in all.
-pub const MAX_TOTAL: usize = 256;
-/// DHT requests from one IP address per minute.
-pub const DHT_PER_MIN: u32 = 120;
-/// Per link: packets per second (sustained) and the burst allowed.
-pub const PACKETS_PER_S: f64 = 100.0;
-pub const PACKET_BURST: f64 = 300.0;
-/// Per link: bytes per second (sustained); the burst is 4 s worth.
-pub const BYTES_PER_S: f64 = 64.0 * 1024.0;
-/// A link that keeps going over its rate is closed after this many drops.
-pub const DROPS_BEFORE_BAN: u32 = 500;
-/// A link sending this many packets that do not decode is closed.
-pub const INVALID_BEFORE_BAN: u32 = 20;
-pub const BAN_RATE: Duration = Duration::from_secs(10 * 60);
-pub const BAN_INVALID: Duration = Duration::from_secs(15 * 60);
+// The limits, block list networks, token buckets and ban rules live in
+// maarse-hostrules (shared with the simulator).
+pub use maarse_hostrules::guard::{DHT_PER_MIN, MAX_PER_IP, MAX_TOTAL, Net};
+use maarse_hostrules::guard::{BYTES_PER_S, DhtWindow, LinkRate, PACKETS_PER_S, exempt};
 
-/// A block list entry: an IP network (address and prefix length).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Net {
-    pub addr: IpAddr,
-    pub prefix: u8,
-}
-
-impl Net {
-    pub fn parse(s: &str) -> Option<Net> {
-        let (a, p) = s.split_once('/').map_or((s, None), |(a, p)| (a, Some(p)));
-        let addr: IpAddr = a.trim().parse().ok()?;
-        let max = if addr.is_ipv4() { 32 } else { 128 };
-        let prefix = match p {
-            Some(p) => p.trim().parse::<u8>().ok().filter(|&p| p <= max)?,
-            None => max,
-        };
-        Some(Net { addr, prefix })
-    }
-
-    pub fn contains(&self, ip: &IpAddr) -> bool {
-        fn bits(a: &IpAddr) -> (u128, u8) {
-            match a {
-                IpAddr::V4(v) => (u32::from(*v) as u128, 32),
-                IpAddr::V6(v) => (u128::from(*v), 128),
-            }
-        }
-        let ip = match ip {
-            IpAddr::V6(v) => v.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(*ip),
-            _ => *ip,
-        };
-        let ((a, la), (b, lb)) = (bits(&self.addr), bits(&ip));
-        if la != lb {
-            return false;
-        }
-        let shift = la - self.prefix;
-        shift >= la || (a >> shift) == (b >> shift)
-    }
-}
-
-impl std::fmt::Display for Net {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let max = if self.addr.is_ipv4() { 32 } else { 128 };
-        if self.prefix == max { write!(f, "{}", self.addr) } else { write!(f, "{}/{}", self.addr, self.prefix) }
-    }
+/// Milliseconds on the guard's own monotonic clock (for the pure rules).
+fn now_ms() -> u64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 #[derive(Default)]
@@ -83,7 +30,7 @@ struct State {
     bans: HashMap<IpAddr, (Instant, Duration, String)>,
     blocked_nets: Vec<Net>,
     blocked_nodes: Vec<Address>,
-    dht: HashMap<IpAddr, (Instant, u32)>,
+    dht: HashMap<IpAddr, DhtWindow>,
     file: Option<PathBuf>,
     refused: u64,
 }
@@ -93,10 +40,6 @@ static STATE: Mutex<Option<State>> = Mutex::new(None);
 fn with<T>(f: impl FnOnce(&mut State) -> T) -> T {
     let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
     f(s.get_or_insert_with(State::default))
-}
-
-fn exempt(ip: &IpAddr) -> bool {
-    ip.is_loopback() || matches!(ip, IpAddr::V6(v) if v.to_ipv4_mapped().is_some_and(|m| m.is_loopback()))
 }
 
 fn hex(b: &[u8]) -> String {
@@ -252,15 +195,11 @@ pub fn dht_allowed(ip: IpAddr) -> bool {
         if refusal(s, &ip).is_some() {
             return false;
         }
+        let now = now_ms();
         if s.dht.len() > 10_000 {
-            s.dht.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(60));
+            s.dht.retain(|_, w| w.live(now));
         }
-        let e = s.dht.entry(ip).or_insert((Instant::now(), 0));
-        if e.0.elapsed() > Duration::from_secs(60) {
-            *e = (Instant::now(), 0);
-        }
-        e.1 += 1;
-        e.1 <= DHT_PER_MIN
+        s.dht.entry(ip).or_insert(DhtWindow::new(now)).allow(now)
     })
 }
 
@@ -276,36 +215,25 @@ pub fn ban(ip: IpAddr, d: Duration, why: &str) {
     crate::debug::push("admin", serde_json::json!({"op": format!("banned for {} min: {why}", d.as_secs() / 60), "ip": ip.to_string()}));
 }
 
-/// Token buckets for one link (packets and bytes).
-pub struct Rate {
-    pkts: f64,
-    bytes: f64,
-    last: Instant,
-    pub drops: u32,
-    pub invalid: u32,
-}
+/// Token buckets for one link (packets and bytes); see [`LinkRate`].
+pub struct Rate(pub LinkRate);
 
 impl Default for Rate {
     fn default() -> Self {
-        Rate { pkts: PACKET_BURST, bytes: BYTES_PER_S * 4.0, last: Instant::now(), drops: 0, invalid: 0 }
+        Rate(LinkRate::new(now_ms()))
     }
 }
 
 impl Rate {
-    /// May a packet of `len` bytes pass now?
-    pub fn allow(&mut self, len: usize) -> bool {
-        let dt = self.last.elapsed().as_secs_f64();
-        self.last = Instant::now();
-        self.pkts = (self.pkts + dt * PACKETS_PER_S).min(PACKET_BURST);
-        self.bytes = (self.bytes + dt * BYTES_PER_S).min(BYTES_PER_S * 4.0);
-        if self.pkts >= 1.0 && self.bytes >= len as f64 {
-            self.pkts -= 1.0;
-            self.bytes -= len as f64;
-            true
-        } else {
-            self.drops += 1;
-            false
-        }
+    /// A packet of `len` bytes: `Ok(true)` passes, `Ok(false)` is dropped,
+    /// `Err` closes the link with a ban.
+    pub fn on_packet(&mut self, len: usize) -> Result<bool, maarse_hostrules::guard::Ban> {
+        self.0.on_packet(len, now_ms())
+    }
+
+    /// A packet that did not decode: a ban when there are too many.
+    pub fn on_invalid(&mut self) -> Option<maarse_hostrules::guard::Ban> {
+        self.0.on_invalid()
     }
 }
 
@@ -329,23 +257,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nets_match() {
-        let n = Net::parse("203.0.113.0/24").unwrap();
-        assert!(n.contains(&"203.0.113.77".parse().unwrap()));
-        assert!(!n.contains(&"203.0.114.1".parse().unwrap()));
-        assert!(n.contains(&"::ffff:203.0.113.5".parse().unwrap()), "IPv4-mapped IPv6");
-        assert!(Net::parse("2001:db8::/32").unwrap().contains(&"2001:db8:1::9".parse().unwrap()));
-        assert!(Net::parse("0.0.0.0/0").unwrap().contains(&"8.8.8.8".parse().unwrap()));
-        assert!(Net::parse("1.2.3.4/33").is_none() && Net::parse("nonsense").is_none());
-        assert_eq!(Net::parse("198.51.100.9").unwrap().to_string(), "198.51.100.9");
-    }
-
-    #[test]
     fn rate_limit_allows_bursts_and_then_drops() {
         let mut r = Rate::default();
-        let passed = (0..1000).filter(|_| r.allow(20)).count();
+        let passed = (0..1000).filter(|_| r.on_packet(20) == Ok(true)).count();
         assert!((300..=310).contains(&passed), "{passed}");
-        assert!(r.drops > 600);
+        assert!(r.0.drops > 600);
     }
 
     #[test]

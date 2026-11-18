@@ -594,6 +594,8 @@ Code blocks are written between lines with three backticks.
 
 The client asks for the picture like a page, with the style as the first path segment (`_grey/harbour.jpg`). Over the internet the host sends the original (scaled down only if it is over the limit), in the asked style. Over LoRa the page shows a placeholder; a tap brings the smallest copy the host can make, whatever the style asks: a grey JPEG of about 1–1.5 KB or a 1-bit PNG, whichever is smaller for that picture (about 10–15 s of air). Under the small picture a button asks for a better one (`_best/harbour.jpg`): a colour JPEG of up to 8 KB over LoRa (about 1 min. of air), which then replaces the small one. Pictures are fetched one at a time per node (`maarse-host/src/node/pages.rs`).
 
+**Forcing a quality.** An `!` after the style makes the page decide: `![map](kort.png "dots!")` always comes as dots, `"grey!"` as the grey copy, `"colour!"` in colour (the original over the internet). This holds over LoRa and over the internet, there is no "better picture" button, and over LoRa nothing is ever over 8 KB (`_fdots/…`, `_fgrey/…`, `_fcolour/…`).
+
 **Title.** A line `@title Hals Havn BBS` (anywhere, usually first) is the page's title, like `<title>` on a web page: shown above the page and in the lists of pages, not on the page itself. Without it the first heading is used.
 
 **Favourites and search.** Nodes › Announces has a Users and a Pages tab, each with a search field; a star makes a user or a node's pages a favourite (shown first). The star is also on a node's page and above an open page.

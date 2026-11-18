@@ -115,7 +115,7 @@ fun PagesPage() {
     }
 }
 
-private val PIC_LINE = Regex("""^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"(grey|dots|colour|color)")?\)\s*$""")
+private val PIC_LINE = Regex("""^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"(grey|dots|colour|color)(!?)")?\)\s*$""")
 
 /** One block of a page, parsed from the markup. */
 private sealed class Block {
@@ -124,7 +124,7 @@ private sealed class Block {
     data class Item(val text: String) : Block()
     data class Quote(val text: String) : Block()
     data class Code(val text: String) : Block()
-    data class Pic(val caption: String, val src: String, val style: String) : Block()
+    data class Pic(val caption: String, val src: String, val style: String, val forced: Boolean) : Block()
     data object Rule : Block()
 }
 
@@ -153,7 +153,7 @@ private fun parseMarkup(markup: String): List<Block> {
             line.isBlank() -> flush()
             line.startsWith("@title ") -> {}
             RULE.matches(line) -> { flush(); out += Block.Rule }
-            pic != null -> { flush(); out += Block.Pic(pic.groupValues[1], pic.groupValues[2], pic.groupValues[3]) }
+            pic != null -> { flush(); out += Block.Pic(pic.groupValues[1], pic.groupValues[2], pic.groupValues[3], pic.groupValues[4] == "!") }
             item != null -> { flush(); out += Block.Item(item.groupValues[1]) }
             line.startsWith(">") -> { flush(); out += Block.Quote(line.removePrefix(">").trimStart()) }
             else -> { if (para.isNotEmpty()) para.append(' '); para.append(line.trim()) }
@@ -175,7 +175,7 @@ private fun Markup(markup: String, base: Pages.Url, version: Int) {
             is Block.Item -> Row { Text("•  "); Inline(b.text, base, MaterialTheme.typography.bodyLarge) }
             is Block.Quote -> Box(Modifier.padding(start = 8.dp).background(MaterialTheme.colorScheme.surfaceContainer).padding(8.dp)) { Inline(b.text, base, MaterialTheme.typography.bodyLarge) }
             is Block.Code -> CodeBlock(b.text)
-            is Block.Pic -> Picture(b.caption, b.src, b.style, base, version)
+            is Block.Pic -> Picture(b.caption, b.src, b.style, base, version, b.forced)
             Block.Rule -> HorizontalDivider()
         }
     }
@@ -227,10 +227,14 @@ private fun Inline(text: String, base: Pages.Url, style: androidx.compose.ui.tex
 /** A picture: over LoRa it waits for a tap; over the internet it loads at once. */
 @Composable
 // `version` is passed so a picture redraws when Pages changes.
-private fun Picture(caption: String, src: String, style: String, base: Pages.Url, @Suppress("UNUSED_PARAMETER") version: Int) {
+// `forced` ("dots!" on the page): this quality on every route; over LoRa
+// never over 8 KB, and no "better picture".
+private fun Picture(caption: String, src: String, style: String, base: Pages.Url, @Suppress("UNUSED_PARAMETER") version: Int, forced: Boolean = false) {
     val st = when (style) { "color", "colour" -> "colour"; "dots" -> "dots"; else -> "grey" }
     val rel = src.trimStart('/').lowercase()
-    val path = "_$st/$rel"
+    val path = if (forced) "_f$st/$rel" else "_$st/$rel"
+    val loadText = if (forced) "Load picture · $st, set by the page · about ${if (st == "colour") "1 min (up to 8 KB)" else "10–20 s"} over LoRa"
+        else "Load picture · smallest version · about 10–20 s over LoRa"
     val key = "${base.addr}/$path"
     // The better copy (asked for after the small one over LoRa) wins when it has come.
     val bestPath = "_best/$rel"
@@ -251,7 +255,7 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                 Text("${if (caption.isNotEmpty()) "$caption · " else ""}%.1f KB".format(pic.data.size / 1024f) + if (best is Pages.Pic.Got) " · better picture" else "",
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 // Over LoRa the small copy came first: a better one can be asked for.
-                if (Pages.overLora(base.addr) && best !is Pages.Pic.Got) when {
+                if (Pages.overLora(base.addr) && best !is Pages.Pic.Got && !forced) when {
                     best is Pages.Pic.Busy -> Column(Modifier.widthIn(max = 320.dp)) {
                         androidx.compose.material3.LinearProgressIndicator(progress = { best.percent / 100f }, modifier = Modifier.fillMaxWidth())
                         Text("Better picture · %d %% · %.1f of %.1f KB".format(best.percent, best.total * best.percent / 100f / 1024f, best.total / 1024f),
@@ -282,9 +286,9 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                             style = MaterialTheme.typography.bodySmall)
                     }
                     null -> if (Pages.queued(base.addr, path)) Text("Waiting for the picture before it…", style = MaterialTheme.typography.bodySmall)
-                        else OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) { Text("Load picture · smallest version · about 10–20 s over LoRa") }
+                        else OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) { Text(loadText) }
                     else -> OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) {
-                        Text(if (pic is Pages.Pic.Failed) "Try again (${pic.why})" else "Load picture · smallest version · about 10–20 s over LoRa")
+                        Text(if (pic is Pages.Pic.Failed) "Try again (${pic.why})" else loadText)
                     }
                 }
             }

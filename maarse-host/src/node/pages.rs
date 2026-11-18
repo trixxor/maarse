@@ -18,6 +18,11 @@
 //! wants more asks for `_best/hytte.jpg`: the best copy that fits the
 //! route's limit (a colour JPEG of up to 8 KB over LoRa, the original over
 //! the internet).
+//!
+//! A page can force a quality with "!": `![map](kort.png "dots!")` is asked
+//! for as `_fdots/kort.png` and always comes as that copy, over LoRa and over
+//! the internet: `_fgrey` the grey copy, `_fdots` the dots, `_fcolour` colour
+//! (the original over the internet). Over LoRa nothing is ever over 8 KB.
 
 use super::{Node, err_ev, short};
 use crate::ClientId;
@@ -65,7 +70,15 @@ pub(crate) enum PicStyle {
     Colour,
     /// The best copy the route allows (asked for after the small one).
     Best,
+    /// Forced by the page ("grey!", "dots!", "colour!"): this copy on any
+    /// route, never over 8 KB over LoRa.
+    ForceGrey,
+    ForceDots,
+    ForceColour,
 }
+
+/// The most a picture may be over LoRa, whatever the page asks.
+pub(crate) const LORA_PICTURE_MAX: usize = 8 * 1024;
 
 /// Splits `_dots/hytte.jpg` into (style, `hytte.jpg`) when the rest is a
 /// picture; `None` for pages.
@@ -75,6 +88,9 @@ pub(crate) fn picture_path(path: &str) -> Option<(PicStyle, &str)> {
         Some(("_dots", r)) => (PicStyle::Dots, r),
         Some(("_colour", r)) => (PicStyle::Colour, r),
         Some(("_best", r)) => (PicStyle::Best, r),
+        Some(("_fgrey", r)) => (PicStyle::ForceGrey, r),
+        Some(("_fdots", r)) => (PicStyle::ForceDots, r),
+        Some(("_fcolour", r)) => (PicStyle::ForceColour, r),
         _ => (PicStyle::Grey, path),
     };
     let ext = rest.rsplit_once('.')?.1;
@@ -204,6 +220,23 @@ pub(crate) fn colour_picture(img: &image::DynamicImage, limit: usize) -> Option<
 /// the smallest small copy (grey or dots), so a page never costs more air
 /// than it must.
 pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bool, max: usize) -> Option<(Vec<u8>, &'static str)> {
+    let max = if via_lora { max.min(LORA_PICTURE_MAX) } else { max };
+    // Forced by the page: that copy on every route.
+    match style {
+        PicStyle::ForceGrey => {
+            let img = image::load_from_memory(data).ok()?;
+            return grey_picture(&img).filter(|b| b.len() <= max).map(|b| (b, "image/jpeg"));
+        }
+        PicStyle::ForceDots => {
+            let img = image::load_from_memory(data).ok()?;
+            return Some(dots_picture(&img)).filter(|b| b.len() <= max).map(|b| (b, "image/png"));
+        }
+        PicStyle::ForceColour if via_lora || data.len() > max => {
+            let img = image::load_from_memory(data).ok()?;
+            return colour_picture(&img, max).map(|b| (b, "image/jpeg"));
+        }
+        _ => {}
+    }
     if !via_lora && data.len() <= max {
         return Some((data.to_vec(), mime_of(name)));
     }
@@ -367,6 +400,8 @@ mod tests {
         assert_eq!(picture_path("vejr/kort.png"), Some((PicStyle::Grey, "vejr/kort.png")));
         assert_eq!(picture_path("_colour/a.webp"), Some((PicStyle::Colour, "a.webp")));
         assert_eq!(picture_path("_best/a.jpg"), Some((PicStyle::Best, "a.jpg")));
+        assert_eq!(picture_path("_fdots/a.jpg"), Some((PicStyle::ForceDots, "a.jpg")));
+        assert_eq!(picture_path("_fcolour/a.jpg"), Some((PicStyle::ForceColour, "a.jpg")));
         assert_eq!(picture_path("weather/index"), None);
         assert_eq!(picture_path("_dots/readme"), None);
     }
@@ -404,6 +439,16 @@ mod tests {
         // Over the internet the original goes as it is.
         let (orig, m) = picture_for(&src, "a.jpg", PicStyle::Grey, false, 1 << 20).unwrap();
         assert_eq!((orig.len(), m), (src.len(), "image/jpeg"));
+        // Forced by the page: the same copy on both routes, colour within 8 KB
+        // over LoRa and the original over the internet.
+        for lora in [true, false] {
+            assert_eq!(picture_for(&src, "a.jpg", PicStyle::ForceDots, lora, 1 << 20).unwrap(), (dots.clone(), "image/png"));
+            assert_eq!(picture_for(&src, "a.jpg", PicStyle::ForceGrey, lora, 1 << 20).unwrap(), (grey.clone(), "image/jpeg"));
+        }
+        let (fc, _) = picture_for(&src, "a.jpg", PicStyle::ForceColour, true, 1 << 20).unwrap();
+        assert!(fc.len() <= LORA_PICTURE_MAX, "forced colour over LoRa {} bytes", fc.len());
+        let (fo, _) = picture_for(&src, "a.jpg", PicStyle::ForceColour, false, 1 << 20).unwrap();
+        assert_eq!(fo.len(), src.len());
         println!("grey {} B, dots {} B, colour {} B", grey.len(), dots.len(), colour.len());
     }
 

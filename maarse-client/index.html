@@ -3213,7 +3213,7 @@ function pageInline(text, base) {
 // A picture on a page: `![caption](file.jpg "grey")`, style grey (default),
 // dots or colour. The path is from the node's pages folder. Over LoRa it waits
 // for a tap; over the internet it loads at once (the host sends the original).
-const PIC_LINE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"(grey|dots|colour|color)")?\)\s*$/;
+const PIC_LINE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"(grey|dots|colour|color)(!?)")?\)\s*$/;
 // One picture at a time per node: several big files to one recipient at once
 // overfill the host's send queue, and over LoRa they would only share the air.
 function picBusy(addr) {
@@ -3249,10 +3249,12 @@ function picProgress(f, what) {
   w.append(bar, el("div", { className: "muted", style: "font-size:12px" }, `${what} · ${pct} % · ${(f.size * pct / 100 / 1024).toFixed(1)} of ${(f.size / 1024).toFixed(1)} KB`));
   return w;
 }
-function pagePicture(caption, src, style, base) {
+// `forced` ("dots!" on the page): this quality on every route; over LoRa
+// never over 8 KB, and no "better picture".
+function pagePicture(caption, src, style, base, forced = false) {
   const st = style === "color" ? "colour" : style || "grey";
   const rel = src.replace(/^\/+/, "").toLowerCase();
-  const path = `_${st}/${rel}`;
+  const path = forced ? `_f${st}/${rel}` : `_${st}/${rel}`;
   const key = pageKey(base.addr, path);
   const fig = el("figure", {});
   Object.assign(fig.style, { margin: "12px 0", display: "flex", flexDirection: "column", gap: "6px" });
@@ -3269,7 +3271,7 @@ function pagePicture(caption, src, style, base) {
     img.onclick = () => showImage(got.url, rel);
     fig.append(img, el("figcaption", { className: "muted", style: "font-size:12px" }, `${caption ? caption + " · " : ""}${(got.size / 1024).toFixed(1)} KB${best?.url ? " · better picture" : ""}`));
     // Over LoRa the small copy came first: a better one can be asked for.
-    if (lora && !best?.url) {
+    if (lora && !best?.url && !forced) {
       const bBusy = [...state.files.values()].find(f => f.pic && f.key === bestKey);
       if (bBusy) fig.append(picProgress(bBusy, "Better picture"));
       else if (pages.picWaits.has(bestKey) || pages.picQueue.some(q => q.addr === base.addr && q.path === bestPath)) fig.append(el("div", { className: "muted", style: "font-size:12px" }, "Asking for a better picture…"), el("progress", { className: "picbar" }));
@@ -3290,7 +3292,7 @@ function pagePicture(caption, src, style, base) {
   else if (pages.picWaits.has(key)) box.append(el("div", { className: "muted" }, "Asking the node…"), el("progress", { className: "picbar" }));
   else if (pages.picQueue.some(q => q.addr === base.addr && q.path === path)) box.append(el("div", { className: "muted" }, "Waiting for the picture before it…"));
   else {
-    const b = el("button", { textContent: got?.error ? `Try again (${got.error})` : "Load picture · smallest version · about 10–20 sec. over LoRa" });
+    const b = el("button", { textContent: got?.error ? `Try again (${got.error})` : forced ? `Load picture · ${st}, set by the page · about ${st === "colour" ? "1 min. (up to 8 KB)" : "10–20 sec."} over LoRa` : "Load picture · smallest version · about 10–20 sec. over LoRa" });
     b.onclick = () => { requestPicture(base.addr, path); renderChat(); };
     box.append(b);
   }
@@ -3321,7 +3323,7 @@ function renderMarkup(markup, base) {
     if (/^@title\s/.test(line)) continue;
     if (/^---+\s*$/.test(line)) { flush(); root.append(el("hr")); continue; }
     const pic = line.match(PIC_LINE);
-    if (pic && base) { flush(); root.append(pagePicture(pic[1], pic[2], pic[3], base)); continue; }
+    if (pic && base) { flush(); root.append(pagePicture(pic[1], pic[2], pic[3], base, pic[4] === "!")); continue; }
     const li = line.match(/^\s*[-*]\s+(.*)$/);
     if (li) {
       if (para.length) { root.append(el("p", {}, ...pageInline(para.join(" "), base))); para = []; }

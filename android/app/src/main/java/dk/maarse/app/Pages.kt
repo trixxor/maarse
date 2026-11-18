@@ -34,6 +34,15 @@ object Pages {
     var url: Url? = null; private set
     var status = ""; private set
     val history = ArrayDeque<Url>()
+    /** Pages to go forward to (after Back), like a browser. */
+    val forwardStack = ArrayDeque<Url>()
+    /** The current page is being fetched (the bar under the toolbar moves). */
+    var loading = false; private set
+    /** Size (compressed) and time of the page shown. */
+    var pageBytes = 0; private set
+    var pageAt = 0L; private set
+    /** Recently visited pages, newest first (url, title). */
+    val recent = ArrayList<Pair<Url, String>>()
     private val cache = LinkedHashMap<String, String>()
     private val pics = HashMap<String, Pic>()
     private val waits = HashSet<String>()
@@ -88,8 +97,13 @@ object Pages {
 
     fun open(input: String, push: Boolean = true) {
         val u = parse(input, url) ?: run { status = "Invalid address. Write maarse://<32 hex characters>/path"; bump(); return }
-        url?.let { if (push && it != u) history.addLast(it) }
+        url?.let { if (push && it != u) { history.addLast(it); forwardStack.clear() } }
         url = u
+        loading = true
+        // No answer in a minute: stop the bar and say so.
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (loading && url == u && u.key in waits) { loading = false; status = "No answer from the node (is it online, and does it have pages?)"; bump() }
+        }, 60_000)
         if (!lora.containsKey(u.addr)) askRoute(u.addr)
         status = if (cache.containsKey(u.key)) "From this session's copy – fetching a new one…" else "Fetching…"
         waits.add(u.key)
@@ -97,7 +111,11 @@ object Pages {
         bump()
     }
 
-    fun back() { history.removeLastOrNull()?.let { open(it.toString(), push = false) } }
+    fun back() { history.removeLastOrNull()?.let { u -> url?.let { forwardStack.addLast(it) }; open(u.toString(), push = false) } }
+    fun forward() { forwardStack.removeLastOrNull()?.let { u -> url?.let { history.addLast(it) }; open(u.toString(), push = false) } }
+    fun reload() { url?.let { open(it.toString(), push = false) } }
+    /** The browser's start page (bookmarks, nodes sharing pages, recent). */
+    fun home() { url?.let { history.addLast(it); forwardStack.clear() }; url = null; loading = false; status = ""; bump() }
 
     /** Pictures waiting for the one before them (one at a time per node). */
     private val queue = ArrayDeque<Pair<String, String>>()
@@ -163,7 +181,7 @@ object Pages {
         val f = files.remove(ev.fileId) ?: return false
         when {
             !ev.ok && f.pic -> pics[f.key] = Pic.Failed(ev.text)
-            !ev.ok -> status = "Error: ${ev.text}"
+            !ev.ok -> { status = "Error: ${ev.text}"; if (url?.key == f.key) loading = false }
             f.pic && f.mime == PAGE_MIME -> pics[f.key] = Pic.Failed("missing on the node")
             f.pic -> pics[f.key] = Pic.Got(f.buf, f.mime)
             else -> runCatching { inflate(f.buf) }.onSuccess { m ->
@@ -175,7 +193,10 @@ object Pages {
                 // say) is often learned just after the page has come.
                 askRoute(from)
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ askRoute(from) }, 5000)
-                if (url?.key == f.key) status = "Fetched (${f.buf.size} bytes compressed)"
+                if (url?.key == f.key) {
+                    status = ""; loading = false; pageBytes = f.buf.size; pageAt = System.currentTimeMillis()
+                    url?.let { u -> recent.removeAll { it.first == u }; recent.add(0, u to title(m)); while (recent.size > 20) recent.removeAt(recent.lastIndex) }
+                }
             }.onFailure { status = "Could not unpack the page" }
         }
         if (f.pic) next()

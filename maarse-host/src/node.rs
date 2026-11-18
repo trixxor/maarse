@@ -5012,6 +5012,12 @@ mod radio_file_e2e_tests {
         assert!(size > 1000 && size <= 8192, "better picture {size} bytes");
         assert!(ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, ok: true, .. })), "better picture not finished");
         println!("better picture: {size} bytes over LoRa");
+        // Forced by the page ("colour!"): colour straight away, within 8 KB.
+        a.n.command(1, Command::RequestPage { req: 11, dest: b.n.addr, path: text(b"_fcolour/map.jpg") });
+        let (ea, _, _, _) = run_radio(&mut a, &mut b, 240, &mut |ea, _| ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, .. })));
+        let size = ea.iter().find_map(|e| match e { Event::FileIncoming { size, .. } => Some(*size), _ => None }).expect("no forced picture");
+        assert!(size > 1000 && size <= 8192, "forced colour {size} bytes");
+        println!("forced colour: {size} bytes over LoRa");
     }
 
     /// The phone node's case: a 7.5 KB picture over one LoRa hop through

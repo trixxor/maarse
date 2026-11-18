@@ -377,51 +377,84 @@ private fun Inline(text: String, base: Pages.Url, style: androidx.compose.ui.tex
     Text(s, style = style, fontWeight = if (bold) FontWeight.SemiBold else null)
 }
 
-/** A picture: over LoRa it waits for a tap; over the internet it loads at once. */
+// Pictures come in steps over LoRa, all made by the host as WebP:
+// Greyscale (about 1.3 KB) first, then on request Colour 4 KB and Colour 8 KB.
+// Tapping the picture offers the next steps. `forced` ("dots!" on the page):
+// that copy on every route, no steps.
+private data class PicStep(val id: String, val name: String, val time: String)
+private val PIC_STEPS = listOf(PicStep("_c4", "Colour 4 KB", "about 35 s"), PicStep("_c8", "Colour 8 KB", "about 1 min"))
+
+/** A picture: over LoRa it waits for a tap; over the internet it loads at once.
+ *  `version` is passed so a picture redraws when Pages changes. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-// `version` is passed so a picture redraws when Pages changes.
-// `forced` ("dots!" on the page): this quality on every route; over LoRa
-// never over 8 KB, and no "better picture".
 private fun Picture(caption: String, src: String, style: String, base: Pages.Url, @Suppress("UNUSED_PARAMETER") version: Int, forced: Boolean = false) {
     // Read here too: a child given an unchanged-looking version may be skipped.
     Pages.version.collectAsState().value
     val st = when (style) { "color", "colour" -> "colour"; "dots" -> "dots"; else -> "grey" }
     val rel = src.trimStart('/').lowercase()
     val path = if (forced) "_f$st/$rel" else "_$st/$rel"
-    val loadText = if (forced) "Load picture · $st, set by the page · about ${if (st == "colour") "1 min (up to 8 KB)" else "10–20 s"} over LoRa"
-        else "Load picture · smallest version · about 10–20 s over LoRa"
+    val loadText = "Load picture · " + when {
+        !forced -> "Greyscale · about 1.3 KB · 10–15 s"
+        st == "dots" -> "dots, set by the page · 10–20 s"
+        st == "colour" -> "Colour 8 KB, set by the page · about 1 min"
+        else -> "Greyscale, set by the page · 10–15 s"
+    } + " over LoRa"
     val key = "${base.addr}/$path"
-    // The better copy (asked for after the small one over LoRa) wins when it has come.
-    val bestPath = "_best/$rel"
-    val best = Pages.picture("${base.addr}/$bestPath")
-    val small = Pages.picture(key)
-    val pic = if (best is Pages.Pic.Got) best else small
-    LaunchedEffect(key, Pages.overLora(base.addr)) {
-        if (!Pages.overLora(base.addr) && pic == null && !Pages.queued(base.addr, path)) Pages.requestPicture(base.addr, path)
+    val lora = Pages.overLora(base.addr)
+    // The best step that has come wins: Colour 8 KB, Colour 4 KB, then the first copy.
+    val steps = if (forced) emptyList() else PIC_STEPS
+    val top = steps.lastOrNull { Pages.picture("${base.addr}/${it.id}/$rel") is Pages.Pic.Got }
+    val first = Pages.picture(key)
+    val pic = top?.let { Pages.picture("${base.addr}/${it.id}/$rel") } ?: first
+    var menu by remember(key) { mutableStateOf(false) }
+    var large by remember(key) { mutableStateOf(false) }
+    LaunchedEffect(key, lora) {
+        if (!lora && pic == null && !Pages.queued(base.addr, path)) Pages.requestPicture(base.addr, path)
     }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         when (pic) {
             is Pages.Pic.Got -> {
                 val bmp = remember(pic) { BitmapFactory.decodeByteArray(pic.data, 0, pic.data.size) }
+                val stepName = top?.name ?: when { pic.mime == "image/png" -> "Dots"; lora -> "Greyscale"; else -> "Original" }
                 if (bmp != null) Image(bmp.asImageBitmap(), caption.ifEmpty { rel },
-                    Modifier.widthIn(max = 320.dp).fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(Color.White),
+                    Modifier.widthIn(max = 320.dp).fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(Color.White)
+                        // Over LoRa a tap offers a better step; otherwise it shows the picture large.
+                        .clickable { if (lora && !forced) menu = !menu else large = true },
                     contentScale = ContentScale.FillWidth,
                     filterQuality = if (pic.mime == "image/png") FilterQuality.None else FilterQuality.Low)
-                Text("${if (caption.isNotEmpty()) "$caption · " else ""}%.1f KB".format(pic.data.size / 1024f) + if (best is Pages.Pic.Got) " · better picture" else "",
+                if (large && bmp != null) androidx.compose.ui.window.Dialog(onDismissRequest = { large = false }) {
+                    Image(bmp.asImageBitmap(), caption.ifEmpty { rel }, Modifier.fillMaxWidth().background(Color.White).clickable { large = false },
+                        contentScale = ContentScale.FillWidth,
+                        filterQuality = if (pic.mime == "image/png") FilterQuality.None else FilterQuality.Low)
+                }
+                Text("${if (caption.isNotEmpty()) "$caption · " else ""}$stepName · " + "%.1f KB".format(pic.data.size / 1024f),
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                // Over LoRa the small copy came first: a better one can be asked for.
-                if (Pages.overLora(base.addr) && best !is Pages.Pic.Got && !forced) when {
-                    best is Pages.Pic.Busy -> Column(Modifier.widthIn(max = 320.dp)) {
-                        androidx.compose.material3.LinearProgressIndicator(progress = { best.percent / 100f }, modifier = Modifier.fillMaxWidth())
-                        Text("Better picture · %d %% · %.1f of %.1f KB".format(best.percent, best.total * best.percent / 100f / 1024f, best.total / 1024f),
-                            style = MaterialTheme.typography.labelSmall)
-                    }
-                    best is Pages.Pic.Asking || Pages.queued(base.addr, bestPath) -> Column(Modifier.widthIn(max = 320.dp)) {
-                        Text("Asking for a better picture…", style = MaterialTheme.typography.labelSmall)
-                        androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
-                    }
-                    else -> OutlinedButton(onClick = { Pages.requestPicture(base.addr, bestPath) }) {
-                        Text(if (best is Pages.Pic.Failed) "Better picture: try again (${best.why})" else "Get a better picture · colour, up to 8 KB · about 1 min")
+                if (lora && !forced) {
+                    val higher = steps.drop(if (top == null) 0 else steps.indexOf(top) + 1)
+                    val working = higher.firstOrNull { val p = Pages.picture("${base.addr}/${it.id}/$rel"); p is Pages.Pic.Busy || p is Pages.Pic.Asking || Pages.queued(base.addr, "${it.id}/$rel") }
+                    val wp = working?.let { Pages.picture("${base.addr}/${it.id}/$rel") }
+                    when {
+                        wp is Pages.Pic.Busy -> Column(Modifier.widthIn(max = 320.dp)) {
+                            androidx.compose.material3.LinearProgressIndicator(progress = { wp.percent / 100f }, modifier = Modifier.fillMaxWidth())
+                            Text("${working.name} · %d %% · %.1f of %.1f KB".format(wp.percent, wp.total * wp.percent / 100f / 1024f, wp.total / 1024f),
+                                style = MaterialTheme.typography.labelSmall)
+                        }
+                        working != null -> Column(Modifier.widthIn(max = 320.dp)) {
+                            Text("Asking for ${working.name}…", style = MaterialTheme.typography.labelSmall)
+                            androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+                        }
+                        menu -> androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            higher.forEach { s ->
+                                val sp = Pages.picture("${base.addr}/${s.id}/$rel")
+                                OutlinedButton(onClick = { menu = false; Pages.requestPicture(base.addr, "${s.id}/$rel") }) {
+                                    Text(if (sp is Pages.Pic.Failed) "${s.name}: try again" else "${s.name} · ${s.time}")
+                                }
+                            }
+                            androidx.compose.material3.TextButton(onClick = { menu = false; large = true }) { Text("Show larger") }
+                        }
+                        higher.isNotEmpty() -> Text("Tap the picture for a better one", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }

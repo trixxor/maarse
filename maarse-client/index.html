@@ -3293,8 +3293,14 @@ function picProgress(f, what) {
   w.append(bar, el("div", { className: "muted", style: "font-size:12px" }, `${what} · ${pct} % · ${(f.size * pct / 100 / 1024).toFixed(1)} of ${(f.size / 1024).toFixed(1)} KB`));
   return w;
 }
-// `forced` ("dots!" on the page): this quality on every route; over LoRa
-// never over 8 KB, and no "better picture".
+// Pictures come in steps over LoRa, all made by the host as WebP:
+// Greyscale (about 1.3 KB) first, then on request Colour 4 KB and Colour 8 KB.
+// Tapping the picture offers the next steps. `forced` ("dots!" on the page):
+// that copy on every route, no steps.
+const PIC_STEPS = [
+  { id: "_c4", name: "Colour 4 KB", time: "about 35 sec." },
+  { id: "_c8", name: "Colour 8 KB", time: "about 1 min." },
+];
 function pagePicture(caption, src, style, base, forced = false) {
   const st = style === "color" ? "colour" : style || "grey";
   const rel = src.replace(/^\/+/, "").toLowerCase();
@@ -3302,33 +3308,46 @@ function pagePicture(caption, src, style, base, forced = false) {
   const key = pageKey(base.addr, path);
   const fig = el("figure", {});
   Object.assign(fig.style, { margin: "12px 0", display: "flex", flexDirection: "column", gap: "6px" });
-  // The better copy (asked for after the small one over LoRa) wins when it has come.
-  const bestPath = `_best/${rel}`, bestKey = pageKey(base.addr, bestPath);
-  const best = pages.pics.get(bestKey);
-  const got = best?.url ? best : pages.pics.get(key);
-  const busy = [...state.files.values()].find(f => f.pic && f.key === key);
   const lora = pages.lora.get(base.addr) !== false;
+  const queued = (k, pth) => pages.picWaits.has(k) || pages.picQueue.some(q => q.addr === base.addr && q.path === pth);
+  // The best step that has come wins: Colour 8 KB, Colour 4 KB, then the first copy.
+  const steps = forced ? [] : PIC_STEPS.map(s => ({ ...s, path: `${s.id}/${rel}`, key: pageKey(base.addr, `${s.id}/${rel}`) }));
+  steps.forEach(s => { s.got = pages.pics.get(s.key); s.busy = [...state.files.values()].find(f => f.pic && f.key === s.key); });
+  const top = [...steps].reverse().find(s => s.got?.url);
+  const first = pages.pics.get(key);
+  const got = top ? top.got : first;
+  const busy = [...state.files.values()].find(f => f.pic && f.key === key);
   if (got?.url) {
     const img = el("img", { src: got.url, alt: caption || rel });
-    Object.assign(img.style, { maxWidth: "100%", width: "320px", background: "#fff", borderRadius: "4px", cursor: "zoom-in" });
+    Object.assign(img.style, { maxWidth: "100%", width: "320px", background: "#fff", borderRadius: "4px", cursor: lora && !forced ? "pointer" : "zoom-in" });
     if (got.mime === "image/png") img.style.imageRendering = "pixelated";
-    img.onclick = () => showImage(got.url, rel);
-    fig.append(img, el("figcaption", { className: "muted", style: "font-size:12px" }, `${caption ? caption + " · " : ""}${(got.size / 1024).toFixed(1)} KB${best?.url ? " · better picture" : ""}`));
-    // Over LoRa the small copy came first: a better one can be asked for.
-    if (lora && !best?.url && !forced) {
-      const bBusy = [...state.files.values()].find(f => f.pic && f.key === bestKey);
-      if (bBusy) fig.append(picProgress(bBusy, "Better picture"));
-      else if (pages.picWaits.has(bestKey) || pages.picQueue.some(q => q.addr === base.addr && q.path === bestPath)) fig.append(el("div", { className: "muted", style: "font-size:12px" }, "Asking for a better picture…"), el("progress", { className: "picbar" }));
-      else {
-        const more = el("button", { textContent: best?.error ? `Better picture: try again (${best.error})` : "Get a better picture · colour, up to 8 KB · about 1 min. over LoRa" });
-        more.style.alignSelf = "flex-start";
-        more.onclick = () => { requestPicture(base.addr, bestPath); renderChat(); };
-        fig.append(more);
-      }
+    const stepName = top ? top.name : got.mime === "image/png" ? "Dots" : lora ? "Greyscale" : "Original";
+    const open = pages.picMenu === key;
+    // Over LoRa a tap offers a better step; otherwise it shows the picture large.
+    img.onclick = () => { if (lora && !forced) { pages.picMenu = open ? null : key; renderChat(); } else showImage(got.url, rel); };
+    img.title = lora && !forced ? "Tap for a better picture" : "Show larger";
+    fig.append(img, el("figcaption", { className: "muted", style: "font-size:12px" }, `${caption ? caption + " · " : ""}${stepName} · ${(got.size / 1024).toFixed(1)} KB`));
+    if (lora && !forced) {
+      const higher = steps.filter(s => !top || PIC_STEPS.findIndex(p => p.id === s.id) > PIC_STEPS.findIndex(p => p.id === top.id));
+      const working = higher.find(s => s.busy || queued(s.key, s.path));
+      if (working?.busy) fig.append(picProgress(working.busy, working.name));
+      else if (working) fig.append(el("div", { className: "muted", style: "font-size:12px" }, `Asking for ${working.name}…`), el("progress", { className: "picbar" }));
+      else if (open) {
+        const row = el("div", { className: "row" }); row.style.flexWrap = "wrap"; row.style.gap = "6px";
+        for (const s of higher) {
+          const b = el("button", { textContent: s.got?.error ? `${s.name}: try again (${s.got.error})` : `${s.name} · ${s.time}` });
+          b.onclick = () => { pages.picMenu = null; requestPicture(base.addr, s.path); renderChat(); };
+          row.append(b);
+        }
+        const big = el("button", { className: "ghost", textContent: "Show larger" });
+        big.onclick = () => { pages.picMenu = null; showImage(got.url, rel); };
+        row.append(big);
+        fig.append(row);
+      } else if (higher.length) fig.append(el("div", { className: "muted", style: "font-size:12px" }, "Tap the picture for a better one"));
     }
     return fig;
   }
-  if (!lora && !busy && !got && !pages.picWaits.has(key) && !pages.picQueue.some(q => q.addr === base.addr && q.path === path)) requestPicture(base.addr, path);
+  if (!lora && !busy && !got && !queued(key, path)) requestPicture(base.addr, path);
   const box = el("div", {});
   Object.assign(box.style, { width: "320px", maxWidth: "100%", minHeight: "120px", border: "1px dashed var(--line)", borderRadius: "6px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", padding: "12px", boxSizing: "border-box" });
   box.append(el("div", {}, caption || rel));
@@ -3336,7 +3355,8 @@ function pagePicture(caption, src, style, base, forced = false) {
   else if (pages.picWaits.has(key)) box.append(el("div", { className: "muted" }, "Asking the node…"), el("progress", { className: "picbar" }));
   else if (pages.picQueue.some(q => q.addr === base.addr && q.path === path)) box.append(el("div", { className: "muted" }, "Waiting for the picture before it…"));
   else {
-    const b = el("button", { textContent: got?.error ? `Try again (${got.error})` : forced ? `Load picture · ${st}, set by the page · about ${st === "colour" ? "1 min. (up to 8 KB)" : "10–20 sec."} over LoRa` : "Load picture · smallest version · about 10–20 sec. over LoRa" });
+    const what = !forced ? "Greyscale · about 1.3 KB · 10–15 sec." : st === "dots" ? "dots, set by the page · 10–20 sec." : st === "colour" ? "Colour 8 KB, set by the page · about 1 min." : "Greyscale, set by the page · 10–15 sec.";
+    const b = el("button", { textContent: got?.error ? `Try again (${got.error})` : `Load picture · ${what} over LoRa` });
     b.onclick = () => { requestPicture(base.addr, path); renderChat(); };
     box.append(b);
   }

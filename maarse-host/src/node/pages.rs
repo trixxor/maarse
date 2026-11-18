@@ -9,20 +9,26 @@
 //! it uses the same per-chunk acknowledgement and limit over LoRa as files.
 //!
 //! Pictures: a page may show `![caption](hytte.jpg "grey")`. The client asks
-//! for the picture like a page, with the style as a first path segment
-//! (`_grey/hytte.jpg`, `_dots/…`, `_colour/…`). Over the internet the original
-//! is sent (scaled down only if it is over the limit), in the asked style.
-//! Over LoRa the host always sends the smallest copy, whatever the style
-//! asks: grey (a grey JPEG of about 1.3 KB) or dots (1-bit ordered dithering
-//! as a 1-bit PNG), whichever is smaller for this picture. A reader who
-//! wants more asks for `_best/hytte.jpg`: the best copy that fits the
-//! route's limit (a colour JPEG of up to 8 KB over LoRa, the original over
-//! the internet).
+//! for the picture like a page, with the step as a first path segment. The
+//! host makes every copy itself, as lossy WebP (the format with the most
+//! picture per byte in our format test), in three steps:
 //!
-//! A page can force a quality with "!": `![map](kort.png "dots!")` is asked
-//! for as `_fdots/kort.png` and always comes as that copy, over LoRa and over
-//! the internet: `_fgrey` the grey copy, `_fdots` the dots, `_fcolour` colour
-//! (the original over the internet). Over LoRa nothing is ever over 8 KB.
+//! - `_grey/hytte.jpg`: **Greyscale**, about 1.3 KB. Over LoRa this always
+//!   comes first, whatever the page asks (`_colour/…` too), unless dots
+//!   (`_dots/…`, 1-bit PNG, best for drawings) are smaller.
+//! - `_c4/hytte.jpg`: **Colour 4 KB**, asked for when the reader taps the
+//!   picture for a better one.
+//! - `_c8/hytte.jpg`: **Colour 8 KB**, the most LoRa carries.
+//!
+//! Over the internet the original is sent for `_grey`/`_colour`/`_dots`
+//! (scaled down only if it is over the limit); `_c4`/`_c8` are sent as asked.
+//! `_best/…` (older clients) is Colour 8 KB.
+//!
+//! A page can force a copy with "!": `![map](kort.png "dots!")` is asked for
+//! as `_fdots/kort.png` and always comes as that copy, over LoRa and over the
+//! internet: `_fgrey` Greyscale, `_fdots` the dots, `_fcolour` Colour 8 KB
+//! over LoRa (the original over the internet). Over LoRa nothing is ever over
+//! 8 KB.
 
 use super::{Node, err_ev, short};
 use crate::ClientId;
@@ -65,14 +71,16 @@ pub(crate) fn compress(markup: &[u8]) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec(markup, 9)
 }
 
-/// How a picture on a page goes over LoRa.
+/// Which copy of a picture is asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PicStyle {
     Grey,
     Dots,
     Colour,
-    /// The best copy the route allows (asked for after the small one).
-    Best,
+    /// Colour 4 KB and Colour 8 KB: asked for when the reader wants a better
+    /// picture than the greyscale one.
+    Colour4,
+    Colour8,
     /// Forced by the page ("grey!", "dots!", "colour!"): this copy on any
     /// route, never over 8 KB over LoRa.
     ForceGrey,
@@ -82,6 +90,10 @@ pub(crate) enum PicStyle {
 
 /// The most a picture may be over LoRa, whatever the page asks.
 pub(crate) const LORA_PICTURE_MAX: usize = 8 * 1024;
+/// The greyscale step aims at this size.
+const GREY_TARGET: usize = 1400;
+/// The middle colour step.
+const COLOUR4_MAX: usize = 4 * 1024;
 
 /// Splits `_dots/hytte.jpg` into (style, `hytte.jpg`) when the rest is a
 /// picture; `None` for pages.
@@ -90,7 +102,8 @@ pub(crate) fn picture_path(path: &str) -> Option<(PicStyle, &str)> {
         Some(("_grey", r)) => (PicStyle::Grey, r),
         Some(("_dots", r)) => (PicStyle::Dots, r),
         Some(("_colour", r)) => (PicStyle::Colour, r),
-        Some(("_best", r)) => (PicStyle::Best, r),
+        Some(("_c4", r)) => (PicStyle::Colour4, r),
+        Some(("_c8" | "_best", r)) => (PicStyle::Colour8, r),
         Some(("_fgrey", r)) => (PicStyle::ForceGrey, r),
         Some(("_fdots", r)) => (PicStyle::ForceDots, r),
         Some(("_fcolour", r)) => (PicStyle::ForceColour, r),
@@ -108,50 +121,48 @@ fn mime_of(path: &str) -> &'static str {
     }
 }
 
-fn jpeg(img: &image::DynamicImage, q: u8) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    img.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, q)).ok()?;
-    Some(out)
+/// Lossy WebP of `img` (grey pictures as RGB with equal channels: the
+/// colour planes then cost almost nothing).
+fn webp(img: &image::RgbImage, q: f32) -> Vec<u8> {
+    webp::Encoder::from_rgb(img.as_raw(), img.width(), img.height()).encode(q).to_vec()
 }
 
-/// Grey, small: longest side 256, grey JPEG at falling quality until it is
-/// at most 1.5 KB (or the smallest tried).
-pub(crate) fn grey_picture(img: &image::DynamicImage) -> Option<Vec<u8>> {
-    let g = image::DynamicImage::ImageLuma8(img.thumbnail(256, 256).to_luma8());
-    let mut best: Option<Vec<u8>> = None;
-    for q in [30, 20, 12, 8] {
-        let b = jpeg(&g, q)?;
-        let small = b.len() <= 1500;
-        if best.as_ref().is_none_or(|x| b.len() < x.len()) {
-            best = Some(b);
-        }
-        if small {
-            break;
-        }
-    }
-    best
-}
-
-/// Grey, good: what a page asks for with "grey!". Longest side 384 (down to
-/// 256), grey JPEG at quality 30 or better, aiming at 4 KB, so it is clearly better
-/// than the small copy and still a fraction of the 8 KB LoRa limit.
-pub(crate) fn grey_picture_good(img: &image::DynamicImage) -> Option<Vec<u8>> {
-    // Keep the quality up and make the picture smaller first: a smaller
-    // sharp picture reads better than a big blocky one.
+/// The largest, sharpest WebP that fits `limit`: each side from big to small,
+/// quality from high down to `floor`, the first that fits. A smaller sharp
+/// picture reads better than a big blocky one, hence the floor. If nothing
+/// fits, the smallest tried.
+fn webp_fit(img: &image::DynamicImage, grey: bool, limit: usize, sides: &[u32], floor: f32) -> Vec<u8> {
     let mut smallest: Option<Vec<u8>> = None;
-    for side in [384, 320, 256] {
-        let g = image::DynamicImage::ImageLuma8(img.thumbnail(side, side).to_luma8());
-        for q in [75, 65, 55, 45, 38, 30] {
-            let b = jpeg(&g, q)?;
-            if b.len() <= 4096 {
-                return Some(b);
+    for &side in sides {
+        let t = img.thumbnail(side, side);
+        let rgb = if grey { image::DynamicImage::ImageLuma8(t.to_luma8()).to_rgb8() } else { t.to_rgb8() };
+        let mut q = 80.0;
+        while q >= floor {
+            let b = webp(&rgb, q);
+            if b.len() <= limit {
+                return b;
             }
             if smallest.as_ref().is_none_or(|x| b.len() < x.len()) {
                 smallest = Some(b);
             }
+            q -= 10.0;
         }
     }
-    smallest
+    smallest.unwrap_or_default()
+}
+
+/// Greyscale: about 1.3 KB, the first copy over LoRa.
+pub(crate) fn grey_picture(img: &image::DynamicImage) -> Vec<u8> {
+    webp_fit(img, true, GREY_TARGET, &[256, 224, 192, 160, 128, 96], 10.0)
+}
+
+/// Colour that fits `limit` (Colour 4 KB, Colour 8 KB, or an internet limit).
+pub(crate) fn colour_picture(img: &image::DynamicImage, limit: usize) -> Option<Vec<u8>> {
+    // Within the LoRa sizes a picture over 640 px never fits: skip those tries.
+    const SIDES: [u32; 11] = [1280, 960, 800, 640, 560, 480, 400, 320, 256, 192, 160];
+    let first = if limit <= LORA_PICTURE_MAX { 3 } else { 0 };
+    let b = webp_fit(img, false, limit, &SIDES[first..], 30.0);
+    (b.len() <= limit && !b.is_empty()).then_some(b)
 }
 
 const BAYER4: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
@@ -226,37 +237,18 @@ fn png_grey1(w: u32, h: u32, raw: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Colour: smaller sides and lower quality until the JPEG fits `limit`.
-pub(crate) fn colour_picture(img: &image::DynamicImage, limit: usize) -> Option<Vec<u8>> {
-    for side in [1280, 960, 640, 480, 320, 240, 160] {
-        let t = image::DynamicImage::ImageRgb8(img.thumbnail(side, side).to_rgb8());
-        for q in [75, 55, 40, 25] {
-            let b = jpeg(&t, q)?;
-            if b.len() <= limit {
-                return Some(b);
-            }
-        }
-    }
-    None
-}
-
-/// The bytes and MIME of a picture for a route: the original over the
-/// internet when it fits (else a colour copy that fits); over LoRa always
-/// the smallest small copy (grey or dots), so a page never costs more air
-/// than it must.
+/// The bytes and MIME of a picture for a route: over LoRa the greyscale
+/// step (or dots when smaller) unless a colour step is asked for; over the
+/// internet the original when it fits. Nothing over LoRa is over 8 KB.
 pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bool, max: usize) -> Option<(Vec<u8>, &'static str)> {
+    const WEBP: &str = "image/webp";
     let max = if via_lora { max.min(LORA_PICTURE_MAX) } else { max };
-    // Forced by the page: that copy on every route.
+    let load = || image::load_from_memory(data).ok();
     match style {
-        PicStyle::ForceGrey => {
-            let img = image::load_from_memory(data).ok()?;
-            // The good copy if it fits, else the small one.
-            let good = grey_picture_good(&img).filter(|b| b.len() <= max);
-            return good.or_else(|| grey_picture(&img)).filter(|b| b.len() <= max).map(|b| (b, "image/jpeg"));
-        }
+        PicStyle::ForceGrey => return Some((grey_picture(&load()?), WEBP)).filter(|(b, _)| b.len() <= max),
         PicStyle::ForceDots => {
             // A busy picture can make big dots: smaller until it fits.
-            let img = image::load_from_memory(data).ok()?;
+            let img = load()?;
             for side in [256, 192, 128, 96] {
                 let d = dots_picture(&img.thumbnail(side, side));
                 if d.len() <= max {
@@ -265,26 +257,25 @@ pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bo
             }
             return None;
         }
-        PicStyle::ForceColour if via_lora || data.len() > max => {
-            let img = image::load_from_memory(data).ok()?;
-            return colour_picture(&img, max).map(|b| (b, "image/jpeg"));
-        }
+        PicStyle::Colour4 => return colour_picture(&load()?, max.min(COLOUR4_MAX)).map(|b| (b, WEBP)),
+        PicStyle::Colour8 => return colour_picture(&load()?, max.min(LORA_PICTURE_MAX)).map(|b| (b, WEBP)),
+        PicStyle::ForceColour if via_lora => return colour_picture(&load()?, max).map(|b| (b, WEBP)),
         _ => {}
     }
-    if !via_lora && data.len() <= max {
-        return Some((data.to_vec(), mime_of(name)));
-    }
-    let img = image::load_from_memory(data).ok()?;
     if !via_lora {
-        return colour_picture(&img, max).map(|b| (b, "image/jpeg"));
+        if data.len() <= max {
+            return Some((data.to_vec(), mime_of(name)));
+        }
+        return colour_picture(&load()?, max).map(|b| (b, WEBP));
     }
-    if style == PicStyle::Best {
-        return colour_picture(&img, max).map(|b| (b, "image/jpeg"));
-    }
+    // Over LoRa: the smallest first copy.
+    let img = load()?;
+    let grey = grey_picture(&img);
     let dots = dots_picture(&img);
-    match grey_picture(&img) {
-        Some(g) if g.len() <= dots.len() => Some((g, "image/jpeg")),
-        _ => Some((dots, "image/png")),
+    if dots.len() < grey.len() && dots.len() <= max {
+        Some((dots, "image/png"))
+    } else {
+        Some((grey, WEBP)).filter(|(b, _)| b.len() <= max)
     }
 }
 
@@ -452,15 +443,21 @@ mod tests {
         assert_eq!(picture_path("_dots/hytte.jpg"), Some((PicStyle::Dots, "hytte.jpg")));
         assert_eq!(picture_path("vejr/kort.png"), Some((PicStyle::Grey, "vejr/kort.png")));
         assert_eq!(picture_path("_colour/a.webp"), Some((PicStyle::Colour, "a.webp")));
-        assert_eq!(picture_path("_best/a.jpg"), Some((PicStyle::Best, "a.jpg")));
+        assert_eq!(picture_path("_c4/a.jpg"), Some((PicStyle::Colour4, "a.jpg")));
+        assert_eq!(picture_path("_c8/a.jpg"), Some((PicStyle::Colour8, "a.jpg")));
+        assert_eq!(picture_path("_best/a.jpg"), Some((PicStyle::Colour8, "a.jpg")));
         assert_eq!(picture_path("_fdots/a.jpg"), Some((PicStyle::ForceDots, "a.jpg")));
         assert_eq!(picture_path("_fcolour/a.jpg"), Some((PicStyle::ForceColour, "a.jpg")));
         assert_eq!(picture_path("weather/index"), None);
         assert_eq!(picture_path("_dots/readme"), None);
     }
 
+    fn is_webp(b: &[u8]) -> bool {
+        b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP"
+    }
+
     #[test]
-    fn small_pictures_for_lora() {
+    fn picture_steps_for_lora() {
         // A 640×480 photo-like test picture: gradients plus noise.
         let mut rng = 1u32;
         let img = image::RgbImage::from_fn(640, 480, |x, y| {
@@ -472,39 +469,34 @@ mod tests {
         image::DynamicImage::ImageRgb8(img)
             .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut src, 90))
             .unwrap();
-        let img = image::load_from_memory(&src).unwrap();
-        let grey = grey_picture(&img).unwrap();
-        let dots = dots_picture(&img);
-        assert_eq!(image::load_from_memory(&grey).unwrap().width(), 256);
-        assert_eq!(image::load_from_memory(&dots).unwrap().width(), 256);
-        // Over LoRa: always the smaller of the two, whatever the style asks.
-        for style in [PicStyle::Grey, PicStyle::Dots, PicStyle::Colour] {
-            let (b, m) = picture_for(&src, "a.jpg", style, true, 8192).unwrap();
-            assert_eq!(b.len(), grey.len().min(dots.len()), "{style:?}");
-            assert_eq!(m, if grey.len() <= dots.len() { "image/jpeg" } else { "image/png" });
+        let get = |st, lora| picture_for(&src, "a.jpg", st, lora, 1 << 20).unwrap();
+        // Over LoRa the first copy is Greyscale (WebP, about 1.3 KB) whatever the page asks.
+        let (grey, m) = get(PicStyle::Grey, true);
+        assert_eq!(m, "image/webp");
+        assert!(is_webp(&grey) && grey.len() <= GREY_TARGET, "greyscale {} bytes", grey.len());
+        for st in [PicStyle::Dots, PicStyle::Colour] {
+            assert_eq!(get(st, true).0.len(), grey.len(), "{st:?}");
         }
-        let colour = colour_picture(&img, 8192).unwrap();
-        assert!(colour.len() <= 8192);
-        // Asked for the better copy over LoRa: colour within the limit.
-        let (best, m) = picture_for(&src, "a.jpg", PicStyle::Best, true, 8192).unwrap();
-        assert_eq!((best.len(), m), (colour.len(), "image/jpeg"));
-        assert!(best.len() > grey.len().min(dots.len()));
-        // Over the internet the original goes as it is.
-        let (orig, m) = picture_for(&src, "a.jpg", PicStyle::Grey, false, 1 << 20).unwrap();
-        assert_eq!((orig.len(), m), (src.len(), "image/jpeg"));
-        // Forced by the page: the same copy on both routes, colour within 8 KB
-        // over LoRa and the original over the internet.
+        // The better steps: Colour 4 KB, then Colour 8 KB, both WebP, each bigger.
+        let (c4, m4) = get(PicStyle::Colour4, true);
+        let (c8, m8) = get(PicStyle::Colour8, true);
+        assert_eq!((m4, m8), ("image/webp", "image/webp"));
+        assert!(grey.len() < c4.len() && c4.len() <= COLOUR4_MAX, "colour 4 KB: {} bytes", c4.len());
+        assert!(c4.len() < c8.len() && c8.len() <= LORA_PICTURE_MAX, "colour 8 KB: {} bytes", c8.len());
+        // They decode, and the colour steps are larger pictures.
+        let w = |b: &[u8]| image::load_from_memory(b).unwrap().width();
+        assert!(w(&c8) >= w(&c4) && w(&c4) >= w(&grey));
+        // Over the internet the original goes as it is; the colour steps as asked.
+        assert_eq!(get(PicStyle::Grey, false), (src.clone(), "image/jpeg"));
+        assert_eq!(get(PicStyle::Colour4, false).0.len(), c4.len());
+        // Forced by the page: the same copy on both routes.
         for lora in [true, false] {
-            assert_eq!(picture_for(&src, "a.jpg", PicStyle::ForceDots, lora, 1 << 20).unwrap(), (dots.clone(), "image/png"));
-            let (fg, m) = picture_for(&src, "a.jpg", PicStyle::ForceGrey, lora, 1 << 20).unwrap();
-            assert_eq!(m, "image/jpeg");
-            assert!(fg.len() > grey.len() && fg.len() <= LORA_PICTURE_MAX, "forced grey {} bytes", fg.len());
+            assert_eq!(get(PicStyle::ForceGrey, lora).0, grey);
+            assert_eq!(get(PicStyle::ForceDots, lora).1, "image/png");
         }
-        let (fc, _) = picture_for(&src, "a.jpg", PicStyle::ForceColour, true, 1 << 20).unwrap();
-        assert!(fc.len() <= LORA_PICTURE_MAX, "forced colour over LoRa {} bytes", fc.len());
-        let (fo, _) = picture_for(&src, "a.jpg", PicStyle::ForceColour, false, 1 << 20).unwrap();
-        assert_eq!(fo.len(), src.len());
-        // Noise makes the biggest dots; forced dots still fit in 8 KB.
+        assert!(get(PicStyle::ForceColour, true).0.len() <= LORA_PICTURE_MAX);
+        assert_eq!(get(PicStyle::ForceColour, false).0.len(), src.len());
+        // Noise is the worst case: still within 8 KB over LoRa in every step.
         let mut noise = image::RgbImage::new(600, 600);
         let mut x = 1u32;
         for p in noise.pixels_mut() {
@@ -513,11 +505,11 @@ mod tests {
         }
         let mut nb = Vec::new();
         image::DynamicImage::ImageRgb8(noise).write_to(&mut std::io::Cursor::new(&mut nb), image::ImageFormat::Png).unwrap();
-        for st in [PicStyle::ForceDots, PicStyle::ForceGrey, PicStyle::ForceColour, PicStyle::Best, PicStyle::Grey] {
-            let (b, _) = picture_for(&nb, "n.png", st, true, 1 << 20).unwrap();
+        for st in [PicStyle::Grey, PicStyle::ForceGrey, PicStyle::ForceDots, PicStyle::Colour4, PicStyle::Colour8, PicStyle::ForceColour] {
+            let (b, _) = picture_for(&nb, "n.png", st, true, 1 << 20).unwrap_or_else(|| panic!("{st:?}: no copy"));
             assert!(b.len() <= LORA_PICTURE_MAX, "{st:?} noise over LoRa {} bytes", b.len());
         }
-        println!("grey {} B, dots {} B, colour {} B", grey.len(), dots.len(), colour.len());
+        println!("greyscale {} B, colour 4 KB {} B, colour 8 KB {} B", grey.len(), c4.len(), c8.len());
     }
 
     #[test]

@@ -5040,20 +5040,20 @@ mod radio_file_e2e_tests {
                 _ => None,
             });
             let (m, size) = got.unwrap_or_else(|| panic!("no picture for {style}"));
-            assert!(m == "image/png" || m == "image/jpeg", "{style}: {m}{mime}");
+            assert!(m == "image/png" || m == "image/webp", "{style}: {m}{mime}");
             assert!(size <= max, "{style}: {size} bytes");
             assert!(ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, ok: true, .. })), "{style} not finished");
             println!("{style}: {size} bytes over LoRa");
         }
         // Asked for the better copy afterwards: colour, bigger, within 8 KB.
-        a.n.command(1, Command::RequestPage { req: 10, dest: b.n.addr, path: text(b"_best/map.jpg") });
+        a.n.command(1, Command::RequestPage { req: 10, dest: b.n.addr, path: text(b"_c8/map.jpg") });
         let (ea, _, _, _) = run_radio(&mut a, &mut b, 240, &mut |ea, _| ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, .. })));
         let got = ea.iter().find_map(|e| match e {
             Event::FileIncoming { mime: m, size, .. } => Some((String::from_utf8_lossy(m).to_string(), *size)),
             _ => None,
         });
         let (m, size) = got.expect("no better picture");
-        assert_eq!(m, "image/jpeg");
+        assert_eq!(m, "image/webp");
         assert!(size > 1000 && size <= 8192, "better picture {size} bytes");
         assert!(ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, ok: true, .. })), "better picture not finished");
         println!("better picture: {size} bytes over LoRa");

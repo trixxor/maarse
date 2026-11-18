@@ -42,6 +42,8 @@ tun-rs = { version = "2.8", optional = true }
 # Pictures on maarse:// pages: decoded and made small for LoRa (pure Rust,
 # so it also builds for Android).
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# Lossy WebP for page pictures (the image crate only writes lossless WebP).
+webp = { version = "0.3", default-features = false }
 
 [features]
 default = ["tun"]

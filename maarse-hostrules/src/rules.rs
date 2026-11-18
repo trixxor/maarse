@@ -35,6 +35,15 @@ pub struct Rules {
     /// Key requests are answered from the announce cache at most this often
     /// per destination.
     pub key_answer_every_ms: u64,
+    /// Largest file over the internet (`--max-file`).
+    pub max_file: u32,
+    /// The file mailbox is on (files for recipients that cannot be reached wait).
+    pub filebox_on: bool,
+    /// Page requests per reader in the burst window, over LoRa and over the internet.
+    pub pages_burst_lora: usize,
+    pub pages_burst_net: usize,
+    /// IP tunnel packets may go over LoRa (`--tun-lora`).
+    pub tun_lora: bool,
 }
 
 impl Rules {
@@ -51,6 +60,11 @@ impl Rules {
         dht_lookup_every_ms: 30_000,
         bordercast_repeat_ms: 120_000,
         key_answer_every_ms: 30_000,
+        max_file: crate::filebox::MAX_FILE_DEFAULT,
+        filebox_on: true,
+        pages_burst_lora: crate::pages::BURST_LORA,
+        pages_burst_net: crate::pages::BURST_NET,
+        tun_lora: false,
     };
 
     /// The name of the standard profile.

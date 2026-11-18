@@ -37,6 +37,8 @@ use std::collections::HashSet;
 pub const LORA_MAX_FILE: u32 = maarse_crypto::files::MAX_FILE as u32;
 /// Files in the mailbox expire after the same time as messages (7 days, ms).
 pub const FILEBOX_TTL_MS: u64 = 7 * 24 * 3600 * 1000;
+/// Largest file over the internet by default (`--max-file`, 1 MB).
+pub const MAX_FILE_DEFAULT: u32 = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathKind {

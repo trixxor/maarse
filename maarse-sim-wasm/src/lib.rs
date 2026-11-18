@@ -41,12 +41,45 @@ pub fn create(json: &str) -> Result<Engine, String> {
     Ok(Engine::new(sc))
 }
 
+/// `send_file`: a file, voice message (Codec2, `secs` long) or picture
+/// (a Pages picture copy: `quality` grey | c4 | c8, or `bytes`).
+fn content_file(e: &mut Engine, cmd: &Value) -> Value {
+    use engine::transfer::{ItemKind, VOICE_BYTES_PER_S, VOICE_MIME};
+    use maarse_hostrules::pages;
+    let (from, to) = (cmd["from"].as_u64().unwrap_or(0) as usize, cmd["to"].as_u64().unwrap_or(0) as usize);
+    let given = cmd["bytes"].as_u64().map(|b| b as u32);
+    let (kind, bytes, mime, name) = match cmd["kind"].as_str().unwrap_or("file") {
+        "voice" => {
+            let secs = cmd["secs"].as_u64().unwrap_or(10) as u32;
+            (ItemKind::Voice, given.unwrap_or(secs * VOICE_BYTES_PER_S), VOICE_MIME, "voice.c2")
+        }
+        "picture" => {
+            let q = match cmd["quality"].as_str().unwrap_or("c4") {
+                "grey" => pages::GREY_TARGET,
+                "c8" => pages::LORA_PICTURE_MAX,
+                _ => pages::COLOUR4_MAX,
+            };
+            (ItemKind::Picture, given.unwrap_or(q as u32), "image/webp", "picture.webp")
+        }
+        _ => (ItemKind::File, given.unwrap_or(4096), "application/octet-stream", "file.bin"),
+    };
+    match e.xf_send_file(from, to, kind, bytes, mime, name, None) {
+        Ok(k) => e.item_json(k),
+        Err((_, why)) => json!({"state": "refused", "why": why, "bytes": bytes}),
+    }
+}
+
 /// Runs one command on an engine. Commands (`cmd`):
 /// step {ms, max_events?} | run_to_end | summary | state | inspect {node} |
 /// events {since, max, node?, ptype?, msg?} | reach {pid} | announce {node} |
 /// send {from, to} | inject {event} | msgs {from?, max?} | follow {msg} |
 /// alert {index} | components | phone_cmd {node, frame} |
-/// phone_events {node} | phone_detach {node} (see phone.rs)
+/// phone_events {node} | phone_detach {node} (see phone.rs) |
+/// content (see engine/transfer.rs): send_file {from, to, bytes?, kind:
+/// file|voice|picture, secs?, quality?} | page {from, host, path, bytes?} |
+/// call {from, to, secs} | tunnel {from, to, workload: ssh|ping|bulk, kb?,
+/// tun_lora?} | cancel {item, by} | file_limit {from, to} | item {item} |
+/// items {from?} | rules
 pub fn call(e: &mut Engine, cmd: &Value) -> Value {
     let u = |k: &str| cmd[k].as_u64().unwrap_or(0) as usize;
     match cmd["cmd"].as_str().unwrap_or("") {
@@ -106,6 +139,35 @@ pub fn call(e: &mut Engine, cmd: &Value) -> Value {
             json!({"ok": true})
         }
         "alert" if u("index") < e.alerts.len() => e.alert_summary(u("index"), true),
+        "rules" => json!({"name": maarse_hostrules::rules::Rules::STANDARD_NAME, "standard": maarse_hostrules::rules::Rules::STANDARD, "current": e.sc.rules}),
+        "send_file" if u("from") < e.nodes.len() && u("to") < e.nodes.len() => content_file(e, cmd),
+        "page" if u("from") < e.nodes.len() && u("host") < e.nodes.len() => {
+            let bytes = cmd["bytes"].as_u64().map(|b| b as u32);
+            match e.xf_page(u("from"), u("host"), cmd["path"].as_str().unwrap_or("index"), bytes) {
+                Ok(k) => e.item_json(k),
+                Err((_, why)) => json!({"state": "refused", "why": why}),
+            }
+        }
+        "call" if u("from") < e.nodes.len() && u("to") < e.nodes.len() => {
+            let k = e.xf_call(u("from"), u("to"), cmd["secs"].as_u64().unwrap_or(10) as u32);
+            e.item_json(k)
+        }
+        "tunnel" if u("from") < e.nodes.len() && u("to") < e.nodes.len() => {
+            let k = e.xf_tunnel(u("from"), u("to"), cmd["workload"].as_str().unwrap_or("ping"), cmd["kb"].as_u64().unwrap_or(64) as u32, cmd["tun_lora"].as_bool().unwrap_or(false));
+            e.item_json(k)
+        }
+        "cancel" => json!({"ok": e.xf_cancel(u("item"), u("by"))}),
+        "file_limit" if u("from") < e.nodes.len() && u("to") < e.nodes.len() => {
+            let l = e.xf_limit(u("from"), u("to"));
+            let route = match e.xf_path_kind(u("from"), u("to")) {
+                maarse_hostrules::filebox::PathKind::Tcp => "tcp",
+                maarse_hostrules::filebox::PathKind::Lora => "lora",
+                maarse_hostrules::filebox::PathKind::Unknown => "unknown",
+            };
+            json!({"route": route, "max_bytes": l.max_bytes, "via_lora": l.via_lora, "mailbox": l.mailbox, "est_airtime_s": l.est_airtime_s})
+        }
+        "item" => e.item_follow(u("item")),
+        "items" => e.items_json(u("from")),
         other => json!({"error": format!("unknown or invalid command: {other}")}),
     }
 }

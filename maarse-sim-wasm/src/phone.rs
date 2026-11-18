@@ -8,8 +8,9 @@
 //!
 //! A node gets a phone when a command arrives for it ("attached"); from then
 //! on the engine queues events for it: messages delivered to the node, acks,
-//! routes, announces heard and channel posts. Everything the simulator cannot
-//! do yet is answered with an `Error` event that says so.
+//! routes, announces heard, channel posts, files (also voice and pictures),
+//! pages and call data (see transfer.rs). Everything the simulator cannot do
+//! yet is answered with an `Error` event that says so.
 
 use super::*;
 use maarse_core::companion::{Command, Event, FrameDecoder, PROTOCOL_VERSION, Stats, error_code, neighbor_events, stat, text};
@@ -42,7 +43,7 @@ fn txt(s: &str) -> maarse_core::companion::Text {
 }
 
 impl Engine {
-    fn phone_emit(&mut self, node: usize, ev: &Event) {
+    pub(crate) fn phone_emit(&mut self, node: usize, ev: &Event) {
         let Some(p) = self.phones.attached.get_mut(&node) else { return };
         if p.events.len() >= MAX_QUEUED {
             p.events.pop_front();
@@ -111,13 +112,14 @@ impl Engine {
         let not_yet = |what: &str| format!("Not simulated yet: {what} (Denmark simulator)");
         match c {
             Command::GetInfo => {
+                let max_file = if self.nodes[node].kind == Kind::Host || !self.nodes[node].radio { self.sc.rules.max_file } else { maarse_hostrules::filebox::LORA_MAX_FILE };
                 let rt = &self.nodes[node].router;
                 let info = Event::Info {
                     addr: rt.addr,
                     repeater: rt.role.forwards(),
                     version: PROTOCOL_VERSION,
                     max_text: (maarse_core::companion::MAX_TEXT - 1) as u8,
-                    max_file: 0,
+                    max_file,
                     identity: None,
                 };
                 self.phone_emit(node, &info);
@@ -220,12 +222,56 @@ impl Engine {
                 self.phone_err(node, 0, error_code::BAD_FRAME, &not_yet("node settings (radio, sharing, admins, regions, Wi-Fi, range test, updates)"));
             }
             Command::TraceRoute { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("trace route")),
-            Command::FileBegin { req, .. } | Command::FileData { req, .. } | Command::FileEnd { req } => {
-                self.phone_err(node, req, error_code::FILE_TOO_LARGE, &not_yet("files and pictures"))
+            Command::FileBegin { req, dest, size, mime, name } => {
+                let Some(&to) = self.addr_idx.get(&dest) else {
+                    return self.phone_err(node, req, error_code::UNKNOWN_DEST, "Simulator: no node with this address in this world");
+                };
+                let (mime, name) = (String::from_utf8_lossy(&mime).into_owned(), String::from_utf8_lossy(&name).into_owned());
+                if let Err((code, m)) = self.xf_file_begin(node, req, to, size, mime, name) {
+                    self.phone_err(node, req, code, &m);
+                }
             }
-            Command::GetFileLimit { .. } | Command::CancelFile { .. } => self.phone_err(node, 0, error_code::FILE_TOO_LARGE, &not_yet("files and pictures")),
-            Command::SendCall { .. } => self.phone_err(node, 0, error_code::NOT_OVER_TCP, &not_yet("voice calls")),
-            Command::RequestPage { req, .. } | Command::PostBoard { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("Pages")),
+            Command::FileData { req, offset, data } => self.xf_file_data(node, req, offset, &data),
+            Command::FileEnd { req } => match self.xf_file_end(node, req) {
+                Ok((file_id, chunks)) => self.phone_emit(node, &Event::FileStarted { req, file_id, chunks }),
+                Err((code, m)) => self.phone_err(node, req, code, &m),
+            },
+            Command::GetFileLimit { dest } => {
+                let Some(&to) = self.addr_idx.get(&dest) else {
+                    return self.phone_err(node, 0, error_code::UNKNOWN_DEST, "Simulator: no node with this address in this world");
+                };
+                let l = self.xf_limit(node, to);
+                self.phone_emit(node, &Event::FileLimit { dest, max_bytes: l.max_bytes, via_lora: l.via_lora, mailbox: l.mailbox, est_airtime_s: l.est_airtime_s });
+            }
+            Command::CancelFile { file_id } => {
+                if let Some(k) = self.xf_by_file_id(file_id) {
+                    self.xf_cancel(k, node);
+                }
+            }
+            Command::SendCall { dest, data } => {
+                let Some(&to) = self.addr_idx.get(&dest) else {
+                    return self.phone_err(node, 0, error_code::UNKNOWN_DEST, "Simulator: no node with this address in this world");
+                };
+                if let Some((code, why)) = self.xf_phone_call(node, to, &data) {
+                    self.phone_err(node, 0, code, why);
+                }
+            }
+            Command::RequestPage { req, dest, path } => {
+                let Some(&host) = self.addr_idx.get(&dest) else {
+                    return self.phone_err(node, req, error_code::UNKNOWN_DEST, "Simulator: no node with this address in this world");
+                };
+                if host == node {
+                    return self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("this node's own pages (ask another host)"));
+                }
+                match self.xf_page(node, host, &String::from_utf8_lossy(&path), None) {
+                    Ok(k) => {
+                        let msg_id = k as u64 | 0x5000_0000_0000_0000;
+                        self.phone_emit(node, &Event::Sent { req, msg_id });
+                    }
+                    Err((code, m)) => self.phone_err(node, req, code, &m),
+                }
+            }
+            Command::PostBoard { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("page boards")),
             Command::Remote { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("remote admin")),
             Command::SendAlert { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("alerts from a phone (use the Alert tool on the map)")),
             Command::LinkDevice { req, .. } | Command::PersonSetup { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("linked devices")),
@@ -354,5 +400,42 @@ mod tests {
         e.phone_cmd(0, &Command::TraceRoute { req: 9, dest: b_addr }.encode());
         let a = frames(&e.phone_events(0));
         assert!(matches!(&a[..], [Event::Error { req: 9, .. }]), "{a:?}");
+    }
+
+    /// A phone sends a small file through the companion commands; the other
+    /// phone gets it with the same bytes. A call over LoRa is refused with
+    /// the host's text.
+    #[test]
+    fn phone_file_and_call_refusal() {
+        let sc = json!({"seed": 3, "duration_s": 600, "nodes": [
+            {"kind": "handheld", "lat": 56.0, "lon": 9.0},
+            {"kind": "repeater", "lat": 56.0, "lon": 9.05},
+            {"kind": "handheld", "lat": 56.0, "lon": 9.1}
+        ], "traffic": {"direct_per_min": 0, "channel_per_min": 0}});
+        let mut e = create(&sc.to_string()).unwrap();
+        e.run_until(20_000, usize::MAX);
+        let b_addr = e.nodes[2].router.addr;
+        e.phone_cmd(2, &Command::GetInfo.encode());
+        frames(&e.phone_events(2));
+        e.phone_cmd(0, &Command::GetFileLimit { dest: b_addr }.encode());
+        let a = frames(&e.phone_events(0));
+        assert!(matches!(&a[..], [Event::FileLimit { max_bytes: 8192, via_lora: true, .. }]), "{a:?}");
+        let data: Vec<u8> = (0..1000u32).map(|i| (i * 7) as u8).collect();
+        e.phone_cmd(0, &Command::FileBegin { req: 3, dest: b_addr, size: 1000, mime: text(b"text/plain"), name: text(b"a.txt") }.encode());
+        for (k, part) in data.chunks(200).enumerate() {
+            e.phone_cmd(0, &Command::FileData { req: 3, offset: (k * 200) as u32, data: text(part) }.encode());
+        }
+        e.phone_cmd(0, &Command::FileEnd { req: 3 }.encode());
+        e.run_until(400_000, usize::MAX);
+        let a = frames(&e.phone_events(0));
+        assert!(a.iter().any(|ev| matches!(ev, Event::FileStarted { req: 3, .. })), "{a:?}");
+        assert!(a.iter().any(|ev| matches!(ev, Event::FileDone { ok: true, outgoing: true, .. })), "{a:?}");
+        let b = frames(&e.phone_events(2));
+        assert!(b.iter().any(|ev| matches!(ev, Event::FileIncoming { size: 1000, .. })), "{b:?}");
+        let got: Vec<u8> = b.iter().filter_map(|ev| if let Event::FileChunk { data, .. } = ev { Some(data.to_vec()) } else { None }).flatten().collect();
+        assert_eq!(got, data);
+        e.phone_cmd(0, &Command::SendCall { dest: b_addr, data: text(&[1]) }.encode());
+        let a = frames(&e.phone_events(0));
+        assert!(matches!(&a[..], [Event::Error { text: t, .. }] if &t[..] == maarse_hostrules::calls::REFUSED_TEXT.as_bytes()), "{a:?}");
     }
 }

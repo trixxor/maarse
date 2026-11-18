@@ -49,6 +49,9 @@ pub type Node = Router<128, 1024>;
 // Simulated phones (companion protocol for the web client); see phone.rs.
 #[path = "phone.rs"]
 pub mod phone;
+// Files, voice, pictures, Pages, calls and the IP tunnel; see transfer.rs.
+#[path = "transfer.rs"]
+pub mod transfer;
 
 /// Projection centre (Denmark).
 const LAT0: f64 = 56.0;
@@ -400,6 +403,8 @@ enum Ev {
     MailSyncAt { node: usize },
     /// Mail between two hosts over a direct TCP connection (never radio).
     MailTcp { to: usize, payload: Vec<u8> },
+    /// A content transfer's timer (see transfer.rs).
+    Xfer { item: usize, what: u8 },
 }
 
 /// Copies a sibling sends per sync request.
@@ -673,6 +678,8 @@ pub struct Engine {
     pub sync_req: HashSet<usize>,
     /// Simulated phones attached to nodes (see phone.rs).
     pub phones: phone::Phones,
+    /// Content transfers (files, voice, pictures, Pages, calls, IP tunnel).
+    pub xf: transfer::Xfers,
     /// (office, message) handed to carriers (`office_carry`).
     office_handed: HashSet<(usize, usize)>,
     mail_class: Vec<u8>,
@@ -899,6 +906,7 @@ impl Engine {
             ids: HashMap::default(),
             addr_idx: HashMap::default(),
             phones: Default::default(),
+            xf: Default::default(),
             clutter: Vec::new(),
             degrade: Vec::new(),
             gw: Vec::new(),
@@ -1241,6 +1249,7 @@ impl Engine {
 
     fn handle(&mut self, ev: Ev) {
         match ev {
+            Ev::Xfer { item, what } => self.xfer_timer(item, what),
             Ev::Ready { node, packet, id } => self.ready(node, packet, id),
             Ev::Service { node } => {
                 if self.nodes[node].svc_at == self.now {
@@ -1564,6 +1573,7 @@ impl Engine {
                     };
                     self.tr(format!("{{\"t\":{},\"ev\":\"route\",\"n\":{node},\"dest\":{d},\"hops\":{hops}{tj}}}", self.now));
                 }
+                Action::Acked { msg_id } | Action::CarryAcked { msg_id } if self.xfer_acked(node, msg_id) => {}
                 Action::Acked { msg_id } | Action::CarryAcked { msg_id } if self.mail_acked(node, msg_id) => {}
                 Action::Acked { msg_id } | Action::CarryAcked { msg_id } => {
                     self.phone_on_ack(node, msg_id, false);
@@ -1613,6 +1623,9 @@ impl Engine {
     }
 
     fn on_deliver(&mut self, node: usize, ptype: PacketType, dest: Address, payload: &[u8], hops: u8) {
+        if self.xfer_on_deliver(node, ptype, payload, hops) {
+            return;
+        }
         self.phone_on_deliver(node, ptype, dest, payload, hops);
         if ptype == PacketType::Announce
             && self.sc.person_fresh
@@ -2127,7 +2140,7 @@ impl Engine {
             return m;
         }
         if !self.sc.mail.is_empty() {
-            self.schedule(self.now + maarse_core::mail::DEPOSIT_AFTER_MS, Ev::MailCheck { msg: m });
+            self.schedule(self.now + self.sc.rules.deposit_after_ms, Ev::MailCheck { msg: m });
         }
         if !self.knows(from, to) {
             if self.sc.features.key_request {

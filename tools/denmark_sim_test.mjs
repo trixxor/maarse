@@ -200,5 +200,32 @@ console.log(`scale: ${bs.nodes} nodes, 120 s simulated in ${Date.now() - t2} ms 
 check(bs.nodes >= 1900, "about 2,000 nodes load");
 b.free();
 
+// Content types with the host's real rules (send.js uses the same commands).
+{
+  const cs = new Sim({ seed: 5, duration_s: 900, nodes: [
+    { kind: "host", lat: 56.0, lon: 9.0 }, { kind: "repeater", lat: 56.0, lon: 9.05 }, { kind: "host", lat: 56.0, lon: 9.1 },
+    { kind: "handheld", lat: 56.0, lon: 9.02 }, { kind: "handheld", lat: 56.0, lon: 9.08 },
+  ], links: [{ a: 0, b: 2, kind: "tcp" }], traffic: { direct_per_min: 0, channel_per_min: 0 } });
+  cs.step(30_000);
+  const rules = cs.call({ cmd: "rules" });
+  check(rules.name === "Standard (as built)" && rules.current.max_file === 1048576, "rules: the standard profile from maarse-hostrules");
+  const voice = cs.call({ cmd: "send_file", from: 3, to: 4, kind: "voice", secs: 8 });
+  const tooBig = cs.call({ cmd: "send_file", from: 3, to: 4, kind: "file", bytes: 20000 });
+  const page = cs.call({ cmd: "page", from: 3, host: 0, path: "weather/aarhus" });
+  const callLora = cs.call({ cmd: "call", from: 3, to: 4, secs: 5 });
+  const callTcp = cs.call({ cmd: "call", from: 0, to: 2, secs: 5 });
+  const ssh = cs.call({ cmd: "tunnel", from: 0, to: 2, workload: "ssh" });
+  cs.step(600_000);
+  const st = (v) => cs.call({ cmd: "item", item: v.item });
+  check(st(voice).state === "delivered", `voice message over LoRa delivered (${st(voice).bytes} bytes)`);
+  check(tooBig.state === "refused" && /8 KB/.test(tooBig.why), "20 KB from a handheld refused (8 KB over LoRa)");
+  check(st(page).state === "delivered", "page fetched from a host");
+  check(callLora.state === "refused" && /internet all the way/.test(callLora.why), "call over LoRa refused with the host's text");
+  check(st(callTcp).state === "done" && st(callTcp).call.recv[0] > 0, "call over TCP carries audio");
+  check(st(ssh).state === "done" && st(ssh).tunnel.answered === 40, `ssh over TCP: ${st(ssh).why}`);
+  check(st(voice).events.length > 0, "item events in the trace for the follow view");
+  cs.free();
+}
+
 if (failed) { console.log(`${failed} check(s) failed`); process.exit(1); }
 console.log("OK");

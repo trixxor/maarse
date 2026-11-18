@@ -180,6 +180,13 @@ class Prefs(ctx: Context) {
     /** Should the app connect at start (the user pressed Connect and not Disconnect)? */
     var running: Boolean get() = p.getBoolean("running", false); set(v) = p.edit().putBoolean("running", v).apply()
     var notifyMessages: Boolean get() = p.getBoolean("notifyMsg", true); set(v) = p.edit().putBoolean("notifyMsg", v).apply()
+    /** Favourite users and favourite pages (addresses). */
+    var favUsers: List<String>
+        get() = (p.getString("favUsers", "") ?: "").split(',').filter { it.length == 32 }
+        set(v) = p.edit().putString("favUsers", v.joinToString(",")).apply()
+    var favPages: List<String>
+        get() = (p.getString("favPages", "") ?: "").split(',').filter { it.length == 32 }
+        set(v) = p.edit().putString("favPages", v.joinToString(",")).apply()
     /** Nodes known to share maarse:// pages (heard in announces or visited). */
     var pageNodes: List<String>
         get() = (p.getString("pageNodes", "") ?: "").split(',').filter { it.length == 32 }

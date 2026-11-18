@@ -4986,7 +4986,8 @@ mod radio_file_e2e_tests {
         fs::create_dir_all(&pages).unwrap();
         let img = image::RgbImage::from_fn(800, 600, |x, y| image::Rgb([(x / 4) as u8, (y / 3) as u8, ((x + y) / 8) as u8]));
         image::DynamicImage::ImageRgb8(img).save(pages.join("map.jpg")).unwrap();
-        for (style, mime, max) in [("dots", "image/png", 4000u32), ("grey", "image/jpeg", 3000)] {
+        // Over LoRa the smallest copy comes whatever the style asks.
+        for (style, mime, max) in [("dots", "", 4000u32), ("colour", "", 4000)] {
             a.n.command(1, Command::RequestPage { req: 9, dest: b.n.addr, path: text(format!("_{style}/map.jpg").as_bytes()) });
             let (ea, _, _, _) = run_radio(&mut a, &mut b, 120, &mut |ea, _| ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, .. })));
             let got = ea.iter().find_map(|e| match e {
@@ -4994,7 +4995,7 @@ mod radio_file_e2e_tests {
                 _ => None,
             });
             let (m, size) = got.unwrap_or_else(|| panic!("no picture for {style}"));
-            assert_eq!(m, mime, "{style}");
+            assert!(m == "image/png" || m == "image/jpeg", "{style}: {m}{mime}");
             assert!(size <= max, "{style}: {size} bytes");
             assert!(ea.iter().any(|e| matches!(e, Event::FileDone { outgoing: false, ok: true, .. })), "{style} not finished");
             println!("{style}: {size} bytes over LoRa");

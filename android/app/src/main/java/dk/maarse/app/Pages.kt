@@ -61,6 +61,25 @@ object Pages {
     private fun askRoute(addr: String) = Node.queryFileLimit(addr) { l -> lora[addr] = l == null || l.viaLora || l.mailbox; bump() }
 
     fun markup(u: Url): String? = cache[u.key]
+
+    /** A page's title, like <title> on a web page: a line "@title …" (not
+     *  shown on the page), else the first heading. */
+    fun title(markup: String): String =
+        (Regex("(?m)^@title\\s+(.+)$").find(markup) ?: Regex("(?m)^#{1,3}\\s+(.+)$").find(markup))
+            ?.groupValues?.get(1)?.replace(Regex("[*`]"), "")?.trim()?.take(80) ?: ""
+    /** The title of a node's front page, if we have it. */
+    fun siteTitle(addr: String): String = cache["$addr/index"]?.let { title(it) } ?: ""
+
+    /** Favourite users ("u") and pages ("p"), kept in the app's settings. */
+    val favUsers: MutableList<String> by lazy { runCatching { Node.prefs.favUsers.toMutableList() }.getOrDefault(mutableListOf()) }
+    val favPages: MutableList<String> by lazy { runCatching { Node.prefs.favPages.toMutableList() }.getOrDefault(mutableListOf()) }
+    fun isFav(kind: Char, addr: String) = (if (kind == 'u') favUsers else favPages).contains(addr)
+    fun toggleFav(kind: Char, addr: String) {
+        val l = if (kind == 'u') favUsers else favPages
+        if (!l.remove(addr)) l.add(addr)
+        runCatching { if (kind == 'u') Node.prefs.favUsers = favUsers else Node.prefs.favPages = favPages }
+        bump()
+    }
     fun picture(key: String): Pic? = pics[key]
     fun overLora(addr: String) = lora[addr] != false
 

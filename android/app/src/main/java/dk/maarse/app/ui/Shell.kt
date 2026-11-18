@@ -106,6 +106,7 @@ class Nav(start: Screen) {
 fun AppShell(nav: Nav) {
     BackHandler(nav.stack.size > 1) { nav.back() }
     PagesNav.open = { nav.go(Screen.Net(NetPage.PAGES)) }
+    PagesNav.contact = { nav.go(Screen.Contact(it)) }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when (val s = nav.top) {
             Screen.Home -> Home(nav)

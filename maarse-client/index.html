@@ -3262,7 +3262,7 @@ function pagePicture(caption, src, style, base) {
   else if (pages.picWaits.has(key)) box.append(el("div", { className: "muted" }, "Asking the node…"));
   else if (pages.picQueue.some(q => q.addr === base.addr && q.path === path)) box.append(el("div", { className: "muted" }, "Waiting for the picture before it…"));
   else {
-    const b = el("button", { textContent: got?.error ? `Try again (${got.error})` : `Load picture · ${st} · about ${st === "colour" ? "1 min." : "10–20 sec."} over LoRa` });
+    const b = el("button", { textContent: got?.error ? `Try again (${got.error})` : "Load picture · smallest version · about 10–20 sec. over LoRa" });
     b.onclick = () => { requestPicture(base.addr, path); renderChat(); };
     box.append(b);
   }
@@ -3270,6 +3270,12 @@ function pagePicture(caption, src, style, base) {
   return fig;
 }
 
+// A page's title, like <title> on a web page: a line "@title …" (not shown on
+// the page), else the first heading.
+function pageTitle(markup) {
+  const m = markup.match(/^@title\s+(.+)$/m) || markup.match(/^#{1,3}\s+(.+)$/m);
+  return m ? m[1].replace(/[*`]/g, "").trim().slice(0, 80) : "";
+}
 function renderMarkup(markup, base) {
   const root = el("div", { className: "page" });
   const lines = markup.replace(/\r/g, "").split("\n");
@@ -3284,6 +3290,7 @@ function renderMarkup(markup, base) {
     const h = line.match(/^(#{1,3})\s+(.*)$/);
     if (h) { flush(); root.append(el("h" + (h[1].length + 1), {}, ...pageInline(h[2], base))); continue; }
     if (/^\s*$/.test(line)) { flush(); continue; }
+    if (/^@title\s/.test(line)) continue;
     if (/^---+\s*$/.test(line)) { flush(); root.append(el("hr")); continue; }
     const pic = line.match(PIC_LINE);
     if (pic && base) { flush(); root.append(pagePicture(pic[1], pic[2], pic[3], base)); continue; }
@@ -3345,7 +3352,15 @@ function renderPages(box) {
     return;
   }
   const cached = pages.cache.get(pageKey(cur.addr, cur.path));
-  if (cached) box.append(renderMarkup(cached.markup, cur));
+  if (cached) {
+    const t = pageTitle(cached.markup);
+    $("chat-title").textContent = t || "Pages";
+    $("chat-sub").textContent = pageUrl(cur) + " · " + label(cur.addr);
+    document.title = (t ? t + " – " : "") + "Må:rse";
+    const fr = el("div", { className: "row" }); fr.style.margin = "0 0 10px";
+    fr.append(favButton("p", cur.addr), el("span", { className: "muted", textContent: isFav("p", cur.addr) ? "In your favourite pages" : "Add to your favourite pages" }));
+    box.append(fr, renderMarkup(cached.markup, cur));
+  }
 }
 
 // ---------- voice messages (Codec2) ----------
@@ -5161,49 +5176,90 @@ function noteAnnounce(addr, hops) {
   $("ann-sub").textContent = `Latest: ${label(addr)}`;
   if (state.view === "announces") renderChat();
 }
+// Favourites (users and pages), kept for this browser.
+state.favs = store.get("favs", { u: [], p: [] });
+function isFav(kind, a) { return state.favs[kind].includes(a); }
+function toggleFav(kind, a) {
+  const l = state.favs[kind];
+  const i = l.indexOf(a);
+  if (i >= 0) l.splice(i, 1); else l.push(a);
+  store.set("favs", state.favs);
+  renderChat();
+}
+function favButton(kind, a) {
+  const on = isFav(kind, a);
+  const b = el("button", { className: "ghost icon", textContent: on ? "★" : "☆", title: on ? "Remove from favourites" : "Add to favourites" });
+  b.setAttribute("aria-label", b.title);
+  b.style.fontSize = "18px"; b.style.color = on ? "var(--signal)" : "var(--muted)";
+  b.onclick = e => { e.stopPropagation(); toggleFav(kind, a); };
+  return b;
+}
+// The title of a node's front page, if we have it.
+function siteTitle(a) { const c = pages.cache.get(pageKey(a, "index")); return c ? pageTitle(c.markup) : ""; }
 function renderAnnounces(box) {
   $("chat-title").textContent = "Announces";
   $("chat-sub").textContent = "Nodes announce themselves every few minutes; newest first";
-  const tabs = el("div", { className: "filters" }); tabs.style.margin = "4px 0 12px";
+  const tabs = el("div", { className: "filters" }); tabs.style.margin = "4px 0 8px";
   for (const [k, t] of [["users", "Users"], ["pages", "Pages"]]) {
     const b = el("button", { textContent: t, className: state.annTab === k ? "on" : "" });
     b.onclick = () => { state.annTab = k; renderChat(); };
     tabs.append(b);
   }
-  box.append(tabs);
+  const search = el("input", { placeholder: state.annTab === "users" ? "Search users by name or address" : "Search pages by title, name or address", value: state.annQuery || "" });
+  search.style.cssText = "width:100%;max-width:520px;margin:0 0 12px";
+  search.oninput = () => { state.annQuery = search.value; const pos = search.selectionStart; renderChat(); const n = $("ann-search"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } };
+  search.id = "ann-search";
+  box.append(tabs, search);
+  const q = (state.annQuery || "").trim().toLowerCase();
+  const match = (a, extra = "") => !q || label(a).toLowerCase().includes(q) || a.startsWith(q) || extra.toLowerCase().includes(q);
   const list = el("div", { className: "ov" });
   box.append(list);
   const sharing = a => pages.sharing.has(a) || state.nodeInfo.get(a)?.pages;
+  const lastAt = new Map();
+  for (const r of state.announces) if (!lastAt.has(r.addr)) lastAt.set(r.addr, r);
+  const row = (a, sub, onClick, kind, extra) => {
+    const r = el("div", { className: "card" });
+    r.style.cssText = "display:flex;align-items:center;gap:12px;padding:10px 14px;margin:0 0 8px" + (onClick ? ";cursor:pointer" : "");
+    r.append(favButton(kind, a), el("div", { style: "flex:1;min-width:0" }, el("b", { textContent: label(a) }), el("div", { className: "muted", textContent: sub })));
+    if (extra) r.append(extra);
+    if (onClick) r.onclick = onClick;
+    return r;
+  };
   if (state.annTab === "users") {
-    if (!state.announces.length) { list.append(el("p", { className: "muted", textContent: "No announces yet. They come in while you are connected." })); return; }
-    for (const r of state.announces.slice(0, 100)) {
+    // Favourites first (also when they have not announced lately), then the live list.
+    const favs = state.favs.u.filter(a => match(a));
+    if (favs.length) {
+      list.append(el("h4", { textContent: "Favourites" }));
+      for (const a of favs) {
+        const r = lastAt.get(a);
+        list.append(row(a, r ? `announced ${ago(new Date(r.at))}` : "not heard this session", () => { state.nodeSel = a; markTab("nodes"); setView("node"); renderNodes(); }, "u"));
+      }
+      list.append(el("h4", { textContent: "Latest announces" }));
+    }
+    const live = state.announces.filter(r => match(r.addr)).slice(0, 100);
+    if (!live.length) { list.append(el("p", { className: "muted", textContent: q ? "Nobody matches." : "No announces yet. They come in while you are connected." })); return; }
+    for (const r of live) {
       const k = state.nodeInfo.get(r.addr) || {};
-      const row = el("div", { className: "card" });
-      row.style.cssText = "display:flex;align-items:center;gap:12px;padding:10px 14px;margin:0 0 8px;cursor:pointer";
       const tags = [r.hops === 0 ? "direct" : `${r.hops} hop${r.hops === 1 ? "" : "s"}`];
       if (k.position) tags.push("shares position");
       if (sharing(r.addr)) tags.push("has pages");
-      row.append(el("div", { style: "flex:1;min-width:0" }, el("b", { textContent: label(r.addr) }), el("div", { className: "muted", textContent: tags.join(" · ") })),
-        el("span", { className: "muted", textContent: ago(new Date(r.at)) }));
-      row.onclick = () => { state.nodeSel = r.addr; markTab("nodes"); setView("node"); renderNodes(); };
-      list.append(row);
+      list.append(row(r.addr, tags.join(" · ") + " · " + ago(new Date(r.at)), () => { state.nodeSel = r.addr; markTab("nodes"); setView("node"); renderNodes(); }, "u"));
     }
     return;
   }
-  // Pages: nodes that share pages, with when they last announced.
-  const lastAt = new Map();
-  for (const r of state.announces) if (!lastAt.has(r.addr)) lastAt.set(r.addr, r.at);
-  const nodes = [...new Set([...pages.sharing, ...[...state.nodeInfo.keys()].filter(a => state.nodeInfo.get(a)?.pages)])]
-    .sort((a, b) => (lastAt.get(b) || 0) - (lastAt.get(a) || 0));
-  if (!nodes.length) { list.append(el("p", { className: "muted", textContent: "No node sharing pages heard yet. A host with pages/index.mu says so in every announce." })); return; }
+  // Pages: nodes sharing pages, favourites first, with the front page's title.
+  const nodes = [...new Set([...state.favs.p, ...pages.sharing, ...[...state.nodeInfo.keys()].filter(a => state.nodeInfo.get(a)?.pages)])]
+    .filter(a => match(a, siteTitle(a)))
+    .sort((a, b) => (isFav("p", b) - isFav("p", a)) || ((lastAt.get(b)?.at || 0) - (lastAt.get(a)?.at || 0)));
+  if (!nodes.length) { list.append(el("p", { className: "muted", textContent: q ? "No page matches." : "No node sharing pages heard yet. A host with pages/index.mu says so in every announce." })); return; }
   for (const a of nodes) {
-    const row = el("div", { className: "card" });
-    row.style.cssText = "display:flex;align-items:center;gap:12px;padding:10px 14px;margin:0 0 8px";
-    const open = el("button", { textContent: "Open pages", className: "primary" });
-    open.onclick = () => openPage("maarse://" + a + "/");
-    row.append(el("div", { style: "flex:1;min-width:0" }, el("b", { textContent: label(a) }),
-      el("div", { className: "muted", textContent: lastAt.has(a) ? "announced " + ago(new Date(lastAt.get(a))) : "visited earlier" })), open);
-    list.append(row);
+    const open = el("button", { textContent: "Open", className: "primary" });
+    open.onclick = e => { e.stopPropagation(); openPage("maarse://" + a + "/"); };
+    const t = siteTitle(a);
+    const when = lastAt.has(a) ? "announced " + ago(new Date(lastAt.get(a).at)) : "visited earlier";
+    const r = row(a, (t ? t + " · " : "") + when, () => openPage("maarse://" + a + "/"), "p", open);
+    if (t) r.querySelector("b").textContent = t, r.querySelector(".muted").textContent = label(a) + " · " + when;
+    list.append(r);
   }
 }
 
@@ -5267,6 +5323,7 @@ function renderNode(box) {
   b("Message", () => { state.active = "dm:" + a; state.unread.delete(state.active); markTab("chats"); setView("chat"); renderSide(); renderChat(); }, true);
   if (k.position) b("Show on map", () => { state.mapFocus = a; markTab("nodes"); setView("map"); });
   b(k.pages ? "Open their pages" : "Pages", () => openPage("maarse://" + a + "/"));
+  acts.append(favButton("u", a));
   ov.append(acts);
   const mg = el("div", { className: "card" });
   mg.append(el("h4", { textContent: "Manage" }),

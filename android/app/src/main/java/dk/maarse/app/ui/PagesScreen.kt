@@ -49,8 +49,22 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import dk.maarse.app.Node
 import dk.maarse.app.Pages
+
+/** A star that adds a user ('u') or a node's pages ('p') to the favourites. */
+@Composable
+fun FavStar(kind: Char, addr: String) {
+    Pages.version.collectAsState().value
+    val on = Pages.isFav(kind, addr)
+    androidx.compose.material3.IconButton(onClick = { Pages.toggleFav(kind, addr) }) {
+        Text(if (on) "★" else "☆", style = MaterialTheme.typography.titleLarge,
+            color = if (on) Color(0xFFE7A94B) else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.semantics { contentDescription = if (on) "Remove from favourites" else "Add to favourites" })
+    }
+}
 
 /** maarse:// pages from other nodes, with pictures (same markup as the web client). */
 @Composable
@@ -85,6 +99,11 @@ fun PagesPage() {
             return@Column
         }
         val markup = Pages.markup(cur) ?: return@Column
+        // The page's title, like a web page's <title>, and its favourite star.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(Pages.title(markup).ifEmpty { "Untitled page" }, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            FavStar('p', cur.addr)
+        }
         Markup(markup, cur, v)
     }
 }
@@ -125,6 +144,7 @@ private fun parseMarkup(markup: String): List<Block> {
             line.startsWith("```") -> { flush(); code = mutableListOf() }
             h != null -> { flush(); out += Block.Heading(h.groupValues[1].length, h.groupValues[2]) }
             line.isBlank() -> flush()
+            line.startsWith("@title ") -> {}
             RULE.matches(line) -> { flush(); out += Block.Rule }
             pic != null -> { flush(); out += Block.Pic(pic.groupValues[1], pic.groupValues[2], pic.groupValues[3]) }
             item != null -> { flush(); out += Block.Item(item.groupValues[1]) }
@@ -219,9 +239,9 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                 when (pic) {
                     is Pages.Pic.Busy -> Text("Receiving… ${pic.percent} %", style = MaterialTheme.typography.bodySmall)
                     null -> if (Pages.queued(base.addr, path)) Text("Waiting for the picture before it…", style = MaterialTheme.typography.bodySmall)
-                        else OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) { Text("Load picture · $st · about ${if (st == "colour") "1 min" else "10–20 s"} over LoRa") }
+                        else OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) { Text("Load picture · smallest version · about 10–20 s over LoRa") }
                     else -> OutlinedButton(onClick = { Pages.requestPicture(base.addr, path) }) {
-                        Text(if (pic is Pages.Pic.Failed) "Try again (${pic.why})" else "Load picture · $st · about ${if (st == "colour") "1 min" else "10–20 s"} over LoRa")
+                        Text(if (pic is Pages.Pic.Failed) "Try again (${pic.why})" else "Load picture · smallest version · about 10–20 s over LoRa")
                     }
                 }
             }

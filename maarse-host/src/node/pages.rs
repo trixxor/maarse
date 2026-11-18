@@ -11,9 +11,10 @@
 //! Pictures: a page may show `![caption](hytte.jpg "grey")`. The client asks
 //! for the picture like a page, with the style as a first path segment
 //! (`_grey/hytte.jpg`, `_dots/…`, `_colour/…`). Over the internet the original
-//! is sent (scaled down only if it is over the limit). Over LoRa the host
-//! makes a small copy: grey (grey JPEG of about 1.3 KB, the default), dots
-//! (1-bit ordered dithering as a 1-bit PNG) or colour (JPEG under 8 KB).
+//! is sent (scaled down only if it is over the limit), in the asked style.
+//! Over LoRa the host always sends the smallest copy, whatever the style
+//! asks: grey (a grey JPEG of about 1.3 KB) or dots (1-bit ordered dithering
+//! as a 1-bit PNG), whichever is smaller for this picture.
 
 use super::{Node, err_ev, short};
 use crate::ClientId;
@@ -193,7 +194,9 @@ pub(crate) fn colour_picture(img: &image::DynamicImage, limit: usize) -> Option<
 }
 
 /// The bytes and MIME of a picture for a route: the original over the
-/// internet when it fits, else a small copy in the asked style.
+/// internet when it fits (else a colour copy that fits); over LoRa always
+/// the smallest small copy (grey or dots), so a page never costs more air
+/// than it must.
 pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bool, max: usize) -> Option<(Vec<u8>, &'static str)> {
     if !via_lora && data.len() <= max {
         return Some((data.to_vec(), mime_of(name)));
@@ -202,10 +205,11 @@ pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bo
     if !via_lora {
         return colour_picture(&img, max).map(|b| (b, "image/jpeg"));
     }
-    match style {
-        PicStyle::Grey => grey_picture(&img).map(|b| (b, "image/jpeg")),
-        PicStyle::Dots => Some((dots_picture(&img), "image/png")),
-        PicStyle::Colour => colour_picture(&img, max).map(|b| (b, "image/jpeg")),
+    let _ = style;
+    let dots = dots_picture(&img);
+    match grey_picture(&img) {
+        Some(g) if g.len() <= dots.len() => Some((g, "image/jpeg")),
+        _ => Some((dots, "image/png")),
     }
 }
 
@@ -371,15 +375,18 @@ mod tests {
         image::DynamicImage::ImageRgb8(img)
             .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut src, 90))
             .unwrap();
-        let (grey, m) = picture_for(&src, "a.jpg", PicStyle::Grey, true, 8192).unwrap();
-        assert_eq!(m, "image/jpeg");
-        let g = image::load_from_memory(&grey).unwrap();
-        assert_eq!((g.width(), g.height()), (256, 192));
-        let (dots, m) = picture_for(&src, "a.jpg", PicStyle::Dots, true, 8192).unwrap();
-        assert_eq!(m, "image/png");
-        let d = image::load_from_memory(&dots).unwrap();
-        assert_eq!((d.width(), d.height()), (256, 192));
-        let (colour, _) = picture_for(&src, "a.jpg", PicStyle::Colour, true, 8192).unwrap();
+        let img = image::load_from_memory(&src).unwrap();
+        let grey = grey_picture(&img).unwrap();
+        let dots = dots_picture(&img);
+        assert_eq!(image::load_from_memory(&grey).unwrap().width(), 256);
+        assert_eq!(image::load_from_memory(&dots).unwrap().width(), 256);
+        // Over LoRa: always the smaller of the two, whatever the style asks.
+        for style in [PicStyle::Grey, PicStyle::Dots, PicStyle::Colour] {
+            let (b, m) = picture_for(&src, "a.jpg", style, true, 8192).unwrap();
+            assert_eq!(b.len(), grey.len().min(dots.len()), "{style:?}");
+            assert_eq!(m, if grey.len() <= dots.len() { "image/jpeg" } else { "image/png" });
+        }
+        let colour = colour_picture(&img, 8192).unwrap();
         assert!(colour.len() <= 8192);
         // Over the internet the original goes as it is.
         let (orig, m) = picture_for(&src, "a.jpg", PicStyle::Grey, false, 1 << 20).unwrap();

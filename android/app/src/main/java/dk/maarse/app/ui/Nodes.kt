@@ -109,7 +109,11 @@ fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
     val n = nodes[addr]
     val title = Node.label(addr)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        IconButton(onClick = onBack, modifier = Modifier.padding(4.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack, modifier = Modifier.padding(4.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+            androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+            FavStar('u', addr)
+        }
         Column(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Avatar(title, addr, 88.dp)
             Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)

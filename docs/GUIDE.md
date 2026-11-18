@@ -592,7 +592,11 @@ Code blocks are written between lines with three backticks.
 ![Logo](logo.png "colour")                 colour, up to 8 KB over LoRa
 ```
 
-The client asks for the picture like a page, with the style as the first path segment (`_grey/harbour.jpg`). Over the internet the host sends the original (scaled down only if it is over the limit). Over LoRa it makes a small copy: grey is a grey JPEG of about 1–1.5 KB (about 10–15 s of air), dots a 1-bit PNG, colour a JPEG under 8 KB. Over LoRa the picture waits for a tap; over the internet it loads at once. Pictures are fetched one at a time per node (`maarse-host/src/node/pages.rs`).
+The client asks for the picture like a page, with the style as the first path segment (`_grey/harbour.jpg`). Over the internet the host sends the original (scaled down only if it is over the limit), in the asked style. Over LoRa the page shows a placeholder; a tap brings the smallest copy the host can make, whatever the style asks: a grey JPEG of about 1–1.5 KB or a 1-bit PNG, whichever is smaller for that picture (about 10–15 s of air). Pictures are fetched one at a time per node (`maarse-host/src/node/pages.rs`).
+
+**Title.** A line `@title Hals Havn BBS` (anywhere, usually first) is the page's title, like `<title>` on a web page: shown above the page and in the lists of pages, not on the page itself. Without it the first heading is used.
+
+**Favourites and search.** Nodes › Announces has a Users and a Pages tab, each with a search field; a star makes a user or a node's pages a favourite (shown first). The star is also on a node's page and above an open page.
 
 **Pictures in chats.** When a picture goes over LoRa, the web client and the Android app ask how to send it: colour (up to 8 KB), grey (about 1.3 KB) or dots, each shown with its real size and air time.
 

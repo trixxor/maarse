@@ -170,6 +170,21 @@ impl Kind {
     }
 }
 
+/// How busy the hour is on a normal day (average 1.0 over 24 h): quiet at
+/// night, a morning peak around 8 and the evening peak 18-21. `start_h` < 0
+/// means flat rates.
+pub fn day_factor(start_h: f64, t_s: f64) -> f64 {
+    if start_h < 0.0 {
+        return 1.0;
+    }
+    const W: [f64; 24] = [0.25, 0.12, 0.08, 0.06, 0.06, 0.12, 0.4, 0.9, 1.5, 1.3, 1.1, 1.1, 1.3, 1.2, 1.1, 1.2, 1.4, 1.6, 1.8, 1.9, 1.8, 1.5, 1.0, 0.5];
+    let sum: f64 = W.iter().sum();
+    let h = (start_h + t_s / 3600.0).rem_euclid(24.0);
+    let (a, f) = (h.floor() as usize, h.fract());
+    let w = W[a] * (1.0 - f) + W[(a + 1) % 24] * f;
+    w * 24.0 / sum
+}
+
 /// Height gain: crude, +10 dB per decade of height above 1.5 m.
 fn height_db(h: f64) -> f64 {
     10.0 * (h.max(1.0) / 1.5).log10()
@@ -2020,15 +2035,16 @@ impl Engine {
             return;
         }
         let users = self.users();
+        let k = day_factor(tr.day_start_h, t);
         if users.len() >= 2 {
-            for _ in 0..self.poisson_count(tr.direct_per_min / 60.0) {
+            for _ in 0..self.poisson_count(tr.direct_per_min * k / 60.0) {
                 let from = users[self.rng.gen_range(0..users.len())];
                 let to = self.pick_dest(from, &users, &tr);
                 if let Some(to) = to {
                     self.send_message(from, to);
                 }
             }
-            for _ in 0..self.poisson_count(tr.channel_per_min / 60.0) {
+            for _ in 0..self.poisson_count(tr.channel_per_min * k / 60.0) {
                 let from = users[self.rng.gen_range(0..users.len())];
                 self.send_channel(from);
             }

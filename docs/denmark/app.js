@@ -1515,7 +1515,7 @@
   $("sc-ann").onchange = () => { scenario.announce_s = Math.max(0, +$("sc-ann").value) * 3600; edited(); };
   $("sc-rh").onchange = () => { scenario.relay_hops = Math.max(1, Math.min(12, +$("sc-rh").value || 4)); edited(); };
   $("sc-ar").onchange = () => { scenario.auto_relay_after_s = Math.max(0, +$("sc-ar").value) * 60; edited(); };
-  const trMap = { "tr-direct": "direct_per_min", "tr-channel": "channel_per_min", "tr-local": "local_share" };
+  const trMap = { "tr-direct": "direct_per_min", "tr-channel": "channel_per_min", "tr-local": "local_share", "tr-day": "day_start_h" };
   for (const [id, key] of Object.entries(trMap)) $(id).onchange = () => { scenario.traffic[key] = +$(id).value; edited(); };
   ["opt-islands", "opt-links", "opt-backbone"].forEach(id => $(id).onchange = () => { drawLinks(); restyle(); });
   syncPerf();
@@ -1536,7 +1536,7 @@
     $("sc-ann").value = +((scenario.announce_s || 0) / 3600).toFixed(2);
     $("sc-rh").value = scenario.relay_hops || 4;
     $("sc-ar").value = +((scenario.auto_relay_after_s ?? 600) / 60).toFixed(1);
-    for (const [id, key] of Object.entries(trMap)) $(id).value = scenario.traffic[key];
+    for (const [id, key] of Object.entries(trMap)) $(id).value = scenario.traffic[key] ?? (key === "day_start_h" ? -1 : "");
     fillForestForm(scenario.forest);
   }
   $("btn-export").onclick = () => download((scenario.name || "scenario").replace(/\W+/g, "-").toLowerCase() + ".json", JSON.stringify(scenario, null, 1), "application/json");

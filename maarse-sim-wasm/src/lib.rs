@@ -309,4 +309,14 @@ mod tests {
         e.inject(&serde_json::from_value(json!({"t_s": 0, "type": "radio", "freq_mhz": 2400.0})).unwrap());
         assert!(links(&e) < sf12, "2.4 GHz should hear less far");
     }
+
+    /// The day curve averages 1 over 24 h and is quiet at night.
+    #[test]
+    fn day_curve_averages_one() {
+        use crate::engine::day_factor;
+        let avg: f64 = (0..24 * 60).map(|m| day_factor(0.0, m as f64 * 60.0)).sum::<f64>() / (24.0 * 60.0);
+        assert!((avg - 1.0).abs() < 0.01, "{avg}");
+        assert!(day_factor(3.0, 0.0) < 0.2 && day_factor(19.0, 0.0) > 1.5);
+        assert_eq!(day_factor(-1.0, 5000.0), 1.0);
+    }
 }

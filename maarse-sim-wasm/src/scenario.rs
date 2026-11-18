@@ -526,6 +526,11 @@ pub struct Traffic {
     /// probability `friend_share`.
     pub friends: usize,
     pub friend_share: f64,
+    /// A normal day: the clock time (hour, 0-24) when the run starts. The
+    /// message rates then follow a day curve (quiet at night, peaks in the
+    /// morning and evening; the rates above are the day's average).
+    /// Negative = flat rates (the default).
+    pub day_start_h: f64,
 }
 
 impl Default for Traffic {
@@ -541,6 +546,7 @@ impl Default for Traffic {
             spam_per_min: 0.0,
             friends: 0,
             friend_share: 0.9,
+            day_start_h: -1.0,
         }
     }
 }

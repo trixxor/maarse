@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=28">
-<link rel="stylesheet" href="phone.css?v=28">
+<link rel="stylesheet" href="style.css?v=29">
+<link rel="stylesheet" href="phone.css?v=29">
 </head>
 <body>
 <header id="top">
@@ -92,6 +92,7 @@
       <label>Direct msgs / min <input type="number" id="tr-direct" value="6" min="0" step="1"></label>
       <label>Channel msgs / min <input type="number" id="tr-channel" value="1" min="0" step="0.5"></label>
       <label>Local share <input type="number" id="tr-local" value="0.8" min="0" max="1" step="0.1"></label>
+      <label>Normal day: run starts at <input type="number" id="tr-day" min="-1" max="23.75" step="0.25" style="width:60px"> o'clock <span class="hint">(-1 = flat rates; otherwise the rates follow a day curve: quiet at night, peaks morning and evening)</span></label>
 
       <h3>Map</h3>
       <label><input type="checkbox" id="opt-islands" checked> Colour by island (radio component)</label>
@@ -250,10 +251,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="scenarios.js?v=28"></script>
-<script src="maarse-sim.js?v=28"></script>
-<script src="app.js?v=28"></script>
-<script src="store.js?v=28"></script>
-<script src="phone.js?v=28"></script>
+<script src="scenarios.js?v=29"></script>
+<script src="maarse-sim.js?v=29"></script>
+<script src="app.js?v=29"></script>
+<script src="store.js?v=29"></script>
+<script src="phone.js?v=29"></script>
 </body>
 </html>

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=20">
+<link rel="stylesheet" href="style.css?v=21">
 </head>
 <body>
 <header id="top">
@@ -96,6 +96,12 @@
       <label><input type="checkbox" id="opt-links"> Show radio links of the selected node</label>
       <label><input type="checkbox" id="opt-backbone" checked> Show backbone links</label>
 
+      <h3>Save, snapshots and links</h3>
+      <p class="hint">Saved in this browser only. A snapshot keeps the time too: open it to continue from there, or start a branch from it and try something else.</p>
+      <div class="row"><input id="st-name" placeholder="name (optional)" size="16" aria-label="Name for the saved run"><button id="st-save">Save run</button><button id="st-snap">Snapshot now</button><button id="st-share">Copy link</button></div>
+      <input id="st-link" class="hidden" readonly style="width:100%" aria-label="Share link">
+      <p class="hint" id="st-note"></p>
+      <div id="st-list"></div>
       <h3>Scenario file</h3>
       <button id="btn-export">Export JSON</button>
       <label class="file">Import JSON <input type="file" id="file-import" accept=".json,application/json"></label>
@@ -217,8 +223,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="scenarios.js?v=20"></script>
-<script src="maarse-sim.js?v=20"></script>
-<script src="app.js?v=20"></script>
+<script src="scenarios.js?v=21"></script>
+<script src="maarse-sim.js?v=21"></script>
+<script src="app.js?v=21"></script>
+<script src="store.js?v=21"></script>
 </body>
 </html>

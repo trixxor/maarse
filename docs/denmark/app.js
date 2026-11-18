@@ -1555,6 +1555,7 @@
     const k2 = location.hash.slice(1);
     if (DK.PRESETS[k2]) { pre.value = k2; loadPreset(k2); }
     else { pre.value = "normal"; loadPreset("normal"); }
+    if (window.DkStore) { DkStore.init(); if (k2.startsWith("run=")) setTimeout(() => DkStore.openFromHash(k2), 50); }
     requestAnimationFrame(frame);
   }).catch((e) => {
     document.body.insertAdjacentHTML("afterbegin", `<p style="padding:8px;background:#fee2e2;color:#7f1d1d">Could not load the WebAssembly engine (${esc(e.message)}). Build it with <code>python tools/build_denmark_sim.py</code> and serve <code>docs/</code> over HTTP.</p>`);

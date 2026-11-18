@@ -67,15 +67,18 @@ fun PagesPage() {
             Button(onClick = { Pages.open(input) }) { Text("Fetch") }
         }
         if (Pages.status.isNotEmpty()) Text(Pages.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (cur == null) {
-            if (Pages.sharing.isNotEmpty()) {
-                Text("Nodes sharing pages", fontWeight = FontWeight.SemiBold)
-                Text("Heard in their announces.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                val nodes = Node.nodes.value
+        if (Pages.sharing.isNotEmpty()) {
+            Text("Nodes sharing pages", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val nodes = Node.nodes.value
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Pages.sharing.forEach { a ->
-                    Button(onClick = { Pages.open("maarse://$a/") }) { Text(nodes[a]?.name?.let { "~$it" } ?: a.take(8)) }
+                    val name = nodes[a]?.name?.let { "~$it" } ?: a.take(8)
+                    if (cur?.addr == a) Button(onClick = { Pages.open("maarse://$a/") }) { Text(name) }
+                    else OutlinedButton(onClick = { Pages.open("maarse://$a/") }) { Text(name) }
                 }
             }
+        }
+        if (cur == null) {
             Text("A maarse-host shares pages from the folder pages/ in its data folder (index.mu is the front page). " +
                 "Write a node's address above. Pages are only text, headings, lists, links and pictures – never HTML.",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -195,7 +198,7 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
     val key = "${base.addr}/$path"
     val pic = Pages.picture(key)
     LaunchedEffect(key, Pages.overLora(base.addr)) {
-        if (!Pages.overLora(base.addr) && pic == null && Node.conn.value.state == dk.maarse.app.Conn.State.ONLINE) Pages.requestPicture(base.addr, path)
+        if (!Pages.overLora(base.addr) && pic == null && !Pages.queued(base.addr, path)) Pages.requestPicture(base.addr, path)
     }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         when (pic) {

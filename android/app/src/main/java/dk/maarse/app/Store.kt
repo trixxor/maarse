@@ -180,6 +180,10 @@ class Prefs(ctx: Context) {
     /** Should the app connect at start (the user pressed Connect and not Disconnect)? */
     var running: Boolean get() = p.getBoolean("running", false); set(v) = p.edit().putBoolean("running", v).apply()
     var notifyMessages: Boolean get() = p.getBoolean("notifyMsg", true); set(v) = p.edit().putBoolean("notifyMsg", v).apply()
+    /** Nodes known to share maarse:// pages (heard in announces or visited). */
+    var pageNodes: List<String>
+        get() = (p.getString("pageNodes", "") ?: "").split(',').filter { it.length == 32 }
+        set(v) = p.edit().putString("pageNodes", v.takeLast(50).joinToString(",")).apply()
     /** The first-start guide has been through. */
     var onboarded: Boolean get() = p.getBoolean("onboarded", false); set(v) = p.edit().putBoolean("onboarded", v).apply()
     var notifyChannels: Boolean get() = p.getBoolean("notifyCh", false); set(v) = p.edit().putBoolean("notifyCh", v).apply()

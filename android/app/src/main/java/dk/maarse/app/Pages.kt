@@ -43,16 +43,22 @@ object Pages {
     fun parse(s: String, base: Url? = null): Url? {
         val t = s.trim()
         if (t.startsWith("/") && base != null) return Url(base.addr, t.trim('/').ifEmpty { "index" })
-        val m = Regex("^([0-9a-fA-F]{32})(/.*)?$").find(t.removePrefix("maarse://").removePrefix("MAARSE://")) ?: return null
+        val m = Regex("^([0-9a-fA-F]{32})(/.*)?$").find(t.removePrefix("maarse://").removePrefix("MAARSE://"))
+        if (m == null && base != null && Regex("^[a-z0-9_][a-z0-9_./-]*$").matches(t)) return Url(base.addr, t.trimEnd('/').ifEmpty { "index" })
+        if (m == null) return null
         return Url(m.groupValues[1].lowercase(), m.groupValues[2].trim('/').ifEmpty { "index" })
     }
 
     /** Nodes whose announces say they share pages (CAP_PAGES 0x20). */
-    val sharing = LinkedHashSet<String>()
-    fun noteCaps(addr: String, caps: Int) {
-        val changed = if (caps and 0x20 != 0) sharing.add(addr) else sharing.remove(addr)
-        if (changed) bump()
+    val sharing: LinkedHashSet<String> by lazy { LinkedHashSet(runCatching { Node.prefs.pageNodes }.getOrDefault(emptyList())) }
+    fun noteCaps(addr: String, caps: Int) { if (caps and 0x20 != 0) noteSharing(addr) }
+    private fun noteSharing(addr: String) {
+        if (sharing.add(addr)) { runCatching { Node.prefs.pageNodes = sharing.toList() }; bump() }
     }
+
+    /** Over LoRa pictures wait for a tap. A route not known yet counts as LoRa
+     *  until the page has come; then it is asked again. */
+    private fun askRoute(addr: String) = Node.queryFileLimit(addr) { l -> lora[addr] = l == null || l.viaLora || l.mailbox; bump() }
 
     fun markup(u: Url): String? = cache[u.key]
     fun picture(key: String): Pic? = pics[key]
@@ -62,7 +68,7 @@ object Pages {
         val u = parse(input, url) ?: run { status = "Invalid address. Write maarse://<32 hex characters>/path"; bump(); return }
         url?.let { if (push && it != u) history.addLast(it) }
         url = u
-        if (!lora.containsKey(u.addr)) Node.queryFileLimit(u.addr) { l -> lora[u.addr] = l == null || l.viaLora || l.mailbox; bump() }
+        if (!lora.containsKey(u.addr)) askRoute(u.addr)
         status = if (cache.containsKey(u.key)) "From this session's copy – fetching a new one…" else "Fetching…"
         waits.add(u.key)
         if (!Node.send(Cmd.requestPage(Node.req(), u.addr, u.path))) status = "Not connected"
@@ -136,6 +142,12 @@ object Pages {
             else -> runCatching { inflate(f.buf) }.onSuccess { m ->
                 cache[f.key] = m
                 while (cache.size > 30) cache.remove(cache.keys.first())
+                val from = f.key.substringBefore('/')
+                noteSharing(from)
+                // Asked now and again in a moment: the route (a DHT relay,
+                // say) is often learned just after the page has come.
+                askRoute(from)
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ askRoute(from) }, 5000)
                 if (url?.key == f.key) status = "Fetched (${f.buf.size} bytes compressed)"
             }.onFailure { status = "Could not unpack the page" }
         }

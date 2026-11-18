@@ -1404,6 +1404,7 @@ function onEvent(ev) {
       if (ev.caps !== undefined) {
         const pages = !!(ev.caps & 0x20);
         state.nodeInfo.get(ev.addr).pages = pages;
+        if (pages) noteSharing(ev.addr);
         if (old.pages !== pages && state.view === "pages") renderChat();
       }
       rememberHeard(ev.addr, ev.name);
@@ -3070,6 +3071,7 @@ function parsePageUrl(s, base) {
   s = (s || "").trim();
   if (s.startsWith("/") && base) return { addr: base.addr, path: s.replace(/^\/+|\/+$/g, "") || "index" };
   const m = s.replace(/^maarse:\/\//i, "").match(/^([0-9a-fA-F]{32})(\/.*)?$/);
+  if (!m && base && /^[a-z0-9_][a-z0-9_.\/-]*$/.test(s)) return { addr: base.addr, path: s.replace(/\/+$/g, "") || "index" };
   if (!m) return null;
   const path = (m[2] || "").replace(/^\/+|\/+$/g, "") || "index";
   return { addr: m[1].toLowerCase(), path };
@@ -3083,6 +3085,18 @@ function savePageCache() {
   store.set("pageCache", Object.fromEntries(items));
 }
 
+// Over LoRa pictures wait for a tap; over the internet they load at once.
+// A route not known yet (the host answers "mailbox") counts as LoRa until the
+// page has come, then it is asked again.
+function pageRoute(addr) {
+  queryFileLimit(addr).then(l => { pages.lora.set(addr, !l || l.mailbox || l.viaLora); if (state.view === "pages") renderChat(); });
+}
+// Nodes known to share pages: heard in announces (CAP_PAGES) or visited.
+pages.sharing = new Set(store.get("pageNodes", []));
+function noteSharing(addr) {
+  if (pages.sharing.has(addr)) return;
+  pages.sharing.add(addr); store.set("pageNodes", [...pages.sharing].slice(-50));
+}
 function openPage(input, push = true) {
   const cur = parsePageUrl(pages.url);
   const p = parsePageUrl(input, cur);
@@ -3092,7 +3106,7 @@ function openPage(input, push = true) {
   const key = pageKey(p.addr, p.path);
   const cached = pages.cache.get(key);
   // Pictures load at once only when the node is reached over the internet.
-  if (transport && !pages.lora.has(p.addr)) queryFileLimit(p.addr).then(l => { pages.lora.set(p.addr, !l || l.viaLora || l.mailbox); if (state.view === "pages") renderChat(); });
+  if (transport && !pages.lora.has(p.addr)) pageRoute(p.addr);
   if (transport) {
     pages.status = cached ? `From cache (${new Date(cached.at).toLocaleString()}) – fetching a new one…` : "Fetching…";
     pages.waits.set(key, Date.now());
@@ -3148,6 +3162,11 @@ async function pageDone(ev, m) {
     if (markup.length > 200000) throw new Error("too large when unpacked");
     pages.cache.set(m.key, { markup, at: Date.now(), size: m.size });
     savePageCache();
+    const from = m.key.slice(0, 32);
+    noteSharing(from);
+    // Asked now and again in a moment: the route (a DHT relay, say) is often
+    // learned just after the page has come.
+    pageRoute(from); setTimeout(() => pageRoute(from), 5000);
     const cur = parsePageUrl(pages.url);
     if (cur && pageKey(cur.addr, cur.path) === m.key) pages.status = `Fetched ${new Date().toLocaleTimeString()} (${m.size} bytes compressed)`;
   } catch (e) { pages.status = "Could not unpack the page: " + e.message; }
@@ -3295,20 +3314,19 @@ function renderPages(box) {
   const st = el("div", { className: "muted" }, busy ? `Receiving… ${Math.round(busy.progress * 100)} %` : pages.status);
   st.style.margin = "6px 0 12px";
   box.append(st);
+  // Nodes sharing pages (heard in announces or visited), always at hand.
+  if (pages.sharing.size) {
+    const pw = el("div", {}); pw.style.maxWidth = "760px"; pw.style.margin = "0 0 14px";
+    pw.append(el("span", { className: "muted" }, "Nodes sharing pages: "));
+    for (const a of pages.sharing) {
+      const b = el("button", { textContent: label(a), className: cur?.addr === a ? "primary" : "" }); b.style.margin = "4px 6px 0 0";
+      b.onclick = () => openPage("maarse://" + a + "/");
+      pw.append(b);
+    }
+    box.append(pw);
+  }
   if (!cur) {
     const known = [...new Set([...state.contacts.keys(), ...state.nodeInfo.keys()])].filter(a => /^[0-9a-f]{32}$/.test(a));
-    // Nodes whose announces say they share pages come first, in their own list.
-    const withPages = known.filter(a => state.nodeInfo.get(a)?.pages);
-    if (withPages.length) {
-      const pw = el("div", {}); pw.style.maxWidth = "640px"; pw.style.marginBottom = "14px";
-      pw.append(el("b", {}, "Nodes sharing pages"), el("div", { className: "muted" }, "Heard in their announces."));
-      for (const a of withPages) {
-        const b = el("button", { textContent: label(a), className: "primary" }); b.style.margin = "6px 6px 0 0";
-        b.onclick = () => openPage("maarse://" + a + "/");
-        pw.append(b);
-      }
-      box.append(pw);
-    }
     const w = el("div", { className: "warn" }); w.style.maxWidth = "640px";
     w.append(el("b", {}, "How it works"), el("div", { className: "muted" },
       "A maarse-host shares pages from the folder pages/ in its data folder (index.mu is the front page). Write the node's address above, or choose a known node. " +

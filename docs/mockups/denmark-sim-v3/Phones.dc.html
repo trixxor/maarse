@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Two simulated phones</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1F5FD6}a:hover{color:#16469E}
+button,input{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 940px; box-sizing: border-box; display: flex; flex-direction: column; background: #F5F4EF; color: #16191D; font-family: Inter, system-ui, sans-serif; font-size: 14px">
+
+  <header style="display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: #FFFFFF; border-bottom: 1px solid #E3E1DA">
+    <div style="display: flex; align-items: baseline; gap: 8px">
+      <span style="font-weight: 700; font-size: 18px">Må:rse</span>
+      <span style="color: #5B6470; font-size: 15px">Denmark Simulator</span>
+    </div>
+    <nav aria-label="Mode" style="display: flex; gap: 4px; background: #F0EEE7; padding: 4px; border-radius: 12px">
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; font-size: 14px; color: #3D4550; min-height: 40px">Build</button>
+      <button style="border: 0; background: #FFFFFF; padding: 10px 16px; border-radius: 9px; font-size: 14px; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.08); min-height: 40px">Send</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; font-size: 14px; color: #3D4550; min-height: 40px">Break</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; font-size: 14px; color: #3D4550; min-height: 40px">Results</button>
+    </nav>
+    <div style="display: flex; gap: 4px; margin-left: 8px">
+      <button style="border: 0; background: transparent; padding: 8px 12px; border-radius: 8px; color: #3D4550; min-height: 40px">Message</button>
+      <button style="border: 0; background: transparent; padding: 8px 12px; border-radius: 8px; color: #3D4550; min-height: 40px">Alert</button>
+      <button style="border: 0; background: #16191D; color: #FFFFFF; padding: 8px 12px; border-radius: 8px; font-weight: 600; min-height: 40px">Phones</button>
+    </div>
+  </header>
+
+  <div style="display: flex; flex: 1; gap: 24px; padding: 20px 24px; min-height: 0; align-items: flex-start">
+
+    <section aria-label="Phone A" style="display: flex; flex-direction: column; gap: 10px; align-items: center">
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 2px">
+        <b>Phone A · Anna</b>
+        <span style="font-size: 12px; color: #5B6470">App only (internet, no radio) · home host Aalborg</span>
+      </div>
+      <div style="display: flex; gap: 4px; background: #E9E7E0; padding: 3px; border-radius: 10px">
+        <button onClick="{{aChat}}" style="border: 0; background: {{aChatBg}}; padding: 7px 14px; border-radius: 8px; font-size: 13px; min-height: 36px">Chat</button>
+        <button onClick="{{aCall}}" style="border: 0; background: {{aCallBg}}; padding: 7px 14px; border-radius: 8px; font-size: 13px; min-height: 36px">Call</button>
+      </div>
+      <div style="width: 340px; height: 700px; border-radius: 40px; background: #16191D; padding: 10px; box-sizing: border-box">
+        <div style="width: 100%; height: 100%; border-radius: 31px; background: #FFFFFF; overflow: hidden; display: flex; flex-direction: column">
+
+          <sc-if value="{{aIsChat}}" hint-placeholder-val="{{ true }}">
+            <div style="padding: 18px 16px 10px; border-bottom: 1px solid #F0EEE7">
+              <div style="font-weight: 700; font-size: 16px">Bo</div>
+              <div style="font-size: 12px; color: #5B6470">Reached via Rønne host · internet + LoRa trunk + 1 radio hop</div>
+            </div>
+            <div style="flex: 1; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: #FAFAF7">
+              <div style="align-self: flex-start; max-width: 80%; background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 14px 14px 14px 4px; padding: 9px 12px">Is the ferry running?</div>
+              <div style="align-self: flex-end; max-width: 80%; background: #1F5FD6; color: #FFFFFF; border-radius: 14px 14px 4px 14px; padding: 9px 12px">Yes, 14:30 from Ystad</div>
+              <div style="align-self: flex-end; font-size: 11px; color: #15803D">Delivered · 6 hops · 7.4 s</div>
+              <div style="align-self: flex-end; max-width: 80%; background: #1F5FD6; color: #FFFFFF; border-radius: 14px 14px 4px 14px; padding: 10px 12px; display: flex; align-items: center; gap: 10px">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="#FFFFFF" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg>
+                <svg width="120" height="22" viewBox="0 0 120 22" aria-hidden="true"><g fill="#BFD3FA"><rect x="0" y="8" width="3" height="6"></rect><rect x="6" y="4" width="3" height="14"></rect><rect x="12" y="7" width="3" height="8"></rect><rect x="18" y="2" width="3" height="18"></rect><rect x="24" y="6" width="3" height="10"></rect><rect x="30" y="9" width="3" height="4"></rect><rect x="36" y="3" width="3" height="16"></rect><rect x="42" y="7" width="3" height="8"></rect><rect x="48" y="5" width="3" height="12"></rect><rect x="54" y="8" width="3" height="6"></rect><rect x="60" y="4" width="3" height="14"></rect><rect x="66" y="9" width="3" height="4"></rect><rect x="72" y="6" width="3" height="10"></rect><rect x="78" y="3" width="3" height="16"></rect><rect x="84" y="8" width="3" height="6"></rect><rect x="90" y="5" width="3" height="12"></rect><rect x="96" y="9" width="3" height="4"></rect><rect x="102" y="7" width="3" height="8"></rect></g></svg>
+                <span style="font-size: 12px">0:08</span>
+              </div>
+              <div style="align-self: flex-end; font-size: 11px; color: #6D28D9">Voice · 1.2 KB · waiting in post office (trunk cut)</div>
+              <div style="align-self: flex-start; width: 180px; height: 120px; border-radius: 12px; background-color: #E9E7E0; background-image: radial-gradient(#16191D 1px, transparent 1.2px); background-size: 5px 5px; display: grid; place-items: end start; padding: 8px; box-sizing: border-box">
+                <span style="background: #FFFFFF; font-size: 11px; padding: 3px 7px; border-radius: 6px">Picture · dots copy 1.1 KB</span>
+              </div>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-top: 1px solid #F0EEE7">
+              <button aria-label="Attach" style="width: 40px; height: 40px; border: 0; border-radius: 50%; background: #F0EEE7; display: grid; place-items: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3D4550" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+              <input aria-label="Message" placeholder="Message" style="flex: 1; min-width: 0; border: 1px solid #E3E1DA; border-radius: 20px; padding: 10px 14px; font-size: 14px">
+              <button aria-label="Record voice message" style="width: 40px; height: 40px; border: 0; border-radius: 50%; background: #1F5FD6; display: grid; place-items: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg></button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{aIsCall}}" hint-placeholder-val="{{ false }}">
+            <div style="flex: 1; background: #16191D; color: #FFFFFF; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center">
+              <div style="width: 88px; height: 88px; border-radius: 50%; background: #2E353D; display: grid; place-items: center; font-size: 32px; font-weight: 700">B</div>
+              <div style="font-size: 22px; font-weight: 700">Calling Bo…</div>
+              <div style="background: #3B2A12; color: #FCD9A8; border-radius: 12px; padding: 12px 14px; font-size: 13px; line-height: 1.5">Calls need the internet all the way. Bo is reached over a LoRa trunk and a radio hop, so this call cannot start.</div>
+              <button style="border: 0; background: #FFFFFF; color: #16191D; padding: 12px 18px; border-radius: 22px; font-weight: 600; min-height: 44px">Send a voice message instead</button>
+              <button style="border: 0; background: #C2410C; color: #FFFFFF; padding: 12px 18px; border-radius: 22px; font-weight: 600; min-height: 44px">Hang up</button>
+            </div>
+          </sc-if>
+
+          <nav aria-label="App tabs" style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid #F0EEE7; font-size: 11px; color: #5B6470; text-align: center">
+            <span style="padding: 10px 0; color: #1F5FD6; font-weight: 600">Chats</span><span style="padding: 10px 0">Map</span><span style="padding: 10px 0">Pages</span><span style="padding: 10px 0">Network</span><span style="padding: 10px 0">Settings</span>
+          </nav>
+        </div>
+      </div>
+    </section>
+
+    <section aria-label="What the phones are doing" style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px">
+      <div style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px">
+        <b style="font-size: 16px">Two phones in the simulated network</b>
+        <div style="font-size: 13px; color: #3D4550; line-height: 1.55">Each phone is a node on the map running the same app screens as the Android app and web client. What you do on a phone is sent through the simulated network, and you can follow it on the map like any other message.</div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+          <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600">Phone A is
+            <select style="font: inherit; font-weight: 400; padding: 10px; border: 1px solid #D6D3CA; border-radius: 9px; background: #FFFFFF"><option>Node 812 · app only · Aalborg</option></select>
+          </label>
+          <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600">Phone B is
+            <select style="font: inherit; font-weight: 400; padding: 10px; border: 1px solid #D6D3CA; border-radius: 9px; background: #FFFFFF"><option>Node 2 · handheld radio · Rønne</option></select>
+          </label>
+        </div>
+        <div style="font-size: 12px; color: #5B6470">Or right-click any node on the map: Open as a phone.</div>
+      </div>
+
+      <div style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 6px">
+        <b style="font-size: 15px; margin-bottom: 4px">What happened</b>
+        <sc-for list="{{log}}" as="l" hint-placeholder-count="6">
+          <div style="display: grid; grid-template-columns: 48px 12px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid #F0EEE7; font-size: 13px">
+            <span style="font-family: 'JetBrains Mono', monospace; color: #5B6470; font-size: 12px">{{l.t}}</span>
+            <span style="width: 10px; height: 10px; border-radius: 50%; background: {{l.color}}"></span>
+            <span>{{l.text}}</span>
+            <button style="border: 1px solid #D6D3CA; background: #FFFFFF; padding: 5px 10px; border-radius: 7px; font-size: 12px; min-height: 32px">Follow</button>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="background: #F3EEFF; border-radius: 14px; padding: 14px 16px; font-size: 13px; line-height: 1.55; color: #2E353D">
+        <b>What a phone can do here:</b> text, voice messages, pictures and files (with the real size limits: 8 KB over LoRa, 1 MB over the internet), calls (internet all the way only), Pages, the IP tunnel for SSH and mosh, channels, alerts, and linked devices.
+      </div>
+    </section>
+
+    <section aria-label="Phone B" style="display: flex; flex-direction: column; gap: 10px; align-items: center">
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 2px">
+        <b>Phone B · Bo</b>
+        <span style="font-size: 12px; color: #5B6470">Handheld radio over Bluetooth · Rønne, Bornholm</span>
+      </div>
+      <div style="display: flex; gap: 4px; background: #E9E7E0; padding: 3px; border-radius: 10px">
+        <button onClick="{{bPages}}" style="border: 0; background: {{bPagesBg}}; padding: 7px 14px; border-radius: 8px; font-size: 13px; min-height: 36px">Pages</button>
+        <button onClick="{{bTun}}" style="border: 0; background: {{bTunBg}}; padding: 7px 14px; border-radius: 8px; font-size: 13px; min-height: 36px">Terminal (mosh)</button>
+      </div>
+      <div style="width: 340px; height: 700px; border-radius: 40px; background: #16191D; padding: 10px; box-sizing: border-box">
+        <div style="width: 100%; height: 100%; border-radius: 31px; background: #FFFFFF; overflow: hidden; display: flex; flex-direction: column">
+
+          <sc-if value="{{bIsPages}}" hint-placeholder-val="{{ true }}">
+            <div style="padding: 14px 14px 10px; border-bottom: 1px solid #F0EEE7; display: flex; gap: 8px; align-items: center">
+              <span style="flex: 1; background: #F0EEE7; border-radius: 10px; padding: 9px 12px; font-family: 'JetBrains Mono', monospace; font-size: 12px">maarse://ronne-host/ferry</span>
+            </div>
+            <div style="flex: 1; background: #0F1A14; color: #B8F5C8; font-family: 'JetBrains Mono', monospace; font-size: 13px; padding: 16px; display: flex; flex-direction: column; gap: 10px; line-height: 1.5">
+              <div style="color: #FFFFFF; font-weight: 500">== BORNHOLM FERRY ==</div>
+              <div>Ystad 14:30 · on time<br>Ystad 18:00 · on time<br>Køge 23:45 · cancelled</div>
+              <div style="border: 1px dashed #4D7A5B; border-radius: 6px; padding: 12px; color: #8FD4A4">[ picture: harbour.jpg ]<br>tap for grey copy · 900 B</div>
+              <div style="color: #FFFFFF">&gt; Notice board (3)</div>
+              <div style="color: #FFFFFF">&gt; Weather Bornholm</div>
+              <div style="margin-top: auto; color: #6FA884; font-size: 11px">Page 1.4 KB · fetched in 3.2 s over 1 radio hop</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{bIsTun}}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 14px; border-bottom: 1px solid #F0EEE7; display: flex; flex-direction: column; gap: 4px">
+              <b style="font-size: 14px">Tunnel to Anna’s server</b>
+              <span style="font-size: 11px; color: #5B6470; font-family: 'JetBrains Mono', monospace">fd3a:91c0:…:7e → fd8b:22d4:…:01</span>
+              <span style="align-self: flex-start; font-size: 11px; font-weight: 600; background: #FFEDD5; color: #9A3412; padding: 3px 8px; border-radius: 99px">Over LoRa (tun-lora) · round trip 2.8 s</span>
+            </div>
+            <div style="flex: 1; background: #111418; color: #D7DDE4; font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 14px; line-height: 1.6">
+              <div>$ mosh bo@fd8b:22d4::1</div>
+              <div style="color: #8E98A4">Connecting over the Må:rse tunnel…</div>
+              <div>bo@server:~$ uptime</div>
+              <div>14:02:11 up 41 days, load 0.08</div>
+              <div>bo@server:~$ tail -2 /var/log/ferry</div>
+              <div>14:01 departure 14:30 confirmed</div>
+              <div>14:01 departure 23:45 cancelled</div>
+              <div>bo@server:~$ <span style="background: #D7DDE4; color: #111418">_</span></div>
+            </div>
+            <div style="padding: 10px 14px; border-top: 1px solid #F0EEE7; font-size: 11px; color: #5B6470">180 B/s · 34 packets · 2 pieces resent (NACK)</div>
+          </sc-if>
+
+          <nav aria-label="App tabs" style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid #F0EEE7; font-size: 11px; color: #5B6470; text-align: center">
+            <span style="padding: 10px 0">Chats</span><span style="padding: 10px 0">Map</span><span style="padding: 10px 0; color: {{bPagesTab}}; font-weight: 600">Pages</span><span style="padding: 10px 0; color: {{bNetTab}}; font-weight: 600">Network</span><span style="padding: 10px 0">Settings</span>
+          </nav>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":940}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { a: 'chat', b: 'pages' };
+  }
+  renderVals() {
+    const { a, b } = this.state;
+    const on = '#FFFFFF', off = 'transparent';
+    return {
+      aIsChat: a === 'chat', aIsCall: a === 'call',
+      aChat: () => this.setState({ a: 'chat' }), aCall: () => this.setState({ a: 'call' }),
+      aChatBg: a === 'chat' ? on : off, aCallBg: a === 'call' ? on : off,
+      bIsPages: b === 'pages', bIsTun: b === 'tun',
+      bPages: () => this.setState({ b: 'pages' }), bTun: () => this.setState({ b: 'tun' }),
+      bPagesBg: b === 'pages' ? on : off, bTunBg: b === 'tun' ? on : off,
+      bPagesTab: b === 'pages' ? '#1F5FD6' : '#5B6470', bNetTab: b === 'tun' ? '#1F5FD6' : '#5B6470',
+      log: [
+        { t: '0:12', color: '#15803D', text: 'Anna → Bo: text, delivered in 7.4 s (6 hops)' },
+        { t: '0:40', color: '#1F5FD6', text: 'Bo opened maarse://ronne-host/ferry (1.4 KB)' },
+        { t: '1:05', color: '#C2410C', text: 'Anna called Bo: refused, no internet path all the way' },
+        { t: '2:14', color: '#C2410C', text: 'You cut the LoRa trunk to Bornholm' },
+        { t: '2:30', color: '#6D28D9', text: 'Anna → Bo: voice message 8 s, waiting in post office' },
+        { t: '3:02', color: '#1F5FD6', text: 'Bo opened a mosh session to Anna’s server over the tunnel' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

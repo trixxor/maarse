@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Every feature</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1F5FD6}a:hover{color:#16469E}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1640px; box-sizing: border-box; padding: 44px 48px; background: #F5F4EF; color: #16191D; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; gap: 20px">
+  <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 24px">
+    <div>
+      <h1 style="margin: 0; font-size: 32px; letter-spacing: -0.02em">Every Må:rse feature, simulated</h1>
+      <p style="margin: 6px 0 0; color: #3D4550; font-size: 15px; max-width: 820px; line-height: 1.5">Everything the firmware, the app and the hosts can do, and how the simulator runs it. Nothing from today’s simulator is dropped. This list is also the outline for the full system description.</p>
+    </div>
+    <div style="display: flex; gap: 8px; flex: none; font-size: 12px">
+      <span style="padding: 5px 10px; border-radius: 99px; background: #DCFCE7; color: #166534; font-weight: 600">Real code</span>
+      <span style="padding: 5px 10px; border-radius: 99px; background: #DBEAFE; color: #1E40AF; font-weight: 600">Shared rules from the host</span>
+      <span style="padding: 5px 10px; border-radius: 99px; background: #FFEDD5; color: #9A3412; font-weight: 600">Model</span>
+      <span style="padding: 5px 10px; border-radius: 99px; background: #16191D; color: #FFFFFF; font-weight: 600">New</span>
+    </div>
+  </div>
+
+  <div style="column-count: 3; column-gap: 18px">
+    <sc-for list="{{groups}}" as="g" hint-placeholder-count="12">
+      <section style="break-inside: avoid; background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 14px; padding: 14px 16px; margin-bottom: 18px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px">
+          <b style="font-size: 15px">{{g.name}}</b>
+          <span style="font-size: 12px; color: #5B6470">{{g.where}}</span>
+        </div>
+        <sc-for list="{{g.items}}" as="i" hint-placeholder-count="5">
+          <div style="display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid #F0EEE7; font-size: 13px">
+            <span style="flex: 1; line-height: 1.35">{{i.name}}</span>
+            <sc-if value="{{i.isNew}}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 99px; background: #16191D; color: #FFFFFF">NEW</span></sc-if>
+            <span style="font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 99px; background: {{i.bg}}; color: {{i.fg}}; white-space: nowrap">{{i.how}}</span>
+          </div>
+        </sc-for>
+      </section>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1640}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const H = {
+      r: { how: 'real', bg: '#DCFCE7', fg: '#166534' },
+      s: { how: 'shared', bg: '#DBEAFE', fg: '#1E40AF' },
+      m: { how: 'model', bg: '#FFEDD5', fg: '#9A3412' }
+    };
+    const it = (name, k, isNew) => Object.assign({ name, isNew: !!isNew }, H[k]);
+    const groups = [
+      { name: 'Messages', where: 'Send · Phones', items: [
+        it('Direct messages, acks, textz compression', 'r'), it('Sequence numbers, “2 messages missing”', 's', 1),
+        it('Public and private channels', 'r', 1), it('Store-carry-forward, carried notice', 'r'),
+        it('Post offices: deposit, sync, quotas, expiry', 'm'), it('Hold messages from unknown senders', 'r'),
+        it('History shared by several screens', 's', 1) ] },
+      { name: 'Files, voice and pictures', where: 'Send · Phones', items: [
+        it('File offer + pull/batch transfer, progress', 's', 1), it('Cancel by sender or receiver', 's', 1),
+        it('Size limit per route: 8 KB LoRa, 1 MB internet', 's', 1), it('File mailbox for offline receivers (7 days)', 's', 1),
+        it('Voice messages (Codec2, 1200 bit/s)', 's', 1), it('Pictures: dots, grey and colour copies', 's', 1) ] },
+      { name: 'Calls', where: 'Phones', items: [
+        it('Opus calls as datagrams, internet all the way', 's', 1), it('Refusal with reason when a path is not internet', 's', 1),
+        it('Call test service: music, echo, speed', 's', 1) ] },
+      { name: 'Pages', where: 'Phones · Send', items: [
+        it('Page requests, deflated page files', 's', 1), it('Locked pages (@allow)', 's', 1), it('Notice boards: posts', 's', 1),
+        it('Pictures on demand, small over LoRa', 's', 1), it('Burst limits LoRa / internet', 's', 1), it('Page statistics per host', 'm', 1) ] },
+      { name: 'Alerts', where: 'Send · Results', items: [
+        it('Signed bulletins on #bulletin, priority', 'r'), it('Alerts v2: issuer key, certificate, replay drop', 'r', 1),
+        it('Area + region scope', 'r'), it('Latency heat map, who missed it and why', 'm') ] },
+      { name: 'IP tunnel (VPN)', where: 'Phones · Send', items: [
+        it('Session key in a sealed message, key change every 5 min', 's', 1), it('Datagrams, header compression, MSS clamp', 's', 1),
+        it('Fragments + NACK', 's', 1), it('Over TCP always, over LoRa with tun-lora', 's', 1),
+        it('Workloads: ping, SSH session, mosh, bulk copy', 'm', 1) ] },
+      { name: 'Identity and people', where: 'Phones · Build', items: [
+        it('Announces, known contacts, pinned contacts', 'r'), it('Key requests and host key cache', 'r'),
+        it('Linked devices: one person, many devices', 'm'), it('Recovery phrase: restore a device elsewhere', 's', 1),
+        it('Safety numbers (shown on the phones)', 's', 1) ] },
+      { name: 'Routing and radio', where: 'Build · Break', items: [
+        it('Flooding, path requests, routes, local repair', 'r'), it('Hello, regions, bordercast, area scope', 'r'),
+        it('Forest mode (auto relay), edge bridges, hop limit', 'r'), it('Mobile mode (cars), anchors, host anchor', 'r'),
+        it('Load control, QoS priorities, SF slot', 'r'), it('Duty cycle, CAD, collisions, half duplex', 'r'),
+        it('Path loss, height, horizon, forest/town clutter', 'r'), it('Storm / jamming loss in an area', 'm') ] },
+      { name: 'Backbone and links', where: 'Build · Break', items: [
+        it('TCP backbone, region hello', 'm'), it('DHT lookup between hosts', 'm'), it('Wi-Fi point to point', 'm'),
+        it('LoRa trunks with Bloom filters', 'm'), it('Public servers relaying hosts behind NAT', 'm', 1),
+        it('Serial, KISS and UDP links', 'm', 1), it('Guard: rate limits, bans, block list', 's', 1), it('Home routing (proposal)', 'm') ] },
+      { name: 'Power', where: 'Build · Break', items: [
+        it('Batteries, mains with battery fallback', 'm'), it('Energy level drives flood delays', 'r'), it('Power cuts by area, hosts lose internet', 'm') ] },
+      { name: 'Operations and tools', where: 'Phones · Results', items: [
+        it('Trace route and neighbours', 'r', 1), it('Range test between two nodes', 'r', 1), it('Remote admin of a node', 's', 1),
+        it('Position and telemetry sharing on the map', 'r', 1), it('Firmware update (shown as reboot, USB/BT only)', 'm', 1),
+        it('Server dashboard numbers (telemetry)', 'm', 1), it('MeshCore gateway and MQTT bridge (gateway node)', 'm', 1) ] },
+      { name: 'The simulator itself', where: 'all modes', items: [
+        it('Generator per region with connection mix', 'm', 1), it('Presets with expected results, run in CI', 'm', 1),
+        it('Walkers, cars on routes, forest scenario', 'm'), it('Timeline, undo, durations', 'm'),
+        it('Follow any item live, reach maps', 'm'), it('Compare runs, export JSON/CSV', 'm'),
+        it('Share a run as a link (GitHub Pages)', 'm', 1), it('Light and dark mode', 'm', 1) ] }
+    ];
+    return { groups };
+  }
+}
+</script>
+</body>
+</html>

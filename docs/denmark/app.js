@@ -65,9 +65,16 @@
   function applyTheme() {
     const dark = isDark();
     map.getContainer().classList.toggle("dark-tiles", dark);
+    $("theme-name").textContent = dark ? "Dark" : "Light";
     if (!tilesFailed) land.setStyle({ fillOpacity: dark ? 0.06 : 0.18 });
   }
-  $("btn-theme").onclick = () => { document.documentElement.dataset.theme = isDark() ? "light" : "dark"; applyTheme(); };
+  $("btn-theme").onclick = () => {
+    const t = isDark() ? "light" : "dark";
+    document.documentElement.dataset.theme = t;
+    try { localStorage.setItem("dk-theme", t); } catch (e) { /* private window */ }
+    applyTheme();
+  };
+  try { const t = localStorage.getItem("dk-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* private window */ }
   applyTheme();
 
   function compColor(c) {
@@ -99,7 +106,8 @@
       const m = L.circleMarker([n.lat, n.lon], { renderer: canvas, radius: KIND_R[n.kind] || 3, weight: 1, color: "#0b0f14", fillColor: KIND_COLOR[n.kind], fillOpacity: 0.9 });
       m.on("click", (e) => { L.DomEvent.stopPropagation(e); onNodeClick(i); });
       m.on("mousedown", (e) => startDrag(i, e));
-      m.bindTooltip(() => esc(name(i)), { sticky: true });
+      m.on("contextmenu", (e) => { L.DomEvent.stop(e); nodeMenu(i, e); });
+      m.bindTooltip(() => `${esc(name(i))}<br><span class="tip-hint">click: inspect · right-click: actions</span>`, { sticky: true });
       m.addTo(nodeLayer);
       return m;
     });
@@ -122,8 +130,9 @@
         });
         const tr = lora && state && state.trunks ? state.trunks.find(t => t.label === l.label) : null;
         const kindText = lora ? `${esc(l.label || "LoRa trunk")} (SF${l.sf || 9}, ${l.snr_db || 5} dB)` : `${l.kind.toUpperCase()} link ${k}`;
-        pl.bindTooltip(`${kindText}: ${esc(name(l.a))} ↔ ${esc(name(l.b))} ${ok ? "(up)" : "(down)"}${tr ? ` · ${tr.packets} packets, ${tr.airtime_s.toFixed(0)} s airtime` : ""}. Click to toggle.`);
+        pl.bindTooltip(`${kindText}: ${esc(name(l.a))} ↔ ${esc(name(l.b))} ${ok ? "(up)" : "(down)"}${tr ? ` · ${tr.packets} packets, ${tr.airtime_s.toFixed(0)} s airtime` : ""}.<br><span class="tip-hint">click: ${ok ? "cut" : "restore"} · right-click: more</span>`);
         pl.on("click", (e) => { L.DomEvent.stopPropagation(e); toggleLink(k); });
+        pl.on("contextmenu", (e) => { L.DomEvent.stop(e); linkMenu(k, e); });
         pl.addTo(linkLayer);
       });
     }
@@ -591,6 +600,51 @@
     if (drag.moved) { const n = scenario.nodes[drag.i]; n.lat = +e.latlng.lat.toFixed(5); n.lon = +e.latlng.lng.toFixed(5); selected = drag.i; edited(); renderInspector(); }
     drag = null;
   });
+
+  // ---------- right-click menus on the map ----------
+  function showMenu(e, title, items) {
+    const box = $("ctx");
+    const pt = map.mouseEventToContainerPoint(e.originalEvent);
+    box.innerHTML = `<div class="ctx-title">${esc(title)}</div>` + items.map((it, k) => `<button role="menuitem" data-k="${k}" class="${it.danger ? "danger" : ""}">${esc(it.label)}</button>`).join("");
+    box.classList.remove("hidden");
+    const W = map.getContainer().clientWidth, H = map.getContainer().clientHeight;
+    box.style.left = Math.min(pt.x, W - box.offsetWidth - 8) + "px";
+    box.style.top = Math.min(pt.y, H - box.offsetHeight - 8) + "px";
+    box.querySelectorAll("button").forEach(b => b.onclick = () => { hideMenu(); items[+b.dataset.k].run(); });
+    const first = box.querySelector("button"); if (first) first.focus();
+  }
+  function hideMenu() { $("ctx").classList.add("hidden"); }
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideMenu(); });
+  map.on("click movestart zoomstart", hideMenu);
+  function nodeMenu(i, e) {
+    const n = scenario.nodes[i];
+    const dead = state && state.state[i] === "k";
+    const items = [
+      { label: "Inspect", run: () => selectNode(i, false) },
+      { label: "Send a message from here…", run: () => { $("jr-from").value = "#" + i; openTab("journey"); } },
+      { label: "Send a message to here…", run: () => { $("jr-to").value = "#" + i; openTab("journey"); } },
+      { label: "Announce now: show reach", run: () => { selected = i; renderInspector(); $("in-announce").click(); } },
+      dead ? { label: "Start this node again", run: () => addEvent({ type: "revive", nodes: [i] }) }
+           : { label: "Stop this node", run: () => addEvent({ type: "kill", nodes: [i] }, { type: "revive", nodes: [i] }) },
+      { label: "Reboot", run: () => addEvent({ type: "reboot", nodes: [i] }) },
+    ];
+    if (n.kind === "host") {
+      const up = !(sim && sim.inspect(i).internet);
+      items.push({ label: up ? "Give it internet again" : "Cut its internet", run: () => addEvent({ type: "host_internet", node: i, up }, up ? null : { type: "host_internet", node: i, up: true }) });
+    }
+    items.push({ label: "Delete", danger: true, run: () => deleteNode(i) });
+    showMenu(e, name(i), items);
+  }
+  function linkMenu(k, e) {
+    const l = scenario.links[k];
+    const ok = state && state.links_ok ? state.links_ok[k] : l.up;
+    showMenu(e, `${l.label || l.kind.toUpperCase() + " link"}: ${name(l.a)} ↔ ${name(l.b)}`, [
+      { label: ok ? "Cut this link" : "Restore this link", run: () => toggleLink(k) },
+      { label: "Inspect " + name(l.a), run: () => selectNode(l.a, true) },
+      { label: "Inspect " + name(l.b), run: () => selectNode(l.b, true) },
+      { label: "Delete link", danger: true, run: () => { scenario.links.splice(k, 1); edited(); } },
+    ]);
+  }
 
   function toggleLink(k) {
     const up = !(state && state.links_ok ? state.links_ok[k] : scenario.links[k].up);
@@ -1234,13 +1288,25 @@
   };
 
   // ---------- tabs, controls ----------
-  function openTab(t) {
-    document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x.dataset.tab === t));
-    document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x.id === "tab-" + t));
-    if (t === "journey") renderMsgList();
-    if (t === "stats") renderStats();
+  // Four modes; each shows one or more of the old tab sections, stacked.
+  const MODES = { build: ["build", "terrain"], send: ["journey", "alerts"], break: ["disaster"], results: ["stats", "log"] };
+  let mode = "send";
+  function openMode(m) {
+    mode = m;
+    document.querySelectorAll("#modes button").forEach(x => x.classList.toggle("on", x.dataset.mode === m));
+    document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", MODES[m].includes(x.id.slice(4))));
+    if (m === "send") renderMsgList();
+    if (m === "results") renderStats();
   }
-  $("tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) openTab(b.dataset.tab); });
+  // Opens the mode that holds an old tab section and scrolls to it.
+  function openTab(t) {
+    const m = Object.keys(MODES).find(k => MODES[k].includes(t)) || "send";
+    if (m !== mode) openMode(m);
+    const sec = $("tab-" + t);
+    if (sec && MODES[m][0] !== t) sec.scrollIntoView({ block: "start" });
+  }
+  $("modes").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) openMode(b.dataset.mode); });
+  openMode("send");
   function togglePlay() { playing = !playing; $("btn-play").textContent = playing ? "❚❚" : "▶"; }
   $("btn-play").onclick = togglePlay;
   document.addEventListener("keydown", (e) => { if (e.code === "Space" && !/INPUT|SELECT|TEXTAREA|BUTTON/.test(document.activeElement.tagName)) { e.preventDefault(); togglePlay(); } });
@@ -1265,7 +1331,7 @@
     fitScenario();
   }
 
-  // ---------- API for ask.js ----------
+  // ---------- page API (console and headless tests) ----------
   const plain = (html) => { const d = document.createElement("div"); d.innerHTML = html; return d.textContent.replace(/\s+/g, " ").trim(); };
   window.DkSim = {
     DK,

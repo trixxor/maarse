@@ -849,60 +849,6 @@ count, and why it did not forward: forwarded / suppressed (neighbours covered
 the area) / role does not forward / outside region / hop limit / dropped (duty,
 busy, quota, area scope) / not forwarded (duplicate or not needed).
 
-## Ask Claude
-
-The **Ask Claude** tab lets you ask a question ("what happens to Bornholm if
-the internet goes down?"); Claude plans a test and runs it here through five
-page tools (`docs/denmark/ask.js`).
-
-**Locally (preferred).** Start the bridge instead of `python -m http.server`:
-
-```
-node tools/sim-bridge/bridge.mjs      # or scripts/start-sim.bat / start-sim.sh
-# open http://127.0.0.1:8765/denmark/
-```
-
-The bridge (`tools/sim-bridge/bridge.mjs`, no dependencies) serves `docs/`
-and, for each question, runs Claude Code headless (`claude -p`) with the
-Claude Code login on this machine. Claude gets no file or shell tools, only
-the simulator's tools through a small MCP server (`sim-mcp.mjs`) that relays
-each call to the open simulator page; the page runs it in the WebAssembly
-engine and shows it live. Follow-up questions continue the same conversation
-(`--resume`). The bridge listens on 127.0.0.1 only; API calls need a per-run
-token that only a page served by the bridge can read, and other origins are
-refused. Each question spends your own Claude usage.
-
-**As a claude.ai artifact.** The same tab works through the `sample`
-capability when the page is published as an artifact (see below).
-
-The tools:
-
-* `describe_setup`: the scenario on the map, features, events, live results,
-  presets and the largest towns with coordinates;
-* `run_experiment`: up to 4 variants x 3 seeds, headless in the engine, mean
-  results per variant (delivered, acked, latency, transmissions, path
-  requests, airtime, drops, losses at the next hop, flood copies, alerts);
-* `show_live`: load a variant on the live map and start it;
-* `follow_message`: send one message (towns by name), run until it is acked,
-  and return its story (the Journey tab's steps and diagnosis);
-* `add_event`: a timeline event now, optionally undone after N minutes.
-
-Claude sees only what the page sends: a short description of the protocol and
-the simulator, the conversation, and the tool results. Each question spends
-the viewer's own Claude usage. Opened locally (not as an artifact) the tab
-stays hidden. Build and publish:
-
-```
-python tools/build_denmark_sim.py         # the engine, if it changed
-python tools/build_denmark_artifact.py    # docs/denmark/artifact.html
-```
-
-Then publish `artifact.html` as an artifact with the files the script lists
-and `capabilities: {sample: {}, downloads: true}`. Inside an artifact the map
-tiles do not load (the page may not fetch images from other hosts); the
-embedded coastline carries the map, and exports go through the `downloads`
-capability.
-
 ## What the UI does
 
 * **Live view** (on the map): a dark map (OSM tiles under a CSS filter; the

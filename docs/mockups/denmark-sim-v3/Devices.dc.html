@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Place devices and people</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1F5FD6}a:hover{color:#16469E}
+button,input,select{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1000px; box-sizing: border-box; display: flex; flex-direction: column; background: #F5F4EF; color: #16191D; font-family: Inter, system-ui, sans-serif; font-size: 14px">
+
+  <header style="display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: #FFFFFF; border-bottom: 1px solid #E3E1DA">
+    <span style="font-weight: 700; font-size: 18px">Må:rse</span>
+    <span style="color: #5B6470; font-size: 15px">Denmark Simulator</span>
+    <nav aria-label="Mode" style="display: flex; gap: 4px; background: #F0EEE7; padding: 4px; border-radius: 12px">
+      <button style="border: 0; background: #FFFFFF; padding: 10px 16px; border-radius: 9px; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.08); min-height: 40px">Build</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; color: #3D4550; min-height: 40px">Send</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; color: #3D4550; min-height: 40px">Break</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; color: #3D4550; min-height: 40px">Results</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; color: #3D4550; min-height: 40px">Control room</button>
+    </nav>
+  </header>
+
+  <div style="flex: 1; display: grid; grid-template-columns: 330px minmax(0, 1fr) 360px; gap: 16px; padding: 16px 20px 20px; min-height: 0">
+
+    <aside aria-label="Devices" style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 8px; overflow: hidden">
+      <b style="font-size: 15px">Devices</b>
+      <div style="font-size: 12px; color: #5B6470">Drag onto the map, or pick and click. Each comes with the settings of the real device.</div>
+      <sc-for list="{{devices}}" as="d" hint-placeholder-count="12">
+        <button style="display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; align-items: center; text-align: left; border: 1px solid {{d.border}}; background: {{d.bg}}; border-radius: 10px; padding: 7px 10px; min-height: 44px">
+          <span style="width: 30px; height: 30px; border-radius: 8px; background: {{d.color}}; color: #FFFFFF; display: grid; place-items: center; font-size: 12px; font-weight: 700">{{d.tag}}</span>
+          <span><span style="font-weight: 600; font-size: 13px; display: block">{{d.name}}</span><span style="font-size: 11px; color: #5B6470">{{d.text}}</span></span>
+        </button>
+      </sc-for>
+    </aside>
+
+    <main style="position: relative; background: #DCE7F0; border-radius: 16px; overflow: hidden; border: 1px solid #CBD8E3">
+      <svg viewBox="180 230 260 200" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Zoomed map of mid Jutland with a walking route and waypoints" style="position: absolute; inset: 0; width: 100%; height: 100%">
+        <path d="M196,300 L210,250 L232,200 L262,160 L350,190 L362,230 L390,262 L372,300 L392,330 L370,372 L352,405 L360,440 L200,440 L188,350 Z" fill="#FBFAF6" stroke="#C9C5BA" stroke-width="0.6"></path>
+        <path d="M262,300 Q290,285 318,300 Q330,330 300,345 Q268,345 258,325 Z" fill="#15803D" fill-opacity="0.16" stroke="#15803D" stroke-width="0.5" stroke-dasharray="2 1.5"></path>
+        <text x="270" y="322" font-family="Inter, sans-serif" font-size="5" fill="#166534">Forest −10 dB/km</text>
+        <path d="M222,262 L250,290 L290,312 L322,336 L360,350" fill="none" stroke="#B45309" stroke-width="1.6" stroke-dasharray="3 2" stroke-linecap="round"></path>
+        <g fill="#FFFFFF" stroke="#B45309" stroke-width="1">
+          <circle cx="250" cy="290" r="3"></circle><circle cx="290" cy="312" r="3"></circle><circle cx="322" cy="336" r="3"></circle>
+        </g>
+        <g font-family="Inter, sans-serif" font-size="4.5" font-weight="700" fill="#B45309" text-anchor="middle">
+          <text x="250" y="284">1</text><text x="290" y="306">2</text><text x="322" y="330">3</text>
+        </g>
+        <circle cx="222" cy="262" r="4.5" fill="#16191D"></circle><text x="222" y="264" font-family="Inter, sans-serif" font-size="5" font-weight="700" fill="#FFFFFF" text-anchor="middle">A</text>
+        <circle cx="360" cy="350" r="4.5" fill="#16191D"></circle><text x="360" y="352" font-family="Inter, sans-serif" font-size="5" font-weight="700" fill="#FFFFFF" text-anchor="middle">B</text>
+        <circle cx="272" cy="302" r="3.5" fill="#B45309" stroke="#FFFFFF" stroke-width="1"></circle>
+        <g fill="#16191D"><rect x="361" y="296" width="6" height="6" rx="1"></rect></g>
+        <g fill="#6D28D9"><path d="M230,330 l4,-8 l4,8 z"></path></g>
+        <g fill="#9AA3AE"><circle cx="240" cy="250" r="1.8"></circle><circle cx="300" cy="270" r="1.8"></circle><circle cx="330" cy="300" r="1.8"></circle><circle cx="250" cy="370" r="1.8"></circle><circle cx="340" cy="390" r="1.8"></circle></g>
+        <g font-family="Inter, sans-serif" font-size="5" font-weight="600" fill="#16191D" stroke="#FBFAF6" stroke-width="1.6" paint-order="stroke">
+          <text x="200" y="256">Herning</text><text x="368" y="300">Aarhus host</text><text x="240" y="336">Mast 40 m</text><text x="276" y="296">Mette</text><text x="350" y="362">Silkeborg</text>
+        </g>
+      </svg>
+      <div style="position: absolute; left: 14px; top: 14px; background: #FFFFFF; border-radius: 12px; padding: 10px 12px; box-shadow: 0 2px 8px rgba(22,25,29,0.12); font-size: 13px; display: flex; flex-direction: column; gap: 4px">
+        <b>Drawing a route for Mette</b>
+        <span style="color: #5B6470">Click to add waypoints · double-click to finish · drag a point to move it</span>
+      </div>
+      <div style="position: absolute; right: 14px; bottom: 14px; background: #16191D; color: #FFFFFF; border-radius: 10px; padding: 8px 12px; font-size: 12px">Now at 14:20 · between waypoint 1 and 2 · in the forest, hears no repeater → forest mode</div>
+    </main>
+
+    <aside aria-label="Person" style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px; overflow: hidden">
+      <div>
+        <div style="font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5B6470">Person</div>
+        <input value="Mette" aria-label="Name" style="font-size: 20px; font-weight: 700; border: 0; padding: 2px 0; width: 100%">
+      </div>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600">Carries
+        <select style="font: inherit; font-weight: 400; padding: 10px; border: 1px solid #D6D3CA; border-radius: 9px; background: #FFFFFF"><option>Handheld (Heltec V4) + phone over Bluetooth</option><option>Phone with app only</option><option>Relay box in backpack</option><option>Nothing (just walks)</option></select>
+      </label>
+      <div style="display: flex; gap: 4px; background: #F0EEE7; padding: 3px; border-radius: 10px">
+        <button style="flex: 1; border: 0; background: #FFFFFF; padding: 8px; border-radius: 8px; font-weight: 600; min-height: 38px">Mobile</button>
+        <button style="flex: 1; border: 0; background: transparent; padding: 8px; border-radius: 8px; color: #3D4550; min-height: 38px">Stationary</button>
+      </div>
+      <div style="font-size: 12px; color: #5B6470; margin-top: -6px">Mobile: says so in its announce, so routes to it go stale after 30 s.</div>
+
+      <b style="font-size: 13px">Route</b>
+      <ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px">
+        <sc-for list="{{route}}" as="w" hint-placeholder-count="5">
+          <li style="display: grid; grid-template-columns: 26px minmax(0, 1fr) 88px; gap: 8px; align-items: center; font-size: 13px">
+            <span style="width: 24px; height: 24px; border-radius: 50%; background: {{w.bg}}; color: {{w.fg}}; border: 1.5px solid #B45309; display: grid; place-items: center; font-size: 11px; font-weight: 700">{{w.n}}</span>
+            <span>{{w.name}}</span>
+            <span style="font-size: 12px; color: #5B6470; text-align: right">{{w.stop}}</span>
+          </li>
+        </sc-for>
+      </ol>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+        <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600">Speed
+          <select style="font: inherit; font-weight: 400; padding: 9px; border: 1px solid #D6D3CA; border-radius: 9px; background: #FFFFFF"><option>Walk 5 km/h</option><option>Bike 15 km/h</option><option>Car 50 km/h</option><option>Custom…</option></select>
+        </label>
+        <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600">Starts at
+          <input value="14:00" style="font: inherit; font-weight: 400; padding: 9px; border: 1px solid #D6D3CA; border-radius: 9px">
+        </label>
+      </div>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600">At the end
+        <select style="font: inherit; font-weight: 400; padding: 9px; border: 1px solid #D6D3CA; border-radius: 9px; background: #FFFFFF"><option>Stay at B</option><option>Walk back to A</option><option>Repeat</option></select>
+      </label>
+      <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600">On the way
+        <select style="font: inherit; font-weight: 400; padding: 9px; border: 1px solid #D6D3CA; border-radius: 9px; background: #FFFFFF"><option>Send a text to Bo every 10 min</option><option>Share position every 5 min</option><option>Open as a phone (control it yourself)</option><option>Nothing</option></select>
+      </label>
+      <div style="display: flex; gap: 8px; margin-top: auto">
+        <button style="flex: 1; border: 1px solid #D6D3CA; background: #FFFFFF; padding: 11px; border-radius: 9px; min-height: 44px">Add group of 10</button>
+        <button style="flex: 1; border: 0; background: #1F5FD6; color: #FFFFFF; font-weight: 600; padding: 11px; border-radius: 9px; min-height: 44px">Place Mette</button>
+      </div>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const d = (tag, name, text, color, on) => ({ tag, name, text, color, bg: on ? '#E8EFFC' : '#FFFFFF', border: on ? '#1F5FD6' : '#E3E1DA' });
+    return {
+      devices: [
+        d('H', 'Handheld radio', 'Heltec V4 / XIAO · phone over BLE or USB · battery', '#16191D', true),
+        d('P', 'Phone, app only', 'Internet to its home host · no radio', '#E8930C'),
+        d('R', 'Relay box', 'Forwards floods within the hop limit · battery', '#5B6470'),
+        d('Rp', 'Repeater', 'Fixed, 15 m, mains + battery', '#7A8591'),
+        d('A', 'Anchor / mast', '40 m, splits long routes', '#6D28D9'),
+        d('Ho', 'Host', 'PC with LoRa modem · backbone · post office', '#16191D'),
+        d('S', 'Server (VPS)', 'Backbone + DHT, no radio · relays NAT hosts', '#3D4550'),
+        d('W', 'Wi-Fi node', 'ESP32 modem on Wi-Fi, 6 m', '#1F5FD6'),
+        d('T', 'LoRa trunk', 'Directional link between two hosts', '#0E7490'),
+        d('C', 'Car', 'Mobile node on a road route', '#B45309'),
+        d('G', 'MeshCore gateway', 'Host with a MeshCore companion node', '#9A3412'),
+        d('👤', 'Person', 'Walks a route carrying one of the above', '#B45309')
+      ],
+      route: [
+        { n: 'A', name: 'Herning station', stop: 'start 14:00', bg: '#16191D', fg: '#FFFFFF' },
+        { n: '1', name: 'Forest edge', stop: '—', bg: '#FFFFFF', fg: '#B45309' },
+        { n: '2', name: 'Lake shelter', stop: 'stop 15 min', bg: '#FFFFFF', fg: '#B45309' },
+        { n: '3', name: 'Hill (antenna 2 m)', stop: '—', bg: '#FFFFFF', fg: '#B45309' },
+        { n: 'B', name: 'Silkeborg', stop: 'arrives 17:35', bg: '#16191D', fg: '#FFFFFF' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

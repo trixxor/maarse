@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Generate a network</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1F5FD6}a:hover{color:#16469E}
+button,input,select{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 940px; box-sizing: border-box; display: flex; flex-direction: column; background: #F5F4EF; color: #16191D; font-family: Inter, system-ui, sans-serif; font-size: 14px">
+
+  <header style="display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: #FFFFFF; border-bottom: 1px solid #E3E1DA">
+    <div style="display: flex; align-items: baseline; gap: 8px">
+      <span style="font-weight: 700; font-size: 18px">Må:rse</span>
+      <span style="color: #5B6470; font-size: 15px">Denmark Simulator</span>
+    </div>
+    <nav aria-label="Mode" style="display: flex; gap: 4px; background: #F0EEE7; padding: 4px; border-radius: 12px">
+      <button style="border: 0; background: #FFFFFF; padding: 10px 16px; border-radius: 9px; font-size: 14px; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.08); min-height: 40px">Build</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; font-size: 14px; color: #3D4550; min-height: 40px">Send</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; font-size: 14px; color: #3D4550; min-height: 40px">Break</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; font-size: 14px; color: #3D4550; min-height: 40px">Results</button>
+    </nav>
+  </header>
+
+  <div style="display: flex; flex: 1; gap: 16px; padding: 16px 20px 20px; min-height: 0">
+    <section aria-label="Generator" style="flex: 1; min-width: 0; background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 16px; padding: 20px 22px; display: flex; flex-direction: column; gap: 18px">
+      <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 16px">
+        <div>
+          <h1 style="margin: 0; font-size: 22px">Generate a network</h1>
+          <div style="color: #5B6470; margin-top: 4px">Say who lives where and how they are connected. Repeaters, hosts and post offices are placed for you.</div>
+        </div>
+        <div style="display: flex; gap: 6px; flex: none">
+          <button style="border: 1px solid #D6D3CA; background: #FFFFFF; padding: 9px 12px; border-radius: 9px; min-height: 40px">Start from a preset ▾</button>
+        </div>
+      </div>
+
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px">
+        <thead>
+          <tr style="text-align: left; color: #5B6470; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em">
+            <th style="padding: 8px 6px; font-weight: 600">Region</th>
+            <th style="padding: 8px 6px; font-weight: 600">Users</th>
+            <th style="padding: 8px 6px; font-weight: 600; width: 38%">How they connect</th>
+            <th style="padding: 8px 6px; font-weight: 600">Cars</th>
+            <th style="padding: 8px 6px; font-weight: 600">Relay boxes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <sc-for list="{{regions}}" as="r" hint-placeholder-count="5">
+            <tr style="border-top: 1px solid #F0EEE7">
+              <td style="padding: 10px 6px; font-weight: 600">{{r.name}}</td>
+              <td style="padding: 10px 6px"><input value="{{r.users}}" aria-label="Users in {{r.name}}" style="width: 72px; padding: 8px; border: 1px solid #D6D3CA; border-radius: 8px; font-family: 'JetBrains Mono', monospace"></td>
+              <td style="padding: 10px 6px">
+                <div style="display: flex; height: 14px; border-radius: 7px; overflow: hidden">
+                  <span style="width: {{r.lora}}; background: #1F5FD6"></span>
+                  <span style="width: {{r.both}}; background: #7FA6EC"></span>
+                  <span style="width: {{r.app}}; background: #E8930C"></span>
+                </div>
+                <div style="font-size: 12px; color: #5B6470; margin-top: 4px">{{r.mix}}</div>
+              </td>
+              <td style="padding: 10px 6px; font-family: 'JetBrains Mono', monospace">{{r.cars}}</td>
+              <td style="padding: 10px 6px; font-family: 'JetBrains Mono', monospace">{{r.relays}}</td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+      <div style="display: flex; gap: 16px; font-size: 13px; color: #3D4550">
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 12px; height: 12px; border-radius: 3px; background: #1F5FD6"></span>LoRa only</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 12px; height: 12px; border-radius: 3px; background: #7FA6EC"></span>LoRa + internet</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span style="width: 12px; height: 12px; border-radius: 3px; background: #E8930C"></span>App only (internet, no radio)</span>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+        <div style="border: 1px solid #E3E1DA; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px">
+          <b>Repeaters</b>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px"><input type="radio" name="rep" checked> Auto: cover the towns</label>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px"><input type="radio" name="rep"> Grid every <input value="18" aria-label="Grid spacing in km" style="width: 40px; padding: 4px; border: 1px solid #D6D3CA; border-radius: 6px"> km</label>
+        </div>
+        <div style="border: 1px solid #E3E1DA; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px">
+          <b>Hosts and post offices</b>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px"><input type="checkbox" checked> Host in towns over 12,000</label>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px"><input type="checkbox" checked> Post office on every host</label>
+        </div>
+        <div style="border: 1px solid #E3E1DA; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px">
+          <b>Masts and trunks</b>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px"><input type="checkbox" checked> Masts in towns over 50,000</label>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px"><input type="checkbox" checked> LoRa trunks to islands</label>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 12px; margin-top: auto">
+        <label style="display: flex; align-items: center; gap: 8px; color: #5B6470">Seed <input value="1" style="width: 56px; padding: 9px; border: 1px solid #D6D3CA; border-radius: 8px"></label>
+        <div style="flex: 1"></div>
+        <button style="border: 1px solid #D6D3CA; background: #FFFFFF; padding: 11px 16px; border-radius: 10px; min-height: 44px">Preview on map</button>
+        <button style="border: 0; background: #1F5FD6; color: #FFFFFF; padding: 11px 20px; border-radius: 10px; font-weight: 600; min-height: 44px">Generate</button>
+      </div>
+    </section>
+
+    <aside aria-label="Before you run" style="width: 420px; flex: none; display: flex; flex-direction: column; gap: 16px">
+      <div style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px">
+        <b style="font-size: 15px">Before you run</b>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+          <div style="background: #F5F4EF; border-radius: 10px; padding: 12px"><div style="font-size: 22px; font-weight: 700">1,912</div><div style="font-size: 12px; color: #5B6470">nodes (limit 2,000)</div></div>
+          <div style="background: #F5F4EF; border-radius: 10px; padding: 12px"><div style="font-size: 22px; font-weight: 700">212</div><div style="font-size: 12px; color: #5B6470">repeaters</div></div>
+          <div style="background: #F5F4EF; border-radius: 10px; padding: 12px"><div style="font-size: 22px; font-weight: 700">24</div><div style="font-size: 12px; color: #5B6470">hosts with post office</div></div>
+          <div style="background: #F5F4EF; border-radius: 10px; padding: 12px"><div style="font-size: 22px; font-weight: 700">2</div><div style="font-size: 12px; color: #5B6470">LoRa trunks</div></div>
+        </div>
+        <div style="height: 8px; border-radius: 4px; background: #F0EEE7; overflow: hidden"><div style="width: 95.6%; height: 100%; background: #16191D"></div></div>
+      </div>
+      <div style="background: #FFF7ED; border: 1px solid #FED7AA; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 8px">
+        <b style="color: #9A3412">3 places can only be reached over the internet</b>
+        <div style="font-size: 13px; color: #3D4550; line-height: 1.5">Læsø, Anholt and Ærø have users but no radio path to the mainland. Their app users still work while the internet is up.</div>
+        <button style="align-self: flex-start; border: 1px solid #FDBA74; background: #FFFFFF; padding: 8px 12px; border-radius: 8px; font-size: 13px; min-height: 40px">Add a trunk to each</button>
+      </div>
+      <div style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 10px">
+        <b style="font-size: 15px">Presets</b>
+        <sc-for list="{{presets}}" as="p" hint-placeholder-count="5">
+          <button style="text-align: left; border: 1px solid #E3E1DA; background: #FFFFFF; border-radius: 10px; padding: 10px 12px; min-height: 44px">
+            <div style="font-weight: 600; font-size: 13px">{{p.name}}</div>
+            <div style="font-size: 12px; color: #5B6470">{{p.text}}</div>
+          </button>
+        </sc-for>
+      </div>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":940}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const row = (name, users, lora, both, app, cars, relays) => ({ name, users, lora: lora + '%', both: both + '%', app: app + '%', mix: lora + ' % LoRa only · ' + both + ' % both · ' + app + ' % app only', cars: cars + ' %', relays: relays + ' %' });
+    return {
+      regions: [
+        row('Hovedstaden', 520, 20, 45, 35, 6, 4),
+        row('Sjælland', 260, 35, 45, 20, 8, 6),
+        row('Syddanmark', 330, 35, 45, 20, 8, 6),
+        row('Midtjylland', 340, 30, 45, 25, 8, 5),
+        row('Nordjylland', 200, 45, 40, 15, 10, 8)
+      ],
+      presets: [
+        { name: 'Normal day', text: 'Everything up, everyday traffic' },
+        { name: 'Storebælt cut', text: 'Backbone and trunks across the belt fail; watch mail pile up' },
+        { name: 'Bornholm alone', text: 'Trunk and internet to Bornholm down for 2 hours' },
+        { name: 'Storm surge, west coast', text: 'Power cut + radio loss + flood alert' },
+        { name: 'SSH across the country', text: 'App user in Aalborg logs in to a server in Odense' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

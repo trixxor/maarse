@@ -1,5 +1,5 @@
 @echo off
-rem Starts the Denmark simulator with "Ask Claude" (local Claude Code) and opens it.
+rem Serves docs/ and opens the Denmark simulator (browsers do not load .wasm from file://).
 cd /d "%~dp0.."
-start "" http://127.0.0.1:8765/denmark/
-node tools\sim-bridge\bridge.mjs
+start "" http://127.0.0.1:8000/denmark/
+python -m http.server -d docs 8000

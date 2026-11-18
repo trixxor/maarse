@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Control room</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#5B8DEF}a:hover{color:#8FB0F5}
+button,input,select{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1600px; height: 1040px; box-sizing: border-box; display: flex; flex-direction: column; background: {{c.bg}}; color: {{c.ink}}; font-family: Inter, system-ui, sans-serif; font-size: 14px">
+
+  <header style="display: flex; align-items: center; gap: 14px; padding: 12px 20px; background: {{c.surface}}; border-bottom: 1px solid {{c.line}}">
+    <span style="font-weight: 700; font-size: 18px">Må:rse</span>
+    <span style="color: {{c.muted}}; font-size: 15px">Denmark Simulator</span>
+    <nav aria-label="Mode" style="display: flex; gap: 4px; background: {{c.surface2}}; padding: 4px; border-radius: 12px; margin-left: 8px">
+      <button style="border: 0; background: transparent; color: {{c.muted}}; padding: 10px 14px; border-radius: 9px; min-height: 40px">Build</button>
+      <button style="border: 0; background: transparent; color: {{c.muted}}; padding: 10px 14px; border-radius: 9px; min-height: 40px">Send</button>
+      <button style="border: 0; background: transparent; color: {{c.muted}}; padding: 10px 14px; border-radius: 9px; min-height: 40px">Break</button>
+      <button style="border: 0; background: transparent; color: {{c.muted}}; padding: 10px 14px; border-radius: 9px; min-height: 40px">Results</button>
+      <button style="border: 0; background: {{c.surface}}; color: {{c.ink}}; font-weight: 600; padding: 10px 14px; border-radius: 9px; min-height: 40px">Control room</button>
+    </nav>
+    <div style="flex: 1"></div>
+    <button aria-label="Pause" style="width: 40px; height: 40px; border: 0; border-radius: 50%; background: {{c.ink}}; color: {{c.bg}}; display: grid; place-items: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg></button>
+    <span style="font-family: 'JetBrains Mono', monospace; font-size: 16px">12:40</span>
+    <span style="font-size: 12px; color: {{c.muted}}">10× · 1,912 nodes</span>
+    <button onClick="{{toggleTheme}}" aria-label="Switch light or dark mode" style="display: flex; align-items: center; gap: 8px; border: 1px solid {{c.line}}; background: {{c.surface2}}; color: {{c.ink}}; padding: 8px 12px; border-radius: 20px; min-height: 40px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>{{themeLabel}}
+    </button>
+  </header>
+
+  <div style="flex: 1; display: grid; grid-template-columns: 300px minmax(0, 1fr) 300px; grid-template-rows: 640px minmax(0, 1fr); gap: 16px; padding: 16px 20px 20px; min-height: 0">
+
+    <section aria-label="Phone A" style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+      <div style="text-align: center"><b>Phone A · Anna</b><div style="font-size: 12px; color: {{c.muted}}">App only · Aalborg</div></div>
+      <div style="width: 280px; height: 584px; border-radius: 36px; background: #050607; padding: 9px; box-sizing: border-box; box-shadow: 0 0 0 1px {{c.line}}">
+        <div style="height: 100%; border-radius: 28px; background: {{c.phone}}; overflow: hidden; display: flex; flex-direction: column">
+          <div style="padding: 16px 14px 10px; border-bottom: 1px solid {{c.line}}">
+            <div style="font-weight: 700">Bo</div>
+            <span style="display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 99px; background: {{aChipBg}}; color: {{aChipFg}}">{{aChip}}</span>
+          </div>
+          <div style="flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+            <div style="align-self: flex-end; max-width: 85%; background: {{c.accent}}; color: #FFFFFF; border-radius: 14px 14px 4px 14px; padding: 8px 11px; font-size: 13px">Storm here. Are you OK over there?</div>
+            <div style="align-self: flex-end; font-size: 11px; color: {{aMsgFg}}">{{aMsgState}}</div>
+            <div style="align-self: flex-end; max-width: 85%; background: {{c.accent}}; color: #FFFFFF; border-radius: 14px 14px 4px 14px; padding: 8px 11px; font-size: 13px">Voice message · 0:06</div>
+            <div style="align-self: flex-end; font-size: 11px; color: {{aMsgFg}}">{{aVoiceState}}</div>
+            <sc-if value="{{aShowReply}}" hint-placeholder-val="{{ true }}">
+              <div style="align-self: flex-start; max-width: 85%; background: {{c.surface2}}; border-radius: 14px 14px 14px 4px; padding: 8px 11px; font-size: 13px">All fine, power is on here 👍</div>
+            </sc-if>
+          </div>
+          <sc-if value="{{aOffline}}" hint-placeholder-val="{{ false }}">
+            <div style="margin: 0 10px 10px; padding: 10px; border-radius: 10px; background: {{c.badBg}}; color: {{c.bad}}; font-size: 12px; line-height: 1.45">No internet. Anna has no radio, so messages stay on the phone and go out when the line is back.</div>
+          </sc-if>
+          <div style="display: flex; gap: 6px; padding: 10px; border-top: 1px solid {{c.line}}">
+            <input aria-label="Message" placeholder="Message" style="flex: 1; min-width: 0; background: {{c.surface2}}; color: {{c.ink}}; border: 1px solid {{c.line}}; border-radius: 18px; padding: 9px 12px">
+            <button aria-label="Send" style="width: 38px; height: 38px; border: 0; border-radius: 50%; background: {{c.accent}}; color: #FFFFFF; display: grid; place-items: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 12h14M13 6l6 6-6 6"></path></svg></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-label="Map and live breaking" style="display: flex; flex-direction: column; gap: 10px; min-width: 0">
+      <div role="toolbar" aria-label="Break it live" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center">
+        <span style="font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: {{c.muted}}; margin-right: 4px">Break it live</span>
+        <sc-for list="{{switches}}" as="s" hint-placeholder-count="5">
+          <button onClick="{{s.flip}}" aria-pressed="{{s.pressed}}" style="display: flex; align-items: center; gap: 8px; border: 1px solid {{s.border}}; background: {{s.bg}}; color: {{c.ink}}; padding: 8px 12px; border-radius: 10px; font-size: 13px; min-height: 40px">
+            <span style="width: 10px; height: 10px; border-radius: 50%; background: {{s.dot}}"></span>{{s.label}}<span style="color: {{c.muted}}">{{s.state}}</span>
+          </button>
+        </sc-for>
+      </div>
+      <div style="flex: 1; position: relative; border-radius: 16px; overflow: hidden; background: {{c.sea}}; border: 1px solid {{c.line}}">
+        <svg viewBox="150 20 660 580" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Live map of Denmark" style="position: absolute; inset: 0; width: 100%; height: 100%">
+          <g fill="{{c.land}}" stroke="{{c.landStroke}}" stroke-width="1.5">
+            <path d="M330,30 L345,60 L325,95 L360,120 L372,160 L350,190 L362,230 L390,262 L372,300 L392,330 L370,372 L352,405 L360,440 L338,480 L345,520 L330,560 L300,580 L222,580 L210,540 L196,500 L190,450 L200,400 L188,350 L196,300 L210,250 L232,200 L262,160 L292,120 L312,80 Z"></path>
+            <path d="M380,450 Q395,425 425,432 Q448,445 440,478 Q428,505 400,500 Q372,490 380,450 Z"></path>
+            <path d="M480,360 Q500,320 545,325 Q585,330 592,370 Q600,410 575,445 Q545,470 510,460 Q478,445 470,410 Q465,380 480,360 Z"></path>
+            <path d="M470,500 Q500,488 540,495 Q560,505 545,518 Q505,525 475,515 Z"></path>
+            <path d="M745,455 Q770,448 782,468 Q785,492 765,500 Q745,498 740,478 Z"></path>
+          </g>
+          <path d="M262,160 L292,120 L312,80 L330,30 L345,60 L325,95 L360,120 L372,160 L350,190 Z" fill="{{c.bad}}" opacity="{{powerOpacity}}"></path>
+          <path d="M196,300 L210,250 L232,200 L250,210 L240,560 L222,580 L210,540 L196,500 L190,450 L200,400 L188,350 Z" fill="{{c.warn}}" opacity="{{stormOpacity}}"></path>
+          <g stroke="{{bbColor}}" stroke-width="2" stroke-dasharray="6 5" fill="none" opacity="{{bbOpacity}}">
+            <path d="M325,145 L365,300"></path><path d="M365,300 L408,465"></path><path d="M408,465 L582,378"></path><path d="M205,470 L408,465"></path><path d="M325,145 Q470,200 582,378"></path>
+          </g>
+          <path d="M582,378 L748,476" stroke="{{trunkColor}}" stroke-width="3" stroke-dasharray="{{trunkDash}}" fill="none"></path>
+          <g fill="{{c.node}}">
+            <circle cx="280" cy="170" r="3"></circle><circle cx="250" cy="230" r="3"></circle><circle cx="300" cy="240" r="3"></circle><circle cx="340" cy="210" r="3"></circle>
+            <circle cx="230" cy="300" r="3"></circle><circle cx="290" cy="310" r="3"></circle><circle cx="330" cy="350" r="3"></circle><circle cx="240" cy="380" r="3"></circle>
+            <circle cx="290" cy="420" r="3"></circle><circle cx="230" cy="460" r="3"></circle><circle cx="280" cy="500" r="3"></circle><circle cx="260" cy="550" r="3"></circle>
+            <circle cx="410" cy="455" r="3"></circle><circle cx="500" cy="370" r="3"></circle><circle cx="540" cy="420" r="3"></circle><circle cx="520" cy="350" r="3"></circle>
+            <circle cx="510" cy="505" r="3"></circle><circle cx="765" cy="470" r="3"></circle><circle cx="350" cy="82" r="3"></circle><circle cx="318" cy="105" r="3"></circle>
+          </g>
+          <g fill="{{c.ink}}">
+            <rect x="319" y="139" width="12" height="12" rx="2"></rect><rect x="359" y="294" width="12" height="12" rx="2"></rect>
+            <rect x="402" y="459" width="12" height="12" rx="2"></rect><rect x="199" y="464" width="12" height="12" rx="2"></rect>
+            <rect x="576" y="372" width="12" height="12" rx="2"></rect><rect x="742" y="470" width="12" height="12" rx="2"></rect>
+          </g>
+          <circle cx="300" cy="150" r="9" fill="{{c.accent}}" stroke="{{c.sea}}" stroke-width="3"></circle>
+          <circle cx="768" cy="490" r="9" fill="{{c.accent}}" stroke="{{c.sea}}" stroke-width="3"></circle>
+          <g font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="{{c.ink}}" stroke="{{c.sea}}" stroke-width="4" paint-order="stroke">
+            <text x="226" y="128">Phone A</text>
+            <text x="700" y="520">Phone B</text>
+            <text x="600" y="368" font-size="12" font-weight="500">Copenhagen · post office</text>
+          </g>
+        </svg>
+        <div style="position: absolute; left: 12px; top: 12px; background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; font-size: 12px">
+          <b style="font-size: 13px">Right now</b>
+          <span>{{nowLine1}}</span>
+          <span style="color: {{c.muted}}">{{nowLine2}}</span>
+        </div>
+      </div>
+    </section>
+
+    <section aria-label="Phone B" style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+      <div style="text-align: center"><b>Phone B · Bo</b><div style="font-size: 12px; color: {{c.muted}}">Handheld radio · Rønne</div></div>
+      <div style="width: 280px; height: 584px; border-radius: 36px; background: #050607; padding: 9px; box-sizing: border-box; box-shadow: 0 0 0 1px {{c.line}}">
+        <div style="height: 100%; border-radius: 28px; background: {{c.phone}}; overflow: hidden; display: flex; flex-direction: column">
+          <div style="padding: 16px 14px 10px; border-bottom: 1px solid {{c.line}}">
+            <div style="font-weight: 700">Chats</div>
+            <span style="display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 99px; background: {{bChipBg}}; color: {{bChipFg}}">{{bChip}}</span>
+          </div>
+          <div style="flex: 1; padding: 10px; display: flex; flex-direction: column; gap: 8px">
+            <div style="background: {{c.surface2}}; border-radius: 12px; padding: 10px 12px">
+              <div style="display: flex; justify-content: space-between"><b style="font-size: 13px">Anna</b><span style="font-size: 11px; color: {{c.muted}}">{{bAnnaTime}}</span></div>
+              <div style="font-size: 12px; color: {{c.muted}}; margin-top: 2px">{{bAnnaText}}</div>
+            </div>
+            <div style="background: {{c.surface2}}; border-radius: 12px; padding: 10px 12px">
+              <div style="display: flex; justify-content: space-between"><b style="font-size: 13px">#bornholm</b><span style="font-size: 11px; color: {{c.muted}}">12:38</span></div>
+              <div style="font-size: 12px; color: {{c.muted}}; margin-top: 2px">Ferry 18:00 cancelled (local radio, still works)</div>
+            </div>
+            <sc-if value="{{bShowAlert}}" hint-placeholder-val="{{ false }}">
+              <div style="background: {{c.warnBg}}; border-radius: 12px; padding: 10px 12px; color: {{c.warn}}">
+                <b style="font-size: 13px">Alert · Storm surge</b>
+                <div style="font-size: 12px; margin-top: 2px">West coast of Jutland. Signed by the issuer. Bo got it over the trunk.</div>
+              </div>
+            </sc-if>
+          </div>
+          <nav aria-label="App tabs" style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid {{c.line}}; font-size: 10px; color: {{c.muted}}; text-align: center">
+            <span style="padding: 10px 0; color: {{c.accent}}; font-weight: 600">Chats</span><span style="padding: 10px 0">Map</span><span style="padding: 10px 0">Pages</span><span style="padding: 10px 0">Network</span><span style="padding: 10px 0">Settings</span>
+          </nav>
+        </div>
+      </div>
+    </section>
+
+    <section aria-label="Live log" style="grid-column: 1 / 3; background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: hidden">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <b>Live log</b>
+        <span style="font-size: 12px; color: {{c.muted}}">phones, your actions and what the network did about them</span>
+        <div style="flex: 1"></div>
+        <select aria-label="Filter log" style="background: {{c.surface2}}; color: {{c.ink}}; border: 1px solid {{c.line}}; border-radius: 8px; padding: 6px 8px"><option>Phones + events</option><option>Every packet</option><option>Post offices</option><option>Routes</option></select>
+      </div>
+      <sc-for list="{{log}}" as="l" hint-placeholder-count="6">
+        <div style="display: grid; grid-template-columns: 56px 92px minmax(0, 1fr); gap: 10px; align-items: center; padding: 5px 0; border-top: 1px solid {{c.line}}; font-size: 13px">
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: {{c.muted}}">{{l.t}}</span>
+          <span style="font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 99px; background: {{c.surface2}}; color: {{l.color}}; justify-self: start">{{l.who}}</span>
+          <span>{{l.text}}</span>
+        </div>
+      </sc-for>
+    </section>
+
+    <section aria-label="Live numbers" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-content: start">
+      <sc-for list="{{tiles}}" as="k" hint-placeholder-count="6">
+        <div style="background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 12px; padding: 10px 12px">
+          <div style="font-size: 11px; color: {{c.muted}}">{{k.label}}</div>
+          <div style="font-size: 22px; font-weight: 700; color: {{k.color}}">{{k.value}}</div>
+        </div>
+      </sc-for>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1600,"height":1040}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { theme: null, net: false, trunk: true, power: false, storm: true };
+  }
+  renderVals() {
+    const theme = this.state.theme || this.props.theme || 'dark';
+    const dark = theme === 'dark';
+    const c = dark ? {
+      bg: '#0F1215', surface: '#171B20', surface2: '#20262D', phone: '#14181C', ink: '#ECEEF1', muted: '#A3ACB7', line: '#2A3038',
+      sea: '#122230', land: '#1E252C', landStroke: '#38444F', node: '#6B7683', accent: '#5B8DEF',
+      good: '#4ADE80', goodBg: '#123322', bad: '#F2875A', badBg: '#3A1E14', warn: '#F5B451', warnBg: '#3A2A10', post: '#B39CF7'
+    } : {
+      bg: '#F5F4EF', surface: '#FFFFFF', surface2: '#F0EEE7', phone: '#FFFFFF', ink: '#16191D', muted: '#5B6470', line: '#E3E1DA',
+      sea: '#DCE7F0', land: '#FBFAF6', landStroke: '#C9C5BA', node: '#9AA3AE', accent: '#1F5FD6',
+      good: '#15803D', goodBg: '#DCFCE7', bad: '#C2410C', badBg: '#FFEDD5', warn: '#B45309', warnBg: '#FEF3C7', post: '#6D28D9'
+    };
+    const { net, trunk, power, storm } = this.state;
+    const flip = (k) => () => this.setState({ [k]: !this.state[k] });
+    const sw = (key, label, bad, onText, offText) => ({
+      label, flip: flip(key), state: bad ? offText : onText, pressed: bad ? 'true' : 'false',
+      dot: bad ? c.bad : c.good, bg: bad ? c.badBg : c.surface, border: bad ? c.bad : c.line
+    });
+    const reach = net && trunk;
+    const log = [
+      { t: '12:31', who: 'You', color: c.bad, text: 'Storm on the west coast: −15 dB on every link with an end inside' },
+      { t: '12:33', who: 'Network', color: c.warn, text: 'Alert "Storm surge" sent; reached 412 of 430 nodes in the area in 41 s' }
+    ];
+    if (!net) {
+      log.push({ t: '12:35', who: 'You', color: c.bad, text: 'Internet down everywhere: 18 backbone links lost' });
+      log.push({ t: '12:36', who: 'Phone A', color: c.accent, text: 'Anna sent a text to Bo: kept on the phone (no internet, no radio)' });
+      log.push({ t: '12:37', who: 'Phone A', color: c.accent, text: 'Anna recorded a voice message (6 s, 0.9 KB): kept on the phone' });
+    } else {
+      log.push({ t: '12:36', who: 'Phone A', color: c.accent, text: trunk ? 'Anna → Bo: text delivered in 6.8 s (internet → trunk → 1 radio hop)' : 'Anna → Bo: text waiting in Copenhagen post office (trunk cut)' });
+    }
+    if (!trunk) log.push({ t: '12:38', who: 'You', color: c.bad, text: 'Cut the LoRa trunk Copenhagen ↔ Rønne: Bornholm is on its own' });
+    if (power) log.push({ t: '12:39', who: 'You', color: c.bad, text: 'Power cut in Nordjylland: 9 hosts on battery, 2 died' });
+    log.push({ t: '12:40', who: 'Phone B', color: c.accent, text: 'Bo posted on #bornholm: reached 37 nodes on the island by radio' });
+    return {
+      c,
+      themeLabel: dark ? 'Dark' : 'Light',
+      toggleTheme: () => this.setState({ theme: dark ? 'light' : 'dark' }),
+      switches: [
+        sw('net', 'Internet everywhere', !net, 'up', 'down'),
+        sw('trunk', 'Trunk to Bornholm', !trunk, 'up', 'cut'),
+        sw('power', 'Power Nordjylland', power, 'on', 'cut'),
+        sw('storm', 'Storm west coast', storm, 'calm', '−15 dB')
+      ],
+      powerOpacity: power ? '0.28' : '0',
+      stormOpacity: storm ? '0.22' : '0',
+      bbColor: net ? c.muted : c.bad,
+      bbOpacity: net ? '0.9' : '0.35',
+      trunkColor: trunk ? c.accent : c.bad,
+      trunkDash: trunk ? '0' : '4 6',
+      aChip: net ? 'Online via Aalborg host' : 'No internet · 2 waiting on phone',
+      aChipBg: net ? c.goodBg : c.badBg, aChipFg: net ? c.good : c.bad,
+      aOffline: !net,
+      aMsgState: reach ? 'Delivered 12:36 · 6 hops' : (net ? 'In Copenhagen post office' : 'Waiting on this phone'),
+      aVoiceState: reach ? 'Delivered 12:37' : (net ? 'In file mailbox, Copenhagen' : 'Waiting on this phone'),
+      aMsgFg: reach ? c.good : (net ? c.post : c.bad),
+      aShowReply: reach,
+      bChip: trunk ? 'Radio · trunk to mainland up' : 'Radio · Bornholm on its own',
+      bChipBg: trunk ? c.goodBg : c.warnBg, bChipFg: trunk ? c.good : c.warn,
+      bAnnaText: reach ? 'Storm here. Are you OK over there?' : 'Nothing new (Anna’s message is on its way)',
+      bAnnaTime: reach ? '12:36' : '—',
+      bShowAlert: trunk && storm,
+      nowLine1: reach ? 'Phone A ↔ Phone B: reachable' : 'Phone A ↔ Phone B: not reachable',
+      nowLine2: !net ? 'Why: Anna has internet only, and it is down' : (!trunk ? 'Why: only path to Bornholm is the trunk' : 'Path: internet → Copenhagen → trunk → radio'),
+      log,
+      tiles: [
+        { label: 'Delivered, last 5 min', value: reach ? '97 %' : (net ? '81 %' : '64 %'), color: reach ? c.good : c.bad },
+        { label: 'In post offices', value: net ? (trunk ? '12' : '58') : '140', color: c.post },
+        { label: 'Waiting on phones', value: net ? '0' : '31', color: net ? c.ink : c.bad },
+        { label: 'Carried by nodes', value: '9', color: c.ink },
+        { label: 'Busiest channel', value: storm ? '14 % air' : '6 % air', color: storm ? c.warn : c.ink },
+        { label: 'Dead nodes', value: power ? '27' : '3', color: power ? c.bad : c.ink }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

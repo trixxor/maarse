@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>How to follow a message</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1F5FD6}a:hover{color:#16469E}
+</style>
+</helmet>
+<div style="width: 1200px; height: 1180px; box-sizing: border-box; padding: 56px 64px; background: #FFFFFF; color: #16191D; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; gap: 28px">
+  <div>
+    <div style="font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #5B6470">How to</div>
+    <h1 style="margin: 6px 0 0; font-size: 36px; letter-spacing: -0.02em">Follow a message from Node 1 in Skagen to Node 2 on Bornholm</h1>
+    <p style="margin: 10px 0 0; font-size: 16px; color: #3D4550; max-width: 860px; line-height: 1.55">Every step is on board 1. The map shows where the message is right now, the panel on the right says what is happening to it in plain words, and the timeline at the bottom shows what you did.</p>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px">
+    <sc-for list="{{steps}}" as="s" hint-placeholder-count="6">
+      <div style="display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 14px">
+        <span style="width: 40px; height: 40px; border-radius: 50%; background: #16191D; color: #FFFFFF; display: grid; place-items: center; font-weight: 700">{{s.n}}</span>
+        <div>
+          <div style="font-weight: 700; font-size: 17px">{{s.title}}</div>
+          <div style="font-size: 14px; color: #3D4550; line-height: 1.55; margin-top: 4px">{{s.text}}</div>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="border-top: 1px solid #E3E1DA; padding-top: 24px">
+    <div style="font-weight: 700; font-size: 18px; margin-bottom: 12px">What the status can say</div>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+      <sc-for list="{{states}}" as="st" hint-placeholder-count="9">
+        <div style="display: flex; gap: 10px; align-items: flex-start; background: #F5F4EF; border-radius: 10px; padding: 12px">
+          <span style="width: 12px; height: 12px; border-radius: 50%; background: {{st.color}}; margin-top: 3px; flex: none"></span>
+          <div><div style="font-weight: 600; font-size: 14px">{{st.name}}</div><div style="font-size: 13px; color: #5B6470; line-height: 1.45">{{st.text}}</div></div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="background: #F3EEFF; border-radius: 12px; padding: 16px 18px; font-size: 14px; line-height: 1.55; color: #2E353D">
+    <b>Same view for everything you send.</b> A voice message, picture or file shows a progress bar on the route and can wait in a file mailbox; an alert shows a heat map of who got it and who did not; a call or SSH session shows whether a path over the internet exists all the way, and if not, why.
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      steps: [
+        { n: 1, title: 'Pick sender and receiver', text: 'Go to Send. Click Node 1 on the map (or type Skagen), then Node 2 (or type Rønne). Choose Text and press Send and follow. You can also right-click a node: Send a message from here.' },
+        { n: 2, title: 'Watch it travel', text: 'The route is drawn as it happens: solid blue for radio hops, dashed for the internet backbone, a moving dot for where the message is now. The panel lists each hop with time and signal.' },
+        { n: 3, title: 'Break something on the way', text: 'Click the LoRa trunk to Bornholm and choose Cut, or stop a repeater, or draw an area for a power cut. It goes on the timeline as an orange marker.' },
+        { n: 4, title: 'See where it waits and why', text: 'The status turns purple: Waiting in a post office at Copenhagen host, because the only way to Bornholm is cut. It also says how long it has waited and when it would expire.' },
+        { n: 5, title: 'Repair and see it delivered', text: 'Click the trunk again and choose Restore (or press the button in the panel). The post office sends it on; the status turns green when Node 2 has it and again when the acknowledgement is back.' },
+        { n: 6, title: 'Dig deeper or share it', text: 'Every packet of #1 opens the packet log for just this message; How far did the search reach shows the route search on the map. Copy link to this run gives a link that replays exactly this.' }
+      ],
+      states: [
+        { color: '#8E98A4', name: 'Queued', text: 'In a node’s send queue, waiting for a free channel or duty cycle.' },
+        { color: '#8E98A4', name: 'Searching for a route', text: 'Path request out; no route known yet.' },
+        { color: '#1F5FD6', name: 'On air', text: 'A radio hop is being sent now.' },
+        { color: '#1F5FD6', name: 'On the backbone', text: 'Between two hosts over the internet or a trunk.' },
+        { color: '#6D28D9', name: 'Waiting in a post office', text: 'Kept by a host for the receiver; sent on when the receiver is heard.' },
+        { color: '#6D28D9', name: 'Carried', text: 'A node keeps a copy and passes it on when it meets a way forward.' },
+        { color: '#B45309', name: 'Held', text: 'The receiver got it but does not know the sender yet; waits for an announce.' },
+        { color: '#15803D', name: 'Delivered / acknowledged', text: 'Receiver has it; then the sender has the acknowledgement.' },
+        { color: '#C2410C', name: 'Given up', text: 'With the reason: expired, too large for LoRa, no route, refused.' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

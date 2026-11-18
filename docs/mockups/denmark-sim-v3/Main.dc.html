@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Follow a message</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1F5FD6}a:hover{color:#16469E}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="min-height: 940px; display: flex; flex-direction: column; background: #F5F4EF; color: #16191D; font-family: Inter, system-ui, sans-serif; font-size: 14px">
+
+  <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 12px 20px; background: #FFFFFF; border-bottom: 1px solid #E3E1DA">
+    <div style="display: flex; align-items: baseline; gap: 8px">
+      <span style="font-weight: 700; font-size: 18px; letter-spacing: -0.01em">Må:rse</span>
+      <span style="color: #5B6470; font-size: 15px">Denmark Simulator</span>
+    </div>
+    <nav aria-label="Mode" style="display: flex; gap: 4px; background: #F0EEE7; padding: 4px; border-radius: 12px">
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; font-size: 14px; color: #3D4550; min-height: 40px">Build</button>
+      <button style="border: 0; background: #FFFFFF; padding: 10px 16px; border-radius: 9px; font-size: 14px; font-weight: 600; color: #16191D; box-shadow: 0 1px 2px rgba(0,0,0,0.08); min-height: 40px">Send</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; font-size: 14px; color: #3D4550; min-height: 40px">Break</button>
+      <button style="border: 0; background: transparent; padding: 10px 16px; border-radius: 9px; font-size: 14px; color: #3D4550; min-height: 40px">Results</button>
+    </nav>
+    <div style="flex: 1"></div>
+    <label style="display: flex; align-items: center; gap: 8px; color: #5B6470">Network
+      <select style="font: inherit; padding: 9px 10px; border: 1px solid #D6D3CA; border-radius: 9px; background: #FFFFFF; color: #16191D; min-height: 40px"><option>Denmark · 600 users · seed 1</option></select>
+    </label>
+    <button style="border: 1px solid #D6D3CA; background: #FFFFFF; padding: 9px 14px; border-radius: 9px; font-size: 14px; min-height: 40px">Reset</button>
+    <button style="border: 1px solid #D6D3CA; background: #FFFFFF; padding: 9px 14px; border-radius: 9px; font-size: 14px; min-height: 40px">Copy link to this run</button>
+  </header>
+
+  <div style="display: flex; flex-wrap: wrap; flex: 1; gap: 16px; padding: 16px 20px 20px">
+
+    <main style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+      <div style="position: relative; aspect-ratio: 800 / 600; background: #DCE7F0; border-radius: 16px; overflow: hidden; border: 1px solid #CBD8E3">
+        <svg viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Map of Denmark with the followed message's route from Skagen to Rønne" style="position: absolute; inset: 0; width: 100%; height: 100%">
+          <g fill="#FBFAF6" stroke="#C9C5BA" stroke-width="1.5">
+            <path d="M330,30 L345,60 L325,95 L360,120 L372,160 L350,190 L362,230 L390,262 L372,300 L392,330 L370,372 L352,405 L360,440 L338,480 L345,520 L330,560 L300,580 L222,580 L210,540 L196,500 L190,450 L200,400 L188,350 L196,300 L210,250 L232,200 L262,160 L292,120 L312,80 Z"></path>
+            <path d="M380,450 Q395,425 425,432 Q448,445 440,478 Q428,505 400,500 Q372,490 380,450 Z"></path>
+            <path d="M480,360 Q500,320 545,325 Q585,330 592,370 Q600,410 575,445 Q545,470 510,460 Q478,445 470,410 Q465,380 480,360 Z"></path>
+            <path d="M470,500 Q500,488 540,495 Q560,505 545,518 Q505,525 475,515 Z"></path>
+            <path d="M745,455 Q770,448 782,468 Q785,492 765,500 Q745,498 740,478 Z"></path>
+          </g>
+          <g fill="#9AA3AE">
+            <circle cx="280" cy="170" r="3"></circle><circle cx="250" cy="230" r="3"></circle><circle cx="300" cy="240" r="3"></circle><circle cx="340" cy="210" r="3"></circle>
+            <circle cx="230" cy="300" r="3"></circle><circle cx="290" cy="310" r="3"></circle><circle cx="330" cy="350" r="3"></circle><circle cx="240" cy="380" r="3"></circle>
+            <circle cx="290" cy="420" r="3"></circle><circle cx="230" cy="460" r="3"></circle><circle cx="280" cy="500" r="3"></circle><circle cx="260" cy="550" r="3"></circle>
+            <circle cx="410" cy="455" r="3"></circle><circle cx="500" cy="370" r="3"></circle><circle cx="540" cy="420" r="3"></circle><circle cx="520" cy="350" r="3"></circle>
+            <circle cx="510" cy="505" r="3"></circle><circle cx="765" cy="470" r="3"></circle>
+          </g>
+          <g stroke="#8E98A4" stroke-width="1.5" stroke-dasharray="5 5" fill="none">
+            <path d="M325,145 L365,300"></path><path d="M365,300 L408,465"></path><path d="M408,465 L582,378"></path><path d="M205,470 L408,465"></path>
+          </g>
+          <path d="M336,48 L350,82 L318,105 L325,145" stroke="#1F5FD6" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          <path d="M325,145 Q470,200 582,378" stroke="#1F5FD6" stroke-width="3" stroke-dasharray="9 6" fill="none"></path>
+          <path d="M582,378 L748,476" stroke="{{trunkColor}}" stroke-width="4" stroke-dasharray="{{trunkDash}}" fill="none" stroke-linecap="round"></path>
+          <path d="M748,476 L768,490" stroke="{{lastColor}}" stroke-width="4" fill="none" stroke-linecap="round"></path>
+          <g opacity="{{cutOpacity}}" stroke="#C2410C" stroke-width="4" stroke-linecap="round">
+            <path d="M655,417 L675,437"></path><path d="M675,417 L655,437"></path>
+          </g>
+          <g fill="#16191D">
+            <rect x="319" y="139" width="12" height="12" rx="2"></rect>
+            <rect x="359" y="294" width="12" height="12" rx="2"></rect>
+            <rect x="402" y="459" width="12" height="12" rx="2"></rect>
+            <rect x="199" y="464" width="12" height="12" rx="2"></rect>
+            <rect x="576" y="372" width="12" height="12" rx="2"></rect>
+            <rect x="742" y="470" width="12" height="12" rx="2"></rect>
+          </g>
+          <circle cx="582" cy="378" r="13" fill="none" stroke="#6D28D9" stroke-width="2.5"></circle>
+          <g fill="#FFFFFF" stroke="#1F5FD6" stroke-width="2.5">
+            <circle cx="350" cy="82" r="5"></circle><circle cx="318" cy="105" r="5"></circle>
+          </g>
+          <circle cx="336" cy="48" r="7" fill="#16191D" stroke="#FFFFFF" stroke-width="2"></circle>
+          <circle cx="768" cy="490" r="7" fill="#16191D" stroke="#FFFFFF" stroke-width="2"></circle>
+          <circle cx="{{msgX}}" cy="{{msgY}}" r="18" fill="{{msgFill}}" opacity="0.22"></circle>
+          <circle cx="{{msgX}}" cy="{{msgY}}" r="8" fill="{{msgFill}}" stroke="#FFFFFF" stroke-width="2.5"></circle>
+          <g font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#16191D" stroke="#FBFAF6" stroke-width="4" paint-order="stroke">
+            <text x="348" y="40">Node 1 · Skagen</text>
+            <text x="262" y="137">Aalborg host</text>
+            <text x="600" y="368">Copenhagen host · post office</text>
+            <text x="652" y="525">Node 2 · Rønne</text>
+            <text x="630" y="400" font-weight="500" font-size="12">LoRa trunk 145 km</text>
+          </g>
+        </svg>
+
+        <div role="toolbar" aria-label="Map tools" style="position: absolute; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 4px; background: #FFFFFF; padding: 6px; border-radius: 12px; box-shadow: 0 2px 8px rgba(22,25,29,0.12)">
+          <button aria-label="Select" title="Select (V)" style="width: 44px; height: 44px; border: 0; border-radius: 8px; background: #E8EFFC; color: #1F5FD6; display: grid; place-items: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3l14 8-6 2-3 6z"></path></svg></button>
+          <button aria-label="Add node" title="Add node (N)" style="width: 44px; height: 44px; border: 0; border-radius: 8px; background: transparent; color: #3D4550; display: grid; place-items: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7"></circle><path d="M12 9v6M9 12h6"></path></svg></button>
+          <button aria-label="Draw link" title="Link two nodes (L)" style="width: 44px; height: 44px; border: 0; border-radius: 8px; background: transparent; color: #3D4550; display: grid; place-items: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="18" r="2.5"></circle><circle cx="18" cy="6" r="2.5"></circle><path d="M8 16l8-8"></path></svg></button>
+          <button aria-label="Draw area" title="Draw area (A)" style="width: 44px; height: 44px; border: 0; border-radius: 8px; background: transparent; color: #3D4550; display: grid; place-items: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 7l7-4 9 5-2 10-10 3-4-7z"></path></svg></button>
+          <button aria-label="Measure" title="Measure distance and link budget (M)" style="width: 44px; height: 44px; border: 0; border-radius: 8px; background: transparent; color: #3D4550; display: grid; place-items: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 17L17 3l4 4L7 21z"></path><path d="M7 13l2 2M10 10l2 2M13 7l2 2"></path></svg></button>
+        </div>
+
+        <div style="position: absolute; left: 58%; top: 50%; width: 250px; background: #FFFFFF; border-radius: 12px; box-shadow: 0 6px 24px rgba(22,25,29,0.18); padding: 14px; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; justify-content: space-between; align-items: center">
+            <b style="font-size: 14px">LoRa trunk</b>
+            <span style="font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 99px; background: {{trunkBadgeBg}}; color: {{trunkBadgeFg}}">{{trunkBadge}}</span>
+          </div>
+          <div style="color: #5B6470; font-size: 13px; line-height: 1.45">Copenhagen host ↔ Rønne host · 145 km · SF9 · SNR 6.2 dB</div>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px">
+            <button onClick="{{toggle}}" style="border: 0; background: {{toggleBg}}; color: #FFFFFF; padding: 9px 12px; border-radius: 8px; font-size: 13px; font-weight: 600; min-height: 40px">{{toggleLabel}}</button>
+            <button style="border: 1px solid #D6D3CA; background: #FFFFFF; padding: 9px 12px; border-radius: 8px; font-size: 13px; min-height: 40px">Radio loss…</button>
+            <button style="border: 1px solid #D6D3CA; background: #FFFFFF; padding: 9px 12px; border-radius: 8px; font-size: 13px; min-height: 40px">Traffic on it</button>
+          </div>
+        </div>
+
+        <div style="position: absolute; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px; max-width: 70%">
+          <span style="background: rgba(255,255,255,0.92); border-radius: 99px; padding: 5px 10px; font-size: 12px; display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 50%; background: #16191D"></span>Handheld</span>
+          <span style="background: rgba(255,255,255,0.92); border-radius: 99px; padding: 5px 10px; font-size: 12px; display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #9AA3AE"></span>Repeater</span>
+          <span style="background: rgba(255,255,255,0.92); border-radius: 99px; padding: 5px 10px; font-size: 12px; display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 2px; background: #16191D"></span>Host</span>
+          <span style="background: rgba(255,255,255,0.92); border-radius: 99px; padding: 5px 10px; font-size: 12px; display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 50%; border: 2px solid #6D28D9"></span>Post office</span>
+          <span style="background: rgba(255,255,255,0.92); border-radius: 99px; padding: 5px 10px; font-size: 12px; display: flex; align-items: center; gap: 6px"><span style="width: 16px; border-top: 2px dashed #5B6470"></span>Internet backbone</span>
+          <span style="background: rgba(255,255,255,0.92); border-radius: 99px; padding: 5px 10px; font-size: 12px; display: flex; align-items: center; gap: 6px"><span style="width: 16px; border-top: 3px solid #1F5FD6"></span>Message route</span>
+        </div>
+        <div style="position: absolute; right: 12px; bottom: 12px; background: #16191D; color: #FFFFFF; border-radius: 10px; padding: 8px 12px; font-size: 12px">Click any node, link or area to act on it</div>
+      </div>
+
+      <section aria-label="Timeline" style="background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 14px; padding: 12px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px">
+        <button aria-label="Play" style="width: 44px; height: 44px; border: 0; border-radius: 50%; background: #16191D; color: #FFFFFF; display: grid; place-items: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg></button>
+        <div style="display: flex; gap: 2px; background: #F0EEE7; border-radius: 9px; padding: 3px">
+          <button style="border: 0; background: transparent; padding: 7px 10px; border-radius: 7px; font-size: 13px; min-height: 36px">1×</button>
+          <button style="border: 0; background: #FFFFFF; padding: 7px 10px; border-radius: 7px; font-size: 13px; font-weight: 600; min-height: 36px">10×</button>
+          <button style="border: 0; background: transparent; padding: 7px 10px; border-radius: 7px; font-size: 13px; min-height: 36px">60×</button>
+        </div>
+        <div style="flex: 1 1 320px; min-width: 240px; position: relative; height: 48px">
+          <div style="position: absolute; left: 0; right: 0; top: 22px; height: 4px; border-radius: 2px; background: #E3E1DA"></div>
+          <div style="position: absolute; left: 0; width: {{progress}}; top: 22px; height: 4px; border-radius: 2px; background: #1F5FD6"></div>
+          <sc-for list="{{markers}}" as="m" hint-placeholder-count="4">
+            <div style="position: absolute; left: {{m.left}}; top: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 4px">
+              <span style="font-size: 11px; font-weight: 600; color: {{m.color}}; white-space: nowrap">{{m.label}}</span>
+              <span style="width: 12px; height: 12px; border-radius: 50%; background: {{m.color}}; border: 2px solid #FFFFFF; box-shadow: 0 0 0 1px {{m.color}}"></span>
+            </div>
+          </sc-for>
+        </div>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 500">{{clock}}</span>
+        <button style="border: 1px solid #D6D3CA; background: #FFFFFF; padding: 9px 12px; border-radius: 9px; font-size: 13px; min-height: 40px">Skip to next change of #1</button>
+      </section>
+    </main>
+
+    <aside aria-label="Followed message" style="flex: 1 1 360px; max-width: 460px; background: #FFFFFF; border: 1px solid #E3E1DA; border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 16px">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px">
+        <div>
+          <div style="font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5B6470">Following</div>
+          <div style="font-size: 20px; font-weight: 700; margin-top: 2px">Message #1</div>
+          <div style="color: #5B6470; font-size: 13px; margin-top: 2px">Text · 38 bytes · sent at 0:00</div>
+        </div>
+        <button aria-label="Stop following" style="width: 40px; height: 40px; border: 1px solid #E3E1DA; border-radius: 9px; background: #FFFFFF; display: grid; place-items: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3D4550" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px">
+        <div style="background: #F5F4EF; border-radius: 10px; padding: 10px 12px"><div style="font-weight: 600">Node 1</div><div style="color: #5B6470; font-size: 12px">Handheld · Skagen</div></div>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5B6470" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 12h16M14 6l6 6-6 6"></path></svg>
+        <div style="background: #F5F4EF; border-radius: 10px; padding: 10px 12px"><div style="font-weight: 600">Node 2</div><div style="color: #5B6470; font-size: 12px">Handheld · Rønne</div></div>
+      </div>
+
+      <div style="border-radius: 12px; padding: 14px; background: {{statusBg}}; display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; color: {{statusFg}}">
+          <span style="width: 10px; height: 10px; border-radius: 50%; background: {{statusFg}}"></span>{{statusTitle}}
+        </div>
+        <div style="font-size: 13px; line-height: 1.5; color: #2E353D">{{statusText}}</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px">
+          <button onClick="{{toggle}}" style="border: 0; background: {{toggleBg}}; color: #FFFFFF; padding: 9px 12px; border-radius: 8px; font-size: 13px; font-weight: 600; min-height: 40px">{{toggleLabel}}</button>
+          <button style="border: 1px solid #D6D3CA; background: #FFFFFF; padding: 9px 12px; border-radius: 8px; font-size: 13px; min-height: 40px">Show where on map</button>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: baseline">
+        <b style="font-size: 15px">Journey</b>
+        <span style="color: #5B6470; font-size: 12px">{{hopSummary}}</span>
+      </div>
+      <ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column">
+        <sc-for list="{{steps}}" as="s" hint-placeholder-count="6">
+          <li style="display: grid; grid-template-columns: 44px 18px minmax(0, 1fr); gap: 8px; padding: 8px 0; border-top: 1px solid #F0EEE7">
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #5B6470; padding-top: 2px">{{s.t}}</span>
+            <span style="width: 10px; height: 10px; border-radius: 50%; background: {{s.color}}; margin-top: 5px"></span>
+            <div>
+              <div style="font-weight: 600; font-size: 13px">{{s.title}}</div>
+              <div style="color: #5B6470; font-size: 12px; line-height: 1.45">{{s.detail}}</div>
+            </div>
+          </li>
+        </sc-for>
+      </ol>
+      <div style="display: flex; gap: 8px; margin-top: auto">
+        <button style="flex: 1; border: 1px solid #D6D3CA; background: #FFFFFF; padding: 10px; border-radius: 9px; font-size: 13px; min-height: 44px">Every packet of #1</button>
+        <button style="flex: 1; border: 1px solid #D6D3CA; background: #FFFFFF; padding: 10px; border-radius: 9px; font-size: 13px; min-height: 44px">How far did the search reach?</button>
+      </div>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":940}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { restored: false };
+  }
+  renderVals() {
+    const r = this.state.restored;
+    const blue = '#1F5FD6', green = '#15803D', orange = '#C2410C', purple = '#6D28D9', grey = '#8E98A4';
+    const steps = [
+      { t: '0:00', color: grey, title: 'Sent by Node 1', detail: 'Direct message to Node 2. No route known yet.' },
+      { t: '0:01', color: grey, title: 'Route search (path request)', detail: 'Flooded in Nordjylland; reached Aalborg host after 3 hops. Aalborg asks the backbone: Rønne host knows Node 2.' },
+      { t: '0:03', color: blue, title: 'Over the air: 3 radio hops', detail: 'Node 1 → Frederikshavn repeater → Hjørring repeater → Aalborg host. SNR 4.5 / 7.0 / 9.1 dB.' },
+      { t: '0:03', color: blue, title: 'Over the internet backbone', detail: 'Aalborg host → Copenhagen host (TCP, 40 ms).' },
+      { t: '2:14', color: orange, title: 'You cut the LoRa trunk', detail: 'Copenhagen ↔ Rønne. Bornholm now has no way in.' },
+      { t: '2:20', color: purple, title: 'Put in the post office', detail: 'No acknowledgement within 6 s. Copenhagen host keeps it in Node 2’s mailbox.' }
+    ];
+    if (r) {
+      steps.push({ t: '6:40', color: green, title: 'You restored the trunk', detail: 'Rønne host announces again; Copenhagen hears it.' });
+      steps.push({ t: '6:44', color: blue, title: 'Post office sends it on', detail: 'Copenhagen host → Rønne host over the trunk. SNR 6.2 dB, 1.1 s on air.' });
+      steps.push({ t: '6:52', color: green, title: 'Delivered to Node 2', detail: 'Rønne host → Node 2, 1 radio hop. Acknowledgement back to Node 1 at 7:05.' });
+    }
+    const markers = [
+      { left: '0%', color: grey, label: 'sent 0:00' },
+      { left: '28%', color: orange, label: 'cut 2:14' }
+    ];
+    if (r) {
+      markers.push({ left: '83%', color: green, label: 'restored 6:40' });
+      markers.push({ left: '87%', color: green, label: 'delivered' });
+    }
+    return {
+      steps, markers,
+      toggle: () => this.setState({ restored: !r }),
+      toggleLabel: r ? 'Cut the trunk again' : 'Restore the trunk',
+      toggleBg: r ? orange : green,
+      trunkColor: r ? blue : orange,
+      trunkDash: r ? '0' : '6 6',
+      lastColor: r ? blue : '#B9C1CA',
+      cutOpacity: r ? '0' : '1',
+      trunkBadge: r ? 'Up' : 'Cut by you at 2:14',
+      trunkBadgeBg: r ? '#DCFCE7' : '#FFEDD5',
+      trunkBadgeFg: r ? '#166534' : '#9A3412',
+      msgX: r ? 768 : 582,
+      msgY: r ? 490 : 378,
+      msgFill: r ? green : purple,
+      statusBg: r ? '#ECFDF3' : '#F3EEFF',
+      statusFg: r ? green : purple,
+      statusTitle: r ? 'Delivered and acknowledged' : 'Waiting in a post office',
+      statusText: r ? 'Arrived at Node 2 at 6:52, 12 s after you restored the trunk. Total 6 hops: 4 radio, 1 backbone, 1 trunk.' : 'At Copenhagen host, in Node 2’s mailbox, for 2:26 so far. Why: the only way to Bornholm (the LoRa trunk) is cut. It is sent on as soon as Rønne host is heard again; it expires after 7 days.',
+      hopSummary: r ? '6 hops · 6:52 end to end' : '4 hops so far',
+      progress: r ? '90%' : '58%',
+      clock: r ? '7:12' : '4:40'
+    };
+  }
+}
+</script>
+</body>
+</html>

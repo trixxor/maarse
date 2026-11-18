@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Results</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#5B8DEF}a:hover{color:#8FB0F5}
+button,input,select{font-family:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1640px; box-sizing: border-box; display: flex; flex-direction: column; background: {{c.bg}}; color: {{c.ink}}; font-family: Inter, system-ui, sans-serif; font-size: 14px">
+
+  <header style="display: flex; align-items: center; gap: 14px; padding: 12px 20px; background: {{c.surface}}; border-bottom: 1px solid {{c.line}}">
+    <span style="font-weight: 700; font-size: 18px">Må:rse</span>
+    <span style="color: {{c.muted}}; font-size: 15px">Denmark Simulator</span>
+    <nav aria-label="Mode" style="display: flex; gap: 4px; background: {{c.surface2}}; padding: 4px; border-radius: 12px; margin-left: 8px">
+      <button style="border: 0; background: transparent; color: {{c.muted}}; padding: 10px 14px; border-radius: 9px; min-height: 40px">Build</button>
+      <button style="border: 0; background: transparent; color: {{c.muted}}; padding: 10px 14px; border-radius: 9px; min-height: 40px">Send</button>
+      <button style="border: 0; background: transparent; color: {{c.muted}}; padding: 10px 14px; border-radius: 9px; min-height: 40px">Break</button>
+      <button style="border: 0; background: {{c.surface}}; color: {{c.ink}}; font-weight: 600; padding: 10px 14px; border-radius: 9px; min-height: 40px">Results</button>
+      <button style="border: 0; background: transparent; color: {{c.muted}}; padding: 10px 14px; border-radius: 9px; min-height: 40px">Control room</button>
+    </nav>
+    <div style="flex: 1"></div>
+    <button onClick="{{toggleTheme}}" aria-label="Switch light or dark mode" style="display: flex; align-items: center; gap: 8px; border: 1px solid {{c.line}}; background: {{c.surface2}}; color: {{c.ink}}; padding: 8px 12px; border-radius: 20px; min-height: 40px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M2 12h2M20 12h2"></path></svg>{{themeLabel}}
+    </button>
+  </header>
+
+  <div style="padding: 18px 20px 24px; display: flex; flex-direction: column; gap: 16px">
+
+    <div role="toolbar" aria-label="Filters" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center">
+      <label style="display: flex; align-items: center; gap: 6px; color: {{c.muted}}">Run <select style="background: {{c.surface}}; color: {{c.ink}}; border: 1px solid {{c.line}}; border-radius: 9px; padding: 9px 10px"><option>Storm + Bornholm cut · seed 1</option></select></label>
+      <div style="display: flex; gap: 2px; background: {{c.surface2}}; border-radius: 9px; padding: 3px">
+        <button style="border: 0; background: transparent; color: {{c.muted}}; padding: 7px 10px; border-radius: 7px; min-height: 34px">Last 5 min</button>
+        <button style="border: 0; background: transparent; color: {{c.muted}}; padding: 7px 10px; border-radius: 7px; min-height: 34px">Last 30 min</button>
+        <button style="border: 0; background: {{c.surface}}; color: {{c.ink}}; font-weight: 600; padding: 7px 10px; border-radius: 7px; min-height: 34px">Whole run</button>
+      </div>
+      <label style="display: flex; align-items: center; gap: 6px; color: {{c.muted}}">Region <select style="background: {{c.surface}}; color: {{c.ink}}; border: 1px solid {{c.line}}; border-radius: 9px; padding: 9px 10px"><option>All of Denmark</option></select></label>
+      <label style="display: flex; align-items: center; gap: 6px; color: {{c.muted}}">Traffic <select style="background: {{c.surface}}; color: {{c.ink}}; border: 1px solid {{c.line}}; border-radius: 9px; padding: 9px 10px"><option>All types</option></select></label>
+      <div style="flex: 1"></div>
+      <button style="border: 1px solid {{c.line}}; background: {{c.surface}}; color: {{c.ink}}; padding: 9px 12px; border-radius: 9px; min-height: 40px">Export JSON</button>
+      <button style="border: 1px solid {{c.line}}; background: {{c.surface}}; color: {{c.ink}}; padding: 9px 12px; border-radius: 9px; min-height: 40px">Export CSV</button>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px">
+      <sc-for list="{{kpis}}" as="k" hint-placeholder-count="6">
+        <div style="background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 14px; padding: 14px">
+          <div style="font-size: 12px; color: {{c.muted}}">{{k.label}}</div>
+          <div style="font-size: 28px; font-weight: 700; margin-top: 4px">{{k.value}}</div>
+          <div style="font-size: 12px; color: {{c.muted}}; margin-top: 2px">{{k.sub}}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 16px">
+      <section style="background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 14px; padding: 16px">
+        <b>Delivered, by traffic type</b>
+        <div style="font-size: 12px; color: {{c.muted}}; margin: 2px 0 12px">Share delivered end to end within the run</div>
+        <sc-for list="{{byType}}" as="t" hint-placeholder-count="9">
+          <div title="{{t.tip}}" style="display: grid; grid-template-columns: 120px minmax(0, 1fr) 52px; gap: 10px; align-items: center; padding: 5px 0">
+            <span style="font-size: 13px">{{t.name}}</span>
+            <div style="height: 12px; background: {{c.surface2}}; border-radius: 4px"><div style="height: 12px; width: {{t.w}}; background: {{c.s1}}; border-radius: 0 4px 4px 0"></div></div>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; text-align: right">{{t.v}}</span>
+          </div>
+        </sc-for>
+      </section>
+
+      <section style="background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 14px; padding: 16px">
+        <div style="display: flex; justify-content: space-between; align-items: baseline">
+          <b>Time to deliver a text</b>
+          <div style="display: flex; gap: 14px; font-size: 12px; color: {{c.muted}}">
+            <span style="display: flex; align-items: center; gap: 6px"><span style="width: 16px; height: 2px; background: {{c.s1}}"></span>Median</span>
+            <span style="display: flex; align-items: center; gap: 6px"><span style="width: 16px; height: 2px; background: {{c.s2}}"></span>95th percentile</span>
+          </div>
+        </div>
+        <svg viewBox="0 0 640 240" role="img" aria-label="Line chart: median and 95th percentile delivery time over the run. Both jump when the trunk is cut at 14 min and fall after the repair at 22 min." style="width: 100%; height: auto; margin-top: 8px">
+          <g stroke="{{c.grid}}" stroke-width="1">
+            <path d="M40,200 H630"></path><path d="M40,150 H630"></path><path d="M40,100 H630"></path><path d="M40,50 H630"></path>
+          </g>
+          <g font-family="Inter, sans-serif" font-size="11" fill="{{c.muted}}">
+            <text x="32" y="204" text-anchor="end">0 s</text><text x="32" y="154" text-anchor="end">30 s</text><text x="32" y="104" text-anchor="end">60 s</text><text x="32" y="54" text-anchor="end">90 s</text>
+            <text x="40" y="224">0 min</text><text x="230" y="224">10</text><text x="420" y="224">20</text><text x="606" y="224">30</text>
+          </g>
+          <path d="M306,30 V200" stroke="{{c.bad}}" stroke-width="1.5" stroke-dasharray="4 4"></path>
+          <path d="M458,30 V200" stroke="{{c.good}}" stroke-width="1.5" stroke-dasharray="4 4"></path>
+          <g font-family="Inter, sans-serif" font-size="11" font-weight="600">
+            <text x="310" y="26" fill="{{c.ink}}">trunk cut</text><text x="462" y="26" fill="{{c.ink}}">restored</text>
+          </g>
+          <polyline points="40,192 80,190 120,191 160,189 200,190 240,188 280,190 306,189 330,186 370,184 410,185 450,186 470,189 510,190 550,189 590,190 630,190" fill="none" stroke="{{c.s1}}" stroke-width="2" stroke-linejoin="round"></polyline>
+          <polyline points="40,178 80,175 120,177 160,172 200,174 240,170 280,173 306,168 330,92 370,64 410,58 450,62 470,120 510,170 550,172 590,174 630,173" fill="none" stroke="{{c.s2}}" stroke-width="2" stroke-linejoin="round"></polyline>
+        </svg>
+      </section>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px">
+      <section style="background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 14px; padding: 16px">
+        <b>Post offices and mailboxes</b>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px">
+          <thead><tr style="color: {{c.muted}}; font-size: 11px; text-align: left"><th style="padding: 6px 4px; font-weight: 600">Host</th><th style="padding: 6px 4px; font-weight: 600; text-align: right">Mail</th><th style="padding: 6px 4px; font-weight: 600; text-align: right">Files</th><th style="padding: 6px 4px; font-weight: 600; text-align: right">Oldest</th></tr></thead>
+          <tbody>
+            <sc-for list="{{offices}}" as="o" hint-placeholder-count="5">
+              <tr style="border-top: 1px solid {{c.line}}"><td style="padding: 7px 4px">{{o.host}}</td><td style="padding: 7px 4px; text-align: right; font-family: 'JetBrains Mono', monospace">{{o.mail}}</td><td style="padding: 7px 4px; text-align: right; font-family: 'JetBrains Mono', monospace">{{o.files}}</td><td style="padding: 7px 4px; text-align: right; font-family: 'JetBrains Mono', monospace">{{o.oldest}}</td></tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </section>
+      <section style="background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 14px; padding: 16px">
+        <b>Why things were not delivered</b>
+        <div style="font-size: 12px; color: {{c.muted}}; margin: 2px 0 10px">212 items in all</div>
+        <sc-for list="{{why}}" as="w" hint-placeholder-count="6">
+          <div style="display: grid; grid-template-columns: minmax(0, 1fr) 110px 34px; gap: 8px; align-items: center; padding: 5px 0; font-size: 13px">
+            <span>{{w.name}}</span>
+            <div style="height: 10px; background: {{c.surface2}}; border-radius: 4px"><div style="height: 10px; width: {{w.w}}; background: {{c.s2}}; border-radius: 0 4px 4px 0"></div></div>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; text-align: right">{{w.n}}</span>
+          </div>
+        </sc-for>
+      </section>
+      <section style="background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 14px; padding: 16px">
+        <b>Busiest nodes</b>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px">
+          <thead><tr style="color: {{c.muted}}; font-size: 11px; text-align: left"><th style="padding: 6px 4px; font-weight: 600">Node</th><th style="padding: 6px 4px; font-weight: 600; text-align: right">Air</th><th style="padding: 6px 4px; font-weight: 600; text-align: right">Queue</th><th style="padding: 6px 4px; font-weight: 600; text-align: right">Drops</th></tr></thead>
+          <tbody>
+            <sc-for list="{{busy}}" as="b" hint-placeholder-count="5">
+              <tr style="border-top: 1px solid {{c.line}}"><td style="padding: 7px 4px">{{b.node}}</td><td style="padding: 7px 4px; text-align: right; font-family: 'JetBrains Mono', monospace">{{b.air}}</td><td style="padding: 7px 4px; text-align: right; font-family: 'JetBrains Mono', monospace">{{b.q}}</td><td style="padding: 7px 4px; text-align: right; font-family: 'JetBrains Mono', monospace">{{b.drops}}</td></tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </section>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
+      <sc-for list="{{more}}" as="m" hint-placeholder-count="8">
+        <div style="background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 12px; padding: 12px 14px">
+          <div style="font-size: 12px; color: {{c.muted}}">{{m.label}}</div>
+          <div style="font-size: 18px; font-weight: 700; margin-top: 2px">{{m.value}}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <section style="background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+        <b>Packet log</b>
+        <input aria-label="Node" placeholder="node" style="width: 80px; background: {{c.surface2}}; color: {{c.ink}}; border: 1px solid {{c.line}}; border-radius: 8px; padding: 7px 9px">
+        <input aria-label="Message" placeholder="message #" style="width: 90px; background: {{c.surface2}}; color: {{c.ink}}; border: 1px solid {{c.line}}; border-radius: 8px; padding: 7px 9px">
+        <select aria-label="Packet type" style="background: {{c.surface2}}; color: {{c.ink}}; border: 1px solid {{c.line}}; border-radius: 8px; padding: 7px 9px"><option>any packet</option></select>
+        <select aria-label="Event" style="background: {{c.surface2}}; color: {{c.ink}}; border: 1px solid {{c.line}}; border-radius: 8px; padding: 7px 9px"><option>any event</option></select>
+        <div style="flex: 1"></div>
+        <span style="font-size: 12px; color: {{c.muted}}">184,302 events · newest first</span>
+      </div>
+      <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; display: flex; flex-direction: column">
+        <sc-for list="{{packets}}" as="p" hint-placeholder-count="8">
+          <div style="display: grid; grid-template-columns: 70px 80px 90px minmax(0, 1fr); gap: 12px; padding: 5px 0; border-top: 1px solid {{c.line}}">
+            <span style="color: {{c.muted}}">{{p.t}}</span><span style="color: {{p.color}}">{{p.ev}}</span><span>{{p.type}}</span><span>{{p.text}}</span>
+          </div>
+        </sc-for>
+      </div>
+    </section>
+
+    <section style="background: {{c.surface}}; border: 1px solid {{c.line}}; border-radius: 14px; padding: 16px">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <b>Compare two runs</b>
+        <span style="font-size: 12px; color: {{c.muted}}">Same seed, one feature switched</span>
+        <div style="flex: 1"></div>
+        <select style="background: {{c.surface2}}; color: {{c.ink}}; border: 1px solid {{c.line}}; border-radius: 8px; padding: 7px 9px"><option>carry off vs on</option></select>
+        <button style="border: 0; background: {{c.accent}}; color: #FFFFFF; padding: 9px 14px; border-radius: 9px; font-weight: 600; min-height: 40px">Run both</button>
+      </div>
+      <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px">
+        <thead><tr style="color: {{c.muted}}; font-size: 11px; text-align: left"><th style="padding: 6px 4px; font-weight: 600">Measure</th><th style="padding: 6px 4px; font-weight: 600; text-align: right">Carry off</th><th style="padding: 6px 4px; font-weight: 600; text-align: right">Carry on</th><th style="padding: 6px 4px; font-weight: 600; text-align: right">Change</th></tr></thead>
+        <tbody>
+          <sc-for list="{{compare}}" as="r" hint-placeholder-count="4">
+            <tr style="border-top: 1px solid {{c.line}}"><td style="padding: 7px 4px">{{r.m}}</td><td style="padding: 7px 4px; text-align: right; font-family: 'JetBrains Mono', monospace">{{r.a}}</td><td style="padding: 7px 4px; text-align: right; font-family: 'JetBrains Mono', monospace">{{r.b}}</td><td style="padding: 7px 4px; text-align: right; font-family: 'JetBrains Mono', monospace">{{r.d}}</td></tr>
+          </sc-for>
+        </tbody>
+      </table>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"light"},"$preview":{"width":1440,"height":1640}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { theme: null }; }
+  renderVals() {
+    const theme = this.state.theme || this.props.theme || 'light';
+    const dark = theme === 'dark';
+    const c = dark ? {
+      bg: '#0F1215', surface: '#171B20', surface2: '#20262D', ink: '#ECEEF1', muted: '#A3ACB7', line: '#2A3038', grid: '#262C33',
+      accent: '#3987e5', s1: '#3987e5', s2: '#d95926', good: '#4ADE80', bad: '#F2875A'
+    } : {
+      bg: '#F5F4EF', surface: '#FFFFFF', surface2: '#F0EEE7', ink: '#16191D', muted: '#5B6470', line: '#E3E1DA', grid: '#EEECE6',
+      accent: '#2a78d6', s1: '#2a78d6', s2: '#eb6834', good: '#15803D', bad: '#C2410C'
+    };
+    const bar = (name, v) => ({ name, v: v + ' %', w: v + '%', tip: name + ': ' + v + ' % delivered' });
+    const why = (name, n) => ({ name, n, w: Math.round(n / 82 * 100) + '%' });
+    return {
+      c,
+      themeLabel: dark ? 'Dark' : 'Light',
+      toggleTheme: () => this.setState({ theme: dark ? 'light' : 'dark' }),
+      kpis: [
+        { label: 'Delivered', value: '94.1 %', sub: '3,402 of 3,615 items' },
+        { label: 'Median time', value: '7.9 s', sub: 'texts, end to end' },
+        { label: '95th percentile', value: '84 s', sub: 'mostly post office waits' },
+        { label: 'Via post office', value: '311', sub: '9 % of all items' },
+        { label: 'Carried by nodes', value: '46', sub: 'delivered later by carry' },
+        { label: 'Alerts reached', value: '96 %', sub: '412 of 430 in the area' }
+      ],
+      byType: [bar('Text', 97), bar('Voice message', 93), bar('Picture', 88), bar('File', 71), bar('Pages', 95), bar('Alert', 96), bar('Channel', 99), bar('Call set-up', 42), bar('SSH / mosh', 64)],
+      offices: [
+        { host: 'Copenhagen host', mail: '58', files: '6', oldest: '8:12' },
+        { host: 'Aalborg host', mail: '19', files: '1', oldest: '3:40' },
+        { host: 'Esbjerg host', mail: '14', files: '0', oldest: '6:05' },
+        { host: 'Odense host', mail: '7', files: '2', oldest: '1:10' },
+        { host: 'Rønne host', mail: '4', files: '0', oldest: '0:52' }
+      ],
+      why: [why('No route (trunk cut)', 82), why('Too large for LoRa, waiting for internet', 41), why('Receiver dead (power cut)', 37), why('Call refused: no internet path', 24), why('Collisions after 8 tries', 19), why('Expired', 9)],
+      busy: [
+        { node: 'Esbjerg repeater', air: '14.2 %', q: '11', drops: '23' },
+        { node: 'Copenhagen host', air: '9.8 %', q: '6', drops: '2' },
+        { node: 'Ribe repeater', air: '9.1 %', q: '7', drops: '9' },
+        { node: 'Stevns mast', air: '7.7 %', q: '3', drops: '0' },
+        { node: 'Aalborg host', air: '6.4 %', q: '2', drops: '1' }
+      ],
+      more: [
+        { label: 'Packets on air', value: '128,440' },
+        { label: 'Backbone copies', value: '22,915' },
+        { label: 'Route searches', value: '1,208' },
+        { label: 'Local repairs', value: '74' },
+        { label: 'Key requests', value: '33' },
+        { label: 'Duty cycle give-ups', value: '5' },
+        { label: 'Tunnel throughput (LoRa)', value: '180 B/s' },
+        { label: 'Battery nodes below 30 %', value: '41' }
+      ],
+      packets: [
+        { t: '22:04.1', ev: 'deliver', color: c.good, type: 'text', text: 'msg #1 at Node 2 (Rønne) · 6 hops · from post office Copenhagen' },
+        { t: '22:03.9', ev: 'tx', color: c.ink, type: 'data', text: 'Rønne host → Node 2 · SF9 · 38 B · 0.21 s on air' },
+        { t: '22:02.8', ev: 'mail', color: c.ink, type: 'deposit', text: 'Copenhagen host sends 4 kept items for Rønne host’s users over the trunk' },
+        { t: '22:00.0', ev: 'event', color: c.good, type: '—', text: 'You restored the LoRa trunk Copenhagen ↔ Rønne' },
+        { t: '21:58.3', ev: 'drop', color: c.bad, type: 'path req', text: 'Ribe repeater: CAD busy 8 times, gave up' },
+        { t: '21:57.0', ev: 'refuse', color: c.bad, type: 'call', text: 'Phone A → Phone B: call refused, not over TCP all the way' }
+      ],
+      compare: [
+        { m: 'Delivered', a: '91.3 %', b: '94.1 %', d: '+2.8' },
+        { m: 'Median time', a: '7.6 s', b: '7.9 s', d: '+0.3 s' },
+        { m: 'Packets on air', a: '119,200', b: '128,440', d: '+7.8 %' },
+        { m: 'Delivered after a cut', a: '61 %', b: '88 %', d: '+27' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

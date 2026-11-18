@@ -198,6 +198,7 @@
   /* Typing an address: the field takes the bar, like a browser. */
   .bbar:focus-within .bside, .bbar:focus-within .broute { display: none; }
   .bpill { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; margin: 0 4px; border-radius: 20px; background: var(--bg); border: 1px solid var(--line); }
+  .broute.lock { background: #3a2a10; color: #ffcf6b; }
   .bpill input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-family: var(--mono); font-size: 13px; color: var(--ink); padding: 0; }
   .bshown { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.15; cursor: text; }
   .bshown b, .bshown small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -248,6 +249,106 @@
   .page table { border-collapse: collapse; font-size: 14px; line-height: 1.4; }
   .page th, .page td { border: 1px solid var(--line); padding: 4px 10px; vertical-align: top; text-align: left; }
   .page th { background: var(--bg); font-weight: 600; }
+  /* MU: everything below is asked for by the page's own .mu file. */
+  /* A page with its own background picks the palette for that background, not the app's theme. */
+  :root .page.mu-own.mu-light { --pf-red: #b3261e; --pb-red: #fbdad6; --pf-orange: #b55400; --pb-orange: #fde2c8; --pf-yellow: #8a6a00; --pb-yellow: #fff0a8;
+    --pf-green: #2e7d32; --pb-green: #d6efd8; --pf-blue: #1f5fbf; --pb-blue: #dbe6fb; --pf-purple: #7a3db0; --pb-purple: #ebdcf7; --pf-grey: #5f6b66; --pb-grey: #e4e9e6; }
+  :root .page.mu-own.mu-dark { --pf-red: #ff8a80; --pb-red: #4a1d1a; --pf-orange: #ffb46b; --pb-orange: #4a2c10; --pf-yellow: #ffd95a; --pb-yellow: #443a0e;
+    --pf-green: #7fd68a; --pb-green: #1b3a1f; --pf-blue: #8ab4ff; --pb-blue: #1b2b4a; --pf-purple: #cda2ff; --pb-purple: #34234a; --pf-grey: #a3afa9; --pb-grey: #2b3430; }
+  .page.mu-own blockquote { color: inherit; }
+  .page.mu-own pre, .page.mu-own code { background: #8882; color: inherit; }
+  .page.mu-own input, .page.mu-own button { background: transparent; color: inherit; border: 1px solid currentColor; }
+  .page.mu-own .mu-board.slips .mu-note { color: #111; }
+  .page { --pf-cyan: #0a8a99; --pb-cyan: #d3f4f7; --pf-magenta: #b0278f; --pb-magenta: #f9d6ef; --pf-white: #fff; --pb-white: #fff; --pf-black: #000; --pb-black: #000; }
+  .page.mu-own { border-color: transparent; }
+  .page.mu-own h2, .page.mu-own h3, .page.mu-own h4, .page.mu-own th { color: inherit; }
+  .page.mu-own th { background: #8881; }
+  .page.mu-own th, .page.mu-own td { border-color: #8884; }
+  .page a { color: var(--mu-link, var(--accent)); }
+  .page .mu-body { max-width: var(--mu-width, none); }
+  .page.mu-serif { font-family: Georgia, "Times New Roman", serif; }
+  .page.mu-sans { font-family: "Segoe UI", system-ui, sans-serif; }
+  .page.mu-mono, .page.mu-grid { font-family: Consolas, "Lucida Console", ui-monospace, monospace; }
+  .page.mu-grid { padding: 12px; overflow-x: auto; }
+  .page.mu-grid .mu-body { width: max-content; margin: 0 auto; line-height: 1.18; }
+  .page.mu-grid .mu-row { white-space: pre; min-height: 1.18em; }
+  .page.mu-grid .mu-cols.split { display: flex; gap: 2ch; }
+  .page .mu-ticker { overflow: hidden; white-space: nowrap; margin: -6px -22px 10px; padding: 4px 0; background: var(--pb-red); font-weight: 700; }
+  .page .mu-ticker span { display: inline-block; padding-left: 100%; animation: mu-tick 24s linear infinite; }
+  @keyframes mu-tick { to { transform: translateX(-100%); } }
+  .page .mu-big { font-size: 1.9em; font-weight: 800; line-height: 1.1; letter-spacing: -.02em; }
+  .page .mu-huge { font-size: 3.6em; font-weight: 900; line-height: .95; letter-spacing: -.03em; }
+  .page .mu-small { font-size: .78em; letter-spacing: .04em; }
+  .page .mu-outline { color: transparent !important; -webkit-text-stroke: 2px currentColor; }
+  .page .mu-outline { -webkit-text-stroke-color: var(--mu-outline, #111); }
+  .page.mu-own .mu-outline { -webkit-text-stroke-color: var(--mu-fg, currentColor); color: transparent; }
+  .page .mu-flash { animation: mu-flash 1s steps(1) infinite; }
+  @keyframes mu-flash { 50% { visibility: hidden; } }
+  .page .mu-glow { text-shadow: 0 0 14px var(--g, currentColor), 0 0 2px var(--g, currentColor); }
+  .page .mu-gradient { -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .page .mu-tilt { display: inline-block; margin: .3em 0; }
+  .page .mu-marker { padding: 0 2px; }
+  .page .mu-hand { font-family: "Segoe Print", "Comic Sans MS", cursive; font-style: italic; display: inline-block; transform: rotate(-3deg); }
+  .page .mu-stamp { display: inline-block; border: 4px solid; padding: 2px 10px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase; opacity: .85; }
+  .page .mu-hl { padding: 0 3px; border-radius: 2px; }
+  .page .mu-clock { font-family: Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .page .mu-live { display: inline-block; width: .55em; height: .55em; border-radius: 50%; background: #2ecc71; box-shadow: 0 0 8px #2ecc71; animation: mu-pulse-o 1.6s infinite; vertical-align: middle; }
+  @keyframes mu-pulse-o { 50% { opacity: .3; } }
+  .page .mu-spark { width: 100%; height: 38px; display: block; margin: 4px 0; }
+  .page .mu-ring { width: 72px; height: 72px; float: right; }
+  .page .mu-compass { width: 52px; height: 52px; float: right; }
+  .page .mu-signal { display: inline-flex; gap: 2px; align-items: flex-end; height: 16px; vertical-align: middle; }
+  .page .mu-signal i { width: 4px; border-radius: 1px; background: currentColor; opacity: .2; }
+  .page .mu-signal i.on { opacity: 1; background: #2ecc71; }
+  .page hr.mu-double { border: 0; border-top: 3px double currentColor; }
+  .page figure.mu-right { float: right; margin: 4px 0 10px 16px !important; max-width: 45%; }
+  .page figure.mu-left { float: left; margin: 4px 16px 10px 0 !important; max-width: 45%; }
+  .page figure.mu-wide img { width: 100% !important; }
+  .page figure.mu-tape { position: relative; transform: rotate(1deg); }
+  .page figure.mu-tape::before { content: ""; position: absolute; top: -8px; left: 20px; width: 70px; height: 18px; background: #fff8; border: 1px solid #0002; transform: rotate(-8deg); z-index: 1; }
+  .page figure.mu-rec { position: relative; }
+  .page figure.mu-rec::after { content: "● REC"; position: absolute; top: 8px; left: 10px; font: 700 11px Consolas, monospace; color: #ff4d6d; animation: mu-pulse-o 1.2s infinite; }
+  .page blockquote.mu-shadow { box-shadow: 6px 6px 0 #111; border: 2px solid #111; }
+  .page blockquote.mu-pulse { animation: mu-alarm 2s ease-in-out infinite; }
+  @keyframes mu-alarm { 50% { box-shadow: 0 0 28px var(--pf-red); } }
+  .page .mu-cols { column-count: var(--n); column-gap: 26px; column-rule: 1px solid #8884; margin: 10px 0; }
+  .page .mu-cols.dashed { column-rule: 2px dashed currentColor; }
+  .page .mu-cols.split { column-count: auto; display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 26px; }
+  .page .mu-cols h2 { column-span: all; }
+  .page .mu-cols > *, .page .mu-cols blockquote, .page .mu-cols figure { break-inside: avoid; }
+  .page .mu-cards { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 14px; margin: 12px 0; }
+  .page .mu-card { border: 1px solid #8884; border-radius: 14px; padding: 4px 14px 10px; background: #8881; min-width: 0; overflow: hidden; }
+  .page .mu-card > blockquote.callout:first-child { margin: 6px -8px; }
+  .page .mu-code { position: relative; }
+  .page .mu-copy { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 2px 8px; opacity: .75; }
+  .page .mu-drop::first-letter { float: left; font-size: 3.4em; line-height: .85; padding: 4px 8px 0 0; font-weight: 800; }
+  .page .mu-board { margin: 10px 0; }
+  .page .mu-board.list .mu-note { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid #8884; }
+  .page .mu-board.list .mu-note small { margin-left: auto; opacity: .6; white-space: nowrap; }
+  .page .mu-board.slips { columns: 3 200px; }
+  .page .mu-board.slips .mu-note { break-inside: avoid; display: block; background: #fff; color: #111; font: 13px/1.35 "Courier New", monospace; padding: 9px 10px 16px; margin: 0 0 12px; box-shadow: 3px 3px 0 #0003; clip-path: polygon(0 0, 100% 0, 100% 86%, 92% 100%, 84% 86%, 76% 100%, 68% 86%, 60% 100%, 52% 86%, 44% 100%, 36% 86%, 28% 100%, 20% 86%, 12% 100%, 4% 86%, 0 100%); }
+  .page .mu-board.slips .mu-note:nth-child(2n) { transform: rotate(1deg); } .page .mu-board.slips .mu-note:nth-child(2n+1) { transform: rotate(-.8deg); }
+  .page .mu-board.slips .mu-note b::after { content: ": "; } .page .mu-board.slips .mu-note small { display: block; opacity: .6; margin-top: 4px; }
+  .page .mu-right { float: right; margin-left: 1em; }
+  .page blockquote.mu-rules { border: 0; border-top: 3px solid currentColor; border-bottom: 3px solid currentColor; border-radius: 0; background: none; text-align: center; padding: 10px 4px; margin: 12px 0; }
+  .page blockquote.mu-frame { border: 1px solid currentColor; border-radius: 0; background: none; }
+  .page .mu-board.ads { columns: 4 160px; column-rule: 1px solid #8885; column-gap: 16px; font-size: .9em; }
+  .page .mu-board.ads .mu-note { display: block; break-inside: avoid; border-bottom: 1px solid #8885; padding: 0 0 8px; margin: 0 0 8px; }
+  .page .mu-board.ads .mu-note b { display: block; font-size: .8em; letter-spacing: .06em; text-transform: uppercase; }
+  .page .mu-board.ads .mu-note small { display: block; font-style: italic; opacity: .7; }
+  .page .mu-board.ads .mu-write { column-span: all; }
+  .page .mu-write { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .page .mu-write input { flex: 1; min-width: 180px; }
+  @media (max-width: 700px) {
+    .page .mu-cols { column-count: 1; }
+    .page .mu-cols.split { grid-template-columns: minmax(0, 1fr); }
+    .page.mu-grid .mu-cols.split { display: block; }
+    .page .mu-cards { grid-template-columns: repeat(min(var(--n), 2), minmax(0, 1fr)); }
+    .page .mu-card[style*="span"] { grid-column: 1 / -1 !important; }
+    .page figure.mu-right, .page figure.mu-left { float: none; max-width: 100%; margin: 10px 0 !important; }
+    .page .mu-huge { font-size: 2.4em; }
+    .page .mu-ticker { margin: -4px -12px 10px; }
+  }
   .secure { max-width: 580px; }
   .svc { max-width: 900px; }
   .svc-log { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; height: 50vh; overflow: auto;
@@ -765,6 +866,7 @@ const Cmd = {
   getPerson: () => frame(0x36),
   personSetup: (req, op, text = "") => frame(0x37, u16(req), [op], enc.encode(text)),
   requestPage: (req, destHex, path) => frame(0x26, u16(req), unhex(destHex), enc.encode(path)),
+  postBoard: (req, destHex, path, text) => { const p = enc.encode(path); return frame(0x2e, u16(req), unhex(destHex), [p.length], p, enc.encode(text)); },
   otaBegin: (req, flags, manifest) => frame(0x18, u16(req), [flags], manifest),
   otaChunk: (req, offset, data) => frame(0x19, u16(req), u32(offset), data),
   otaEnd: (req, apply) => frame(0x1a, u16(req), [apply ? 1 : 0]),
@@ -3162,7 +3264,8 @@ const pageKey = (addr, path) => addr + "/" + path;
 function savePageCache() {
   const items = [...pages.cache.entries()].sort((a, b) => b[1].at - a[1].at).slice(0, 30);
   pages.cache = new Map(items);
-  store.set("pageCache", Object.fromEntries(items));
+  // Locked pages (`@lockinfo` from the host) stay in memory only, never in the offline cache.
+  store.set("pageCache", Object.fromEntries(items.filter(([, v]) => !/^@lockinfo\s/m.test(v.markup))));
 }
 
 // Over LoRa pictures wait for a tap; over the internet they load at once.
@@ -3260,50 +3363,6 @@ async function pageDone(ev, m) {
   if (state.view === "pages") renderChat();
 }
 
-// Inline: `code`, **bold**, ~~struck~~, *italic*, {red:colour}, {!red:highlight}
-// and [text](link). Everything becomes text nodes and plain elements, never HTML.
-// Bold, struck, italic and colour may hold other inline markup.
-const PAGE_COLOURS = ["red", "orange", "yellow", "green", "blue", "purple", "grey"];
-const PAGE_INLINE = /`([^`]+)`|\*\*(.+?)\*\*|~~(.+?)~~|\*([^*\s](?:[^*]*[^*\s])?)\*|\{(!?)([a-z]+):([^{}]+)\}|\[([^\]]+)\]\(([^)\s]+)\)/g;
-function pageColour(name) { return name === "gray" ? "grey" : PAGE_COLOURS.includes(name) ? name : null; }
-function pageInline(text, base, depth = 0) {
-  const out = [];
-  if (depth > 4) { out.push(document.createTextNode(text)); return out; }
-  const re = new RegExp(PAGE_INLINE.source, "g");
-  const inner = (s) => pageInline(s, base, depth + 1);
-  let last = 0, m;
-  while ((m = re.exec(text))) {
-    if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
-    if (m[1]) out.push(el("code", {}, m[1]));
-    else if (m[2]) out.push(el("b", {}, ...inner(m[2])));
-    else if (m[3]) out.push(el("s", {}, ...inner(m[3])));
-    else if (m[4]) out.push(el("i", {}, ...inner(m[4])));
-    else if (m[6]) {
-      // An unknown colour is shown as its plain text.
-      const c = pageColour(m[6]);
-      out.push(c ? el("span", { className: (m[5] ? "hl-" : "fg-") + c }, ...inner(m[7])) : el("span", {}, ...inner(m[7])));
-    } else {
-      const target = m[9];
-      const p = parsePageUrl(target, base);
-      if (p) {
-        const a = el("a", { href: "#", textContent: m[8], title: pageUrl(p) });
-        a.onclick = (e) => { e.preventDefault(); openPage(pageUrl(p)); };
-        out.push(a);
-      } else if (/^https?:\/\//i.test(target)) {
-        // Links out of the network are not opened: show the address so the user can decide.
-        out.push(document.createTextNode(`${m[8]} <${target}>`));
-      } else out.push(document.createTextNode(m[8]));
-    }
-    last = re.lastIndex;
-  }
-  if (last < text.length) out.push(document.createTextNode(text.slice(last)));
-  return out;
-}
-
-// A picture on a page: `![caption](file.jpg "grey")`, style grey (default),
-// dots or colour. The path is from the node's pages folder. Over LoRa it waits
-// for a tap; over the internet it loads at once (the host sends the original).
-const PIC_LINE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"(grey|dots|colour|color)(!?)")?\)\s*$/;
 // One picture at a time per node: several big files to one recipient at once
 // overfill the host's send queue, and over LoRa they would only share the air.
 function picBusy(addr) {
@@ -3411,16 +3470,196 @@ function pagePicture(caption, src, style, base, forced = false) {
   return fig;
 }
 
-// A page's title, like <title> on a web page: a line "@title …" (not shown on
-// the page), else the first heading.
+// ---------- Må:rse markup (MU) ----------
+// The whole look of a page is written in its .mu file; the browser only
+// draws what the file says. Everything becomes text nodes and plain
+// elements, never HTML; colours are checked before they reach a style.
+//
+// Inline: `code`, **bold**, *italic*, ~~struck~~, [text](link) and braces
+// {head:text}, which may hold each other: {red:…} {!red:…} {#f80:…}
+// {!#00a:…} {#fff!#00a:…} (text/background), {big:…} {small:…} {huge:…},
+// {glow #hex:…} {gradient #a #b:…} {outline:…} {tilt -3:…} {marker #hex:…}
+// {hand #hex:…} {stamp red 14:…} {flash:…}; widgets {spark #hex:1 2 3}
+// {ring #hex:80} {compass:290} {signal:3}; and {clock} {live}.
+const PAGE_COLOURS = ["red", "orange", "yellow", "green", "blue", "purple", "grey", "cyan", "magenta", "white", "black"];
+function pageColour(name) { return name === "gray" ? "grey" : PAGE_COLOURS.includes(name) ? name : null; }
+const MU_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+// A colour value for a style: a hex colour or a named one (as a CSS variable).
+function muColour(c) {
+  if (!c) return null;
+  if (MU_HEX.test(c)) return c;
+  const n = pageColour(c.toLowerCase());
+  return n ? `var(--pf-${n})` : null;
+}
+function muBack(c) {
+  if (!c) return null;
+  if (MU_HEX.test(c)) return c;
+  const n = pageColour(c.toLowerCase());
+  return n ? `var(--pb-${n})` : null;
+}
+const muNum = (s, lo, hi, d = 0) => { const n = parseFloat(s); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
+
+// Finds the brace that closes the one at `i` (braces may nest).
+function muClose(text, i) {
+  let depth = 0;
+  for (let j = i; j < text.length; j++) {
+    if (text[j] === "{") depth++;
+    else if (text[j] === "}" && --depth === 0) return j;
+  }
+  return -1;
+}
+const MU_SIMPLE = /`([^`]+)`|\*\*(.+?)\*\*|~~(.+?)~~|\*([^*\s](?:[^*]*[^*\s])?)\*|\[([^\]]+)\]\(([^)\s]+)\)/g;
+
+function pageInline(text, base, depth = 0) {
+  const out = [];
+  if (depth > 6) { out.push(document.createTextNode(text)); return out; }
+  const inner = (s) => pageInline(s, base, depth + 1);
+  // Braces first (they may hold anything), then the simple markup between them.
+  let last = 0;
+  const simple = (s) => {
+    const re = new RegExp(MU_SIMPLE.source, "g");
+    let l = 0, m;
+    while ((m = re.exec(s))) {
+      if (m.index > l) out.push(document.createTextNode(s.slice(l, m.index)));
+      if (m[1]) out.push(el("code", {}, m[1]));
+      else if (m[2]) out.push(el("b", {}, ...inner(m[2])));
+      else if (m[3]) out.push(el("s", {}, ...inner(m[3])));
+      else if (m[4]) out.push(el("i", {}, ...inner(m[4])));
+      else out.push(muLink(m[5], m[6], base, inner));
+      l = re.lastIndex;
+    }
+    if (l < s.length) out.push(document.createTextNode(s.slice(l)));
+  };
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+    // Links and code win over braces that start inside them.
+    const before = text.slice(last, i);
+    if ((before.match(/`/g) || []).length % 2) continue;
+    const j = muClose(text, i);
+    if (j < 0) break;
+    const body = text.slice(i + 1, j);
+    const node = muBrace(body, base, inner);
+    if (!node) continue;
+    simple(text.slice(last, i));
+    out.push(node);
+    last = j + 1; i = j;
+  }
+  simple(text.slice(last));
+  return out;
+}
+
+function muLink(label, target, base, inner) {
+  if (target.startsWith("#")) {
+    const a = el("a", { href: "#" }, ...inner(label));
+    a.onclick = (e) => { e.preventDefault(); const t = document.getElementById("mu-" + muSlug(target.slice(1))); t?.scrollIntoView({ behavior: "smooth", block: "start" }); };
+    return a;
+  }
+  const p = parsePageUrl(target, base);
+  if (p) {
+    const a = el("a", { href: "#", title: pageUrl(p) }, ...inner(label));
+    a.onclick = (e) => { e.preventDefault(); openPage(pageUrl(p)); };
+    // One letter in brackets is a hot key: `[M](board)`.
+    if (/^[A-Za-z0-9]$/.test(label)) a.dataset.key = label.toLowerCase();
+    return a;
+  }
+  // Links out of the network are not opened: show the address so the user can decide.
+  if (/^https?:\/\//i.test(target)) return document.createTextNode(`${label} <${target}>`);
+  return document.createTextNode(label);
+}
+const muSlug = (s) => s.toLowerCase().replace(/<-|->|\{[^:{}]*:|[{}*`~]/g, "").trim().replace(/[^a-z0-9æøå]+/g, "-").replace(/^-|-$/g, "");
+
+// One {head:text} (or {clock}). Returns a node, or null to show it as text.
+function muBrace(body, base, inner) {
+  if (body === "clock") { const s = el("span", { className: "mu-clock" }, new Date().toTimeString().slice(0, 8)); return s; }
+  if (body === "live") return el("span", { className: "mu-live" });
+  const k = body.indexOf(":");
+  if (k < 0) return null;
+  const head = body.slice(0, k).trim(), txt = body.slice(k + 1);
+  if (!/^[!#a-z0-9 .\-]{1,60}$/i.test(head)) return null;
+  const w = head.split(/\s+/), name = w[0].toLowerCase();
+  const span = (cls, kids) => el("span", { className: cls }, ...kids);
+  switch (name) {
+    case "right": return span("mu-right", inner(txt));
+    case "big": return span("mu-big", inner(txt));
+    case "small": return span("mu-small", inner(txt));
+    case "huge": return span("mu-huge", inner(txt));
+    case "outline": return span("mu-outline", inner(txt));
+    case "flash": case "blink": return span("mu-flash", inner(txt));
+    case "glow": { const s = span("mu-glow", inner(txt)); const c = muColour(w[1]); if (c) { s.style.color = c; s.style.setProperty("--g", c); } return s; }
+    case "gradient": { const s = span("mu-gradient", inner(txt)); const a = muColour(w[1]), b = muColour(w[2]); if (a && b) s.style.backgroundImage = `linear-gradient(90deg, ${a}, ${b})`; return s; }
+    case "tilt": { const s = span("mu-tilt", inner(txt)); s.style.transform = `rotate(${muNum(w[1], -20, 20)}deg)`; return s; }
+    case "marker": { const s = span("mu-marker", inner(txt)); const c = muColour(w[1]) || "#ffe14d"; s.style.backgroundImage = `linear-gradient(transparent 55%, ${c} 55%)`; return s; }
+    case "hand": { const s = span("mu-hand", inner(txt)); const c = muColour(w[1]); if (c) s.style.color = c; return s; }
+    case "stamp": { const s = span("mu-stamp", inner(txt)); const c = muColour(w[1]) || "#e0102f"; s.style.color = c; s.style.borderColor = c; s.style.transform = `rotate(${muNum(w[2], -30, 30, 12)}deg)`; return s; }
+    case "spark": return muSpark(txt, muColour(w[1]) || "currentColor");
+    case "ring": return muRing(muNum(txt, 0, 100), muColour(w[1]) || "currentColor");
+    case "compass": return muCompass(muNum(txt, 0, 360));
+    case "signal": return muSignal(Math.round(muNum(txt, 0, 5)));
+  }
+  // Colours: {red:…} {!red:…} {#f80:…} {!#00a:…} {#fff!#00a:…}
+  const cm = head.match(/^([#a-z0-9]*)(?:!([#a-z0-9]+))?$/i);
+  if (cm) {
+    const fg = cm[1] ? muColour(cm[1]) : null, bg = cm[2] ? muBack(cm[2]) : null;
+    const s = el("span", {}, ...inner(txt));
+    if (cm[1] && !fg || cm[2] && !bg) return s; // unknown colour: plain text
+    if (fg) s.style.color = fg;
+    if (bg) { s.style.background = bg; s.className = "mu-hl"; }
+    return s;
+  }
+  return null;
+}
+
+// Widgets drawn as small inline SVG (built with DOM calls, never from text).
+const SVG = "http://www.w3.org/2000/svg";
+const svgEl = (tag, attrs) => { const e = document.createElementNS(SVG, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+function muSpark(txt, colour) {
+  const pts = txt.split(/[\s,]+/).map(Number).filter(Number.isFinite).slice(0, 60);
+  const s = svgEl("svg", { class: "mu-spark", viewBox: "0 0 100 30", preserveAspectRatio: "none" });
+  if (pts.length < 2) return s;
+  const mx = Math.max(...pts), mn = Math.min(...pts), r = mx - mn || 1;
+  const p = pts.map((v, i) => `${(i / (pts.length - 1) * 100).toFixed(1)},${(27 - (v - mn) / r * 24).toFixed(1)}`).join(" ");
+  s.append(svgEl("polygon", { points: `0,30 ${p} 100,30`, fill: colour, "fill-opacity": ".18" }), svgEl("polyline", { points: p, fill: "none", stroke: colour, "stroke-width": "2", "vector-effect": "non-scaling-stroke" }));
+  return s;
+}
+function muRing(pct, colour) {
+  const s = svgEl("svg", { class: "mu-ring", viewBox: "0 0 36 36" });
+  s.append(svgEl("circle", { cx: 18, cy: 18, r: 15.9, fill: "none", stroke: "currentColor", "stroke-opacity": ".15", "stroke-width": 3.5 }),
+    svgEl("circle", { cx: 18, cy: 18, r: 15.9, fill: "none", stroke: colour, "stroke-width": 3.5, "stroke-dasharray": `${pct} 100`, "stroke-linecap": "round", transform: "rotate(-90 18 18)" }));
+  const t = svgEl("text", { x: 18, y: 21.5, "text-anchor": "middle", "font-size": 9, "font-weight": 700, fill: colour }); t.textContent = Math.round(pct) + "%"; s.append(t);
+  return s;
+}
+function muCompass(deg) {
+  const s = svgEl("svg", { class: "mu-compass", viewBox: "0 0 40 40" });
+  s.append(svgEl("circle", { cx: 20, cy: 20, r: 18, fill: "none", stroke: "currentColor", "stroke-opacity": ".35", "stroke-width": 1.5 }),
+    svgEl("polygon", { points: "20,4 23.5,21 16.5,21", fill: "currentColor", transform: `rotate(${deg} 20 20)` }));
+  const n = svgEl("text", { x: 20, y: 39.5, "text-anchor": "middle", "font-size": 6, fill: "currentColor" }); n.textContent = deg + "°"; s.append(n);
+  return s;
+}
+function muSignal(n) {
+  const s = el("span", { className: "mu-signal" });
+  for (let i = 0; i < 5; i++) { const b = el("i"); b.style.height = (4 + i * 3) + "px"; if (i < n) b.className = "on"; s.append(b); }
+  return s;
+}
+
+// A picture: `![caption](file.jpg "style words")`; style grey (default),
+// dots or colour, `!` forces it; words: left, right, wide, tape, rec.
+const PIC_LINE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)\s*$/;
+function picWords(s) {
+  const w = (s || "").toLowerCase().split(/[\s,]+/).filter(Boolean);
+  const st = w.find(x => /^(grey|dots|colour|color)!?$/.test(x)) || "";
+  return { style: st.replace("!", ""), forced: st.endsWith("!"), place: w.find(x => ["left", "right", "wide"].includes(x)) || "", tape: w.includes("tape"), rec: w.includes("rec") };
+}
+
+// A page's title, like <title> on a web page: "@title …", else the first heading.
 function pageTitle(markup) {
   const m = markup.match(/^@title\s+(.+)$/m) || markup.match(/^#{1,3}\s+(.+)$/m);
-  // Markup is dropped: `-> x <-` centring, {red:…} colours, *, ~ and backticks.
-  return m ? m[1].replace(/^->\s*(.*?)\s*<-\s*$/, "$1").replace(/\{!?[a-z]+:([^{}]+)\}/g, "$1").replace(/[*`~]/g, "").trim().slice(0, 80) : "";
+  if (!m) return "";
+  let t = m[1].replace(/^->\s*(.*?)\s*<-\s*$/, "$1");
+  for (let i = 0; i < 6; i++) t = t.replace(/\{[^{}:]*:([^{}]*)\}/g, "$1");
+  return t.replace(/\{(clock|live)\}/g, "").replace(/[*`~]/g, "").trim().slice(0, 80);
 }
-// Pipe tables: `| a | b |` rows; a second row like `|---|:--:|--:|` makes the
-// first row a header and sets left, centre or right alignment. `\|` is a
-// literal bar. Returns { head, aligns, rows } with every row as long as the widest.
+
+// Pipe tables: `| a | b |`; a second row `|---|:--:|--:|` makes a header and sets the alignment.
 function pageTable(lines) {
   const cells = (l) => {
     let s = l.trim().replace(/^\|/, "");
@@ -3430,61 +3669,181 @@ function pageTable(lines) {
   let rows = lines.map(cells), head = null, aligns = [];
   if (rows.length > 1 && rows[1].every(c => /^:?-+:?$/.test(c))) {
     aligns = rows[1].map(c => c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "left");
-    head = rows[0];
-    rows = rows.slice(2);
+    head = rows[0]; rows = rows.slice(2);
   }
   const n = Math.min(20, Math.max(head ? head.length : 0, ...rows.map(r => r.length)));
   const fit = (r) => Array.from({ length: n }, (_, i) => r[i] ?? "");
   return { head: head && fit(head), aligns: Array.from({ length: n }, (_, i) => aligns[i] || "left"), rows: rows.map(fit) };
 }
-// A centred line: `-> text <-`.
 const PAGE_CENTRE = /^->\s*(.*?)\s*<-\s*$/;
-// A quote line; `>!colour` starts a coloured box (callout), e.g. `>!red Storm tonight`.
-const PAGE_QUOTE = /^>(?:!([a-z]+)(?=\s|$))?\s?(.*)$/;
+// A quote line; `>!colour [effects]` starts a box: `>!red [tilt -1, shadow, pulse] Storm tonight`.
+const PAGE_QUOTE = /^>(?:!([#a-z0-9]*)(?:\s*\[([a-z0-9 ,.\-]*)\])?(?=\s|$))?\s?(.*)$/i;
+
+// The page-wide settings: @bg @fg @link @font @width @grid @ticker @dropcap and
+// what the host adds (@lockinfo, @locked-notice).
+function pageSettings(markup) {
+  const st = {};
+  let fence = false;
+  for (const line of markup.replace(/\r/g, "").split("\n")) {
+    // An example in a code block is text, never a setting.
+    if (line.startsWith("```")) { fence = !fence; continue; }
+    if (fence) continue;
+    const m = line.match(/^@([a-z-]+)(?:\s+(.*))?$/);
+    if (!m) continue;
+    const v = (m[2] || "").trim();
+    if (m[1] === "bg") st.bg = v; else if (m[1] === "fg") st.fg = v; else if (m[1] === "link") st.link = v;
+    else if (m[1] === "font") st.font = v; else if (m[1] === "width") st.width = muNum(v, 20, 200, 0);
+    else if (m[1] === "grid") { const g = v.match(/^(\d+)x(\d+)$/); if (g) st.grid = [muNum(g[1], 20, 132, 80), muNum(g[2], 5, 60, 25)]; }
+    else if (m[1] === "ticker") st.ticker = v; else if (m[1] === "dropcap") st.dropcap = true;
+    else if (m[1] === "lockinfo") st.lock = muNum(v, 1, 9999, 1); else if (m[1] === "locked-notice") st.lockedMe = v;
+  }
+  return st;
+}
+// Is the page's own background light? (Then named colours use the light palette.)
+function muIsLight(v) {
+  const c = (v || "").split(/[\s.]+/)[0];
+  if (!MU_HEX.test(c)) return true;
+  let h = c.slice(1); if (h.length <= 4) h = [...h.slice(0, 3)].map(x => x + x).join("");
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16));
+  return 0.299 * r + 0.587 * g + 0.114 * b > 140;
+}
+// Background: `@bg #111`, `@bg #0b1220..#0e1726`, `… dots`, `… glow #1f3a66 #3a1f5c`.
+function muBackground(v) {
+  const w = (v || "").split(/\s+/).filter(Boolean);
+  if (!w.length) return null;
+  const layers = [];
+  const gi = w.indexOf("glow");
+  if (gi >= 0) {
+    const g = w.slice(gi + 1).map(muColour).filter(Boolean);
+    if (g[0]) layers.push(`radial-gradient(1200px 500px at 15% -10%, ${g[0]} 0%, transparent 60%)`);
+    if (g[1]) layers.push(`radial-gradient(900px 500px at 110% 10%, ${g[1]} 0%, transparent 55%)`);
+  }
+  if (w.includes("dots")) layers.push("radial-gradient(#0000001a 1px, transparent 1px) 0 0/6px 6px");
+  const base = w[0].split("..");
+  const a = muColour(base[0]), b = muColour(base[1]);
+  if (a && b) layers.push(`linear-gradient(180deg, ${a}, ${b})`);
+  else if (a) layers.push(a);
+  return layers.length ? layers.join(", ") : null;
+}
 
 function renderMarkup(markup, base) {
-  const root = el("div", { className: "page" });
-  const lines = markup.replace(/\r/g, "").split("\n");
-  let para = [], list = null, code = null, table = null, quote = null;
+  const st = pageSettings(markup);
+  const root = el("div", { className: "page" + (st.grid ? " mu-grid" : "") });
+  const bg = muBackground(st.bg); if (bg) { root.style.background = bg; root.classList.add("mu-own", muIsLight(st.bg) ? "mu-light" : "mu-dark"); }
+  const fg = muColour(st.fg); if (fg) { root.style.color = fg; root.style.setProperty("--mu-fg", fg); root.classList.add("mu-own"); }
+  const ln = muColour(st.link); if (ln) root.style.setProperty("--mu-link", ln);
+  if (["serif", "sans", "mono"].includes(st.font)) root.classList.add("mu-" + st.font);
+  if (st.width) root.style.setProperty("--mu-width", st.width + "ch");
+  if (st.ticker) { const t = el("div", { className: "mu-ticker" }); t.append(el("span", {}, ...pageInline(st.ticker, base))); root.append(t); }
+  if (st.lockedMe && /^[0-9a-f]{32}$/.test(st.lockedMe)) {
+    const b = el("button", { textContent: "Copy my address" }); b.onclick = () => navigator.clipboard?.writeText(st.lockedMe).then(() => { b.textContent = "Copied"; });
+    setTimeout(() => root.append(el("p", {}, b)), 0);
+  }
+  const body = el("div", { className: "mu-body" });
+  root.append(body);
+  renderBlocks(markup.replace(/\r/g, "").split("\n"), body, base, st);
+  // Hot keys: `[M](board)` opens with the M key (not while typing).
+  root.tabIndex = -1;
+  if (st.grid) requestAnimationFrame(() => muFitGrid(root, st.grid[0]));
+  return root;
+}
+// A grid page (`@grid 80x25`) is scaled so its width fits the pane.
+function muFitGrid(root, cols) {
+  const body = root.querySelector(".mu-body"); if (!body) return;
+  body.style.fontSize = "16px";
+  const probe = el("span", {}, "M".repeat(10)); probe.style.visibility = "hidden"; body.append(probe);
+  const cw = probe.getBoundingClientRect().width / 10; probe.remove();
+  const avail = root.clientWidth - 24;
+  if (cw > 0) body.style.fontSize = Math.max(5, Math.min(22, 16 * avail / (cw * cols))) + "px";
+}
+window.addEventListener("resize", () => document.querySelectorAll(".page.mu-grid").forEach(p => { const m = (pages.cache.get(pageKey(parsePageUrl(pages.url)?.addr, parsePageUrl(pages.url)?.path)) || {}).markup; const g = m && pageSettings(m).grid; if (g) muFitGrid(p, g[0]); }));
+document.addEventListener("keydown", (e) => {
+  if (state.view !== "pages" || e.ctrlKey || e.metaKey || e.altKey || /input|textarea/i.test(document.activeElement?.tagName || "")) return;
+  const a = document.querySelector(`.page a[data-key="${CSS.escape(e.key.toLowerCase())}"]`);
+  if (a) { e.preventDefault(); a.click(); }
+});
+setInterval(() => document.querySelectorAll(".mu-clock").forEach(c => c.textContent = new Date().toTimeString().slice(0, 8)), 1000);
+
+// The blocks of a page (or of a column or card).
+function renderBlocks(lines, root, base, st) {
+  let para = [], list = null, code = null, table = null, quote = null, first = true;
+  const grid = !!st.grid;
+  const addPara = (txt) => {
+    const p = el("p", {}, ...pageInline(txt, base));
+    // `@dropcap` gives the paragraph after it a big first letter.
+    if (st.dropNext && !grid) { p.className = "mu-drop"; st.dropNext = false; }
+    first = false; root.append(p);
+  };
   const flush = () => {
-    if (para.length) { root.append(el("p", {}, ...pageInline(para.join(" "), base))); para = []; }
+    if (para.length) { addPara(para.join(" ")); para = []; }
     if (table) {
       const t = pageTable(table), tb = el("table");
-      const row = (r, tag) => el("tr", {}, ...r.map((c, i) => {
-        const td = el(tag, {}, ...pageInline(c, base));
-        if (t.aligns[i] !== "left") td.style.textAlign = t.aligns[i];
-        return td;
-      }));
+      const row = (r, tag) => el("tr", {}, ...r.map((c, i) => { const td = el(tag, {}, ...pageInline(c, base)); if (t.aligns[i] !== "left") td.style.textAlign = t.aligns[i]; return td; }));
       if (t.head) tb.append(el("thead", {}, row(t.head, "th")));
       tb.append(el("tbody", {}, ...t.rows.map(r => row(r, "td"))));
-      // The table scrolls sideways inside its box, never the page.
       root.append(el("div", { className: "tbl" }, tb));
       table = null;
     }
     list = null; quote = null;
   };
-  for (const line of lines) {
-    if (code) { if (line.startsWith("```")) { root.append(el("pre", {}, code.join("\n"))); code = null; } else code.push(line); continue; }
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (code) { if (line.startsWith("```")) { root.append(muCode(code.join("\n"))); code = null; } else code.push(line); continue; }
+    // Columns and cards: `::: 3 [dashed]` … `:::`, `::: cards 4` … `+++ [2]` … `:::`.
+    const blk = line.match(/^:::\s*(cards)?\s*(\d)?\s*(dashed)?\s*$/i);
+    if (blk && line.trim() !== ":::") {
+      flush();
+      let depth = 1, j = i + 1;
+      // Code blocks inside may show ::: lines as text.
+      for (let fence = false; j < lines.length; j++) {
+        const t = lines[j].trim();
+        if (t.startsWith("```")) fence = !fence;
+        else if (fence) continue;
+        else if (/^:::\s*\S/.test(t)) depth++;
+        else if (t === ":::" && --depth === 0) break;
+      }
+      const inside = lines.slice(i + 1, j);
+      root.append(muColumns(inside, base, st, !!blk[1], muNum(blk[2], 1, 6, blk[1] ? 3 : 2), !!blk[3]));
+      i = j; continue;
+    }
     if (table && !/^\s*\|/.test(line)) flush();
     if (line.startsWith("```")) { flush(); code = []; continue; }
+    if (/^@board(\s|$)/.test(line)) { flush(); root.append(muBoard(line, lines, i, base)); continue; }
+    if (/^@(boardpath|note)\s/.test(line)) continue;
+    if (/^@dropcap\s*$/.test(line)) { flush(); st.dropNext = true; continue; }
+    if (/^@[a-z-]+(\s|$)/.test(line)) continue; // page settings: not shown
+    if (grid) {
+      // A grid page: every line is one row of the screen, spaces kept.
+      if (/^!\[/.test(line) && line.match(PIC_LINE)) { const p = line.match(PIC_LINE), w = picWords(p[3]); root.append(pagePicture(p[1], p[2], w.style, base, w.forced)); continue; }
+      root.append(el("div", { className: "mu-row" }, ...pageInline(line, base)));
+      continue;
+    }
     const h = line.match(/^(#{1,3})\s+(.*)$/);
     if (h) {
       flush();
       const c = h[2].match(PAGE_CENTRE);
       const e = el("h" + (h[1].length + 1), {}, ...pageInline(c ? c[1] : h[2], base));
       if (c) e.className = "centre";
-      root.append(e);
-      continue;
+      e.id = "mu-" + muSlug(c ? c[1] : h[2]);
+      root.append(e); continue;
     }
     if (/^\s*$/.test(line)) { flush(); continue; }
-    if (/^@title\s/.test(line)) continue;
+    if (/^===+\s*$/.test(line)) { flush(); root.append(el("hr", { className: "mu-double" })); continue; }
     if (/^---+\s*$/.test(line)) { flush(); root.append(el("hr")); continue; }
     const pic = line.match(PIC_LINE);
-    if (pic && base) { flush(); root.append(pagePicture(pic[1], pic[2], pic[3], base, pic[4] === "!")); continue; }
+    if (pic && base) {
+      flush();
+      const w = picWords(pic[3]);
+      const fig = pagePicture(pic[1], pic[2], w.style, base, w.forced);
+      if (w.place) fig.classList.add("mu-" + w.place);
+      if (w.tape) fig.classList.add("mu-tape");
+      if (w.rec) fig.classList.add("mu-rec");
+      root.append(fig); continue;
+    }
     if (/^\s*\|/.test(line)) { if (!table) { flush(); table = []; } table.push(line); continue; }
     const li = line.match(/^\s*[-*]\s+(.*)$/);
     if (li) {
-      if (para.length) { root.append(el("p", {}, ...pageInline(para.join(" "), base))); para = []; }
+      if (para.length) { addPara(para.join(" ")); para = []; }
       quote = null;
       if (!list) { list = el("ul"); root.append(list); }
       list.append(el("li", {}, ...pageInline(li[1], base)));
@@ -3492,25 +3851,117 @@ function renderMarkup(markup, base) {
     }
     const q = line.match(PAGE_QUOTE);
     if (q) {
-      // Quote lines in a row make one box, one line each; `>!colour` starts a new, coloured one.
-      if (!quote || q[1]) {
+      if (!quote || q[1] !== undefined) {
         flush();
         quote = el("blockquote", {});
-        const c = q[1] && pageColour(q[1]);
-        if (c) quote.className = "callout co-" + c;
+        if (q[1] !== undefined) {
+          const named = pageColour(q[1].toLowerCase());
+          if (named) quote.className = "callout co-" + named;
+          else if (MU_HEX.test(q[1])) { quote.className = "callout"; quote.style.background = q[1]; quote.style.borderColor = q[1]; }
+          for (const fx of (q[2] || "").split(",").map(s => s.trim().split(/\s+/))) {
+            if (fx[0] === "tilt") quote.style.transform = `rotate(${muNum(fx[1], -10, 10)}deg)`;
+            else if (fx[0] === "shadow") quote.classList.add("mu-shadow");
+            else if (fx[0] === "pulse") quote.classList.add("mu-pulse");
+            else if (fx[0] === "rules") quote.classList.add("mu-rules");
+            else if (fx[0] === "frame") quote.classList.add("mu-frame");
+          }
+        }
         root.append(quote);
       } else quote.append(el("br"));
-      quote.append(...pageInline(q[2], base));
+      quote.append(...pageInline(q[3], base));
       continue;
     }
     const c = line.match(PAGE_CENTRE);
     if (c) { flush(); root.append(el("p", { className: "centre" }, ...pageInline(c[1], base))); continue; }
     list = null; quote = null; para.push(line.trim());
   }
-  if (code) root.append(el("pre", {}, code.join("\n")));
+  if (code) root.append(muCode(code.join("\n")));
   flush();
-  return root;
 }
+
+// A code block with a copy button.
+function muCode(text) {
+  const w = el("div", { className: "mu-code" });
+  const b = el("button", { className: "mu-copy", textContent: "copy" });
+  b.onclick = () => navigator.clipboard?.writeText(text).then(() => { b.textContent = "copied"; setTimeout(() => b.textContent = "copy", 1500); });
+  w.append(el("pre", {}, text), b);
+  return w;
+}
+
+// Columns (text flows from one to the next) or cards (a grid of boxes).
+function muColumns(lines, base, st, cards, n, dashed) {
+  if (!cards) {
+    const box = el("div", { className: "mu-cols" + (dashed ? " dashed" : "") });
+    box.style.setProperty("--n", n);
+    // `+++` in columns starts the next column; without it the text flows.
+    if (lines.some(l => /^\+\+\+/.test(l.trim()))) {
+      box.classList.add("split");
+      let cur = [];
+      const add = () => { const c = el("div", { className: "mu-col" }); renderBlocks(cur, c, base, st); box.append(c); cur = []; };
+      let fence = false;
+      for (const l of lines) { if (l.trim().startsWith("```")) fence = !fence; if (!fence && /^\+\+\+/.test(l.trim())) add(); else cur.push(l); }
+      add();
+    } else renderBlocks(lines, box, base, st);
+    return box;
+  }
+  const grid = el("div", { className: "mu-cards" });
+  grid.style.setProperty("--n", n);
+  let cur = [], span = 1;
+  const add = () => {
+    // A `+++ 2` before the first card only sets that card's width.
+    if (!grid.children.length && !cur.some(l => l.trim())) { cur = []; return; }
+    const c = el("div", { className: "mu-card" });
+    if (span > 1) c.style.gridColumn = `span ${Math.min(span, n)}`;
+    renderBlocks(cur, c, base, st); grid.append(c); cur = [];
+  };
+  let fence = false;
+  for (const l of lines) {
+    if (l.trim().startsWith("```")) fence = !fence;
+    const m = !fence && l.trim().match(/^\+\+\+\s*(\d)?\s*$/);
+    if (m) { add(); span = muNum(m[1], 1, 6, 1); } else cur.push(l);
+  }
+  add();
+  return grid;
+}
+
+// A notice board: `@board [n] [list|slips|table]`; the host puts the newest
+// notes after it (`@note time\tname\tshort\ttext`). Notes are shown as plain text.
+function muBoard(line, lines, i, base) {
+  const style = (line.match(/\b(list|slips|table|ads)\b/) || [, "list"])[1];
+  const path = (lines.slice(i + 1, i + 3).map(l => l.match(/^@boardpath\s+(\S+)/)).find(Boolean) || [])[1];
+  const notes = [];
+  for (let j = i + 1; j < lines.length && /^@(boardpath|note)\s/.test(lines[j]); j++) {
+    const m = lines[j].match(/^@note\s+(\d+)\t([^\t]*)\t([^\t]*)\t(.*)$/);
+    if (m) notes.push({ at: +m[1], name: m[2] || m[3], text: m[4] });
+  }
+  const box = el("div", { className: "mu-board " + style });
+  const when = (t) => { const d = new Date(t * 1000), s = (Date.now() - d) / 1000; return s < 3600 ? `${Math.max(1, Math.round(s / 60))} min` : s < 86400 ? d.toTimeString().slice(0, 5) : d.toLocaleDateString([], { day: "numeric", month: "short" }); };
+  if (style === "table") {
+    const tb = el("table");
+    for (const n of notes) tb.append(el("tr", {}, el("td", {}, el("b", {}, n.name)), el("td", { className: "muted" }, when(n.at)), el("td", {}, n.text)));
+    box.append(el("div", { className: "tbl" }, tb));
+  } else for (const n of notes) box.append(el("div", { className: "mu-note" }, el("b", {}, n.name), el("span", {}, n.text), el("small", {}, when(n.at))));
+  if (!notes.length) box.append(el("div", { className: "muted" }, "No notes yet. Be the first."));
+  if (path && base) {
+    const form = el("form", { className: "mu-write" });
+    const input = el("input", { maxLength: 100, placeholder: "Write a note (100 characters)" });
+    const send = el("button", { type: "submit", textContent: "Post" });
+    const msg = el("small", { className: "muted" });
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const t = input.value.trim();
+      if (!t || !transport) return;
+      if (new TextEncoder().encode(t).length > 100) { msg.textContent = "Too long: at most 100 bytes."; return; }
+      transport.send(Cmd.postBoard(state.nextReq++ & 0xffff, base.addr, path, t));
+      input.value = ""; msg.textContent = "Sent. The page reloads in a moment…";
+      setTimeout(() => openPage(pageUrl(base), false), base.addr === muMe() ? 400 : 6000);
+    };
+    form.append(input, send, msg);
+    box.append(form);
+  }
+  return box;
+}
+const muMe = () => typeof state.me === "string" ? state.me : (state.me?.addr || state.nodeInfo?.addr || "");
 
 // Pages look like a small web browser: a toolbar (back, forward, reload or
 // stop, an address pill with the page's title and route, bookmark, home), a
@@ -3536,6 +3987,8 @@ function renderPages(box) {
   if (cur) {
     const lora = pages.lora.get(cur.addr) !== false;
     pill.append(el("span", { className: "broute " + (lora ? "lora" : "net"), textContent: lora ? "LoRa" : "Net", title: lora ? "Over LoRa: pictures wait for a tap" : "Over the internet" }));
+    const lk = cached && pageSettings(cached.markup).lock;
+    if (lk) pill.append(el("span", { className: "broute lock", textContent: `🔒 ${lk}`, title: `A locked page: ${lk} may read it` }));
   }
   const input = el("input", { value: pages.url, placeholder: "maarse://address/path", spellcheck: false });
   input.onkeydown = (e) => { if (e.key === "Enter") openPage(input.value); if (e.key === "Escape") renderChat(); };

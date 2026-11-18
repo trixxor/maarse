@@ -53,10 +53,23 @@ impl Lock {
     }
 }
 
+/// The lines of a page outside code blocks (an example in a code block
+/// is text to read, never a setting).
+pub(super) fn outside_code(markup: &str) -> impl Iterator<Item = &str> {
+    let mut fence = false;
+    markup.lines().filter(move |l| {
+        if l.trim_start().starts_with("```") {
+            fence = !fence;
+            return false;
+        }
+        !fence
+    })
+}
+
 /// Reads the lock lines of a page.
 pub(super) fn lock_of(markup: &str) -> Lock {
     let mut l = Lock::default();
-    for line in markup.lines() {
+    for line in outside_code(markup) {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("@allow ") {
             let mut words = rest.split_whitespace();
@@ -109,9 +122,12 @@ pub(super) fn unix_now() -> u64 {
 /// The markup sent to a reader: lock lines cut out.
 pub(super) fn strip_locks(markup: &str) -> String {
     let mut out = String::with_capacity(markup.len());
+    let mut fence = false;
     for line in markup.lines() {
         let t = line.trim_start();
-        if t.starts_with("@allow ") || t.starts_with("@locked ") {
+        if t.starts_with("```") {
+            fence = !fence;
+        } else if !fence && (t.starts_with("@allow ") || t.starts_with("@locked ")) {
             continue;
         }
         out.push_str(line);
@@ -222,15 +238,24 @@ impl Node {
 
     /// The page's markup with the newest notes after each `@board` line.
     pub(super) fn with_notes(&self, markup: &str, page: &Path, path: &str) -> String {
-        if !markup.lines().any(|l| l.trim_start().starts_with("@board")) {
+        if !outside_code(markup).any(|l| l.trim_start().starts_with("@board")) {
             return markup.to_string();
         }
         let notes = read_notes(&board_file(page));
         let mut out = String::with_capacity(markup.len() + notes.len() * 80);
+        let mut fence = false;
         for line in markup.lines() {
             out.push_str(line);
             out.push('\n');
             let t = line.trim_start();
+            // An example in a code block is text, never a board.
+            if t.starts_with("```") {
+                fence = !fence;
+                continue;
+            }
+            if fence {
+                continue;
+            }
             if let Some(rest) = t.strip_prefix("@board") {
                 if !(rest.is_empty() || rest.starts_with(' ')) {
                     continue;
@@ -253,7 +278,7 @@ impl Node {
         let root = self.pages_dir();
         let page = super::pages::find_page(&root, path).ok_or("no such page")?;
         let markup = fs::read_to_string(&page).map_err(|_| "no such page")?;
-        if !markup.lines().any(|l| l.trim_start() == "@board" || l.trim_start().starts_with("@board ")) {
+        if !outside_code(&markup).any(|l| l.trim_start() == "@board" || l.trim_start().starts_with("@board ")) {
             return Err("this page has no notice board");
         }
         let reader = (from != self.addr).then_some(from);
@@ -305,6 +330,19 @@ mod tests {
         assert!(l.hidden);
         assert_eq!(l.until, Some(1_798_070_400));
         assert!(!lock_of("# open page\n").locked());
+    }
+
+    #[test]
+    fn examples_in_code_blocks_are_not_settings() {
+        let m = "# Help
+```
+@allow 0123456789abcdef0123456789abcdef
+@board 3
+```
+";
+        assert!(!lock_of(m).locked());
+        assert_eq!(strip_locks(m), m);
+        assert!(!outside_code(m).any(|l| l.starts_with("@board")), "a board in a code block");
     }
 
     #[test]

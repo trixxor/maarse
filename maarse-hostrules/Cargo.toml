@@ -1,0 +1,18 @@
+[package]
+name = "maarse-hostrules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The host's pure rules (file limits, file mailbox time, IP tunnel framing,
+# guard limits, Pages, post office timings, call refusal), shared by
+# maarse-host and the simulator. No I/O: no sockets, files or threads; time
+# comes in as milliseconds. Builds for wasm32-unknown-unknown.
+
+[dependencies]
+maarse-core = { version = "0.1.0", path = "../maarse-core" }
+maarse-crypto = { version = "0.1.0", path = "../maarse-crypto" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

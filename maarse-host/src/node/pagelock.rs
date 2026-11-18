@@ -32,104 +32,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
-/// The lock lines of one page.
-#[derive(Default, Debug, PartialEq)]
-pub(super) struct Lock {
-    /// Who may read: addresses (hex), `admins`, `group:<name>`.
-    pub allow: Vec<String>,
-    pub hidden: bool,
-    /// Open for everyone from this time (unix seconds).
-    pub until: Option<u64>,
-}
-
-impl Lock {
-    pub fn locked(&self) -> bool {
-        !self.allow.is_empty() || self.until.is_some()
-    }
-}
-
-/// The lines of a page outside code blocks (an example in a code block
-/// is text to read, never a setting).
-pub(super) fn outside_code(markup: &str) -> impl Iterator<Item = &str> {
-    let mut fence = false;
-    markup.lines().filter(move |l| {
-        if l.trim_start().starts_with("```") {
-            fence = !fence;
-            return false;
-        }
-        !fence
-    })
-}
-
-/// Reads the lock lines of a page.
-pub(super) fn lock_of(markup: &str) -> Lock {
-    let mut l = Lock::default();
-    for line in outside_code(markup) {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("@allow ") {
-            let mut words = rest.split_whitespace();
-            while let Some(w) = words.next() {
-                match w {
-                    "group" => {
-                        if let Some(g) = words.next() {
-                            l.allow.push(format!("group:{g}"));
-                        }
-                    }
-                    w => l.allow.push(w.to_ascii_lowercase()),
-                }
-            }
-        } else if let Some(rest) = line.strip_prefix("@locked ") {
-            let mut words = rest.split_whitespace();
-            while let Some(w) = words.next() {
-                match w {
-                    "hidden" => l.hidden = true,
-                    "until" => l.until = words.next().and_then(parse_date),
-                    _ => {}
-                }
-            }
-        }
-    }
-    l
-}
-
-/// `2026-12-24` as unix seconds (midnight UTC).
-pub(super) fn parse_date(s: &str) -> Option<u64> {
-    let mut it = s.split('-');
-    let (y, m, d): (i64, i64, i64) = (it.next()?.parse().ok()?, it.next()?.parse().ok()?, it.next()?.parse().ok()?);
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-        return None;
-    }
-    // Days from civil (Howard Hinnant).
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
-    (days >= 0).then_some(days as u64 * 86400)
-}
+// The text rules (lock lines, boards, notes, dates, preview words) live in
+// maarse-hostrules (shared with the simulator).
+pub(super) use maarse_hostrules::pagelock::{outside_code, strip_locks, with_previews};
+use maarse_hostrules::pagelock::{Lock, board_line, clean_note, has_board, hex, is_note, lock_folders, lock_of, may_note, note_line, parse_hex};
 
 pub(super) fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
-
-/// The markup sent to a reader: lock lines cut out.
-pub(super) fn strip_locks(markup: &str) -> String {
-    let mut out = String::with_capacity(markup.len());
-    let mut fence = false;
-    for line in markup.lines() {
-        let t = line.trim_start();
-        if t.starts_with("```") {
-            fence = !fence;
-        } else if !fence && (t.starts_with("@allow ") || t.starts_with("@locked ")) {
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
 }
 
 /// The `.mu` files whose locks apply to `path` (a page path or the path of
@@ -137,9 +46,8 @@ pub(super) fn strip_locks(markup: &str) -> String {
 /// `index.mu` of every folder it is in (not the top folder).
 pub(super) fn lock_files(root: &Path, path: &str, page: Option<&Path>) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = page.map(Path::to_path_buf).into_iter().collect();
-    let segs: Vec<&str> = path.split('/').collect();
-    for i in 1..segs.len() {
-        let idx = root.join(segs[..i].join("/")).join("index.mu");
+    for folder in lock_folders(path) {
+        let idx = root.join(folder).join("index.mu");
         if idx.is_file() && !v.contains(&idx) {
             v.push(idx);
         }
@@ -155,15 +63,7 @@ pub(super) fn board_file(page: &Path) -> PathBuf {
 
 /// The note lines kept for a board, newest last.
 pub(super) fn read_notes(file: &Path) -> Vec<String> {
-    fs::read_to_string(file).unwrap_or_default().lines().filter(|l| l.split('\t').count() >= 4).map(str::to_string).collect()
-}
-
-/// Cleans a note: one line, no tabs, no control characters, trimmed.
-pub(super) fn clean_note(text: &[u8]) -> Option<String> {
-    let s = std::str::from_utf8(text).ok()?;
-    let s: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-    let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!s.is_empty()).then_some(s)
+    fs::read_to_string(file).unwrap_or_default().lines().filter(|l| is_note(l)).map(str::to_string).collect()
 }
 
 /// What a reader gets for a locked page.
@@ -216,7 +116,7 @@ impl Node {
         let now = unix_now();
         for f in lock_files(&root, path, page) {
             let lock = lock_of(&fs::read_to_string(&f).unwrap_or_default());
-            if !lock.locked() || lock.until.is_some_and(|t| now >= t) {
+            if !lock.applies(now) {
                 continue;
             }
             let members = self.members(&root, &lock);
@@ -252,17 +152,11 @@ impl Node {
             if fence {
                 continue;
             }
-            if let Some(rest) = t.strip_prefix("@board") {
-                if !(rest.is_empty() || rest.starts_with(' ')) {
-                    continue;
-                }
-                // `@board [n] [style]`: n newest (all kept ones without n).
-                let n = rest.split_whitespace().find_map(|w| w.parse::<usize>().ok()).unwrap_or(self.pages.board_keep);
+            // `@board [n] [style]`: n newest (all kept ones without n).
+            if let Some(n) = board_line(t, self.pages.board_keep) {
                 out.push_str(&format!("@boardpath {path}\n"));
                 for note in notes.iter().rev().take(n) {
-                    let mut f = note.splitn(4, '\t');
-                    let (ts, addr, name, text) = (f.next().unwrap_or(""), f.next().unwrap_or(""), f.next().unwrap_or(""), f.next().unwrap_or(""));
-                    out.push_str(&format!("@note {ts}\t{name}\t{}\t{text}\n", &addr[..addr.len().min(8)]));
+                    out.push_str(&note_line(note));
                 }
             }
         }
@@ -274,7 +168,7 @@ impl Node {
         let root = self.pages_dir();
         let page = super::pages::find_page(&root, path).ok_or("no such page")?;
         let markup = fs::read_to_string(&page).map_err(|_| "no such page")?;
-        if !outside_code(&markup).any(|l| l.trim_start() == "@board" || l.trim_start().starts_with("@board ")) {
+        if !has_board(&markup) {
             return Err("this page has no notice board");
         }
         let reader = (from != self.addr).then_some(from);
@@ -282,9 +176,7 @@ impl Node {
             return Err("locked");
         }
         let now = unix_now();
-        if let Some(t) = self.pages.noted.get(&from)
-            && now.saturating_sub(*t) < self.pages.board_every
-        {
+        if !may_note(self.pages.noted.get(&from).copied(), now, self.pages.board_every) {
             return Err("one note a minute");
         }
         let text = clean_note(text).ok_or("empty note")?;
@@ -305,64 +197,6 @@ impl Node {
     }
 }
 
-fn hex(a: &Address) -> String {
-    a.0.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn parse_hex(s: &str) -> Option<Address> {
-    let s = s.trim();
-    if s.len() != 32 {
-        return None;
-    }
-    let b: Vec<u8> = (0..32).step_by(2).filter_map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect();
-    Address::from_slice(&b)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reads_lock_lines() {
-        let l = lock_of("@title x\n@allow 0123456789abcdef0123456789abcdef admins\n@allow group crew\n@locked hidden until 2026-12-24\n# x\n");
-        assert_eq!(l.allow, vec!["0123456789abcdef0123456789abcdef", "admins", "group:crew"]);
-        assert!(l.hidden);
-        assert_eq!(l.until, Some(1_798_070_400));
-        assert!(!lock_of("# open page\n").locked());
-    }
-
-    #[test]
-    fn examples_in_code_blocks_are_not_settings() {
-        let m = "# Help
-```
-@allow 0123456789abcdef0123456789abcdef
-@board 3
-```
-";
-        assert!(!lock_of(m).locked());
-        assert_eq!(strip_locks(m), m);
-        assert!(!outside_code(m).any(|l| l.starts_with("@board")), "a board in a code block");
-    }
-
-    #[test]
-    fn strips_lock_lines() {
-        assert_eq!(strip_locks("@allow admins\n# Hi\n@locked hidden\ntext\n"), "# Hi\ntext\n");
-    }
-
-    #[test]
-    fn dates() {
-        assert_eq!(parse_date("1970-01-01"), Some(0));
-        assert_eq!(parse_date("2000-03-01"), Some(951_868_800));
-        assert_eq!(parse_date("2026-13-01"), None);
-    }
-
-    #[test]
-    fn notes_are_one_clean_line() {
-        assert_eq!(clean_note(b"  hello\tthere\nyou  ").as_deref(), Some("hello there you"));
-        assert_eq!(clean_note(b"   "), None);
-    }
-}
-
 // ---------- picture previews ----------
 //
 // Every picture line a page is sent with gets a preview in its style words:
@@ -376,68 +210,12 @@ pub(crate) fn preview_token(data: &[u8]) -> Option<String> {
     let img = image::load_from_memory(data).ok()?;
     let (w, h) = (img.width(), img.height());
     let small = img.resize_exact(4, 3, image::imageops::FilterType::Triangle).to_rgb8();
-    let nibbles: Vec<u8> = small.pixels().flat_map(|p| [p[0] >> 4, p[1] >> 4, p[2] >> 4]).collect();
-    let bytes: Vec<u8> = nibbles.chunks(2).map(|c| c[0] << 4 | c.get(1).copied().unwrap_or(0)).collect();
-    Some(format!("~{w}x{h}:{}", b64url(&bytes)))
-}
-
-fn b64url(b: &[u8]) -> String {
-    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::new();
-    for c in b.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-        let k = c.len() + 1;
-        for i in 0..k {
-            out.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
-        }
-    }
-    out
-}
-
-/// Adds the preview token to every picture line outside code blocks.
-/// `token` gives the token for a picture path (relative to `pages/`).
-pub(super) fn with_previews(markup: &str, token: &mut dyn FnMut(&str) -> Option<String>) -> String {
-    let mut out = String::with_capacity(markup.len() + 64);
-    let mut fence = false;
-    for line in markup.lines() {
-        let t = line.trim();
-        if t.starts_with("```") {
-            fence = !fence;
-        }
-        let pic = (!fence && t.starts_with("![") && t.ends_with(')')).then(|| t.find("](")).flatten();
-        if let Some(i) = pic {
-            let inner = &t[i + 2..t.len() - 1];
-            let (src, words) = match inner.find(char::is_whitespace) {
-                Some(k) => (&inner[..k], inner[k..].trim()),
-                None => (inner, ""),
-            };
-            let words = words.trim_matches('"');
-            if !words.contains('~')
-                && let Some(tok) = token(src.trim_start_matches('/'))
-            {
-                let w = if words.is_empty() { tok } else { format!("{words} {tok}") };
-                out.push_str(&format!("{}({src} \"{w}\")\n", &t[..i + 1]));
-                continue;
-            }
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
+    Some(maarse_hostrules::pagelock::preview_from_pixels(w, h, small.as_raw()))
 }
 
 #[cfg(test)]
 mod preview_tests {
     use super::*;
-
-    #[test]
-    fn picture_lines_get_a_preview() {
-        let m = "# Hi\n![Cabin](demo/a.png \"dots wide\")\n![b](b.png)\n```\n![x](a.png)\n```\n";
-        let out = with_previews(m, &mut |p| Some(format!("~4x3:{p}")));
-        assert!(out.contains("![Cabin](demo/a.png \"dots wide ~4x3:demo/a.png\")"), "{out}");
-        assert!(out.contains("![b](b.png \"~4x3:b.png\")"), "{out}");
-        assert!(out.contains("```\n![x](a.png)\n```"), "an example in a code block was changed: {out}");
-    }
 
     #[test]
     fn preview_of_a_picture() {

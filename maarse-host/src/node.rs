@@ -101,15 +101,18 @@ const FILE_TIMEOUT: Duration = Duration::from_secs(600);
 /// A page answer the reader has not taken by then is dropped (the app
 /// stops waiting for a page after a minute, for a picture after two).
 const PAGE_REPLY_TIMEOUT: Duration = Duration::from_secs(150);
+/// Post office and backbone timings: the standard profile from
+/// maarse-hostrules (the simulator can load others; the host runs this one).
+const RULES: maarse_hostrules::rules::Rules = maarse_hostrules::rules::Rules::STANDARD;
 /// Without an acknowledgement within this time a message is put in the recipient's mailbox.
-const DEPOSIT_AFTER: Duration = Duration::from_secs(45);
+const DEPOSIT_AFTER: Duration = Duration::from_millis(RULES.deposit_after_ms);
 /// The mailbox keeps at most this many messages per recipient, for this long.
-const MAILBOX_PER_RECIPIENT: usize = 100;
-const MAILBOX_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
+const MAILBOX_PER_RECIPIENT: usize = RULES.mailbox_per_recipient;
+const MAILBOX_TTL: Duration = Duration::from_millis(RULES.mailbox_ttl_ms);
 /// How often the DHT is maintained (bootstrap, publications, expiry).
-const DHT_EVERY: Duration = Duration::from_secs(5);
+const DHT_EVERY: Duration = Duration::from_millis(RULES.dht_every_ms);
 /// The same address is looked up at most this often.
-const DHT_LOOKUP_EVERY: Duration = Duration::from_secs(30);
+const DHT_LOOKUP_EVERY: Duration = Duration::from_millis(RULES.dht_lookup_every_ms);
 /// At most this many gateways are connected to via DHT lookups.
 const DHT_MAX_DYNAMIC: usize = 32;
 /// A link's kind for telemetry: "radio", "trunk" or "backbone".
@@ -159,16 +162,16 @@ enum Only {
 
 /// Bordercast: a second request for the same destination within this time
 /// goes on the radio anyway (the node may be here but unheard).
-const BORDERCAST_REPEAT: Duration = Duration::from_secs(120);
+const BORDERCAST_REPEAT: Duration = Duration::from_millis(RULES.bordercast_repeat_ms);
 /// Key requests are answered from the announce cache at most this often per
 /// destination.
-const KEY_ANSWER_EVERY: Duration = Duration::from_secs(30);
+const KEY_ANSWER_EVERY: Duration = Duration::from_millis(RULES.key_answer_every_ms);
 /// Post office: how long a recipient counts as present after a sync, how
 /// often we ask the replicas for a recipient we hear, and the first retry
-/// of a delivery (then doubling, up to 32 times that).
-const MAIL_PRESENT: Duration = Duration::from_secs(600);
-const MAIL_FETCH_EVERY: Duration = Duration::from_secs(600);
-const MAIL_RETRY_FIRST: Duration = Duration::from_secs(300);
+/// of a delivery (then doubling, see `Rules::mail_retry_after`).
+const MAIL_PRESENT: Duration = Duration::from_millis(RULES.mail_present_ms);
+const MAIL_FETCH_EVERY: Duration = Duration::from_millis(RULES.mail_fetch_every_ms);
+const MAIL_RETRY_FIRST: Duration = Duration::from_millis(RULES.mail_retry_first_ms);
 /// Trunks: a request for a node heard over our own radio crosses only on a
 /// second request within this time.
 const TRUNK_REPEAT: Duration = Duration::from_secs(120);
@@ -3029,11 +3032,12 @@ impl Node {
         let due: Vec<Address> = self.mail_retry.iter().filter(|(_, (t, _))| Instant::now() >= *t).map(|(a, _)| *a).collect();
         for r in due {
             let step = self.mail_retry[&r].1 + 1;
-            if backbone || step > 3 || !self.mailbox.get(&r).is_some_and(|m| !m.is_empty()) {
+            let next = RULES.mail_retry_after(step);
+            let Some(next) = next.filter(|_| !backbone && self.mailbox.get(&r).is_some_and(|m| !m.is_empty())) else {
                 self.mail_retry.remove(&r);
                 continue;
-            }
-            self.mail_retry.insert(r, (Instant::now() + MAIL_RETRY_FIRST * (1 << step), step));
+            };
+            self.mail_retry.insert(r, (Instant::now() + Duration::from_millis(next), step));
             self.flush_mailbox(r);
         }
         self.present.retain(|_, t| t.elapsed() < MAIL_PRESENT);

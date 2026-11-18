@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=21">
+<link rel="stylesheet" href="style.css?v=23">
 </head>
 <body>
 <header id="top">
@@ -96,6 +96,12 @@
       <label><input type="checkbox" id="opt-links"> Show radio links of the selected node</label>
       <label><input type="checkbox" id="opt-backbone" checked> Show backbone links</label>
 
+      <h3>Performance</h3>
+      <p class="hint">Limits for this browser. The benchmark runs the current scenario flat out and sets them.</p>
+      <label>Max events per frame <input type="number" id="pf-events" min="1000" step="1000" style="width:90px"></label>
+      <label>Max speed <input type="number" id="pf-speed" min="1" style="width:70px">× · warn above <input type="number" id="pf-nodes" min="10" style="width:70px"> nodes</label>
+      <button id="pf-bench">Run benchmark</button>
+      <p class="hint" id="pf-out"></p>
       <h3>Save, snapshots and links</h3>
       <p class="hint">Saved in this browser only. A snapshot keeps the time too: open it to continue from there, or start a branch from it and try something else.</p>
       <div class="row"><input id="st-name" placeholder="name (optional)" size="16" aria-label="Name for the saved run"><button id="st-save">Save run</button><button id="st-snap">Snapshot now</button><button id="st-share">Copy link</button></div>
@@ -223,9 +229,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="scenarios.js?v=21"></script>
-<script src="maarse-sim.js?v=21"></script>
-<script src="app.js?v=21"></script>
-<script src="store.js?v=21"></script>
+<script src="scenarios.js?v=23"></script>
+<script src="maarse-sim.js?v=23"></script>
+<script src="app.js?v=23"></script>
+<script src="store.js?v=23"></script>
 </body>
 </html>

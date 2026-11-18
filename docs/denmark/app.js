@@ -205,7 +205,7 @@
     state = sim.state();
     computeTowns(); drawNodes(); drawClutter(); drawDisasters();
     updateClock(); renderStats(); renderTimeline(); fillSenders(); renderAlerts(); renderHud(); renderFeed(true); drawHist();
-    $("sc-info").textContent = `${scenario.name || "scenario"}: ${scenario.nodes.length} nodes, ${scenario.links.length} backbone links, ${scenario.events.length} timeline events.`;
+    $("sc-info").textContent = `${scenario.name || "scenario"}: ${scenario.nodes.length} nodes, ${scenario.links.length} backbone links, ${scenario.events.length} timeline events.${scenario.nodes.length > perf.maxNodes ? ` Over this browser's limit of ${perf.maxNodes} nodes (Build > Performance): it may run slowly.` : ""}`;
   }
   function edited() { rebuild(); }
   function showNote(text) { $("sc-info").textContent = text; }
@@ -218,6 +218,29 @@
 
   // ---------- main loop ----------
   let lastFrame = 0, lastState = 0, lastStats = 0, lastFeed = 0;
+  // CPU limits for this browser (Build > Performance), measured by the benchmark.
+  const perf = Object.assign({ maxEvents: 400000, maxSpeed: 1000, maxNodes: 2000 }, (() => { try { return JSON.parse(localStorage.getItem("dk-perf") || "{}"); } catch (e) { return {}; } })());
+  function savePerf() { try { localStorage.setItem("dk-perf", JSON.stringify(perf)); } catch (e) { /* private window */ } }
+  function syncPerf() { $("pf-events").value = perf.maxEvents; $("pf-speed").value = perf.maxSpeed; $("pf-nodes").value = perf.maxNodes; }
+  function benchmark() {
+    // Runs a copy of the current scenario as fast as possible (up to 15
+    // simulated minutes or 2 s of real time) and works out what this browser
+    // can keep up with.
+    const b = new Engine.Sim(JSON.parse(JSON.stringify(scenario)));
+    const t0 = performance.now();
+    let events = 0, simS = 0;
+    while (simS < 900 && performance.now() - t0 < 2000) { events += b.step(10000, 1e9).events; simS += 10; }
+    const ms = performance.now() - t0;
+    const evPerSec = events / (ms / 1000);
+    b.free();
+    // Real time per simulated second; keep a frame under ~25 ms.
+    const msPerSimS = ms / simS;
+    const speedOk = Math.max(1, Math.floor(1000 / msPerSimS * 0.6));
+    perf.maxEvents = Math.max(100000, Math.round(evPerSec * 0.025));
+    perf.maxSpeed = Math.min(1000, speedOk);
+    savePerf(); syncPerf();
+    $("pf-out").textContent = `${scenario.nodes.length} nodes: ${simS} s simulated in ${(ms / 1000).toFixed(2)} s (${Math.round(evPerSec).toLocaleString()} events/s). This browser keeps up to about ${speedOk}× real time; limits set to ${perf.maxEvents.toLocaleString()} events per frame and ${perf.maxSpeed}× speed.`;
+  }
   function frame(ts) {
     requestAnimationFrame(frame);
     if (!sim) return;
@@ -225,7 +248,7 @@
     lastFrame = ts;
     if (playing) {
       const t0 = performance.now();
-      const r = sim.step(Math.max(1, Math.round(dt * speed)), scenario.nodes.length > 1500 ? 150000 : 400000);
+      const r = sim.step(Math.max(1, Math.round(dt * Math.min(speed, perf.maxSpeed))), perf.maxEvents);
       lastT = r.t;
       $("behind").classList.toggle("hidden", !(r.behind || performance.now() - t0 > 40));
       injectDue();
@@ -1448,6 +1471,11 @@
   const trMap = { "tr-direct": "direct_per_min", "tr-channel": "channel_per_min", "tr-local": "local_share" };
   for (const [id, key] of Object.entries(trMap)) $(id).onchange = () => { scenario.traffic[key] = +$(id).value; edited(); };
   ["opt-islands", "opt-links", "opt-backbone"].forEach(id => $(id).onchange = () => { drawLinks(); restyle(); });
+  syncPerf();
+  $("pf-events").onchange = () => { perf.maxEvents = Math.max(1000, +$("pf-events").value || 400000); savePerf(); };
+  $("pf-speed").onchange = () => { perf.maxSpeed = Math.max(1, +$("pf-speed").value || 1000); savePerf(); };
+  $("pf-nodes").onchange = () => { perf.maxNodes = Math.max(10, +$("pf-nodes").value || 2000); savePerf(); };
+  $("pf-bench").onclick = () => { $("pf-out").textContent = "Measuring…"; setTimeout(benchmark, 30); };
   function syncForm() {
     document.querySelectorAll("#features input").forEach(i => i.checked = !!scenario.features[i.dataset.f]);
     $("sc-sf").value = scenario.sf; $("sc-duty").value = scenario.duty_permille;

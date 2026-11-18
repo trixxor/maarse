@@ -141,7 +141,7 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
 | 11 | Share-a-run link, README, feature inventory | **share link done 2026-11-19** (scenario + events + time deflated in the URL hash, ~12 KB for 800 nodes) | README, docs/maybe/feature-inventory.md |
 | 12 | Rule/settings profiles ("Standard (as built)" + own), live changes incl. SF/frequency | decided | radio model with frequency; profile store; UI |
 | 13 | Save locally, snapshots, branches | **done 2026-11-19**: Build > Save: save run / snapshot (IndexedDB), open, branch from a snapshot (deterministic replay to its time, verified identical), delete | real memory snapshots if replay gets slow |
-| 14 | CPU limits + benchmark mode | decided | all |
+| 14 | CPU limits + benchmark | **done 2026-11-19**: Build > Performance: max events per frame, max speed, node warning (saved per browser); benchmark runs the scenario flat out and sets the limits | — |
 | 15 | Tracking a node/person | **done 2026-11-19**: right-click > Track; track line coloured by best contact (green repeater/anchor/host, yellow only handhelds/relays, red none); watch list with contact now, lost-for time, role (forest mode), battery, messages got/sent, contact changes | timeline of received messages on the track line |
 
 **Small findings while reading the code (2026-11-18)**

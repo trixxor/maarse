@@ -3293,9 +3293,10 @@ function picProgress(f, what) {
   w.append(bar, el("div", { className: "muted", style: "font-size:12px" }, `${what} · ${pct} % · ${(f.size * pct / 100 / 1024).toFixed(1)} of ${(f.size / 1024).toFixed(1)} KB`));
   return w;
 }
-// Pictures come in steps over LoRa, all made by the host as WebP:
-// Greyscale (about 1.3 KB) first, then on request Colour 4 KB and Colour 8 KB.
-// Tapping the picture offers the next steps. `forced` ("dots!" on the page):
+// Pictures come in steps, all made by the host as WebP and the same on every
+// route: Greyscale (about 1.3 KB) first, then on request Colour 4 KB and
+// Colour 8 KB. Over LoRa the first waits for a tap; over the internet it loads
+// at once. Tapping the picture offers the next steps. `forced` ("dots!" on the page):
 // that copy on every route, no steps.
 const PIC_STEPS = [
   { id: "_c4", name: "Colour 4 KB", time: "about 35 sec." },
@@ -3319,15 +3320,15 @@ function pagePicture(caption, src, style, base, forced = false) {
   const busy = [...state.files.values()].find(f => f.pic && f.key === key);
   if (got?.url) {
     const img = el("img", { src: got.url, alt: caption || rel });
-    Object.assign(img.style, { maxWidth: "100%", width: "320px", background: "#fff", borderRadius: "4px", cursor: lora && !forced ? "pointer" : "zoom-in" });
+    Object.assign(img.style, { maxWidth: "100%", width: "320px", background: "#fff", borderRadius: "4px", cursor: !forced ? "pointer" : "zoom-in" });
     if (got.mime === "image/png") img.style.imageRendering = "pixelated";
-    const stepName = top ? top.name : got.mime === "image/png" ? "Dots" : lora ? "Greyscale" : "Original";
+    const stepName = top ? top.name : got.mime === "image/png" ? "Dots" : forced && st === "colour" ? "Colour 8 KB" : "Greyscale";
     const open = pages.picMenu === key;
-    // Over LoRa a tap offers a better step; otherwise it shows the picture large.
-    img.onclick = () => { if (lora && !forced) { pages.picMenu = open ? null : key; renderChat(); } else showImage(got.url, rel); };
-    img.title = lora && !forced ? "Tap for a better picture" : "Show larger";
+    // A tap offers a better step; a forced picture just shows large.
+    img.onclick = () => { if (!forced) { pages.picMenu = open ? null : key; renderChat(); } else showImage(got.url, rel); };
+    img.title = !forced ? "Tap for a better picture" : "Show larger";
     fig.append(img, el("figcaption", { className: "muted", style: "font-size:12px" }, `${caption ? caption + " · " : ""}${stepName} · ${(got.size / 1024).toFixed(1)} KB`));
-    if (lora && !forced) {
+    if (!forced) {
       const higher = steps.filter(s => !top || PIC_STEPS.findIndex(p => p.id === s.id) > PIC_STEPS.findIndex(p => p.id === top.id));
       const working = higher.find(s => s.busy || queued(s.key, s.path));
       if (working?.busy) fig.append(picProgress(working.busy, working.name));
@@ -3335,7 +3336,7 @@ function pagePicture(caption, src, style, base, forced = false) {
       else if (open) {
         const row = el("div", { className: "row" }); row.style.flexWrap = "wrap"; row.style.gap = "6px";
         for (const s of higher) {
-          const b = el("button", { textContent: s.got?.error ? `${s.name}: try again (${s.got.error})` : `${s.name} · ${s.time}` });
+          const b = el("button", { textContent: s.got?.error ? `${s.name}: try again (${s.got.error})` : lora ? `${s.name} · ${s.time}` : s.name });
           b.onclick = () => { pages.picMenu = null; requestPicture(base.addr, s.path); renderChat(); };
           row.append(b);
         }

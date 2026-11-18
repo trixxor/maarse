@@ -377,9 +377,10 @@ private fun Inline(text: String, base: Pages.Url, style: androidx.compose.ui.tex
     Text(s, style = style, fontWeight = if (bold) FontWeight.SemiBold else null)
 }
 
-// Pictures come in steps over LoRa, all made by the host as WebP:
-// Greyscale (about 1.3 KB) first, then on request Colour 4 KB and Colour 8 KB.
-// Tapping the picture offers the next steps. `forced` ("dots!" on the page):
+// Pictures come in steps, all made by the host as WebP and the same on every
+// route: Greyscale (about 1.3 KB) first, then on request Colour 4 KB and
+// Colour 8 KB. Over LoRa the first waits for a tap; over the internet it loads
+// at once. Tapping the picture offers the next steps. `forced` ("dots!" on the page):
 // that copy on every route, no steps.
 private data class PicStep(val id: String, val name: String, val time: String)
 private val PIC_STEPS = listOf(PicStep("_c4", "Colour 4 KB", "about 35 s"), PicStep("_c8", "Colour 8 KB", "about 1 min"))
@@ -416,11 +417,11 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
         when (pic) {
             is Pages.Pic.Got -> {
                 val bmp = remember(pic) { BitmapFactory.decodeByteArray(pic.data, 0, pic.data.size) }
-                val stepName = top?.name ?: when { pic.mime == "image/png" -> "Dots"; lora -> "Greyscale"; else -> "Original" }
+                val stepName = top?.name ?: when { pic.mime == "image/png" -> "Dots"; forced && st == "colour" -> "Colour 8 KB"; else -> "Greyscale" }
                 if (bmp != null) Image(bmp.asImageBitmap(), caption.ifEmpty { rel },
                     Modifier.widthIn(max = 320.dp).fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(Color.White)
-                        // Over LoRa a tap offers a better step; otherwise it shows the picture large.
-                        .clickable { if (lora && !forced) menu = !menu else large = true },
+                        // A tap offers a better step; a forced picture just shows large.
+                        .clickable { if (!forced) menu = !menu else large = true },
                     contentScale = ContentScale.FillWidth,
                     filterQuality = if (pic.mime == "image/png") FilterQuality.None else FilterQuality.Low)
                 if (large && bmp != null) androidx.compose.ui.window.Dialog(onDismissRequest = { large = false }) {
@@ -430,7 +431,7 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                 }
                 Text("${if (caption.isNotEmpty()) "$caption · " else ""}$stepName · " + "%.1f KB".format(pic.data.size / 1024f),
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (lora && !forced) {
+                if (!forced) {
                     val higher = steps.drop(if (top == null) 0 else steps.indexOf(top) + 1)
                     val working = higher.firstOrNull { val p = Pages.picture("${base.addr}/${it.id}/$rel"); p is Pages.Pic.Busy || p is Pages.Pic.Asking || Pages.queued(base.addr, "${it.id}/$rel") }
                     val wp = working?.let { Pages.picture("${base.addr}/${it.id}/$rel") }
@@ -448,7 +449,7 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                             higher.forEach { s ->
                                 val sp = Pages.picture("${base.addr}/${s.id}/$rel")
                                 OutlinedButton(onClick = { menu = false; Pages.requestPicture(base.addr, "${s.id}/$rel") }) {
-                                    Text(if (sp is Pages.Pic.Failed) "${s.name}: try again" else "${s.name} · ${s.time}")
+                                    Text(if (sp is Pages.Pic.Failed) "${s.name}: try again" else if (lora) "${s.name} · ${s.time}" else s.name)
                                 }
                             }
                             androidx.compose.material3.TextButton(onClick = { menu = false; large = true }) { Text("Show larger") }

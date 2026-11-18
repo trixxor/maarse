@@ -20,15 +20,14 @@
 //!   picture for a better one.
 //! - `_c8/hytte.jpg`: **Colour 8 KB**, the most LoRa carries.
 //!
-//! Over the internet the original is sent for `_grey`/`_colour`/`_dots`
-//! (scaled down only if it is over the limit); `_c4`/`_c8` are sent as asked.
-//! `_best/…` (older clients) is Colour 8 KB.
+//! The steps are the same over the internet (where the first loads without
+//! a tap), so a page looks the same on every route and no picture is ever
+//! over 8 KB; the original is never sent. `_best/…` (older clients) is
+//! Colour 8 KB.
 //!
 //! A page can force a copy with "!": `![map](kort.png "dots!")` is asked for
 //! as `_fdots/kort.png` and always comes as that copy, over LoRa and over the
-//! internet: `_fgrey` Greyscale, `_fdots` the dots, `_fcolour` Colour 8 KB
-//! over LoRa (the original over the internet). Over LoRa nothing is ever over
-//! 8 KB.
+//! internet: `_fgrey` Greyscale, `_fdots` the dots, `_fcolour` Colour 8 KB.
 
 use super::{Node, err_ev, short};
 use crate::ClientId;
@@ -111,14 +110,6 @@ pub(crate) fn picture_path(path: &str) -> Option<(PicStyle, &str)> {
     };
     let ext = rest.rsplit_once('.')?.1;
     ["jpg", "jpeg", "png", "webp"].contains(&ext).then_some((style, rest))
-}
-
-fn mime_of(path: &str) -> &'static str {
-    match path.rsplit_once('.').map(|x| x.1) {
-        Some("png") => "image/png",
-        Some("webp") => "image/webp",
-        _ => "image/jpeg",
-    }
 }
 
 /// Lossy WebP of `img` (grey pictures as RGB with equal channels: the
@@ -237,45 +228,38 @@ fn png_grey1(w: u32, h: u32, raw: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The bytes and MIME of a picture for a route: over LoRa the greyscale
-/// step (or dots when smaller) unless a colour step is asked for; over the
-/// internet the original when it fits. Nothing over LoRa is over 8 KB.
-pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bool, max: usize) -> Option<(Vec<u8>, &'static str)> {
+/// The bytes and MIME of a picture: the same steps on every route, so a
+/// page looks the same over LoRa and over the internet and no picture is ever
+/// over 8 KB. The first copy is Greyscale (or dots when smaller); Colour 4 KB
+/// and Colour 8 KB on request; a forced copy ("!") as the page says.
+pub(crate) fn picture_for(data: &[u8], _name: &str, style: PicStyle, _via_lora: bool, max: usize) -> Option<(Vec<u8>, &'static str)> {
     const WEBP: &str = "image/webp";
-    let max = if via_lora { max.min(LORA_PICTURE_MAX) } else { max };
-    let load = || image::load_from_memory(data).ok();
+    let max = max.min(LORA_PICTURE_MAX);
+    let img = image::load_from_memory(data).ok()?;
     match style {
-        PicStyle::ForceGrey => return Some((grey_picture(&load()?), WEBP)).filter(|(b, _)| b.len() <= max),
+        PicStyle::ForceGrey => Some((grey_picture(&img), WEBP)).filter(|(b, _)| b.len() <= max),
         PicStyle::ForceDots => {
             // A busy picture can make big dots: smaller until it fits.
-            let img = load()?;
             for side in [256, 192, 128, 96] {
                 let d = dots_picture(&img.thumbnail(side, side));
                 if d.len() <= max {
                     return Some((d, "image/png"));
                 }
             }
-            return None;
+            None
         }
-        PicStyle::Colour4 => return colour_picture(&load()?, max.min(COLOUR4_MAX)).map(|b| (b, WEBP)),
-        PicStyle::Colour8 => return colour_picture(&load()?, max.min(LORA_PICTURE_MAX)).map(|b| (b, WEBP)),
-        PicStyle::ForceColour if via_lora => return colour_picture(&load()?, max).map(|b| (b, WEBP)),
-        _ => {}
-    }
-    if !via_lora {
-        if data.len() <= max {
-            return Some((data.to_vec(), mime_of(name)));
+        PicStyle::Colour4 => colour_picture(&img, max.min(COLOUR4_MAX)).map(|b| (b, WEBP)),
+        PicStyle::Colour8 | PicStyle::ForceColour => colour_picture(&img, max).map(|b| (b, WEBP)),
+        PicStyle::Grey | PicStyle::Dots | PicStyle::Colour => {
+            // The smallest first copy.
+            let grey = grey_picture(&img);
+            let dots = dots_picture(&img);
+            if dots.len() < grey.len() && dots.len() <= max {
+                Some((dots, "image/png"))
+            } else {
+                Some((grey, WEBP)).filter(|(b, _)| b.len() <= max)
+            }
         }
-        return colour_picture(&load()?, max).map(|b| (b, WEBP));
-    }
-    // Over LoRa: the smallest first copy.
-    let img = load()?;
-    let grey = grey_picture(&img);
-    let dots = dots_picture(&img);
-    if dots.len() < grey.len() && dots.len() <= max {
-        Some((dots, "image/png"))
-    } else {
-        Some((grey, WEBP)).filter(|(b, _)| b.len() <= max)
     }
 }
 
@@ -486,16 +470,18 @@ mod tests {
         // They decode, and the colour steps are larger pictures.
         let w = |b: &[u8]| image::load_from_memory(b).unwrap().width();
         assert!(w(&c8) >= w(&c4) && w(&c4) >= w(&grey));
-        // Over the internet the original goes as it is; the colour steps as asked.
-        assert_eq!(get(PicStyle::Grey, false), (src.clone(), "image/jpeg"));
-        assert_eq!(get(PicStyle::Colour4, false).0.len(), c4.len());
+        // Over the internet the same steps (never the original).
+        assert_eq!(get(PicStyle::Grey, false).0, grey);
+        assert_eq!(get(PicStyle::Colour4, false).0, c4);
+        assert_eq!(get(PicStyle::Colour8, false).0, c8);
         // Forced by the page: the same copy on both routes.
         for lora in [true, false] {
             assert_eq!(get(PicStyle::ForceGrey, lora).0, grey);
             assert_eq!(get(PicStyle::ForceDots, lora).1, "image/png");
         }
-        assert!(get(PicStyle::ForceColour, true).0.len() <= LORA_PICTURE_MAX);
-        assert_eq!(get(PicStyle::ForceColour, false).0.len(), src.len());
+        for lora in [true, false] {
+            assert_eq!(get(PicStyle::ForceColour, lora).0, c8);
+        }
         // Noise is the worst case: still within 8 KB over LoRa in every step.
         let mut noise = image::RgbImage::new(600, 600);
         let mut x = 1u32;

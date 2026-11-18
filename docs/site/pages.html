@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Må:rse pages · how to design them</title>
+<meta name="description" content="How maarse:// pages work: everything a page looks like is written in its .mu file, small enough for LoRa.">
+<style>
+  :root { --bg: #0f1214; --panel: #161b1f; --line: #2a3238; --ink: #e8ecef; --muted: #93a0a8; --acc: #6fd3a5; --code: #0a0c0d; --warn: #ffcf6b; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg: #f7f8f9; --panel: #fff; --line: #dfe3e7; --ink: #15191c; --muted: #5d6870; --acc: #11804f; --code: #f0f2f4; --warn: #8a5a00; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 system-ui, "Segoe UI", sans-serif; }
+  header { padding: 48px 20px 28px; border-bottom: 1px solid var(--line); background: radial-gradient(900px 300px at 10% 0%, #6fd3a522, transparent), var(--panel); }
+  header h1 { margin: 0 0 8px; font-size: clamp(30px, 5vw, 48px); letter-spacing: -.02em; }
+  header p { margin: 0; color: var(--muted); max-width: 760px; font-size: 18px; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 20px; }
+  nav.toc { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line); overflow-x: auto; white-space: nowrap; }
+  nav.toc a { display: inline-block; padding: 10px 12px; color: var(--muted); text-decoration: none; font-size: 14px; }
+  nav.toc a:hover { color: var(--ink); }
+  section { padding: 34px 0 10px; }
+  h2 { font-size: 26px; margin: 0 0 10px; letter-spacing: -.01em; }
+  h3 { font-size: 18px; margin: 22px 0 6px; }
+  p, li { max-width: 780px; }
+  a { color: var(--acc); }
+  code { font: 14px ui-monospace, Consolas, monospace; background: var(--code); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  pre { font: 13.5px/1.5 ui-monospace, Consolas, monospace; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; margin: 8px 0 16px; }
+  th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 8px 10px 8px 0; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  td code { white-space: nowrap; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin: 14px 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .card h3 { margin-top: 0; }
+  .card small { color: var(--muted); }
+  .rule { border-left: 4px solid var(--acc); background: var(--panel); padding: 10px 14px; border-radius: 4px; margin: 12px 0; max-width: 780px; }
+  .rule.warn { border-color: var(--warn); }
+  .demo { display: flex; gap: 10px; align-items: baseline; }
+  .demo code { white-space: normal; word-break: break-all; }
+  footer { border-top: 1px solid var(--line); margin-top: 40px; padding: 20px 0 40px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1>Må:rse pages</h1>
+  <p>Small web pages that travel over LoRa radio and the internet backbone. Everything a page looks like is written in its own <code>.mu</code> text file, a page is usually 1–2 KB on air, and it never runs code or loads anything from outside.</p>
+</div></header>
+<nav class="toc"><div class="wrap">
+  <a href="#principles">Principles</a><a href="#page">The page</a><a href="#blocks">Blocks</a><a href="#inline">Text</a><a href="#effects">Effects</a><a href="#widgets">Widgets</a><a href="#pictures">Pictures</a><a href="#board">Notice boards</a><a href="#locks">Locked pages</a><a href="#fonts">Fonts</a><a href="#phone">On a phone</a><a href="#demos">Demos</a><a href="#cost">Byte cost</a>
+</div></nav>
+<main class="wrap">
+
+<section id="principles">
+  <h2>Principles</h2>
+  <div class="rule"><b>The design lives in the .mu file.</b> The browser in the PC host's web client and in the Android app only draws what the file says. There are no themes built into the browser: a newspaper, an old BBS or a dashboard are all just a few lines at the top of the page.</div>
+  <div class="rule"><b>Nothing is fetched from outside.</b> A page cannot load fonts, scripts, pictures or anything else from the internet. It works with no internet at all (over LoRa only), and reading it tells nobody but its node that you read it. Pictures come from the same node and only when you tap them.</div>
+  <div class="rule"><b>Small enough for LoRa.</b> Over LoRa a page may be at most 8 KB compressed; most pages are 1–2 KB (about 10–20 seconds of air). Markup is short and repeats, so it compresses well. Pictures cost nothing until someone taps them.</div>
+  <div class="rule"><b>Safe.</b> MU is not HTML. A page from a stranger can never run code; colours are checked before use, and links out of the network are shown as text, never opened.</div>
+  <p>Put pages in <code>&lt;data&gt;/pages/</code> on any maarse-host or maarse-server: <code>index.mu</code> is the front page, <code>news.mu</code> is <code>maarse://&lt;address&gt;/news</code>, and <code>demo/index.mu</code> is <code>maarse://&lt;address&gt;/demo</code>. Links are written from the top folder: <code>[News](demo/news)</code>.</p>
+</section>
+
+<section id="page">
+  <h2>The page</h2>
+  <p>Lines starting with <code>@</code> set up the whole page. They can stand anywhere and are never shown. (An <code>@</code> line inside a code block is an example, never a setting.)</p>
+  <table>
+    <tr><th>Write</th><th>Does</th></tr>
+    <tr><td><code>@title Hals Havn BBS</code></td><td>The page's title (address bar, bookmarks), like &lt;title&gt;. Without it: the first heading.</td></tr>
+    <tr><td><code>@bg #fbfaf6</code></td><td>Background: a colour, <code>#0b1220..#0e1726</code> a gradient, <code>… dots</code> a halftone dot pattern, <code>… glow #1f3a66 #3a1f5c</code> two soft glows.</td></tr>
+    <tr><td><code>@fg #151515</code> · <code>@link #0969da</code></td><td>Text and link colour. With its own background, named colours (<code>red</code>, <code>blue</code> …) pick the shade that reads on that background.</td></tr>
+    <tr><td><code>@font serif</code></td><td><code>serif</code>, <code>sans</code> or <code>mono</code>. See <a href="#fonts">Fonts</a>.</td></tr>
+    <tr><td><code>@width 75</code></td><td>Reading width in characters. Without it the page uses the whole pane.</td></tr>
+    <tr><td><code>@grid 80x25</code></td><td>A fixed text screen: every line is one row and keeps its spaces, the font is scaled so 80 columns fit. For BBS and terminal pages.</td></tr>
+    <tr><td><code>@ticker ⚠ GALE WARNING …</code></td><td>A band at the top with text running across.</td></tr>
+    <tr><td><code>@dropcap</code></td><td>The paragraph after it starts with a big first letter.</td></tr>
+  </table>
+</section>
+
+<section id="blocks">
+  <h2>Blocks</h2>
+<pre># Heading          ## Smaller          ### Smallest
+-> Centred line <-        # -> Centred heading <-
+- a list item
+> a quote; lines in a row stay one quote
+>!red **Gale warning** tonight.          a coloured box (any named or #hex colour)
+>!yellow [tilt -1.5, shadow] …           box effects: tilt N, shadow, pulse, rules, frame
+>! [rules] *"A pull quote"*              thick rules above and below, centred
+---                                      a line across        ===   a double line
+| Day | High |                           a table; |---|:--:|--:| sets header and alignment
+```                                      a code block (with a copy button)
+::: 3            text flows through three columns (dashed: ::: 3 dashed)
+:::
+::: cards 4      a grid of cards; +++ starts the next card, +++ 2 makes it two wide
+:::</pre>
+  <p>Links to a heading on the same page: <code>[Tables](#tables)</code> (the heading's words in lower case, joined by <code>-</code>). A link whose text is one letter, <code>[M](board)</code>, is also a hot key on the PC: press M.</p>
+</section>
+
+<section id="inline">
+  <h2>Text and colour</h2>
+<pre>**bold**  *italic*  ~~struck~~  `code`  [link](news)
+{red:text}  {!yellow:on yellow}  {#e6007e:any colour}  {#fff!#00a:white on blue}
+{big:…}  {huge:…}  {small:…}  {right:pushed to the right edge}</pre>
+  <p>Colours: <code>red orange yellow green blue purple grey cyan magenta white black</code> or any <code>#rgb</code>/<code>#rrggbb</code>. Braces may hold each other: <code>{tilt -3:{huge:{!#ff3b6b:HARBOUR}}}</code>. An unknown colour or brace shows as plain text, so a page never breaks.</p>
+</section>
+
+<section id="effects">
+  <h2>Effects</h2>
+  <table>
+    <tr><th>Write</th><th>Looks like</th></tr>
+    <tr><td><code>{glow #ff6b81:Gale 18 m/s}</code></td><td>glowing text (dashboards)</td></tr>
+    <tr><td><code>{gradient #fff #8fd3ff:Hals Havn}</code></td><td>text in a colour gradient</td></tr>
+    <tr><td><code>{outline:ZINE}</code></td><td>outlined letters</td></tr>
+    <tr><td><code>{tilt -4:…}</code></td><td>turned a few degrees</td></tr>
+    <tr><td><code>{marker #ffe14d:GALE!}</code></td><td>a highlighter stroke under the words</td></tr>
+    <tr><td><code>{hand #1b5fb8:finally!!}</code></td><td>handwriting</td></tr>
+    <tr><td><code>{stamp red 14:LORA ONLY}</code></td><td>a rubber stamp</td></tr>
+    <tr><td><code>{flash:…}</code></td><td>flashing (use sparingly)</td></tr>
+  </table>
+</section>
+
+<section id="widgets">
+  <h2>Widgets</h2>
+  <p>Small drawings made by the browser from a few numbers, so they cost almost nothing on air.</p>
+  <table>
+    <tr><th>Write</th><th>Draws</th></tr>
+    <tr><td><code>{spark #ffd166:6 7 7 9 10 12 14}</code></td><td>a sparkline with a soft fill</td></tr>
+    <tr><td><code>{ring #5fe0a0:80}</code></td><td>a ring at 80 %</td></tr>
+    <tr><td><code>{compass:290}</code></td><td>a compass needle (wind direction)</td></tr>
+    <tr><td><code>{signal:3}</code></td><td>signal bars, 0–5</td></tr>
+    <tr><td><code>{clock}</code> · <code>{live}</code></td><td>the reader's clock, ticking · a pulsing "live" dot</td></tr>
+  </table>
+</section>
+
+<section id="pictures">
+  <h2>Pictures</h2>
+<pre>![The cabin](hytte.jpg)                    grey first (≈1.3 KB), better on a tap
+![Chart](chart.png "dots")                 1-bit dots: sharp for maps and drawings
+![Poster](poster.png "colour right")       colour, beside the text
+![x](a.jpg "grey! wide tape rec")          forced grey · full width · taped on · REC label</pre>
+  <p>The host makes the small copies itself (WebP). Over LoRa nothing over 8 KB is ever sent and the original never leaves the node.</p>
+</section>
+
+<section id="board">
+  <h2>Notice boards</h2>
+  <p>A line <code>@board [n] [list|slips|table|ads]</code> puts a board on the page: the <code>n</code> newest notes and a line where readers write their own. The node keeps the notes (the newest 50, in <code>&lt;page&gt;.board</code> beside the page). A note is at most 100 bytes and a reader may write one a minute. Notes are shown as plain text, never as markup.</p>
+</section>
+
+<section id="locks">
+  <h2>Locked pages</h2>
+  <p>A page only some people can open. The lock is written in the page, but the <b>node</b> keeps it: someone not on the list never receives the page. Nobody can pretend to be someone else, because a page request is a sealed message made with the sender's own key, and an address is the fingerprint of that key.</p>
+<pre>@allow 256665f180b8e3ce156fd52764c98012     one person, by their full address
+@allow group crew                          a group: a line "crew &lt;address&gt; &lt;address&gt; …" in pages/.groups
+@allow admins                              the node's administrators
+@locked hidden                             others get "Not found" (they do not learn the page exists)
+@locked until 2026-12-24                   open for everyone from that date</pre>
+  <p>A lock in a folder's <code>index.mu</code> covers every page and picture in that folder. The lock lines are cut out before the page is sent, so the member list never leaves the node. A reader on the list sees 🔒 and how many may read it in the address bar; the browser keeps a locked page in memory only, never in its offline copy.</p>
+</section>
+
+<section id="fonts">
+  <h2>Fonts</h2>
+  <div class="rule warn"><b>Use only these names.</b> A page can never load a font from the internet: it would break the page without internet and tell a third party who reads it.</div>
+  <p>Today: <code>serif</code>, <code>sans</code> and <code>mono</code>, drawn with the fonts already on the reader's machine (Georgia/Times, Segoe UI/Roboto, Consolas/Roboto Mono). They always work; the exact letters differ a little from machine to machine.</p>
+  <p>Planned: a small set of free fonts built into the web client and the app, so a page looks the same everywhere and costs nothing on air: <code>serif</code>, <code>sans</code>, <code>mono</code>, <code>display</code> (headlines), <code>slab</code>, <code>hand</code>, <code>typewriter</code> and <code>pixel</code> (a real DOS screen font for BBS pages).</p>
+  <p><b>A name the browser does not know</b> (a newer one, or a typing error) falls back to the nearest of <code>serif</code>, <code>sans</code> and <code>mono</code>; an older browser that does not know <code>@font</code> at all shows its normal font. The page always stays readable.</p>
+</section>
+
+<section id="phone">
+  <h2>On a phone</h2>
+  <p>The page is the same; the app fits it to the screen: columns become one column, cards go two to a row (a two-wide card takes the whole row), side pictures go full width, and an <code>@grid</code> text screen is scaled to the width.</p>
+</section>
+
+<section id="demos">
+  <h2>Demos</h2>
+  <p>On the backbone node <b>nj01</b>, open in the Pages browser of the PC host or the Android app (over the internet or over LoRa through a node that reaches the backbone). The sources are in <a href="https://github.com/trixxor/maarse/tree/main/docs/sample-pages/backbone/demo">docs/sample-pages/backbone/demo</a>.</p>
+  <div class="grid">
+    <div class="card"><h3>All designs</h3><div class="demo"><code>maarse://43916f06181f7d313e99f66580564166/demo</code></div></div>
+    <div class="card"><h3>The Harbour Gazette</h3><small>newspaper: white paper, serif, three columns, drop cap, pull quote, classifieds</small><div class="demo"><code>…/demo/gazette</code></div></div>
+    <div class="card"><h3>Hals Havn BBS</h3><small>80×25 text screen, ANSI colours, frames, hot keys</small><div class="demo"><code>…/demo/bbs</code></div></div>
+    <div class="card"><h3>Pattern book</h3><small>every building block with the text that makes it</small><div class="demo"><code>…/demo/patterns</code></div></div>
+    <div class="card"><h3>Hals Havn · now</h3><small>dashboard: ticker, glow, sparklines, ring, compass</small><div class="demo"><code>…/demo/now</code></div></div>
+    <div class="card"><h3>Harbour Zine</h3><small>magazine: slanted type, stamp, tape, torn slips</small><div class="demo"><code>…/demo/zine</code></div></div>
+    <div class="card"><h3>Crew of Mågen 🔒</h3><small>a locked page (group "demo")</small><div class="demo"><code>…/demo/crew</code></div></div>
+  </div>
+</section>
+
+<section id="cost">
+  <h2>Byte cost</h2>
+  <table>
+    <tr><th>Markup</th><th>Costs</th></tr>
+    <tr><td>A page setting (<code>@bg #0b1220</code>)</td><td>≈ 12–40 bytes, once</td></tr>
+    <tr><td>A colour <code>{red:…}</code> / <code>{#e6007e:…}</code></td><td>6 / 10 bytes</td></tr>
+    <tr><td>A box <code>>!red </code></td><td>6 bytes</td></tr>
+    <tr><td>Columns or cards</td><td>≈ 10 bytes, plus 4 per card</td></tr>
+    <tr><td>A widget <code>{spark #f80:1 2 3 4}</code></td><td>its numbers, ≈ 20–40 bytes</td></tr>
+    <tr><td>A table</td><td>3 bytes per cell</td></tr>
+    <tr><td>A picture line</td><td>its name; the picture only when tapped</td></tr>
+  </table>
+  <p>The demo designs are 0.8–1.9 KB compressed. Repeated markup compresses to almost nothing.</p>
+</section>
+</main>
+<footer><div class="wrap">Må:rse · <a href="https://github.com/trixxor/maarse">github.com/trixxor/maarse</a> · <a href="./">web flasher</a></div></footer>
+</body>
+</html>

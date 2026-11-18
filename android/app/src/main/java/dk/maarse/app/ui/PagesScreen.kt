@@ -49,6 +49,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
@@ -408,7 +413,6 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
     val top = steps.lastOrNull { Pages.picture("${base.addr}/${it.id}/$rel") is Pages.Pic.Got }
     val first = Pages.picture(key)
     val pic = top?.let { Pages.picture("${base.addr}/${it.id}/$rel") } ?: first
-    var menu by remember(key) { mutableStateOf(false) }
     var large by remember(key) { mutableStateOf(false) }
     LaunchedEffect(key, lora) {
         if (!lora && pic == null && !Pages.queued(base.addr, path)) Pages.requestPicture(base.addr, path)
@@ -420,15 +424,11 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                 val stepName = top?.name ?: when { pic.mime == "image/png" -> "Dots"; forced && st == "colour" -> "Colour 8 KB"; else -> "Greyscale" }
                 if (bmp != null) Image(bmp.asImageBitmap(), caption.ifEmpty { rel },
                     Modifier.widthIn(max = 320.dp).fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(Color.White)
-                        // A tap offers a better step; a forced picture just shows large.
-                        .clickable { if (!forced) menu = !menu else large = true },
+                        // A tap opens the picture full screen (zoom there).
+                        .clickable { large = true },
                     contentScale = ContentScale.FillWidth,
                     filterQuality = if (pic.mime == "image/png") FilterQuality.None else FilterQuality.Low)
-                if (large && bmp != null) androidx.compose.ui.window.Dialog(onDismissRequest = { large = false }) {
-                    Image(bmp.asImageBitmap(), caption.ifEmpty { rel }, Modifier.fillMaxWidth().background(Color.White).clickable { large = false },
-                        contentScale = ContentScale.FillWidth,
-                        filterQuality = if (pic.mime == "image/png") FilterQuality.None else FilterQuality.Low)
-                }
+                if (large && bmp != null) ZoomImage(bmp.asImageBitmap(), caption.ifEmpty { rel }, pic.mime == "image/png") { large = false }
                 Text("${if (caption.isNotEmpty()) "$caption · " else ""}$stepName · " + "%.1f KB".format(pic.data.size / 1024f),
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!forced) {
@@ -445,17 +445,15 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                             Text("Asking for ${working.name}…", style = MaterialTheme.typography.labelSmall)
                             androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
                         }
-                        menu -> androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // The next steps, under the picture.
+                        higher.isNotEmpty() -> androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             higher.forEach { s ->
                                 val sp = Pages.picture("${base.addr}/${s.id}/$rel")
-                                OutlinedButton(onClick = { menu = false; Pages.requestPicture(base.addr, "${s.id}/$rel") }) {
+                                OutlinedButton(onClick = { Pages.requestPicture(base.addr, "${s.id}/$rel") }) {
                                     Text(if (sp is Pages.Pic.Failed) "${s.name}: try again" else if (lora) "${s.name} · ${s.time}" else s.name)
                                 }
                             }
-                            androidx.compose.material3.TextButton(onClick = { menu = false; large = true }) { Text("Show larger") }
                         }
-                        higher.isNotEmpty() -> Text("Tap the picture for a better one", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -480,6 +478,36 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                         Text(if (pic is Pages.Pic.Failed) "Try again (${pic.why})" else loadText)
                     }
                 }
+            }
+        }
+    }
+}
+
+
+/** Full screen picture: pinch to zoom, drag to move, double-tap to zoom in
+ *  and out; Back or Close closes. */
+@Composable
+private fun ZoomImage(img: androidx.compose.ui.graphics.ImageBitmap, name: String, pixels: Boolean, onClose: () -> Unit) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        var scale by remember { mutableStateOf(1f) }
+        var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+        Box(Modifier.fillMaxSize().background(Color.Black)
+            .pointerInput(Unit) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    scale = (scale * zoom).coerceIn(1f, 8f)
+                    offset = if (scale == 1f) androidx.compose.ui.geometry.Offset.Zero else offset + pan
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(onDoubleTap = {
+                    if (scale > 1f) { scale = 1f; offset = androidx.compose.ui.geometry.Offset.Zero } else scale = 2.5f
+                })
+            }) {
+            Image(img, name, Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
+                contentScale = ContentScale.Fit, filterQuality = if (pixels || scale > 2f) FilterQuality.None else FilterQuality.Low)
+            androidx.compose.material3.TextButton(onClick = onClose, Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
+                Text("Close", color = Color.White)
             }
         }
     }

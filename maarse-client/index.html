@@ -3323,28 +3323,26 @@ function pagePicture(caption, src, style, base, forced = false) {
     Object.assign(img.style, { maxWidth: "100%", width: "320px", background: "#fff", borderRadius: "4px", cursor: !forced ? "pointer" : "zoom-in" });
     if (got.mime === "image/png") img.style.imageRendering = "pixelated";
     const stepName = top ? top.name : got.mime === "image/png" ? "Dots" : forced && st === "colour" ? "Colour 8 KB" : "Greyscale";
-    const open = pages.picMenu === key;
-    // A tap offers a better step; a forced picture just shows large.
-    img.onclick = () => { if (!forced) { pages.picMenu = open ? null : key; renderChat(); } else showImage(got.url, rel); };
-    img.title = !forced ? "Tap for a better picture" : "Show larger";
+    // A tap opens the picture full screen (zoom there).
+    img.onclick = () => showImage(got.url, caption || rel);
+    img.title = "Open full screen";
+    img.style.cursor = "zoom-in";
     fig.append(img, el("figcaption", { className: "muted", style: "font-size:12px" }, `${caption ? caption + " · " : ""}${stepName} · ${(got.size / 1024).toFixed(1)} KB`));
     if (!forced) {
       const higher = steps.filter(s => !top || PIC_STEPS.findIndex(p => p.id === s.id) > PIC_STEPS.findIndex(p => p.id === top.id));
       const working = higher.find(s => s.busy || queued(s.key, s.path));
       if (working?.busy) fig.append(picProgress(working.busy, working.name));
       else if (working) fig.append(el("div", { className: "muted", style: "font-size:12px" }, `Asking for ${working.name}…`), el("progress", { className: "picbar" }));
-      else if (open) {
+      else if (higher.length) {
+        // The next steps, under the picture.
         const row = el("div", { className: "row" }); row.style.flexWrap = "wrap"; row.style.gap = "6px";
         for (const s of higher) {
           const b = el("button", { textContent: s.got?.error ? `${s.name}: try again (${s.got.error})` : lora ? `${s.name} · ${s.time}` : s.name });
-          b.onclick = () => { pages.picMenu = null; requestPicture(base.addr, s.path); renderChat(); };
+          b.onclick = () => { requestPicture(base.addr, s.path); renderChat(); };
           row.append(b);
         }
-        const big = el("button", { className: "ghost", textContent: "Show larger" });
-        big.onclick = () => { pages.picMenu = null; showImage(got.url, rel); };
-        row.append(big);
         fig.append(row);
-      } else if (higher.length) fig.append(el("div", { className: "muted", style: "font-size:12px" }, "Tap the picture for a better one"));
+      }
     }
     return fig;
   }
@@ -5032,21 +5030,58 @@ function histDeleteMsg(key, m, whole = false) {
 }
 
 // A picture over the whole window; click or Escape closes it.
+// Full screen picture: pinch or scroll to zoom, drag to move, double-click
+// or double-tap to zoom in and out; Close, Escape or a tap beside it closes.
 function showImage(url, name) {
   const o = el("div", { role: "dialog", ariaLabel: name });
-  Object.assign(o.style, { position: "fixed", inset: "0", background: "rgba(0,0,0,0.92)", zIndex: "1000",
-    display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-out" });
-  const img = el("img", { src: url, alt: name });
-  Object.assign(img.style, { maxWidth: "96vw", maxHeight: "92vh", objectFit: "contain", borderRadius: "6px" });
-  const save = el("a", { href: url, download: name, textContent: "Save", title: "Save the picture" });
-  Object.assign(save.style, { position: "absolute", top: "14px", right: "18px", color: "#fff", fontSize: "15px", padding: "6px 12px",
-    border: "1px solid rgba(255,255,255,0.5)", borderRadius: "8px", textDecoration: "none" });
-  save.onclick = (e) => e.stopPropagation();
+  Object.assign(o.style, { position: "fixed", inset: "0", background: "rgba(0,0,0,0.94)", zIndex: "1000", overflow: "hidden", touchAction: "none" });
+  const img = el("img", { src: url, alt: name, draggable: false });
+  Object.assign(img.style, { position: "absolute", left: "50%", top: "50%", maxWidth: "96vw", maxHeight: "92vh", objectFit: "contain",
+    transformOrigin: "center", cursor: "grab", userSelect: "none", background: "#fff" });
+  let z = 1, x = 0, y = 0;
+  const apply = () => { img.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px)) scale(${z})`; img.style.imageRendering = z > 2 ? "pixelated" : "auto"; };
+  const zoomAt = (nz, cx, cy) => {
+    nz = Math.min(8, Math.max(1, nz));
+    const r = o.getBoundingClientRect(), px = cx - r.width / 2 - x, py = cy - r.height / 2 - y;
+    x -= px * (nz / z - 1); y -= py * (nz / z - 1); z = nz;
+    if (z === 1) { x = 0; y = 0; }
+    apply();
+  };
+  apply();
+  const bar = el("div", {});
+  Object.assign(bar.style, { position: "absolute", top: "calc(12px + env(safe-area-inset-top, 0px))", right: "calc(14px + env(safe-area-inset-right, 0px))", display: "flex", gap: "8px", zIndex: "1" });
+  const btn = (t, f) => { const b = el("button", { textContent: t }); Object.assign(b.style, { color: "#fff", background: "rgba(0,0,0,.5)", border: "1px solid rgba(255,255,255,.5)", borderRadius: "8px", padding: "6px 12px", fontSize: "15px" }); b.onclick = (e) => { e.stopPropagation(); f(); }; b.onpointerdown = (e) => e.stopPropagation(); b.onpointerup = (e) => e.stopPropagation(); return b; };
+  const save = el("a", { href: url, download: name, textContent: "Save" });
+  Object.assign(save.style, { color: "#fff", border: "1px solid rgba(255,255,255,.5)", borderRadius: "8px", padding: "6px 12px", fontSize: "15px", textDecoration: "none", background: "rgba(0,0,0,.5)" });
+  save.onclick = (e) => e.stopPropagation(); save.onpointerdown = (e) => e.stopPropagation(); save.onpointerup = (e) => e.stopPropagation();
   const close = () => { o.remove(); document.removeEventListener("keydown", esc); };
   const esc = (e) => { if (e.key === "Escape") close(); };
-  o.onclick = close;
+  bar.append(btn("−", () => zoomAt(z / 1.5, innerWidth / 2, innerHeight / 2)), btn("+", () => zoomAt(z * 1.5, innerWidth / 2, innerHeight / 2)), save, btn("Close", close));
+  o.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(z * (e.deltaY < 0 ? 1.2 : 1 / 1.2), e.clientX, e.clientY); }, { passive: false });
+  // Pointers: one moves, two pinch.
+  const pts = new Map(); let moved = false, pinch = null, lastTap = 0;
+  o.addEventListener("pointerdown", (e) => { o.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); moved = false;
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), z }; } });
+  o.addEventListener("pointermove", (e) => {
+    const p = pts.get(e.pointerId); if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
+    if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
+    if (pts.size === 2 && pinch) { const [a, b] = [...pts.values()]; zoomAt(pinch.z * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, (a.x + b.x) / 2, (a.y + b.y) / 2); }
+    else if (pts.size === 1 && z > 1) { x += dx; y += dy; apply(); }
+  });
+  const up = (e) => {
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    pts.delete(e.pointerId); if (pts.size < 2) pinch = null;
+    if (pts.size || moved) return;
+    const now = Date.now();
+    if (now - lastTap < 300) { zoomAt(z > 1 ? 1 : 2.5, e.clientX, e.clientY); lastTap = 0; return; }
+    lastTap = now;
+    // A single tap beside the picture closes.
+    if (target !== img) setTimeout(() => { if (lastTap === now) close(); }, 300);
+  };
+  o.addEventListener("pointerup", up); o.addEventListener("pointercancel", up);
   document.addEventListener("keydown", esc);
-  o.append(img, save);
+  o.append(img, bar);
   document.body.append(o);
 }
 

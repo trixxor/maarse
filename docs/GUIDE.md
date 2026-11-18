@@ -592,7 +592,7 @@ Code blocks are written between lines with three backticks.
 ![Logo](logo.png "colour")                 colour, up to 8 KB over LoRa
 ```
 
-The client asks for the picture like a page, with the style as the first path segment (`_grey/harbour.jpg`). Over the internet the host sends the original (scaled down only if it is over the limit), in the asked style. Over LoRa the page shows a placeholder; a tap brings the smallest copy the host can make, whatever the style asks: a grey JPEG of about 1–1.5 KB or a 1-bit PNG, whichever is smaller for that picture (about 10–15 s of air). Pictures are fetched one at a time per node (`maarse-host/src/node/pages.rs`).
+The client asks for the picture like a page, with the style as the first path segment (`_grey/harbour.jpg`). Over the internet the host sends the original (scaled down only if it is over the limit), in the asked style. Over LoRa the page shows a placeholder; a tap brings the smallest copy the host can make, whatever the style asks: a grey JPEG of about 1–1.5 KB or a 1-bit PNG, whichever is smaller for that picture (about 10–15 s of air). Under the small picture a button asks for a better one (`_best/harbour.jpg`): a colour JPEG of up to 8 KB over LoRa (about 1 min. of air), which then replaces the small one. Pictures are fetched one at a time per node (`maarse-host/src/node/pages.rs`).
 
 **Title.** A line `@title Hals Havn BBS` (anywhere, usually first) is the page's title, like `<title>` on a web page: shown above the page and in the lists of pages, not on the page itself. Without it the first heading is used.
 

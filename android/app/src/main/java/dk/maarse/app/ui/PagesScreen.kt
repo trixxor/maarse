@@ -216,7 +216,11 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
     val rel = src.trimStart('/').lowercase()
     val path = "_$st/$rel"
     val key = "${base.addr}/$path"
-    val pic = Pages.picture(key)
+    // The better copy (asked for after the small one over LoRa) wins when it has come.
+    val bestPath = "_best/$rel"
+    val best = Pages.picture("${base.addr}/$bestPath")
+    val small = Pages.picture(key)
+    val pic = if (best is Pages.Pic.Got) best else small
     LaunchedEffect(key, Pages.overLora(base.addr)) {
         if (!Pages.overLora(base.addr) && pic == null && !Pages.queued(base.addr, path)) Pages.requestPicture(base.addr, path)
     }
@@ -228,8 +232,16 @@ private fun Picture(caption: String, src: String, style: String, base: Pages.Url
                     Modifier.widthIn(max = 320.dp).fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(Color.White),
                     contentScale = ContentScale.FillWidth,
                     filterQuality = if (pic.mime == "image/png") FilterQuality.None else FilterQuality.Low)
-                Text("${if (caption.isNotEmpty()) "$caption · " else ""}%.1f KB".format(pic.data.size / 1024f),
+                Text("${if (caption.isNotEmpty()) "$caption · " else ""}%.1f KB".format(pic.data.size / 1024f) + if (best is Pages.Pic.Got) " · better picture" else "",
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Over LoRa the small copy came first: a better one can be asked for.
+                if (Pages.overLora(base.addr) && best !is Pages.Pic.Got) when {
+                    best is Pages.Pic.Busy -> Text("Better picture: ${best.percent} %", style = MaterialTheme.typography.labelSmall)
+                    Pages.queued(base.addr, bestPath) -> Text("Asking for a better picture…", style = MaterialTheme.typography.labelSmall)
+                    else -> OutlinedButton(onClick = { Pages.requestPicture(base.addr, bestPath) }) {
+                        Text(if (best is Pages.Pic.Failed) "Better picture: try again (${best.why})" else "Get a better picture · colour, up to 8 KB · about 1 min")
+                    }
+                }
             }
             else -> Column(
                 Modifier.widthIn(max = 320.dp).fillMaxWidth().heightIn(min = 110.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp)).padding(12.dp),

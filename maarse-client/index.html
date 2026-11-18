@@ -3243,17 +3243,32 @@ function pagePicture(caption, src, style, base) {
   const key = pageKey(base.addr, path);
   const fig = el("figure", {});
   Object.assign(fig.style, { margin: "12px 0", display: "flex", flexDirection: "column", gap: "6px" });
-  const got = pages.pics.get(key);
+  // The better copy (asked for after the small one over LoRa) wins when it has come.
+  const bestPath = `_best/${rel}`, bestKey = pageKey(base.addr, bestPath);
+  const best = pages.pics.get(bestKey);
+  const got = best?.url ? best : pages.pics.get(key);
   const busy = [...state.files.values()].find(f => f.pic && f.key === key);
+  const lora = pages.lora.get(base.addr) !== false;
   if (got?.url) {
     const img = el("img", { src: got.url, alt: caption || rel });
     Object.assign(img.style, { maxWidth: "100%", width: "320px", background: "#fff", borderRadius: "4px", cursor: "zoom-in" });
     if (got.mime === "image/png") img.style.imageRendering = "pixelated";
     img.onclick = () => showImage(got.url, rel);
-    fig.append(img, el("figcaption", { className: "muted", style: "font-size:12px" }, `${caption ? caption + " · " : ""}${(got.size / 1024).toFixed(1)} KB`));
+    fig.append(img, el("figcaption", { className: "muted", style: "font-size:12px" }, `${caption ? caption + " · " : ""}${(got.size / 1024).toFixed(1)} KB${best?.url ? " · better picture" : ""}`));
+    // Over LoRa the small copy came first: a better one can be asked for.
+    if (lora && !best?.url) {
+      const bBusy = [...state.files.values()].find(f => f.pic && f.key === bestKey);
+      if (bBusy) fig.append(el("div", { className: "muted", style: "font-size:12px" }, `Better picture: ${Math.round(bBusy.progress * 100)} %`));
+      else if (pages.picWaits.has(bestKey) || pages.picQueue.some(q => q.addr === base.addr && q.path === bestPath)) fig.append(el("div", { className: "muted", style: "font-size:12px" }, "Asking for a better picture…"));
+      else {
+        const more = el("button", { textContent: best?.error ? `Better picture: try again (${best.error})` : "Get a better picture · colour, up to 8 KB · about 1 min. over LoRa" });
+        more.style.alignSelf = "flex-start";
+        more.onclick = () => { requestPicture(base.addr, bestPath); renderChat(); };
+        fig.append(more);
+      }
+    }
     return fig;
   }
-  const lora = pages.lora.get(base.addr) !== false;
   if (!lora && !busy && !got && !pages.picWaits.has(key) && !pages.picQueue.some(q => q.addr === base.addr && q.path === path)) requestPicture(base.addr, path);
   const box = el("div", {});
   Object.assign(box.style, { width: "320px", maxWidth: "100%", minHeight: "120px", border: "1px dashed var(--line)", borderRadius: "6px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", padding: "12px", boxSizing: "border-box" });

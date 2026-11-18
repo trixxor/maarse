@@ -14,7 +14,10 @@
 //! is sent (scaled down only if it is over the limit), in the asked style.
 //! Over LoRa the host always sends the smallest copy, whatever the style
 //! asks: grey (a grey JPEG of about 1.3 KB) or dots (1-bit ordered dithering
-//! as a 1-bit PNG), whichever is smaller for this picture.
+//! as a 1-bit PNG), whichever is smaller for this picture. A reader who
+//! wants more asks for `_best/hytte.jpg`: the best copy that fits the
+//! route's limit (a colour JPEG of up to 8 KB over LoRa, the original over
+//! the internet).
 
 use super::{Node, err_ev, short};
 use crate::ClientId;
@@ -60,6 +63,8 @@ pub(crate) enum PicStyle {
     Grey,
     Dots,
     Colour,
+    /// The best copy the route allows (asked for after the small one).
+    Best,
 }
 
 /// Splits `_dots/hytte.jpg` into (style, `hytte.jpg`) when the rest is a
@@ -69,6 +74,7 @@ pub(crate) fn picture_path(path: &str) -> Option<(PicStyle, &str)> {
         Some(("_grey", r)) => (PicStyle::Grey, r),
         Some(("_dots", r)) => (PicStyle::Dots, r),
         Some(("_colour", r)) => (PicStyle::Colour, r),
+        Some(("_best", r)) => (PicStyle::Best, r),
         _ => (PicStyle::Grey, path),
     };
     let ext = rest.rsplit_once('.')?.1;
@@ -205,7 +211,9 @@ pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bo
     if !via_lora {
         return colour_picture(&img, max).map(|b| (b, "image/jpeg"));
     }
-    let _ = style;
+    if style == PicStyle::Best {
+        return colour_picture(&img, max).map(|b| (b, "image/jpeg"));
+    }
     let dots = dots_picture(&img);
     match grey_picture(&img) {
         Some(g) if g.len() <= dots.len() => Some((g, "image/jpeg")),
@@ -358,6 +366,7 @@ mod tests {
         assert_eq!(picture_path("_dots/hytte.jpg"), Some((PicStyle::Dots, "hytte.jpg")));
         assert_eq!(picture_path("vejr/kort.png"), Some((PicStyle::Grey, "vejr/kort.png")));
         assert_eq!(picture_path("_colour/a.webp"), Some((PicStyle::Colour, "a.webp")));
+        assert_eq!(picture_path("_best/a.jpg"), Some((PicStyle::Best, "a.jpg")));
         assert_eq!(picture_path("weather/index"), None);
         assert_eq!(picture_path("_dots/readme"), None);
     }
@@ -388,6 +397,10 @@ mod tests {
         }
         let colour = colour_picture(&img, 8192).unwrap();
         assert!(colour.len() <= 8192);
+        // Asked for the better copy over LoRa: colour within the limit.
+        let (best, m) = picture_for(&src, "a.jpg", PicStyle::Best, true, 8192).unwrap();
+        assert_eq!((best.len(), m), (colour.len(), "image/jpeg"));
+        assert!(best.len() > grey.len().min(dots.len()));
         // Over the internet the original goes as it is.
         let (orig, m) = picture_for(&src, "a.jpg", PicStyle::Grey, false, 1 << 20).unwrap();
         assert_eq!((orig.len(), m), (src.len(), "image/jpeg"));

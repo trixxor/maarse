@@ -625,6 +625,78 @@
     drag = null;
   });
 
+  // ---------- tracking (watch list) ----------
+  // A tracked node leaves a line on the map coloured by its best contact
+  // (green: hears a repeater, anchor or host; yellow: only handhelds or
+  // relays; red: nobody), and the watch list says what it got and when.
+  const tracked = new Map();
+  const trackLayer = L.layerGroup().addTo(map);
+  const FIXED = ["repeater", "anchor", "host", "wifi"];
+  function toggleTrack(i) {
+    if (tracked.has(i)) tracked.delete(i);
+    else tracked.set(i, { pts: [], lost: null, lastCls: null, changes: [] });
+    renderWatch(); drawTracks();
+  }
+  function contactOf(i) {
+    const ins = sim.inspect(i);
+    const nb = ins.radio_neighbors.filter(([j]) => state && state.state[j] !== "k");
+    const fixed = nb.filter(([j]) => FIXED.includes(scenario.nodes[j].kind));
+    if (fixed.length) { const best = fixed.sort((a, b) => b[1] - a[1])[0]; return { cls: "good", via: best[0], snr: best[1], ins }; }
+    if (nb.length) { const best = nb.sort((a, b) => b[1] - a[1])[0]; return { cls: "weak", via: best[0], snr: best[1], ins }; }
+    return { cls: "none", via: -1, snr: null, ins };
+  }
+  function sampleTracks() {
+    if (!sim || !tracked.size) return;
+    const t = now();
+    for (const [i, tr] of tracked) {
+      const c = contactOf(i);
+      const p = pos(i);
+      const last = tr.pts[tr.pts.length - 1];
+      if (!last || last.t + 2000 <= t) tr.pts.push({ ll: p, cls: c.cls, t });
+      if (tr.lastCls !== c.cls) {
+        tr.changes.push({ t, cls: c.cls, via: c.via });
+        if (tr.changes.length > 40) tr.changes.shift();
+        tr.lost = c.cls === "none" ? t : null;
+        tr.lastCls = c.cls;
+      }
+      tr.now = c;
+    }
+    drawTracks();
+    if (!$("watch").classList.contains("hidden")) renderWatch();
+  }
+  function drawTracks() {
+    trackLayer.clearLayers();
+    const col = { good: "#22c55e", weak: "#eab308", none: "#ef4444" };
+    for (const [, tr] of tracked) {
+      for (let k = 1; k < tr.pts.length; k++) {
+        const a = tr.pts[k - 1], b = tr.pts[k];
+        L.polyline([a.ll, b.ll], { color: col[b.cls], weight: 4, opacity: 0.85, interactive: false }).addTo(trackLayer);
+      }
+    }
+  }
+  function renderWatch() {
+    const box = $("watch");
+    if (!tracked.size) { box.classList.add("hidden"); return; }
+    box.classList.remove("hidden");
+    const t = now();
+    const all = sim ? sim.msgs(0, 100000).msgs : [];
+    box.innerHTML = `<div class="w-head"><b>Watch list</b><span class="mute">${tracked.size} tracked</span></div>` + [...tracked.entries()].map(([i, tr]) => {
+      const c = tr.now;
+      const ins = c ? c.ins : null;
+      const got = all.filter(m => m[2] === i), sent = all.filter(m => m[1] === i);
+      const lastGot = got.filter(m => m[4] !== null).pop();
+      const st = !c ? "starting…" : c.cls === "good" ? `in contact via ${nameH(c.via)} (${c.snr} dB)` : c.cls === "weak" ? `only near ${nameH(c.via)} (no repeater)` : `<span class="bad">no contact for ${fmtTime((t - tr.lost) / 1000)}</span>`;
+      const role = ins ? ins.role : "";
+      return `<div class="w-node"><div class="w-name">${nameH(i)} <button class="x" data-untrack="${i}" aria-label="Stop tracking">✕</button></div>
+        <div>${st}</div>
+        <div class="mute">${role ? "role " + esc(role) : ""}${role === "Relay" && scenario.nodes[i].kind === "handheld" ? " (forest mode)" : ""}${ins && ins.on_battery !== undefined ? ` · battery ${ins.battery_max_wh ? Math.round(100 * ins.battery_wh / ins.battery_max_wh) + " %" : "–"}` : ""}</div>
+        <div class="mute">got ${got.filter(m => m[4] !== null).length} of ${got.length} messages${lastGot ? `, last at ${fmtTime(lastGot[4] / 1000)}` : ""} · sent ${sent.length} (${sent.filter(m => m[4] !== null).length} delivered)</div>
+        <div class="w-changes">${tr.changes.slice(-4).map(ch => `<span class="w-${ch.cls}">${fmtTime(ch.t / 1000)} ${ch.cls === "good" ? "contact" : ch.cls === "weak" ? "weak" : "lost"}</span>`).join(" ")}</div></div>`;
+    }).join("");
+    box.querySelectorAll("[data-untrack]").forEach(b => b.onclick = () => toggleTrack(+b.dataset.untrack));
+  }
+  setInterval(sampleTracks, 1000);
+
   // ---------- right-click menus on the map ----------
   function showMenu(e, title, items) {
     const box = $("ctx");
@@ -651,6 +723,7 @@
       dead ? { label: "Start this node again", run: () => addEvent({ type: "revive", nodes: [i] }) }
            : { label: "Stop this node", run: () => addEvent({ type: "kill", nodes: [i] }, { type: "revive", nodes: [i] }) },
       { label: "Reboot", run: () => addEvent({ type: "reboot", nodes: [i] }) },
+      { label: tracked.has(i) ? "Stop tracking" : "Track this node (contact, messages, battery)", run: () => toggleTrack(i) },
     ];
     if (n.kind === "host") {
       const up = !(sim && sim.inspect(i).internet);
@@ -1465,6 +1538,7 @@
     },
     addEvent,
     follow(m) { followMessage(m); },
+    track(i) { toggleTrack(i); },
     showMessageOnMap(m, from, to) { followMessage(m); fitAround([pos(from), pos(to)]); },
     // A message's story as plain text (the Journey tab's steps and diagnosis).
     story(m) {

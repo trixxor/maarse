@@ -132,7 +132,7 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
 | 2 | Device palette, mobile/stationary, people with routes | **done 2026-11-19**: kinds server (no radio) and app (no radio, TCP to host), radio on/off per node, routes with start time, pause per waypoint, end mode (back/stay/repeat), mobile/stationary flag; Build tools + inspector; engine tests | MeshCore gateway kind; group of people at once |
 | 3 | Generator per region + connection mix + app users | **done 2026-11-19**: users per region with LoRa/both/app/cars/relays per cent; both + app get a TCP link to the nearest host with internet; summary of what was made and users cut off | warning list per island with "add a trunk" button |
 | 4 | Shared host rules library + transfer model (files, voice, pictures, Pages) | proposed | library split, engine transfer model |
-| 5 | Live item state on the map (queued/air/backbone/post office/carried/held/delivered/given up) | designed (boards 1, 4) | per-item state machine in the engine, `item_state` call |
+| 5 | Live item state on the map | **done 2026-11-19**: plain status in the follow panel + pulsing dot where the message is now, coloured by state | per-copy view for floods |
 | 6 | Phone simulators on the real web client | designed (boards 5, 6) | fake WebSocket, engine answering companion commands |
 | 7 | Calls, IP tunnel (SSH/mosh/ping/bulk), channels, alerts v2, linked devices, remaining features of board 8 | listed (board 8) | all code |
 | 8 | Failover and extras: replica post offices, backbone self-healing, link drops, restore, attacks, day/night | proposed | user's yes, then code |
@@ -142,7 +142,7 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
 | 12 | Rule/settings profiles ("Standard (as built)" + own), live changes incl. SF/frequency | decided | radio model with frequency; profile store; UI |
 | 13 | Save locally (IndexedDB), snapshots, branches from snapshots | decided | all |
 | 14 | CPU limits + benchmark mode | decided | all |
-| 15 | Tracking a node/person (e.g. Mette on her walk): pin a node, see on a track line where she had/lost contact (coloured by best link: repeater, relay, none), which messages she sent/got and when, forest mode on/off, battery; a "watch list" panel with several tracked nodes | decided | all |
+| 15 | Tracking a node/person | **done 2026-11-19**: right-click > Track; track line coloured by best contact (green repeater/anchor/host, yellow only handhelds/relays, red none); watch list with contact now, lost-for time, role (forest mode), battery, messages got/sent, contact changes | timeline of received messages on the track line |
 
 **Small findings while reading the code (2026-11-18)**
 

@@ -141,3 +141,10 @@ h3 { font-weight:600; }
 @media (max-width: 760px) { #mapwrap { margin:0; border-radius:0; } }
 .where-dot span { display:block; width:22px; height:22px; border-radius:50%; background:var(--c, #94a3b8); border:3px solid #fff; box-shadow:0 0 0 0 var(--c, #94a3b8); animation:where 1.6s infinite; box-sizing:border-box; }
 @keyframes where { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--c, #94a3b8) 60%, transparent); } 100% { box-shadow:0 0 0 18px transparent; } }
+#watch { left:54px; top:52px; width:300px; max-height:calc(100% - 330px); overflow:auto; padding:8px 10px; font-size:12px; }
+#watch .w-head { display:flex; justify-content:space-between; margin-bottom:4px; }
+#watch .w-node { border-top:1px solid var(--ovline); padding:6px 0; display:flex; flex-direction:column; gap:2px; }
+#watch .w-name { display:flex; justify-content:space-between; font-weight:600; }
+#watch .x { border:0; background:transparent; padding:0 2px; }
+#watch .w-changes span { display:inline-block; padding:0 5px; border-radius:6px; margin:1px 2px 0 0; color:#fff; }
+.w-good { background:#15803d; } .w-weak { background:#a16207; } .w-none { background:#b91c1c; }

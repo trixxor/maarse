@@ -867,6 +867,7 @@
   }));
   function describe(ev) {
     switch (ev.type) {
+      case "radio": return "Every node switches radio: " + [ev.sf && "SF" + ev.sf, ev.freq_mhz && ev.freq_mhz + " MHz", ev.bw_hz && ev.bw_hz / 1000 + " kHz", ev.tx_dbm && ev.tx_dbm + " dBm"].filter(Boolean).join(", ");
       case "internet_down": return ev.region ? `Internet down in ${ev.region}` : "Internet down everywhere";
       case "internet_up": return ev.region ? `Internet back in ${ev.region}` : "Internet back";
       case "power_cut": return ev.area && (ev.area.circle || (ev.area.polygon || []).length) ? "Power cut in area" : "Power cut everywhere";
@@ -1474,6 +1475,13 @@
   for (const [id, key] of Object.entries(trMap)) $(id).onchange = () => { scenario.traffic[key] = +$(id).value; edited(); };
   ["opt-islands", "opt-links", "opt-backbone"].forEach(id => $(id).onchange = () => { drawLinks(); restyle(); });
   syncPerf();
+  $("rd-go").onclick = () => {
+    const ev = { type: "radio", sf: +$("rd-sf").value || 0, freq_mhz: +$("rd-f").value || 0, bw_hz: +$("rd-bw").value || 0, tx_dbm: $("rd-p").value === "" ? 0 : +$("rd-p").value };
+    if (!ev.sf && !ev.freq_mhz && !ev.bw_hz && !ev.tx_dbm) return showNote("Pick at least one radio setting to change.");
+    addEvent(ev);
+    drawLinks(); restyle();
+    showNote(`Every node switched: ${[ev.sf && "SF" + ev.sf, ev.freq_mhz && ev.freq_mhz + " MHz", ev.bw_hz && ev.bw_hz / 1000 + " kHz", ev.tx_dbm && ev.tx_dbm + " dBm"].filter(Boolean).join(", ")}.`);
+  };
   $("pf-events").onchange = () => { perf.maxEvents = Math.max(1000, +$("pf-events").value || 400000); savePerf(); };
   $("pf-speed").onchange = () => { perf.maxSpeed = Math.max(1, +$("pf-speed").value || 1000); savePerf(); };
   $("pf-nodes").onchange = () => { perf.maxNodes = Math.max(10, +$("pf-nodes").value || 2000); savePerf(); };
@@ -1580,7 +1588,7 @@
 
   // ---------- start ----------
   renderLegend();
-  MaarseSim.load("maarse_sim_wasm.wasm").then((E) => {
+  MaarseSim.load("maarse_sim_wasm.wasm?v=" + (document.querySelector("script[src^=\"app.js\"]").src.split("v=")[1] || "0")).then((E) => {
     Engine = E;
     const k2 = location.hash.slice(1);
     if (DK.PRESETS[k2]) { pre.value = k2; loadPreset(k2); }

@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=24">
-<link rel="stylesheet" href="phone.css?v=24">
+<link rel="stylesheet" href="style.css?v=26">
+<link rel="stylesheet" href="phone.css?v=26">
 </head>
 <body>
 <header id="top">
@@ -133,6 +133,12 @@
       <label>Radio loss <input type="number" id="ev-db" value="15" min="1" max="60" style="width:55px"> dB <button data-ev="degrade">in an area</button></label>
       <p class="hint">Radio loss: storm, heavy rain or jamming; every link with an end inside loses that much.</p>
       <div class="row"><button data-ev="power_cut">Power cut in an area</button><button data-ev="power_cut_all">Power cut everywhere</button><button data-ev="power_restore">Power back</button></div>
+      <h3>Radio settings for every node</h3>
+      <p class="hint">Switch all LoRa to other settings now, to test range and speed. Goes on the timeline.</p>
+      <label>SF <select id="rd-sf"><option value="0">keep</option><option>7</option><option>8</option><option>9</option><option>10</option><option>11</option><option>12</option></select>
+        Frequency <input id="rd-f" type="number" step="0.025" placeholder="868" style="width:80px"> MHz</label>
+      <label>Bandwidth <select id="rd-bw"><option value="0">keep</option><option value="62500">62.5 kHz</option><option value="125000">125 kHz</option><option value="250000">250 kHz</option><option value="500000">500 kHz</option></select>
+        Power <input id="rd-p" type="number" placeholder="keep" style="width:60px"> dBm <button id="rd-go">Switch now</button></label>
       <h3>Internet</h3>
       <div class="row"><button data-ev="internet_down">Internet down everywhere</button><button data-ev="internet_up">Internet back</button></div>
       <label>Region <select id="ev-region"><option>nordjylland</option><option>midtjylland</option><option>syddanmark</option><option>sjaelland</option><option>hovedstaden</option></select> <button data-ev="internet_down_region">Internet down</button></label>
@@ -244,10 +250,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="scenarios.js?v=24"></script>
-<script src="maarse-sim.js?v=24"></script>
-<script src="app.js?v=24"></script>
-<script src="store.js?v=24"></script>
-<script src="phone.js?v=24"></script>
+<script src="scenarios.js?v=26"></script>
+<script src="maarse-sim.js?v=26"></script>
+<script src="app.js?v=26"></script>
+<script src="store.js?v=26"></script>
+<script src="phone.js?v=26"></script>
 </body>
 </html>

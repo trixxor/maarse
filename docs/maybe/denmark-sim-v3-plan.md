@@ -174,6 +174,14 @@ announces itself and shows the announces it hears around it (real router).
   host-to-host Deposit ops (STORE/FETCH/DELIVERED) as routed Deposit
   packets over the radio, as consolidation already does
   (`send_deposit_lora`), and do the same in the sim.
+  **Sim part done 2026-11-19** (user: go): host-to-host mail ops without
+  TCP go routed over radio/trunks (`mail_tcp_only` keeps the old rule).
+  The Bornholm preset still fails: in a 6.4 h run Roenne host never sends a
+  fetch for the recipient (0 Deposit transmissions from it), while other
+  hosts send 542 fetches; so the recipient's MailSync does not make Roenne
+  host its named home office (check `current_office`/`home_po` for a handheld
+  that hears Roenne only through a repeater). maarse-host part: not done
+  yet, waiting until the sim shows the full chain working.
 - The Great Belt does not cut the radio: repeaters on Funen and Zealand hear
   each other across 18 km, so messages cross with every link down.
 

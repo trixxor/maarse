@@ -24,6 +24,34 @@ cargo test -p maarse-sim-wasm                 # the engine's native tests
 Map tiles come from OpenStreetMap (internet needed). The Denmark coastline is
 embedded (`dk-land.js`), so land/sea, islands and node generation work offline.
 
+## Using it (v3, 2026-11-19)
+
+* **Modes** at the top: **Build** (generate a network per region, place
+  devices and people, terrain, performance, save), **Send** (send and follow a
+  message, alerts), **Break** (cut links, internet, power, storms, switch every
+  node's radio), **Results** (statistics, delivery time, busiest nodes, why
+  messages were not delivered, compare runs, packet log), **Phones** (two
+  phones on simulated nodes). Light and dark mode with the button top right.
+* **Everything on the map is clickable**: hover says what a click does;
+  right-click a node for send from/to, announce, stop, reboot, cut internet,
+  track, delete; right-click a link to cut or restore it.
+* **Follow a message**: Send > Send and follow. A panel on the map says where
+  it is now (searching, queued, on air, on the backbone, waiting in a post
+  office, carried, held, delivered, no progress) and a pulsing dot shows the
+  place. Break something meanwhile and watch the status change.
+* **Track a node** (right-click > Track): a line coloured by its best contact
+  and a watch list with contact, battery and its messages.
+* **Generate**: users per region and how they connect (LoRa only, LoRa +
+  internet, app only), cars and relay boxes.
+* **People**: Build > + Person: click A, waypoints and B; set what they carry,
+  speed, start time, pauses and what happens at the end.
+* **Save**: runs and snapshots stay in this browser; open a snapshot or start
+  a branch from it; Copy link puts the run in the URL.
+* **Normal day**: Build > Traffic, start time of day: the rates follow a day
+  curve.
+* **Presets with expected results** (Great Belt cut, Bornholm on its own,
+  power cut in Nordjylland) are checked by `node tools/denmark_sim_test.mjs`.
+
 ## Design
 
 ### Layers

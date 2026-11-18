@@ -208,6 +208,8 @@
     $("sc-info").textContent = `${scenario.name || "scenario"}: ${scenario.nodes.length} nodes, ${scenario.links.length} backbone links, ${scenario.events.length} timeline events.${scenario.nodes.length > perf.maxNodes ? ` Over this browser's limit of ${perf.maxNodes} nodes (Build > Performance): it may run slowly.` : ""}`;
   }
   function edited() { rebuild(); }
+  // Phones (phone.js) read the engine and scenario through this.
+  window.DKSim = { get sim() { return sim; }, get scenario() { return scenario; }, name: (i) => name(i) };
   function showNote(text) { $("sc-info").textContent = text; }
 
   function fmtTime(s) { const m = Math.floor(s / 60); const r = s - m * 60; return `${m}:${r < 10 ? "0" : ""}${r.toFixed(r < 60 && m === 0 ? 1 : 0)}`; }
@@ -1494,7 +1496,7 @@
 
   // ---------- tabs, controls ----------
   // Four modes; each shows one or more of the old tab sections, stacked.
-  const MODES = { build: ["build", "terrain"], send: ["journey", "alerts"], break: ["disaster"], results: ["stats", "log"] };
+  const MODES = { build: ["build", "terrain"], send: ["journey", "alerts"], break: ["disaster"], results: ["stats", "log"], phones: ["phones"] };
   let mode = "send";
   function openMode(m) {
     mode = m;

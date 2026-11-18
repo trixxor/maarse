@@ -34,6 +34,10 @@ def main() -> int:
     else:
         shutil.copyfile(built, OUT)
     print(f"wrote {OUT.relative_to(ROOT)} ({OUT.stat().st_size // 1024} KiB)")
+    # The phones (docs/denmark/phone.js) run the real web client.
+    client = ROOT / "docs" / "denmark" / "client.html"
+    shutil.copyfile(ROOT / "maarse-client" / "index.html", client)
+    print(f"wrote {client.relative_to(ROOT)}")
     return 0
 
 

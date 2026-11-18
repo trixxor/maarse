@@ -46,6 +46,10 @@ use std::fmt::Write as _;
 
 pub type Node = Router<128, 1024>;
 
+// Simulated phones (companion protocol for the web client); see phone.rs.
+#[path = "phone.rs"]
+pub mod phone;
+
 /// Projection centre (Denmark).
 const LAT0: f64 = 56.0;
 const LON0: f64 = 10.5;
@@ -652,6 +656,8 @@ pub struct Engine {
     heard_device: HashMap<(usize, usize), u64>,
     /// Linked devices: sync request messages (not counted as mail).
     pub sync_req: HashSet<usize>,
+    /// Simulated phones attached to nodes (see phone.rs).
+    pub phones: phone::Phones,
     /// (office, message) handed to carriers (`office_carry`).
     office_handed: HashSet<(usize, usize)>,
     mail_class: Vec<u8>,
@@ -877,6 +883,7 @@ impl Engine {
             timeline_done: 0,
             ids: HashMap::default(),
             addr_idx: HashMap::default(),
+            phones: Default::default(),
             clutter: Vec::new(),
             degrade: Vec::new(),
             gw: Vec::new(),
@@ -1534,6 +1541,7 @@ impl Engine {
                 }
                 Action::Deliver { ptype, dest, payload, hops } => self.on_deliver(node, ptype, dest, &payload, hops),
                 Action::RouteLearned { dest, hops } => {
+                    self.phone_on_route(node, dest, hops);
                     let d = self.nodes.iter().position(|n| n.router.addr == dest).map_or(-1, |i| i as i64);
                     let tj = match tag {
                         Some(t) if t & ALERT_TAG == 0 => format!(",\"msg\":{t}"),
@@ -1543,6 +1551,7 @@ impl Engine {
                 }
                 Action::Acked { msg_id } | Action::CarryAcked { msg_id } if self.mail_acked(node, msg_id) => {}
                 Action::Acked { msg_id } | Action::CarryAcked { msg_id } => {
+                    self.phone_on_ack(node, msg_id, false);
                     if let Some(i) = self.msgs.iter().position(|m| m.id == msg_id && m.from == node)
                         && self.msgs[i].acked_ms.is_none()
                     {
@@ -1589,6 +1598,7 @@ impl Engine {
     }
 
     fn on_deliver(&mut self, node: usize, ptype: PacketType, dest: Address, payload: &[u8], hops: u8) {
+        self.phone_on_deliver(node, ptype, dest, payload, hops);
         if ptype == PacketType::Announce
             && self.sc.person_fresh
             && let Some(&who) = self.addr_idx.get(&dest)
@@ -1699,6 +1709,7 @@ impl Engine {
                     let i = u32::from_be_bytes([c[0], c[1], c[2], c[3]]) as usize;
                     if i < self.msgs.len() && self.msgs[i].to == node && self.msgs[i].delivered_ms.is_none() {
                         self.msgs[i].delivered_ms = Some(self.now);
+                        self.phone_on_message(i, node, hops);
                         self.sibling_copies(i, node);
                         let from = self.msgs[i].from;
                         if self.knows(node, from) {
@@ -1719,6 +1730,7 @@ impl Engine {
                     && self.msgs[i].delivered_ms.is_none()
                 {
                     self.msgs[i].delivered_ms = Some(self.now);
+                    self.phone_on_message(i, node, hops);
                     self.sibling_copies(i, node);
                     self.tr(format!("{{\"t\":{},\"ev\":\"deliver\",\"msg\":{i},\"n\":{node},\"hops\":{hops}}}", self.now));
                     if !self.got.is_empty() {
@@ -2082,6 +2094,14 @@ impl Engine {
         let m = self.msgs.len();
         let mut payload = format!("message {m} from {from} to {to}: ").into_bytes();
         payload.resize(self.msg_size(), b'.');
+        self.send_payload(from, to, payload)
+    }
+
+    /// Sends a direct message with the given payload (a phone's text, or the
+    /// generated traffic) from `from` to `to`. Returns its message index.
+    pub fn send_payload(&mut self, from: usize, to: usize, payload: Vec<u8>) -> usize {
+        let to = self.person_device(from, to);
+        let m = self.msgs.len();
         let id = packet_id(PacketType::Data, &self.nodes[to].router.addr, &payload);
         let cross = self.nodes[from].router.hears_repeater(self.now) != self.nodes[to].router.hears_repeater(self.now);
         self.msgs.push(Msg { from, to, payload: payload.clone(), id, sent_ms: self.now, delivered_ms: None, acked_ms: None, shown_ms: None, dropped_unknown: false, unsent: false, cross, sync_of: None });
@@ -2667,6 +2687,7 @@ impl Engine {
         let office = if self.sc.mail == "named" { self.named_box[to] } else { self.current_office(from) };
         let Some(office) = office else { return };
         self.stats.mail_deposits += 1;
+        self.phone_on_deposit(m);
         let body = Self::store_body(m, false);
         if office == from {
             self.store(from, to, m, false);

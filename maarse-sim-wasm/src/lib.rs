@@ -280,4 +280,23 @@ mod tests {
         e.run_until(1_200_000, usize::MAX);
         assert_eq!(e.nodes[0].x, end, "did not stay at the end");
     }
+
+    /// A `radio` event switches every node: SF12 hears further than SF9, and a
+    /// higher frequency hears less far.
+    #[test]
+    fn radio_event_changes_range() {
+        // Two masts 14 km apart at -10 dBm: out of reach at SF9, in reach at SF12.
+        let sc = json!({"seed": 1, "tx_dbm": -10.0, "nodes": [
+            {"kind": "handheld", "lat": 56.0, "lon": 9.0, "h": 30.0},
+            {"kind": "handheld", "lat": 56.0, "lon": 9.2257, "h": 30.0}
+        ], "traffic": {"direct_per_min": 0, "channel_per_min": 0}});
+        let mut e = create(&sc.to_string()).unwrap();
+        let links = |e: &Engine| e.nodes.iter().map(|n| n.nbrs.len()).sum::<usize>();
+        let sf9 = links(&e);
+        e.inject(&serde_json::from_value(json!({"t_s": 0, "type": "radio", "sf": 12})).unwrap());
+        let sf12 = links(&e);
+        assert!(sf12 > sf9, "SF12 {sf12} <= SF9 {sf9}");
+        e.inject(&serde_json::from_value(json!({"t_s": 0, "type": "radio", "freq_mhz": 2400.0})).unwrap());
+        assert!(links(&e) < sf12, "2.4 GHz should hear less far");
+    }
 }

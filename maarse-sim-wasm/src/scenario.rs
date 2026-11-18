@@ -44,6 +44,9 @@ pub struct Scenario {
     pub duty_permille: u32,
     #[serde(default = "d_tx")]
     pub tx_dbm: f64,
+    /// Carrier frequency (MHz) and bandwidth (Hz) of every node. 0 = 868 MHz / 125 kHz.
+    pub freq_mhz: f64,
+    pub bw_hz: u32,
     /// Length of a "run to end" (comparisons, headless test), seconds.
     #[serde(default = "d_dur")]
     pub duration_s: u64,
@@ -236,6 +239,8 @@ impl Default for Scenario {
             sf: 9,
             duty_permille: 100,
             tx_dbm: 20.0,
+            freq_mhz: 0.0,
+            bw_hz: 0,
             duration_s: 1800,
             features: Features::default(),
             nodes: Vec::new(),
@@ -604,4 +609,9 @@ pub struct TimedEvent {
     /// Extra loss in dB (degrade).
     pub db: f64,
     pub traffic: Option<Traffic>,
+    /// `radio` event: new settings for every node (0 = keep).
+    pub sf: u8,
+    pub freq_mhz: f64,
+    pub bw_hz: u32,
+    pub tx_dbm: f64,
 }

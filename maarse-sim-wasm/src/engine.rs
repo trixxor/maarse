@@ -210,7 +210,7 @@ pub struct SimNode {
     pub region: String,
     /// (other node, received power in dBm), sorted by node. Contains every pair
     /// down to the interference limit (snr_min - 6 dB).
-    nbrs: Vec<(u32, f32)>,
+    pub(crate) nbrs: Vec<(u32, f32)>,
     txq: Vec<Queued>,
     busy_until: u64,
     svc_at: u64,
@@ -722,7 +722,7 @@ fn ptype_name(p: PacketType) -> &'static str {
 impl Engine {
     pub fn new(sc: Scenario) -> Engine {
         let mut rng = SmallRng::seed_from_u64(sc.seed);
-        let radios: Vec<Radio> = (7..=12).map(|sf| Radio::new(sf, sc.tx_dbm)).collect();
+        let radios: Vec<Radio> = (7..=12).map(|sf| Radio::with_band(sf, sc.tx_dbm, sc.freq_mhz, sc.bw_hz)).collect();
         let public_channel = Address([0xc0; 16]);
         let bulletin_channel = bulletin::channel();
         // The authority's signing key is derived from the seed, so runs repeat.
@@ -4052,6 +4052,27 @@ impl Engine {
                 if ev.node < self.nodes.len() {
                     self.announce(ev.node);
                 }
+            }
+            "radio" => {
+                // Every node switches to new radio settings at once.
+                if ev.sf >= 7 && ev.sf <= 12 {
+                    self.sc.sf = ev.sf;
+                    for n in &mut self.nodes {
+                        n.sf = ev.sf;
+                    }
+                }
+                if ev.freq_mhz > 0.0 {
+                    self.sc.freq_mhz = ev.freq_mhz;
+                }
+                if ev.bw_hz > 0 {
+                    self.sc.bw_hz = ev.bw_hz;
+                }
+                if ev.tx_dbm != 0.0 {
+                    self.sc.tx_dbm = ev.tx_dbm;
+                }
+                let (tx, f, bw) = (self.sc.tx_dbm, self.sc.freq_mhz, self.sc.bw_hz);
+                self.radios = (7..=12).map(|sf| Radio::with_band(sf, tx, f, bw)).collect();
+                self.build_links();
             }
             "set_traffic" => {
                 if let Some(t) = &ev.traffic {

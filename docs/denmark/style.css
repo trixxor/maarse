@@ -148,3 +148,5 @@ h3 { font-weight:600; }
 #watch .x { border:0; background:transparent; padding:0 2px; }
 #watch .w-changes span { display:inline-block; padding:0 5px; border-radius:6px; margin:1px 2px 0 0; color:#fff; }
 .w-good { background:#15803d; } .w-weak { background:#a16207; } .w-none { background:#b91c1c; }
+.legend-row { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; margin:2px 0 4px; }
+.legend-row i { display:inline-block; width:14px; height:3px; margin-right:5px; vertical-align:middle; }

@@ -1281,6 +1281,49 @@
   $("journey").addEventListener("click", (e) => { const h = e.target.closest(".hop[data-n]"); if (h) selectNode(+h.dataset.n, true); });
 
   // ---------- stats ----------
+  // Results overview: delivery time over the run, busiest nodes, and (on
+  // demand) why messages were not delivered.
+  let lossReport = "";
+  function statsOverview(s) {
+    const all = sim.msgs(0, 100000).msgs; // [id, from, to, sent, delivered, acked]
+    const tEnd = Math.max(60000, lastT);
+    const bucket = Math.max(60000, Math.ceil(tEnd / 40 / 60000) * 60000);
+    const nb = Math.ceil(tEnd / bucket);
+    const med = [], p95 = [];
+    for (let b = 0; b < nb; b++) {
+      const d = all.filter(m => m[4] !== null && Math.floor(m[3] / bucket) === b).map(m => m[4] - m[3]).sort((x, y) => x - y);
+      med.push(d.length ? d[Math.floor(d.length / 2)] / 1000 : null);
+      p95.push(d.length ? d[Math.min(d.length - 1, Math.floor(d.length * 0.95))] / 1000 : null);
+    }
+    const ymax = Math.max(5, ...p95.filter(v => v !== null)) * 1.1;
+    const W = 360, H = 130, x = (b) => 34 + (b + 0.5) * (W - 40) / nb, y = (v) => H - 18 - v / ymax * (H - 28);
+    const line = (arr, col) => { let d = "", pen = false; arr.forEach((v, b) => { if (v === null) { pen = false; return; } d += (pen ? "L" : "M") + x(b).toFixed(1) + "," + y(v).toFixed(1); pen = true; }); return `<path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round"></path>`; };
+    const marks = scenario.events.filter(e => e.t_s * 1000 <= tEnd).map(e => { const fix = e.up === true || ["revive", "power_restore", "internet_up", "degrade_clear"].includes(e.type); const xx = 34 + e.t_s * 1000 / tEnd * (W - 40); return `<line x1="${xx}" x2="${xx}" y1="8" y2="${H - 18}" stroke="${fix ? "#22c55e" : "#ef4444"}" stroke-dasharray="3 3"><title>${esc(describe(e))}</title></line>`; }).join("");
+    const grid = [0, 0.5, 1].map(f => `<line x1="34" x2="${W - 6}" y1="${y(ymax * f / 1.1)}" y2="${y(ymax * f / 1.1)}" stroke="var(--line)"></line><text x="30" y="${y(ymax * f / 1.1) + 4}" text-anchor="end" font-size="10" fill="var(--mute)">${(ymax * f / 1.1).toFixed(0)} s</text>`).join("");
+    const chart = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Delivery time over the run: median and 95th percentile" style="width:100%;height:auto">${grid}${marks}${line(med, "var(--acc)")}${line(p95, "#eb6834")}<text x="34" y="${H - 4}" font-size="10" fill="var(--mute)">0</text><text x="${W - 6}" y="${H - 4}" font-size="10" fill="var(--mute)" text-anchor="end">${fmtTime(tEnd / 1000)}</text></svg>`;
+    // Busiest nodes by airtime.
+    let busy = "";
+    if (state && state.airtime_ms) {
+      const top = state.airtime_ms.map((a, i) => [a, i]).sort((p, q) => q[0] - p[0]).slice(0, 6);
+      busy = `<table><tr><th>node</th><th class="n">airtime</th><th class="n">queue</th></tr>${top.map(([a, i]) => `<tr class="click" data-n="${i}"><td>${esc(name(i))}</td><td class="n">${(a / 1000).toFixed(1)} s · ${(a / Math.max(1, lastT) * 100).toFixed(1)} %</td><td class="n">${state.queue ? state.queue[i] : ""}</td></tr>`).join("")}</table>`;
+    }
+    return `<h3>Delivery time over the run</h3>
+      <div class="legend-row"><span><i style="background:var(--acc)"></i>median</span><span><i style="background:#eb6834"></i>95th percentile</span><span class="mute">dashed: your events (red damage, green repair)</span></div>
+      ${chart}
+      <h3>Busiest nodes</h3>${busy}
+      <h3>Why messages were not delivered</h3>
+      <div class="row"><button id="st-loss">Analyse undelivered messages</button></div><div id="st-loss-out">${lossReport}</div>`;
+  }
+  function analyseLosses() {
+    const all = sim.msgs(0, 100000).msgs.filter(m => m[4] === null && lastT - m[3] > 60000).slice(-200);
+    const count = new Map();
+    for (const m of all) { const st = followStatus(sim.follow(m[0])); count.set(st.title, (count.get(st.title) || 0) + 1); }
+    const rows = [...count.entries()].sort((a, b) => b[1] - a[1]);
+    const max = rows.length ? rows[0][1] : 1;
+    lossReport = all.length ? `<p class="hint">${all.length} messages older than a minute and not delivered${all.length === 200 ? " (the newest 200)" : ""}, by where they are now:</p><table>${rows.map(([t, n]) => `<tr><td>${esc(t)}</td><td style="width:45%"><div style="height:10px;border-radius:0 4px 4px 0;background:#eb6834;width:${(n / max * 100).toFixed(0)}%"></div></td><td class="n">${n}</td></tr>`).join("")}</table>` : `<p class="hint">Every message older than a minute was delivered.</p>`;
+    $("st-loss-out").innerHTML = lossReport;
+  }
+  document.addEventListener("click", (e) => { if (e.target.id === "st-loss") analyseLosses(); });
   function renderStats() {
     if (!sim) return;
     const s = sim.summary();
@@ -1294,6 +1337,7 @@
       ${k(s.duty_hits, "duty-cycle hits")}${k(s.duty_drops + s.busy_drops, "dropped (duty/busy)")}${k(s.local_repairs, "local repairs")}
       ${k(s.carry_handoffs + "/" + s.carry_delivered, "carry handoffs/deliv.")}${k(s.backbone_packets, "backbone packets")}${k(s.dht_lookups ? s.dht_lookups + "/" + s.dht_misses : "–", "DHT lookups/misses")}
     </div>
+    ${statsOverview(s)}
     <h3>Collisions: what was lost</h3>
     <table>
       <tr><td>copies of floods</td><td class="n">${s.coll_flood}</td><td class="hint">path requests, announces, channel messages: other copies usually get through</td></tr>

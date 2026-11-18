@@ -59,7 +59,7 @@
   const DEFAULT_FEATURES = { carry: false, local_repair: true, backbone: true, regions: false, sf_slot: false, scale_timeouts: false, load_control: false, area_scope: false, dht_backbone: false, home_routing: false, persist_known: true, hold_unknown: true, auto_relay: false };
 
   function base(name, seed) {
-    return { name, seed, sf: 9, duty_permille: 100, tx_dbm: 20, duration_s: 1800, features: Object.assign({}, DEFAULT_FEATURES), nodes: [], links: [], traffic: { direct_per_min: 6, channel_per_min: 1, local_share: 0.8, local_km: 25, start_s: 5, stop_s: 0, spammers: [], spam_per_min: 0 }, events: [], clutter: [], announce_s: 0, relay_hops: 4, auto_relay_after_s: 600, trace: true };
+    return { name, seed, sf: 9, duty_permille: 100, tx_dbm: 20, duration_s: 1800, mail: "post", features: Object.assign({}, DEFAULT_FEATURES), nodes: [], links: [], traffic: { direct_per_min: 6, channel_per_min: 1, local_share: 0.8, local_km: 25, start_s: 5, stop_s: 0, spammers: [], spam_per_min: 0 }, events: [], clutter: [], announce_s: 0, relay_hops: 4, auto_relay_after_s: 600, trace: true };
   }
 
   // ---------- Denmark generator ----------
@@ -243,6 +243,17 @@
   const WEST_COAST = [[57.10, 8.20], [57.10, 8.75], [56.40, 8.50], [55.95, 8.40], [55.30, 8.75], [55.30, 8.30], [55.95, 7.95], [56.60, 8.00]];
   const BORNHOLM = [[55.32, 14.60], [55.32, 15.25], [54.95, 15.25], [54.95, 14.60]];
 
+  // The handheld nearest a town (for presets that send between two places).
+  function userNear(sc, lat, lon, not) {
+    let best = -1, bd = 1e9;
+    sc.nodes.forEach((n, i) => { if (n.kind !== "handheld" || i === not) return; const d = km([n.lat, n.lon], [lat, lon]); if (d < bd) { bd = d; best = i; } });
+    return best;
+  }
+  // Message ids sent by "message" events, in event order (the engine numbers
+  // messages as they are sent, and background traffic is switched off in
+  // presets that check a message).
+  const quiet = (s) => { s.traffic = Object.assign({}, s.traffic, { direct_per_min: 0, channel_per_min: 0 }); };
+
   const PRESETS = {
     normal: {
       title: "National normal day",
@@ -257,6 +268,68 @@
         s.events.push({ t_s: 120, type: "internet_down" });
         return s;
       },
+    },
+    great_belt: {
+      title: "Great Belt cut (the radio crosses the belt)",
+      text: "At 1 min every backbone link and trunk between Jutland/Funen and Zealand fails. At 1.5 min a handheld in Aalborg writes to one in Naestved. At 10 min the links come back. Expected: it still gets through, because repeaters hear each other across the 18 km belt.",
+      build: (land, towns, seed) => {
+        const s = generateDenmark({ seed }, land, towns); s.name = "Great Belt cut"; quiet(s);
+        const east = (n) => n.lon >= 11.0;
+        s.links.forEach((l, k) => { if (east(s.nodes[l.a]) !== east(s.nodes[l.b])) { s.events.push({ t_s: 60, type: "link", index: k, up: false }); s.events.push({ t_s: 600, type: "link", index: k, up: true }); } });
+        const a = userNear(s, 57.048, 9.919), b = userNear(s, 55.230, 11.760, a);
+        s.events.push({ t_s: 90, type: "message", from: a, node: b });
+        s.duration_s = 1500;
+        return s;
+      },
+      expect: (sim) => {
+        const m = sim.msgs(0, 10).msgs[0];
+        return [
+          [m && m[4] !== null, "the Aalborg → Naestved message is delivered"],
+          // Repeaters on Funen and Zealand hear each other across the 18 km
+          // belt, so the radio carries it even with every link down.
+        ];
+      },
+      run_s: 1500,
+    },
+    bornholm_alone: {
+      title: "Bornholm on its own (trunk and internet down)",
+      text: "At 1 min the LoRa trunk and every internet link to Bornholm fail; at 2 min Copenhagen writes to a handheld in Roenne; at 15 min Bornholm is connected again. Expected: local traffic on Bornholm still works, the message waits and arrives after 15 min.",
+      build: (land, towns, seed) => {
+        const s = generateDenmark({ seed }, land, towns); s.name = "Bornholm on its own"; quiet(s);
+        const bh = (n) => n.lon > 14.5;
+        s.links.forEach((l, k) => { if (bh(s.nodes[l.a]) !== bh(s.nodes[l.b])) { s.events.push({ t_s: 60, type: "link", index: k, up: false }); s.events.push({ t_s: 900, type: "link", index: k, up: true }); } });
+        const a = userNear(s, 55.676, 12.568), b = userNear(s, 55.101, 14.700, a);
+        const c = userNear(s, 55.06, 15.0, b);
+        s.events.push({ t_s: 120, type: "message", from: a, node: b });
+        s.events.push({ t_s: 130, type: "message", from: c, node: b });
+        s.duration_s = 1800;
+        return s;
+      },
+      expect: (sim) => {
+        const [m1, m2] = sim.msgs(0, 10).msgs;
+        return [
+          [m2 && m2[4] !== null && m2[4] < 600000, "a message inside Bornholm is delivered while the island is cut off"],
+          // Known gap 2026-11-19: the mail is stored at the Copenhagen office
+          // and 2 replicas but not delivered after the repair (see the plan).
+          [m1 && m1[4] !== null && m1[4] >= 900000, "the message from Copenhagen arrives after the repair at 15 min", "known"],
+        ];
+      },
+      run_s: 1800,
+    },
+    north_power: {
+      title: "Power cut in Nordjylland, normal day",
+      text: "A normal evening (traffic follows the day curve from 18:00). At 3 min the power fails in Nordjylland for 20 min: repeaters run on battery, hosts lose internet, handhelds keep going. Expected: most messages are still delivered.",
+      build: (land, towns, seed) => {
+        const s = generateDenmark({ seed }, land, towns); s.name = "Power cut in Nordjylland";
+        s.traffic.day_start_h = 18;
+        const NJ = [[57.75, 8.2], [57.75, 11.0], [56.55, 11.0], [56.55, 8.2]];
+        s.events.push({ t_s: 180, type: "power_cut", area: { polygon: NJ } });
+        s.events.push({ t_s: 1380, type: "power_restore", area: { polygon: NJ } });
+        s.duration_s = 1800;
+        return s;
+      },
+      expect: (sim) => { const s = sim.summary(); return [[s.delivered_pct > 85, `delivered ${s.delivered_pct.toFixed(1)} % (> 85 %)`]]; },
+      run_s: 1800,
     },
     bornholm: {
       title: "Bornholm cut off",

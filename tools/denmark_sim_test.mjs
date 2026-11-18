@@ -189,6 +189,22 @@ for (const [id, p] of Object.entries(DK.PRESETS)) {
   x.free();
 }
 
+// 2b. Presets with expected results run to their end and must meet them.
+for (const [id, p] of Object.entries(DK.PRESETS)) {
+  if (!p.expect) continue;
+  const t1 = Date.now();
+  const sc = p.build(window.DK_LAND, window.DK_TOWNS, seed);
+  sc.trace = true;
+  const x = new Sim(sc);
+  x.step((p.run_s || sc.duration_s) * 1000, 1e9);
+  for (const [ok, text, known] of p.expect(x)) {
+    if (known && !ok) console.log(`KNOWN ${id}: ${text} (known gap, not counted)`);
+    else check(!!ok, `${id}: ${text}`);
+  }
+  console.log(`  (${id}: ${((Date.now() - t1) / 1000).toFixed(1)} s)`);
+  x.free();
+}
+
 // 3. Scale: 2,000 nodes for 2 simulated minutes.
 const big = DK.generateDenmark({ users: 1700, repeaterKm: 16, seed }, window.DK_LAND, window.DK_TOWNS);
 big.trace = false;

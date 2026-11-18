@@ -131,11 +131,11 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
 | 1 | New layout: modes, clickable map, follow panel, timeline, light/dark | **done 2026-11-19**: 4 modes, theme remembered, right-click menus, hover hints, follow panel on the map (plain status: queued/on air/backbone/post office/carried/held/delivered/no progress), coloured timeline markers + followed message dots | Control room mode moved to step 6 (needs the phones) |
 | 2 | Device palette, mobile/stationary, people with routes | **done 2026-11-19**: kinds server (no radio) and app (no radio, TCP to host), radio on/off per node, routes with start time, pause per waypoint, end mode (back/stay/repeat), mobile/stationary flag; Build tools + inspector; engine tests | MeshCore gateway kind; group of people at once |
 | 3 | Generator per region + connection mix + app users | **done 2026-11-19**: users per region with LoRa/both/app/cars/relays per cent; both + app get a TCP link to the nearest host with internet; summary of what was made and users cut off | warning list per island with "add a trunk" button |
-| 4 | Shared host rules library + transfer model (files, voice, pictures, Pages) | proposed | library split, engine transfer model |
+| 4 | Shared host rules library + transfer model | **4A done 2026-11-19**: crate maarse-hostrules (filebox, calls, tunnel, guard, pages, pagelock, Rules 'Standard (as built)'), maarse-host uses it (107 + 38 tests green). **4B in progress** (agent): transfer model for files/voice/pictures/Pages/calls/tunnel in the engine + phones | 4B |
 | 5 | Live item state on the map | **done 2026-11-19**: plain status in the follow panel + pulsing dot where the message is now, coloured by state | per-copy view for floods |
 | 6 | Phone simulators on the real web client | **done 2026-11-19 (first version)**: Phones mode, two phones = the real maarse-client in iframes over a fake WebSocket to simulated nodes (phone.rs: GetInfo, names, announce, channels, SendDirect, SendChannel, stats, neighbours; events Sent/Acked/DirectReceived/RouteLearned/Deposited/Heard); keeps running while you break the net | files/voice/pictures, calls, Pages, trace route, remote admin, alerts from phones, linked devices, identity for safety numbers, 'Open as a phone' menu, Control room layout |
 | 7 | Calls, IP tunnel (SSH/mosh/ping/bulk), channels, alerts v2, linked devices, remaining features of board 8 | listed (board 8) | all code |
-| 8 | Failover and extras: replica post offices, backbone self-healing, link drops, restore, attacks, day/night | proposed | user's yes, then code |
+| 8 | Failover and extras | **started 2026-11-19**: normal day traffic curve (day_start_h) | replica post office kill test, backbone self-healing (min-peers/DHT/reconnect), phone ↔ radio link drops, device restore, forged/replayed alerts, guard bans, range-test calibration, duty sub-bands |
 | 9 | Results page | **first version 2026-11-19**: KPI tiles (existing), delivery time over the run (median + p95, your events marked), busiest nodes, 'why not delivered' analysis by current status, collisions, reboots, queue delay, compare runs, packet log + export | delivery by traffic type (needs step 4/7 types), post office table, dark-mode check of charts |
 | 10 | Smarter presets with expected results, run in CI | proposed | code |
 | 11 | Share-a-run link, README, feature inventory | **share link done 2026-11-19** (scenario + events + time deflated in the URL hash, ~12 KB for 800 nodes) | README, docs/maybe/feature-inventory.md |
@@ -143,6 +143,18 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
 | 13 | Save locally, snapshots, branches | **done 2026-11-19**: Build > Save: save run / snapshot (IndexedDB), open, branch from a snapshot (deterministic replay to its time, verified identical), delete | real memory snapshots if replay gets slow |
 | 14 | CPU limits + benchmark | **done 2026-11-19**: Build > Performance: max events per frame, max speed, node warning (saved per browser); benchmark runs the scenario flat out and sets the limits | — |
 | 15 | Tracking a node/person | **done 2026-11-19**: right-click > Track; track line coloured by best contact (green repeater/anchor/host, yellow only handhelds/relays, red none); watch list with contact now, lost-for time, role (forest mode), battery, messages got/sent, contact changes | timeline of received messages on the track line |
+
+**Findings from the simulator (2026-11-19)**
+
+- Presets ran without post offices (`mail: ""`) although hosts and firmware
+  have them: fixed, the standard scenario now uses `mail: "post"`.
+- Known gap: Bornholm cut off (trunk + internet) → a message from Copenhagen
+  is stored at the Copenhagen office and 2 replicas, but is NOT delivered
+  within 45 min after the links come back (presets have periodic announces
+  off; office retries / presence fetch do not reach Roenne). To investigate:
+  retry timing after reconnect, presence fetch without announces.
+- The Great Belt does not cut the radio: repeaters on Funen and Zealand hear
+  each other across 18 km, so messages cross with every link down.
 
 **Small findings while reading the code (2026-11-18)**
 

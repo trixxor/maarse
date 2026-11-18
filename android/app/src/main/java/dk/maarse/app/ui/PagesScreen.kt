@@ -243,51 +243,44 @@ private fun StartPage(@Suppress("UNUSED_PARAMETER") version: Int) {
     // Read here too: a child given an unchanged-looking version may be skipped.
     Pages.version.collectAsState().value
     val nodes = Node.nodes.value
+    var q by remember { mutableStateOf("") }
+    fun name(a: String) = Pages.siteTitle(a).ifEmpty { nodes[a]?.name?.let { "~$it" } ?: a.take(8) }
+    fun hit(vararg t: String) = q.isBlank() || t.any { it.contains(q.trim(), ignoreCase = true) }
+    val head = MaterialTheme.typography.titleMedium
+    val small = MaterialTheme.typography.labelSmall
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    @Composable fun Server(a: String) = Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { Pages.open("maarse://$a/") }.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Avatar(name(a), a)
+        Column(Modifier.weight(1f)) {
+            Text(name(a), fontWeight = FontWeight.SemiBold)
+            Text("maarse://${a.take(8)}…/", style = small, color = muted)
+        }
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Bookmarks", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        if (Pages.favPages.isEmpty()) Text("Star a page to keep it here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Pages.favPages.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                row.forEach { a ->
-                    val t = Pages.siteTitle(a).ifEmpty { Node.label(a) }
-                    Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
-                        .clickable { Pages.open("maarse://$a/") }.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Avatar(t, a, 36.dp)
-                        Text(t, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        Text(Node.label(a), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                    }
-                }
-                if (row.size == 1) androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
-            }
-        }
-        val others = Pages.sharing.filter { it !in Pages.favPages }
-        if (others.isNotEmpty()) {
-            Text("Nodes sharing pages", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            others.forEach { a ->
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { Pages.open("maarse://$a/") }.padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Avatar(Node.label(a), a)
-                    Column(Modifier.weight(1f)) {
-                        Text(Pages.siteTitle(a).ifEmpty { nodes[a]?.name?.let { "~$it" } ?: a.take(8) }, fontWeight = FontWeight.SemiBold)
-                        Text("maarse://${a.take(8)}…/", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        }
-        if (Pages.recent.isNotEmpty()) {
-            Text("Recently visited", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Pages.recent.forEach { (u, t) ->
+        OutlinedTextField(q, { q = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Search pages and page servers") })
+        val favs = Pages.favPages.filter { hit(name(it), it) }
+        Text("Favourites", style = head, fontWeight = FontWeight.SemiBold)
+        if (favs.isEmpty()) Text(if (q.isBlank()) "Star a page to keep it here." else "No favourite matches.", style = MaterialTheme.typography.bodySmall, color = muted)
+        favs.forEach { Server(it) }
+        val recent = Pages.recent.filter { (u, t) -> hit(t, u.toString()) }
+        if (recent.isNotEmpty()) {
+            Text("Recently visited", style = head, fontWeight = FontWeight.SemiBold)
+            recent.forEach { (u, t) ->
                 Row(Modifier.fillMaxWidth().clickable { Pages.open(u.toString()) }.padding(vertical = 6.dp)) {
                     Column {
                         Text(t.ifEmpty { u.path }, fontWeight = FontWeight.Medium)
-                        Text(u.toString(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        Text(u.toString(), style = small, color = muted, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     }
                 }
             }
         }
-        Text("Type a node's address in the bar above (maarse://<32 hex characters>/). Pages are text, links and small pictures – never HTML.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // Nodes whose announces say they share pages.
+        val servers = Pages.sharing.filter { it !in Pages.favPages && hit(name(it), it, nodes[it]?.name ?: "") }
+        Text("Page servers", style = head, fontWeight = FontWeight.SemiBold)
+        if (servers.isEmpty()) Text(if (q.isBlank()) "No page servers heard yet." else "No page server matches.", style = MaterialTheme.typography.bodySmall, color = muted)
+        servers.forEach { Server(it) }
+        Text("Or type an address in the bar above (maarse://<32 hex characters>/).", style = MaterialTheme.typography.bodySmall, color = muted)
     }
 }
 

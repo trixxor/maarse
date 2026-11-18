@@ -49,12 +49,11 @@ fun AnnouncesPage(onUser: (String) -> Unit = { PagesNav.contact(it) }) {
     fun match(a: String, extra: String = "") = q.isEmpty() || Node.label(a).lowercase().contains(q) || a.startsWith(q) || extra.lowercase().contains(q)
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
-            Tab(tab == 0, { tab = 0 }, text = { Text("Users") })
-            Tab(tab == 1, { tab = 1 }, text = { Text("Pages") })
+            Tab(tab == 0, { tab = 0 }, text = { Text("Nodes and repeaters") })
         }
         OutlinedTextField(
             query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), singleLine = true,
-            placeholder = { Text(if (tab == 0) "Search users" else "Search pages by title, name or address") },
+            placeholder = { Text("Search nodes and repeaters by name or address") },
             leadingIcon = { Icon(Icons.Default.Search, null) }, shape = RoundedCornerShape(24.dp),
         )
         val now = System.currentTimeMillis()

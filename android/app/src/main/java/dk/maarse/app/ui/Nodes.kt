@@ -68,8 +68,7 @@ fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}, onAnno
         LazyColumn {
             item {
                 Group {
-                    GroupRow("Announces", "Who announces themselves, live") { onAnnounces() }
-                    GroupRow("Pages", "Browse maarse:// pages", last = true) { onPages() }
+                    GroupRow("Announces", "Nodes and repeaters announcing themselves, live", last = true) { onAnnounces() }
                 }
             }
             if (saved.isNotEmpty()) item { GroupTitle("Saved (${saved.size})") }

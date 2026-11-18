@@ -145,6 +145,14 @@ pub fn parse_command(frame: &[u8]) -> Option<HistCmd> {
 }
 
 /// Content for a file: size | MIME length | MIME | name.
+/// A file record that is a page or a page picture (see [`file_content`]).
+fn is_page_file(content: &[u8]) -> bool {
+    let Some(&ml) = content.get(4) else { return false };
+    let mime = content.get(5..5 + ml as usize).unwrap_or(&[]);
+    let name = content.get(5 + ml as usize..).unwrap_or(&[]);
+    mime == maarse_core::content::PAGE_MIME || (name.first() == Some(&b'_') && name.contains(&b'/'))
+}
+
 pub fn file_content(size: u32, mime: &[u8], name: &[u8]) -> Vec<u8> {
     let mime = &mime[..mime.len().min(64)];
     let mut v = size.to_le_bytes().to_vec();
@@ -251,6 +259,9 @@ impl History {
                             content: unhex(content)?,
                         })
                     })();
+                    // Pages and page pictures were once kept as files of a chat (and
+                    // counted as unread there); they belong to Pages only.
+                    let it = it.filter(|i| !(i.kind == KIND_FILE && !i.outgoing && is_page_file(&i.content)));
                     if let Some(it) = it {
                         self.next_id = self.next_id.max(it.id + 1);
                         by_id.insert(it.id, self.items.len());
@@ -472,6 +483,13 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pages_are_not_chat_files() {
+        assert!(is_page_file(&file_content(500, maarse_core::content::PAGE_MIME, b"demo/gazette")));
+        assert!(is_page_file(&file_content(700, b"image/webp", b"_c4/demo/storm.png")));
+        assert!(!is_page_file(&file_content(700, b"image/webp", b"holiday.webp")));
+    }
 
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("maarse-hist-{name}-{}", std::process::id()));

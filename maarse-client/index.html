@@ -724,7 +724,6 @@
         <div class="filters" id="node-view"><button data-nv="list" class="on">List</button><button data-nv="map">Map</button></div>
         <nav class="tools list" aria-label="Announces and pages">
           <button id="btn-announces" data-view="announces"><svg class="i"><use href="#i-wave"/></svg><span>Announces<small id="ann-sub">Who announces themselves, live</small></span></button>
-          <button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg><span>Pages<small>Browse maarse:// pages</small></span></button>
         </nav>
         <div class="filters" id="node-filters"><button data-f="all" class="on">All</button><button data-f="contacts">Contacts</button><button data-f="heard">Heard</button><button data-f="pos">With position</button></div>
         <div id="nodes-list"></div>
@@ -1392,7 +1391,7 @@ function setConnected(on, name) {
   $("status").innerHTML = on ? `<b>${name}</b>` : "Not connected";
   $("host-hint").hidden = on && transport instanceof WsTransport;
   startStripPoll(on); updateStrip(); updateMe();
-  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-diag2", "btn-status", "btn-radio", "btn-diag", "btn-range", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
+  for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-diag2", "btn-status", "btn-radio", "btn-diag", "btn-range", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
   $("btn-settings").disabled = $("btn-computer").disabled = !(on && transport instanceof WsTransport);
   $("btn-account").disabled = !(on && transport instanceof WsTransport);
@@ -4129,38 +4128,30 @@ function renderPages(box) {
 // The browser's start page: bookmarks as tiles, nodes sharing pages, recent.
 function startPage() {
   const w = el("div", { className: "bstart" });
-  w.append(el("h3", {}, "Bookmarks"));
-  const favs = state.favs.p.filter(a => /^[0-9a-f]{32}$/.test(a));
-  if (!favs.length) w.append(el("div", { className: "muted" }, "Star a page to keep it here."));
-  const tiles = el("div", { className: "btiles" });
-  for (const a of favs) {
-    const t = siteTitle(a) || label(a);
-    const tile = el("button", { className: "btile" });
-    tile.append(el("span", { className: "bmono", textContent: t.replace(/^~/, "").slice(0, 2).toUpperCase() }), el("b", {}, t), el("small", {}, label(a)));
-    tile.onclick = () => openPage("maarse://" + a + "/");
-    tiles.append(tile);
-  }
-  w.append(tiles);
-  const others = [...pages.sharing].filter(a => !favs.includes(a));
-  if (others.length) {
-    w.append(el("h3", {}, "Nodes sharing pages"));
-    for (const a of others) {
-      const r = el("button", { className: "brow" });
-      r.append(el("b", {}, siteTitle(a) || label(a)), el("small", {}, `maarse://${a.slice(0, 8)}…/`));
-      r.onclick = () => openPage("maarse://" + a + "/");
-      w.append(r);
-    }
-  }
-  if (pages.recent.length) {
-    w.append(el("h3", {}, "Recently visited"));
-    for (const it of pages.recent) {
-      const r = el("button", { className: "brow" });
-      r.append(el("b", {}, it.title || it.url), el("small", {}, it.url));
-      r.onclick = () => openPage(it.url);
-      w.append(r);
-    }
-  }
-  w.append(el("p", { className: "muted" }, "Type a node's address in the bar above (maarse://<32 hex characters>/). Pages are text, links and small pictures – never HTML – and are kept so they can be read without a connection."));
+  const q = el("input", { placeholder: "Search pages and page servers", value: pages.startQ || "", style: "width:100%;margin-bottom:6px" });
+  const list = el("div");
+  const name = (a) => siteTitle(a) || label(a);
+  const draw = () => {
+    pages.startQ = q.value;
+    const t = q.value.trim().toLowerCase(), hit = (...xs) => !t || xs.some(x => (x || "").toLowerCase().includes(t));
+    list.replaceChildren();
+    const row = (title, sub, fn) => { const r = el("button", { className: "brow" }); r.append(el("b", {}, title), el("small", {}, sub)); r.onclick = fn; return r; };
+    const favs = state.favs.p.filter(a => /^[0-9a-f]{32}$/.test(a) && hit(name(a), a));
+    list.append(el("h3", {}, "Favourites"));
+    if (!favs.length) list.append(el("div", { className: "muted" }, t ? "No favourite matches." : "Star a page to keep it here."));
+    for (const a of favs) list.append(row(name(a), `maarse://${a.slice(0, 8)}…/`, () => openPage("maarse://" + a + "/")));
+    const recent = pages.recent.filter(it => hit(it.title, it.url));
+    if (recent.length) { list.append(el("h3", {}, "Recently visited")); for (const it of recent) list.append(row(it.title || it.url, it.url, () => openPage(it.url))); }
+    // Nodes whose announces say they share pages.
+    const servers = [...pages.sharing].filter(a => !favs.includes(a) && hit(name(a), a));
+    list.append(el("h3", {}, "Page servers"));
+    if (!servers.length) list.append(el("div", { className: "muted" }, t ? "No page server matches." : "No page servers heard yet."));
+    for (const a of servers) list.append(row(name(a), `maarse://${a.slice(0, 8)}…/`, () => openPage("maarse://" + a + "/")));
+    list.append(el("p", { className: "muted" }, "Or type an address in the bar above (maarse://<32 hex characters>/)."));
+  };
+  q.oninput = draw;
+  draw();
+  w.append(q, list);
   return w;
 }
 
@@ -5577,7 +5568,6 @@ $("btn-status").onclick = () => setView("status");
 $("btn-radio").onclick = () => setView("radio");
 $("btn-diag").onclick = () => { state.target = null; setView("diag"); };
 $("btn-range").onclick = () => { state.target = null; setView("range"); };
-$("btn-pages").onclick = () => { state.target = null; setView("pages"); };
 $("btn-announces").onclick = () => { state.target = null; setView("announces"); };
 $("btn-firmware").onclick = () => setView("firmware");
 $("btn-file").onclick = () => $("file").click();
@@ -6044,8 +6034,9 @@ function siteTitle(a) { const c = pages.cache.get(pageKey(a, "index")); return c
 function renderAnnounces(box) {
   $("chat-title").textContent = "Announces";
   $("chat-sub").textContent = "Nodes announce themselves every few minutes; newest first";
+  state.annTab = "users"; // page servers live under Pages now
   const tabs = el("div", { className: "filters" }); tabs.style.margin = "4px 0 8px";
-  for (const [k, t] of [["users", "Users"], ["pages", "Pages"]]) {
+  for (const [k, t] of [["users", "Nodes and repeaters"]]) {
     const b = el("button", { textContent: t, className: state.annTab === k ? "on" : "" });
     b.onclick = () => { state.annTab = k; renderChat(); };
     tabs.append(b);

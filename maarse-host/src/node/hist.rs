@@ -73,6 +73,9 @@ impl Node {
             Event::ChannelReceived { channel, from, hops, text } if *from != me => {
                 h.add(base(history::KIND_CHANNEL, *channel, *from, *hops, text));
             }
+            // A page or a page picture belongs to Pages, never to a chat (it
+            // counted as an unread message from that node).
+            Event::FileIncoming { mime, name, .. } if super::pages::is_page_file(mime, name) => {}
             Event::FileIncoming { from, size, mime, name, .. } => {
                 h.add(base(history::KIND_FILE, *from, *from, 0, &history::file_content(*size, mime, name)));
             }

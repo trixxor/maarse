@@ -151,8 +151,14 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
 - Known gap: Bornholm cut off (trunk + internet) → a message from Copenhagen
   is stored at the Copenhagen office and 2 replicas, but is NOT delivered
   within 45 min after the links come back (presets have periodic announces
-  off; office retries / presence fetch do not reach Roenne). To investigate:
-  retry timing after reconnect, presence fetch without announces.
+  off; office retries / presence fetch do not reach Roenne). Checked: still
+  not delivered after 6.4 h. maarse-host does the same as the sim: with the
+  backbone up an office does not retry (node.rs ~3028, "presence and syncs
+  deliver more cheaply"), so delivery waits for the recipient's announce
+  (firmware default every 12 h) or MailSync, and in the sim the recipient
+  never syncs. mail_refetch and hourly announces did not help. Next: check
+  the handheld's MailSync timer in the sim vs firmware (6 h), and whether
+  Roenne host should fetch for radio-heard nodes when its backbone returns.
 - The Great Belt does not cut the radio: repeaters on Funen and Zealand hear
   each other across 18 km, so messages cross with every link down.
 

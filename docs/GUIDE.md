@@ -569,6 +569,8 @@ How it works (`maarse-core/src/content.rs`, `maarse-host/src/node/pages.rs`):
 - The client only shows files as pages when it has itself asked for exactly that page from exactly that node. Other files with the same MIME are shown as ordinary files.
 - Firmware nodes can fetch pages (the client is connected over USB or Bluetooth), but do not serve any themselves.
 
+**Designing pages.** A page's whole look is written in its own `.mu` file: page settings (`@bg`, `@fg`, `@font`, `@grid`, `@ticker` …), columns and cards, colours and effects, widgets, notice boards (`@board`) and locked pages (`@allow`). The full reference with examples is [docs/site/pages.html](site/pages.html) (also on GitHub Pages), and five demo designs are in [sample-pages/backbone](sample-pages/backbone/) (live on the backbone node nj01 under `/demo`).
+
 Markup (`.mu`, UTF-8) is deliberately not HTML, so a page from a stranger cannot run code in the client:
 
 ```text

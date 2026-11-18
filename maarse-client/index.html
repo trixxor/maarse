@@ -472,7 +472,6 @@
   <div class="brand"><h1>Må<span class="colon">:</span>rse</h1></div>
   <button data-tab="chats" class="on"><span class="pill"><svg class="i"><use href="#i-chat"/></svg></span>Chats<span class="badge" id="tab-unread" hidden></span></button>
   <button data-tab="nodes"><span class="pill"><svg class="i"><use href="#i-nodes"/></svg></span>Nodes</button>
-  <button data-tab="map"><span class="pill"><svg class="i"><use href="#i-map"/></svg></span>Map</button>
   <button data-tab="network"><span class="pill"><svg class="i"><use href="#i-net"/></svg></span>Network</button>
   <button data-tab="settings"><span class="pill"><svg class="i"><use href="#i-gear"/></svg></span>Settings<span class="badge warnb" id="tab-warn" hidden>!</span></button>
 </nav>
@@ -511,6 +510,7 @@
       <div class="pane" id="pane-chats">
         <div class="pane-head"><h2>Chats</h2></div>
         <div class="filters" id="chat-filters"><button data-f="all" class="on">All</button><button data-f="dm">People</button><button data-f="ch">Channels</button><button data-f="unread">Unread</button></div>
+        <nav class="tools list" aria-label="Pinned"><button id="btn-alerts" data-view="alerts"><svg class="i"><use href="#i-bell"/></svg><span>Alerts<small id="alerts-sub">Verified public warnings</small></span></button></nav>
         <div id="channels"></div>
         <div id="contacts"></div>
         <div id="mc-side" hidden></div>
@@ -534,6 +534,8 @@
       <!-- Nodes -->
       <div class="pane" id="pane-nodes" hidden>
         <div class="pane-head"><h2>Nodes</h2></div>
+        <div class="filters" id="node-view"><button data-nv="list" class="on">List</button><button data-nv="map">Map</button></div>
+        <nav class="tools list" aria-label="Pages"><button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg><span>Pages<small>Browse maarse:// pages</small></span></button></nav>
         <div class="filters" id="node-filters"><button data-f="all" class="on">All</button><button data-f="contacts">Contacts</button><button data-f="heard">Heard</button><button data-f="pos">With position</button></div>
         <div id="nodes-list"></div>
       </div>
@@ -542,14 +544,14 @@
       <div class="pane" id="pane-network" hidden>
         <div class="pane-head"><h2>Network</h2></div>
         <nav class="tools list" aria-label="Network">
-          <button id="btn-net" data-view="network"><svg class="i"><use href="#i-net"/></svg><span>Overview<small>Health, airtime, neighbours</small></span></button>
-          <button id="btn-alerts" data-view="alerts"><svg class="i"><use href="#i-bell"/></svg><span>Alerts<small>Verified public warnings; issue one</small></span></button>
-          <button id="btn-activity" data-view="activity"><svg class="i"><use href="#i-log"/></svg><span>Activity<small>Everything that happens, live</small></span></button>
+          <button id="btn-net" data-view="network"><svg class="i"><use href="#i-net"/></svg><span>Overview<small>Is the radio on the air, is the internet link up</small></span></button>
           <button id="btn-diag" data-view="diag" disabled><svg class="i"><use href="#i-diag"/></svg><span>Neighbours and trace route<small>Who you hear, how far a route reaches</small></span></button>
+          <button id="btn-announce" disabled title="Tell the network you are here"><svg class="i"><use href="#i-wave"/></svg><span>Announce me now<small>Tell the network you are here</small></span></button>
+        </nav>
+        <h3 class="grp">Details <small>for troubleshooting</small></h3>
+        <nav class="tools list" aria-label="Details">
+          <button id="btn-activity" data-view="activity"><svg class="i"><use href="#i-log"/></svg><span>Activity log<small>Everything that happens, live</small></span></button>
           <button id="btn-status" data-view="status" disabled><svg class="i"><use href="#i-status"/></svg><span>All counters<small>Every number the node keeps</small></span></button>
-          <button id="btn-range" data-view="range" disabled title="Field measurement of range, loss and power use"><svg class="i"><use href="#i-range"/></svg><span>Range test<small>Measure range and power in the field</small></span></button>
-          <button id="btn-pages" data-view="pages" disabled><svg class="i"><use href="#i-pages"/></svg><span>Pages<small>Browse maarse:// pages</small></span></button>
-          <button id="btn-announce" disabled title="Tell the network you are here"><svg class="i"><use href="#i-wave"/></svg><span>Announce now<small>Tell the network you are here</small></span></button>
         </nav>
       </div>
 
@@ -561,25 +563,29 @@
           <div class="me-t"><b id="me-name">Not connected</b><div class="me" id="me">–</div></div>
           <button id="btn-copy" class="ghost icon" disabled title="Copy my address"><svg class="i"><use href="#i-copy"/></svg></button>
         </div>
-        <h3 class="grp">You <small>this identity</small></h3>
+        <h3 class="grp">Me</h3>
         <nav class="tools list">
           <button id="btn-myqr" data-view="myqr" disabled><svg class="i"><use href="#i-qr"/></svg><span>Contact card and QR code<small>Let others add you</small></span></button>
           <button id="btn-diag2" data-view="diag" disabled><svg class="i"><use href="#i-pin"/></svg><span>Name, position and telemetry<small>What your announces share</small></span></button>
           <button id="btn-account" data-view="account" disabled title="One account for your phone, PC and more (maarse-host)"><svg class="i"><use href="#i-key"/></svg><span>Account and linked devices<small>One address for all your devices</small></span></button>
           <button id="btn-backup" data-view="backup"><svg class="i"><use href="#i-key"/></svg><span>Backup and recovery<small id="bk-sub">Recovery phrase and encrypted backup</small></span></button>
         </nav>
-        <h3 class="grp">This node <small>saved on the node</small></h3>
+        <h3 class="grp">Radio</h3>
         <nav class="tools list">
-          <button id="btn-radio" data-view="radio" disabled><svg class="i"><use href="#i-radio"/></svg><span>Radio, role and regions<small>Frequency, SF, administrators, Wi-Fi backbone</small></span></button>
+          <button id="btn-radio" data-view="radio" disabled><svg class="i"><use href="#i-radio"/></svg><span>Radios, role and regions<small>Which radio, how this node helps others</small></span></button>
           <button id="btn-firmware" data-view="firmware" disabled><svg class="i"><use href="#i-chip"/></svg><span>Firmware<small>Update over USB, Bluetooth or the network</small></span></button>
+          <button id="btn-range" data-view="range" disabled title="Field measurement of range, loss and power use"><svg class="i"><use href="#i-range"/></svg><span>Range test<small>Measure range and power in the field</small></span></button>
         </nav>
-        <h3 class="grp">Host <small>maarse-host</small></h3>
+        <h3 class="grp">Connections <small>maarse-host</small></h3>
         <nav class="tools list">
-          <button id="btn-settings" data-view="settings" disabled title="VPN, backbone, MQTT, MeshCore etc. on maarse-host"><svg class="i"><use href="#i-host"/></svg><span>Host settings<small>Backbone, VPN, MQTT, MeshCore bridge</small></span></button>
+          <button id="btn-settings" data-view="connections" disabled title="Internet link, VPN, MQTT and the MeshCore bridge on maarse-host"><svg class="i"><use href="#i-globe"/></svg><span>Internet link, VPN, MQTT, MeshCore<small>Everything that is not the radio</small></span></button>
+        </nav>
+        <h3 class="grp">This computer</h3>
+        <nav class="tools list">
+          <button id="btn-computer" data-view="computer" disabled title="Storage, file mailbox and web access of maarse-host"><svg class="i"><use href="#i-host"/></svg><span>Storage and web access<small>History, mailbox, files, web address</small></span></button>
           <button id="btn-service" data-view="service" disabled title="Status, live log, restart and stop of maarse-host"><svg class="i"><use href="#i-status"/></svg><span>Service and log<small>Restart, stop, host log</small></span></button>
         </nav>
         <p class="hint" id="host-hint">Connect to a maarse-host to change these.</p>
-        <h3 class="grp">App <small>this device only</small></h3>
         <nav class="tools list">
           <button id="btn-theme"><svg class="i"><use href="#i-sun"/></svg><span>Appearance<small id="theme-sub">System</small></span></button>
           <button id="btn-notify" hidden><svg class="i"><use href="#i-bell"/></svg><span>Turn on notifications<small>For new messages</small></span></button>
@@ -1083,7 +1089,8 @@ function renderChat() {
   if (state.view === "remote") return renderRemote(box);
   if (state.view === "firmware") return renderFirmware(box);
   if (state.view === "backup") return renderBackup(box);
-  if (state.view === "settings") return renderSettings(box);
+  if (state.view === "settings" || state.view === "connections") return renderSettings(box, "connections");
+  if (state.view === "computer") return renderSettings(box, "computer");
   if (state.view === "account") return renderAccount(box);
   if (state.view === "service") return renderService(box);
   if (state.view === "mc") return renderMc(box);
@@ -1195,7 +1202,7 @@ function setConnected(on, name) {
   startStripPoll(on); updateStrip(); updateMe();
   for (const id of ["btn-copy", "btn-announce", "btn-join", "btn-diag2", "btn-status", "btn-radio", "btn-diag", "btn-range", "btn-pages", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   if (!on) $("btn-myqr").disabled = true;
-  $("btn-settings").disabled = !(on && transport instanceof WsTransport);
+  $("btn-settings").disabled = $("btn-computer").disabled = !(on && transport instanceof WsTransport);
   $("btn-account").disabled = !(on && transport instanceof WsTransport);
   if (on && transport instanceof WsTransport) transport.send(Cmd.getPerson());
   $("btn-service").disabled = !(on && transport instanceof WsTransport);
@@ -1792,12 +1799,22 @@ const PRESETS = {
 const BWS = [7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000];
 
 function renderRadio(box) {
-  $("chat-title").textContent = "Radio settings"; $("chat-sub").textContent = "";
-  targetPicker(box);
-  if (!state.target) { renderAdmins(box); renderRegions(box); }
+  $("chat-title").textContent = state.target ? "Manage " + label(state.target) : "Radios, role and regions"; $("chat-sub").textContent = "";
+  if (state.target) {
+    const row = el("div", { className: "row" }); row.style.marginBottom = "12px";
+    const back = el("button", { textContent: "← Back to the node" });
+    back.onclick = () => { state.nodeSel = state.target; state.target = null; markTab("nodes"); setView("node"); };
+    const again = el("button", { textContent: "Fetch again" }); again.onclick = () => setView(state.view);
+    row.append(back, again); box.append(row);
+  } else {
+    // A host: its radios (USB modem etc.) and their port, from settings.txt.
+    if (transport instanceof WsTransport) { if (!hs.data && !hs.loading) { hs.loading = true; hsLoad().finally(() => { hs.loading = false; }); } renderSettings(box, "radio"); }
+    renderAdmins(box); renderRegions(box);
+  }
   const c = state.target ? state.remoteRadio : state.radio;
   if (!c) { box.append(state.target ? "Waiting for a reply… (you must be an administrator of the node)"
-                                    : "maarse-host has no radio of its own. Connect to a radio node via USB."); return; }
+                                    : transport instanceof WsTransport ? "No radio is connected to this host yet: choose its port under Connected radios above."
+                                    : "Waiting for the radio's settings…"); return; }
   const w = document.createElement("div");
   w.innerHTML = `<div class="warn"><b>Important:</b> all nodes in a network must use the same frequency, bandwidth, spreading factor
     and coding rate. Otherwise they cannot hear each other. Duty cycle is the legal airtime; in the EU it is 10 % at 869.4–869.65 MHz
@@ -4322,7 +4339,7 @@ async function hsLoad() {
     hs.data = await r.json();
     await hsLoadDevices();
   } catch (e) { hs.err = "Could not fetch settings: " + e.message; }
-  if (state.view === "settings") renderChat();
+  if (["settings", "connections", "computer", "radio"].includes(state.view)) renderChat();
 }
 // Links of the host right now: backbone peers, USB and Wi-Fi LoRa modems.
 async function hsLoadDevices() {
@@ -4488,33 +4505,30 @@ function renderAccount(box) {
   }
 }
 
-function renderSettings(box) {
-  $("chat-title").textContent = "Host settings";
-  $("chat-sub").textContent = "Stored in settings.txt; the host restarts on save";
+// Which part of the settings each section of settings.txt belongs to. Every
+// setting has one home: Regions are set on the Radio page (SetRegions) and are
+// not shown here; the serial port of the LoRa radio sits with the radios.
+const HS_PART = { "VPN / IP tunnel": "connections", "Backbone (TCP)": "connections", "MeshCore gateway": "connections",
+  "MQTT / Home Assistant": "connections", "LoRa radio (serial)": "radio", "Storage and mailbox": "computer", "Web client": "computer" };
+function renderSettings(box, part = "connections") {
+  const titles = { connections: ["Connections", "Everything that is not the radio. Stored in settings.txt; the host restarts on save"],
+    computer: ["This computer", "Storage, mailbox and web access. Stored in settings.txt; the host restarts on save"],
+    radio: ["", ""] };
+  if (part !== "radio") { $("chat-title").textContent = titles[part][0]; $("chat-sub").textContent = titles[part][1]; }
   const wrap = el("div", { className: "secure" });
   box.append(wrap);
   if (hs.msg) wrap.append(el("p", { className: "warn", textContent: hs.msg }));
   if (hs.err) wrap.append(el("p", { className: "warn", textContent: hs.err }));
   const d = hs.data;
   if (!d) { if (!hs.err) wrap.append(el("p", { className: "hint", textContent: "Fetching …" })); return; }
-  renderDevices(wrap);
-
-  wrap.append(el("h3", { textContent: "Status" }));
-  const st = el("div", { className: "warn" });
-  for (const s of d.startup) {
-    const bad = s.startsWith("!");
-    const line = el("div", { textContent: (bad ? "⚠ " : "✓ ") + s.replace(/^!/, "") });
-    if (bad) line.style.color = "#d33";
-    st.append(line);
-  }
-  st.append(el("div", { textContent: d.tun_up ? "✓ VPN (TUN) running" : (d.tun_feature ? "– VPN (TUN) not running" : "⚠ Built without TUN support") }));
-  wrap.append(st);
+  if (part === "radio") { wrap.append(el("h3", { textContent: "Connected radios" })); renderDevices(wrap); }
   const cliFlags = new Set(d.cli.filter(a => a.startsWith("--")));
   if (cliFlags.size) wrap.append(el("p", { className: "hint", textContent: "Options on the command line (marked *) win over the ones here: " + d.cli.join(" ") }));
 
   const { vals, other } = hsParse(d.settings);
   const inputs = [];
   for (const [title, fields] of HS_FIELDS) {
+    if ((HS_PART[title] || "hidden") !== part) continue;
     wrap.append(el("h3", { textContent: title }));
     const f = el("div", { className: "form" });
     for (const [flag, kind, label, hint] of fields) {
@@ -4538,10 +4552,10 @@ function renderSettings(box) {
     }
     wrap.append(f);
   }
-  wrap.append(el("h3", { textContent: "Other options" }));
+  // Other options (raw lines) are advanced: shown under This computer only.
   const extra = el("textarea", { rows: 3, value: other.join("\n"), spellcheck: false, placeholder: "One command-line option per line" });
   extra.style.width = "100%";
-  wrap.append(extra);
+  if (part === "computer") { wrap.append(el("h3", { textContent: "Other options (advanced)" })); wrap.append(extra); }
 
   const save = el("button", { textContent: "Save and restart host" });
   const restart = el("button", { textContent: "Restart without changes" });
@@ -4552,6 +4566,12 @@ function renderSettings(box) {
       if (kind === "bool") { if (inp.checked) lines.push(flag); }
       else if (kind === "list") { for (const v of inp.value.split("\n").map(s => s.trim()).filter(Boolean)) lines.push(`${flag} ${v}`); }
       else if (inp.value.trim()) lines.push(`${flag} ${inp.value.trim()}`);
+    }
+    // Settings shown on another page are kept exactly as they were.
+    const shown = new Set(inputs.map(x => x[0]));
+    for (const [, fields] of HS_FIELDS) for (const [flag, kind] of fields) {
+      if (shown.has(flag)) continue;
+      for (const v of vals.get(flag) || []) lines.push(kind === "bool" || v === "" ? flag : `${flag} ${v}`);
     }
     lines.push(...extra.value.split("\n").map(s => s.trim()).filter(Boolean));
     save.disabled = restart.disabled = true;
@@ -4566,7 +4586,8 @@ function renderSettings(box) {
   wrap.append(el("div", { className: "row" }, save, restart), out);
 }
 $("btn-account").onclick = () => { acct.err = ""; setView("account"); transport?.send(Cmd.getPerson()); };
-$("btn-settings").onclick = () => { hs.data = null; hs.msg = ""; setView("settings"); hsLoad(); };
+$("btn-settings").onclick = () => { hs.data = null; hs.msg = ""; setView("connections"); hsLoad(); };
+$("btn-computer").onclick = () => { hs.data = null; hs.msg = ""; setView("computer"); hsLoad(); };
 
 // ---------- Service page: host status, live log, restart and stop ----------
 const svc = { status: null, err: "", msg: "", lines: [], last: 0, filter: "", paused: false, timer: 0, confirm: null };
@@ -4947,9 +4968,9 @@ function pwaTitle() {
 // so the navigation always shows where you are. See docs/mockups/README.md.
 
 Object.assign(state, { tab: "chats", activity: [], airHist: [], nodeSel: null, chatFilter: "all", nodeFilter: "all", stripTimer: null });
-var VIEW_TAB = { chat: "chats", mc: "chats", remote: "chats", node: "nodes", map: "map", network: "network", activity: "network", alerts: "network",
-  status: "network", range: "network", pages: "network", radio: "settings", firmware: "settings", settings: "settings",
-  service: "settings", backup: "settings", myqr: "settings" };
+var VIEW_TAB = { chat: "chats", mc: "chats", remote: "chats", alerts: "chats", node: "nodes", map: "nodes", pages: "nodes",
+  network: "network", activity: "network", status: "network", range: "settings", radio: "settings", firmware: "settings",
+  settings: "settings", connections: "settings", computer: "settings", service: "settings", backup: "settings", myqr: "settings", account: "settings" };
 
 // The phone tabs are a copy of the rail (without ids, so ids stay unique).
 {
@@ -4966,7 +4987,10 @@ function markTab(t) {
   state.tab = t; document.body.dataset.tab = t;
   document.querySelectorAll("button[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
   for (const p of ["chats", "nodes", "network", "settings"]) $("pane-" + p).hidden = p !== t;
+  for (const b of $("node-view").querySelectorAll("button")) b.classList.toggle("on", (b.dataset.nv === "map") === (state.view === "map"));
 }
+// Nodes: a list or a map, one toggle.
+for (const b of $("node-view").querySelectorAll("button")) b.onclick = () => { markTab("nodes"); setView(b.dataset.nv === "map" ? "map" : "node"); renderNodes(); };
 // Which area a view belongs to. Managing another node (state.target) belongs to Nodes.
 function tabOfView(v) {
   if (state.target && ["status", "radio", "firmware"].includes(v)) return "nodes";
@@ -4977,7 +5001,6 @@ function setTab(t) {
   markTab(t);
   if (t === "chats") { setView(state.view === "mc" ? "mc" : "chat"); mobileSide(true); }
   else if (t === "nodes") { renderNodes(); setView("node"); mobileSide(!state.nodeSel); }
-  else if (t === "map") setView("map");
   else if (t === "network") setView("network");
   else if (t === "settings") {
     const v = transport && !backupOk() ? "backup" : transport ? "radio" : "backup";
@@ -5151,7 +5174,8 @@ function renderNode(box) {
   const acts = el("div", { className: "row" });
   const b = (t, f, primary) => { const x = el("button", { textContent: t, className: primary ? "primary" : "" }); x.onclick = f; acts.append(x); };
   b("Message", () => { state.active = "dm:" + a; state.unread.delete(state.active); markTab("chats"); setView("chat"); renderSide(); renderChat(); }, true);
-  if (k.position) b("Show on map", () => { state.mapFocus = a; markTab("map"); setView("map"); });
+  if (k.position) b("Show on map", () => { state.mapFocus = a; markTab("nodes"); setView("map"); });
+  b(k.pages ? "Open their pages" : "Pages", () => openPage("maarse://" + a + "/"));
   ov.append(acts);
   const mg = el("div", { className: "card" });
   mg.append(el("h4", { textContent: "Manage" }),

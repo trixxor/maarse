@@ -189,7 +189,8 @@ internal fun BlePicker(onDone: (String?, String?) -> Unit) {
 // ---------- the node (radio, phone host or remote host) ----------
 
 @Composable
-internal fun NodeSection() {
+/** `radioPart = false`: name and position (Me). `radioPart = true`: role, regions and the radio (Radio). */
+internal fun NodeSection(radioPart: Boolean = false) {
     val ctx = LocalContext.current
     val me by Node.me.collectAsState()
     val stats by Node.stats.collectAsState()
@@ -198,6 +199,7 @@ internal fun NodeSection() {
     val radio by Node.radio.collectAsState()
     val conn by Node.conn.collectAsState()
 
+    if (!radioPart) {
     GroupTitle("Your name")
     Card2 {
         var name by remember(me?.name) { mutableStateOf(me?.name ?: "") }
@@ -209,6 +211,9 @@ internal fun NodeSection() {
         }
     }
 
+    }
+
+    if (radioPart) {
     GroupTitle("Role — how this node helps others")
     Card2 {
         when (conn.mode) {
@@ -250,6 +255,9 @@ internal fun NodeSection() {
         }
     }
 
+    }
+
+    if (!radioPart) {
     GroupTitle("Share my position")
     Card2 {
         val sh = sharing
@@ -283,6 +291,9 @@ internal fun NodeSection() {
         }
     }
 
+    }
+
+    if (radioPart) {
     GroupTitle("Regions")
     Card2 {
         var reg by remember(regions) { mutableStateOf(regions?.names ?: "") }
@@ -301,8 +312,12 @@ internal fun NodeSection() {
             Text("All Må:rse radios use the same settings, so everyone hears everyone.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-    TextButton(onClick = { Node.send(Cmd.announce()) }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { Text("Announce now (tell others who you are)") }
-    Hint("Address: " + (me?.addr ?: ""))
+    }
+
+    if (!radioPart) {
+        TextButton(onClick = { Node.send(Cmd.announce()) }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { Text("Announce now (tell others who you are)") }
+        Hint("Address: " + (me?.addr ?: ""))
+    }
 }
 
 /** The phone node's routing role: --repeater-role in its settings, then a restart. */
@@ -327,7 +342,6 @@ private val HOST_FIELDS = listOf(
     Field("--mailbox", Kind.TEXT, "My mailbox", "Address of a node that stores mail for me (32 hex characters)."),
     Field("--no-relay", Kind.BOOL_OFF, "Relay for hosts behind NAT"),
     Field("--no-bordercast", Kind.BOOL_OFF, "Bordercast", "Only put path requests from the backbone on the radio when needed."),
-    Field("--region", Kind.LIST, "Regions", "E.g. dk or nordjylland, one per line."),
     Field("--history-days", Kind.TEXT, "History (days)", "Default 90."),
     Field("--bulletin-key", Kind.LIST, "Trusted bulletin keys", "One per line (128 hex characters)."),
     Field("--alert-root", Kind.LIST, "Alert root keys", "Alerts signed under these roots are shown as verified."),
@@ -354,7 +368,6 @@ internal fun HostSection(server: Boolean) {
     val ctx = LocalContext.current
     val fields = if (server) SERVER_FIELDS else HOST_FIELDS
     var raw by remember { mutableStateOf(HostFiles.readSettings(ctx, server)) }
-    var advanced by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf<String?>(null) }
     val lines = parseSettings(raw)
     fun set(flag: String, values: List<String?>) {
@@ -367,7 +380,7 @@ internal fun HostSection(server: Boolean) {
         val pw = HostFiles.adminPassword(ctx)
         Hint("Dashboard: http://<this phone's address>:8080 — log in with the admin password" + (pw?.let { ": $it" } ?: " (shown after the first start)."))
     } else Hint("Settings for the host running on this phone. Saved in its settings.txt; the node restarts.")
-    if (!advanced) fields.forEach { f ->
+    fields.forEach { f ->
         when (f.kind) {
             Kind.BOOL, Kind.BOOL_OFF -> {
                 val present = lines.any { it.first == f.flag }
@@ -392,7 +405,7 @@ internal fun HostSection(server: Boolean) {
                 supportingText = if (f.help.isNotEmpty()) ({ Text(f.help) }) else null,
             )
         }
-    } else OutlinedTextField(raw, { raw = it; saved = null }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), label = { Text("settings.txt (one option per line)") })
+    }
     saved?.let { Hint(it) }
     Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = {
@@ -400,7 +413,6 @@ internal fun HostSection(server: Boolean) {
             saved = "Saved. Restarting the node…"
             Node.restartHost()
         }) { Text("Save and restart") }
-        TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "Simple" else "All options") }
     }
 }
 

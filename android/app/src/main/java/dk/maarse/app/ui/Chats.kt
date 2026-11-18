@@ -80,7 +80,7 @@ import java.util.Locale
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun ChatsScreen(onOpen: (String) -> Unit) {
+fun ChatsScreen(onOpen: (String) -> Unit, onAlerts: () -> Unit = {}) {
     val version by Node.msgVersion.collectAsState()
     val channels by Node.channels.collectAsState()
     val unread by Node.unread.collectAsState()
@@ -106,6 +106,20 @@ fun ChatsScreen(onOpen: (String) -> Unit) {
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 88.dp)) {
+            item(key = "alerts") {
+                val alerts by Node.alerts.collectAsState()
+                Row(
+                    Modifier.fillMaxWidth().clickable(onClick = onAlerts).padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Avatar("!", "alerts")
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("Alerts", fontWeight = FontWeight.SemiBold)
+                        Text(alerts.lastOrNull()?.text?.takeIf { it.isNotBlank() } ?: if (alerts.isEmpty()) "Verified public warnings" else "${alerts.size} received",
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
             items(convs, key = { it }) { c ->
                 val m = last.firstOrNull { it.conv == c }
                 val n = unread[c] ?: 0

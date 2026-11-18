@@ -109,13 +109,11 @@ fun NetworkScreen(onPage: (NetPage) -> Unit) {
                 }
             }
         }
-        GroupTitle("More")
+        GroupTitle("Details")
         Group {
-            GroupRow("Alerts", if (alerts.isEmpty()) "None received" else "${alerts.size} received") { onPage(NetPage.ALERTS) }
             GroupRow("Neighbours and routes", "Who you hear, and how well") { onPage(NetPage.NEIGHBOURS) }
             GroupRow("All numbers", "Every counter the node keeps") { onPage(NetPage.NUMBERS) }
-            GroupRow("Log", "What happened, live") { onPage(NetPage.LOG) }
-            GroupRow("Pages", "Browse maarse:// pages", last = true) { onPage(NetPage.PAGES) }
+            GroupRow("Log", "What happened, live", last = true) { onPage(NetPage.LOG) }
         }
     }
 }

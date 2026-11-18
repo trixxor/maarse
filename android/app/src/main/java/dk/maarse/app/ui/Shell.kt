@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Router
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material3.Badge
@@ -71,12 +72,12 @@ import dk.maarse.app.Node
 import dk.maarse.app.PersonState
 import dk.maarse.app.R
 
-enum class Tab(val title: String) { CHATS("Chats"), CONTACTS("Contacts"), NETWORK("Network") }
+enum class Tab(val title: String) { CHATS("Chats"), CONTACTS("Nodes"), NETWORK("Network"), SETTINGS("Settings") }
 
 /** Pages behind "You". */
 enum class MePage(val title: String) {
-    ACCOUNT("Account and devices"), NODE("Name, position and role"), APP("Notifications and background"),
-    CONNECTION("All connection options"), HOST("Host settings"),
+    ACCOUNT("Account and devices"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and background"),
+    CONNECTION("All connection options"), HOST("Internet link and post office"),
 }
 
 sealed interface Screen {
@@ -148,21 +149,22 @@ private fun Home(nav: Nav) {
     val unread by Node.unread.collectAsState()
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            MeAvatar(40.dp) { nav.go(Screen.Me) }
+            MeAvatar(40.dp) { nav.tab = Tab.SETTINGS }
             Text(nav.tab.title, Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
         ConnectionBanner { nav.sheet = true }
         AlertBar()
         Box(Modifier.weight(1f)) {
             when (nav.tab) {
-                Tab.CHATS -> ChatsScreen(onOpen = { nav.go(Screen.Chat(it)) })
-                Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) })
+                Tab.CHATS -> ChatsScreen(onOpen = { nav.go(Screen.Chat(it)) }, onAlerts = { nav.go(Screen.Net(NetPage.ALERTS)) })
+                Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onPages = { nav.go(Screen.Net(NetPage.PAGES)) })
                 Tab.NETWORK -> NetworkScreen(onPage = { nav.go(Screen.Net(it)) })
+                Tab.SETTINGS -> MeScreen(nav)
             }
         }
         NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
             Tab.entries.forEach { t ->
-                val icon: ImageVector = when (t) { Tab.CHATS -> Icons.AutoMirrored.Outlined.Chat; Tab.CONTACTS -> Icons.Outlined.People; Tab.NETWORK -> Icons.Outlined.Hub }
+                val icon: ImageVector = when (t) { Tab.CHATS -> Icons.AutoMirrored.Outlined.Chat; Tab.CONTACTS -> Icons.Outlined.People; Tab.NETWORK -> Icons.Outlined.Hub; Tab.SETTINGS -> Icons.Outlined.Settings }
                 NavigationBarItem(
                     selected = nav.tab == t, onClick = { nav.tab = t }, label = { Text(t.title) },
                     colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer),
@@ -298,7 +300,7 @@ private fun MeScreen(nav: Nav) {
                 }
             }
         }
-        GroupTitle("Account")
+        GroupTitle("Me")
         Group {
             if (host) GroupRow("Account and devices", when (p?.state) {
                 PersonState.MEMBER -> if (p!!.master) "This is the master device · backup, add devices" else "Linked to your account"
@@ -308,17 +310,23 @@ private fun MeScreen(nav: Nav) {
             if (p?.state == PersonState.MEMBER) GroupRow("Sync now", "Fetch your mail and copies from your other devices (also done at start-up)") {
                 Node.personSetup(dk.maarse.app.PersonOp.SYNC)
             }
-            GroupRow("Name, position and role", "What your announces share", last = true) { nav.go(Screen.Page(MePage.NODE)) }
+            GroupRow("Name and position", "What your announces share", last = true) { nav.go(Screen.Page(MePage.NODE)) }
+        }
+        GroupTitle("Radio")
+        Group {
+            GroupRow("How this phone connects", connectionSummary()) { nav.sheet = true }
+            GroupRow("Role and regions", "How this node helps others") { nav.go(Screen.Page(MePage.RADIO)) }
+            GroupRow("All connection options", "Server mode, the phone node's radio", last = true) { nav.go(Screen.Page(MePage.CONNECTION)) }
+        }
+        if (conn.mode == Mode.PHONE || conn.mode == Mode.SERVER) {
+            GroupTitle("Connections")
+            Group {
+                GroupRow("Internet link and post office", "Backbone, peers, mail for others, keys", last = true) { nav.go(Screen.Page(MePage.HOST)) }
+            }
         }
         GroupTitle("This phone")
         Group {
-            GroupRow("Connection", connectionSummary()) { nav.sheet = true }
             GroupRow("Notifications and background", "Messages, channels, alerts", last = true) { nav.go(Screen.Page(MePage.APP)) }
-        }
-        GroupTitle("Advanced")
-        Group {
-            GroupRow("All connection options", "Server mode, the phone node's radio", last = conn.mode != Mode.PHONE && conn.mode != Mode.SERVER) { nav.go(Screen.Page(MePage.CONNECTION)) }
-            if (conn.mode == Mode.PHONE || conn.mode == Mode.SERVER) GroupRow("Host settings", "Backbone, post office, keys", last = true) { nav.go(Screen.Page(MePage.HOST)) }
         }
         Hint("Må:rse " + LocalContext.current.packageManager.getPackageInfo(LocalContext.current.packageName, 0).versionName)
     }
@@ -332,6 +340,7 @@ private fun MePageContent(p: MePage) {
         when (p) {
             MePage.ACCOUNT -> if (me != null) AccountSection() else Hint("Connect first.")
             MePage.NODE -> if (me != null) NodeSection() else Hint("Connect first.")
+            MePage.RADIO -> if (me != null) NodeSection(radioPart = true) else Hint("Connect first.")
             MePage.APP -> AppSection()
             MePage.CONNECTION -> ConnectionSection()
             MePage.HOST -> when (conn.mode) {

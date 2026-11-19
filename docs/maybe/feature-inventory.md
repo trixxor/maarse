@@ -16,7 +16,7 @@ Status as of 2026-11-19.
 | Sequence numbers, "2 messages missing" | maarse-host node/seq.rs | not yet |
 | Public and private channels | router, companion | real (public + hashtag channels from phones; private: not yet) |
 | Store-carry-forward, carried notice | router carry | real |
-| Post offices: deposit, sync, replicas, quotas, expiry | maarse-core mail.rs, maarse-host node.rs | model on core rules (host-to-host over TCP only: see the plan's Bornholm finding) |
+| Post offices: deposit, sync, replicas, quotas, expiry | maarse-core mail.rs, maarse-host node.rs | model on core rules; host-to-host over radio/trunks without TCP; retries per the host's rules |
 | Hold messages from unknown senders | router | real |
 | History shared by several screens | maarse-host history.rs | not yet |
 
@@ -24,41 +24,41 @@ Status as of 2026-11-19.
 
 | Feature | Code | Simulator |
 |---|---|---|
-| File offer + pull/batch transfer, progress, cancel | maarse-host node.rs, maarse-crypto files | in progress (step 4B) |
-| Size limit per route (8 KB LoRa, 1 MB TCP), file mailbox | maarse-hostrules filebox | shared (step 4B) |
-| Voice messages (Codec2 1200 bit/s, audio/x-codec2) | maarse-voice, Media.kt, web client | in progress (step 4B) |
-| Pictures (dots / grey / colour copies) | maarse-hostrules pages | in progress (step 4B) |
+| File offer + pull/batch transfer, progress, cancel | maarse-host node.rs, maarse-crypto files | real/shared (step 4B, done) |
+| Size limit per route (8 KB LoRa, 1 MB TCP), file mailbox | maarse-hostrules filebox | real/shared (step 4B, done) |
+| Voice messages (Codec2 1200 bit/s, audio/x-codec2) | maarse-voice, Media.kt, web client | real/shared (step 4B, done) |
+| Pictures (dots / grey / colour copies) | maarse-hostrules pages | real/shared (step 4B, done) |
 
 ## Calls
 
 | Feature | Code | Simulator |
 |---|---|---|
-| Opus calls as datagrams, internet all the way | Calls.kt, web client, maarse-host | in progress (step 4B) |
-| Refusal when the path is not TCP all the way | maarse-hostrules calls | shared (step 4B) |
+| Opus calls as datagrams, internet all the way | Calls.kt, web client, maarse-host | real/shared (step 4B, done) |
+| Refusal when the path is not TCP all the way | maarse-hostrules calls | real/shared (step 4B, done) |
 | Call test service (music, echo, speed) | maarse-host node/calltest.rs | not yet |
 
 ## Pages
 
 | Feature | Code | Simulator |
 |---|---|---|
-| Page requests, deflated page files, MU markup | maarse-host node/pages.rs, Mu.kt, web client | in progress (step 4B) |
+| Page requests, deflated page files, MU markup | maarse-host node/pages.rs, Mu.kt, web client | real/shared (step 4B, done) |
 | Locks, boards, notes | maarse-hostrules pagelock | shared, not wired yet |
-| Pictures on demand, burst limits | maarse-hostrules pages | shared (step 4B) |
+| Pictures on demand, burst limits | maarse-hostrules pages | real/shared (step 4B, done) |
 
 ## Alerts
 
 | Feature | Code | Simulator |
 |---|---|---|
 | Signed bulletins on #bulletin, priority | maarse-crypto bulletin, qos | real |
-| Alerts v2: issuer key, certificate, replay drop | maarse-crypto alert, maarse-host node/alerts.rs | not yet (v1 bulletins only) |
+| Alerts v2: issuer key, certificate, replay drop | maarse-crypto alert, maarse-host node/alerts.rs | real (alert::sign/verify + ReplayGuard per node); forged and replayed alerts in Break |
 | Area + region scope, heat map | sim layer | model |
 
 ## IP tunnel (VPN: SSH, mosh, ping)
 
 | Feature | Code | Simulator |
 |---|---|---|
-| Session key, datagrams, header compression, MSS clamp, pieces + NACK | maarse-hostrules tunnel, maarse-host tunnel.rs | in progress (step 4B) |
-| Over TCP always, over LoRa with --tun-lora | maarse-host | in progress (step 4B) |
+| Session key, datagrams, header compression, MSS clamp, pieces + NACK | maarse-hostrules tunnel, maarse-host tunnel.rs | real/shared (step 4B, done) |
+| Over TCP always, over LoRa with --tun-lora | maarse-host | real/shared (step 4B, done) |
 
 ## Identity and people
 

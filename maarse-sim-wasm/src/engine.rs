@@ -29,6 +29,7 @@ use maarse_core::duty::DutyCycle;
 use maarse_core::packet::{Header, Packet, encode};
 use maarse_core::router::Buf;
 use maarse_core::{Action, Address, Energy, PacketType, Role, Router};
+use maarse_crypto::alert as alert2;
 use maarse_crypto::{Identity, PublicIdentity, bulletin};
 use maarse_sim::radio::Radio;
 use rand::rngs::SmallRng;
@@ -444,6 +445,16 @@ pub struct Alert {
     /// First verified reception per node (ms).
     pub recv: HashMap<usize, u64>,
     pub inside: Vec<usize>,
+    /// The signed alert as sent (a replay sends exactly these bytes again).
+    pub payload: Vec<u8>,
+    /// "real", "forged" or "replay" (of alert `of`).
+    pub origin: &'static str,
+    pub of: usize,
+    /// Nodes that dropped it: bad signature / expired or from the future.
+    pub dropped_forged: usize,
+    pub dropped_expired: usize,
+    /// Nodes that have processed it (shown, repeat or dropped).
+    pub handled: HashSet<usize>,
 }
 
 impl Alert {
@@ -511,6 +522,11 @@ pub struct Stats {
     pub backbone_packets: u64,
     pub channel_sent: u64,
     pub channel_deliveries: u64,
+    /// Alerts v2: copies dropped for a bad signature / as expired or future
+    /// (replays) / quietly as a repeat of one already shown.
+    pub alerts_forged_dropped: u64,
+    pub alerts_replay_dropped: u64,
+    pub alerts_repeat: u64,
     pub channel_receivers: u64,
     pub scope_dropped: u64,
     /// Collisions split by what was lost: a copy of a flood (redundant), a
@@ -593,6 +609,10 @@ pub struct Engine {
     public_channel: Address,
     bulletin_channel: Address,
     authority: Identity,
+    /// Alert packet id -> alert index (real, forged and replayed copies).
+    alert_pid: HashMap<u64, usize>,
+    /// Alerts v2: each node's replay guard (maarse_crypto::alert::ReplayGuard).
+    alert_guard: Vec<alert2::ReplayGuard<32>>,
     trusted: Vec<PublicIdentity>,
     traffic: Traffic,
     /// Packet ids of announces we injected (for reach queries).
@@ -904,6 +924,8 @@ impl Engine {
             public_channel,
             bulletin_channel,
             authority,
+            alert_guard: Vec::new(),
+            alert_pid: HashMap::default(),
             trusted,
             traffic,
             announces: Vec::new(),
@@ -1013,6 +1035,7 @@ impl Engine {
         e.told_choice = vec![None; n];
         e.tick_at = vec![u64::MAX; n];
         e.init_mail();
+        e.alert_guard = (0..n).map(|_| alert2::ReplayGuard::default()).collect();
         e.used = vec![HashSet::default(); n];
         e.await_key = vec![Vec::new(); n];
         e.local_seen = vec![HashSet::default(); n];
@@ -1795,12 +1818,40 @@ impl Engine {
             PacketType::Datagram => self.on_lookup_datagram(node, payload),
             PacketType::Channel if dest == self.public_channel => self.stats.channel_deliveries += 1,
             PacketType::Channel if dest == self.bulletin_channel => {
-                // The bulletin sender is the authority; verify like a client would.
-                let sender = self.authority.address();
-                let Some(v) = bulletin::verify(&sender, payload, &self.trusted) else { return };
-                let Some(idx) = parse_area_index(v.text) else { return };
-                if idx >= self.alerts.len() || self.alerts[idx].recv.contains_key(&node) {
+                // Alerts v2, verified like the host does (node/alerts.rs): the
+                // issuer is the authority's key; each (issuer, serial) is shown
+                // once and an expired or future alert is dropped.
+                let issuer = self.authority.address();
+                let Some(&idx) = self.alert_pid.get(&packet_id(PacketType::Channel, &self.bulletin_channel, payload)) else { return };
+                if idx >= self.alerts.len() || !self.alerts[idx].handled.insert(node) {
                     return;
+                }
+                let now_unix = Some(1_700_000_000 + (self.now / 1000) as u32);
+                let a = match alert2::verify(&issuer, payload, &self.trusted, &[]) {
+                    Ok((a, _)) => a,
+                    Err(e) => {
+                        self.alerts[idx].dropped_forged += 1;
+                        self.alerts[idx].handled.insert(node);
+                        self.stats.alerts_forged_dropped += 1;
+                        self.tr(format!("{{\"t\":{},\"ev\":\"alert_drop\",\"alert\":{idx},\"n\":{node},\"why\":\"{e:?}\"}}", self.now));
+                        return;
+                    }
+                };
+                match self.alert_guard[node].check(&issuer, &a, now_unix) {
+                    alert2::Check::New => {}
+                    alert2::Check::Repeat => {
+                        // Already shown (the original): a replay changes nothing here.
+                        self.alerts[idx].handled.insert(node);
+                        self.stats.alerts_repeat += 1;
+                        return;
+                    }
+                    why => {
+                        self.alerts[idx].dropped_expired += 1;
+                        self.alerts[idx].handled.insert(node);
+                        self.stats.alerts_replay_dropped += 1;
+                        self.tr(format!("{{\"t\":{},\"ev\":\"alert_drop\",\"alert\":{idx},\"n\":{node},\"why\":\"{why:?}\"}}", self.now));
+                        return;
+                    }
                 }
                 let (x, y) = (self.nodes[node].x, self.nodes[node].y);
                 let inside = self.alerts[idx].contains(x, y);
@@ -3574,40 +3625,71 @@ impl Engine {
     // ---------- alerts ----------
 
     pub fn send_alert(&mut self, from: usize, kind: &str, area: &Area, text: &str) -> Option<usize> {
+        self.send_alert_v2(from, kind, area, text, 60, 2, "real")
+    }
+
+    /// Alerts v2 (maarse_crypto::alert): serial = alert index + 1, issued now,
+    /// expiry in minutes, event, severity, a circle area (a polygon is sent
+    /// as its enclosing circle; coverage still uses the polygon), the text.
+    /// `origin` "forged" signs with a key that is not the authority's.
+    #[allow(clippy::too_many_arguments)]
+    fn send_alert_v2(&mut self, from: usize, kind: &str, area: &Area, text: &str, expires_min: u16, severity: u8, origin: &'static str) -> Option<usize> {
         if from >= self.nodes.len() {
             return None;
         }
         let (poly, circle) = area_xy(area);
         let idx = self.alerts.len();
-        // Plaintext: "A" | alert index (u16) | kind (u8) | area | text.
-        // Area: 'C' lat lon (i32 1e-5 deg) r (u32 m) or 'P' n (u8) n x (lat lon).
-        let mut t: Vec<u8> = vec![b'A'];
-        t.extend_from_slice(&(idx as u16).to_be_bytes());
-        t.push(match kind {
-            "evacuation" => 1,
-            "fire" => 2,
-            "flood" => 3,
-            "water" => 4,
-            _ => 0,
-        });
-        if let Some([la, lo, r]) = area.circle {
-            t.push(b'C');
-            t.extend_from_slice(&((la * 1e5) as i32).to_be_bytes());
-            t.extend_from_slice(&((lo * 1e5) as i32).to_be_bytes());
-            t.extend_from_slice(&(r as u32).to_be_bytes());
+        let event = match kind {
+            "evacuation" | "evacuate" => alert2::event::EVACUATE,
+            "shelter" => alert2::event::SHELTER,
+            "fire" => alert2::event::FIRE,
+            "flood" => alert2::event::FLOOD,
+            "water" => alert2::event::WATER,
+            "chemical" => alert2::event::CHEMICAL,
+            "power" => alert2::event::POWER,
+            "weather" => alert2::event::WEATHER,
+            "missing" => alert2::event::MISSING,
+            _ => alert2::event::INFO,
+        };
+        let geo = if let Some([la, lo, r]) = area.circle {
+            Some((la, lo, r))
+        } else if area.polygon.len() >= 3 {
+            let n = area.polygon.len() as f64;
+            let (la, lo) = area.polygon.iter().fold((0.0, 0.0), |(a, b), [x, y]| (a + x / n, b + y / n));
+            let r = area.polygon.iter().map(|[x, y]| ((x - la) * 111_320.0).hypot((y - lo) * 111_320.0 * la.to_radians().cos())).fold(0.0, f64::max);
+            Some((la, lo, r))
         } else {
-            let pts: Vec<&[f64; 2]> = area.polygon.iter().take(12).collect();
-            t.push(b'P');
-            t.push(pts.len() as u8);
-            for [la, lo] in pts {
-                t.extend_from_slice(&((la * 1e5) as i32).to_be_bytes());
-                t.extend_from_slice(&((lo * 1e5) as i32).to_be_bytes());
-            }
-        }
-        let room = 150usize.saturating_sub(t.len() + bulletin::OVERHEAD);
-        t.extend(text.bytes().take(room));
+            None
+        };
+        let a = alert2::Alert {
+            status: alert2::status::ACTUAL,
+            kind: alert2::kind::ALERT,
+            serial: idx as u32 + 1,
+            issued: 1_700_000_000 + (self.now / 1000) as u32,
+            expires_min: if expires_min == 0 { 60 } else { expires_min },
+            event,
+            severity: severity.min(3),
+            reference: 0,
+            area: geo.map(|(la, lo, r)| alert2::Area { lat_e5: (la * 1e5) as i32, lon_e5: (lo * 1e5) as i32, radius_100m: (r / 100.0).ceil().min(65_535.0) as u16 }),
+            text: text.as_bytes().get(..text.len().min(120)).unwrap_or(&[]),
+        };
         let mut out = [0u8; 255];
-        let n = bulletin::sign(&self.authority, 1_700_000_000 + (self.now / 1000) as u32, &t, &mut out)?;
+        let n = if origin == "forged" {
+            // The attacker's own key, but the packet names the authority as issuer.
+            let mut secret = [0u8; 64];
+            self.rng.fill(&mut secret[..]);
+            alert2::sign(&Identity::from_secret_bytes(&secret), &a, &mut out)?
+        } else {
+            alert2::sign(&self.authority, &a, &mut out)?
+        };
+        let payload = out[..n].to_vec();
+        Some(self.launch_alert(from, kind, text, poly, circle, payload, origin, idx))
+    }
+
+    /// Puts a signed alert on the air from `from` and records it.
+    #[allow(clippy::too_many_arguments)]
+    fn launch_alert(&mut self, from: usize, kind: &str, text: &str, poly: Vec<(f64, f64)>, circle: Option<(f64, f64, f64)>, payload: Vec<u8>, origin: &'static str, of: usize) -> usize {
+        let idx = self.alerts.len();
         let inside: Vec<usize> = (0..self.nodes.len())
             .filter(|&i| {
                 let (x, y) = (self.nodes[i].x, self.nodes[i].y);
@@ -3615,8 +3697,8 @@ impl Engine {
             })
             .collect();
         let region = if self.sc.features.regions { self.alert_region(&inside) } else { 0 };
-        let payload = &out[..n];
-        let pid = packet_id(PacketType::Channel, &self.bulletin_channel, payload);
+        let pid = packet_id(PacketType::Channel, &self.bulletin_channel, &payload);
+        self.alert_pid.insert(pid, idx);
         self.alerts.push(Alert {
             from,
             kind: kind.to_string(),
@@ -3627,16 +3709,34 @@ impl Engine {
             pid,
             recv: HashMap::default(),
             inside,
+            payload: payload.clone(),
+            origin,
+            of,
+            dropped_forged: 0,
+            dropped_expired: 0,
+            handled: HashSet::default(),
         });
         self.tags.insert(pid, idx as u32 | ALERT_TAG);
-        self.tr(format!("{{\"t\":{},\"ev\":\"alert\",\"alert\":{idx},\"n\":{from},\"kind\":\"{kind}\",\"pid\":\"{pid:016x}\",\"rg\":{region}}}", self.now));
+        self.tr(format!("{{\"t\":{},\"ev\":\"alert\",\"alert\":{idx},\"n\":{from},\"kind\":\"{kind}\",\"origin\":\"{origin}\",\"pid\":\"{pid:016x}\",\"rg\":{region}}}", self.now));
         let ch = self.bulletin_channel;
         if self.nodes[from].alive()
-            && let Ok(actions) = self.nodes[from].router.send_channel_in(ch, region, payload)
+            && let Ok(actions) = self.nodes[from].router.send_channel_in(ch, region, &payload)
         {
             self.apply(from, actions.into_iter().collect(), Some(idx as u32 | ALERT_TAG));
         }
-        Some(idx)
+        idx
+    }
+
+    /// An attacker at `from` sends alert `of` again, byte for byte.
+    pub fn replay_alert(&mut self, from: usize, of: usize) -> Option<usize> {
+        if from >= self.nodes.len() || of >= self.alerts.len() {
+            return None;
+        }
+        let o = &self.alerts[of];
+        let (kind, text, poly, circle, payload) = (o.kind.clone(), o.text.clone(), o.poly.clone(), o.circle, o.payload.clone());
+        // Same bytes, same packet id: routers that still remember the
+        // original drop it as a duplicate; the rest check it.
+        Some(self.launch_alert(from, &kind, &text, poly, circle, payload, "replay", of))
     }
 
     /// The region for an alert: the one region all nodes in the area share, else `dk`.
@@ -4113,7 +4213,16 @@ impl Engine {
             }
             "alert" => {
                 let text = if ev.text.is_empty() { ev.alert.clone() } else { ev.text.clone() };
-                self.send_alert(ev.from, &ev.alert, &ev.area, &text);
+                let sev = if ev.severity == 0 { 2 } else { ev.severity };
+                self.send_alert_v2(ev.from, &ev.alert, &ev.area, &text, ev.expires_min, sev, "real");
+            }
+            "alert_forged" => {
+                let text = if ev.text.is_empty() { "Evacuate now".to_string() } else { ev.text.clone() };
+                let kind = if ev.alert.is_empty() { "evacuation" } else { ev.alert.as_str() }.to_string();
+                self.send_alert_v2(ev.from, &kind, &ev.area, &text, ev.expires_min, 3, "forged");
+            }
+            "alert_replay" => {
+                self.replay_alert(ev.from, ev.index);
             }
             "announce" => {
                 if ev.node < self.nodes.len() {
@@ -4360,6 +4469,9 @@ impl Engine {
             "airtime_s": self.nodes.iter().map(|x| x.airtime_us).sum::<u64>() as f64 / 1e6,
             "busiest_airtime_s": busiest as f64 / 1e6,
             "collisions": self.stats.collisions,
+            "alerts_forged_dropped": self.stats.alerts_forged_dropped,
+            "alerts_replay_dropped": self.stats.alerts_replay_dropped,
+            "alerts_repeat": self.stats.alerts_repeat,
             "coll_flood": self.stats.coll_flood,
             "coll_next_hop": self.stats.coll_next_hop,
             "coll_half_duplex": self.stats.coll_half_duplex,
@@ -4470,6 +4582,8 @@ impl Engine {
             "latency_p90_ms": lat.get(lat.len() * 9 / 10).copied().unwrap_or(0),
             "outside_received": outside,
             "pid": format!("{:016x}", a.pid),
+            "origin": a.origin, "of": a.of,
+            "dropped_forged": a.dropped_forged, "dropped_expired": a.dropped_expired,
         });
         if per_node {
             let recv: Vec<Value> = a.recv.iter().map(|(n, t)| json!([n, t - a.sent_ms, a.inside.contains(n)])).collect();
@@ -4773,11 +4887,4 @@ impl Engine {
     }
 }
 
-/// Alert index from a verified bulletin text written by `send_alert`.
-fn parse_area_index(text: &[u8]) -> Option<usize> {
-    if text.len() < 4 || text[0] != b'A' {
-        return None;
-    }
-    Some(u16::from_be_bytes([text[1], text[2]]) as usize)
-}
 

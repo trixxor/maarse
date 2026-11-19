@@ -621,7 +621,8 @@ pub struct TimedEvent {
     pub index: usize,
     pub up: bool,
     pub from: usize,
-    /// evacuation | fire | flood | water | info
+    /// evacuation | fire | flood | water | info. `alert_replay`: `index` is the
+    /// alert sent again; `alert_forged`: an alert signed with the wrong key.
     pub alert: String,
     pub text: String,
     pub node: usize,
@@ -634,4 +635,8 @@ pub struct TimedEvent {
     pub freq_mhz: f64,
     pub bw_hz: u32,
     pub tx_dbm: f64,
+    /// `alert`: minutes until the alert expires (0 = 60) and severity
+    /// 0-3 (minor .. extreme; 0 here = severe).
+    pub expires_min: u16,
+    pub severity: u8,
 }

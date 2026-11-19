@@ -859,6 +859,9 @@
     }
     return inside;
   }
+  function nodesInArea(area) {
+    return scenario.nodes.map((n, i) => [n, i]).filter(([n]) => area.circle ? DK.km([n.lat, n.lon], area.circle) * 1000 <= area.circle[2] : inPoly(n.lat, n.lon, area.polygon)).map(([, i]) => i);
+  }
   function finishArea() {
     const a = pendingArea; pendingArea = null;
     map.getContainer().style.cursor = "";
@@ -872,7 +875,14 @@
       area = { polygon: a.pts };
     }
     switch (a.purpose) {
-      case "alert": addEvent({ type: "alert", from: +$("al-from").value, alert: $("al-kind").value, text: $("al-text").value, area }); break;
+      case "alert": addEvent({ type: "alert", from: +$("al-from").value, alert: $("al-kind").value, text: $("al-text").value, expires_min: Math.max(1, +$("al-exp").value || 60), area }); break;
+      case "forged": {
+        // The attacker: a random handheld inside the area (else anywhere).
+        const inArea = nodesInArea(area).filter(i => scenario.nodes[i].kind === "handheld");
+        const pool = inArea.length ? inArea : scenario.nodes.map((n, i) => i).filter(i => scenario.nodes[i].kind === "handheld");
+        addEvent({ type: "alert_forged", from: pool[Math.floor(Math.random() * pool.length)] || 0, alert: "evacuation", text: "Evacuate now (forged)", area });
+        break;
+      }
       case "power": addEvent({ type: "power_cut", area }, { type: "power_restore", area }); break;
       case "reboot": addEvent({ type: "reboot", area, node_kind: $("ev-kind").value }); break;
       case "degrade": addEvent({ type: "degrade", area, db: +$("ev-db").value }, { type: "degrade_clear" }); break;
@@ -923,6 +933,7 @@
       case "kill_random": return addEvent({ type: "kill_random", n: +$("ev-n").value, node_kind: "repeater" }, { type: "revive" });
       case "reboot_random": return addEvent({ type: "reboot", n: +$("ev-n").value, node_kind: $("ev-kind").value });
       case "reboot_area": return beginArea("polygon", "reboot");
+      case "alert_forged": return beginArea("circle", "forged");
       default: return addEvent({ type: k });
     }
   }));
@@ -942,7 +953,9 @@
       case "degrade": return `Radio loss ${ev.db} dB in area`;
       case "degrade_clear": return "Radio loss cleared";
       case "link": return `Backbone link ${ev.index} ${ev.up ? "up" : "down"}`;
-      case "alert": return `${ev.alert} alert from ${name(ev.from)}: "${ev.text || ""}"`;
+      case "alert": return `${ev.alert} alert from ${name(ev.from)}: "${ev.text || ""}" (valid ${ev.expires_min || 60} min)`;
+      case "alert_forged": return `Forged alert from ${name(ev.from)}: "${ev.text || ""}"`;
+      case "alert_replay": return `Replay of alert ${ev.index} from ${name(ev.from)}`;
       case "announce": return `Announce from ${name(ev.node)}`;
       case "set_traffic": return "Change traffic" + (ev.traffic && ev.traffic.spam_per_min ? ` (spam ${ev.traffic.spam_per_min}/min from ${ev.traffic.spammers.length} nodes)` : "");
       default: return ev.type;
@@ -999,7 +1012,10 @@
   function renderAlerts() {
     if (!sim) return;
     const s = sim.summary();
-    $("alert-list").innerHTML = s.alerts.length ? `<h3>Sent alerts</h3><table><tr><th>#</th><th>type</th><th>in area</th><th>coverage</th><th>median</th><th>outside</th></tr>${s.alerts.map(a => `<tr class="click" data-a="${a.index}"><td>${a.index}</td><td>${esc(a.kind)}</td><td class="n">${a.inside_received}/${a.inside_alive}</td><td class="n">${a.coverage_pct.toFixed(0)} %</td><td class="n">${(a.latency_median_ms / 1000).toFixed(1)} s</td><td class="n">${a.outside_received}</td></tr>`).join("")}</table><p class="hint">Click an alert for the latency heat map (green fast → red slow, black = missed). "Outside" = nodes outside the area that also got it.</p>` : "";
+    const origin = (a) => a.origin === "forged" ? "forged" : a.origin === "replay" ? `replay of ${a.of}` : "real";
+    $("alert-list").innerHTML = s.alerts.length ? `<h3>Sent alerts</h3><table><tr><th>#</th><th>type</th><th>what</th><th>in area</th><th>coverage</th><th>median</th><th>outside</th><th title="dropped: bad signature / expired">dropped</th></tr>${s.alerts.map(a => `<tr class="click" data-a="${a.index}"><td>${a.index}</td><td>${esc(a.kind)}</td><td>${origin(a)}</td><td class="n">${a.inside_received}/${a.inside_alive}</td><td class="n">${a.coverage_pct.toFixed(0)} %</td><td class="n">${(a.latency_median_ms / 1000).toFixed(1)} s</td><td class="n">${a.outside_received}</td><td class="n">${a.dropped_forged + a.dropped_expired}</td></tr>`).join("")}</table><p class="hint">Click an alert for the latency heat map (green fast → red slow, black = missed). "Outside" = nodes outside the area that also got it. "Dropped" = nodes that checked it and threw it away (bad signature, or expired). A replay inside its valid time is not shown again where the original was seen.</p>` : "";
+    const rs = $("ev-replay");
+    if (rs) { const keep = rs.value; rs.innerHTML = s.alerts.filter(a => a.origin === "real").map(a => `<option value="${a.index}">#${a.index} ${esc(a.kind)}</option>`).join(""); if (keep) rs.value = keep; }
     $("alert-list").querySelectorAll("tr[data-a]").forEach(r => r.onclick = () => showAlert(+r.dataset.a));
   }
   function heat(f) { return `hsl(${120 - 120 * Math.min(1, Math.max(0, f))},85%,50%)`; }
@@ -1011,7 +1027,10 @@
     for (const [n, ms, inside] of a.recv) overlay.set(n, inside ? heat(ms / max) : "#93c5fd");
     restyle();
     hiLayer.clearLayers();
-    const ev = scenario.events.filter(e => e.type === "alert")[i];
+    // Alerts in the order the engine sent them; a replay uses its original's area.
+    const evs = scenario.events.filter(e => ["alert", "alert_forged", "alert_replay"].includes(e.type)).sort((x, y) => x.t_s - y.t_s);
+    let ev = evs[i];
+    if (ev && ev.type === "alert_replay") ev = evs[ev.index];
     if (ev && ev.area.circle) L.circle([ev.area.circle[0], ev.area.circle[1]], { radius: ev.area.circle[2], color: "#ef4444", fill: false }).addTo(hiLayer);
     else if (ev) L.polygon(ev.area.polygon, { color: "#ef4444", fill: false }).addTo(hiLayer);
   }
@@ -1580,6 +1599,12 @@
   for (const [id, key] of Object.entries(trMap)) $(id).onchange = () => { scenario.traffic[key] = +$(id).value; edited(); };
   ["opt-islands", "opt-links", "opt-backbone"].forEach(id => $(id).onchange = () => { drawLinks(); restyle(); });
   syncPerf();
+  $("ev-replay-go").onclick = () => {
+    const i = $("ev-replay").value;
+    if (i === "" || i == null) return showNote("Send an alert first (Send › Alerts), then replay it.");
+    const pool = scenario.nodes.map((n, k) => k).filter(k => scenario.nodes[k].kind === "handheld");
+    addEvent({ type: "alert_replay", index: +i, from: pool[Math.floor(Math.random() * pool.length)] || 0 });
+  };
   $("rd-go").onclick = () => {
     const ev = { type: "radio", sf: +$("rd-sf").value || 0, freq_mhz: +$("rd-f").value || 0, bw_hz: +$("rd-bw").value || 0, tx_dbm: $("rd-p").value === "" ? 0 : +$("rd-p").value };
     if (!ev.sf && !ev.freq_mhz && !ev.bw_hz && !ev.tx_dbm) return showNote("Pick at least one radio setting to change.");

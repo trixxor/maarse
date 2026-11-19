@@ -406,4 +406,37 @@ mod tests {
         let up = e.nodes[0].links.iter().filter(|&&k| e.link_ok(k)).count();
         assert!(up >= 2, "server has {up} working links");
     }
+
+    #[test]
+    fn alerts_v2_drop_forged_and_expired_replays() {
+        let mut sc: Value = serde_json::from_str(&scenario()).unwrap();
+        sc["traffic"] = json!({"direct_per_min": 0, "channel_per_min": 0});
+        sc["events"] = json!([
+            // A real alert valid 5 min, a forgery, and two replays of the
+            // real one: inside its time (only repeats) and after it expired.
+            {"t_s": 20, "type": "alert", "from": 18, "alert": "fire", "area": {"circle": [56.0, 9.3, 30000]}, "text": "Fire", "expires_min": 5},
+            {"t_s": 60, "type": "alert_forged", "from": 3, "area": {"circle": [56.0, 9.3, 30000]}, "text": "Evacuate"},
+            {"t_s": 120, "type": "alert_replay", "from": 4, "index": 0},
+            // The Zealand cluster is off while the original goes out, so its
+            // routers have not seen it (elsewhere the duplicate filter drops
+            // a replay before the alert check does).
+            {"t_s": 10, "type": "kill", "nodes": [19, 20, 21]},
+            {"t_s": 500, "type": "revive", "nodes": [19, 20, 21]},
+            {"t_s": 600, "type": "alert_replay", "from": 21, "index": 0}
+        ]);
+        let mut e = create(&sc.to_string()).unwrap();
+        e.run_until(900_000, usize::MAX);
+        let real = e.alert_summary(0, false);
+        assert!(real["inside_received"].as_u64().unwrap() > 0, "{real}");
+        let forged = e.alert_summary(1, false);
+        assert_eq!(forged["inside_received"], json!(0), "{forged}");
+        assert!(forged["dropped_forged"].as_u64().unwrap() > 0, "{forged}");
+        let early = e.alert_summary(2, false);
+        assert_eq!(early["origin"], json!("replay"));
+        let late = e.alert_summary(3, false);
+        assert_eq!(late["inside_received"], json!(0), "an expired replay is never shown: {late}");
+        assert!(late["dropped_expired"].as_u64().unwrap() > 0, "{late}");
+        let s = e.summary();
+        assert!(s["alerts_forged_dropped"].as_u64().unwrap() > 0 && s["alerts_replay_dropped"].as_u64().unwrap() > 0, "{s}");
+    }
 }

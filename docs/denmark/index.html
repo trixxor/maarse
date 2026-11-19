@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=42">
-<link rel="stylesheet" href="phone.css?v=42">
+<link rel="stylesheet" href="style.css?v=43">
+<link rel="stylesheet" href="phone.css?v=43">
 </head>
 <body>
 <header id="top">
@@ -172,6 +172,10 @@
         Frequency <input id="rd-f" type="number" step="0.025" placeholder="868" style="width:80px"> MHz</label>
       <label>Bandwidth <select id="rd-bw"><option value="0">keep</option><option value="62500">62.5 kHz</option><option value="125000">125 kHz</option><option value="250000">250 kHz</option><option value="500000">500 kHz</option></select>
         Power <input id="rd-p" type="number" placeholder="keep" style="width:60px"> dBm <button id="rd-go">Switch now</button></label>
+      <h3>Attacks on alerts</h3>
+      <p class="hint">Alerts v2 are checked with the real code (maarse-crypto alert): a forged alert has a bad signature and is dropped by every node; a replay is the same signed bytes sent again later: shown nowhere twice, and dropped everywhere once it has expired. Counts are in the Alerts list (Send).</p>
+      <div class="row"><button data-ev="alert_forged">Forged alert in an area (circle)</button></div>
+      <label>Replay alert <select id="ev-replay"></select> <button id="ev-replay-go">from a random handheld</button></label>
       <h3>Internet</h3>
       <div class="row"><button data-ev="internet_down">Internet down everywhere</button><button data-ev="internet_up">Internet back</button></div>
       <label>Region <select id="ev-region"><option>nordjylland</option><option>midtjylland</option><option>syddanmark</option><option>sjaelland</option><option>hovedstaden</option></select> <button data-ev="internet_down_region">Internet down</button></label>
@@ -206,8 +210,9 @@
     <section id="tab-alerts" class="tab" data-title="Alerts">
       <p class="hint">A signed bulletin (real <code>maarse_crypto::bulletin</code>) on <code>#bulletin</code>, sent with the bulletin priority (<code>qos::priority_with</code>). The area travels inside the signed text; see AREA-ALERTS.md.</p>
       <label>Sender <select id="al-from"></select></label>
-      <label>Type <select id="al-kind"><option value="evacuation">Evacuation</option><option value="fire">Fire</option><option value="flood">Flood</option><option value="water">Water</option><option value="info">Info</option></select></label>
+      <label>Type <select id="al-kind"><option value="evacuation">Evacuation</option><option value="fire">Fire</option><option value="flood">Flood</option><option value="water">Water</option><option value="shelter">Shelter</option><option value="chemical">Chemical</option><option value="power">Power</option><option value="weather">Weather</option><option value="missing">Missing person</option><option value="info">Info</option></select></label>
       <label>Text <input id="al-text" value="Evacuate now" maxlength="60"></label>
+      <label>Valid for <input type="number" id="al-exp" value="60" min="1" max="1440" style="width:60px"> min <span class="hint">(alerts v2: signed with the issuer key, shown once per node, dropped after this time)</span></label>
       <button id="btn-al-circle">Draw circle and send</button>
       <button id="btn-al-poly">Draw polygon and send</button>
       <div id="alert-list"></div>
@@ -284,12 +289,12 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="scenarios.js?v=42"></script>
-<script src="maarse-sim.js?v=42"></script>
-<script src="app.js?v=42"></script>
-<script src="store.js?v=42"></script>
-<script src="phone.js?v=42"></script>
-<script src="profiles.js?v=42"></script>
-<script src="send.js?v=42"></script>
+<script src="scenarios.js?v=43"></script>
+<script src="maarse-sim.js?v=43"></script>
+<script src="app.js?v=43"></script>
+<script src="store.js?v=43"></script>
+<script src="phone.js?v=43"></script>
+<script src="profiles.js?v=43"></script>
+<script src="send.js?v=43"></script>
 </body>
 </html>

@@ -1,20 +1,35 @@
-/* Phones panel (phone.js): two phones running the real web client, over the map. */
-.ph-panel { position:absolute; top:12px; right:12px; z-index:1200; background:var(--ov); border:1px solid var(--ovline); border-radius:16px; padding:10px 12px 12px; box-shadow:0 6px 24px rgba(0,0,0,.18); max-width:calc(100% - 24px); max-height:calc(100% - 24px); overflow:auto; }
-.ph-head { display:flex; gap:10px; align-items:baseline; margin-bottom:8px; }
-.ph-head b { font-size:14px; }
-.ph-note { color:var(--mute); font-size:12px; flex:1; }
-.ph-x { border:none; background:none; font-size:18px; line-height:1; padding:0 4px; color:var(--mute); }
-.ph-row { display:flex; gap:14px; flex-wrap:wrap; }
-.ph-card { display:flex; flex-direction:column; gap:6px; width:calc(432px * var(--ph-k, 0.7)); }
-.ph-bar { display:flex; gap:6px; align-items:center; font-size:12px; color:var(--mute); }
-.ph-bar select { flex:1; min-width:0; padding:3px 6px; font-size:12px; }
+/* Phones (phone.js): floating phone windows over the map, a dock tray and chips. */
+#ph-layer { position:absolute; inset:0; pointer-events:none; z-index:1200; }
+#ph-layer > * { pointer-events:auto; }
+.ph-addbtn { position:absolute; top:12px; right:12px; z-index:1250; box-shadow:0 4px 14px rgba(0,0,0,.25); }
+.ph-addbtn:disabled { opacity:.6; }
+.ph-tray { position:absolute; top:52px; right:12px; bottom:12px; display:flex; gap:10px; align-items:flex-start; flex-direction:row-reverse; flex-wrap:wrap-reverse; overflow:auto; max-width:calc(100% - 24px); pointer-events:none; }
+.ph-tray > * { pointer-events:auto; }
+.ph-chips { position:absolute; left:56px; bottom:12px; display:flex; gap:6px; flex-wrap:wrap; }
+.ph-chip { display:flex; gap:6px; align-items:center; border-radius:999px; padding:5px 12px; background:var(--ov); border:1px solid var(--ovline); box-shadow:0 2px 8px rgba(0,0,0,.2); font-size:12px; }
+.ph-win { position:absolute; background:var(--ov); border:1px solid var(--ovline); border-radius:16px; padding:6px 8px 8px; box-shadow:0 8px 28px rgba(0,0,0,.3); display:flex; flex-direction:column; gap:6px; width:calc(432px * var(--ph-k, 0.7) + 16px); }
+.ph-win.docked { position:relative; left:auto !important; top:auto !important; box-shadow:0 2px 10px rgba(0,0,0,.18); }
+.ph-win.hidden { display:none; }
+.ph-bar { display:flex; gap:6px; align-items:center; font-size:12px; color:var(--mute); cursor:grab; user-select:none; touch-action:none; padding:2px 2px 0; }
+.ph-win.docked .ph-bar { cursor:default; }
+.ph-bar b { color:var(--ink); font-size:13px; }
+.ph-what { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ph-b { border:none; background:none; color:var(--mute); font-size:15px; line-height:1; padding:2px 5px; min-height:0; border-radius:6px; }
+.ph-b:hover { background:var(--line); color:var(--ink); }
 .ph-dot { width:9px; height:9px; border-radius:50%; background:var(--ok); flex:none; }
 .ph-dot.down { background:var(--bad); }
 /* A real Android screen (412 x 892 dp) in a 10 px bezel, scaled as a whole. */
 .ph-fit { width:calc(432px * var(--ph-k, 0.7)); height:calc(912px * var(--ph-k, 0.7)); }
 .ph-device { position:relative; width:412px; height:892px; border:10px solid #111418; border-radius:46px; overflow:hidden; background:#fff; box-shadow:0 0 0 2px #2a3038, 0 8px 28px rgba(0,0,0,.28); transform:scale(var(--ph-k, 0.7)); transform-origin:top left; box-sizing:content-box; }
-.ph-notch { position:absolute; top:10px; left:50%; width:14px; height:14px; margin-left:-7px; border-radius:50%; background:#111418; z-index:2; pointer-events:none; }
+.ph-notch { position:absolute; top:12px; left:50%; width:12px; height:12px; margin-left:-6px; border-radius:50%; background:#111418; z-index:2; pointer-events:none; }
 .ph-screen { width:412px; height:892px; border:0; display:block; background:#fff; }
-.ph-stat { font-size:11px; color:var(--mute); min-height:1.4em; }
+.ph-stat { font-size:11px; color:var(--mute); min-height:1.4em; padding:0 2px; }
+.ph-setup { font-size:12px; display:flex; flex-direction:column; gap:4px; padding:2px 4px 4px; max-height:calc(912px * var(--ph-k, 0.7)); overflow:auto; }
+.ph-setup h4 { margin:8px 0 2px; font-size:13px; }
+.ph-setup label { display:flex; gap:6px; align-items:flex-start; }
+.ph-setup select { width:100%; font-size:12px; padding:3px 4px; }
+.ph-indent { padding-left:22px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.ph-ll { color:var(--mute); }
+.ph-help { margin:2px 0; color:var(--mute); }
+.ph-start { margin-top:8px; align-self:flex-start; padding:6px 22px; }
 #ph-side .ph-list { margin:6px 0 0 18px; padding:0; font-size:12px; color:var(--mute); }
-

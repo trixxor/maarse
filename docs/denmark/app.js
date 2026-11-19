@@ -209,7 +209,9 @@
   }
   function edited() { rebuild(); }
   // Phones (phone.js) read the engine and scenario through this.
-  window.DKSim = { get sim() { return sim; }, get scenario() { return scenario; }, name: (i) => name(i) };
+  window.DKSim = { get sim() { return sim; }, get scenario() { return scenario; }, name: (i) => name(i), map,
+    // A phone added in the Phones panel becomes a node: appended to the scenario, engine rebuilt.
+    addNode(spec, links) { scenario.nodes.push(spec); for (const l of links || []) scenario.links.push(l); edited(); return scenario.nodes.length - 1; } };
   function showNote(text) { $("sc-info").textContent = text; }
 
   function fmtTime(s) { const m = Math.floor(s / 60); const r = s - m * 60; return `${m}:${r < 10 ? "0" : ""}${r.toFixed(r < 60 && m === 0 ? 1 : 0)}`; }

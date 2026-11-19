@@ -211,7 +211,7 @@
   }
   function edited() { rebuild(); fillFlood(); }
   // Phones (phone.js) read the engine and scenario through this.
-  window.DKSim = { get sim() { return sim; }, get scenario() { return scenario; }, name: (i) => name(i), map, showMenu: (e, t, items) => showMenu(e, t, items), openTab: (t) => openTab(t),
+  window.DKSim = { get sim() { return sim; }, get scenario() { return scenario; }, name: (i) => name(i), map, get modes() { return MODES; }, layers: { nodes: nodeLayer, links: linkLayer, clutter: clutterLayer, disaster: disasterLayer, land }, showMenu: (e, t, items) => showMenu(e, t, items), openTab: (t) => openTab(t),
     // A phone added in the Phones panel becomes a node: appended to the scenario, engine rebuilt.
     edited: () => edited(), addNode(spec, links) { scenario.nodes.push(spec); for (const l of links || []) scenario.links.push(l); edited(); return scenario.nodes.length - 1; } };
   function showNote(text) { $("sc-info").textContent = text; }
@@ -1694,24 +1694,27 @@
 
   // ---------- tabs, controls ----------
   // Four modes; each shows one or more of the old tab sections, stacked.
-  const MODES = { build: ["build", "terrain"], send: ["journey", "alerts"], break: ["disaster"], results: ["stats", "log"], phones: ["phones"] };
+  const MODES = { build: ["build", "terrain"], run: ["journey", "alerts", "disaster", "phones"], results: ["stats", "log"] };
   let mode = "send";
   function openMode(m) {
     mode = m;
     document.querySelectorAll("#modes button").forEach(x => x.classList.toggle("on", x.dataset.mode === m));
     document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", MODES[m].includes(x.id.slice(4))));
-    if (m === "send") renderMsgList();
+    if (m === "run") renderMsgList();
     if (m === "results") renderStats();
+    // The frame (shell.js) opens the panel for this mode.
+    document.dispatchEvent(new CustomEvent("dk-mode", { detail: m }));
   }
   // Opens the mode that holds an old tab section and scrolls to it.
   function openTab(t) {
-    const m = Object.keys(MODES).find(k => MODES[k].includes(t)) || "send";
+    const m = Object.keys(MODES).find(k => MODES[k].includes(t)) || "run";
     if (m !== mode) openMode(m);
     const sec = $("tab-" + t);
     if (sec && MODES[m][0] !== t) sec.scrollIntoView({ block: "start" });
+    document.dispatchEvent(new CustomEvent("dk-tab", { detail: t }));
   }
   $("modes").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) openMode(b.dataset.mode); });
-  openMode("send");
+  openMode("run");
   function togglePlay() { playing = !playing; $("btn-play").textContent = playing ? "❚❚" : "▶"; }
   $("btn-play").onclick = togglePlay;
   document.addEventListener("keydown", (e) => { if (e.code === "Space" && !/INPUT|SELECT|TEXTAREA|BUTTON/.test(document.activeElement.tagName)) { e.preventDefault(); togglePlay(); } });

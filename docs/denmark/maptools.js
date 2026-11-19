@@ -13,7 +13,7 @@
     #mt-bar { top:84px; left:10px; display:flex; flex-direction:column; gap:2px; padding:4px; }
     #mt-bar button { display:flex; align-items:center; gap:8px; border:0; background:transparent; padding:6px 8px; border-radius:8px; font-size:12px; color:var(--ink); text-align:left; min-height:32px; white-space:nowrap; }
     #mt-bar button .ic { width:18px; text-align:center; font-size:15px; }
-    #mt-bar button .tx { display:none; }
+    #mt-bar button .tx { display:none; } #mt-bar kbd { font:11px ui-monospace,monospace; color:var(--mute); margin-left:6px; }
     #mt-bar:hover button .tx, #mt-bar:focus-within button .tx { display:inline; }
     #mt-bar button:hover, #mt-bar button:focus-visible { background:rgba(127,127,127,.18); outline:0; }
     #mt-bar button.on { background:var(--acc, #2563eb); color:#fff; }
@@ -29,21 +29,44 @@
     @media (max-width: 600px) { #mt-bar { top:auto; bottom:44px; } }`;
   document.head.appendChild(css);
 
+  // One tool bar; each tool has a key (also listed under "?" and in the
+  // command palette). Icons: 24 px stroke drawings (window.DKIcons, shell.js
+  // reads the same set).
+  const I = {
+    search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+    ruler: '<path d="M21.3 15.3 8.7 2.7a1 1 0 0 0-1.4 0L2.7 7.3a1 1 0 0 0 0 1.4l12.6 12.6a1 1 0 0 0 1.4 0l4.6-4.6a1 1 0 0 0 0-1.4z"/><path d="m7.5 10.5 2-2M10.5 13.5l2-2M13.5 16.5l2-2"/>',
+    path: '<path d="M3 20h18"/><path d="m3 20 5-8 4 4 3-5 6 9"/><path d="M4 5h16" stroke-dasharray="2 3"/>',
+    coverage: '<path d="M4.9 16.1a10 10 0 0 1 0-14.2M19.1 1.9a10 10 0 0 1 0 14.2M7.8 13.2a6 6 0 0 1 0-8.4M16.2 4.8a6 6 0 0 1 0 8.4"/><circle cx="12" cy="9" r="2"/><path d="M12 11v10"/>',
+    heights: '<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+    area: '<path d="M12 3 4 9l2 10h12l2-10-8-6z"/><circle cx="12" cy="3" r="1.2"/><circle cx="4" cy="9" r="1.2"/><circle cx="20" cy="9" r="1.2"/>',
+    walkers: '<circle cx="9" cy="5" r="2"/><path d="M9 7v6l-3 8M9 13l3 8M6 10l3-3 3 3"/><circle cx="17" cy="7" r="1.6"/><path d="M17 9v4l-2 5M17 13l2 5"/>',
+    alert: '<path d="M3 11v2a1 1 0 0 0 1 1h3l5 4V6L7 10H4a1 1 0 0 0-1 1z"/><path d="M16 9a3 3 0 0 1 0 6M19 6a7 7 0 0 1 0 12"/>',
+    phone: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
+    layers: '<path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/>',
+  };
+  window.DKIcons = Object.assign(window.DKIcons || {}, I);
+  const svg = (k) => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[k]}</svg>`;
   const TOOLS = [
-    { id: "search", ic: "🔍", tx: "Find an address or place", run: () => toggleSearch() },
-    { id: "ruler", ic: "📏", tx: "Ruler: measure a line", run: () => toggleRuler() },
-    { id: "profile", ic: "📡", tx: "Radio path between two points", run: () => (mode === "profile" ? T.cancelProfile() || setMode(null) : T.startProfile()) },
-    { id: "realworld", ic: "🌍", tx: "Real world: the real network", run: () => window.DKRealWorld && DKRealWorld.show() },
-    { id: "coverage", ic: "📶", tx: "Coverage map", run: () => window.DKCoverage && DKCoverage.start() },
-    { id: "heights", ic: "⛰", tx: "Show heights", run: () => { T.showHeights(!T.heightsShown); paint(); } },
+    { id: "search", ic: "search", key: "/", tx: "Find a place", run: () => toggleSearch() },
     "-",
-    { id: "forest", ic: "🌲", tx: "Draw a forest area", run: () => side("terrain", "btn-clutter") },
-    { id: "walkers", ic: "🚶", tx: "Place a group of walkers", run: () => side("terrain", "btn-walkers") },
-    { id: "alert", ic: "📢", tx: "Draw an alert area and send", run: () => side("alerts", "btn-al-poly") },
+    { id: "ruler", ic: "ruler", key: "M", tx: "Measure distance", run: () => toggleRuler() },
+    { id: "profile", ic: "path", key: "R", tx: "Radio path", run: () => (mode === "profile" ? T.cancelProfile() || setMode(null) : T.startProfile()) },
+    { id: "coverage", ic: "coverage", key: "C", tx: "Coverage", run: () => window.DKCoverage && DKCoverage.start() },
+    "-",
+    { id: "forest", ic: "area", key: "F", tx: "Forest or town area", run: () => side("terrain", "btn-clutter") },
+    { id: "walkers", ic: "walkers", key: "W", tx: "Group of walkers", run: () => side("terrain", "btn-walkers") },
+    { id: "alert", ic: "alert", key: "A", tx: "Alert area", run: () => side("alerts", "btn-al-poly") },
+    { id: "phone", ic: "phone", key: "P", tx: "Add a phone", run: () => { const b = $("ph-add") || $("ph-toggle"); if (b) b.click(); } },
+    "-",
+    { id: "realworld", ic: "globe", key: "G", tx: "Real world", run: () => window.DKRealWorld && DKRealWorld.show() },
+    { id: "layers", ic: "layers", key: "L", tx: "Layers", run: () => window.DKShell && DKShell.toggleLayers() },
+    // Key only (also in Layers): the height map.
+    { id: "heights", ic: "heights", key: "H", tx: "Height map", hidden: true, run: () => { T.showHeights(!T.heightsShown); paint(); } },
   ];
   const bar = document.createElement("div");
   bar.id = "mt-bar"; bar.className = "ov"; bar.setAttribute("role", "toolbar"); bar.setAttribute("aria-label", "Map tools");
-  bar.innerHTML = TOOLS.map((t) => t === "-" ? "<hr>" : `<button data-t="${t.id}" title="${t.tx}" aria-label="${t.tx}"><span class="ic">${t.ic}</span><span class="tx">${t.tx}</span></button>`).join("");
+  bar.innerHTML = TOOLS.filter((t) => !t.hidden).map((t) => t === "-" ? "<hr>" : `<button data-t="${t.id}" data-tip="${t.tx}" data-key="${t.key}" aria-label="${t.tx}" aria-keyshortcuts="${t.key}">${svg(t.ic)}</button>`).join("");
   $("mapwrap").appendChild(bar);
   L.DomEvent.disableClickPropagation(bar);
   bar.querySelectorAll("button").forEach((b) => b.onclick = () => TOOLS.find((t) => t.id === b.dataset.t).run());
@@ -54,6 +77,13 @@
     bar.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.t === mode || (b.dataset.t === "heights" && T.heightsShown)));
   }
   T.onMode = (m) => setMode(m);
+  // Keys for the tools, while no text field has the focus.
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    const t = TOOLS.find((x) => x !== "-" && x.key !== "/" && x.key.toLowerCase() === e.key.toLowerCase());
+    if (t) { e.preventDefault(); t.run(); }
+  });
+  window.DKMapTools = { paint, tools: TOOLS.filter((t) => t !== "-") };
   // The side panel holds the form for a tool (sizes, loss); open it and press its button.
   function side(tab, btn) {
     if (mode === "ruler") stopRuler();

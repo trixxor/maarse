@@ -422,6 +422,8 @@
   syncHeights();
 
   function showHeights(on) { $("hm-on").checked = on; $("hm-on").onchange(); }
-  const api = { heightAt, on: false, syncHeights, startProfile, cancelProfile, showHeights, get heightsShown() { return map.hasLayer(layer); }, onMode: null };
+  // The Layers panel switches all radio paths on and off.
+  function setPathsVisible(on) { paths.forEach((p) => { if (on) p.layer.addTo(map); else map.removeLayer(p.layer); }); float.classList.toggle("hidden", !on || !paths.length); }
+  const api = { heightAt, on: false, syncHeights, startProfile, cancelProfile, showHeights, setPathsVisible, get heightsShown() { return map.hasLayer(layer); }, onMode: null };
   window.DKTerrain = api;
 })();

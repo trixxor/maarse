@@ -8,29 +8,90 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=57">
-<link rel="stylesheet" href="phone.css?v=57">
+<link rel="stylesheet" href="style.css?v=58">
+<link rel="stylesheet" href="phone.css?v=58">
+<link rel="stylesheet" href="shell.css?v=6">
 </head>
 <body>
 <header id="top">
-  <div class="brand"><b>Må:rse</b> Denmark Simulator <a href="../simulator/" title="The simpler JS model">Mesh Lab</a> <a href="README.md">How it works</a></div>
+  <div class="top-l">
+    <div class="brand"><b>Må:rse</b><span>Denmark</span></div>
+    <select id="preset" title="Scenario" aria-label="Scenario"></select>
+    <button id="btn-file" class="ghost" aria-haspopup="true" aria-expanded="false" title="Save, snapshots, share, scenario file, performance">File</button>
+  </div>
   <nav id="modes" aria-label="Mode">
-    <button data-mode="build">Build</button>
-    <button data-mode="send" class="on">Send</button>
-    <button data-mode="break">Break</button>
-    <button data-mode="results">Results</button>
-    <button data-mode="phones">Phones</button>
+    <button data-mode="build" title="Network, terrain and radio">Build</button>
+    <button data-mode="run" class="on" title="Messages, alerts, events and phones">Run</button>
+    <button data-mode="results" title="Numbers, comparisons and the packet log">Results</button>
   </nav>
   <div class="ctrl">
-    <select id="preset" title="Scenario preset"></select>
-    <button id="btn-reset" title="Rebuild the simulation from the scenario (t = 0)">⟲ Reset</button>
-    <button id="btn-theme" title="Light or dark mode">◐ <span id="theme-name">Dark</span></button>
+    <button id="btn-cmd" class="cmd-trigger" title="Find any action or setting (Ctrl+K)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Search actions</span><kbd>Ctrl K</kbd></button>
+    <button id="btn-reset" class="icon" title="Restart the run from t = 0" aria-label="Restart the run"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button>
+    <button id="btn-theme" class="icon" title="Light or dark" aria-label="Light or dark"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span id="theme-name" class="sr">Dark</span></button>
+    <button id="btn-help" class="icon" aria-haspopup="true" aria-expanded="false" title="About and keys" aria-label="About and keys"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg></button>
   </div>
-  <div class="honest">Simplified radio model (log-distance path loss, antenna height, radio horizon, forest loss per km). Not a coverage prediction; a simulator is not a field measurement. The routing is the real <code>maarse-core</code> Router.</div>
 </header>
 
+<div id="file-pop" class="pop hidden" role="dialog" aria-label="File">
+      <details class="card">
+        <summary><span class="ci">⎙</span><span><b>Save, snapshots and links</b><small>in this browser; branch from a snapshot; share</small></span></summary>
+        <div class="card-body">
+      <p class="hint">Saved in this browser only. A snapshot keeps the time too: open it to continue from there, or start a branch from it and try something else.</p>
+      <div class="row"><input id="st-name" placeholder="name (optional)" size="16" aria-label="Name for the saved run"><button id="st-save">Save run</button><button id="st-snap">Snapshot now</button><button id="st-share">Copy link</button></div>
+      <input id="st-link" class="hidden" readonly style="width:100%" aria-label="Share link">
+      <p class="hint" id="st-note"></p>
+      <div id="st-list"></div>
+        </div>
+      </details>
+      <details class="card">
+        <summary><span class="ci">⏱</span><span><b>Performance</b><small>limits and the live benchmark</small></span></summary>
+        <div class="card-body">
+      <p class="hint">Limits for this browser. The live benchmark grows the network step by step on the map and shows how many nodes this computer can simulate in real time, at 10× and at 100×.</p>
+      <label>Max events per frame <input type="number" id="pf-events" min="1000" step="1000" style="width:90px"></label>
+      <label>Max speed <input type="number" id="pf-speed" min="1" style="width:70px">× · warn above <input type="number" id="pf-nodes" min="10" style="width:70px"> nodes</label>
+      <button id="pf-bench">Run live benchmark</button>
+      <p class="hint" id="pf-out"></p>
+        </div>
+      </details>
+      <details class="card">
+        <summary><span class="ci">⇩</span><span><b>Scenario file</b><small>export or import JSON</small></span></summary>
+        <div class="card-body">
+      <button id="btn-export">Export JSON</button>
+      <label class="file">Import JSON <input type="file" id="file-import" accept=".json,application/json"></label>
+        </div>
+      </details>
+</div>
+<div id="help-pop" class="pop hidden" role="dialog" aria-label="About and keys">
+  <p><b>About</b> Simplified radio model (log-distance path loss, antenna height, radio horizon, forest loss per km, hills when switched on). Not a coverage prediction; a simulator is not a field measurement. The routing is the real <code>maarse-core</code> Router. <a href="README.md">How it works</a> · <a href="../simulator/">Mesh Lab</a></p>
+  <p><b>Modes</b> Build: the network, terrain and radio. Run: send messages and alerts, break things, phones. Results: numbers, comparisons and the packet log.</p>
+  <p><b>Map</b> Tools on the left edge of the map. What the map shows: Layers (the last tool). What you click opens on the right. <b>Ctrl K</b> finds any action or setting.</p>
+  <table class="keys">
+    <tr><td><kbd>Space</kbd></td><td>play / pause</td><td><kbd>/</kbd></td><td>find a place</td></tr>
+    <tr><td><kbd>M</kbd></td><td>ruler</td><td><kbd>R</kbd></td><td>radio path</td></tr>
+    <tr><td><kbd>C</kbd></td><td>coverage</td><td><kbd>H</kbd></td><td>height map</td></tr>
+    <tr><td><kbd>G</kbd></td><td>real world</td><td><kbd>P</kbd></td><td>add a phone</td></tr>
+    <tr><td><kbd>F</kbd></td><td>forest area</td><td><kbd>W</kbd></td><td>walkers</td></tr>
+    <tr><td><kbd>A</kbd></td><td>alert area</td><td><kbd>L</kbd></td><td>layers</td></tr>
+    <tr><td><kbd>Ctrl K</kbd></td><td>find anything</td><td><kbd>Esc</kbd></td><td>stop a tool, close</td></tr>
+  </table>
+</div>
 <div id="main">
   <aside id="side">
+    <section id="layers" aria-label="Layers">
+      <button class="ly-head" id="ly-fold" aria-expanded="true"><b>Layers</b><span class="hint">what the map shows</span><span class="ly-arrow">▾</span></button>
+      <label><input type="checkbox" id="ly-nodes" checked> Nodes</label>
+      <label><input type="checkbox" id="opt-islands" checked> Island colours</label>
+      <label><input type="checkbox" id="opt-backbone" checked> Backbone</label>
+      <label><input type="checkbox" id="opt-links"> Links of selected</label>
+      <label><input type="checkbox" id="ly-heights"> Height map</label>
+      <label><input type="checkbox" id="ly-coverage" checked> Coverage</label>
+      <label><input type="checkbox" id="ly-paths" checked> Radio paths</label>
+      <label><input type="checkbox" id="ly-clutter" checked> Areas</label>
+      <label><input type="checkbox" id="ly-feed"> Live packets</label>
+      <label><input type="checkbox" id="ly-legend" checked> Legend</label>
+      <p class="hint" id="sc-info"></p>
+    </section>
+
 
     <section id="tab-journey" class="tab" data-title="Send and follow">
       <h3>Send one message and watch it</h3>
@@ -110,42 +171,6 @@
       <details class="card">
         <summary><span class="ci">⚙</span><span><b>Rules and radio</b><small>profiles: “Standard (as built)” or your own</small></span></summary>
         <div class="card-body" id="pr-body"></div>
-      </details>
-      <details class="card">
-        <summary><span class="ci">◐</span><span><b>Map display</b><small>islands, radio links, backbone</small></span></summary>
-        <div class="card-body">
-      <label><input type="checkbox" id="opt-islands" checked> Colour by island (radio component)</label>
-      <label><input type="checkbox" id="opt-links"> Show radio links of the selected node</label>
-      <label><input type="checkbox" id="opt-backbone" checked> Show backbone links</label>
-        </div>
-      </details>
-      <details class="card">
-        <summary><span class="ci">⎙</span><span><b>Save, snapshots and links</b><small>in this browser; branch from a snapshot; share</small></span></summary>
-        <div class="card-body">
-      <p class="hint">Saved in this browser only. A snapshot keeps the time too: open it to continue from there, or start a branch from it and try something else.</p>
-      <div class="row"><input id="st-name" placeholder="name (optional)" size="16" aria-label="Name for the saved run"><button id="st-save">Save run</button><button id="st-snap">Snapshot now</button><button id="st-share">Copy link</button></div>
-      <input id="st-link" class="hidden" readonly style="width:100%" aria-label="Share link">
-      <p class="hint" id="st-note"></p>
-      <div id="st-list"></div>
-        </div>
-      </details>
-      <details class="card">
-        <summary><span class="ci">⏱</span><span><b>Performance</b><small>limits and the live benchmark</small></span></summary>
-        <div class="card-body">
-      <p class="hint">Limits for this browser. The live benchmark grows the network step by step on the map and shows how many nodes this computer can simulate in real time, at 10× and at 100×.</p>
-      <label>Max events per frame <input type="number" id="pf-events" min="1000" step="1000" style="width:90px"></label>
-      <label>Max speed <input type="number" id="pf-speed" min="1" style="width:70px">× · warn above <input type="number" id="pf-nodes" min="10" style="width:70px"> nodes</label>
-      <button id="pf-bench">Run live benchmark</button>
-      <p class="hint" id="pf-out"></p>
-        </div>
-      </details>
-      <details class="card">
-        <summary><span class="ci">⇩</span><span><b>Scenario file</b><small>export or import JSON</small></span></summary>
-        <div class="card-body">
-      <button id="btn-export">Export JSON</button>
-      <label class="file">Import JSON <input type="file" id="file-import" accept=".json,application/json"></label>
-      <p class="hint" id="sc-info"></p>
-        </div>
       </details>
     </section>
 
@@ -298,18 +323,19 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="demo-sites.js?v=57"></script>
-<script src="scenarios.js?v=57"></script>
-<script src="maarse-sim.js?v=57"></script>
-<script src="app.js?v=57"></script>
-<script src="store.js?v=57"></script>
-<script src="phone.js?v=57"></script>
-<script src="profiles.js?v=57"></script>
-<script src="send.js?v=57"></script>
+<script src="demo-sites.js?v=58"></script>
+<script src="scenarios.js?v=58"></script>
+<script src="maarse-sim.js?v=58"></script>
+<script src="app.js?v=59"></script>
+<script src="store.js?v=58"></script>
+<script src="phone.js?v=58"></script>
+<script src="profiles.js?v=58"></script>
+<script src="send.js?v=58"></script>
 <script src="dhm.js?v=1"></script>
 <script src="terrain.js?v=8"></script>
 <script src="coverage.js?v=5"></script>
 <script src="realworld.js?v=1"></script>
-<script src="maptools.js?v=7"></script>
+<script src="maptools.js?v=9"></script>
+<script src="shell.js?v=7"></script>
 </body>
 </html>

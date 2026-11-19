@@ -90,7 +90,7 @@
   }
 
   // ---------- drawing: the best margin of all sites, on land ----------
-  let overlay = null;
+  let overlay = null, visible = true;
   // Margin (dB over sensitivity) -> colour, light = weak, dark = strong.
   const RAMP = [[20, [15, 82, 186]], [10, [37, 125, 230]], [3, [96, 165, 250]], [0, [165, 205, 252]]];
   function landMask(W, H, w0, n0, cellLon, cellLat) {
@@ -154,7 +154,8 @@
       covered++;
     }
     g2.putImageData(img, 0, 0);
-    overlay = L.imageOverlay(c.toDataURL(), [[s0, w0], [n0, e0]], { opacity: +$("cv-op").value, interactive: false, pane: "heightPane" }).addTo(map);
+    overlay = L.imageOverlay(c.toDataURL(), [[s0, w0], [n0, e0]], { opacity: +$("cv-op").value, interactive: false, pane: "heightPane" });
+    if (visible) overlay.addTo(map);
     stats(covered * cell * cell / 1e6);
   }
   function stats(km2) {
@@ -302,5 +303,10 @@
     show(true);
     if (at) addPoint(at); else if (!sites.length) pick(true);
   }
-  window.DKCoverage = { start, clear: clearAll, show, predictRx, setSites, setCalibration, noise: NOISE };
+  // The Layers panel switches the picture and the site markers on and off.
+  function setVisible(on) {
+    visible = on;
+    for (const l of [overlay, siteLayer]) if (l) { if (on) l.addTo(map); else map.removeLayer(l); }
+  }
+  window.DKCoverage = { start, clear: clearAll, show, predictRx, setSites, setCalibration, setVisible, noise: NOISE, get count() { return sites.length; } };
 })();

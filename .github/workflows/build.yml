@@ -47,16 +47,21 @@ jobs:
         with:
           targets: thumbv7em-none-eabihf
       - name: libclang and ARM C headers for bindgen (nrf-sdc-sys)
-        # apt has hung for 30+ min on some runners: cap each try and retry.
+        # On Ubuntu 26.04 libnewlib-arm-none-eabi pulls in a full ARM gcc and a
+        # 487 MB libstdc++, which made this step hang. bindgen only needs the
+        # newlib C headers, so unpack those two packages without dependencies.
         timeout-minutes: 15
         run: |
           export DEBIAN_FRONTEND=noninteractive
           for i in 1 2 3; do
-            sudo timeout 240 apt-get update -q -o Acquire::Retries=3 -o Acquire::http::Timeout=30 &&
-            sudo timeout 240 apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=30 libclang-dev clang libnewlib-arm-none-eabi && break
+            sudo timeout 300 apt-get update -q -o Acquire::Retries=3 &&
+            sudo timeout 300 apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 libclang-dev clang &&
+            (cd /tmp && timeout 300 apt-get download -o Acquire::Retries=3 libnewlib-arm-none-eabi libnewlib-dev) && break
             echo "apt attempt $i failed, retrying"; sleep 15
             [ "$i" = 3 ] && exit 1
           done
+          for d in /tmp/libnewlib*.deb; do sudo dpkg -x "$d" /; done
+          test -f /usr/lib/arm-none-eabi/include/stdint.h
           echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/lib/arm-none-eabi/include" >> "$GITHUB_ENV"
       - run: ./scripts/build-firmware.sh ${{ matrix.board }}
       - uses: actions/upload-artifact@v4

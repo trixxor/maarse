@@ -20,7 +20,7 @@
     Carry: "store-carry-forward handoff", Datagram: "home routing lookup (question or answer)", Fragment: "piece of a file", Backbone: "copy over TCP / Wi-Fi between hosts",
   };
   const FLOODS = new Set(["PathRequest", "Announce", "Channel", "Bulletin"]);
-  const FEATURES = [["carry", "Carry (store-carry-forward)"], ["local_repair", "Local repair"], ["backbone", "Backbone links"], ["dht_backbone", "DHT backbone: path requests only to the host that can reach the destination (experimental)"], ["home_routing", "Home routing: fixed infrastructure, home repeaters and a location lookup (model)"], ["persist_known", "Contacts survive a reboot (stored in flash)"], ["hold_unknown", "Keep messages from unknown senders until their announce"], ["auto_relay", "Automatic forest mode: handhelds without a repeater in range become relays"], ["regions", "Regions"], ["sf_slot", "SF-sized flood slot"], ["scale_timeouts", "Scaled timeouts"], ["load_control", "Load control"], ["area_scope", "Area scope for alerts (sim layer)"]];
+  const FEATURES = [["carry", "Carry (store-carry-forward)"], ["local_repair", "Local repair"], ["backbone", "Backbone links"], ["dht_backbone", "DHT backbone: path requests only to the host that can reach the destination (experimental)"], ["home_routing", "Home routing: fixed infrastructure, home repeaters and a location lookup (model)"], ["persist_known", "Contacts survive a reboot (stored in flash)"], ["hold_unknown", "Keep messages from unknown senders until their announce"], ["auto_relay", "Automatic forest mode: handhelds without a repeater in range become relays"], ["regions", "Regions"], ["sf_slot", "SF-sized flood slot"], ["scale_timeouts", "Scaled timeouts"], ["load_control", "Load control"], ["area_scope", "Area scope for alerts (sim layer)"], ["guard", "Guard on internet links: rate limits and bans (as every host)"]];
 
   let Engine = null, sim = null, scenario = null;
   let playing = false, speed = 10;
@@ -207,7 +207,7 @@
     updateClock(); renderStats(); renderTimeline(); fillSenders(); renderAlerts(); renderHud(); renderFeed(true); drawHist();
     $("sc-info").textContent = `${scenario.name || "scenario"}: ${scenario.nodes.length} nodes, ${scenario.links.length} backbone links, ${scenario.events.length} timeline events.${scenario.nodes.length > perf.maxNodes ? ` Over this browser's limit of ${perf.maxNodes} nodes (Build > Performance): it may run slowly.` : ""}`;
   }
-  function edited() { rebuild(); }
+  function edited() { rebuild(); fillFlood(); }
   // Phones (phone.js) read the engine and scenario through this.
   window.DKSim = { get sim() { return sim; }, get scenario() { return scenario; }, name: (i) => name(i), map,
     // A phone added in the Phones panel becomes a node: appended to the scenario, engine rebuilt.
@@ -956,6 +956,7 @@
       case "alert": return `${ev.alert} alert from ${name(ev.from)}: "${ev.text || ""}" (valid ${ev.expires_min || 60} min)`;
       case "alert_forged": return `Forged alert from ${name(ev.from)}: "${ev.text || ""}"`;
       case "alert_replay": return `Replay of alert ${ev.index} from ${name(ev.from)}`;
+      case "flood": return `${name(ev.node)} floods its internet links: ${ev.per_s || 1000}/s for ${ev.duration_s || 60} s`;
       case "announce": return `Announce from ${name(ev.node)}`;
       case "set_traffic": return "Change traffic" + (ev.traffic && ev.traffic.spam_per_min ? ` (spam ${ev.traffic.spam_per_min}/min from ${ev.traffic.spammers.length} nodes)` : "");
       default: return ev.type;
@@ -1435,6 +1436,14 @@
       <tr><td>kept, waiting for an announce</td><td class="n">${s.held_waiting}</td><td class="hint">shown when the sender announces (${s.shown_after_hold} so far)</td></tr>
       <tr><td>not sent: recipient unknown</td><td class="n">${s.unsent_unknown}</td><td class="hint">the sender lost the recipient's keys in a reboot</td></tr>
     </table>
+    <h3>Attacks and the guard</h3>
+    <table>
+      <tr><td>flood packets sent</td><td class="n">${s.flood_packets}</td><td class="hint">Break › Attacks: a host flooding its internet links</td></tr>
+      <tr><td>dropped by the guard</td><td class="n">${s.guard_dropped}</td><td class="hint">over 100 packets/s or 64 KB/s per link, or from a banned host (maarse-hostrules guard)</td></tr>
+      <tr><td><b>bans</b></td><td class="n"><b>${s.guard_bans}</b></td><td class="hint">a link that kept going over the limit: closed for 10 min</td></tr>
+      <tr><td>forged alerts dropped</td><td class="n">${s.alerts_forged_dropped}</td><td class="hint">bad signature (maarse-crypto alert)</td></tr>
+      <tr><td>replayed alerts dropped</td><td class="n">${s.alerts_replay_dropped}</td><td class="hint">expired or from the future; ${s.alerts_repeat} quiet repeats</td></tr>
+    </table>
     <h3>Queue delay per priority</h3>
     <table><tr><th>priority</th><th>sent</th><th>mean</th><th>max</th></tr>${s.queue_delay.map((q, i) => `<tr><td>${i} ${prio[i]}</td><td class="n">${q.count}</td><td class="n">${q.mean_ms.toFixed(0)} ms</td><td class="n">${q.max_ms} ms</td></tr>`).join("")}</table>
     <h3>Transmissions per type</h3><p class="hint">${Object.entries(s.by_type).map(([t, n]) => `<span class="chip" style="background:${PCOLOR[t] || "#666"}">${t} ${n}</span>`).join(" ")}</p>
@@ -1599,6 +1608,20 @@
   for (const [id, key] of Object.entries(trMap)) $(id).onchange = () => { scenario.traffic[key] = +$(id).value; edited(); };
   ["opt-islands", "opt-links", "opt-backbone"].forEach(id => $(id).onchange = () => { drawLinks(); restyle(); });
   syncPerf();
+  $("ev-flood-go").onclick = () => {
+    const node = +$("ev-flood").value;
+    if (!(node >= 0)) return showNote("No host with an internet link in this scenario.");
+    addEvent({ type: "flood", node, per_s: Math.max(1, +$("ev-flood-n").value || 1000), duration_s: 60 });
+  };
+  function fillFlood() {
+    const sel = $("ev-flood");
+    if (!sel || !scenario) return;
+    const tcp = new Set();
+    scenario.links.forEach(l => { if ((l.kind || "tcp") !== "lora") { tcp.add(l.a); tcp.add(l.b); } });
+    const keep = sel.value;
+    sel.innerHTML = [...tcp].filter(i => scenario.nodes[i]).sort((a, b) => a - b).map(i => `<option value="${i}">${esc(name(i))}</option>`).join("");
+    if (keep) sel.value = keep;
+  }
   $("ev-replay-go").onclick = () => {
     const i = $("ev-replay").value;
     if (i === "" || i == null) return showNote("Send an alert first (Send › Alerts), then replay it.");

@@ -94,7 +94,7 @@ Status as of 2026-11-19.
 | Servers (VPS) without radio, NAT relay | maarse-host server | model (server kind; NAT relay not yet) |
 | Self-healing: min-peers, DHT discovery, seed DNS, reconnect | maarse-host | not yet |
 | Serial, KISS, UDP links | maarse-host extra_links.rs | not yet |
-| Guard: rate limits, bans, block list | maarse-hostrules guard | shared, not wired yet |
+| Guard: rate limits, bans, block list | maarse-hostrules guard | shared: LinkRate per (host, sender) on internet links, bans; flood attack in Break (block list not yet) |
 
 ## Power
 

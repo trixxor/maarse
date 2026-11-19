@@ -400,6 +400,8 @@ enum Ev {
     Trunk { link: usize, to: usize, packet: Buf, start: u64 },
     /// 45 s after a message: drop it at a post office if not acknowledged.
     MailCheck { msg: usize },
+    /// An attacker floods its internet links: `per_s` packets a second until `until`.
+    Flood { node: usize, per_s: u32, until: u64 },
     /// Post office upkeep: home office changes, hints, periodic syncs.
     MailTick,
     /// A node asks for its mail (after it came back).
@@ -525,6 +527,10 @@ pub struct Stats {
     /// Alerts v2: copies dropped for a bad signature / as expired or future
     /// (replays) / quietly as a repeat of one already shown.
     pub alerts_forged_dropped: u64,
+    /// Guard on internet links: packets dropped, bans, flood packets sent.
+    pub guard_dropped: u64,
+    pub guard_bans: u64,
+    pub flood_packets: u64,
     pub alerts_replay_dropped: u64,
     pub alerts_repeat: u64,
     pub channel_receivers: u64,
@@ -609,6 +615,10 @@ pub struct Engine {
     public_channel: Address,
     bulletin_channel: Address,
     authority: Identity,
+    /// The host's guard on internet links (maarse_hostrules::guard): per
+    /// (receiver, sender) token buckets, and bans until a time.
+    guard_rate: HashMap<(usize, usize), maarse_hostrules::guard::LinkRate>,
+    guard_ban: HashMap<(usize, usize), u64>,
     /// Alert packet id -> alert index (real, forged and replayed copies).
     alert_pid: HashMap<u64, usize>,
     /// Alerts v2: each node's replay guard (maarse_crypto::alert::ReplayGuard).
@@ -925,6 +935,8 @@ impl Engine {
             bulletin_channel,
             authority,
             alert_guard: Vec::new(),
+            guard_rate: HashMap::default(),
+            guard_ban: HashMap::default(),
             alert_pid: HashMap::default(),
             trusted,
             traffic,
@@ -1302,6 +1314,10 @@ impl Engine {
                 if !self.nodes[to].alive() {
                     return;
                 }
+                // The receiving host's guard, as maarse-host runs it per link.
+                if self.sc.features.guard && !self.guard_pass(to, from, packet.len()) {
+                    return;
+                }
                 let pid = Packet::decode(&packet).map(|p| packet_id(p.header.ptype, &p.header.dest, p.payload)).unwrap_or(0);
                 let tag = self.tags.get(&pid).copied();
                 let tj = self.tag_json(pid);
@@ -1391,6 +1407,12 @@ impl Engine {
                 }
             }
             Ev::MailCheck { msg } => self.mail_check(msg),
+            Ev::Flood { node, per_s, until } => {
+                if self.now < until && self.nodes[node].alive() {
+                    self.flood_tick(node, per_s / 10);
+                    self.schedule(self.now + 100, Ev::Flood { node, per_s, until });
+                }
+            }
             Ev::SleepTick => {
                 self.sleep_tick();
                 self.schedule(self.now + 5_000, Ev::SleepTick);
@@ -3200,6 +3222,50 @@ impl Engine {
         }
     }
 
+    /// The guard at host `to` for a packet of `len` bytes from `from`: false
+    /// drops it (over the rate, or `from` is banned).
+    fn guard_pass(&mut self, to: usize, from: usize, len: usize) -> bool {
+        let now = self.now;
+        if self.guard_ban.get(&(to, from)).is_some_and(|&t| now < t) {
+            self.stats.guard_dropped += 1;
+            return false;
+        }
+        let rate = self.guard_rate.entry((to, from)).or_insert_with(|| maarse_hostrules::guard::LinkRate::new(now));
+        match rate.on_packet(len, now) {
+            Ok(true) => true,
+            Ok(false) => {
+                self.stats.guard_dropped += 1;
+                false
+            }
+            Err(ban) => {
+                self.guard_ban.insert((to, from), now + ban.ms);
+                self.guard_rate.remove(&(to, from));
+                self.stats.guard_bans += 1;
+                self.stats.guard_dropped += 1;
+                self.tr(format!("{{\"t\":{now},\"ev\":\"ban\",\"n\":{to},\"from\":{from},\"why\":\"{}\",\"ms\":{}}}", ban.why, ban.ms));
+                false
+            }
+        }
+    }
+
+    /// One tenth of a second of a flood from `node`: `count` channel packets
+    /// to every internet link it has.
+    fn flood_tick(&mut self, node: usize, count: u32) {
+        let peers: Vec<usize> = (0..self.links.len())
+            .filter(|&k| !self.links[k].lora && self.link_ok(k) && (self.links[k].a == node || self.links[k].b == node))
+            .map(|k| if self.links[k].a == node { self.links[k].b } else { self.links[k].a })
+            .collect();
+        for _ in 0..count.max(1) {
+            let mut body = [0u8; 120];
+            self.rng.fill(&mut body[..]);
+            let Ok(packet) = encode(&Header::new(PacketType::Channel, self.public_channel), &body) else { return };
+            for &p in &peers {
+                self.stats.flood_packets += 1;
+                self.schedule(self.now + 40, Ev::Backbone { from: node, to: p, packet: packet.clone() });
+            }
+        }
+    }
+
     /// Node `node` asks "who is `wanted`?" (at most every 30 s per pair).
     fn ask_key(&mut self, node: usize, wanted: usize) {
         if self.key_asked.get(&(node, wanted)).is_some_and(|&t| self.now < t + 30_000) {
@@ -4224,6 +4290,13 @@ impl Engine {
             "alert_replay" => {
                 self.replay_alert(ev.from, ev.index);
             }
+            "flood" => {
+                if ev.node < self.nodes.len() {
+                    let per_s = if ev.per_s == 0 { 1000 } else { ev.per_s };
+                    let ms = if ev.duration_s <= 0.0 { 60_000 } else { (ev.duration_s * 1000.0) as u64 };
+                    self.schedule(self.now, Ev::Flood { node: ev.node, per_s, until: self.now + ms });
+                }
+            }
             "announce" => {
                 if ev.node < self.nodes.len() {
                     self.announce(ev.node);
@@ -4470,6 +4543,9 @@ impl Engine {
             "busiest_airtime_s": busiest as f64 / 1e6,
             "collisions": self.stats.collisions,
             "alerts_forged_dropped": self.stats.alerts_forged_dropped,
+            "guard_dropped": self.stats.guard_dropped,
+            "guard_bans": self.stats.guard_bans,
+            "flood_packets": self.stats.flood_packets,
             "alerts_replay_dropped": self.stats.alerts_replay_dropped,
             "alerts_repeat": self.stats.alerts_repeat,
             "coll_flood": self.stats.coll_flood,

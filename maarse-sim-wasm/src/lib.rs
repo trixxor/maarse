@@ -439,4 +439,24 @@ mod tests {
         let s = e.summary();
         assert!(s["alerts_forged_dropped"].as_u64().unwrap() > 0 && s["alerts_replay_dropped"].as_u64().unwrap() > 0, "{s}");
     }
+
+    #[test]
+    fn guard_bans_a_flooding_host() {
+        let mut sc: Value = serde_json::from_str(&scenario()).unwrap();
+        sc["traffic"] = json!({"direct_per_min": 0, "channel_per_min": 0});
+        sc["events"] = json!([{"t_s": 10, "type": "flood", "node": 18, "per_s": 1000, "duration_s": 30}]);
+        let mut e = create(&sc.to_string()).unwrap();
+        e.run_until(60_000, usize::MAX);
+        let s = e.summary();
+        assert!(s["flood_packets"].as_u64().unwrap() > 20_000, "{s}");
+        assert_eq!(s["guard_bans"], json!(1), "{s}");
+        // After the ban every packet is dropped, and normal limits let ~100/s through before it.
+        assert!(s["guard_dropped"].as_u64().unwrap() > 20_000, "{s}");
+        // Guard off: nothing dropped (a short flood; every packet is routed).
+        sc["features"] = json!({"guard": false});
+        sc["events"][0]["duration_s"] = json!(1);
+        let mut e = create(&sc.to_string()).unwrap();
+        e.run_until(60_000, usize::MAX);
+        assert_eq!(e.summary()["guard_dropped"], json!(0));
+    }
 }

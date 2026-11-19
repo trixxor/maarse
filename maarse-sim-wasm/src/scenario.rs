@@ -317,6 +317,9 @@ impl Default for Scenario {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Features {
+    /// The host's guard on internet links (rate limits and bans,
+    /// maarse_hostrules::guard). On in every real host.
+    pub guard: bool,
     /// Store-carry-forward (`Router::carry_copies` = each node's `carry`, or 2).
     pub carry: bool,
     /// `Router::local_repair`.
@@ -384,6 +387,7 @@ pub struct Features {
 impl Default for Features {
     fn default() -> Self {
         Features {
+            guard: true,
             carry: false,
             local_repair: true,
             backbone: true,
@@ -639,4 +643,7 @@ pub struct TimedEvent {
     /// 0-3 (minor .. extreme; 0 here = severe).
     pub expires_min: u16,
     pub severity: u8,
+    /// `flood`: packets a second (0 = 1000) for `duration_s` seconds (0 = 60).
+    pub per_s: u32,
+    pub duration_s: f64,
 }

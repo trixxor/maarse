@@ -56,7 +56,7 @@
     return [lat + dyKm / 110.574, lon + dxKm / (111.32 * Math.cos(lat * Math.PI / 180))];
   }
 
-  const DEFAULT_FEATURES = { carry: false, local_repair: true, backbone: true, regions: false, sf_slot: false, scale_timeouts: false, load_control: false, area_scope: false, dht_backbone: false, home_routing: false, persist_known: true, hold_unknown: true, auto_relay: false };
+  const DEFAULT_FEATURES = { guard: true, carry: false, local_repair: true, backbone: true, regions: false, sf_slot: false, scale_timeouts: false, load_control: false, area_scope: false, dht_backbone: false, home_routing: false, persist_known: true, hold_unknown: true, auto_relay: false };
 
   function base(name, seed) {
     return { name, seed, sf: 9, duty_permille: 100, tx_dbm: 20, duration_s: 1800, mail: "post", features: Object.assign({}, DEFAULT_FEATURES), nodes: [], links: [], traffic: { direct_per_min: 6, channel_per_min: 1, local_share: 0.8, local_km: 25, start_s: 5, stop_s: 0, spammers: [], spam_per_min: 0 }, events: [], clutter: [], announce_s: 0, relay_hops: 4, auto_relay_after_s: 600, trace: true };

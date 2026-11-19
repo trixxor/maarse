@@ -92,7 +92,7 @@ Status as of 2026-11-19.
 | DHT lookup | maarse-host dht.rs | model |
 | Wi-Fi point to point, LoRa trunks, Bloom summaries | maarse-host, sim | model |
 | Servers (VPS) without radio, NAT relay | maarse-host server | model (server kind; NAT relay not yet) |
-| Self-healing: min-peers, DHT discovery, seed DNS, reconnect | maarse-host | not yet |
+| Self-healing: min-peers, DHT discovery, seed DNS, reconnect | maarse-host | model: min-peers reconnect (servers default 6); seed DNS not yet |
 | Serial, KISS, UDP links | maarse-host extra_links.rs | not yet |
 | Guard: rate limits, bans, block list | maarse-hostrules guard | shared: LinkRate per (host, sender) on internet links, bans; flood attack in Break (block list not yet) |
 
@@ -110,7 +110,7 @@ Status as of 2026-11-19.
 | Android app (native Kotlin) | android/ | phones: Android look in progress |
 | Web client | maarse-client | real (in the phones) |
 | Firmware: Heltec V4, XIAO nRF52840, Heltec display | firmware/ | router real; display not shown |
-| Phone ↔ radio over Bluetooth / USB, link drops | app, firmware | not yet |
+| Phone ↔ radio over Bluetooth / USB, link drops | app, firmware | model: link drops (see below) |
 | Range test, trace route, neighbours, remote admin | router, companion | neighbours real; others not yet |
 | Position and telemetry sharing | appdata | not yet |
 | Firmware update (USB/BT only) | firmware, web flasher | not simulated (shown as reboot) |

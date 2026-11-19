@@ -211,7 +211,7 @@
   }
   function edited() { rebuild(); fillFlood(); }
   // Phones (phone.js) read the engine and scenario through this.
-  window.DKSim = { get sim() { return sim; }, get scenario() { return scenario; }, name: (i) => name(i), map,
+  window.DKSim = { get sim() { return sim; }, get scenario() { return scenario; }, name: (i) => name(i), map, showMenu: (e, t, items) => showMenu(e, t, items), openTab: (t) => openTab(t),
     // A phone added in the Phones panel becomes a node: appended to the scenario, engine rebuilt.
     edited: () => edited(), addNode(spec, links) { scenario.nodes.push(spec); for (const l of links || []) scenario.links.push(l); edited(); return scenario.nodes.length - 1; } };
   function showNote(text) { $("sc-info").textContent = text; }

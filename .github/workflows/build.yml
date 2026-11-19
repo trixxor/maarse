@@ -60,9 +60,12 @@ jobs:
             echo "apt attempt $i failed, retrying"; sleep 15
             [ "$i" = 3 ] && exit 1
           done
-          for d in /tmp/libnewlib*.deb; do sudo dpkg -x "$d" /; done
-          test -f /usr/lib/arm-none-eabi/include/stdint.h
-          echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/lib/arm-none-eabi/include" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/newlib"
+          for d in /tmp/libnewlib*.deb; do dpkg -x "$d" "$RUNNER_TEMP/newlib"; done
+          # The include folder has moved between Ubuntu releases: find it.
+          inc=$(dirname "$(find "$RUNNER_TEMP/newlib" -path '*arm-none-eabi*' -name stdint.h | grep -v '/machine/\|/sys/' | head -1)")
+          echo "newlib headers: $inc"; test -f "$inc/string.h"
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I$inc" >> "$GITHUB_ENV"
       - run: ./scripts/build-firmware.sh ${{ matrix.board }}
       - uses: actions/upload-artifact@v4
         with:

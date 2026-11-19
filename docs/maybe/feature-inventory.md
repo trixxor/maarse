@@ -132,3 +132,5 @@ Status as of 2026-11-19.
 | Phones running the real web client | done |
 | Results: delivery time, busiest nodes, loss analysis, compare runs, packet log | done |
 | Rule profiles "Standard (as built)" | waiting for step 4B |
+
+| Phone ↔ radio Bluetooth link drop | firmware ble.rs (old frames thrown away on connect) | model: events while down are lost to the phone, counted; phone window ᛒ, Results |

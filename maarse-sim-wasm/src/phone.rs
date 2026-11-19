@@ -29,6 +29,13 @@ pub struct Phone {
     /// Channels the phone joined: (address, name).
     channels: Vec<(Address, String)>,
     dropped: u64,
+    /// The Bluetooth link to the radio is down until then (ms).
+    pub(crate) link_down_until: u64,
+    /// While the link was down: events and messages the phone never got
+    /// (the firmware throws old frames away when a phone connects).
+    pub(crate) lost_events: u64,
+    pub(crate) lost_msgs: u64,
+    pub(crate) link_drops: u64,
 }
 
 #[derive(Default)]
@@ -44,7 +51,21 @@ fn txt(s: &str) -> maarse_core::companion::Text {
 
 impl Engine {
     pub(crate) fn phone_emit(&mut self, node: usize, ev: &Event) {
+        let now = self.now;
+        let host = self.at_host(node);
         let Some(p) = self.phones.attached.get_mut(&node) else { return };
+        // Link to the radio down: the firmware queues frames for Bluetooth
+        // but empties the queue when a phone connects (firmware ble.rs:
+        // "Old frames from before the connection are thrown away"), so
+        // nothing that happens meanwhile reaches the phone.
+        if now < p.link_down_until && !host {
+            p.lost_events += 1;
+            if matches!(ev, Event::DirectReceived { .. } | Event::ChannelReceived { .. }) {
+                p.lost_msgs += 1;
+                self.stats.phone_lost_msgs += 1;
+            }
+            return;
+        }
         if p.events.len() >= MAX_QUEUED {
             p.events.pop_front();
             p.dropped += 1;
@@ -58,7 +79,37 @@ impl Engine {
 
     /// `phone_cmd {node, frame}`: bytes from the client (one or more frames,
     /// possibly partial). Returns how many commands were handled.
+    /// The phone on `node` loses its Bluetooth link to the radio for `ms`.
+    /// Phones that run the host themselves (app nodes) have no such link.
+    pub fn phone_link_drop(&mut self, node: usize, ms: u64) {
+        let now = self.now;
+        let Some(p) = self.phones.attached.get_mut(&node) else { return };
+        p.link_down_until = now + ms;
+        p.link_drops += 1;
+        self.stats.phone_link_drops += 1;
+        self.tr(format!("{{\"t\":{now},\"ev\":\"event\",\"what\":\"phone_link_drop\",\"n\":{node},\"ms\":{ms}}}"));
+        self.schedule_phone_reconnect(node, now + ms);
+    }
+
+    /// Back on the link: tell the phone what it missed (the real firmware
+    /// does not; this line is the simulator's note).
+    pub(crate) fn phone_reconnect(&mut self, node: usize) {
+        let Some(p) = self.phones.attached.get_mut(&node) else { return };
+        if self.now < p.link_down_until {
+            return;
+        }
+        let (ev, msgs) = (p.lost_events, p.lost_msgs);
+        p.lost_events = 0;
+        p.lost_msgs = 0;
+        let note = format!("Simulator: Bluetooth link to the radio is back. While it was down {ev} events were thrown away, {msgs} of them messages (the firmware drops frames from before a connection; senders may already show them as delivered).");
+        self.phone_emit(node, &Event::Log { text: txt(&note) });
+    }
+
     pub fn phone_cmd(&mut self, node: usize, bytes: &[u8]) -> Value {
+        // No link to the radio: what the phone sends never arrives.
+        if self.phones.attached.get(&node).is_some_and(|p| self.now < p.link_down_until) && !self.at_host(node) {
+            return json!({"handled": 0, "link": false});
+        }
         let label = if self.nodes[node].label.is_empty() { format!("Node {node}") } else { self.nodes[node].label.clone() };
         let p = self.phones.attached.entry(node).or_default();
         let fresh = p.name.is_empty();
@@ -100,7 +151,8 @@ impl Engine {
     pub fn phone_events(&mut self, node: usize) -> Value {
         let Some(p) = self.phones.attached.get_mut(&node) else { return json!({"frames": [], "attached": false}) };
         let frames: Vec<Vec<u8>> = p.events.drain(..).collect();
-        json!({"frames": frames, "attached": true, "dropped": p.dropped, "alive": self.nodes[node].alive()})
+        let link = self.now >= p.link_down_until;
+        json!({"frames": frames, "attached": true, "dropped": p.dropped, "alive": self.nodes[node].alive(), "link": link, "link_drops": p.link_drops})
     }
 
     pub fn phone_detach(&mut self, node: usize) {

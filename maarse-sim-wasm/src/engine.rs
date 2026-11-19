@@ -402,6 +402,8 @@ enum Ev {
     MailCheck { msg: usize },
     /// A host's own announce (maarse-host: at start and every 10 minutes).
     HostAnnounce { node: usize },
+    /// A phone's Bluetooth link to its radio comes back.
+    PhoneReconnect { node: usize },
     /// An attacker floods its internet links: `per_s` packets a second until `until`.
     Flood { node: usize, per_s: u32, until: u64 },
     /// Post office upkeep: home office changes, hints, periodic syncs.
@@ -531,6 +533,10 @@ pub struct Stats {
     pub alerts_forged_dropped: u64,
     /// Guard on internet links: packets dropped, bans, flood packets sent.
     pub guard_dropped: u64,
+    /// Phones: Bluetooth link drops, and messages a phone never saw because
+    /// they arrived while its link was down.
+    pub phone_link_drops: u64,
+    pub phone_lost_msgs: u64,
     pub guard_bans: u64,
     pub flood_packets: u64,
     pub alerts_replay_dropped: u64,
@@ -1419,6 +1425,7 @@ impl Engine {
                 }
             }
             Ev::MailCheck { msg } => self.mail_check(msg),
+            Ev::PhoneReconnect { node } => self.phone_reconnect(node),
             Ev::HostAnnounce { node } => {
                 if self.nodes[node].alive() {
                     self.stats.periodic_announces += 1;
@@ -3682,6 +3689,10 @@ impl Engine {
 
     /// Sends an announce from `node` (unsigned body of real size + a real stamp).
     /// Returns its packet id.
+    pub(crate) fn schedule_phone_reconnect(&mut self, node: usize, at: u64) {
+        self.schedule(at, Ev::PhoneReconnect { node });
+    }
+
     /// The pages host `node` shares, if any.
     pub(crate) fn site(&self, node: usize) -> Option<&Site> {
         self.sc.nodes.get(node).and_then(|n| n.site.as_ref()).filter(|s| !s.pages.is_empty())
@@ -4332,6 +4343,10 @@ impl Engine {
             "alert_replay" => {
                 self.replay_alert(ev.from, ev.index);
             }
+            "phone_link_drop" => {
+                let ms = if ev.duration_s <= 0.0 { 60_000 } else { (ev.duration_s * 1000.0) as u64 };
+                self.phone_link_drop(ev.node, ms);
+            }
             "flood" => {
                 if ev.node < self.nodes.len() {
                     let per_s = if ev.per_s == 0 { 1000 } else { ev.per_s };
@@ -4593,6 +4608,8 @@ impl Engine {
             "collisions": self.stats.collisions,
             "alerts_forged_dropped": self.stats.alerts_forged_dropped,
             "guard_dropped": self.stats.guard_dropped,
+            "phone_link_drops": self.stats.phone_link_drops,
+            "phone_lost_msgs": self.stats.phone_lost_msgs,
             "guard_bans": self.stats.guard_bans,
             "flood_packets": self.stats.flood_packets,
             "alerts_replay_dropped": self.stats.alerts_replay_dropped,

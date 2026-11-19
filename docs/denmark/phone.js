@@ -135,11 +135,21 @@
     w.id = "ph-" + p.id;
     w.style.left = p.x + "px"; w.style.top = p.y + "px";
     w.innerHTML = `<div class="ph-bar" title="Drag to move"><span class="ph-dot"></span><b>Phone ${p.id}</b><span class="ph-what"></span>
-      <button class="ph-b" data-a="dock" title="Dock to the tray / float">⇥</button><button class="ph-b" data-a="min" title="Minimise">–</button><button class="ph-b" data-a="close" title="Close (removes the phone)">×</button></div>
+      <button class="ph-b" data-a="bt" title="Bluetooth to the radio drops for 60 s (firmware nodes): what arrives meanwhile is lost to the phone">ᛒ</button><button class="ph-b" data-a="dock" title="Dock to the tray / float">⇥</button><button class="ph-b" data-a="min" title="Minimise">–</button><button class="ph-b" data-a="close" title="Close (removes the phone)">×</button></div>
       <div class="ph-body"></div><div class="ph-stat"></div>`;
     $("ph-layer").appendChild(w);
     p.win = w;
     w.querySelector('[data-a="dock"]').onclick = () => dock(p, !p.docked);
+    w.querySelector('[data-a="bt"]').onclick = () => {
+      const s = sim();
+      if (!s || p.node < 0) return;
+      // On the timeline, so Reset replays it.
+      const sc = window.DKSim.scenario;
+      const t = +(s.summary().t / 1000).toFixed(1);
+      const ev = { t_s: t, type: "phone_link_drop", node: p.node, duration_s: 60 };
+      sc.events.push(ev);
+      s.call({ cmd: "inject", event: ev });
+    };
     w.querySelector('[data-a="min"]').onclick = () => minimise(p, true);
     w.querySelector('[data-a="close"]').onclick = () => closePhone(p);
     w.addEventListener("pointerdown", () => raise(p));
@@ -328,7 +338,7 @@
     const el = p.win.querySelector(".ph-stat");
     const n = nodes()[p.node];
     const what = n ? `${n.kind}${n.internet || n.kind === "app" ? " · internet" : ""}${n.radio ?? n.kind !== "app" ? " · LoRa" : ""}` : "";
-    el.textContent = text || `${what} · ${p.sent} frames out, ${p.got} in${p.alive ? "" : " · node is down"}`;
+    el.textContent = text || `${what} · ${p.sent} frames out, ${p.got} in${p.alive ? "" : " · node is down"}${p.link === false ? " · Bluetooth to the radio is DOWN" : ""}`;
     p.win.querySelector(".ph-dot").classList.toggle("down", !p.alive);
   }
 
@@ -352,6 +362,7 @@
     if (!s || p.node < 0 || !p.ready || p.state !== "on") return;
     let r;
     try { r = s.call({ cmd: "phone_events", node: p.node }); } catch (e) { return; }
+    p.link = r.link;
     const alive = r.alive !== false;
     const changed = alive !== p.alive;
     p.alive = alive;

@@ -956,6 +956,7 @@
       case "alert": return `${ev.alert} alert from ${name(ev.from)}: "${ev.text || ""}" (valid ${ev.expires_min || 60} min)`;
       case "alert_forged": return `Forged alert from ${name(ev.from)}: "${ev.text || ""}"`;
       case "alert_replay": return `Replay of alert ${ev.index} from ${name(ev.from)}`;
+      case "phone_link_drop": return `${name(ev.node)}: phone loses Bluetooth to its radio for ${ev.duration_s || 60} s`;
       case "flood": return `${name(ev.node)} floods its internet links: ${ev.per_s || 1000}/s for ${ev.duration_s || 60} s`;
       case "announce": return `Announce from ${name(ev.node)}`;
       case "set_traffic": return "Change traffic" + (ev.traffic && ev.traffic.spam_per_min ? ` (spam ${ev.traffic.spam_per_min}/min from ${ev.traffic.spammers.length} nodes)` : "");
@@ -1441,6 +1442,8 @@
       <tr><td>flood packets sent</td><td class="n">${s.flood_packets}</td><td class="hint">Break › Attacks: a host flooding its internet links</td></tr>
       <tr><td>dropped by the guard</td><td class="n">${s.guard_dropped}</td><td class="hint">over 100 packets/s or 64 KB/s per link, or from a banned host (maarse-hostrules guard)</td></tr>
       <tr><td><b>bans</b></td><td class="n"><b>${s.guard_bans}</b></td><td class="hint">a link that kept going over the limit: closed for 10 min</td></tr>
+      <tr><td>phone Bluetooth drops</td><td class="n">${s.phone_link_drops}</td><td class="hint">phone ↔ radio link down (phone window ᛒ)</td></tr>
+      <tr><td><b>messages a phone never saw</b></td><td class="n"><b>${s.phone_lost_msgs}</b></td><td class="hint">arrived at the radio while the link was down: the firmware throws them away on reconnect</td></tr>
       <tr><td>forged alerts dropped</td><td class="n">${s.alerts_forged_dropped}</td><td class="hint">bad signature (maarse-crypto alert)</td></tr>
       <tr><td>replayed alerts dropped</td><td class="n">${s.alerts_replay_dropped}</td><td class="hint">expired or from the future; ${s.alerts_repeat} quiet repeats</td></tr>
     </table>

@@ -163,6 +163,16 @@ always have #public.
 
 **Findings from the simulator (2026-11-19)**
 
+- **Firmware loses messages while the phone is not connected** (found while
+  building the phone ↔ radio link drop): events for the phone go into
+  BLE_OUT (16 frames), and on every new connection the queue is emptied
+  (`firmware/{nrf,esp}/src/ble.rs`: "Old frames from before the connection
+  are thrown away"). A message that arrives at the radio while the phone is
+  away is delivered (and acknowledged) by the radio but never shown.
+  Proposal (needs the user's yes): keep unread messages in flash on the
+  node and hand them to the phone when it connects (a small inbox, like the
+  post office's 4 per recipient).
+
 - Presets ran without post offices (`mail: ""`) although hosts and firmware
   have them: fixed, the standard scenario now uses `mail: "post"`.
 - Known gap: Bornholm cut off (trunk + internet) → a message from Copenhagen

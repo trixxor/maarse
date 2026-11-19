@@ -405,7 +405,7 @@ impl Engine {
 
     /// The node counts as "at a host" for the host's rules (a host, or an
     /// app at a host).
-    fn at_host(&self, i: usize) -> bool {
+    pub(crate) fn at_host(&self, i: usize) -> bool {
         self.nodes[i].kind == Kind::Host || self.is_app(i)
     }
 
@@ -1993,6 +1993,28 @@ mod tests {
         let v = e.item_json(k);
         assert_eq!(v["state"], "done", "{v}");
         assert!(v["call"]["recv"][0].as_u64().unwrap() > 50, "{v}");
+    }
+
+    #[test]
+    fn phone_link_drop_loses_what_arrives_meanwhile() {
+        let mut e = world(json!({}));
+        // A phone on handheld 3 (firmware node, Bluetooth to the radio).
+        e.phone_cmd(3, &[]);
+        e.phone_link_drop(3, 120_000);
+        let m = e.send_message(4, 3);
+        run(&mut e, 90);
+        let s = e.summary();
+        assert!(s["phone_lost_msgs"].as_u64().unwrap() >= 1, "{s}");
+        // The radio itself got it (and may have acknowledged it).
+        assert!(e.msgs[m].delivered_ms.is_some());
+        // Back on the link: the phone is told what it missed; new messages arrive.
+        run(&mut e, 60);
+        let ev = e.phone_events(3);
+        assert_eq!(ev["link"], json!(true));
+        let before = e.summary()["phone_lost_msgs"].as_u64().unwrap();
+        e.send_message(4, 3);
+        run(&mut e, 60);
+        assert_eq!(e.summary()["phone_lost_msgs"].as_u64().unwrap(), before);
     }
 
     #[test]

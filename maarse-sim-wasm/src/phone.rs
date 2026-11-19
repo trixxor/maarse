@@ -361,6 +361,10 @@ impl Engine {
                 self.hist_command(node, &f);
                 continue;
             }
+            if f.first() == Some(&0x39) {
+                self.backbones(node);
+                continue;
+            }
             match Command::decode(&f) {
                 Ok(c) => self.phone_command(node, c),
                 Err(maarse_core::companion::FrameError::UnknownType(t)) => {
@@ -371,6 +375,49 @@ impl Engine {
             }
         }
         json!({"ok": true, "commands": n})
+    }
+
+    /// `0x39 GetBackbones` as maarse-host answers it (node/backbone.rs): one
+    /// `0xBA Backbone` per working TCP, Wi-Fi or LoRa trunk link of this
+    /// node, then link 0 as the end of the list. Firmware nodes have none.
+    fn backbones(&mut self, node: usize) {
+        let screen = self.phones.cur_screen;
+        let mut out = Vec::new();
+        if self.at_host(node) {
+            for &k in &self.nodes[node].links {
+                if !self.link_ok(k) {
+                    continue;
+                }
+                let l = &self.links[k];
+                let peer = if l.a == node { l.b } else { l.a };
+                let p = &self.nodes[peer];
+                let kind = if l.lora { "lora" } else if l.wifi { "wifi" } else { "tcp" };
+                let name = format!("{kind} {}", if p.label.is_empty() { format!("node {peer}") } else { p.label.clone() });
+                let server = p.kind == Kind::Host && !p.radio;
+                let flags = server as u8 | (p.radio as u8) << 1 | ((p.kind == Kind::Host) as u8) << 2;
+                let mut b = ((k + 1) as u16).to_le_bytes().to_vec();
+                b.push(flags);
+                b.extend_from_slice(&((self.now / 1000) as u32).to_le_bytes());
+                b.extend_from_slice(&p.router.addr.0);
+                for s in ["sim", name.as_str()] {
+                    let s = &s.as_bytes()[..s.len().min(64)];
+                    b.push(s.len() as u8);
+                    b.extend_from_slice(s);
+                }
+                b.push(0);
+                out.push(b);
+            }
+        }
+        let mut end = 0u16.to_le_bytes().to_vec();
+        end.extend_from_slice(&[0; 1 + 4 + 16]);
+        end.extend_from_slice(&[0, 0, 0]);
+        out.push(end);
+        for body in out {
+            let mut f = ((body.len() + 1) as u16).to_le_bytes().to_vec();
+            f.push(0xBA);
+            f.extend_from_slice(&body);
+            self.phone_raw(node, f, screen, None);
+        }
     }
 
     /// `phone_events {node}`: all queued event frames (each length-prefixed).
@@ -1318,6 +1365,35 @@ mod tests {
                 Some(Event::decode(&b[2..]).unwrap())
             })
             .collect()
+    }
+
+    /// `0x39 GetBackbones` on a host lists its working links as `0xBA`
+    /// frames, then link 0; a firmware node answers with the end only.
+    #[test]
+    fn backbones_list_the_hosts_links() {
+        let sc = json!({"seed": 4, "duration_s": 600, "nodes": [
+            {"kind": "host", "lat": 56.0, "lon": 9.0, "label": "Aarhus host"},
+            {"kind": "host", "lat": 55.7, "lon": 12.5, "label": "Copenhagen host"},
+            {"kind": "handheld", "lat": 56.0, "lon": 9.01}
+        ], "links": [{"a": 0, "b": 1, "kind": "tcp", "up": true}],
+           "traffic": {"direct_per_min": 0, "channel_per_min": 0}});
+        let mut e = create(&sc.to_string()).unwrap();
+        e.run_until(5_000, usize::MAX);
+        let ba = |v: &Value| -> Vec<Vec<u8>> {
+            v["frames"].as_array().unwrap().iter()
+                .map(|f| f.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u8).collect::<Vec<u8>>())
+                .filter(|b| b[2] == 0xBA)
+                .collect()
+        };
+        e.phone_cmd(0, &[1, 0, 0x39]);
+        let got = ba(&e.phone_events(0));
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_ne!(u16::from_le_bytes([got[0][3], got[0][4]]), 0);
+        assert!(String::from_utf8_lossy(&got[0]).contains("tcp Copenhagen host"), "{got:?}");
+        assert_eq!(u16::from_le_bytes([got[1][3], got[1][4]]), 0);
+        e.phone_cmd(2, &[1, 0, 0x39]);
+        let got = ba(&e.phone_events(2));
+        assert_eq!(got.len(), 1, "{got:?}");
     }
 
     /// Phone A (node 0) sends a direct message through a repeater to phone B

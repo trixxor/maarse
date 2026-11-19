@@ -1072,6 +1072,8 @@ setInterval(() => {
   lastPoll = Date.now();
   send(Cmd.getStats());
   if (fast) send(Cmd.getNeighbors());
+  // As Network.kt: a host on the phone lists its backbones.
+  if (fast && Calls.possible()) send(Cmd.getBackbones());
 }, 1000);
 setInterval(() => { if (Calls.s.phase === "ACTIVE" || UI.tab === "CONTACTS" || topScreen().p === "ANNOUNCES") render(); }, 1000);
 

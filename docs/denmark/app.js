@@ -815,6 +815,9 @@
       const up = !(sim && sim.inspect(i).internet);
       items.push({ label: up ? "Give it internet again" : "Cut its internet", run: () => addEvent({ type: "host_internet", node: i, up }, up ? null : { type: "host_internet", node: i, up: true }) });
     }
+    // Remote admin: the phones' nodes become this node's admins (firmware @admins).
+    const phoneNodes = (window.DKPhones && window.DKPhones.nodes ? window.DKPhones.nodes() : []).filter(p => p !== i);
+    if (phoneNodes.length) items.push({ label: (n.admins || []).length ? "Phones may administer this node ✓ (again)" : "Let the phones administer this node", run: () => { n.admins = Array.from(new Set([...(n.admins || []), ...phoneNodes])); edited(); showNote(`${name(i)}: admins are now ${n.admins.map(name).join(", ")}. A phone can control it under Network › the node › Remote admin.`); } });
     items.push({ label: "Delete", danger: true, run: () => deleteNode(i) });
     showMenu(e, name(i), items);
   }

@@ -46,6 +46,10 @@ pub struct Phone {
     wifi: Option<maarse_core::companion::WifiSettings>,
     /// Trace routes waiting for their answer: (destination, request).
     traces: Vec<(Address, u16)>,
+    /// Range test (model): settings, beacon count, received per SF.
+    range: Option<maarse_core::rangetest::Config>,
+    range_seq: u32,
+    range_rx: Vec<(u8, u16, i32, i32)>,
 }
 
 /// A person made on a phone (linked devices, maarse-host `node/person.rs`).
@@ -67,6 +71,11 @@ pub struct Phones {
     pub persons: Vec<PersonRec>,
     /// Link grants on their way: (message, person, device).
     pending_links: Vec<(usize, usize, usize)>,
+    /// Remote admin commands and replies on their way: message -> frame.
+    remote_out: HashMap<usize, Vec<u8>>,
+    remote_back: HashMap<usize, Vec<u8>>,
+    /// Account backups: 6-word code -> person address.
+    backups: Vec<(String, Address)>,
 }
 
 fn txt(s: &str) -> maarse_core::companion::Text {
@@ -305,17 +314,59 @@ impl Engine {
                 }
             }
             Command::GetStats => {
-                let rt = &self.nodes[node].router;
-                let mut items = Stats::new();
-                let routes = rt.routes().len() as i32;
-                let _ = items.push((stat::UPTIME_S, (self.now / 1000) as i32));
-                let _ = items.push((stat::KNOWN_NODES, self.heard_from[node].len() as i32));
-                let _ = items.push((stat::ROUTES, routes));
-                let _ = items.push((stat::CHANNELS, self.phones.attached[&node].channels.len() as i32));
-                let _ = items.push((stat::LINKS, self.nodes[node].links.iter().filter(|&&k| self.link_ok(k)).count() as i32));
-                let _ = items.push((stat::CLIENTS, 1));
-                let _ = items.push((stat::ROLE, rt.role.as_u8() as i32));
+                let items = self.node_stats(node);
                 self.phone_emit(node, &Event::Stats { items });
+            }
+            Command::Remote { req, dest, frame } => {
+                let Some(&to) = self.addr_idx.get(&dest) else {
+                    return self.phone_err(node, req, error_code::UNKNOWN_DEST, "Simulator: no node with this address in this world");
+                };
+                // A sealed control message (content::CONTROL) travels to the node.
+                // A counter keeps equal commands apart (sealed messages differ anyway).
+                self.phones.counter += 1;
+                let m = self.send_payload(node, to, [b"RADM".as_slice(), &self.phones.counter.to_be_bytes(), &frame].concat());
+                self.phones.remote_out.insert(m, frame.to_vec());
+                let msg_id = self.msgs[m].id;
+                self.phone_emit(node, &Event::Sent { req, msg_id });
+            }
+            Command::SendAlert { req, meta, text: t } => {
+                // maarse-host: only a host with an issuer key issues alerts.
+                // In the simulator every host (and app at a host) has one: the
+                // authority key the nodes trust.
+                if !self.at_host(node) {
+                    return self.phone_err(node, req, error_code::BAD_FRAME, "Only a host with an issuer key sends alerts (firmware nodes cannot)");
+                }
+                let kind = maarse_crypto::alert::event::NAMES.get(meta.event as usize).copied().unwrap_or("info");
+                let area = match meta.area {
+                    Some((la, lo, r)) => crate::scenario::Area { circle: Some([la as f64 / 1e5, lo as f64 / 1e5, r as f64 * 100.0]), ..Default::default() },
+                    None => crate::scenario::Area::default(),
+                };
+                let text_s = String::from_utf8_lossy(&t).into_owned();
+                match self.send_alert_v2(node, kind, &area, &text_s, meta.expires_min, meta.severity, "real") {
+                    Some(idx) => self.phone_emit(node, &Event::Sent { req, msg_id: idx as u64 + 1 }),
+                    None => self.phone_err(node, req, error_code::BAD_FRAME, "Could not sign the alert"),
+                }
+            }
+            Command::GetRangeTest => {
+                let st = self.range_state(node);
+                self.phone_emit(node, &Event::RangeState(st));
+            }
+            Command::SetRangeTest(cfg) => {
+                let cfg = match cfg.sanitized() {
+                    Ok(c) => c,
+                    Err(e) => return self.phone_err(node, 0, error_code::BAD_FRAME, e),
+                };
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.range = (cfg.mode != maarse_core::rangetest::mode::OFF).then_some(cfg);
+                    p.range_seq = 0;
+                    p.range_rx.clear();
+                }
+                if cfg.mode == maarse_core::rangetest::mode::BEACON {
+                    self.schedule_range_beacon(node, self.now + 1000);
+                }
+                let st = self.range_state(node);
+                self.phone_emit(node, &Event::RangeState(st));
+                self.phone_emit(node, &Event::Log { text: txt("Simulator: the range test is a model: beacons are not put on the air; receivers get the radio model's RSSI and SNR") });
             }
             Command::GetNeighbors => {
                 for ev in neighbor_events(&self.nodes[node].router.neighbors, self.now) {
@@ -472,8 +523,6 @@ impl Engine {
                     Err((code, m)) => self.phone_err(node, req, code, &m),
                 }
             }
-            Command::Remote { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("remote admin")),
-            Command::SendAlert { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("alerts from a phone (use the Alert tool on the map)")),
             Command::GetPerson => {
                 let info = self.person_info(node);
                 self.phone_emit(node, &Event::Person(info));
@@ -547,6 +596,13 @@ impl Engine {
         if self.msgs[m].payload.starts_with(b"PLINK") && self.link_arrived(m, node) {
             return;
         }
+        if let Some(frame) = self.phones.remote_out.remove(&m) {
+            return self.remote_arrived(m, node, &frame);
+        }
+        if let Some(frame) = self.phones.remote_back.remove(&m) {
+            let from = self.nodes[self.msgs[m].from].router.addr;
+            return self.phone_emit(node, &Event::RemoteReply { from, frame: text(&frame) });
+        }
         if !self.phones.attached.contains_key(&node) {
             return;
         }
@@ -607,6 +663,132 @@ impl Engine {
         }
         let n = &self.sc.nodes[node];
         maarse_core::companion::Sharing { precision: 0, lat_e7: (n.lat * 1e7) as i32, lon_e7: (n.lon * 1e7) as i32, telemetry: false }
+    }
+
+    /// The status numbers a node reports (GetStats).
+    pub(crate) fn node_stats(&self, node: usize) -> Stats {
+        let rt = &self.nodes[node].router;
+        let mut items = Stats::new();
+        let _ = items.push((stat::UPTIME_S, (self.now / 1000) as i32));
+        let _ = items.push((stat::KNOWN_NODES, self.heard_from[node].len() as i32));
+        let _ = items.push((stat::ROUTES, rt.routes().len() as i32));
+        let _ = items.push((stat::CHANNELS, self.phones.attached.get(&node).map_or(0, |p| p.channels.len()) as i32));
+        let _ = items.push((stat::LINKS, self.nodes[node].links.iter().filter(|&&k| self.link_ok(k)).count() as i32));
+        let _ = items.push((stat::CLIENTS, self.phones.attached.contains_key(&node) as i32));
+        let _ = items.push((stat::ROLE, rt.role.as_u8() as i32));
+        items
+    }
+
+    /// Who may control `node` remotely: its phone's admin list, or the
+    /// scenario's `admins` (node numbers).
+    fn admins_of(&self, node: usize) -> Vec<Address> {
+        let mut v: Vec<Address> = self.phones.attached.get(&node).map(|p| p.admins.to_vec()).unwrap_or_default();
+        for &i in self.sc.nodes.get(node).map(|n| n.admins.as_slice()).unwrap_or(&[]) {
+            if i < self.nodes.len() {
+                v.push(self.nodes[i].router.addr);
+            }
+        }
+        v
+    }
+
+    /// A remote admin command reached `node` (firmware `on_control`): only
+    /// admins, and only stats, radio, role and update status; the replies
+    /// travel back as messages.
+    fn remote_arrived(&mut self, m: usize, node: usize, frame: &[u8]) {
+        let from = self.msgs[m].from;
+        let deny = |msg: &str| Event::Error { req: 0, code: error_code::BAD_FRAME, text: txt(msg) };
+        let from_addr = self.nodes[from].router.addr;
+        let mut replies: Vec<Event> = Vec::new();
+        if !self.admins_of(node).contains(&from_addr) {
+            replies.push(deny("You are not an administrator of this node"));
+        } else {
+            match Command::decode(frame) {
+                Ok(Command::GetStats) => replies.push(Event::Stats { items: self.node_stats(node) }),
+                Ok(Command::GetRadio) => replies.push(Event::Radio(self.phone_radio(node))),
+                Ok(Command::SetRadio(r)) => match r.validate() {
+                    Ok(()) => {
+                        replies.push(Event::Radio(r));
+                        if (7..=12).contains(&r.sf) {
+                            self.nodes[node].sf = r.sf;
+                            self.build_links();
+                        }
+                    }
+                    Err(e) => replies.push(deny(e)),
+                },
+                Ok(Command::SetRole { role }) => match maarse_core::Role::from_u8(role) {
+                    Some(r) => {
+                        self.nodes[node].router.set_role(r);
+                        replies.push(Event::Stats { items: self.node_stats(node) });
+                    }
+                    None => replies.push(deny("Unknown role")),
+                },
+                Ok(Command::OtaStatus) => replies.push(Event::OtaState { req: 0, state: 0, next: 0, size: 0, version: 0, current: 0, text: txt("Simulator: no firmware updates in the simulated world") }),
+                _ => replies.push(deny("The command cannot be controlled remotely")),
+            }
+        }
+        for ev in replies {
+            let f = ev.encode();
+            let body = f[2..].to_vec();
+            self.phones.counter += 1;
+            let r = self.send_payload(node, from, [b"RREP".as_slice(), &self.phones.counter.to_be_bytes(), &body].concat());
+            self.phones.remote_back.insert(r, body);
+        }
+    }
+
+    /// Range test (model) state for a phone.
+    fn range_state(&self, node: usize) -> maarse_core::companion::RangeState {
+        use maarse_core::companion::{RangeSfStat, RangeState};
+        let Some(p) = self.phones.attached.get(&node) else { return RangeState::default() };
+        let mut st = RangeState { config: p.range.unwrap_or_default(), sf: self.nodes[node].sf, synced: !p.range_rx.is_empty(), count: p.range_rx.len() as u32, missed: 0, seq: p.range_seq, per_sf: heapless::Vec::new() };
+        for sf in 7..=12u8 {
+            let v: Vec<&(u8, u16, i32, i32)> = p.range_rx.iter().filter(|r| r.0 == sf).collect();
+            if v.is_empty() {
+                continue;
+            }
+            let n = v.len() as i32;
+            let _ = st.per_sf.push(RangeSfStat {
+                sf,
+                rx: n as u16,
+                lost: 0,
+                rssi_avg: (v.iter().map(|r| r.2).sum::<i32>() / n) as i16,
+                rssi_min: v.iter().map(|r| r.2).min().unwrap_or(0) as i16,
+                snr_avg_x4: (v.iter().map(|r| r.3 * 4).sum::<i32>() / n) as i16,
+                snr_min: v.iter().map(|r| r.3).min().unwrap_or(0) as i8,
+            });
+        }
+        st
+    }
+
+    /// A beacon from `node`: every phone in receiver mode that the radio
+    /// model says hears it gets RangeRx (SF steps as the firmware: the SF
+    /// mask, `per_step` beacons each).
+    pub(crate) fn range_beacon(&mut self, node: usize) {
+        use maarse_core::companion::{RangeRx, RangeTx};
+        let Some(cfg) = self.phones.attached.get(&node).and_then(|p| p.range) else { return };
+        if cfg.mode != maarse_core::rangetest::mode::BEACON || !self.nodes[node].alive() {
+            return;
+        }
+        let seq = self.phones.attached.get(&node).map_or(0, |p| p.range_seq);
+        let sfs = cfg.sfs(self.nodes[node].sf);
+        let step = (seq / cfg.per_step.max(1) as u32) as usize % sfs.len().max(1);
+        let sf = sfs.get(step).copied().unwrap_or(self.nodes[node].sf);
+        if let Some(p) = self.phones.attached.get_mut(&node) {
+            p.range_seq += 1;
+        }
+        let air = maarse_core::airtime::LoraParams::new(sf).airtime_us(maarse_core::rangetest::FIXED_LEN + cfg.pad as usize) / 1000;
+        self.phone_emit(node, &Event::RangeTx(RangeTx { uptime_ms: self.now as u32, seq, sf, slot: step as u8, interval_s: cfg.interval_s, airtime_ms: air as u16, charge_ma_ms: 0, skipped: 0 }));
+        let short: [u8; 4] = self.nodes[node].router.addr.0[..4].try_into().unwrap_or([0; 4]);
+        let receivers: Vec<usize> = self.phones.attached.iter().filter(|(k, p)| **k != node && p.range.is_some_and(|c| c.mode == maarse_core::rangetest::mode::RECEIVER)).map(|(k, _)| *k).collect();
+        for r in receivers {
+            let Some((rssi, snr)) = self.range_rx(node, r, sf) else { continue };
+            if let Some(p) = self.phones.attached.get_mut(&r) {
+                p.range_rx.push((sf, seq as u16, rssi as i32, snr as i32));
+            }
+            let (la, lo) = crate::engine::to_ll(self.nodes[node].x, self.nodes[node].y);
+            self.phone_emit(r, &Event::RangeRx(RangeRx { uptime_ms: self.now as u32, sender: short, seq, sf, rssi: rssi as i16, snr: snr as i8, len: (maarse_core::rangetest::FIXED_LEN + cfg.pad as usize) as u8, lost: 0, skipped: 0, tx_power_dbm: self.sc.tx_dbm as i8, battery_mv: 4000, position: Some(((la * 1e7) as i32, (lo * 1e7) as i32)) }));
+        }
+        let next = self.now + cfg.interval_s.max(1) as u64 * 1000;
+        self.schedule_range_beacon(node, next);
     }
 
     /// The person (index in `phones.persons`) `node` is a live device of.
@@ -781,7 +963,41 @@ impl Engine {
                 self.person_sync(node);
                 self.phone_emit(node, &Event::Log { text: txt("Syncing with the other devices and the post offices") });
             }
-            _ => fail(self, "Not simulated yet: account backups (use the 24 words) (Denmark simulator)"),
+            person_op::BACKUP => {
+                let Some(k) = self.person_of_node(node) else { return fail(self, "This device does not belong to a person") };
+                if self.phones.persons[k].master != node {
+                    return fail(self, "Only the master device makes backups");
+                }
+                // The 6-word code that opens the backup file (the file itself
+                // stays in the simulator).
+                let code: Vec<&str> = (0..6).map(|_| maarse_crypto::recovery::word(self.rng.gen_range(0..2048u16))).collect();
+                let code = code.join(" ");
+                let person = self.phones.persons[k].addr;
+                self.phones.backups.push((code.clone(), person));
+                self.phone_emit(node, &Event::PersonBackup { code: txt(&code) });
+            }
+            person_op::RESTORE_BACKUP => {
+                if self.person_of_node(node).is_some() {
+                    return fail(self, "This device already belongs to a person (leave it first)");
+                }
+                let code = String::from_utf8_lossy(t).split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+                let Some(&(_, person)) = self.phones.backups.iter().find(|(c, _)| *c == code) else {
+                    return fail(self, "The code does not open a backup (or no backup was made in this world)");
+                };
+                let Some(k) = self.phones.persons.iter().position(|p| p.addr == person) else { return fail(self, "That person is gone") };
+                // The old master device is removed; this one becomes the master.
+                let old = self.phones.persons[k].master;
+                for d in self.phones.persons[k].devices.iter_mut() {
+                    if d.0 == old {
+                        d.1 = true;
+                    }
+                }
+                self.phones.persons[k].devices.push((node, false));
+                self.phones.persons[k].master = node;
+                self.person_changed(k);
+                self.announce(node);
+            }
+            _ => fail(self, "Unknown operation"),
         }
     }
 
@@ -804,7 +1020,8 @@ impl Engine {
         }
         // The grant goes over the network like any sealed message; the link
         // takes effect when it arrives (checked in phone_on_message).
-        let m = self.send_payload(node, d, b"PLINK".to_vec());
+        self.phones.counter += 1;
+        let m = self.send_payload(node, d, [b"PLINK".as_slice(), &self.phones.counter.to_be_bytes()].concat());
         self.phones.pending_links.push((m, k, d));
         let id = self.msgs[m].id;
         self.phone_emit(node, &Event::Sent { req, msg_id: id });
@@ -968,6 +1185,59 @@ mod tests {
             let f = frames(&e.phone_events(n));
             assert!(f.iter().any(|ev| matches!(ev, Event::DirectReceived { text: t, .. } if &t[..] == b"to the account")), "node {n}: {f:?}");
         }
+    }
+
+    /// Remote admin of a repeater, an alert from a phone at a host, an
+    /// account backup restored on another phone, and a range test.
+    #[test]
+    fn phone_remote_admin_alert_backup_range() {
+        use maarse_core::companion::person_op;
+        let sc = json!({"seed": 4, "duration_s": 900, "mail": "post", "nodes": [
+            {"kind": "handheld", "lat": 56.0, "lon": 9.0},
+            {"kind": "repeater", "lat": 56.0, "lon": 9.05, "admins": [0]},
+            {"kind": "handheld", "lat": 56.0, "lon": 9.1},
+            {"kind": "host", "lat": 56.0, "lon": 9.06}
+        ], "traffic": {"direct_per_min": 0, "channel_per_min": 0}});
+        let mut e = create(&sc.to_string()).unwrap();
+        e.run_until(20_000, usize::MAX);
+        for n in [0, 2, 3] {
+            e.phone_cmd(n, &Command::GetInfo.encode());
+            frames(&e.phone_events(n));
+        }
+        let rep = e.nodes[1].router.addr;
+        // 0 is an admin of the repeater; 2 is not.
+        e.phone_cmd(0, &Command::Remote { req: 1, dest: rep, frame: text(&Command::GetStats.encode()[2..]) }.encode());
+        e.run_until(60_000, usize::MAX);
+        e.phone_cmd(2, &Command::Remote { req: 2, dest: rep, frame: text(&Command::GetStats.encode()[2..]) }.encode());
+        e.run_until(200_000, usize::MAX);
+        let a = frames(&e.phone_events(0));
+        let b = frames(&e.phone_events(2));
+        let stats = |f: &[u8]| matches!(Event::decode(f), Ok(Event::Stats { .. }));
+        assert!(a.iter().any(|ev| matches!(ev, Event::RemoteReply { from, frame } if *from == rep && stats(frame))), "{a:?}");
+        assert!(b.iter().any(|ev| matches!(ev, Event::RemoteReply { frame, .. } if matches!(Event::decode(frame), Ok(Event::Error { .. })))), "{b:?}");
+        // An alert from the phone at the host goes out; from a handheld it is refused.
+        let meta = maarse_core::companion::AlertMeta { event: 3, severity: 2, expires_min: 30, area: Some((5_600_000, 905_000, 100)), ..Default::default() };
+        e.phone_cmd(3, &Command::SendAlert { req: 3, meta, text: text(b"Fire") }.encode());
+        e.phone_cmd(0, &Command::SendAlert { req: 4, meta, text: text(b"Fire") }.encode());
+        e.run_until(260_000, usize::MAX);
+        assert!(frames(&e.phone_events(3)).iter().any(|ev| matches!(ev, Event::Sent { req: 3, .. })));
+        assert!(frames(&e.phone_events(0)).iter().any(|ev| matches!(ev, Event::Error { req: 4, .. })));
+        assert!(e.alert_summary(0, false)["inside_received"].as_u64().unwrap() > 0);
+        // Backup: made on 0, restored on 2 (2 becomes the master, 0 removed).
+        e.phone_cmd(0, &Command::PersonSetup { req: 5, op: person_op::CREATE, text: text(b"") }.encode());
+        e.phone_cmd(0, &Command::PersonSetup { req: 6, op: person_op::BACKUP, text: text(b"") }.encode());
+        let a = frames(&e.phone_events(0));
+        let code = a.iter().find_map(|ev| if let Event::PersonBackup { code } = ev { Some(code.clone()) } else { None }).expect("backup code");
+        e.phone_cmd(2, &Command::PersonSetup { req: 7, op: person_op::RESTORE_BACKUP, text: code }.encode());
+        let b = frames(&e.phone_events(2));
+        assert!(b.iter().any(|ev| matches!(ev, Event::Person(p) if p.master)), "{b:?}");
+        // Range test: 0 sends beacons, 2 listens.
+        let cfg = |mode| maarse_core::rangetest::Config { mode, interval_s: 10, per_step: 1, ..Default::default() };
+        e.phone_cmd(2, &Command::SetRangeTest(cfg(maarse_core::rangetest::mode::RECEIVER)).encode());
+        e.phone_cmd(0, &Command::SetRangeTest(cfg(maarse_core::rangetest::mode::BEACON)).encode());
+        e.run_until(400_000, usize::MAX);
+        let b = frames(&e.phone_events(2));
+        assert!(b.iter().filter(|ev| matches!(ev, Event::RangeRx(_))).count() >= 5, "{b:?}");
     }
 
     /// A phone sends a small file through the companion commands; the other

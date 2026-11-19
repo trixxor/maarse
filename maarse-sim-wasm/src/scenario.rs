@@ -480,6 +480,8 @@ pub struct NodeSpec {
     /// Runs the call test service (maarse-host `<data>/calltest/`): it
     /// answers every call itself with music, echo or a speed test.
     pub calltest: bool,
+    /// Nodes (by number) that may control this node remotely (its admins).
+    pub admins: Vec<usize>,
 }
 
 /// A host's pages: the name it announces and MU markup per path.
@@ -518,6 +520,7 @@ impl Default for NodeSpec {
             min_peers: None,
             site: None,
             calltest: false,
+            admins: Vec::new(),
         }
     }
 }

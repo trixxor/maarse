@@ -391,5 +391,7 @@
     phones.forEach((p) => { if (p.state !== "on") return; pump(p); if (p.ready) status(p, ""); });
   }, 200);
 
+  // For the map's node menu (remote admin): the nodes the running phones are on.
+  window.DKPhones = { nodes: () => phones.filter((p) => p.state === "on" && p.node >= 0).map((p) => p.node) };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", build); else build();
 })();

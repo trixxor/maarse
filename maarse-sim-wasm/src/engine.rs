@@ -406,6 +406,8 @@ enum Ev {
     PhoneReconnect { node: usize },
     /// A lost device is replaced: a new one restored from the recovery phrase.
     Restore { node: usize },
+    /// A range test beacon from a phone's node (model).
+    RangeBeacon { node: usize },
     /// An attacker floods its internet links: `per_s` packets a second until `until`.
     Flood { node: usize, per_s: u32, until: u64 },
     /// Post office upkeep: home office changes, hints, periodic syncs.
@@ -1443,6 +1445,7 @@ impl Engine {
             Ev::MailCheck { msg } => self.mail_check(msg),
             Ev::PhoneReconnect { node } => self.phone_reconnect(node),
             Ev::Restore { node } => self.restore_device(node),
+            Ev::RangeBeacon { node } => self.range_beacon(node),
             Ev::HostAnnounce { node } => {
                 if self.nodes[node].alive() {
                     self.stats.periodic_announces += 1;
@@ -3709,6 +3712,30 @@ impl Engine {
 
     /// Sends an announce from `node` (unsigned body of real size + a real stamp).
     /// Returns its packet id.
+    pub(crate) fn schedule_range_beacon(&mut self, node: usize, at: u64) {
+        self.schedule(at, Ev::RangeBeacon { node });
+    }
+
+    /// A range test beacon from `a` at `sf` heard by `b`? The radio model's
+    /// RSSI and SNR with a little fading (±3 dB), received when the SNR is
+    /// above the SF's limit.
+    pub(crate) fn range_rx(&mut self, a: usize, b: usize, sf: u8) -> Option<(f64, f64)> {
+        let (na, nb) = (&self.nodes[a], &self.nodes[b]);
+        if !na.radio || !nb.radio || !nb.alive() {
+            return None;
+        }
+        let d = (na.x - nb.x).hypot(na.y - nb.y);
+        if d > horizon_m(na.h, nb.h) {
+            return None;
+        }
+        let g = na.kind.ant_db() + nb.kind.ant_db() + height_db(na.h) + height_db(nb.h) - self.extra_loss(a, b);
+        let fade = self.rng.gen_range(-3.0..3.0);
+        let r = self.radio(sf);
+        let rx = r.rx_dbm(d, g) + fade;
+        let snr = r.snr(rx);
+        (snr >= r.snr_min).then_some((rx, snr))
+    }
+
     pub(crate) fn schedule_phone_reconnect(&mut self, node: usize, at: u64) {
         self.schedule(at, Ev::PhoneReconnect { node });
     }

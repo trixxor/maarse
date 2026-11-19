@@ -82,7 +82,7 @@ Status as of 2026-11-19.
 | Duty cycle, CAD, collisions, half duplex | maarse-core duty + sim | real duty, model radio |
 | Path loss, height, horizon, clutter, frequency, bandwidth | maarse-sim radio | model |
 | Live change of SF / frequency / bandwidth / power | sim `radio` event | model |
-| Duty-cycle sub-bands | — | not yet |
+| Duty-cycle sub-bands | maarse-core duty::eu_band_permille | real rule (sim caps duty by the channel's sub-band; firmware does not use it yet) |
 
 ## Backbone and links
 

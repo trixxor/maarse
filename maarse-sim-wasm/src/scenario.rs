@@ -317,6 +317,9 @@ impl Default for Scenario {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Features {
+    /// EU sub-band duty limits (maarse_core::duty::eu_band_permille): a
+    /// channel outside 869.4-869.65 MHz gets 1 % or 0.1 % airtime.
+    pub duty_bands: bool,
     /// The host's guard on internet links (rate limits and bans,
     /// maarse_hostrules::guard). On in every real host.
     pub guard: bool,
@@ -387,6 +390,7 @@ pub struct Features {
 impl Default for Features {
     fn default() -> Self {
         Features {
+            duty_bands: true,
             guard: true,
             carry: false,
             local_repair: true,

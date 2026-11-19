@@ -73,6 +73,24 @@ impl DutyCycle {
     }
 }
 
+/// The EU duty-cycle limit (permille) for a LoRa channel at `freq_hz`
+/// with bandwidth `bw_hz` (ERC Rec 70-03 annex 1, bands h1.3-h1.7): the
+/// whole channel must lie inside one sub-band. 869.4-869.65 MHz allows 10 %,
+/// 865-868.6 and 869.7-870 MHz 1 %, 863-865 and 868.7-869.2 MHz 0.1 %;
+/// anything else (gaps, other bands) gets 0.1 %, the strictest rule.
+pub fn eu_band_permille(freq_hz: u32, bw_hz: u32) -> u32 {
+    const BANDS: [(u32, u32, u32); 6] = [
+        (869_400_000, 869_650_000, 100),
+        (865_000_000, 868_000_000, 10),
+        (868_000_000, 868_600_000, 10),
+        (869_700_000, 870_000_000, 10),
+        (863_000_000, 865_000_000, 1),
+        (868_700_000, 869_200_000, 1),
+    ];
+    let (lo, hi) = (freq_hz.saturating_sub(bw_hz / 2), freq_hz.saturating_add(bw_hz / 2));
+    BANDS.iter().find(|(a, b, _)| lo >= *a && hi <= *b).map_or(1, |(_, _, p)| *p)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,5 +117,17 @@ mod tests {
     fn never_exceeds_capacity() {
         let mut d = DutyCycle::new(100, 0);
         assert_eq!(d.available_us(10 * WINDOW_MS), 360_000_000);
+    }
+
+    #[test]
+    fn eu_sub_bands() {
+        // The Må:rse default: 869.525 MHz, 125 kHz, inside the 10 % band.
+        assert_eq!(eu_band_permille(869_525_000, 125_000), 100);
+        // 250 kHz no longer fits in 869.4-869.65: strictest rule.
+        assert_eq!(eu_band_permille(869_525_000, 300_000), 1);
+        assert_eq!(eu_band_permille(868_100_000, 125_000), 10);
+        assert_eq!(eu_band_permille(867_500_000, 125_000), 10);
+        assert_eq!(eu_band_permille(869_000_000, 125_000), 1);
+        assert_eq!(eu_band_permille(915_000_000, 125_000), 1);
     }
 }

@@ -863,7 +863,7 @@ impl Engine {
                 txq: Vec::new(),
                 busy_until: 0,
                 svc_at: u64::MAX,
-                duty: DutyCycle::new(sc.duty_permille, 0),
+                duty: DutyCycle::new(effective_duty(&sc), 0),
                 airtime_us: 0,
                 duty_hits: 0,
                 speed: if spec.speed_kmh > 0.0 { spec.speed_kmh / 3.6 } else { 30.0 },
@@ -4322,6 +4322,13 @@ impl Engine {
                 let (tx, f, bw) = (self.sc.tx_dbm, self.sc.freq_mhz, self.sc.bw_hz);
                 self.radios = (7..=12).map(|sf| Radio::with_band(sf, tx, f, bw)).collect();
                 self.build_links();
+                // A new channel can fall in a stricter sub-band.
+                let duty = effective_duty(&self.sc);
+                let now = self.now;
+                for n in &mut self.nodes {
+                    n.duty = DutyCycle::new(duty, now);
+                }
+                self.tr(format!("{{\"t\":{now},\"ev\":\"event\",\"what\":\"radio\",\"duty_permille\":{duty}}}"));
             }
             "set_traffic" => {
                 if let Some(t) = &ev.traffic {
@@ -4820,7 +4827,7 @@ impl Engine {
             "carry_copies": rt.carry_copies, "carried": rt.carried_count(), "local_repair": rt.local_repair,
             "slot_ms": rt.slot_ms,
             "airtime_s": n.airtime_us as f64 / 1e6,
-            "duty_budget_used_pct": n.airtime_us as f64 / 1000.0 / (self.sc.duty_permille as f64 / 1000.0 * self.now.max(1) as f64) * 100.0,
+            "duty_budget_used_pct": n.airtime_us as f64 / 1000.0 / (effective_duty(&self.sc) as f64 / 1000.0 * self.now.max(1) as f64) * 100.0,
             "duty_hits": n.duty_hits,
             "neighbors": nb, "radio_neighbors": radio_nbrs, "routes": routes, "queue": queue,
             "dead_hops": rt.dead_hops().iter().filter(|(_, until)| *until > self.now).map(|(id, until)| json!({"node": ids.get(id), "for_s": (until - self.now) as f64 / 1000.0})).collect::<Vec<_>>(),
@@ -4964,3 +4971,15 @@ impl Engine {
 }
 
 
+
+/// The duty cycle every node gets: the scenario's, capped by the EU
+/// sub-band of its channel when `duty_bands` is on. Frequency 0 is the
+/// firmware default (869.525 MHz), bandwidth 0 is 125 kHz.
+pub(crate) fn effective_duty(sc: &Scenario) -> u32 {
+    if !sc.features.duty_bands {
+        return sc.duty_permille;
+    }
+    let f = if sc.freq_mhz > 0.0 { (sc.freq_mhz * 1e6) as u32 } else { maarse_core::companion::RadioConfig::EU_DEFAULT.freq_hz };
+    let bw = if sc.bw_hz > 0 { sc.bw_hz } else { 125_000 };
+    sc.duty_permille.min(maarse_core::duty::eu_band_permille(f, bw))
+}

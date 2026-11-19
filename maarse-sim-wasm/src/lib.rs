@@ -459,4 +459,17 @@ mod tests {
         e.run_until(60_000, usize::MAX);
         assert_eq!(e.summary()["guard_dropped"], json!(0));
     }
+
+    #[test]
+    fn duty_follows_the_eu_sub_band() {
+        let mut sc: scenario::Scenario = serde_json::from_str(&scenario()).unwrap();
+        sc.duty_permille = 100;
+        assert_eq!(engine::effective_duty(&sc), 100, "869.525 MHz default: 10 %");
+        sc.freq_mhz = 868.1;
+        assert_eq!(engine::effective_duty(&sc), 10, "868.1 MHz: 1 %");
+        sc.freq_mhz = 869.0;
+        assert_eq!(engine::effective_duty(&sc), 1, "869.0 MHz: 0.1 %");
+        sc.features.duty_bands = false;
+        assert_eq!(engine::effective_duty(&sc), 100);
+    }
 }

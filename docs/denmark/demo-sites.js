@@ -49,7 +49,7 @@
       },
     },
     {
-      region: "hovedstaden", near: [55.676, 12.568], name: "Copenhagen Emergency Info",
+      region: "hovedstaden", near: [55.676, 12.568], name: "Copenhagen Emergency Info", calltest: true,
       pages: {
         index: `@title Copenhagen Emergency Info\n${style}\n# Copenhagen Emergency Info\nWhat to do when power, phones or internet are down.\n\n::: cards 3\n### [Water points](water)\nWhere to get drinking water\n+++\n### [Shelters](shelters)\nWarm rooms and shelters\n+++\n### [Ferry to Bornholm](bornholm)\nKøge - Rønne\n:::\n>!blue Listen to DR P4 on FM for official messages.\n${foot([["Front page", "/"]])}`,
         water: `@title Water points\n${style}\n## Water points\n- Rådhuspladsen, by the fountain\n- Nørrebro Park, north gate\n- Amager Strandpark, car park\n\nBring your own containers. 20 litres per person.\n${foot([["Front page", "/"]])}`,
@@ -81,6 +81,8 @@
       if (best < 0 || bd > 80) continue;
       used.add(best);
       sc.nodes[best].site = { name: s.name, pages: Object.assign({}, s.pages) };
+      // Call the host to try the call test service (music, echo, speed).
+      if (s.calltest) sc.nodes[best].calltest = true;
     }
     return sc;
   }

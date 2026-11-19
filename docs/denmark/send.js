@@ -35,7 +35,7 @@
     picture: `<label>Copy <select id="sw-quality"><option value="grey">Greyscale (~1.4 KB)</option><option value="c4" selected>Colour 4 KB</option><option value="c8">Colour 8 KB</option></select></label>`,
     file: `<label>KB <input id="sw-kb" type="number" min="1" max="1024" value="4" size="5"></label>`,
     page: `<label>Path <input id="sw-path" value="index" size="14" title="e.g. weather/aarhus, or _grey/map.jpg for a picture"></label>`,
-    call: `<label>Seconds <input id="sw-secs" type="number" min="1" max="600" value="10" size="4"></label>`,
+    call: `<label>Seconds <input id="sw-secs" type="number" min="1" max="600" value="10" size="4"></label> <label title="Only when the callee runs the call test service (the Copenhagen host in generated maps)">Test service <select id="sw-mode"><option value="music">music</option><option value="echo">echo</option><option value="speed">speed (5 s)</option></select></label>`,
     ssh: `<label><input type="checkbox" id="sw-tunlora"> Allow over LoRa (--tun-lora)</label>`,
     ping: `<label><input type="checkbox" id="sw-tunlora"> Allow over LoRa (--tun-lora)</label>`,
     bulk: `<label>KB <input id="sw-kb" type="number" min="1" max="10240" value="64" size="5"></label> <label><input type="checkbox" id="sw-tunlora"> Allow over LoRa</label>`,
@@ -102,7 +102,7 @@
     else if (k === "picture") cmd = { cmd: "send_file", from: a, to: b, kind: "picture", quality: $("sw-quality").value };
     else if (k === "file") cmd = { cmd: "send_file", from: a, to: b, kind: "file", bytes: Math.round(num("sw-kb", 4) * 1024) };
     else if (k === "page") cmd = { cmd: "page", from: a, host: b, path: ($("sw-path").value || "index").trim() };
-    else if (k === "call") cmd = { cmd: "call", from: a, to: b, secs: num("sw-secs", 10) };
+    else if (k === "call") cmd = { cmd: "call", from: a, to: b, secs: num("sw-secs", 10), mode: ($("sw-mode") || {}).value || "music" };
     else cmd = { cmd: "tunnel", from: a, to: b, workload: k, kb: num("sw-kb", 64), tun_lora: lora };
     let v;
     try { v = sim.call(cmd); } catch (e) { $("sw-result").textContent = e.message; return; }

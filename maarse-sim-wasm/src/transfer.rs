@@ -58,6 +58,8 @@ const W_CALL_END: u8 = 7;
 const W_TUN: u8 = 8;
 const W_PAGE_WAIT: u8 = 10;
 const W_TUN_NOKEY: u8 = 11;
+const W_ECHO: u8 = 12;
+const W_SPEED: u8 = 13;
 
 // maarse-host's file transfer constants (node.rs).
 /// Chunks in flight over the internet ...
@@ -194,6 +196,10 @@ struct CallStats {
     started: u64,
     until: u64,
     seq: [u32; 2],
+    /// Call test service: 0 = an ordinary call, else calls::test::MUSIC/ECHO/SPEED.
+    mode: u8,
+    /// Echo: packets to send back (due time).
+    echo: std::collections::VecDeque<(u64, u64)>,
 }
 
 #[derive(Clone, Debug)]
@@ -239,6 +245,8 @@ pub struct Item {
     call: Option<CallStats>,
     tun: Option<Tun>,
     secs: u32,
+    /// Call test mode (see `CallStats::mode`).
+    mode: u8,
     kb: u32,
     pub phone_req: Option<u16>,
     /// A page answer that is the host's "Slow down" page.
@@ -284,6 +292,7 @@ impl Item {
             call: None,
             tun: None,
             secs: 0,
+            mode: 0,
             kb: 0,
             phone_req: None,
             slow: false,
@@ -671,6 +680,8 @@ impl Engine {
             W_BOX => self.xf_box_poll(k),
             W_AUDIO_A | W_AUDIO_B => self.xf_audio(k, (what == W_AUDIO_B) as u8),
             W_CALL_END => self.xf_call_end(k),
+            W_ECHO => self.xf_echo(k),
+            W_SPEED => self.xf_speed(k),
             W_TUN => self.xf_tun_tick(k),
             W_TUN_NOKEY => {
                 if self.xf.items[k].kind == ItemKind::Tunnel && self.xf.items[k].state == "queued" {
@@ -1179,8 +1190,15 @@ impl Engine {
 
     /// Starts a call of `secs` seconds; refused unless TCP all the way.
     pub fn xf_call(&mut self, from: usize, to: usize, secs: u32) -> usize {
+        self.xf_call_mode(from, to, secs, calls::test::MUSIC)
+    }
+
+    /// A call; when `to` runs the call test service, `mode` picks music,
+    /// echo or speed (the ring's mode byte), otherwise it is ignored.
+    pub fn xf_call_mode(&mut self, from: usize, to: usize, secs: u32, mode: u8) -> usize {
         let mut it = Item::new(ItemKind::Call, from, to, self.now);
         it.secs = secs.max(1);
+        it.mode = if self.sc.nodes.get(to).is_some_and(|n| n.calltest) { mode.clamp(calls::test::MUSIC, calls::test::SPEED) } else { 0 };
         it.route = self.xf_path_kind(from, to);
         let route = it.route;
         let k = self.xf_push(it);
@@ -1210,12 +1228,31 @@ impl Engine {
             // The callee answers at once.
             self.xf_ring(k, to, from, 1);
         } else if kind == 1 && node == from && self.xf.items[k].state == "ringing" {
+            use calls::test as ct;
+            let mode = self.xf.items[k].mode;
             let secs = self.xf.items[k].secs as u64;
-            self.xf.items[k].call = Some(CallStats { started: self.now, until: self.now + secs * 1000, ..Default::default() });
-            self.xf_set(k, "active", "answered");
-            self.xf_sched(self.now, k, W_AUDIO_A);
-            self.xf_sched(self.now + 7, k, W_AUDIO_B);
-            self.xf_sched(self.now + secs * 1000 + 3_000, k, W_CALL_END);
+            // The speed test hangs up by itself after 5 s; any call ends after 10 min.
+            let len = if mode == ct::SPEED { ct::SPEED_FOR_MS } else { (secs * 1000).min(ct::MAX_CALL_MS) };
+            self.xf.items[k].call = Some(CallStats { started: self.now, until: self.now + len, mode, ..Default::default() });
+            let what = match mode {
+                ct::MUSIC => "answered by the call test service: music",
+                ct::ECHO => "answered by the call test service: echo",
+                ct::SPEED => "answered by the call test service: speed test",
+                _ => "answered",
+            };
+            self.xf_set(k, "active", what);
+            match mode {
+                // Music: the service talks, the caller listens.
+                ct::MUSIC => self.xf_sched(self.now + 7, k, W_AUDIO_B),
+                // Echo: the caller talks; the service sends it back (xf_on_audio).
+                ct::ECHO => self.xf_sched(self.now, k, W_AUDIO_A),
+                ct::SPEED => self.xf_sched(self.now + 7, k, W_SPEED),
+                _ => {
+                    self.xf_sched(self.now, k, W_AUDIO_A);
+                    self.xf_sched(self.now + 7, k, W_AUDIO_B);
+                }
+            }
+            self.xf_sched(self.now + len + 3_000, k, W_CALL_END);
         }
     }
 
@@ -1227,6 +1264,15 @@ impl Engine {
         if self.now >= c.until {
             return;
         }
+        let _ = c;
+        self.xf_audio_packet(k, dir, self.now);
+        self.xf_sched(self.now + CALL_PACKET_MS, k, if dir == 0 { W_AUDIO_A } else { W_AUDIO_B });
+    }
+
+    /// Sends one call audio packet in direction `dir` (0 caller to callee),
+    /// stamped with `stamp` (when the audio was spoken).
+    fn xf_audio_packet(&mut self, k: usize, dir: u8, stamp: u64) {
+        let Some(c) = self.xf.items[k].call.as_mut() else { return };
         let seq = c.seq[dir as usize];
         c.seq[dir as usize] += 1;
         c.sent[dir as usize] += 1;
@@ -1234,12 +1280,37 @@ impl Engine {
         let mut p = header(OP_AUDIO, k);
         p.push(dir);
         p.extend_from_slice(&seq.to_be_bytes());
-        p.extend_from_slice(&self.now.to_be_bytes());
+        p.extend_from_slice(&stamp.to_be_bytes());
         // CALL_DATAGRAM tag + sealed (content byte, kind, seq u16, frames).
         let len = maarse_core::appdata::CALL_DATAGRAM.len() + DM_OVERHEAD + 1 + 1 + 2 + CALL_FRAMES_PER_PACKET * (1 + OPUS_FRAME_BYTES);
         let p = pad(p, len);
         self.xf_send(a, b, PacketType::Datagram, &p);
-        self.xf_sched(self.now + CALL_PACKET_MS, k, if dir == 0 { W_AUDIO_A } else { W_AUDIO_B });
+    }
+
+    /// Echo: send back what came in a second ago, stamped with the time the
+    /// caller spoke, so the caller's latency is the full round trip.
+    fn xf_echo(&mut self, k: usize) {
+        let now = self.now;
+        while let Some(&(due, spoke)) = self.xf.items[k].call.as_ref().and_then(|c| c.echo.front()) {
+            if due > now {
+                break;
+            }
+            if let Some(c) = self.xf.items[k].call.as_mut() {
+                c.echo.pop_front();
+            }
+            self.xf_audio_packet(k, 1, spoke);
+        }
+    }
+
+    /// Speed test: SPEED_PACKETS full packets every 60 ms until it hangs up.
+    fn xf_speed(&mut self, k: usize) {
+        if self.xf.items[k].state != "active" || self.xf.items[k].call.as_ref().is_none_or(|c| self.now >= c.until) {
+            return;
+        }
+        for _ in 0..calls::test::SPEED_PACKETS {
+            self.xf_audio_packet(k, 1, self.now);
+        }
+        self.xf_sched(self.now + calls::test::PACKET_MS, k, W_SPEED);
     }
 
     fn xf_on_audio(&mut self, k: usize, node: usize, b: &[u8]) {
@@ -1253,9 +1324,18 @@ impl Engine {
             return;
         }
         let now = self.now;
+        let mut echo = false;
         if let Some(c) = self.xf.items[k].call.as_mut() {
             c.recv[dir as usize & 1] += 1;
             c.lat.push(now.saturating_sub(sent));
+            if c.mode == calls::test::ECHO && dir == 0 {
+                // (due, spoken at): what the caller said comes back after 1 s.
+                c.echo.push_back((now + calls::test::ECHO_DELAY_MS, sent));
+                echo = true;
+            }
+        }
+        if echo {
+            self.xf_sched(now + calls::test::ECHO_DELAY_MS, k, W_ECHO);
         }
     }
 
@@ -1268,7 +1348,14 @@ impl Engine {
         let recv = c.recv[0] + c.recv[1];
         let (med, p95) = median_p95(&c.lat);
         let loss = if sent > 0 { 100.0 * (sent - recv.min(sent)) as f64 / sent as f64 } else { 0.0 };
-        let why = format!("call ended: {recv}/{sent} audio packets, loss {loss:.1} %, latency median {} ms, p95 {} ms", med.unwrap_or(0), p95.unwrap_or(0));
+        let mut why = format!("call ended: {recv}/{sent} audio packets, loss {loss:.1} %, latency median {} ms, p95 {} ms", med.unwrap_or(0), p95.unwrap_or(0));
+        if c.mode == calls::test::SPEED {
+            // What the caller counted: payload per second over the 5 s.
+            let bytes = c.recv[1] as u64 * (CALL_FRAMES_PER_PACKET * (1 + OPUS_FRAME_BYTES)) as u64;
+            why = format!("speed test: {} of {} packets arrived, {:.1} KB/s; latency median {} ms", c.recv[1], c.sent[1], bytes as f64 / 1024.0 / (calls::test::SPEED_FOR_MS as f64 / 1000.0), med.unwrap_or(0));
+        } else if c.mode == calls::test::ECHO {
+            why = format!("echo test: {} of {} came back; {recv}/{sent} packets in all, latency median {} ms (the echo's includes the 1 s delay)", c.recv[1], c.sent[0], med.unwrap_or(0));
+        }
         self.xf_set(k, "done", &why);
     }
 
@@ -1906,6 +1993,42 @@ mod tests {
         let v = e.item_json(k);
         assert_eq!(v["state"], "done", "{v}");
         assert!(v["call"]["recv"][0].as_u64().unwrap() > 50, "{v}");
+    }
+
+    #[test]
+    fn call_test_service_music_echo_speed() {
+        let nodes = json!([
+            {"kind": "host", "lat": 56.0, "lon": 9.0},
+            {"kind": "repeater", "lat": 56.0, "lon": 9.05},
+            {"kind": "host", "lat": 56.0, "lon": 9.1, "calltest": true}
+        ]);
+        let mut e = world(json!({"nodes": nodes}));
+        // Music: only the service sends.
+        let k = e.xf_call_mode(0, 2, 5, maarse_hostrules::calls::test::MUSIC);
+        run(&mut e, 15);
+        let v = e.item_json(k);
+        assert_eq!(v["state"], "done", "{v}");
+        assert_eq!(v["call"]["sent"][0], 0, "{v}");
+        assert!(v["call"]["recv"][1].as_u64().unwrap() > 50, "{v}");
+        // Echo: what goes out comes back.
+        let k = e.xf_call_mode(0, 2, 5, maarse_hostrules::calls::test::ECHO);
+        run(&mut e, 15);
+        let v = e.item_json(k);
+        assert!(v["why"].as_str().unwrap().starts_with("echo test"), "{v}");
+        let back = v["call"]["recv"][1].as_u64().unwrap();
+        let out = v["call"]["sent"][0].as_u64().unwrap();
+        assert!(back > 50 && back <= out, "{v}");
+        // Speed: 8 packets per 60 ms for 5 s, then it hangs up.
+        let k = e.xf_call_mode(0, 2, 60, maarse_hostrules::calls::test::SPEED);
+        run(&mut e, 15);
+        let v = e.item_json(k);
+        assert!(v["why"].as_str().unwrap().starts_with("speed test"), "{v}");
+        let sent = v["call"]["sent"][1].as_u64().unwrap();
+        assert!((600..=700).contains(&sent), "5 s / 60 ms * 8 = ~667: {v}");
+        // An ordinary host ignores the mode.
+        let k = e.xf_call_mode(2, 0, 5, maarse_hostrules::calls::test::SPEED);
+        run(&mut e, 15);
+        assert!(e.item_json(k)["call"]["sent"][0].as_u64().unwrap() > 50);
     }
 
     #[test]

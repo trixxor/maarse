@@ -20,20 +20,21 @@ const RING: u8 = 1;
 const ANSWER: u8 = 2;
 const END: u8 = 3;
 const AUDIO: u8 = 4;
-const PACKET: Duration = Duration::from_millis(60);
+use maarse_hostrules::calls::test as rule;
+const PACKET: Duration = Duration::from_millis(rule::PACKET_MS);
 /// Bytes of (length | frame) that fit one sealed call datagram: 212 payload
 /// - 69 forward secrecy - 8 datagram mark - 8 call header. Opus is variable
 /// rate, so three frames often did not fit and the packet was dropped.
 pub(super) const AUDIO_BUDGET: usize = 119;
-const MUSIC: u8 = 1;
-const ECHO: u8 = 2;
-const SPEED: u8 = 3;
-const SPEED_FOR: Duration = Duration::from_secs(5);
+const MUSIC: u8 = rule::MUSIC;
+const ECHO: u8 = rule::ECHO;
+const SPEED: u8 = rule::SPEED;
+const SPEED_FOR: Duration = Duration::from_millis(rule::SPEED_FOR_MS);
 /// Packets per 60 ms in the speed test (about 17 KB/s of payload).
-const SPEED_PACKETS: usize = 8;
-const ECHO_DELAY: Duration = Duration::from_secs(1);
+const SPEED_PACKETS: usize = rule::SPEED_PACKETS;
+const ECHO_DELAY: Duration = Duration::from_millis(rule::ECHO_DELAY_MS);
 /// A call nobody hangs up ends by itself.
-const MAX_CALL: Duration = Duration::from_secs(600);
+const MAX_CALL: Duration = Duration::from_millis(rule::MAX_CALL_MS);
 
 struct Call {
     peer: Address,

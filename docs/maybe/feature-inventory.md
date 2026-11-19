@@ -35,7 +35,7 @@ Status as of 2026-11-19.
 |---|---|---|
 | Opus calls as datagrams, internet all the way | Calls.kt, web client, maarse-host | real/shared (step 4B, done) |
 | Refusal when the path is not TCP all the way | maarse-hostrules calls | real/shared (step 4B, done) |
-| Call test service (music, echo, speed) | maarse-host node/calltest.rs | not yet |
+| Call test service (music, echo, speed) | maarse-host node/calltest.rs, maarse-hostrules calls::test | shared constants; music, echo and speed modes (Copenhagen host in generated maps) |
 
 ## Pages
 

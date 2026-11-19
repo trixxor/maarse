@@ -468,6 +468,9 @@ pub struct NodeSpec {
     /// maarse:// pages this host shares (maarse-host `pages/`): a site
     /// name for its announce and the page files by path ("index" = front page).
     pub site: Option<Site>,
+    /// Runs the call test service (maarse-host `<data>/calltest/`): it
+    /// answers every call itself with music, echo or a speed test.
+    pub calltest: bool,
 }
 
 /// A host's pages: the name it announces and MU markup per path.
@@ -502,6 +505,7 @@ impl Default for NodeSpec {
             radio: None,
             min_peers: None,
             site: None,
+            calltest: false,
         }
     }
 }

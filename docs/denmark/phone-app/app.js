@@ -68,7 +68,7 @@ function insert(m) { m.id = N.nextRow++; m.msgId = m.msgId ?? 0n; m.hops = m.hop
 function onOpen() {
   send(Cmd.getInfo()); send(Cmd.getName()); send(Cmd.setTime()); send(Cmd.getStats()); send(Cmd.getRegions()); send(Cmd.getSharing());
   if (MODE === "BLE") send(Cmd.getRadio());
-  if (MODE !== "BLE") send(Cmd.getPerson());
+  send(Cmd.getPerson());
   note("Connected (simulated node" + (NODE_LABEL ? " " + NODE_LABEL : "") + ")");
 }
 
@@ -213,6 +213,8 @@ function onEvent(ev) {
     }
     case "FileLimit": N.fileLimitWaiter?.(ev); break;
     case "Person": N.person = ev; break;
+    case "PersonPhrase": N.phrase = ev.phrase; break;
+    case "DeviceLinked": note(`Device linked: ${shortAddr(ev.device)} (${ev.words})`); UI.adding = false; break;
     case "Direct": heard(ev.from, (n) => Object.assign(n, { hops: ev.hops })); incoming("dm:" + ev.from, ev.from, ev.text, ev.hops); break;
     case "Channel": incoming("ch:" + ev.channel, ev.from, ev.text, ev.hops); break;
     case "Stats": {
@@ -639,7 +641,9 @@ function meScreen() {
   const me = N.me, p = N.person, host = MODE === "PHONE" || MODE === "REMOTE";
   const sub = p?.state === PersonState.MEMBER ? `Account ${p.person.slice(0, 8)} · ${p.devices.filter((d) => !d[1]).length} devices` : me ? `Address ${me.addr.slice(0, 8)}` : "Not connected";
   const meRows = [];
-  if (host) meRows.push(grow("Account and devices", p?.state === PersonState.MEMBER ? (p.master ? "This is the master device · backup, add devices" : "Linked to your account") : p?.state === PersonState.AWAITING ? "Waiting to be linked" : "One address for your phone, PC and more", "page\" data-p=\"ACCOUNT"));
+  // The Android app always runs maarse-host (also with a LoRa modem), so
+  // every phone has accounts.
+  meRows.push(grow("Account and devices", p?.state === PersonState.MEMBER ? (p.master ? "This is the master device · backup, add devices" : "Linked to your account") : p?.state === PersonState.AWAITING ? "Waiting to be linked" : "One address for your phone, PC and more", "page\" data-p=\"ACCOUNT"));
   if (p?.state === PersonState.MEMBER) meRows.push(grow("Sync now", "Fetch your mail and copies from your other devices (also done at start-up)", "sync"));
   meRows.push(grow("Name and position", "What your announces share", "page\" data-p=\"NODE", true));
   return `<div class="scroll pb24" data-scroll="me">${card2(`<div class="row" style="gap:14px"><div data-act="page" data-p="NODE" style="cursor:pointer">${avatar(me?.name || "?", me?.addr || "me", 56)}</div><div class="grow col"><div class="tm sb">${esc(me?.name || "No name yet")}</div><div class="bs mute">${esc(sub)}</div></div></div>`)}
@@ -659,11 +663,22 @@ function mePage(p) {
     if (!N.person && !ns) out += hint("Fetching…");
     else if (!N.person || N.person.state === PersonState.NONE) {
       out += hint("With an account, friends write to one address and the message reaches all your devices (phone, PC …). Your sent messages show on all of them too.") +
-        `<div class="col" style="gap:8px;padding:8px 16px;align-items:flex-start"><button class="btn" data-act="person" data-op="${PersonOp.CREATE}">Create an account (this is the master device)</button><button class="btn outlined" data-act="person" data-op="${PersonOp.AWAIT_LINK}">Link this device to my account</button><button class="btn text" data-act="person" data-op="${PersonOp.RESTORE}">Restore an account (backup file or 24 words)</button></div>`;
+        `<div class="col" style="gap:8px;padding:8px 16px;align-items:flex-start"><button class="btn" data-act="person" data-op="${PersonOp.CREATE}">Create an account (this is the master device)</button><button class="btn outlined" data-act="person" data-op="${PersonOp.AWAIT_LINK}">Link this device to my account</button></div>` + `<div class="col" style="gap:8px;padding:8px 16px"><div class="ll">Restore an account from the 24 words</div><div class="ofield"><input id="pwords" placeholder="The 24 words, separated by spaces"></div><button class="btn text" style="align-self:flex-start" data-act="restore">Restore (this becomes the master device)</button></div>`;
     } else if (N.person.state === PersonState.AWAITING) {
-      out += hint("This device is waiting to be linked (10 minutes). On your master device, open Account → Add device and enter this address:") + card2(`<div class="mono">${me.addr}</div><div class="sb">Check words: ${esc(N.person.words)}</div>`);
+      out += hint("This device is waiting to be linked (10 minutes). On your master device, open Account → Add device and enter this address:") + card2(`<div class="mono">${me.addr}</div><div class="sb">Check words: ${esc(N.person.words)}</div>`) + `<div style="padding:4px 16px"><button class="btn text" data-act="person" data-op="${PersonOp.CANCEL}">Stop waiting</button></div>`;
     } else {
-      out += hint("Your account address — give this to friends:") + card2(`<div class="mono">${N.person.person}</div>`) + `<div class="ll" style="padding:8px 16px 0">Devices</div>` + N.person.devices.map(([d, rev]) => `<div class="li">${avatar(shortAddr(d), d, 36)}<div class="grow">${shortAddr(d)}${d === me.addr ? " (this device)" : ""}${rev ? " · removed" : ""}</div></div>`).join("");
+      const P = N.person;
+      if (N.phrase) out += `<div class="card2" style="margin:8px 16px;padding:12px;border:1px solid var(--outline);border-radius:12px"><div class="sb">Write down these 24 words — shown only now</div><div class="mono" style="margin:6px 0">${esc(N.phrase)}</div><button class="btn text" data-act="phraseDone">I have written them down</button></div>`;
+      out += hint("Your account address — give this to friends:") + card2(`<div class="mono">${P.person}</div><div class="bs mute">${P.master ? `This is the master device (device ${P.index}).` : `This is device ${P.index}.`}</div>`) +
+        `<div class="btnrow" style="padding:4px 16px"><button class="btn outlined" data-act="person" data-op="${PersonOp.SYNC}">Sync now</button></div>` +
+        `<div class="ll" style="padding:8px 16px 0">Devices</div>` +
+        P.devices.map(([d, rev]) => `<div class="li">${avatar(shortAddr(d), d, 36)}<div class="grow">${shortAddr(d)}${N.nodes[d]?.name ? " · ~" + esc(N.nodes[d].name) : ""}${d === me.addr ? " · this device" : ""}${rev ? " · removed" : ""}</div>${P.master && !rev && d !== me.addr ? `<button class="btn text" data-act="removeDev" data-a="${d}">Remove</button>` : ""}</div>`).join("");
+      if (P.master) {
+        out += UI.adding
+          ? `<div class="col" style="gap:8px;padding:8px 16px">${hint("On the new device: Settings → Account → \"Link this device to my account\". Enter the address it shows:")}<div class="ofield"><input id="linkaddr" placeholder="The new device's address (32 characters)" maxlength="32"></div><div class="btnrow"><button class="btn" data-act="linkDev">Link</button><button class="btn text" data-act="addCancel">Cancel</button></div></div>`
+          : `<div style="padding:4px 16px"><button class="btn outlined" data-act="addDev">Add device</button></div>`;
+      } else out += hint("Devices are added on the master device.");
+      out += `<div style="padding:4px 8px"><button class="btn text" data-act="person" data-op="${PersonOp.LEAVE}">Remove this device from the account</button></div>`;
     }
     if (N.lastError) out += `<div class="err" style="padding:0 16px">${esc(N.lastError)}</div>`;
     return out;
@@ -834,7 +849,7 @@ function act(a, el) {
     case "open": UI.err = null; if (UI.tab !== "CHATS" && t.s === "contact") { UI.stacks.CHATS = []; UI.tab = "CHATS"; } go({ s: "chat", conv: d.c }); return;
     case "contact": go({ s: "contact", addr: d.a }); return;
     case "net": go({ s: "net", p: d.p }); if (d.p === "NEIGHBOURS") send(Cmd.getNeighbors()); return;
-    case "page": go({ s: "page", p: d.p }); if (d.p === "ACCOUNT" && MODE !== "BLE") send(Cmd.getPerson()); return;
+    case "page": go({ s: "page", p: d.p }); if (d.p === "ACCOUNT") send(Cmd.getPerson()); return;
     case "sheet": UI.sheet = true; break;
     case "sheetClose": UI.sheet = false; break;
     case "newchat": UI.dialog = { kind: "newchat" }; break;
@@ -862,6 +877,12 @@ function act(a, el) {
     case "announce": send(Cmd.announce()); break;
     case "sync": personSetup(PersonOp.SYNC); break;
     case "person": personSetup(+d.op); break;
+    case "restore": personSetup(PersonOp.RESTORE, ($("#pwords")?.value || "").trim().toLowerCase().split(/\s+/).join(" ")); break;
+    case "phraseDone": N.phrase = null; break;
+    case "addDev": UI.adding = true; break;
+    case "addCancel": UI.adding = false; break;
+    case "linkDev": { const a = ($("#linkaddr")?.value || "").trim().toLowerCase(); if (/^[0-9a-f]{32}$/.test(a)) { N.lastError = null; send(Cmd.linkDevice(req(), a)); } else N.lastError = "Enter the 32-character address the new device shows."; break; }
+    case "removeDev": personSetup(PersonOp.REMOVE, d.a); break;
     case "saveName": { const v = ($("#myname")?.value || "").trim(); send(Cmd.setName(v)); send(Cmd.getName()); send(Cmd.announce()); UI.myname = undefined; break; }
     case "saveRegions": send(Cmd.setRegions(N.regions?.strict || false, ($("#regions")?.value || "").trim())); send(Cmd.getRegions()); break;
     case "prec": { const sh = N.sharing; send(Cmd.setSharing(+d.i, Math.round(sh.lat * 1e7), Math.round(sh.lon * 1e7), sh.telemetry)); send(Cmd.getSharing()); break; }

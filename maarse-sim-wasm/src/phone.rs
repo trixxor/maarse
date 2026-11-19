@@ -36,6 +36,18 @@ pub struct Phone {
     pub(crate) lost_events: u64,
     pub(crate) lost_msgs: u64,
     pub(crate) link_drops: u64,
+    /// Waiting to be linked by a master device until then (ms), 0 = no.
+    awaiting_until: u64,
+}
+
+/// A person made on a phone (linked devices, maarse-host `node/person.rs`).
+pub struct PersonRec {
+    /// The person's address, derived from its 24 words (maarse_crypto::recovery).
+    pub addr: Address,
+    pub master: usize,
+    /// (device node, revoked), in the order they were linked.
+    pub devices: Vec<(usize, bool)>,
+    pub version: u32,
 }
 
 #[derive(Default)]
@@ -43,6 +55,10 @@ pub struct Phones {
     pub attached: HashMap<usize, Phone>,
     /// Counter appended to phone messages so equal texts get distinct packet ids.
     counter: u64,
+    /// Persons made on phones.
+    pub persons: Vec<PersonRec>,
+    /// Link grants on their way: (message, person, device).
+    pending_links: Vec<(usize, usize, usize)>,
 }
 
 fn txt(s: &str) -> maarse_core::companion::Text {
@@ -232,6 +248,9 @@ impl Engine {
                 self.phone_emit(node, &Event::ChannelJoined { channel: ch, name: txt(&label) });
             }
             Command::SendDirect { req, dest, text: t } => {
+                // An account address: send to one of the person's devices (the
+                // engine routes to the best one and the others get copies).
+                let dest = self.person_device_addr(&dest).unwrap_or(dest);
                 let Some(&to) = self.addr_idx.get(&dest) else {
                     return self.phone_err(node, req, error_code::UNKNOWN_DEST, "Simulator: no node with this address in this world");
                 };
@@ -351,8 +370,12 @@ impl Engine {
             }
             Command::Remote { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("remote admin")),
             Command::SendAlert { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("alerts from a phone (use the Alert tool on the map)")),
-            Command::LinkDevice { req, .. } | Command::PersonSetup { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("linked devices")),
-            Command::GetPerson => self.phone_err(node, 0, error_code::BAD_FRAME, &not_yet("linked devices")),
+            Command::GetPerson => {
+                let info = self.person_info(node);
+                self.phone_emit(node, &Event::Person(info));
+            }
+            Command::PersonSetup { req, op, text: t } => self.person_setup(node, req, op, &t),
+            Command::LinkDevice { req, device } => self.link_device(node, req, device),
             Command::JoinPrivateChannel { .. } => self.phone_err(node, 0, error_code::BAD_FRAME, &not_yet("private channels")),
             other => self.phone_err(node, 0, error_code::BAD_FRAME, &not_yet(&format!("command {:?}", core::mem::discriminant(&other)))),
         }
@@ -399,9 +422,14 @@ impl Engine {
 
     /// Message `m` reached `node` (called where the engine marks it delivered).
     pub(crate) fn phone_on_message(&mut self, m: usize, node: usize, hops: u8) {
+        if self.msgs[m].payload.starts_with(b"PLINK") && self.link_arrived(m, node) {
+            return;
+        }
         if !self.phones.attached.contains_key(&node) {
             return;
         }
+        // A copy from a sibling device carries the original message.
+        let m = self.msgs[m].sync_of.unwrap_or(m);
         let p = &self.msgs[m].payload;
         let body = match p.iter().position(|&b| b == 0) {
             Some(k) => &p[..k],
@@ -410,8 +438,237 @@ impl Engine {
                 &p[..end]
             }
         };
-        let from = self.nodes[self.msgs[m].from].router.addr;
+        let sender = self.msgs[m].from;
+        // From a device of a person: shown as the person (maarse-host person_peer).
+        let from = self.person_of_node(sender).map_or(self.nodes[sender].router.addr, |k| self.phones.persons[k].addr);
         self.phone_emit(node, &Event::DirectReceived { from, hops, text: text(body) });
+    }
+
+    /// The person (index in `phones.persons`) `node` is a live device of.
+    fn person_of_node(&self, node: usize) -> Option<usize> {
+        self.phones.persons.iter().position(|p| p.devices.iter().any(|&(d, rev)| d == node && !rev))
+    }
+
+    /// A device address for an account address (the master, or the first
+    /// device that is alive).
+    fn person_device_addr(&self, a: &Address) -> Option<Address> {
+        let p = self.phones.persons.iter().find(|p| p.addr == *a)?;
+        let live: Vec<usize> = p.devices.iter().filter(|(_, r)| !r).map(|(d, _)| *d).collect();
+        let d = live.iter().copied().find(|&d| self.nodes[d].alive()).or(live.first().copied())?;
+        Some(self.nodes[d].router.addr)
+    }
+
+    /// The words both devices show while linking (maarse_crypto::person::
+    /// link_words takes the device's public key; the simulator's nodes have
+    /// no full identity, so the same word list is used on the address).
+    fn link_words(&self, node: usize) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"maarse/link/v1");
+        h.update(self.nodes[node].router.addr.0);
+        let d = h.finalize();
+        (0..4).map(|i| maarse_crypto::recovery::word(u16::from_be_bytes([d[2 * i], d[2 * i + 1]]) & 0x7ff)).collect::<Vec<_>>().join(" ")
+    }
+
+    fn person_info(&self, node: usize) -> maarse_core::companion::PersonInfo {
+        use maarse_core::companion::{PersonInfo, person_state};
+        let mut i = PersonInfo::default();
+        if let Some(k) = self.person_of_node(node) {
+            let p = &self.phones.persons[k];
+            i.state = person_state::MEMBER;
+            i.master = p.master == node;
+            i.person = p.addr;
+            i.index = p.devices.iter().position(|&(d, _)| d == node).unwrap_or(0) as u8;
+            i.version = p.version;
+            for &(d, rev) in &p.devices {
+                let _ = i.devices.push((self.nodes[d].router.addr, rev));
+            }
+        } else if self.phones.attached.get(&node).is_some_and(|p| self.now < p.awaiting_until) {
+            i.state = person_state::AWAITING_LINK;
+            i.words = heapless::Vec::from_slice(self.link_words(node).as_bytes()).unwrap_or_default();
+        }
+        i
+    }
+
+    /// Puts the person's live devices into the engine's device groups
+    /// (master first: the person's mailbox key), replacing its old group.
+    fn person_groups(&mut self, k: usize) {
+        let p = &self.phones.persons[k];
+        let all: Vec<usize> = p.devices.iter().map(|(d, _)| *d).collect();
+        let mut live: Vec<usize> = p.devices.iter().filter(|(_, r)| !r).map(|(d, _)| *d).collect();
+        if let Some(pos) = live.iter().position(|&d| d == p.master) {
+            live.swap(0, pos);
+        }
+        self.sc.device_groups.retain(|g| !g.iter().any(|d| all.contains(d)));
+        if live.len() >= 2 {
+            self.sc.device_groups.push(live);
+            // maarse-host always copies the person's messages to its other devices.
+            self.sc.sibling_sync = true;
+        }
+    }
+
+    /// Every live device of person `k` hears what changed.
+    fn person_changed(&mut self, k: usize) {
+        self.phones.persons[k].version += 1;
+        self.person_groups(k);
+        let devs: Vec<usize> = self.phones.persons[k].devices.iter().map(|(d, _)| *d).collect();
+        for d in devs {
+            let info = self.person_info(d);
+            self.phone_emit(d, &Event::Person(info));
+        }
+    }
+
+    /// maarse-host `person_setup` on a phone.
+    fn person_setup(&mut self, node: usize, req: u16, op: u8, t: &[u8]) {
+        use maarse_core::companion::person_op;
+        let fail = |e: &mut Self, m: &str| e.phone_err(node, req, error_code::BAD_FRAME, m);
+        match op {
+            person_op::CREATE | person_op::RESTORE => {
+                if self.person_of_node(node).is_some() {
+                    return fail(self, "This device already belongs to a person (leave it first)");
+                }
+                let (phrase, words) = if op == person_op::CREATE {
+                    let mut ent = [0u8; maarse_crypto::recovery::ENTROPY_LEN];
+                    self.rng.fill(&mut ent[..]);
+                    let ph = maarse_crypto::recovery::entropy_to_phrase(&ent).to_string();
+                    (Some(ph.clone()), ph)
+                } else {
+                    (None, String::from_utf8_lossy(t).split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase())
+                };
+                let master = match maarse_crypto::recovery::identity_from_phrase(&words, "") {
+                    Ok(m) => m.address(),
+                    Err(e) => return fail(self, &format!("The phrase is not valid: {e:?}")),
+                };
+                // Restoring a person that already exists here: this device
+                // becomes its master and the old devices must be linked again.
+                if let Some(k) = self.phones.persons.iter().position(|p| p.addr == master) {
+                    self.phones.persons[k].master = node;
+                    self.phones.persons[k].devices = vec![(node, false)];
+                    self.person_changed(k);
+                } else {
+                    self.phones.persons.push(PersonRec { addr: master, master: node, devices: vec![(node, false)], version: 0 });
+                    let k = self.phones.persons.len() - 1;
+                    self.person_changed(k);
+                }
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.awaiting_until = 0;
+                }
+                if let Some(ph) = phrase {
+                    self.phone_emit(node, &Event::PersonPhrase { phrase: txt(&ph) });
+                }
+                self.announce(node);
+            }
+            person_op::AWAIT_LINK => {
+                if self.person_of_node(node).is_some() {
+                    return fail(self, "This device already belongs to a person (leave it first)");
+                }
+                let until = self.now + 600_000;
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.awaiting_until = until;
+                }
+                let info = self.person_info(node);
+                self.phone_emit(node, &Event::Person(info));
+                // The master device needs our keys: tell everyone who we are.
+                self.announce(node);
+            }
+            person_op::CANCEL => {
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.awaiting_until = 0;
+                }
+                let info = self.person_info(node);
+                self.phone_emit(node, &Event::Person(info));
+            }
+            person_op::LEAVE => {
+                if let Some(k) = self.person_of_node(node) {
+                    self.phones.persons[k].devices.retain(|&(d, _)| d != node);
+                    self.sc.device_groups.retain(|g| !g.contains(&node));
+                    if self.phones.persons[k].devices.is_empty() {
+                        self.phones.persons.remove(k);
+                    } else {
+                        self.person_changed(k);
+                    }
+                }
+                let info = self.person_info(node);
+                self.phone_emit(node, &Event::Person(info));
+                self.announce(node);
+            }
+            person_op::REMOVE => {
+                let Some(k) = self.person_of_node(node) else { return fail(self, "This device does not belong to a person") };
+                if self.phones.persons[k].master != node {
+                    return fail(self, "Only the master device can remove devices");
+                }
+                let hex = String::from_utf8_lossy(t).trim().to_lowercase();
+                let Some(d) = maarse_hostrules::pagelock::parse_hex(&hex).and_then(|a| self.addr_idx.get(&a).copied()) else {
+                    return fail(self, "Give the device's address (32 hex characters)");
+                };
+                let Some(e) = self.phones.persons[k].devices.iter_mut().find(|(x, _)| *x == d) else {
+                    return fail(self, "That device does not belong to this person");
+                };
+                e.1 = true;
+                self.person_changed(k);
+                let info = self.person_info(d);
+                self.phone_emit(d, &Event::Person(info));
+            }
+            person_op::SYNC => {
+                if self.person_of_node(node).is_none() {
+                    return fail(self, "This device does not belong to a person");
+                }
+                self.person_sync(node);
+                self.phone_emit(node, &Event::Log { text: txt("Syncing with the other devices and the post offices") });
+            }
+            _ => fail(self, "Not simulated yet: account backups (use the 24 words) (Denmark simulator)"),
+        }
+    }
+
+    /// maarse-host `link_device`: the master device links a waiting device
+    /// it has heard. The grant travels to the device as a sealed message.
+    fn link_device(&mut self, node: usize, req: u16, device: Address) {
+        let fail = |e: &mut Self, m: &str| e.phone_err(node, req, error_code::UNKNOWN_DEST, m);
+        let Some(k) = self.person_of_node(node) else { return fail(self, "This device does not belong to a person") };
+        if self.phones.persons[k].master != node {
+            return fail(self, "Only the master device can link devices");
+        }
+        let Some(&d) = self.addr_idx.get(&device) else {
+            return fail(self, "The new device has not been heard yet: choose \"Link to an account\" on it and keep it open");
+        };
+        if d == node || !self.knows(node, d) {
+            return fail(self, "The new device has not been heard yet: choose \"Link to an account\" on it and keep it open");
+        }
+        if self.phones.persons[k].devices.iter().filter(|(x, _)| *x != d).count() >= 4 {
+            return fail(self, "The person already has 4 devices (removed ones count too)");
+        }
+        // The grant goes over the network like any sealed message; the link
+        // takes effect when it arrives (checked in phone_on_message).
+        let m = self.send_payload(node, d, b"PLINK".to_vec());
+        self.phones.pending_links.push((m, k, d));
+        let id = self.msgs[m].id;
+        self.phone_emit(node, &Event::Sent { req, msg_id: id });
+    }
+
+    /// A link grant reached the waiting device `d`.
+    pub(crate) fn link_arrived(&mut self, m: usize, node: usize) -> bool {
+        let Some(pos) = self.phones.pending_links.iter().position(|&(mm, _, d)| mm == m && d == node) else { return false };
+        let (_, k, d) = self.phones.pending_links.remove(pos);
+        let waiting = self.phones.attached.get(&d).is_some_and(|p| self.now < p.awaiting_until);
+        if !waiting || k >= self.phones.persons.len() {
+            return true;
+        }
+        if let Some(p) = self.phones.attached.get_mut(&d) {
+            p.awaiting_until = 0;
+        }
+        let devs = &mut self.phones.persons[k].devices;
+        devs.retain(|(x, _)| *x != d);
+        devs.push((d, false));
+        let index = (devs.len() - 1) as u8;
+        self.person_changed(k);
+        let words = self.link_words(d);
+        let all: Vec<usize> = self.phones.persons[k].devices.iter().filter(|(_, r)| !r).map(|(x, _)| *x).collect();
+        let dev_addr = self.nodes[d].router.addr;
+        for x in all {
+            self.phone_emit(x, &Event::DeviceLinked { device: dev_addr, index, words: heapless::Vec::from_slice(words.as_bytes()).unwrap_or_default() });
+        }
+        self.announce(d);
+        true
     }
 
     /// The router of `node` got an ack for `msg_id`.
@@ -488,6 +745,46 @@ mod tests {
         e.phone_cmd(0, &Command::TraceRoute { req: 9, dest: b_addr }.encode());
         let a = frames(&e.phone_events(0));
         assert!(matches!(&a[..], [Event::Error { req: 9, .. }]), "{a:?}");
+    }
+
+    /// Linked devices from phones: A creates an account, B waits and is
+    /// linked by A; a message from C to the account reaches both.
+    #[test]
+    fn phones_link_devices_and_share_the_account() {
+        use maarse_core::companion::{person_op, person_state};
+        let sc = json!({"seed": 3, "duration_s": 900, "mail": "post", "nodes": [
+            {"kind": "handheld", "lat": 56.0, "lon": 9.0},
+            {"kind": "repeater", "lat": 56.0, "lon": 9.05},
+            {"kind": "handheld", "lat": 56.0, "lon": 9.1},
+            {"kind": "handheld", "lat": 56.0, "lon": 9.06}
+        ], "traffic": {"direct_per_min": 0, "channel_per_min": 0}});
+        let mut e = create(&sc.to_string()).unwrap();
+        e.run_until(20_000, usize::MAX);
+        for n in [0, 2, 3] {
+            e.phone_cmd(n, &Command::GetInfo.encode());
+            frames(&e.phone_events(n));
+        }
+        e.phone_cmd(0, &Command::PersonSetup { req: 1, op: person_op::CREATE, text: text(b"") }.encode());
+        let a = frames(&e.phone_events(0));
+        assert!(a.iter().any(|ev| matches!(ev, Event::PersonPhrase { phrase } if phrase.split(|&b| b == b' ').count() == 24)), "{a:?}");
+        let person = a.iter().find_map(|ev| if let Event::Person(p) = ev { Some(p.person) } else { None }).unwrap();
+        e.phone_cmd(2, &Command::PersonSetup { req: 2, op: person_op::AWAIT_LINK, text: text(b"") }.encode());
+        let b = frames(&e.phone_events(2));
+        assert!(b.iter().any(|ev| matches!(ev, Event::Person(p) if p.state == person_state::AWAITING_LINK && !p.words.is_empty())), "{b:?}");
+        e.run_until(60_000, usize::MAX);
+        let b_addr = e.nodes[2].router.addr;
+        e.phone_cmd(0, &Command::LinkDevice { req: 3, device: b_addr }.encode());
+        e.run_until(150_000, usize::MAX);
+        let b = frames(&e.phone_events(2));
+        assert!(b.iter().any(|ev| matches!(ev, Event::Person(p) if p.state == person_state::MEMBER && p.person == person && p.devices.len() == 2)), "{b:?}");
+        assert!(b.iter().any(|ev| matches!(ev, Event::DeviceLinked { device, .. } if *device == b_addr)), "{b:?}");
+        // C writes to the account address: both devices get it.
+        e.phone_cmd(3, &Command::SendDirect { req: 4, dest: person, text: text(b"to the account") }.encode());
+        e.run_until(400_000, usize::MAX);
+        for n in [0, 2] {
+            let f = frames(&e.phone_events(n));
+            assert!(f.iter().any(|ev| matches!(ev, Event::DirectReceived { text: t, .. } if &t[..] == b"to the account")), "node {n}: {f:?}");
+        }
     }
 
     /// A phone sends a small file through the companion commands; the other

@@ -32,7 +32,7 @@ const N = { myKey: null, keys: {}, verified: {}, safety: {},
   online: true, alive: true, offlineWhy: "",
   me: null, infoAt: 0,
   stats: {}, neighbors: [], log: [], channels: {}, nodes: {}, nick: {}, announces: [],
-  msgs: [], nextRow: 1, unread: {}, pending: {}, pendingFiles: {}, fileOut: {}, fileIn: {},
+  msgs: [], nextRow: 1, hostHistory: false, histReq: 0, unread: {}, pending: {}, pendingFiles: {}, fileOut: {}, fileIn: {},
   person: null, lastError: null, traces: [], traceSent: {}, traceRtt: {}, regions: null, sharing: null, radio: null, backbones: [], backbonesNext: [],
   alerts: [], dismissed: new Set(), openConv: null, nextReq: 0, fastPoll: false, fileLimitWaiter: null,
   favUsers: [], notSim: [],
@@ -233,7 +233,73 @@ function onEvent(ev) {
     case "Alert": if (!N.alerts.some((a) => a.key === ev.key)) N.alerts.push(ev); break;
     case "Log": note(ev.text); break;
     case "IdentityChanged": note("The node's identity changed: " + shortAddr(ev.addr)); break;
+    // History on the host (Node.kt): the host keeps every message.
+    case "HistoryInfo":
+      N.hostHistory = true;
+      note(`History on the host: ${ev.count} messages (kept for ${ev.days} days)`);
+      send(Cmd.histGet(++N.histReq & 0xffff, null, 0, 200));
+      break;
+    case "HistoryItem": try { onHistory(ev); } catch (e) { note("History item skipped: " + e.message); } break;
+    case "HistoryEnd": if (ev.more && /^0+$/.test(ev.conv)) send(Cmd.histGet(++N.histReq & 0xffff, null, ev.oldest, 200)); break;
+    case "ReadMark": {
+      const c = convOf(ev.conv);
+      if (ev.unread > 0 && N.openConv !== c) N.unread[c] = ev.unread; else delete N.unread[c];
+      break;
+    }
+    case "Deleted": {
+      const c = convOf(ev.conv), text = utf8d.decode(ev.content), mine = (ev.flags & 1) !== 0;
+      if (ev.flags & 2) N.msgs = N.msgs.filter((m) => m.conv !== c);
+      else N.msgs = N.msgs.filter((m) => !(m.conv === c && m.mine === mine && m.text === text && Math.abs(m.ts - ev.unix * 1000) < 120000));
+      break;
+    }
   }
+}
+
+const utf8d = new TextDecoder();
+const convOf = (addr) => (N.channels[addr] !== undefined ? "ch:" : "dm:") + addr;
+const HIST_STATUS = ["", "sent", "delivered", "mailbox", "carried"];
+
+/** The host's copy of a message: import it once (by the host's id), as Node.kt onHistory. */
+function onHistory(ev) {
+  if (ev.kind === 3) return; // files: the app keeps them itself
+  const conv = (ev.kind === 2 ? "ch:" : "dm:") + ev.conv, text = utf8d.decode(ev.content);
+  const st = ev.outgoing ? HIST_STATUS[ev.st] ?? "sent" : "";
+  if (N.msgs.some((m) => m.hid === ev.id)) return;
+  const own = ev.outgoing && ev.msgId !== 0n ? byMsgId(ev.msgId) : null;
+  if (own) { own.hid = ev.id; own.status = st; return; }
+  // A message already shown live: adopt it instead of showing it twice.
+  const same = N.msgs.find((m) => m.hid === undefined && m.conv === conv && m.mine === ev.outgoing && m.text === text && (ev.outgoing || m.from === ev.from) && Math.abs(m.ts - ev.ts * 1000) < 120000);
+  if (same) { same.hid = ev.id; return; }
+  const row = insert({ conv, mine: ev.outgoing, from: ev.from, text, ts: ev.ts * 1000, status: st, msgId: ev.msgId, hops: ev.hops });
+  N.msgs.find((m) => m.id === row).hid = ev.id;
+  N.msgs.sort((a, b) => a.ts - b.ts);
+}
+
+/** Removes a message here and from the host's history (not from the other person's phone). */
+function deleteMessage(m) {
+  N.msgs = N.msgs.filter((x) => x.id !== m.id);
+  if (N.hostHistory && !m.mime) send(Cmd.histDelete(m.conv.split(/:(.*)/s)[1], m.mine ? 1 : 0, Math.floor(m.ts / 1000), utf8.encode(m.text)));
+}
+
+/** Can this message still be stopped (a file on its way, or waiting)? As Node.kt cancellable. */
+function cancellable(m) {
+  if (m.mine) return m.status === "queued" || m.status.startsWith("sending") || m.status === "filebox" || (!!m.mime && m.status === "sent");
+  return Object.values(N.fileIn).some((f) => f.row === m.id);
+}
+
+/** Stops a file on its way or a waiting message, and removes it (Node.kt cancel). */
+function cancelMsg(m) {
+  if (!m.mine) {
+    const e = Object.entries(N.fileIn).find(([, f]) => f.row === m.id);
+    if (e) { send(Cmd.cancelFile(BigInt(e[0]))); delete N.fileIn[e[0]]; m.text = fileLabel(e[1].mime, e[1].name, null) + " — cancelled"; }
+    return;
+  }
+  const o = Object.entries(N.fileOut).find(([, row]) => row === m.id);
+  if (o) { send(Cmd.cancelFile(BigInt(o[0]))); delete N.fileOut[o[0]]; }
+  if (m.status === "filebox" && m.msgId !== 0n) send(Cmd.cancelFile(m.msgId));
+  for (const [k, row] of Object.entries(N.pendingFiles)) if (row === m.id) delete N.pendingFiles[k];
+  for (const [k, row] of Object.entries(N.pending)) if (row === m.id) delete N.pending[k];
+  deleteMessage(m);
 }
 
 // ---------- calls (Calls.kt): signalling over SendCall 0x27 ----------
@@ -526,6 +592,8 @@ function bubble(m, isDm) {
   return `<div class="brow${mine ? " mine" : ""}"><div class="bubble" data-act="bubble" data-id="${m.id}">${sender}${att}${prog}${txt}<div class="meta">${new Date(m.ts).toTimeString().slice(0, 5)}${mine ? deliveryIcon(m.status, !isDm) : ""}</div>${open}</div></div>`;
 }
 function chatScreen(conv) {
+  // Always tell the host when a chat is opened (Node.kt markRead).
+  if (N.openConv !== conv && N.hostHistory) send(Cmd.histMarkRead(conv.split(/:(.*)/s)[1], 0));
   N.openConv = conv;
   if (N.unread[conv]) delete N.unread[conv];
   const isDm = conv.startsWith("dm:"), title = convTitle(conv), peer = conv.split(/:(.*)/s)[1];
@@ -788,7 +856,7 @@ function dialogHtml() {
   if (d.kind === "nick") inner = `<div class="hs">Your name for ${shortAddr(d.addr)}</div><div class="ofield"><label>Only on this phone</label><input id="dlgNick" value="${esc(N.nick[d.addr] || "")}"></div><div class="acts"><button class="btn text" data-act="dlgClose">Cancel</button><button class="btn text" data-act="nickOk">Save</button></div>`;
   if (d.kind === "msg") {
     const m = N.msgs.find((x) => x.id === d.id);
-    inner = `<div class="hs">${m.mine ? "Your message" : "Message"}</div><div class="col" style="gap:4px;align-items:flex-start">${m.file ? "" : `<button class="btn text" data-act="copyMsg">Copy text</button>`}<button class="btn text" style="color:var(--error)" data-act="delMsg">Delete from this phone</button>${m.mine ? `<div class="bs">Already sent messages cannot be called back; this only removes your copy.</div>` : ""}</div><div class="acts"><button class="btn text" data-act="dlgClose">Close</button></div>`;
+    inner = `<div class="hs">${m.mine ? "Your message" : "Message"}</div><div class="col" style="gap:4px;align-items:flex-start">${m.file ? "" : `<button class="btn text" data-act="copyMsg">Copy text</button>`}${cancellable(m) ? `<button class="btn text" style="color:var(--error)" data-act="cancelMsg">Stop sending</button>` : ""}<button class="btn text" style="color:var(--error)" data-act="delMsg">Delete from this phone</button>${m.mine ? `<div class="bs">Already sent messages cannot be called back; this only removes your copy.</div>` : ""}</div><div class="acts"><button class="btn text" data-act="dlgClose">Close</button></div>`;
   }
   if (d.kind === "delchat") inner = `<div class="hs">Delete the chat with ${esc(convTitle(d.conv))}?</div><div class="bm mute">Removes it from this phone and your node's history. The other person keeps their copy.${d.conv.startsWith("ch:") ? " You stay in the channel." : " It comes back if they write again."}</div><div class="acts"><button class="btn text" data-act="dlgClose">Cancel</button><button class="btn text" style="color:var(--error)" data-act="delChatOk">Delete</button></div>`;
   if (d.kind === "pic") inner = `<div class="hs">This picture goes over LoRa</div><div class="bm">Pick how it is sent. Smaller arrives sooner and uses less air time.</div>${d.opts ? d.opts.map((o, i) => `<div class="row" style="gap:12px;padding:8px;border-radius:10px;background:var(--sc);cursor:pointer" data-act="picPick" data-i="${i}"><img src="${o.url}" style="width:72px;height:72px;object-fit:contain;border-radius:6px;background:#fff;${o.mime === "image/png" ? "image-rendering:pixelated" : ""}"><div class="grow col"><div class="sb">${o.title}</div><div class="bs">${(o.data.length / 1024).toFixed(1)} KB · about ${Math.round(o.data.length * 8 / 1000 * 1.6)} s</div><div class="bs mute">${o.sub}</div></div></div>`).join("") : `<div class="mute">Making the small versions…</div>`}<div class="acts"><button class="btn text" data-act="dlgClose">Cancel</button></div>`;
@@ -889,8 +957,14 @@ function act(a, el) {
     case "nick": UI.dialog = { kind: "nick", addr: d.a }; break;
     case "nickOk": { const v = $("#dlgNick").value.trim(); if (v) N.nick[UI.dialog.addr] = v; else delete N.nick[UI.dialog.addr]; UI.dialog = null; break; }
     case "copyMsg": navigator.clipboard?.writeText(N.msgs.find((x) => x.id === UI.dialog.id)?.text || ""); UI.dialog = null; break;
-    case "delMsg": N.msgs = N.msgs.filter((x) => x.id !== UI.dialog.id); UI.dialog = null; break;
-    case "delChatOk": N.msgs = N.msgs.filter((x) => x.conv !== UI.dialog.conv); UI.dialog = null; break;
+    case "delMsg": { const m = N.msgs.find((x) => x.id === UI.dialog.id); if (m) deleteMessage(m); UI.dialog = null; break; }
+    case "cancelMsg": { const m = N.msgs.find((x) => x.id === UI.dialog.id); if (m) cancelMsg(m); UI.dialog = null; break; }
+    case "delChatOk": {
+      const c = UI.dialog.conv;
+      N.msgs = N.msgs.filter((x) => x.conv !== c); delete N.unread[c];
+      if (N.hostHistory) send(Cmd.histDelete(c.split(/:(.*)/s)[1], 2, 0, new Uint8Array(0)));
+      UI.dialog = null; break;
+    }
     case "bubble": UI.shown = UI.shown === +d.id ? null : +d.id; break;
     case "send": { const txt = UI.draft[t.conv] || ""; if (!N.me || !txt.trim()) return; UI.err = sendText(t.conv, txt); if (!UI.err) UI.draft[t.conv] = ""; break; }
     case "call": Calls.start(d.a); return;

@@ -53,6 +53,11 @@ const Cmd = {
   setName: (name) => frame(0x24, (w) => w.text(name)),
   getName: () => frame(0x25),
   getBackbones: () => frame(0x39),
+  // History on maarse-host (maarse-host/src/history.rs), as Proto.kt.
+  histGet: (req, conv, before, limit) => frame(0x30, (w) => { w.u16(req); if (conv) w.addr(conv); else w.bytes(new Uint8Array(16)); w.u64(before).u8(limit); }),
+  histMarkRead: (conv, upTo) => frame(0x31, (w) => w.addr(conv).u64(upTo)),
+  /** flags: 1 outgoing, 2 the whole conversation. */
+  histDelete: (conv, flags, unix, content) => frame(0x33, (w) => w.addr(conv).u8(flags).u32(unix).bytes(content)),
   // Files (the same frames as the web client's sendFile).
   fileBegin: (req, dest, size, mime, name) => frame(0x06, (w) => {
     const m = utf8.encode(mime).slice(0, 60);
@@ -150,6 +155,11 @@ function decodeEvent(f) {
     case 0xb7: return { t: "PersonPhrase", phrase: r.txt(1) };
     case 0xb8: return { t: "PersonBackup", code: r.txt(1) };
     case 0xac: return alert(r);
+    case 0xb0: return { t: "HistoryItem", id: r.u64(1), ts: r.u32(9), outgoing: (r.u8(13) & 1) !== 0, live: (r.u8(13) & 2) !== 0, kind: r.u8(14), st: r.u8(15), hops: r.u8(16), msgId: r.u64(17), conv: r.addr(25), from: r.addr(41), content: sub(57) };
+    case 0xb1: return { t: "HistoryEnd", req: r.u16(1), conv: r.addr(3), count: r.u8(19), more: r.u8(20) !== 0, oldest: r.u64(21) };
+    case 0xb2: return { t: "ReadMark", conv: r.addr(1), upTo: r.u64(17), unread: r.u16(25) };
+    case 0xb3: return { t: "HistoryInfo", days: r.u16(2), count: r.u32(4) };
+    case 0xb9: return { t: "Deleted", conv: r.addr(1), flags: r.u8(17), unix: r.u32(18), content: sub(22) };
     default: return { t: "Unknown", kind: t };
   }
 }

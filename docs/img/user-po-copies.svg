@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 330" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="14">
+<style>
+  .bg { fill: #ffffff; } .ink { fill: #17202a; } .muted { fill: #5b6673; } .wire { stroke: #c9d0d8; } .net { stroke: #1f6fd1; }
+  .amber { fill: #c47f12; } .card { fill: #f3f5f7; stroke: #d5dbe1; } .env { fill: #c47f12; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #171c22; } .ink { fill: #e7ebef; } .muted { fill: #9ba6b2; } .wire { stroke: #3a434d; } .net { stroke: #5ea6ff; }
+    .amber { fill: #eaa65a; } .card { fill: #222932; stroke: #3a434d; } .env { fill: #eaa65a; }
+  }
+  /* Anna's letter goes to her nearest office, then copies fly to three hosts. */
+  .m0 { offset-path: path('M90,250 L260,250'); animation: m0 8s linear infinite; }
+  @keyframes m0 { 0% { offset-distance: 0%; opacity: 1; } 22% { offset-distance: 100%; opacity: 1; } 24%, 100% { opacity: 0; } }
+  .m1, .m2, .m3 { opacity: 0; animation: 8s linear infinite; }
+  .m1 { offset-path: path('M260,250 L520,90'); animation-name: mc; }
+  .m2 { offset-path: path('M260,250 L640,190'); animation-name: mc; }
+  .m3 { offset-path: path('M260,250 L780,280'); animation-name: mc; }
+  @keyframes mc { 0%, 26% { offset-distance: 0%; opacity: 0; } 28% { opacity: 1; } 60% { offset-distance: 100%; opacity: 1; } 62%, 100% { offset-distance: 100%; opacity: 0; } }
+  .held { opacity: 0; animation: held 8s infinite; } @keyframes held { 0%, 60% { opacity: 0; } 64%, 97% { opacity: 1; } 100% { opacity: 0; } }
+</style>
+<rect class="bg" width="900" height="330" rx="12"/>
+<text class="ink" x="450" y="34" text-anchor="middle" font-weight="600" font-size="16">Anna posts the letter nearby; copies are kept in three post offices</text>
+<line class="wire" x1="90" y1="250" x2="260" y2="250" stroke-width="3" stroke-dasharray="6 6"/>
+<line class="net" x1="260" y1="250" x2="520" y2="90" stroke-width="3"/>
+<line class="net" x1="260" y1="250" x2="640" y2="190" stroke-width="3"/>
+<line class="net" x1="260" y1="250" x2="780" y2="280" stroke-width="3"/>
+<!-- Anna -->
+<text x="90" y="258" text-anchor="middle" font-size="26">📱</text><text class="ink" x="90" y="292" text-anchor="middle" font-weight="600">Anna</text>
+<!-- nearest office -->
+<rect class="card" x="215" y="215" width="90" height="70" rx="10"/><text x="260" y="258" text-anchor="middle" font-size="26">🏤</text>
+<text class="ink" x="260" y="305" text-anchor="middle">nearest post office</text>
+<!-- three copies -->
+<rect class="card" x="475" y="55" width="90" height="70" rx="10"/><text x="520" y="98" text-anchor="middle" font-size="26">🏤</text><text class="muted" x="520" y="143" text-anchor="middle">copy 1</text>
+<rect class="card" x="595" y="155" width="90" height="70" rx="10"/><text x="640" y="198" text-anchor="middle" font-size="26">🏤</text><text class="muted" x="640" y="243" text-anchor="middle">copy 2</text>
+<rect class="card" x="735" y="245" width="90" height="70" rx="10"/><text x="780" y="288" text-anchor="middle" font-size="26">🏤</text><text class="muted" x="845" y="262">copy 3</text>
+<text class="amber held" x="660" y="110" font-weight="600">✉ kept until Bo asks (up to 7 days)</text>
+<text class="muted" x="40" y="80">Which three offices? Worked out</text>
+<text class="muted" x="40" y="98">from Bo's address, so any post</text>
+<text class="muted" x="40" y="116">office can find his mail again.</text>
+<g class="m0"><circle class="env" r="9"/><text y="4" text-anchor="middle" font-size="10" fill="#fff">✉</text></g>
+<g class="m1"><circle class="env" r="8"/></g><g class="m2"><circle class="env" r="8"/></g><g class="m3"><circle class="env" r="8"/></g>
+</svg>

@@ -9,6 +9,7 @@ watch it happen.
 | Page | Status |
 |---|---|
 | [Sending a message](messages.md) | done (sample page) |
+| [Post offices: messages that wait for you](post-office.md) | done (sample page) |
 | Contacts and names | planned |
 | Channels | planned |
 | Files, pictures and voice | planned |

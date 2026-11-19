@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 270" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="14">
+<style>
+  .bg { fill: #ffffff; } .ink { fill: #17202a; } .muted { fill: #5b6673; } .wire { stroke: #c9d0d8; } .net { stroke: #1f6fd1; }
+  .ok { fill: #2e8b57; } .card { fill: #f3f5f7; stroke: #d5dbe1; } .ask { fill: #1f6fd1; } .env { fill: #c47f12; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #171c22; } .ink { fill: #e7ebef; } .muted { fill: #9ba6b2; } .wire { stroke: #3a434d; } .net { stroke: #5ea6ff; }
+    .ok { fill: #5cc489; } .card { fill: #222932; stroke: #3a434d; } .ask { fill: #5ea6ff; } .env { fill: #eaa65a; }
+  }
+  /* 1 Bo asks the nearest office  2 it fetches a copy  3 it hands it to Bo */
+  .q { offset-path: path('M800,170 L560,170'); animation: q 9s linear infinite; }
+  @keyframes q { 0% { offset-distance: 0%; opacity: 1; } 22% { offset-distance: 100%; opacity: 1; } 24%, 100% { opacity: 0; } }
+  .f { opacity: 0; offset-path: path('M200,170 L560,170'); animation: f 9s linear infinite; }
+  @keyframes f { 0%, 26% { offset-distance: 0%; opacity: 0; } 28% { opacity: 1; } 52% { offset-distance: 100%; opacity: 1; } 54%, 100% { opacity: 0; } }
+  .d { opacity: 0; offset-path: path('M560,170 L800,170'); animation: d 9s linear infinite; }
+  @keyframes d { 0%, 56% { offset-distance: 0%; opacity: 0; } 58% { opacity: 1; } 78% { offset-distance: 100%; opacity: 1; } 80%, 100% { opacity: 0; } }
+  .got { opacity: 0; animation: got 9s infinite; } @keyframes got { 0%, 80% { opacity: 0; } 83%, 98% { opacity: 1; } 100% { opacity: 0; } }
+  .l1 { opacity: 0.3; animation: l1 9s infinite; } @keyframes l1 { 0%, 24% { opacity: 1; } 26%, 100% { opacity: 0.3; } }
+  .l2 { opacity: 0.3; animation: l2 9s infinite; } @keyframes l2 { 0%, 25% { opacity: 0.3; } 27%, 54% { opacity: 1; } 56%, 100% { opacity: 0.3; } }
+  .l3 { opacity: 0.3; animation: l3 9s infinite; } @keyframes l3 { 0%, 55% { opacity: 0.3; } 57%, 100% { opacity: 1; } }
+</style>
+<rect class="bg" width="900" height="270" rx="12"/>
+<text class="ink" x="450" y="34" text-anchor="middle" font-weight="600" font-size="16">Bo is back: his phone asks, and the mail comes to him</text>
+<line class="net" x1="200" y1="170" x2="560" y2="170" stroke-width="3"/>
+<line class="wire" x1="560" y1="170" x2="800" y2="170" stroke-width="3" stroke-dasharray="6 6"/>
+<rect class="card" x="155" y="135" width="90" height="70" rx="10"/><text x="200" y="178" text-anchor="middle" font-size="26">🏤</text><text class="muted" x="200" y="225" text-anchor="middle">copy, far away</text>
+<rect class="card" x="515" y="135" width="90" height="70" rx="10"/><text x="560" y="178" text-anchor="middle" font-size="26">🏤</text><text class="muted" x="560" y="225" text-anchor="middle">Bo's nearest office</text>
+<text x="800" y="180" text-anchor="middle" font-size="26">📱</text><text class="ink" x="800" y="225" text-anchor="middle" font-weight="600">Bo</text>
+<text class="ink l1" x="60" y="72">1  "Any mail for me?"</text>
+<text class="ink l2" x="330" y="72">2  The office fetches the copy</text>
+<text class="ink l3" x="640" y="72">3  Delivered, copies deleted</text>
+<g class="q"><circle class="ask" r="8"/><text y="4" text-anchor="middle" font-size="10" fill="#fff">?</text></g>
+<g class="f"><circle class="env" r="9"/><text y="4" text-anchor="middle" font-size="10" fill="#fff">✉</text></g>
+<g class="d"><circle class="env" r="9"/><text y="4" text-anchor="middle" font-size="10" fill="#fff">✉</text></g>
+<text class="ok got" x="800" y="120" text-anchor="middle" font-weight="700">✓ new message</text>
+</svg>

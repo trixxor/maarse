@@ -404,6 +404,8 @@ enum Ev {
     HostAnnounce { node: usize },
     /// A phone's Bluetooth link to its radio comes back.
     PhoneReconnect { node: usize },
+    /// A lost device is replaced: a new one restored from the recovery phrase.
+    Restore { node: usize },
     /// An attacker floods its internet links: `per_s` packets a second until `until`.
     Flood { node: usize, per_s: u32, until: u64 },
     /// Post office upkeep: home office changes, hints, periodic syncs.
@@ -539,6 +541,8 @@ pub struct Stats {
     /// Phones: Bluetooth link drops, and messages a phone never saw because
     /// they arrived while its link was down.
     pub phone_link_drops: u64,
+    /// Devices restored from a recovery phrase.
+    pub restores: u64,
     /// Sequence numbers: gaps shown, messages counted missing, late ones.
     pub seq_gaps: u64,
     pub seq_missing: u64,
@@ -1438,6 +1442,7 @@ impl Engine {
             }
             Ev::MailCheck { msg } => self.mail_check(msg),
             Ev::PhoneReconnect { node } => self.phone_reconnect(node),
+            Ev::Restore { node } => self.restore_device(node),
             Ev::HostAnnounce { node } => {
                 if self.nodes[node].alive() {
                     self.stats.periodic_announces += 1;
@@ -3950,6 +3955,43 @@ impl Engine {
         }
     }
 
+    /// A new device restored from the recovery phrase replaces lost node
+    /// `i`: the same identity (checked with the real derivation,
+    /// maarse_crypto::recovery), but nothing else: no contacts, routes,
+    /// kept messages or history. It announces at once and asks the post
+    /// offices for its mail.
+    fn restore_device(&mut self, i: usize) {
+        if self.nodes[i].dead != DeadWhy::Killed {
+            return;
+        }
+        // The phrase gives back the same key: entropy -> 24 words -> identity.
+        let mut entropy = [0u8; maarse_crypto::recovery::ENTROPY_LEN];
+        entropy[..8].copy_from_slice(&self.sc.seed.to_le_bytes());
+        entropy[8..16].copy_from_slice(&(i as u64).to_le_bytes());
+        let phrase = maarse_crypto::recovery::entropy_to_phrase(&entropy);
+        let a = maarse_crypto::recovery::identity_from_phrase(&phrase, "").map(|x| x.address());
+        let b = maarse_crypto::recovery::identity_from_phrase(&phrase, "").map(|x| x.address());
+        let same = a.is_ok() && a == b;
+        self.nodes[i].dead = DeadWhy::Alive;
+        self.stats.restores += 1;
+        self.reboot(i);
+        // A new device: the flash had nothing on it.
+        self.forgot[i] = true;
+        self.relearned[i].clear();
+        self.contacts[i].clear();
+        self.pinned[i].clear();
+        if let Some(g) = self.got.get_mut(i) {
+            g.clear();
+        }
+        self.tr(format!("{{\"t\":{},\"ev\":\"restore\",\"n\":{i},\"same_identity\":{same}}}", self.now));
+        self.phone_emit(i, &maarse_core::companion::Event::Log { text: maarse_core::companion::text(b"Simulator: this device was restored from its recovery phrase: same address, but contacts, routes and history start empty. Mail waiting at post offices comes now.") });
+        self.announce(i);
+        if self.sc.mail == "post" && self.nodes[i].kind.is_user() {
+            let at = self.now + 20_000;
+            self.schedule(at, Ev::MailSyncAt { node: i });
+        }
+    }
+
     /// Does node `i`'s app know node `j`'s keys?
     fn knows(&self, i: usize, j: usize) -> bool {
         if self.sc.contact_capacity > 0 {
@@ -4397,6 +4439,15 @@ impl Engine {
             "alert_replay" => {
                 self.replay_alert(ev.from, ev.index);
             }
+            "device_lost" => {
+                // Lost (stolen, broken, in the sea); a new one is restored
+                // from the recovery phrase after `duration_s` (0 = 10 min).
+                if ev.node < self.nodes.len() && self.nodes[ev.node].alive() {
+                    self.kill(ev.node, DeadWhy::Killed);
+                    let ms = if ev.duration_s <= 0.0 { 600_000 } else { (ev.duration_s * 1000.0) as u64 };
+                    self.schedule(self.now + ms, Ev::Restore { node: ev.node });
+                }
+            }
             "phone_link_drop" => {
                 let ms = if ev.duration_s <= 0.0 { 60_000 } else { (ev.duration_s * 1000.0) as u64 };
                 self.phone_link_drop(ev.node, ms);
@@ -4663,6 +4714,7 @@ impl Engine {
             "alerts_forged_dropped": self.stats.alerts_forged_dropped,
             "guard_dropped": self.stats.guard_dropped,
             "phone_link_drops": self.stats.phone_link_drops,
+            "restores": self.stats.restores,
             "seq_gaps": self.stats.seq_gaps,
             "seq_missing": self.stats.seq_missing,
             "seq_late": self.stats.seq_late,

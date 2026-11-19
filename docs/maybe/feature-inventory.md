@@ -67,7 +67,7 @@ Status as of 2026-11-19.
 | Announces, contacts, pinned contacts | router | real |
 | Key requests, host key cache | router, maarse-host | real |
 | Linked devices (one person, many devices) | maarse-host node/person.rs | model (sync) |
-| Recovery phrase, identity restore | maarse-crypto recovery | not yet |
+| Recovery phrase, identity restore | maarse-crypto recovery | real derivation; lost device restored after N min with empty state, mail from post offices (Break, phone ↺) |
 | Safety numbers | web client, app | not yet (phones get no identity yet) |
 
 ## Routing and radio

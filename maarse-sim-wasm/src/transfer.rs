@@ -2151,6 +2151,21 @@ mod tests {
     }
 
     #[test]
+    fn lost_device_restored_gets_its_mail() {
+        let mut e = world(json!({"mail": "post"}));
+        let ev: crate::scenario::TimedEvent = serde_json::from_value(json!({"t_s": 0, "type": "device_lost", "node": 3, "duration_s": 300})).unwrap();
+        e.inject(&ev);
+        let m = e.send_message(4, 3);
+        run(&mut e, 200);
+        assert!(e.msgs[m].delivered_ms.is_none(), "the device is gone");
+        assert!(e.summary()["mail_deposits"].as_u64().unwrap() > 0, "kept at a post office");
+        run(&mut e, 400);
+        let s = e.summary();
+        assert_eq!(s["restores"], json!(1), "{s}");
+        assert!(e.msgs[m].delivered_ms.is_some(), "the restored device gets the mail: {s}");
+    }
+
+    #[test]
     fn locked_pages_and_notice_boards() {
         let nodes = json!([
             {"kind": "host", "lat": 56.0, "lon": 9.0},

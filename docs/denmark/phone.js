@@ -135,11 +135,19 @@
     w.id = "ph-" + p.id;
     w.style.left = p.x + "px"; w.style.top = p.y + "px";
     w.innerHTML = `<div class="ph-bar" title="Drag to move"><span class="ph-dot"></span><b>Phone ${p.id}</b><span class="ph-what"></span>
-      <button class="ph-b" data-a="bt" title="Bluetooth to the radio drops for 60 s (firmware nodes): what arrives meanwhile is lost to the phone">ᛒ</button><button class="ph-b" data-a="dock" title="Dock to the tray / float">⇥</button><button class="ph-b" data-a="min" title="Minimise">–</button><button class="ph-b" data-a="close" title="Close (removes the phone)">×</button></div>
+      <button class="ph-b" data-a="lose" title="Lose this device; a new one is restored from the recovery phrase after 5 min">↺</button><button class="ph-b" data-a="bt" title="Bluetooth to the radio drops for 60 s (firmware nodes): what arrives meanwhile is lost to the phone">ᛒ</button><button class="ph-b" data-a="dock" title="Dock to the tray / float">⇥</button><button class="ph-b" data-a="min" title="Minimise">–</button><button class="ph-b" data-a="close" title="Close (removes the phone)">×</button></div>
       <div class="ph-body"></div><div class="ph-stat"></div>`;
     $("ph-layer").appendChild(w);
     p.win = w;
     w.querySelector('[data-a="dock"]').onclick = () => dock(p, !p.docked);
+    w.querySelector('[data-a="lose"]').onclick = () => {
+      const s = sim();
+      if (!s || p.node < 0) return;
+      const t = +(s.summary().t / 1000).toFixed(1);
+      const ev = { t_s: t, type: "device_lost", node: p.node, duration_s: 300 };
+      window.DKSim.scenario.events.push(ev);
+      s.call({ cmd: "inject", event: ev });
+    };
     w.querySelector('[data-a="bt"]').onclick = () => {
       const s = sim();
       if (!s || p.node < 0) return;

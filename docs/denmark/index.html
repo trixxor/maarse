@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=48">
-<link rel="stylesheet" href="phone.css?v=48">
+<link rel="stylesheet" href="style.css?v=49">
+<link rel="stylesheet" href="phone.css?v=49">
 </head>
 <body>
 <header id="top">
@@ -176,6 +176,9 @@
       <p class="hint">Alerts v2 are checked with the real code (maarse-crypto alert): a forged alert has a bad signature and is dropped by every node; a replay is the same signed bytes sent again later: shown nowhere twice, and dropped everywhere once it has expired. Counts are in the Alerts list (Send).</p>
       <div class="row"><button data-ev="alert_forged">Forged alert in an area (circle)</button></div>
       <label>Replay alert <select id="ev-replay"></select> <button id="ev-replay-go">from a random handheld</button></label>
+      <h3>Lost device, restored from the recovery phrase</h3>
+      <p class="hint">The device is gone; after the time below a new one is restored from its 24 words (real maarse-crypto recovery): same address, but contacts, routes and history start empty. Its mail comes from the post offices. Phones have the same button (↺) in their window.</p>
+      <label>Restore after <input type="number" id="ev-restore" value="10" min="1" style="width:60px"> min <button id="ev-lose">Lose a random handheld</button></label>
       <h3>Flood a host over the internet</h3>
       <p class="hint">A host or app user sends junk to every internet link it has for 60 s. The receiving hosts run the real guard (maarse-hostrules): over 100 packets/s the extra is dropped; a link that keeps going is banned for 10 min. Results › Attacks and the guard. Switch the guard off in Build › Features to compare.</p>
       <label>Attacker <select id="ev-flood" style="max-width:160px"></select> <input type="number" id="ev-flood-n" value="1000" min="1" style="width:70px">/s <button id="ev-flood-go">Flood</button></label>
@@ -292,13 +295,13 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="demo-sites.js?v=48"></script>
-<script src="scenarios.js?v=48"></script>
-<script src="maarse-sim.js?v=48"></script>
-<script src="app.js?v=48"></script>
-<script src="store.js?v=48"></script>
-<script src="phone.js?v=48"></script>
-<script src="profiles.js?v=48"></script>
-<script src="send.js?v=48"></script>
+<script src="demo-sites.js?v=49"></script>
+<script src="scenarios.js?v=49"></script>
+<script src="maarse-sim.js?v=49"></script>
+<script src="app.js?v=49"></script>
+<script src="store.js?v=49"></script>
+<script src="phone.js?v=49"></script>
+<script src="profiles.js?v=49"></script>
+<script src="send.js?v=49"></script>
 </body>
 </html>

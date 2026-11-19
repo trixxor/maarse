@@ -191,3 +191,10 @@ details.card .scroll { border:0; }
 #g-regions th:nth-child(2) { width:14%; }
 #g-regions input { width:100% !important; box-sizing:border-box; }
 details.card .scroll:has(#g-regions) { overflow:visible; }
+
+/* Rules and radio profiles */
+#pr-body h4 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted, #888); }
+.pr-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 2px 0; }
+.pr-row > span:first-child { flex: 1; }
+.pr-changed > span:first-child { font-weight: 600; }
+.pr-changed > span:first-child::after { content: " •"; color: var(--accent, #e8a33d); }

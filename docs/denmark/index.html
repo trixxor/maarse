@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=41">
-<link rel="stylesheet" href="phone.css?v=41">
+<link rel="stylesheet" href="style.css?v=42">
+<link rel="stylesheet" href="phone.css?v=42">
 </head>
 <body>
 <header id="top">
@@ -106,6 +106,10 @@
       <label>Local share <input type="number" id="tr-local" value="0.8" min="0" max="1" step="0.1"></label>
       <label>Normal day: run starts at <input type="number" id="tr-day" min="-1" max="23.75" step="0.25" style="width:60px"> o'clock <span class="hint">(-1 = flat rates; otherwise the rates follow a day curve: quiet at night, peaks morning and evening)</span></label>
         </div>
+      </details>
+      <details class="card">
+        <summary><span class="ci">⚙</span><span><b>Rules and radio</b><small>profiles: “Standard (as built)” or your own</small></span></summary>
+        <div class="card-body" id="pr-body"></div>
       </details>
       <details class="card">
         <summary><span class="ci">◐</span><span><b>Map display</b><small>islands, radio links, backbone</small></span></summary>
@@ -280,11 +284,12 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="scenarios.js?v=41"></script>
-<script src="maarse-sim.js?v=41"></script>
-<script src="app.js?v=41"></script>
-<script src="store.js?v=41"></script>
-<script src="phone.js?v=41"></script>
-<script src="send.js?v=41"></script>
+<script src="scenarios.js?v=42"></script>
+<script src="maarse-sim.js?v=42"></script>
+<script src="app.js?v=42"></script>
+<script src="store.js?v=42"></script>
+<script src="phone.js?v=42"></script>
+<script src="profiles.js?v=42"></script>
+<script src="send.js?v=42"></script>
 </body>
 </html>

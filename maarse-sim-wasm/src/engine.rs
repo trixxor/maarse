@@ -2764,7 +2764,7 @@ impl Engine {
         if list.contains(&m) {
             return;
         }
-        let (per, all) = if class >= 3 { (100, usize::MAX) } else { (4, 30) };
+        let (per, all) = if class >= 3 { (self.sc.rules.mailbox_per_recipient, usize::MAX) } else { (4, 30) };
         if list.len() >= per || total >= all {
             self.stats.mail_full += 1;
             return;
@@ -2775,7 +2775,7 @@ impl Engine {
         if !copy && self.sc.mail == "post" {
             // The office that took the message tries to deliver it itself
             // now and then (5, 10, 20, 40 ... min), like a mail server.
-            self.mail_retry.entry((node, recipient)).or_insert((self.now + 300_000, 0));
+            self.mail_retry.entry((node, recipient)).or_insert((self.now + self.sc.rules.mail_retry_first_ms, 0));
         }
         if self.sc.mail == "post" && !copy {
             let body = Self::store_body(m, true);
@@ -3024,7 +3024,7 @@ impl Engine {
         if !holds && !named {
             return;
         }
-        self.present[node].insert(rec, self.now + 600_000);
+        self.present[node].insert(rec, self.now + self.sc.rules.mail_present_ms);
         self.deliver_mail(node, rec, &have);
         if named {
             if self.mail_class[node] >= 3 {
@@ -3104,28 +3104,20 @@ impl Engine {
             // With the backbone, presence and syncs deliver more cheaply,
             // but only for a recipient some backbone host has heard: one that
             // lives behind a trunk or radio-only host never shows up there,
-            // so the office keeps trying. Otherwise at most three tries
-            // (5, 15, 35 min), then the mail waits for the recipient to ask.
+            // so the office keeps trying. The host's rule
+            // (Rules::mail_retry_after: tries 10, 20 and 40 min apart, then the
+            // mail waits for the recipient to ask); long retries add three steps.
             let step = self.mail_retry[&(office, rec)].1 + 1;
-            let max = if self.sc.mail_long_retry { 6 } else { 3 };
             let cheap = self.on_backbone(office) && self.backbone_knows(rec);
-            if step > max || cheap {
+            let extra = if self.sc.mail_long_retry { 3 } else { 0 };
+            let rules = maarse_hostrules::rules::Rules { mail_retry_steps: self.sc.rules.mail_retry_steps + extra, ..self.sc.rules };
+            let Some(wait) = rules.mail_retry_after(step).filter(|_| !cheap) else {
                 self.mail_retry.remove(&(office, rec));
-            } else {
-                // 5, 15, 35 min, then (long retries) 1, 2 and 4 hours after that.
-                let wait = match step {
-                    1 => 600_000,
-                    2 => 1_200_000,
-                    3 => 1_500_000,
-                    4 => 3_600_000,
-                    _ => 7_200_000,
-                };
-                self.mail_retry.insert((office, rec), (self.now + wait, step));
-            }
-            if !cheap {
-                self.stats.mail_retries += 1;
-                self.deliver_mail(office, rec, &[]);
-            }
+                continue;
+            };
+            self.mail_retry.insert((office, rec), (self.now + wait, step));
+            self.stats.mail_retries += 1;
+            self.deliver_mail(office, rec, &[]);
         }
         for i in 0..self.nodes.len() {
             if !self.nodes[i].kind.is_user() || !self.nodes[i].alive() {

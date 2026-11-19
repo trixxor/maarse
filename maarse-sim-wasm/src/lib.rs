@@ -139,7 +139,12 @@ pub fn call(e: &mut Engine, cmd: &Value) -> Value {
             json!({"ok": true})
         }
         "alert" if u("index") < e.alerts.len() => e.alert_summary(u("index"), true),
-        "rules" => json!({"name": maarse_hostrules::rules::Rules::STANDARD_NAME, "standard": maarse_hostrules::rules::Rules::STANDARD, "current": e.sc.rules}),
+        "rules" => {
+            // The firmware's radio default (maarse_core::companion::RadioConfig::EU_DEFAULT).
+            let r = maarse_core::companion::RadioConfig::EU_DEFAULT;
+            json!({"name": maarse_hostrules::rules::Rules::STANDARD_NAME, "standard": maarse_hostrules::rules::Rules::STANDARD, "current": e.sc.rules,
+                "radio_standard": {"sf": r.sf, "freq_mhz": r.freq_hz as f64 / 1e6, "bw_hz": r.bw_hz, "tx_dbm": r.tx_power_dbm, "duty_permille": r.duty_permille}})
+        }
         "send_file" if u("from") < e.nodes.len() && u("to") < e.nodes.len() => content_file(e, cmd),
         "page" if u("from") < e.nodes.len() && u("host") < e.nodes.len() => {
             let bytes = cmd["bytes"].as_u64().map(|b| b as u32);

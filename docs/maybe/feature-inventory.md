@@ -42,7 +42,7 @@ Status as of 2026-11-19.
 | Feature | Code | Simulator |
 |---|---|---|
 | Page requests, deflated page files, MU markup | maarse-host node/pages.rs, Mu.kt, web client | real/shared (step 4B, done) |
-| Locks, boards, notes | maarse-hostrules pagelock | shared, not wired yet |
+| Locks, boards, notes | maarse-hostrules pagelock | shared: @allow/@locked per page and folder, groups per site, boards with notes (one a minute, 50 kept), PostBoard from phones |
 | Pictures on demand, burst limits | maarse-hostrules pages | real/shared (step 4B, done) |
 
 ## Alerts

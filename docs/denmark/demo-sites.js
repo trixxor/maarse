@@ -16,9 +16,10 @@
     {
       region: "nordjylland", near: [57.441, 10.537], name: "Nordjylland Harbours",
       pages: {
-        index: `@title Nordjylland Harbours\n${style}\n# Nordjylland Harbours\nFerries from Frederikshavn and Hirtshals, and the weather at sea.\n\n::: cards 3\n### [Ferries](ferries)\nGöteborg, Kristiansand, Larvik, Læsø\n+++\n### [Sea weather](weather)\nWind and waves, Skagerrak and Kattegat\n+++\n### [Harbour office](office)\nOpening hours and VHF channels\n:::\n${foot([["Front page", "/"]])}`,
+        index: `@title Nordjylland Harbours\n${style}\n# Nordjylland Harbours\nFerries from Frederikshavn and Hirtshals, and the weather at sea.\n\n::: cards 3\n### [Ferries](ferries)\nGöteborg, Kristiansand, Larvik, Læsø\n+++\n### [Sea weather](weather)\nWind and waves, Skagerrak and Kattegat\n+++\n### [Harbour office](office)\nOpening hours and VHF channels\n:::\n[Staff only 🔒](staff)\n${foot([["Front page", "/"]])}`,
         ferries: `@title Ferries\n${style}\n## Departures today\n${table(["From", "To", "Times", "Crossing"], [["Frederikshavn", "Göteborg", "07:15 · 12:30 · 18:45", "3 h 30"], ["Hirtshals", "Kristiansand", "08:00 · 20:15", "3 h 15"], ["Hirtshals", "Larvik", "11:30", "3 h 45"], ["Frederikshavn", "Læsø", "06:00 · 09:30 · 14:00 · 19:30", "1 h 30"]])}\n>!yellow **Strong wind from 16:00:** the evening departures may be late.\n${foot([["Front page", "/"], ["Sea weather", "weather"]])}`,
         weather: `@title Sea weather\n${style}\n## Sea weather\n${table(["Area", "Wind", "Waves", "Sight"], [["Skagerrak", "SW 12-15 m/s", "2.5 m", "good"], ["Kattegat north", "SW 9-12 m/s", "1.5 m", "good"], ["Læsø Rende", "W 8-10 m/s", "1 m", "fog patches at dawn"]])}\n${foot([["Front page", "/"], ["Ferries", "ferries"]])}`,
+        staff: `@title Harbour staff\n@allow group staff\n${style}\n## 🔒 Harbour staff\nOnly for the harbour crew: the host itself and the staff group.\n\n- Night watch: pier 3\n- Fuel delivery Thursday 06:00\n${foot([["Front page", "/"]])}`,
         office: `@title Harbour office\n${style}\n## Harbour office\nOpen every day 07:00-19:00.\n\n- VHF channel 12 (Frederikshavn), 14 (Hirtshals)\n- Fuel at pier 3, cash and card\n- Guest berths: ask on VHF before you come in\n${foot([["Front page", "/"]])}`,
       },
     },
@@ -36,7 +37,7 @@
         index: `@title Esbjerg & Fanø\n${style}\n# Esbjerg & Fanø\n- [Fanø ferry](ferry): every 20-40 minutes\n- [Tides](tides): high and low water\n- [Beach and wind](beach)\n${foot([["Front page", "/"]])}`,
         ferry: `@title Fanø ferry\n${style}\n## Esbjerg - Nordby, 12 minutes\nFrom Esbjerg: every 20 min 06:00-19:00, then every 40 min until 00:20.\nFrom Nordby: on the 10s, 30s and 50s in the day.\n\n>!green The ferry runs normally today.\n${foot([["Front page", "/"], ["Tides", "tides"]])}`,
         tides: `@title Tides\n${style}\n## Tides, Esbjerg\n${table(["", "Time", "Height"], [["High", "03:40", "+0.9 m"], ["Low", "09:55", "-0.6 m"], ["High", "16:05", "+1.0 m"], ["Low", "22:20", "-0.5 m"]])}\n${foot([["Front page", "/"]])}`,
-        beach: `@title Beach and wind\n${style}\n## Fanø beach\nWind W 9 m/s, water 11 °C, flag yellow (take care).\n${foot([["Front page", "/"]])}`,
+        beach: `@title Beach and wind\n${style}\n## Fanø beach\nWind W 9 m/s, water 11 °C, flag yellow (take care).\n\n## What people see on the beach\n@board 10\n${foot([["Front page", "/"]])}`,
       },
     },
     {
@@ -60,7 +61,7 @@
     {
       region: "bornholm", near: [55.101, 14.700], name: "Bornholm Ferries",
       pages: {
-        index: `@title Bornholm Ferries\n${style}\n# Bornholm Ferries\n${table(["Route", "Next", "Time"], [["Rønne - Ystad", "10:30", "1 h 20"], ["Rønne - Køge", "16:30", "5 h 30"], ["Rønne - Sassnitz", "14:00", "3 h 30"]])}\n- [All departures](all)\n- [Weather on the Baltic](weather)\n${foot([["Front page", "/"]])}`,
+        index: `@title Bornholm Ferries\n${style}\n# Bornholm Ferries\n${table(["Route", "Next", "Time"], [["Rønne - Ystad", "10:30", "1 h 20"], ["Rønne - Køge", "16:30", "5 h 30"], ["Rønne - Sassnitz", "14:00", "3 h 30"]])}\n- [All departures](all)\n- [Weather on the Baltic](weather)\n\n## Notices from travellers\n@board 10\n${foot([["Front page", "/"]])}`,
         all: `@title All departures\n${style}\n## Rønne - Ystad\n06:00 · 08:30 · 10:30 · 13:00 · 15:30 · 18:00 · 20:30\n\n## Ystad - Rønne\n07:30 · 10:00 · 12:00 · 14:30 · 17:00 · 19:30 · 22:00\n${foot([["Front page", "/"]])}`,
         weather: `@title Baltic weather\n${style}\n## Baltic, Bornholm\nWind SE 7 m/s, waves 1 m, rain in the afternoon.\n${foot([["Front page", "/"]])}`,
       },
@@ -80,7 +81,9 @@
       });
       if (best < 0 || bd > 80) continue;
       used.add(best);
-      sc.nodes[best].site = { name: s.name, pages: Object.assign({}, s.pages) };
+      // Groups for locked pages ("@allow group staff"): empty here, so only the
+      // host itself may open them; add node numbers in a scenario file.
+      sc.nodes[best].site = { name: s.name, pages: Object.assign({}, s.pages), groups: { staff: [] } };
       // Call the host to try the call test service (music, echo, speed).
       if (s.calltest) sc.nodes[best].calltest = true;
     }

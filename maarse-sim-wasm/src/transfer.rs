@@ -47,6 +47,7 @@ const OP_PHONE_CALL: u8 = b'Q';
 const OP_TUN_KEY: u8 = b'T';
 const OP_TUN_PIECE: u8 = b'D';
 const OP_TUN_NACK: u8 = b'N';
+const OP_BOARD: u8 = b'B';
 
 // Timer kinds (`Ev::Xfer { what }`).
 const W_CHECK: u8 = 1;
@@ -109,6 +110,8 @@ pub enum ItemKind {
     /// A page request (the answer is a child item of kind `PageReply`).
     Page,
     PageReply,
+    /// A note for a page's notice board.
+    Board,
     Call,
     Tunnel,
 }
@@ -121,6 +124,7 @@ impl ItemKind {
             ItemKind::Picture => "picture",
             ItemKind::Page => "page",
             ItemKind::PageReply => "page_reply",
+            ItemKind::Board => "board",
             ItemKind::Call => "call",
             ItemKind::Tunnel => "tunnel",
         }
@@ -239,6 +243,8 @@ pub struct Item {
     pull: Option<Pull>,
     // Pages.
     path: String,
+    /// A board note's text.
+    note: String,
     parent: Option<usize>,
     child: Option<usize>,
     // Calls and tunnel.
@@ -287,6 +293,7 @@ impl Item {
             offered: false,
             pull: None,
             path: String::new(),
+            note: String::new(),
             parent: None,
             child: None,
             call: None,
@@ -320,6 +327,10 @@ pub struct Xfers {
     acks: HashMap<(usize, u64), (usize, u8, u16)>,
     /// Page burst: (host, reader) -> times served.
     served: HashMap<(usize, usize), Vec<u64>>,
+    /// Notice boards: (host, page file) -> kept note lines, newest last.
+    pub board_notes: HashMap<(usize, String), Vec<String>>,
+    /// Last note per (host, reader), unix seconds.
+    noted: HashMap<(usize, usize), u64>,
     uploads: HashMap<(usize, u16), Upload>,
     counter: u32,
 }
@@ -1110,19 +1121,162 @@ impl Engine {
     }
 
     /// The simulated page markup for `path` at `host`.
+    /// The page file at `path` on a site: `path`, else `path/index`.
+    fn site_page<'a>(site: &'a crate::scenario::Site, path: &str) -> Option<(String, &'a String)> {
+        if let Some(m) = site.pages.get(path) {
+            return Some((path.to_string(), m));
+        }
+        let idx = format!("{path}/index");
+        site.pages.get(&idx).map(|m| (idx, m))
+    }
+
+    /// May `reader` open `path` on `host`'s site? As maarse-host's
+    /// `access`: the page's own lock and every folder's `index` above it;
+    /// None = open, Some(hidden) = refused.
+    fn site_refuses(&self, host: usize, reader: usize, path: &str) -> Option<bool> {
+        use maarse_hostrules::pagelock::{lock_folders, lock_of, parse_hex};
+        let site = self.site(host)?;
+        if reader == host {
+            return None;
+        }
+        let now_s = 1_700_000_000 + self.now / 1000;
+        let mut files: Vec<&String> = Self::site_page(site, path).map(|(_, m)| m).into_iter().collect();
+        for f in lock_folders(path) {
+            if let Some(m) = site.pages.get(&format!("{f}/index"))
+                && !files.iter().any(|x| std::ptr::eq(*x, m))
+            {
+                files.push(m);
+            }
+        }
+        let me = self.nodes[reader].router.addr;
+        for m in files {
+            let lock = lock_of(m);
+            if !lock.applies(now_s) {
+                continue;
+            }
+            let member = lock.allow.iter().any(|a| match a.strip_prefix("group:") {
+                Some(g) => site.groups.get(g).is_some_and(|v| v.contains(&reader)),
+                None => parse_hex(a) == Some(me),
+            });
+            if !member {
+                return Some(lock.hidden);
+            }
+        }
+        None
+    }
+
     /// A host with a site serves its own page files (as maarse-host serves
-    /// `pages/<path>.mu`); an unknown path gets a "Not found" page.
-    fn page_markup(&self, host: usize, path: &str) -> String {
+    /// `pages/<path>.mu`), with locks and notice boards applied for the
+    /// reader; an unknown path gets a "Not found" page.
+    fn page_markup(&self, host: usize, path: &str, reader: usize) -> String {
+        use maarse_hostrules::pagelock::{board_line, hex, note_line, outside_code, refused_page, strip_locks, BOARD_KEEP};
         let name = if self.nodes[host].label.is_empty() { format!("Host {host}") } else { self.nodes[host].label.clone() };
         let path = path.trim_matches('/');
         let path = if path.is_empty() { "index" } else { path };
-        if let Some(site) = self.site(host) {
-            return match site.pages.get(path) {
-                Some(m) => m.clone(),
-                None => format!("@title Not found\n# Not found\n\n{} has no page called \"{path}\".\n\n[Front page](/)\n", site.name),
-            };
+        let Some(site) = self.site(host) else {
+            return format!("@title {path}\n# {path}\n\nA page served by {name} in the Denmark simulator.\n\n[Front page](/)\n");
+        };
+        let Some((file, markup)) = Self::site_page(site, path) else {
+            return format!("@title Not found\n# Not found\n\n{} has no page called \"{path}\".\n\n[Front page](/)\n", site.name);
+        };
+        if let Some(hidden) = self.site_refuses(host, reader, path) {
+            return refused_page(path, hidden, &hex(&self.nodes[reader].router.addr));
         }
-        format!("@title {path}\n# {path}\n\nA page served by {name} in the Denmark simulator.\n\n[Front page](/)\n")
+        let markup = strip_locks(markup);
+        if !outside_code(&markup).any(|l| l.trim_start().starts_with("@board")) {
+            return markup;
+        }
+        // The newest notes after each board line (maarse-host `with_notes`).
+        let notes = self.xf.board_notes.get(&(host, file.clone())).cloned().unwrap_or_default();
+        let mut out = String::with_capacity(markup.len() + notes.len() * 80);
+        let mut fence = false;
+        for line in markup.lines() {
+            out.push_str(line);
+            out.push('\n');
+            let t = line.trim_start();
+            if t.starts_with("```") {
+                fence = !fence;
+                continue;
+            }
+            if fence {
+                continue;
+            }
+            if let Some(n) = board_line(t, BOARD_KEEP) {
+                out.push_str(&format!("@boardpath {file}\n"));
+                for note in notes.iter().rev().take(n) {
+                    out.push_str(&note_line(note));
+                }
+            }
+        }
+        out
+    }
+
+    /// `reader` writes a note on `path` at `host` (maarse-host
+    /// `on_board_post`): a board must be there, the lock must let the
+    /// reader in, one note a minute, at most BOARD_KEEP kept.
+    fn board_post(&mut self, host: usize, reader: usize, path: &str, text: &[u8]) -> Result<(), &'static str> {
+        use maarse_hostrules::pagelock::{clean_note, has_board, hex, may_note, BOARD_EVERY_S, BOARD_KEEP};
+        let path = path.trim_matches('/');
+        let path = if path.is_empty() { "index" } else { path };
+        let site = self.site(host).ok_or("no such page")?;
+        let (file, markup) = Self::site_page(site, path).ok_or("no such page")?;
+        if !has_board(markup) {
+            return Err("this page has no notice board");
+        }
+        if self.site_refuses(host, reader, path).is_some() {
+            return Err("locked");
+        }
+        let now_s = 1_700_000_000 + self.now / 1000;
+        if !may_note(self.xf.noted.get(&(host, reader)).copied(), now_s, BOARD_EVERY_S) {
+            return Err("one note a minute");
+        }
+        let text = clean_note(text).ok_or("empty note")?;
+        let name = self.phones.attached.get(&reader).map(|p| p.name.clone()).unwrap_or_else(|| self.nodes[reader].label.clone()).replace(['\t', '\n'], " ");
+        let line = format!("{now_s}\t{}\t{name}\t{text}", hex(&self.nodes[reader].router.addr));
+        let notes = self.xf.board_notes.entry((host, file)).or_default();
+        notes.push(line);
+        let skip = notes.len().saturating_sub(BOARD_KEEP);
+        notes.drain(..skip);
+        self.xf.noted.insert((host, reader), now_s);
+        Ok(())
+    }
+
+    /// `reader` sends a note for the board on `path` to `host`: a sealed
+    /// `BOARD_POST` message, as the clients send it.
+    pub fn xf_board(&mut self, reader: usize, host: usize, path: &str, note: &str) -> Result<usize, (u8, String)> {
+        let Some(plain) = content::board_post(path.as_bytes(), note.as_bytes()) else {
+            return Err((error_code::TOO_LARGE, "Invalid path or note too long (100 bytes)".into()));
+        };
+        if !self.nodes[reader].alive() {
+            return Err((error_code::QUEUE_FULL, "Simulator: this node is down; nothing was sent".into()));
+        }
+        let mut it = Item::new(ItemKind::Board, reader, host, self.now);
+        it.path = path.to_string();
+        it.route = self.xf_path_kind(reader, host);
+        let k = self.xf_push(it);
+        self.xf.items[k].note = note.to_string();
+        let mut p = header(OP_BOARD, k);
+        let nonce = self.xf_nonce();
+        p.extend_from_slice(&nonce);
+        p.extend_from_slice(&(plain.len() as u16).to_be_bytes());
+        p.extend_from_slice(&plain);
+        let p = pad(p, plain.len() + DM_OVERHEAD);
+        self.xf_trace(k, reader, &format!(",\"from\":{reader},\"to\":{host},\"path\":{}", serde_json::to_string(path).unwrap_or_default()));
+        self.xf.items[k].state = "queued";
+        self.xf_send(reader, host, PacketType::Data, &p);
+        Ok(k)
+    }
+
+    fn xf_on_board(&mut self, k: usize, node: usize) {
+        let (reader, host) = (self.xf.items[k].from, self.xf.items[k].to);
+        if node != host || self.xf.items[k].state != "queued" {
+            return;
+        }
+        let (path, note) = (self.xf.items[k].path.clone(), self.xf.items[k].note.clone());
+        match self.board_post(host, reader, &path, note.as_bytes()) {
+            Ok(()) => self.xf_set(k, "done", "note posted"),
+            Err(e) => self.xf_set(k, "refused", e),
+        }
     }
 
     fn xf_on_page_request(&mut self, k: usize, node: usize, b: &[u8]) {
@@ -1163,7 +1317,7 @@ impl Engine {
                     let size = pages::page_max(lim.via_lora, (given as usize).min(lim.max_bytes as usize));
                     (vec![0u8; size], String::from_utf8_lossy(content::PAGE_MIME).into_owned(), path.clone())
                 } else {
-                    let m = self.page_markup(node, &path);
+                    let m = self.page_markup(node, &path, reader);
                     (miniz_oxide::deflate::compress_to_vec(m.as_bytes(), 9), String::from_utf8_lossy(content::PAGE_MIME).into_owned(), path.clone())
                 }
             }
@@ -1702,6 +1856,7 @@ impl Engine {
             OP_REQUEST => self.xf_on_request(k, node, b),
             OP_CANCEL => self.xf_on_cancel(k, node, b),
             OP_PAGE => self.xf_on_page_request(k, node, b),
+            OP_BOARD => self.xf_on_board(k, node),
             OP_RING => self.xf_on_ring(k, node, b),
             OP_AUDIO => self.xf_on_audio(k, node, b),
             OP_TUN_KEY => {}
@@ -1993,6 +2148,43 @@ mod tests {
         let v = e.item_json(k);
         assert_eq!(v["state"], "done", "{v}");
         assert!(v["call"]["recv"][0].as_u64().unwrap() > 50, "{v}");
+    }
+
+    #[test]
+    fn locked_pages_and_notice_boards() {
+        let nodes = json!([
+            {"kind": "host", "lat": 56.0, "lon": 9.0},
+            {"kind": "repeater", "lat": 56.0, "lon": 9.05},
+            {"kind": "host", "lat": 56.0, "lon": 9.1, "site": {"name": "Harbour", "groups": {"crew": [0]}, "pages": {
+                "index": "# Harbour\n@board 5\n",
+                "crew/index": "@allow group crew\n# Crew only\n",
+                "crew/plan": "# Plan\n",
+                "secret": "@allow group crew\n@locked hidden\n# Secret\n"
+            }}},
+            {"kind": "handheld", "lat": 56.0, "lon": 9.02},
+            {"kind": "handheld", "lat": 56.0, "lon": 9.08}
+        ]);
+        let mut e = world(json!({"nodes": nodes}));
+        // The crew member reads the locked folder; the lock lines are cut out.
+        let m = e.page_markup(2, "crew", 0);
+        assert!(m.contains("Crew only") && !m.contains("@allow"), "{m}");
+        assert!(e.page_markup(2, "crew/plan", 0).contains("# Plan"));
+        // Others get the locked notice, also for a page inside the folder.
+        assert!(e.page_markup(2, "crew", 3).contains("This page is locked"));
+        assert!(e.page_markup(2, "crew/plan", 3).contains("This page is locked"));
+        // A hidden page looks like a missing one.
+        assert!(e.page_markup(2, "secret", 3).starts_with("# Not found"));
+        // Boards: one note a minute, shown after the board line.
+        assert_eq!(e.board_post(2, 3, "index", b"Ferry is late"), Ok(()));
+        assert_eq!(e.board_post(2, 3, "index", b"Again"), Err("one note a minute"));
+        assert_eq!(e.board_post(2, 3, "crew", b"hi"), Err("this page has no notice board"));
+        let m = e.page_markup(2, "index", 4);
+        assert!(m.contains("@boardpath index") && m.contains("Ferry is late"), "{m}");
+        // Over the network: a note sent from handheld 4 lands on the board.
+        let k = e.xf_board(4, 2, "index", "Fish at pier 2").unwrap();
+        run(&mut e, 60);
+        assert_eq!(e.item_json(k)["state"], "done", "{}", e.item_json(k));
+        assert!(e.page_markup(2, "index", 0).contains("Fish at pier 2"));
     }
 
     #[test]

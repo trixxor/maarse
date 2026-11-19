@@ -153,6 +153,12 @@ pub fn call(e: &mut Engine, cmd: &Value) -> Value {
                 Err((_, why)) => json!({"state": "refused", "why": why}),
             }
         }
+        "board" if u("from") < e.nodes.len() && u("host") < e.nodes.len() => {
+            match e.xf_board(u("from"), u("host"), cmd["path"].as_str().unwrap_or("index"), cmd["text"].as_str().unwrap_or("")) {
+                Ok(k) => json!({"item": k}),
+                Err((code, why)) => json!({"error": why, "code": code}),
+            }
+        }
         "call" if u("from") < e.nodes.len() && u("to") < e.nodes.len() => {
             let mode = match cmd["mode"].as_str().unwrap_or("music") { "echo" => 2, "speed" => 3, _ => 1 };
             let k = e.xf_call_mode(u("from"), u("to"), cmd["secs"].as_u64().unwrap_or(10) as u32, mode);

@@ -479,6 +479,9 @@ pub struct NodeSpec {
 pub struct Site {
     pub name: String,
     pub pages: std::collections::BTreeMap<String, String>,
+    /// Groups for `@allow group <name>` lines: the node indices in each
+    /// (maarse-host keeps them as `groups/<name>` files of addresses).
+    pub groups: std::collections::BTreeMap<String, Vec<usize>>,
 }
 
 impl Default for NodeSpec {

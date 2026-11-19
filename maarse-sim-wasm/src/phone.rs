@@ -337,7 +337,18 @@ impl Engine {
                     Err((code, m)) => self.phone_err(node, req, code, &m),
                 }
             }
-            Command::PostBoard { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("page boards")),
+            Command::PostBoard { req, dest, path, text: note } => {
+                let Some(&host) = self.addr_idx.get(&dest) else {
+                    return self.phone_err(node, req, error_code::UNKNOWN_DEST, "Simulator: no node with this address in this world");
+                };
+                match self.xf_board(node, host, &String::from_utf8_lossy(&path), &String::from_utf8_lossy(&note)) {
+                    Ok(k) => {
+                        let msg_id = k as u64 | 0x5000_0000_0000_0000;
+                        self.phone_emit(node, &Event::Sent { req, msg_id });
+                    }
+                    Err((code, m)) => self.phone_err(node, req, code, &m),
+                }
+            }
             Command::Remote { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("remote admin")),
             Command::SendAlert { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("alerts from a phone (use the Alert tool on the map)")),
             Command::LinkDevice { req, .. } | Command::PersonSetup { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("linked devices")),

@@ -329,24 +329,8 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
     fn page_answer(&self, reader: Option<Address>, path_s: &str, via_lora: bool, max_bytes: usize) -> (Vec<u8>, Small) {
         let page_mime = || Small::from_slice(content::PAGE_MIME).unwrap_or_default();
         let locked = |hidden: bool| {
-            let msg = if hidden {
-                format!("# Not found
-
-The page `{path_s}` does not exist here.
-
-[Front page](/)
-")
-            } else {
-                let me = reader.map(|a| a.0.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap_or_default();
-                format!("@title Locked page
-@locked-notice {me}
-# 🔒 This page is locked
-
-Only some people can open it. Your address is `{me}`; send it to the owner if you should be on the list.
-
-[Front page](/)
-")
-            };
+            let me = reader.map(|a| a.0.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap_or_default();
+            let msg = maarse_hostrules::pagelock::refused_page(path_s, hidden, &me);
             (compress(msg.as_bytes()), page_mime())
         };
         if let Some((style, rel)) = picture_path(path_s) {

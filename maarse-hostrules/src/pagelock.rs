@@ -48,6 +48,21 @@ pub fn outside_code(markup: &str) -> impl Iterator<Item = &str> {
     })
 }
 
+/// Notes kept per board (`--board-keep`).
+pub const BOARD_KEEP: usize = 50;
+/// A reader may write one note per this many seconds (`--board-every`).
+pub const BOARD_EVERY_S: u64 = 60;
+
+/// What a reader who may not open `path` gets: "Not found" for a hidden
+/// page, otherwise the locked notice with the reader's address (hex).
+pub fn refused_page(path: &str, hidden: bool, me_hex: &str) -> String {
+    if hidden {
+        format!("# Not found\n\nThe page `{path}` does not exist here.\n\n[Front page](/)\n")
+    } else {
+        format!("@title Locked page\n@locked-notice {me_hex}\n# 🔒 This page is locked\n\nOnly some people can open it. Your address is `{me_hex}`; send it to the owner if you should be on the list.\n\n[Front page](/)\n")
+    }
+}
+
 /// Reads the lock lines of a page.
 pub fn lock_of(markup: &str) -> Lock {
     let mut l = Lock::default();

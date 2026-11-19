@@ -149,6 +149,9 @@ start; "+ Add phone" up to 10; floating windows that can be dragged, docked or
 minimised; setup per phone: where in Denmark (new node on the map or an
 existing node), internet yes/no, LoRa modem yes/no, then Start; the phone
 announces itself and shows the announces it hears around it (real router).
+**Done 2026-11-19** (merged after the PC restart): + Add phone, setup,
+floating/docked/minimised windows, Android app replica in `docs/denmark/phone-app/`
+(default) or the real web client per phone.
 
 **Findings from the simulator (2026-11-19)**
 

@@ -2805,6 +2805,12 @@ impl Node {
         contacts
     }
 
+    /// Has the backbone heard `recipient`: in the DHT's heard table, or
+    /// heard by us over a TCP link?
+    fn backbone_knows(&self, recipient: &Address) -> bool {
+        self.dht.heard.contains_key(recipient) || self.heard_via.get(recipient).is_some_and(|(_, tcp, _)| *tcp)
+    }
+
     /// Asks the replicas for `recipient`'s mail (answers come back as
     /// `In::MailFetched`), at most every `MAIL_FETCH_EVERY` per recipient
     /// unless the recipient has just synced.
@@ -3033,7 +3039,11 @@ impl Node {
         for r in due {
             let step = self.mail_retry[&r].1 + 1;
             let next = RULES.mail_retry_after(step);
-            let Some(next) = next.filter(|_| !backbone && self.mailbox.get(&r).is_some_and(|m| !m.is_empty())) else {
+            // Presence only delivers for a recipient the backbone has heard;
+            // one behind a trunk or a radio-only host never shows up there,
+            // so keep retrying (maarse-sim preset bornholm_alone).
+            let cheap = backbone && self.backbone_knows(&r);
+            let Some(next) = next.filter(|_| !cheap && self.mailbox.get(&r).is_some_and(|m| !m.is_empty())) else {
                 self.mail_retry.remove(&r);
                 continue;
             };

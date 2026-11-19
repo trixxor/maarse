@@ -137,7 +137,7 @@ so the wasm runs the real host loop. B gives the most realism and is bigger.
 | 7 | Calls, IP tunnel (SSH/mosh/ping/bulk), channels, alerts v2, linked devices, remaining features of board 8 | listed (board 8) | all code |
 | 8 | Failover and extras | **started 2026-11-19**: normal day traffic curve (day_start_h); backbone self-healing (min_peers per node, server default 6: reconnects to random hosts every minute, engine test) | replica post office failover preset (office_failure: passes), phone ↔ radio link drops, device restore, forged/replayed alerts, guard bans, range-test calibration, duty sub-bands |
 | 9 | Results page | **first version 2026-11-19**: KPI tiles (existing), delivery time over the run (median + p95, your events marked), busiest nodes, 'why not delivered' analysis by current status, collisions, reboots, queue delay, compare runs, packet log + export | delivery by traffic type (needs step 4/7 types), post office table, dark-mode check of charts |
-| 10 | Presets with expected results | **started 2026-11-19**: great_belt, bornholm_alone (1 known gap), north_power; checked by tools/denmark_sim_test.mjs (known gaps reported, not counted) | more presets (SSH across the country, storm + alerts v2, festival), run the test in CI (no CI workflow for it yet) |
+| 10 | Presets with expected results | **started 2026-11-19**: great_belt, bornholm_alone (passes since the retry fix), north_power; checked by tools/denmark_sim_test.mjs (known gaps reported, not counted) | more presets (SSH across the country, storm + alerts v2, festival), run the test in CI (no CI workflow for it yet) |
 | 11 | Share link, README, feature inventory | **done 2026-11-19**: share link; README 'Using it (v3)'; docs/maybe/feature-inventory.md with sim status per feature | keep the inventory up to date |
 | 12 | Profiles + live settings | **in progress**: radio model takes frequency + bandwidth; Break > Radio settings switches SF/frequency/BW/power for all nodes mid-run | UI for the radio event; profiles 'Standard (as built)' from the shared rules crate (agent working on step 4A) |
 | 13 | Save locally, snapshots, branches | **done 2026-11-19**: Build > Save: save run / snapshot (IndexedDB), open, branch from a snapshot (deterministic replay to its time, verified identical), delete | real memory snapshots if replay gets slow |
@@ -185,6 +185,15 @@ floating/docked/minimised windows, Android app replica in `docs/denmark/phone-ap
   host its named home office (check `current_office`/`home_po` for a handheld
   that hears Roenne only through a repeater). maarse-host part: not done
   yet, waiting until the sim shows the full chain working.
+  **Fixed 2026-11-19:** the real cause was the office retry rule. An office
+  on the backbone stopped retrying and waited for presence, but a recipient
+  behind a trunk never shows up on the backbone. Now an office on the
+  backbone keeps the 5/15/35 min retries unless a backbone host has heard
+  the recipient (sim `backbone_knows`, host `backbone_knows`: DHT heard
+  table or heard over TCP). The preset passes (delivered at ~18 min).
+  Tried and dropped: syncing at once when a user finds its first office
+  makes every user sync at the same moment and costs great_belt and
+  north_power their delivery.
 - The Great Belt does not cut the radio: repeaters on Funen and Zealand hear
   each other across 18 km, so messages cross with every link down.
 

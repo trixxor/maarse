@@ -2988,6 +2988,12 @@ impl Engine {
         }
     }
 
+    /// Has a host on the backbone heard `rec` over its radio in the last
+    /// 24 h? (maarse-host: the recipient is in the DHT's heard table.)
+    fn backbone_knows(&self, rec: usize) -> bool {
+        self.host_list.iter().any(|&h| self.on_backbone(h) && self.radio_seen[h].get(&rec).is_some_and(|&t| self.now < t + 86_400_000))
+    }
+
     /// Host `node` asks the replicas for `rec`'s mail (they send copies).
     fn fetch_copies(&mut self, node: usize, rec: usize, have: &[usize]) {
         let mut body: heapless::Vec<u8, 64> = heapless::Vec::new();
@@ -3039,6 +3045,7 @@ impl Engine {
         let have: Vec<u32> = self.got[i].iter().map(|&m| m as u32).collect();
         self.last_sync[i] = self.now;
         self.stats.mail_syncs += 1;
+        self.tr(format!("{{\"t\":{},\"ev\":\"mail_sync\",\"n\":{i},\"home\":{}}}", self.now, home.map_or(-1, |h| h as i64)));
         let actions = self.nodes[i].router.request_mail(home_id, &have);
         self.apply(i, actions.into_iter().collect(), None);
     }
@@ -3094,12 +3101,15 @@ impl Engine {
                 self.mail_retry.remove(&(office, rec));
                 continue;
             }
-            // With the backbone, presence and syncs deliver more cheaply;
-            // without it, at most three tries (5, 15, 35 min), then the mail
-            // waits for the recipient to ask.
+            // With the backbone, presence and syncs deliver more cheaply,
+            // but only for a recipient some backbone host has heard: one that
+            // lives behind a trunk or radio-only host never shows up there,
+            // so the office keeps trying. Otherwise at most three tries
+            // (5, 15, 35 min), then the mail waits for the recipient to ask.
             let step = self.mail_retry[&(office, rec)].1 + 1;
             let max = if self.sc.mail_long_retry { 6 } else { 3 };
-            if step > max || self.on_backbone(office) {
+            let cheap = self.on_backbone(office) && self.backbone_knows(rec);
+            if step > max || cheap {
                 self.mail_retry.remove(&(office, rec));
             } else {
                 // 5, 15, 35 min, then (long retries) 1, 2 and 4 hours after that.
@@ -3112,7 +3122,7 @@ impl Engine {
                 };
                 self.mail_retry.insert((office, rec), (self.now + wait, step));
             }
-            if !self.on_backbone(office) {
+            if !cheap {
                 self.stats.mail_retries += 1;
                 self.deliver_mail(office, rec, &[]);
             }
@@ -3128,6 +3138,7 @@ impl Engine {
                 let prev = self.home_po[i];
                 self.prev_home[i] = prev;
                 self.home_po[i] = office;
+                // The first office found (after a start) always gets a sync.
                 if now > self.last_sync[i] + 60_000 {
                     self.mail_sync(i);
                 }

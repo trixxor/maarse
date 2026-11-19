@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 250" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="14">
+<style>
+  .bg { fill: #ffffff; } .ink { fill: #17202a; } .muted { fill: #5b6673; } .line { stroke: #c9d0d8; }
+  .amber { fill: #c47f12; } .ok { fill: #2e8b57; } .step { fill: #f3f5f7; stroke: #d5dbe1; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #171c22; } .ink { fill: #e7ebef; } .muted { fill: #9ba6b2; } .line { stroke: #3a434d; }
+    .amber { fill: #eaa65a; } .ok { fill: #5cc489; } .step { fill: #222932; stroke: #3a434d; }
+  }
+  .s1, .s2, .s3, .s4 { opacity: 0.25; animation: 10s infinite; }
+  .s1 { animation-name: a1; } .s2 { animation-name: a2; } .s3 { animation-name: a3; } .s4 { animation-name: a4; }
+  @keyframes a1 { 0%, 100% { opacity: 1; } }
+  @keyframes a2 { 0%, 22% { opacity: 0.25; } 25%, 100% { opacity: 1; } }
+  @keyframes a3 { 0%, 47% { opacity: 0.25; } 50%, 100% { opacity: 1; } }
+  @keyframes a4 { 0%, 72% { opacity: 0.25; } 75%, 100% { opacity: 1; } }
+</style>
+<rect class="bg" width="900" height="250" rx="12"/>
+<text class="ink" x="450" y="36" text-anchor="middle" font-weight="600" font-size="16">Bo's phone is off. The message waits for him at a post office.</text>
+<line class="line" x1="110" y1="120" x2="790" y2="120" stroke-width="3"/>
+<g class="s1"><rect class="step" x="40" y="70" width="150" height="100" rx="12"/><text x="115" y="108" text-anchor="middle" font-size="28">📱</text>
+  <text class="ink" x="115" y="140" text-anchor="middle" font-weight="600">Anna sends</text><text class="muted" x="115" y="158" text-anchor="middle">"Sent, waiting…"</text></g>
+<g class="s2"><rect class="step" x="250" y="70" width="170" height="100" rx="12"/><text x="335" y="108" text-anchor="middle" font-size="28">⏱️</text>
+  <text class="ink" x="335" y="140" text-anchor="middle" font-weight="600">No receipt in 45 s</text><text class="muted" x="335" y="158" text-anchor="middle">Bo is not reachable</text></g>
+<g class="s3"><rect class="step" x="480" y="70" width="170" height="100" rx="12"/><text x="565" y="108" text-anchor="middle" font-size="28">🏤</text>
+  <text class="amber" x="565" y="140" text-anchor="middle" font-weight="600">✉ In a post office</text><text class="muted" x="565" y="158" text-anchor="middle">kept for up to 7 days</text></g>
+<g class="s4"><rect class="step" x="710" y="70" width="150" height="100" rx="12"/><text x="785" y="108" text-anchor="middle" font-size="28">📱</text>
+  <text class="ok" x="785" y="140" text-anchor="middle" font-weight="600">✓ Delivered</text><text class="muted" x="785" y="158" text-anchor="middle">when Bo is back</text></g>
+<text class="muted" x="450" y="215" text-anchor="middle">Post offices are hosts (and some repeaters). Each message is kept in three places, so one broken office does not lose it.</text>
+</svg>

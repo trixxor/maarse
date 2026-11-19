@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 260" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="14">
+<style>
+  .bg { fill: #ffffff; } .ink { fill: #17202a; } .muted { fill: #5b6673; } .wire { stroke: #c9d0d8; } .net { stroke: #1f6fd1; }
+  .dot { fill: #2e8b57; } .card { fill: #f3f5f7; stroke: #d5dbe1; } .ok { fill: #2e8b57; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #171c22; } .ink { fill: #e7ebef; } .muted { fill: #9ba6b2; } .wire { stroke: #3a434d; } .net { stroke: #5ea6ff; }
+    .dot { fill: #5cc489; } .card { fill: #222932; stroke: #3a434d; } .ok { fill: #5cc489; }
+  }
+  /* The message walks the whole way in 7 s, then "✓ Delivered" shows. */
+  .msg { offset-path: path('M70,130 L190,130 L330,130 L450,130 L570,130 L690,130 L830,130'); animation: go 8s linear infinite; }
+  @keyframes go { 0% { offset-distance: 0%; opacity: 1; } 80% { offset-distance: 100%; opacity: 1; } 82%, 100% { offset-distance: 100%; opacity: 0; } }
+  .done { opacity: 0; animation: done 8s infinite; } @keyframes done { 0%, 80% { opacity: 0; } 83%, 97% { opacity: 1; } 100% { opacity: 0; } }
+</style>
+<rect class="bg" width="900" height="260" rx="12"/>
+<!-- links: radio (dashed) and internet (solid blue) -->
+<line class="wire" x1="70" y1="130" x2="450" y2="130" stroke-width="3" stroke-dasharray="6 6"/>
+<line class="net" x1="450" y1="130" x2="570" y2="130" stroke-width="4"/>
+<line class="wire" x1="570" y1="130" x2="830" y2="130" stroke-width="3" stroke-dasharray="6 6"/>
+<!-- Anna's phone -->
+<rect class="card" x="40" y="95" width="60" height="70" rx="10"/><text class="ink" x="70" y="137" text-anchor="middle" font-size="26">📱</text>
+<text class="ink" x="70" y="190" text-anchor="middle" font-weight="600">Anna</text><text class="muted" x="70" y="208" text-anchor="middle">Skagen</text>
+<!-- repeaters -->
+<text class="ink" x="190" y="140" text-anchor="middle" font-size="26">📡</text><text class="muted" x="190" y="190" text-anchor="middle">repeater</text>
+<text class="ink" x="330" y="140" text-anchor="middle" font-size="26">📡</text><text class="muted" x="330" y="190" text-anchor="middle">repeater</text>
+<!-- hosts and internet -->
+<text class="ink" x="450" y="140" text-anchor="middle" font-size="26">🖥️</text><text class="muted" x="450" y="190" text-anchor="middle">host</text>
+<text class="ink" x="510" y="112" text-anchor="middle" font-size="13">internet</text>
+<text class="ink" x="570" y="140" text-anchor="middle" font-size="26">🖥️</text><text class="muted" x="570" y="190" text-anchor="middle">host</text>
+<text class="ink" x="690" y="140" text-anchor="middle" font-size="26">📡</text><text class="muted" x="690" y="190" text-anchor="middle">repeater</text>
+<!-- Bo's phone -->
+<rect class="card" x="800" y="95" width="60" height="70" rx="10"/><text class="ink" x="830" y="137" text-anchor="middle" font-size="26">📱</text>
+<text class="ink" x="830" y="190" text-anchor="middle" font-weight="600">Bo</text><text class="muted" x="830" y="208" text-anchor="middle">Odense</text>
+<!-- legend -->
+<line class="wire" x1="40" y1="240" x2="80" y2="240" stroke-width="3" stroke-dasharray="6 6"/><text class="muted" x="88" y="245">radio (LoRa, no internet needed)</text>
+<line class="net" x1="330" y1="240" x2="370" y2="240" stroke-width="4"/><text class="muted" x="378" y="245">internet between hosts (when there is one)</text>
+<text class="ink" x="450" y="40" text-anchor="middle" font-weight="600" font-size="16">Your message hops from radio to radio, and over the internet where it can</text>
+<!-- the moving message -->
+<g class="msg"><circle class="dot" r="9"/><text y="4" text-anchor="middle" font-size="10" fill="#fff">✉</text></g>
+<text class="ok done" x="830" y="78" text-anchor="middle" font-weight="700">✓ Delivered</text>
+</svg>

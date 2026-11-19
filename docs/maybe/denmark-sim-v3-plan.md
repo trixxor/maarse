@@ -153,6 +153,14 @@ announces itself and shows the announces it hears around it (real router).
 floating/docked/minimised windows, Android app replica in `docs/denmark/phone-app/`
 (default) or the real web client per phone.
 
+**Pages and announces (2026-11-19, user's wish)**: demo sites in every
+region (docs/denmark/demo-sites.js: Nordjylland Harbours, Aarhus Weather,
+Esbjerg & Fanø, Kalundborg Port, Copenhagen Emergency Info, Bornholm
+Ferries; example data). Hosts announce at start and every 10 min as
+maarse-host, with their name and CAP_PAGES; phones get NodeInfo from
+announces (Pages tab lists the servers), announce when they start, and
+always have #public.
+
 **Findings from the simulator (2026-11-19)**
 
 - Presets ran without post offices (`mail: ""`) although hosts and firmware

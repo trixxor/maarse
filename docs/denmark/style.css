@@ -198,3 +198,8 @@ details.card .scroll:has(#g-regions) { overflow:visible; }
 .pr-row > span:first-child { flex: 1; }
 .pr-changed > span:first-child { font-weight: 600; }
 .pr-changed > span:first-child::after { content: " •"; color: var(--accent, #e8a33d); }
+
+/* No text selection outside text fields (clicks and drags on the map and
+   panels should not select text). */
+body { -webkit-user-select:none; user-select:none; }
+input, textarea, select, [contenteditable="true"], [contenteditable=""] { -webkit-user-select:text; user-select:text; }

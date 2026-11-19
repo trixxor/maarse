@@ -12,6 +12,7 @@ const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "docs"
 globalThis.window = globalThis;
 require(path.join(dir, "dk-land.js"));
 require(path.join(dir, "dk-towns.js"));
+require(path.join(dir, "demo-sites.js"));
 const DK = require(path.join(dir, "scenarios.js"));
 const { load } = require(path.join(dir, "maarse-sim.js"));
 

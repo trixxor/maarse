@@ -400,6 +400,8 @@ enum Ev {
     Trunk { link: usize, to: usize, packet: Buf, start: u64 },
     /// 45 s after a message: drop it at a post office if not acknowledged.
     MailCheck { msg: usize },
+    /// A host's own announce (maarse-host: at start and every 10 minutes).
+    HostAnnounce { node: usize },
     /// An attacker floods its internet links: `per_s` packets a second until `until`.
     Flood { node: usize, per_s: u32, until: u64 },
     /// Post office upkeep: home office changes, hints, periodic syncs.
@@ -1074,6 +1076,16 @@ impl Engine {
                 e.plan_announce(i, at);
             }
         }
+        if e.sc.features.host_announce {
+            // First within 30 s of the start; the spread comes from the index,
+            // not the random stream, so other runs keep their numbers.
+            for i in 0..n {
+                if e.nodes[i].kind == Kind::Host {
+                    let at = 1_000 + ((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 40) % 29_000;
+                    e.schedule(at, Ev::HostAnnounce { node: i });
+                }
+            }
+        }
         e.schedule(1000, Ev::Traffic);
         e.schedule(2000, Ev::Move);
         e.schedule(10_000, Ev::Energy);
@@ -1407,6 +1419,16 @@ impl Engine {
                 }
             }
             Ev::MailCheck { msg } => self.mail_check(msg),
+            Ev::HostAnnounce { node } => {
+                if self.nodes[node].alive() {
+                    self.stats.periodic_announces += 1;
+                    self.announce(node);
+                    self.announced[node] = true;
+                }
+                // maarse-host ANNOUNCE_EVERY = 10 min, spread ±10 % by index.
+                let jitter = ((node as u64).wrapping_mul(0x2545_f491_4f6c_dd1d) >> 40) % 120_000;
+                self.schedule(self.now + 540_000 + jitter, Ev::HostAnnounce { node });
+            }
             Ev::Flood { node, per_s, until } => {
                 if self.now < until && self.nodes[node].alive() {
                     self.flood_tick(node, per_s / 10);
@@ -3660,6 +3682,19 @@ impl Engine {
 
     /// Sends an announce from `node` (unsigned body of real size + a real stamp).
     /// Returns its packet id.
+    /// The pages host `node` shares, if any.
+    pub(crate) fn site(&self, node: usize) -> Option<&Site> {
+        self.sc.nodes.get(node).and_then(|n| n.site.as_ref()).filter(|s| !s.pages.is_empty())
+    }
+
+    /// The name in `node`'s announce: its site name, or the phone's name.
+    fn announce_name(&self, node: usize) -> Option<String> {
+        if let Some(s) = self.site(node).filter(|s| !s.name.is_empty()) {
+            return Some(s.name.clone());
+        }
+        self.phones.attached.get(&node).map(|p| p.name.clone()).filter(|n| !n.is_empty())
+    }
+
     pub fn announce(&mut self, node: usize) -> u64 {
         let addr = self.nodes[node].router.addr;
         let mut body: heapless::Vec<u8, { maarse_core::MAX_PACKET }> = heapless::Vec::new();
@@ -3667,12 +3702,19 @@ impl Engine {
         self.rng.fill(&mut keys[..]);
         let _ = body.extend_from_slice(&keys);
         let _ = body.extend_from_slice(&((self.now / 1000) as u32 + 1_700_000_000).to_be_bytes());
-        // App data: the role field, as the firmware sends it (forwarders read
-        // the mobile flag from it to give a moving node's announce full scope).
-        let mut app = maarse_core::appdata::AppBuf::new();
+        // App data as the firmware/host sends it: a name (a host's site name,
+        // or the phone's name), the role field (forwarders read the mobile
+        // flag from it) and the capabilities (CAP_PAGES for a host with pages).
+        let name = self.announce_name(node);
+        let mut app = maarse_core::appdata::build(None, false, None, None, name.as_deref().map(str::as_bytes));
         let rt = &self.nodes[node].router;
         let flags = if rt.mobile { maarse_core::appdata::ROLE_MOBILE } else { 0 };
         maarse_core::appdata::push_role(&mut app, rt.role.as_u8(), flags);
+        if self.nodes[node].kind == Kind::Host {
+            use maarse_core::appdata::*;
+            let pages = if self.site(node).is_some() { CAP_PAGES } else { 0 };
+            push_caps(&mut app, MY_CAPS | CAP_SEQ | CAP_CALL_DG | CAP_FILE_PULL | pages);
+        }
         let _ = body.push(app.len() as u8);
         let _ = body.extend_from_slice(&app);
         let _ = body.extend_from_slice(&[0u8; 64]);

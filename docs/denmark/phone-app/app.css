@@ -209,3 +209,8 @@ button { cursor:pointer; }
 :root.dark .toast { background:#E2E6E3; color:#1A1D1B; }
 .toast b { font-weight:600; }
 .simtag { font-size:10px; font-weight:700; letter-spacing:.8px; text-transform:uppercase; opacity:.7; }
+
+/* No text selection outside text fields (clicks and drags on the map and
+   panels should not select text). */
+body { -webkit-user-select:none; user-select:none; }
+input, textarea, select, [contenteditable="true"], [contenteditable=""] { -webkit-user-select:text; user-select:text; }

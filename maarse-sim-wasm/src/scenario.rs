@@ -317,6 +317,9 @@ impl Default for Scenario {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Features {
+    /// Hosts announce at start and every 10 minutes, as maarse-host does
+    /// (`ANNOUNCE_EVERY`), with their name and capabilities (pages).
+    pub host_announce: bool,
     /// EU sub-band duty limits (maarse_core::duty::eu_band_permille): a
     /// channel outside 869.4-869.65 MHz gets 1 % or 0.1 % airtime.
     pub duty_bands: bool,
@@ -390,6 +393,7 @@ pub struct Features {
 impl Default for Features {
     fn default() -> Self {
         Features {
+            host_announce: true,
             duty_bands: true,
             guard: true,
             carry: false,
@@ -461,6 +465,17 @@ pub struct NodeSpec {
     /// backbone links, connecting to other hosts when links fail. None: 6
     /// for a server (as maarse-server), 0 otherwise.
     pub min_peers: Option<usize>,
+    /// maarse:// pages this host shares (maarse-host `pages/`): a site
+    /// name for its announce and the page files by path ("index" = front page).
+    pub site: Option<Site>,
+}
+
+/// A host's pages: the name it announces and MU markup per path.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Site {
+    pub name: String,
+    pub pages: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for NodeSpec {
@@ -486,6 +501,7 @@ impl Default for NodeSpec {
             mobile: None,
             radio: None,
             min_peers: None,
+            site: None,
         }
     }
 }

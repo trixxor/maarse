@@ -1099,8 +1099,18 @@ impl Engine {
     }
 
     /// The simulated page markup for `path` at `host`.
+    /// A host with a site serves its own page files (as maarse-host serves
+    /// `pages/<path>.mu`); an unknown path gets a "Not found" page.
     fn page_markup(&self, host: usize, path: &str) -> String {
         let name = if self.nodes[host].label.is_empty() { format!("Host {host}") } else { self.nodes[host].label.clone() };
+        let path = path.trim_matches('/');
+        let path = if path.is_empty() { "index" } else { path };
+        if let Some(site) = self.site(host) {
+            return match site.pages.get(path) {
+                Some(m) => m.clone(),
+                None => format!("@title Not found\n# Not found\n\n{} has no page called \"{path}\".\n\n[Front page](/)\n", site.name),
+            };
+        }
         format!("@title {path}\n# {path}\n\nA page served by {name} in the Denmark simulator.\n\n[Front page](/)\n")
     }
 

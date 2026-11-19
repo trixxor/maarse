@@ -25,7 +25,7 @@ const PHONE_POST: &[u8] = b"PHC";
 pub struct Phone {
     events: VecDeque<Vec<u8>>,
     decoder: FrameDecoder,
-    name: String,
+    pub(crate) name: String,
     /// Channels the phone joined: (address, name).
     channels: Vec<(Address, String)>,
     dropped: u64,
@@ -59,11 +59,25 @@ impl Engine {
     /// `phone_cmd {node, frame}`: bytes from the client (one or more frames,
     /// possibly partial). Returns how many commands were handled.
     pub fn phone_cmd(&mut self, node: usize, bytes: &[u8]) -> Value {
+        let label = if self.nodes[node].label.is_empty() { format!("Node {node}") } else { self.nodes[node].label.clone() };
         let p = self.phones.attached.entry(node).or_default();
-        if p.name.is_empty() {
-            p.name = if self.nodes[node].label.is_empty() { format!("Node {node}") } else { self.nodes[node].label.clone() };
+        let fresh = p.name.is_empty();
+        if fresh {
+            p.name = label;
         }
-        p.decoder.push(bytes);
+        if fresh {
+            // The public channel is always there, as on a real device.
+            let ch = self.public_channel;
+            p.channels.push((ch, "public".into()));
+            let _ = self.nodes[node].router.subscribe(ch);
+            // A phone that starts announces itself, like a device that boots.
+            if self.nodes[node].alive() {
+                self.announce(node);
+            }
+        }
+        if let Some(p) = self.phones.attached.get_mut(&node) {
+            p.decoder.push(bytes);
+        }
         let mut frames = Vec::new();
         while let Some(f) = self.phones.attached.get_mut(&node).and_then(|p| p.decoder.next_frame()) {
             frames.push(f);
@@ -295,6 +309,17 @@ impl Engine {
                     && self.nodes[who].kind.is_user()
                 {
                     self.phone_emit(node, &Event::Heard { addr: dest, hops, identity: None });
+                    // The announce's app data (name, capabilities such as
+                    // pages), as the firmware passes it on: keys (64) |
+                    // timestamp (4) | app data length | app data | ...
+                    if let Some(&len) = payload.get(68)
+                        && let Some(raw) = payload.get(69..69 + len as usize)
+                    {
+                        let a = maarse_core::appdata::parse(raw);
+                        if a.name.is_some() || a.caps.is_some() || a.position.is_some() {
+                            self.phone_emit(node, &Event::NodeInfo { addr: dest, hops, position: a.position, telemetry: a.telemetry, name: a.name, caps: a.caps });
+                        }
+                    }
                 }
             }
             PacketType::Channel if payload.starts_with(PHONE_POST) && payload.len() >= 7 => {

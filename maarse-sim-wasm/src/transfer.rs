@@ -1168,7 +1168,7 @@ impl Engine {
     /// A host with a site serves its own page files (as maarse-host serves
     /// `pages/<path>.mu`), with locks and notice boards applied for the
     /// reader; an unknown path gets a "Not found" page.
-    fn page_markup(&self, host: usize, path: &str, reader: usize) -> String {
+    pub(crate) fn page_markup(&self, host: usize, path: &str, reader: usize) -> String {
         use maarse_hostrules::pagelock::{board_line, hex, note_line, outside_code, refused_page, strip_locks, BOARD_KEEP};
         let name = if self.nodes[host].label.is_empty() { format!("Host {host}") } else { self.nodes[host].label.clone() };
         let path = path.trim_matches('/');

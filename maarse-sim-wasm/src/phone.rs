@@ -702,7 +702,8 @@ impl Engine {
                     return self.phone_err(node, req, error_code::UNKNOWN_DEST, "Simulator: no node with this address in this world");
                 };
                 if host == node {
-                    return self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("this node's own pages (ask another host)"));
+                    // Our own pages (maarse-host own_page): straight to the screen.
+                    return self.own_page(node, req, &String::from_utf8_lossy(&path));
                 }
                 match self.xf_page(node, host, &String::from_utf8_lossy(&path), None) {
                     Ok(k) => {
@@ -990,6 +991,26 @@ impl Engine {
         }
         let next = self.now + cfg.interval_s.max(1) as u64 * 1000;
         self.schedule_range_beacon(node, next);
+    }
+
+    /// A phone asks for a page on its own node: no network, the file events
+    /// come at once (a firmware node has no pages).
+    fn own_page(&mut self, node: usize, req: u16, path: &str) {
+        if self.nodes[node].kind != Kind::Host {
+            return self.phone_err(node, req, error_code::BAD_FRAME, "This node has no pages (only hosts share pages)");
+        }
+        let markup = self.page_markup(node, path, node);
+        let data = miniz_oxide::deflate::compress_to_vec(markup.as_bytes(), 9);
+        let file_id: u64 = self.rng.r#gen();
+        let me = self.nodes[node].router.addr;
+        let name = path.trim_matches('/');
+        let name = if name.is_empty() { "index" } else { name };
+        self.phone_emit(node, &Event::Sent { req, msg_id: 0 });
+        self.phone_emit(node, &Event::FileIncoming { file_id, from: me, size: data.len() as u32, mime: text(maarse_core::content::PAGE_MIME), name: txt(name) });
+        for (i, part) in data.chunks(maarse_core::companion::MAX_TEXT).enumerate() {
+            self.phone_emit(node, &Event::FileChunk { file_id, offset: (i * maarse_core::companion::MAX_TEXT) as u32, data: text(part) });
+        }
+        self.phone_emit(node, &Event::FileDone { file_id, ok: true, outgoing: false, text: txt(name) });
     }
 
     /// The person (index in `phones.persons`) `node` is a live device of.

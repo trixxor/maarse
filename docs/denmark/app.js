@@ -929,6 +929,8 @@
     switch (k) {
       case "internet_down_region": { const r = $("ev-region").value; return addEvent({ type: "internet_down", region: r }, { type: "internet_up", region: r }); }
       case "internet_down": return addEvent({ type: "internet_down" }, { type: "internet_up" });
+      case "seed_dns_down": return addEvent({ type: "seed_dns", up: false }, { type: "seed_dns", up: true });
+      case "seed_dns_up": return addEvent({ type: "seed_dns", up: true });
       case "power_cut": return beginArea("polygon", "power");
       case "power_cut_all": return addEvent({ type: "power_cut" }, { type: "power_restore" });
       case "kill_area": return beginArea("polygon", "kill_area");
@@ -961,6 +963,9 @@
       case "alert_replay": return `Replay of alert ${ev.index} from ${name(ev.from)}`;
       case "device_lost": return `${name(ev.node)} is lost; a new device is restored from the recovery phrase after ${Math.round((ev.duration_s || 600) / 60)} min`;
       case "phone_link_drop": return `${name(ev.node)}: phone loses Bluetooth to its radio for ${ev.duration_s || 60} s`;
+      case "seed_dns": return ev.up ? "Seed DNS name answers again" : "Seed DNS name stops answering";
+      case "block": return `Every host blocks ${(ev.nodes || []).map(name).join(", ")}`;
+      case "unblock": return `Block list: ${(ev.nodes || []).map(name).join(", ")} removed`;
       case "flood": return `${name(ev.node)} floods its internet links: ${ev.per_s || 1000}/s for ${ev.duration_s || 60} s`;
       case "announce": return `Announce from ${name(ev.node)}`;
       case "set_traffic": return "Change traffic" + (ev.traffic && ev.traffic.spam_per_min ? ` (spam ${ev.traffic.spam_per_min}/min from ${ev.traffic.spammers.length} nodes)` : "");
@@ -1451,6 +1456,8 @@
     <table>
       <tr><td>flood packets sent</td><td class="n">${s.flood_packets}</td><td class="hint">Break › Attacks: a host flooding its internet links</td></tr>
       <tr><td>dropped by the guard</td><td class="n">${s.guard_dropped}</td><td class="hint">over 100 packets/s or 64 KB/s per link, or from a banned host (maarse-hostrules guard)</td></tr>
+      <tr><td>blocked packets</td><td class="n">${s.guard_blocked}</td><td class="hint">from a node on the hosts' block list</td></tr>
+      <tr><td>servers with nobody to connect to</td><td class="n">${s.backbone_no_candidates}</td><td class="hint">min-peers found no host it knows (seeds, past peers, DHT) that it can reach</td></tr>
       <tr><td><b>bans</b></td><td class="n"><b>${s.guard_bans}</b></td><td class="hint">a link that kept going over the limit: closed for 10 min</td></tr>
       <tr><td>devices restored from the phrase</td><td class="n">${s.restores}</td><td class="hint">same address, empty contacts and history; mail from the post offices</td></tr>
       <tr><td>phone Bluetooth drops</td><td class="n">${s.phone_link_drops}</td><td class="hint">phone ↔ radio link down (phone window ᛒ)</td></tr>
@@ -1627,6 +1634,8 @@
     if (!pool.length) return showNote("No handhelds in this scenario.");
     addEvent({ type: "device_lost", node: pool[Math.floor(Math.random() * pool.length)], duration_s: Math.max(1, +$("ev-restore").value || 10) * 60 });
   };
+  $("ev-block").onclick = () => { const n = +$("ev-flood").value; if (n >= 0) addEvent({ type: "block", nodes: [n] }); };
+  $("ev-unblock").onclick = () => { const n = +$("ev-flood").value; if (n >= 0) addEvent({ type: "unblock", nodes: [n] }); };
   $("ev-flood-go").onclick = () => {
     const node = +$("ev-flood").value;
     if (!(node >= 0)) return showNote("No host with an internet link in this scenario.");

@@ -482,6 +482,11 @@ pub struct NodeSpec {
     pub calltest: bool,
     /// Nodes (by number) that may control this node remotely (its admins).
     pub admins: Vec<usize>,
+    /// A seed host: one the seed DNS name points at (maarse-host `--seed`).
+    pub seed: bool,
+    /// Behind NAT: can connect out but cannot be connected to; others reach
+    /// it through the hosts it connected to (relays).
+    pub nat: bool,
 }
 
 /// A host's pages: the name it announces and MU markup per path.
@@ -521,6 +526,8 @@ impl Default for NodeSpec {
             site: None,
             calltest: false,
             admins: Vec::new(),
+            seed: false,
+            nat: false,
         }
     }
 }

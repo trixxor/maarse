@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=52">
-<link rel="stylesheet" href="phone.css?v=52">
+<link rel="stylesheet" href="style.css?v=53">
+<link rel="stylesheet" href="phone.css?v=53">
 </head>
 <body>
 <header id="top">
@@ -182,8 +182,11 @@
       <h3>Flood a host over the internet</h3>
       <p class="hint">A host or app user sends junk to every internet link it has for 60 s. The receiving hosts run the real guard (maarse-hostrules): over 100 packets/s the extra is dropped; a link that keeps going is banned for 10 min. Results › Attacks and the guard. Switch the guard off in Build › Features to compare.</p>
       <label>Attacker <select id="ev-flood" style="max-width:160px"></select> <input type="number" id="ev-flood-n" value="1000" min="1" style="width:70px">/s <button id="ev-flood-go">Flood</button></label>
+      <div class="row"><button id="ev-block">Put the attacker on every host's block list</button><button id="ev-unblock">Remove it again</button></div>
       <h3>Internet</h3>
       <div class="row"><button data-ev="internet_down">Internet down everywhere</button><button data-ev="internet_up">Internet back</button></div>
+      <div class="row"><button data-ev="seed_dns_down">Seed DNS name stops answering</button><button data-ev="seed_dns_up">Seed DNS back</button></div>
+      <p class="hint">Servers that lose links find new ones through the seed DNS name (the seed hosts in Copenhagen and Aarhus), the hosts they knew, and the DHT. Hosts behind NAT cannot be connected to.</p>
       <label>Region <select id="ev-region"><option>nordjylland</option><option>midtjylland</option><option>syddanmark</option><option>sjaelland</option><option>hovedstaden</option></select> <button data-ev="internet_down_region">Internet down</button></label>
       <h3>Random failures</h3>
       <label>N <input type="number" id="ev-n" value="10" min="1" style="width:60px"> <button data-ev="kill_random">Kill N random repeaters</button> <button data-ev="revive">Revive all</button> <button data-ev="degrade_clear">Clear radio loss</button></label>
@@ -295,13 +298,13 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
-<script src="demo-sites.js?v=52"></script>
-<script src="scenarios.js?v=52"></script>
-<script src="maarse-sim.js?v=52"></script>
-<script src="app.js?v=52"></script>
-<script src="store.js?v=52"></script>
-<script src="phone.js?v=52"></script>
-<script src="profiles.js?v=52"></script>
-<script src="send.js?v=52"></script>
+<script src="demo-sites.js?v=53"></script>
+<script src="scenarios.js?v=53"></script>
+<script src="maarse-sim.js?v=53"></script>
+<script src="app.js?v=53"></script>
+<script src="store.js?v=53"></script>
+<script src="phone.js?v=53"></script>
+<script src="profiles.js?v=53"></script>
+<script src="send.js?v=53"></script>
 </body>
 </html>

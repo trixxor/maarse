@@ -223,6 +223,16 @@
     sc.traffic.direct_per_min = Math.max(2, Math.round(total / 60));
     // Demo maarse:// pages (ferries, weather, emergency info) on a host in
     // every region (demo-sites.js), unless switched off.
+    // The seed DNS name points at the Copenhagen and Aarhus hosts; hosts in
+    // smaller towns sit behind NAT (they connect out, nobody connects to
+    // them), as most home internet does.
+    const seedNear = [[55.676, 12.568], [56.157, 10.211]];
+    for (const at of seedNear) {
+      let best = -1, bd = 1e9;
+      sc.nodes.forEach((n, i) => { if (n.kind === "host") { const d = km([n.lat, n.lon], at); if (d < bd) { bd = d; best = i; } } });
+      if (best >= 0 && bd < 30) sc.nodes[best].seed = true;
+    }
+    for (const n of sc.nodes) if (n.kind === "host" && !n.seed && !/^(Copenhagen|Aarhus|Odense|Aalborg)/.test(n.label || "")) n.nat = true;
     const DS = (typeof window !== "undefined" ? window : globalThis).DK_DEMO_SITES;
     if (DS && opts.sites !== false) DS.addDemoSites(sc);
     return sc;

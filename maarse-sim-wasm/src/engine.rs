@@ -551,6 +551,10 @@ pub struct Stats {
     pub seq_late: u64,
     pub phone_lost_msgs: u64,
     pub guard_bans: u64,
+    /// Packets dropped because the sender is on the block list.
+    pub guard_blocked: u64,
+    /// min-peers upkeep found nobody it could connect to.
+    pub backbone_no_candidates: u64,
     pub flood_packets: u64,
     pub alerts_replay_dropped: u64,
     pub alerts_repeat: u64,
@@ -636,6 +640,12 @@ pub struct Engine {
     public_channel: Address,
     bulletin_channel: Address,
     authority: Identity,
+    /// Hosts each host knows about (seeds, past peers, DHT), for min-peers.
+    known_hosts: HashMap<usize, HashSet<usize>>,
+    /// The seed DNS name resolves (event `seed_dns`).
+    seed_dns_up: bool,
+    /// Nodes on every host's block list (guard).
+    blocked: HashSet<usize>,
     /// Sequence counters per (sender, recipient): last sent, last seen.
     seq_out: HashMap<(usize, usize), u32>,
     seq_in: HashMap<(usize, usize), u32>,
@@ -959,6 +969,9 @@ impl Engine {
             bulletin_channel,
             authority,
             alert_guard: Vec::new(),
+            known_hosts: HashMap::default(),
+            seed_dns_up: true,
+            blocked: HashSet::default(),
             seq_out: HashMap::default(),
             seq_in: HashMap::default(),
             guard_rate: HashMap::default(),
@@ -3278,6 +3291,12 @@ impl Engine {
     /// drops it (over the rate, or `from` is banned).
     fn guard_pass(&mut self, to: usize, from: usize, len: usize) -> bool {
         let now = self.now;
+        // The block list (maarse-host --block): dropped at once.
+        if self.blocked.contains(&from) {
+            self.stats.guard_dropped += 1;
+            self.stats.guard_blocked += 1;
+            return false;
+        }
         if self.guard_ban.get(&(to, from)).is_some_and(|&t| now < t) {
             self.stats.guard_dropped += 1;
             return false;
@@ -4491,6 +4510,18 @@ impl Engine {
                     self.schedule(self.now + ms, Ev::Restore { node: ev.node });
                 }
             }
+            "seed_dns" => {
+                self.seed_dns_up = ev.up;
+            }
+            "block" | "unblock" => {
+                for &n in &ev.nodes {
+                    if what == "block" {
+                        self.blocked.insert(n);
+                    } else {
+                        self.blocked.remove(&n);
+                    }
+                }
+            }
             "phone_link_drop" => {
                 let ms = if ev.duration_s <= 0.0 { 60_000 } else { (ev.duration_s * 1000.0) as u64 };
                 self.phone_link_drop(ev.node, ms);
@@ -4694,9 +4725,36 @@ impl Engine {
                 continue;
             }
             let linked: Vec<usize> = self.nodes[i].links.iter().map(|&k| if self.links[k].a == i { self.links[k].b } else { self.links[k].a }).collect();
-            let mut cands: Vec<usize> = (0..self.nodes.len())
-                .filter(|&j| j != i && self.nodes[j].kind == Kind::Host && self.nodes[j].alive() && self.has_internet(j) && !linked.contains(&j))
+            // Whom this host knows (maarse-host): the seeds from the seed DNS
+            // name, the hosts it was ever connected to (dht-contacts), and what
+            // the DHT tells it: the peers of its working peers.
+            let mut known: HashSet<usize> = self.known_hosts.get(&i).cloned().unwrap_or_default();
+            known.extend(linked.iter().copied());
+            if self.seed_dns_up {
+                known.extend((0..self.nodes.len()).filter(|&j| self.sc.nodes[j].seed));
+            }
+            for &k in &self.nodes[i].links {
+                if self.links[k].lora || !self.link_ok(k) {
+                    continue;
+                }
+                let peer = if self.links[k].a == i { self.links[k].b } else { self.links[k].a };
+                for &k2 in &self.nodes[peer].links {
+                    if !self.links[k2].lora {
+                        known.insert(if self.links[k2].a == peer { self.links[k2].b } else { self.links[k2].a });
+                    }
+                }
+            }
+            known.remove(&i);
+            self.known_hosts.insert(i, known.clone());
+            // A host behind NAT cannot be connected to.
+            let mut cands: Vec<usize> = known
+                .into_iter()
+                .filter(|&j| self.nodes[j].kind == Kind::Host && !self.sc.nodes[j].nat && self.nodes[j].alive() && self.has_internet(j) && !linked.contains(&j))
                 .collect();
+            cands.sort_unstable();
+            if cands.is_empty() {
+                self.stats.backbone_no_candidates += 1;
+            }
             for _ in 0..(want - up).min(cands.len()) {
                 let j = cands.swap_remove(self.rng.gen_range(0..cands.len()));
                 let k = self.links.len();
@@ -4707,6 +4765,11 @@ impl Engine {
                 self.tr(format!("{{\"t\":{},\"ev\":\"event\",\"n\":{i},\"text\":\"backbone: connects to {j} to keep {want} links\"}}", self.now));
             }
         }
+    }
+
+    /// The other end of link `k` from node `i`.
+    pub fn links_peer(&self, k: usize, i: usize) -> usize {
+        if self.links[k].a == i { self.links[k].b } else { self.links[k].a }
     }
 
     /// Moves node `i` to `p` and recomputes its links.
@@ -4764,6 +4827,8 @@ impl Engine {
             "seq_late": self.stats.seq_late,
             "phone_lost_msgs": self.stats.phone_lost_msgs,
             "guard_bans": self.stats.guard_bans,
+            "guard_blocked": self.stats.guard_blocked,
+            "backbone_no_candidates": self.stats.backbone_no_candidates,
             "flood_packets": self.stats.flood_packets,
             "alerts_replay_dropped": self.stats.alerts_replay_dropped,
             "alerts_repeat": self.stats.alerts_repeat,

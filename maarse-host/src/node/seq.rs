@@ -54,27 +54,21 @@ impl Seqs {
     }
 }
 
-/// What a gap looks like in the conversation.
-pub(super) fn gap_notice(missing: u32) -> String {
-    if missing == 1 {
-        "⚠ 1 earlier message from this contact has not arrived (it may still be on its way)".into()
-    } else {
-        format!("⚠ {missing} earlier messages from this contact have not arrived (they may still be on their way)")
-    }
-}
+pub(super) use maarse_hostrules::seq::gap_notice;
+use maarse_hostrules::seq::{Seen, check};
 
 impl Node {
     /// Message number `n` from `from` (a device). Shows a gap before it.
     pub(super) fn seq_received(&mut self, from: Address, n: u32, hops: u8) {
         let last = self.seqs.inn.get(&from).copied().unwrap_or(0);
-        if n <= last {
+        let seen = check(last, n);
+        if seen == Seen::LateOrRepeat {
             // Late (it was counted as missing before) or a repeat.
             return;
         }
         self.seqs.inn.insert(from, n);
         self.seqs.dirty = true;
-        if last > 0 && n > last + 1 {
-            let missing = n - last - 1;
+        if let Seen::Gap(missing) = seen {
             self.log(format!("{} message(s) from {} missing before number {n}", missing, short(&from)));
             let peer = self.person_peer(&from);
             self.broadcast(&Event::DirectReceived { from: peer, hops, text: text(gap_notice(missing).as_bytes()) });

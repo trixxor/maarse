@@ -438,6 +438,9 @@ pub struct Msg {
     pub cross: bool,
     /// A sibling copy: the index of the original message.
     pub sync_of: Option<usize>,
+    /// Sequence number in the conversation (maarse_hostrules::seq), 0 =
+    /// none (only between hosts and app users: CAP_SEQ).
+    pub seq: u32,
 }
 
 pub struct Alert {
@@ -536,6 +539,10 @@ pub struct Stats {
     /// Phones: Bluetooth link drops, and messages a phone never saw because
     /// they arrived while its link was down.
     pub phone_link_drops: u64,
+    /// Sequence numbers: gaps shown, messages counted missing, late ones.
+    pub seq_gaps: u64,
+    pub seq_missing: u64,
+    pub seq_late: u64,
     pub phone_lost_msgs: u64,
     pub guard_bans: u64,
     pub flood_packets: u64,
@@ -623,6 +630,9 @@ pub struct Engine {
     public_channel: Address,
     bulletin_channel: Address,
     authority: Identity,
+    /// Sequence counters per (sender, recipient): last sent, last seen.
+    seq_out: HashMap<(usize, usize), u32>,
+    seq_in: HashMap<(usize, usize), u32>,
     /// The host's guard on internet links (maarse_hostrules::guard): per
     /// (receiver, sender) token buckets, and bans until a time.
     guard_rate: HashMap<(usize, usize), maarse_hostrules::guard::LinkRate>,
@@ -943,6 +953,8 @@ impl Engine {
             bulletin_channel,
             authority,
             alert_guard: Vec::new(),
+            seq_out: HashMap::default(),
+            seq_in: HashMap::default(),
             guard_rate: HashMap::default(),
             guard_ban: HashMap::default(),
             alert_pid: HashMap::default(),
@@ -1819,6 +1831,7 @@ impl Engine {
                     let i = u32::from_be_bytes([c[0], c[1], c[2], c[3]]) as usize;
                     if i < self.msgs.len() && self.msgs[i].to == node && self.msgs[i].delivered_ms.is_none() {
                         self.msgs[i].delivered_ms = Some(self.now);
+                        self.seq_on_deliver(i, node, hops);
                         self.phone_on_message(i, node, hops);
                         self.sibling_copies(i, node);
                         let from = self.msgs[i].from;
@@ -1840,6 +1853,7 @@ impl Engine {
                     && self.msgs[i].delivered_ms.is_none()
                 {
                     self.msgs[i].delivered_ms = Some(self.now);
+                    self.seq_on_deliver(i, node, hops);
                     self.phone_on_message(i, node, hops);
                     self.sibling_copies(i, node);
                     self.tr(format!("{{\"t\":{},\"ev\":\"deliver\",\"msg\":{i},\"n\":{node},\"hops\":{hops}}}", self.now));
@@ -2243,7 +2257,8 @@ impl Engine {
         let m = self.msgs.len();
         let id = packet_id(PacketType::Data, &self.nodes[to].router.addr, &payload);
         let cross = self.nodes[from].router.hears_repeater(self.now) != self.nodes[to].router.hears_repeater(self.now);
-        self.msgs.push(Msg { from, to, payload: payload.clone(), id, sent_ms: self.now, delivered_ms: None, acked_ms: None, shown_ms: None, dropped_unknown: false, unsent: false, cross, sync_of: None });
+        self.msgs.push(Msg { from, to, payload: payload.clone(), id, sent_ms: self.now, delivered_ms: None, acked_ms: None, shown_ms: None, dropped_unknown: false, unsent: false, cross, sync_of: None, seq: 0 });
+        self.seq_number(self.msgs.len() - 1);
         self.tags.insert(id, m as u32);
         self.tr(format!("{{\"t\":{},\"ev\":\"send\",\"msg\":{m},\"from\":{from},\"to\":{to},\"pid\":\"{id:016x}\"}}", self.now));
         if !self.nodes[from].alive() {
@@ -3693,6 +3708,45 @@ impl Engine {
         self.schedule(at, Ev::PhoneReconnect { node });
     }
 
+    /// Numbers message `m` in its conversation when both ends are at a host
+    /// (they announce CAP_SEQ), as maarse-host does (`Seqs::next`).
+    fn seq_number(&mut self, m: usize) {
+        let (from, to) = (self.msgs[m].from, self.msgs[m].to);
+        if self.msgs[m].sync_of.is_some() || !self.at_host(from) || !self.at_host(to) {
+            return;
+        }
+        let n = self.seq_out.entry((from, to)).or_insert(0);
+        *n += 1;
+        self.msgs[m].seq = *n;
+    }
+
+    /// Message `m` reached `node`: check its number (maarse_hostrules::seq)
+    /// and show a gap before it, as maarse-host's `seq_received`.
+    fn seq_on_deliver(&mut self, m: usize, node: usize, hops: u8) {
+        use maarse_hostrules::seq::{Seen, check, gap_notice};
+        let (from, n) = (self.msgs[m].from, self.msgs[m].seq);
+        if n == 0 {
+            return;
+        }
+        let last = self.seq_in.get(&(from, node)).copied().unwrap_or(0);
+        match check(last, n) {
+            Seen::LateOrRepeat => {
+                self.stats.seq_late += 1;
+                return;
+            }
+            Seen::Gap(missing) => {
+                self.stats.seq_gaps += 1;
+                self.stats.seq_missing += missing as u64;
+                self.tr(format!("{{\"t\":{},\"ev\":\"seq_gap\",\"msg\":{m},\"n\":{node},\"from\":{from},\"missing\":{missing}}}", self.now));
+                let addr = self.nodes[from].router.addr;
+                let note = gap_notice(missing);
+                self.phone_emit(node, &maarse_core::companion::Event::DirectReceived { from: addr, hops, text: maarse_core::companion::text(note.as_bytes()) });
+            }
+            Seen::First | Seen::InOrder => {}
+        }
+        self.seq_in.insert((from, node), n);
+    }
+
     /// The pages host `node` shares, if any.
     pub(crate) fn site(&self, node: usize) -> Option<&Site> {
         self.sc.nodes.get(node).and_then(|n| n.site.as_ref()).filter(|s| !s.pages.is_empty())
@@ -4609,6 +4663,9 @@ impl Engine {
             "alerts_forged_dropped": self.stats.alerts_forged_dropped,
             "guard_dropped": self.stats.guard_dropped,
             "phone_link_drops": self.stats.phone_link_drops,
+            "seq_gaps": self.stats.seq_gaps,
+            "seq_missing": self.stats.seq_missing,
+            "seq_late": self.stats.seq_late,
             "phone_lost_msgs": self.stats.phone_lost_msgs,
             "guard_bans": self.stats.guard_bans,
             "flood_packets": self.stats.flood_packets,

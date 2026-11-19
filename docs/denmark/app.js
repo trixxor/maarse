@@ -1437,6 +1437,12 @@
       <tr><td>kept, waiting for an announce</td><td class="n">${s.held_waiting}</td><td class="hint">shown when the sender announces (${s.shown_after_hold} so far)</td></tr>
       <tr><td>not sent: recipient unknown</td><td class="n">${s.unsent_unknown}</td><td class="hint">the sender lost the recipient's keys in a reboot</td></tr>
     </table>
+    <h3>Sequence numbers (hosts and app users)</h3>
+    <table>
+      <tr><td>gaps shown</td><td class="n">${s.seq_gaps}</td><td class="hint">"⚠ N earlier messages have not arrived" in the conversation (maarse-hostrules seq)</td></tr>
+      <tr><td>messages counted missing</td><td class="n">${s.seq_missing}</td><td class="hint">the numbers skipped over</td></tr>
+      <tr><td>late or repeated</td><td class="n">${s.seq_late}</td><td class="hint">arrived after a later one (via the post office, for example)</td></tr>
+    </table>
     <h3>Attacks and the guard</h3>
     <table>
       <tr><td>flood packets sent</td><td class="n">${s.flood_packets}</td><td class="hint">Break › Attacks: a host flooding its internet links</td></tr>

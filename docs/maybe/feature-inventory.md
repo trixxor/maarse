@@ -13,7 +13,7 @@ Status as of 2026-11-19.
 | Feature | Code | Simulator |
 |---|---|---|
 | Direct messages, acks, textz compression | maarse-core router, content | real |
-| Sequence numbers, "2 messages missing" | maarse-host node/seq.rs | not yet |
+| Sequence numbers, "2 messages missing" | maarse-hostrules seq, maarse-host node/seq.rs | shared rule: numbered between hosts/app users, gaps shown on phones, Results |
 | Public and private channels | router, companion | real (public + hashtag channels from phones; private: not yet) |
 | Store-carry-forward, carried notice | router carry | real |
 | Post offices: deposit, sync, replicas, quotas, expiry | maarse-core mail.rs, maarse-host node.rs | model on core rules; host-to-host over radio/trunks without TCP; retries per the host's rules |

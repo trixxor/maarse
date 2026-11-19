@@ -19,4 +19,5 @@ pub mod guard;
 pub mod pagelock;
 pub mod pages;
 pub mod rules;
+pub mod seq;
 pub mod tunnel;

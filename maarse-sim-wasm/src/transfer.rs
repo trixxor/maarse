@@ -1996,6 +1996,22 @@ mod tests {
     }
 
     #[test]
+    fn sequence_gap_between_hosts() {
+        let mut e = world(json!({"mail": ""}));
+        let (a, b, c) = (e.send_message(0, 2), e.send_message(0, 2), e.send_message(0, 2));
+        assert_eq!((e.msgs[a].seq, e.msgs[b].seq, e.msgs[c].seq), (1, 2, 3));
+        // Arrivals 1, 3, 2: one gap of one message, then a late one.
+        e.seq_on_deliver(a, 2, 1);
+        e.seq_on_deliver(c, 2, 1);
+        e.seq_on_deliver(b, 2, 1);
+        let s = e.summary();
+        assert_eq!((s["seq_gaps"].as_u64(), s["seq_missing"].as_u64(), s["seq_late"].as_u64()), (Some(1), Some(1), Some(1)), "{s}");
+        // Handhelds do not number (no CAP_SEQ).
+        let d = e.send_message(3, 4);
+        assert_eq!(e.msgs[d].seq, 0);
+    }
+
+    #[test]
     fn phone_link_drop_loses_what_arrives_meanwhile() {
         let mut e = world(json!({}));
         // A phone on handheld 3 (firmware node, Bluetooth to the radio).

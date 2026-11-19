@@ -68,9 +68,14 @@ const MODEM_KEY_MAGIC: &[u8; 4] = b"MKY1";
 const MODEM_KEY_OFF: usize = 0x420;
 const MODEM_KEY_LEN: usize = 4 + 32;
 const _: () = assert!(RANGE_OFF + RANGE_LEN <= MODEM_KEY_OFF);
+const SITE_MAGIC: &[u8; 4] = b"SIT1";
+const SITE_OFF: usize = 0x450;
+/// Magic, length, site bytes.
+const SITE_LEN: usize = 4 + 1 + maarse_core::appdata::SITE_FIXED + maarse_core::appdata::MAX_OWNER;
+const _: () = assert!(MODEM_KEY_OFF + MODEM_KEY_LEN <= SITE_OFF);
 const _: () = assert!(WIFI_OFF + WIFI_LEN <= RANGE_OFF);
 /// Used part of the page, rounded up to whole words.
-const USED: usize = (MODEM_KEY_OFF + MODEM_KEY_LEN).div_ceil(4) * 4;
+const USED: usize = (SITE_OFF + SITE_LEN).div_ceil(4) * 4;
 const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
 
 const KNOWN_MAGIC: &[u8; 4] = b"KNW1";
@@ -455,6 +460,25 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         let buf = self.read_page();
         let b = &buf[MODEM_KEY_OFF..MODEM_KEY_OFF + MODEM_KEY_LEN];
         (&b[..4] == MODEM_KEY_MAGIC).then(|| b[4..].try_into().unwrap())
+    }
+    fn save_site(&mut self, site: &maarse_core::appdata::Site) {
+        let mut buf = self.read_page();
+        let b = &mut buf[SITE_OFF..SITE_OFF + SITE_LEN];
+        b.fill(0);
+        b[..4].copy_from_slice(SITE_MAGIC);
+        let w = site.to_bytes();
+        b[4] = w.len() as u8;
+        b[5..5 + w.len()].copy_from_slice(&w);
+        self.write_page(&buf);
+    }
+    fn load_site(&mut self) -> maarse_core::appdata::Site {
+        let buf = self.read_page();
+        let b = &buf[SITE_OFF..SITE_OFF + SITE_LEN];
+        if &b[..4] != SITE_MAGIC {
+            return Default::default();
+        }
+        let n = (b[4] as usize).min(SITE_LEN - 5);
+        maarse_core::appdata::Site::from_bytes(&b[5..5 + n]).unwrap_or_default()
     }
     fn load_name(&mut self) -> maarse_core::appdata::Name {
         let buf = self.read_page();

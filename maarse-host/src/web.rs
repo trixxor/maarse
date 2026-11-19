@@ -57,7 +57,23 @@ fn is_local(stream: &TcpStream) -> bool {
     }
 }
 
-fn handle(stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
+fn handle(mut stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
+    // The public map (`--public-map`): open to everyone, for map pages on
+    // other sites (the Denmark simulator's real-world mode), no login.
+    {
+        let mut peek = [0u8; 64];
+        let n = stream.peek(&mut peek).unwrap_or(0);
+        if peek[..n].starts_with(b"GET /api/public/map") {
+            let mut sink = [0u8; 4096];
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+            let _ = stream.read(&mut sink);
+            return if PUBLIC_MAP.load(std::sync::atomic::Ordering::Relaxed) {
+                reply(&mut stream, "200 OK", "application/json", &crate::debug::public_map())
+            } else {
+                reply(&mut stream, "404 Not Found", "application/json", "{\"error\":\"this host does not share a public map (--public-map)\"}")
+            };
+        }
+    }
     if crate::server_mode() {
         // maarse-server: only the admin dashboard, behind a login; no chat
         // client and no WebSocket.
@@ -498,6 +514,8 @@ fn service_worker() -> String {
 /// `--require-key`: no free pass for 127.0.0.1. On a phone every other app
 /// can reach the loopback address, so there the key is always needed.
 pub static REQUIRE_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// `--public-map`: serve `/api/public/map` to everyone.
+pub static PUBLIC_MAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn allowed(query: &str, host: Option<&str>, origin: Option<&str>, loopback: bool, token: &str) -> bool {
     let given = query

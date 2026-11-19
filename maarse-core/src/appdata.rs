@@ -7,6 +7,9 @@
 //! 0x04 | length | telemetry
 //! 0x05 | length | display name            (UTF-8, at most 24 bytes)
 //! 0x06 | length | role | services         (see [`push_role`])
+//! 0x07 | 1 | capabilities
+//! 0x08 | 17 | person | device index
+//! 0x09 | length | site                     (see [`Site`])
 //! ```
 //!
 //! Role (2 bytes): role as [`crate::router::Role::as_u8`] | flags (bit 0 =
@@ -46,6 +49,86 @@ pub const APP_CAPS: u8 = 0x07;
 /// index (1). A claim only: it is trusted after the device's certificate has
 /// been checked (`maarse_crypto::person`).
 pub const APP_PERSON: u8 = 0x08;
+
+/// Site of a fixed node (repeater, anchor, host), filled in by its owner:
+/// `0x09 | length | antenna height (u16, 0.1 m above ground) | antenna gain
+/// (i8, 0.5 dB) | transmit power (i8, dBm) | owner (UTF-8, the rest)`.
+/// Used by maps and coverage pictures; not proven, like the name.
+pub const APP_SITE: u8 = 0x09;
+/// Longest owner text (name or call sign, optionally a contact).
+pub const MAX_OWNER: usize = 40;
+/// Fixed part of a site field.
+pub const SITE_FIXED: usize = 4;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Site {
+    /// Antenna height above the ground, 0.1 m; 0 = not set (no site field is sent).
+    pub height_dm: u16,
+    /// Antenna gain, 0.5 dB steps.
+    pub gain_hdb: i8,
+    /// Transmit power, dBm (the radio's own setting when the node builds its announce).
+    pub tx_dbm: i8,
+    /// Owner: name or call sign, and a contact if the owner wants one public.
+    pub owner: heapless::Vec<u8, MAX_OWNER>,
+}
+
+impl Site {
+    pub fn is_set(&self) -> bool {
+        self.height_dm > 0
+    }
+    /// Wire form (also the companion protocol's): fixed part, then the owner.
+    pub fn to_bytes(&self) -> heapless::Vec<u8, { SITE_FIXED + MAX_OWNER }> {
+        let mut v = heapless::Vec::new();
+        let _ = v.extend_from_slice(&self.height_dm.to_le_bytes());
+        let _ = v.extend_from_slice(&[self.gain_hdb as u8, self.tx_dbm as u8]);
+        let _ = v.extend_from_slice(&self.owner);
+        v
+    }
+    pub fn from_bytes(d: &[u8]) -> Option<Site> {
+        if d.len() < SITE_FIXED {
+            return None;
+        }
+        Some(Site {
+            height_dm: u16::from_le_bytes([d[0], d[1]]),
+            gain_hdb: d[2] as i8,
+            tx_dbm: d[3] as i8,
+            owner: clean_owner(&d[SITE_FIXED..]),
+        })
+    }
+}
+
+/// Owner text: valid UTF-8, trimmed, at most `MAX_OWNER` bytes (cut on a
+/// character boundary), no control characters.
+pub fn clean_owner(raw: &[u8]) -> heapless::Vec<u8, MAX_OWNER> {
+    let s = match core::str::from_utf8(raw) {
+        Ok(s) => s,
+        Err(e) => core::str::from_utf8(&raw[..e.valid_up_to()]).unwrap_or(""),
+    };
+    let mut out = heapless::Vec::new();
+    for ch in s.trim().chars().filter(|c| !c.is_control()) {
+        let mut b = [0u8; 4];
+        if out.extend_from_slice(ch.encode_utf8(&mut b).as_bytes()).is_err() {
+            break;
+        }
+    }
+    out
+}
+
+/// Adds the site field, shortening the owner text so the app data still fits.
+pub fn push_site(v: &mut AppBuf, site: &Site) {
+    if !site.is_set() || v.capacity() < v.len() + 2 + SITE_FIXED {
+        return;
+    }
+    let room = v.capacity() - (v.len() + 2 + SITE_FIXED);
+    let mut owner = &site.owner[..site.owner.len().min(room)];
+    while core::str::from_utf8(owner).is_err() {
+        owner = &owner[..owner.len() - 1];
+    }
+    let b = site.to_bytes();
+    let _ = v.extend_from_slice(&[APP_SITE, (SITE_FIXED + owner.len()) as u8]);
+    let _ = v.extend_from_slice(&b[..SITE_FIXED]);
+    let _ = v.extend_from_slice(owner);
+}
 
 pub fn push_person(v: &mut AppBuf, person: &Address, index: u8) {
     let _ = v.extend_from_slice(&[APP_PERSON, 17]);
@@ -289,6 +372,8 @@ pub struct AppData {
     pub role_bridge: Option<u16>,
     /// Person and device index (`APP_PERSON`), if present.
     pub person: Option<(Address, u8)>,
+    /// Site of a fixed node (`APP_SITE`), if present.
+    pub site: Option<Site>,
 }
 
 /// Builds app data. The position is rounded here (a precise position is
@@ -342,6 +427,7 @@ pub fn parse(b: &[u8]) -> AppData {
                     APP_TELEMETRY => a.telemetry = Telemetry::decode(d),
                     APP_NAME => a.name = clean_name(d),
                     APP_CAPS => a.caps = d.first().copied(),
+                    APP_SITE => a.site = Site::from_bytes(d),
                     APP_PERSON if d.len() >= 17 => a.person = Address::from_slice(&d[..16]).map(|p| (p, d[16])),
                     APP_ROLE => {
                         a.role = d.first().copied();
@@ -396,6 +482,31 @@ mod tests {
         let _ = v.extend_from_slice(&[APP_NAME, 2, b'J', b'o']);
         assert_eq!(parse(&v).name.as_deref(), Some(&b"Jo"[..]));
         assert_eq!(parse(&build(None, true, None, None, None)).role, None);
+    }
+
+    #[test]
+    fn site_round_trips_and_fits() {
+        let site = Site { height_dm: 185, gain_hdb: 10, tx_dbm: 20, owner: clean_owner("OZ1ABC Aalborg Nødnet · oz1abc@example.dk".as_bytes()) };
+        assert!(site.owner.len() <= MAX_OWNER);
+        assert!(core::str::from_utf8(&site.owner).is_ok());
+        let mut v = build(None, true, None, None, Some(b"Mast"));
+        push_site(&mut v, &site);
+        assert_eq!(parse(&v).site, Some(site.clone()));
+        // A full announce still fits: the owner is shortened, never the numbers.
+        let t = Telemetry { battery_mv: 1, ..Default::default() };
+        let mut full = build(Some(&Address([9; 16])), true, Some(pos(Precision::Precise)), Some(&t), Some("Æblegrød-og-flødeskum-hver-dag".as_bytes()));
+        push_role(&mut full, 2, 0);
+        push_caps(&mut full, MY_CAPS);
+        push_site(&mut full, &site);
+        let got = parse(&full).site.unwrap();
+        assert_eq!((got.height_dm, got.gain_hdb, got.tx_dbm), (185, 10, 20));
+        assert!(core::str::from_utf8(&got.owner).is_ok());
+        // Not set: nothing is sent; an older parser skips the field.
+        let mut w = build(None, true, None, None, None);
+        push_site(&mut w, &Site::default());
+        assert_eq!(&w[..], &[APP_FS]);
+        assert_eq!(parse(&[APP_SITE, 4, 10, 0, 0, 20, APP_NAME, 2, b'J', b'o']).name.as_deref(), Some(&b"Jo"[..]));
+        assert_eq!(clean_owner(b"  \x07Ida  "), heapless::Vec::<u8, MAX_OWNER>::from_slice(b"Ida").unwrap());
     }
 
     #[test]

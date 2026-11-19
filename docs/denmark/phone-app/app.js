@@ -66,7 +66,7 @@ function setStatus(row, s, msgId) { const m = N.msgs.find((x) => x.id === row); 
 function insert(m) { m.id = N.nextRow++; m.msgId = m.msgId ?? 0n; m.hops = m.hops ?? 0; N.msgs.push(m); return m.id; }
 
 function onOpen() {
-  send(Cmd.getInfo()); send(Cmd.getName()); send(Cmd.setTime()); send(Cmd.getStats()); send(Cmd.getRegions()); send(Cmd.getSharing());
+  send(Cmd.getInfo()); send(Cmd.getName()); send(Cmd.setTime()); send(Cmd.getStats()); send(Cmd.getRegions()); send(Cmd.getSharing()); send(Cmd.getSite());
   if (MODE === "BLE") send(Cmd.getRadio());
   send(Cmd.getPerson());
   note("Connected (simulated node" + (NODE_LABEL ? " " + NODE_LABEL : "") + ")");
@@ -228,6 +228,7 @@ function onEvent(ev) {
     case "Radio": N.radio = ev.cfg; break;
     case "Regions": N.regions = ev; break;
     case "Sharing": N.sharing = ev; break;
+    case "Site": N.site = ev; UI.site = undefined; break;
     case "Neighbors": N.neighbors = ev.part === 0 ? ev.items : N.neighbors.concat(ev.items); break;
     case "Trace": { const t = N.traceSent[ev.dest]; if (t) { delete N.traceSent[ev.dest]; N.traceRtt[ev.dest] = Date.now() - t; } N.traces = [ev].concat(N.traces).slice(0, 10); break; }
     case "Alert": if (!N.alerts.some((a) => a.key === ev.key)) N.alerts.push(ev); break;
@@ -789,7 +790,13 @@ function mePage(p) {
       ? `<div class="bs mute">Your radio's role. It decides whether the radio passes on messages for others.</div>` + Names.ROLES.map((r, i) => `<div class="optrow" data-act="role" data-i="${i}"><span class="radio${role === i ? " on" : ""}"></span><div class="col" style="padding-top:8px"><div class="sb">${r}</div><div class="bs mute">${esc(ROLE_HELP[i])}</div></div></div>`).join("") + `<div class="bs">Tip: a radio you carry around → Auto. A radio on a roof or mast → Repeater. In a forest or at sea with no repeaters → Relay.</div>`
       : MODE === "PHONE" ? `<div class="bs mute">The phone node routes like a fixed node. Choose how:</div><div class="optrow"><span class="radio on"></span><div class="col" style="padding-top:8px"><div class="sb">Anchor (default)</div><div class="bs mute">Passes on messages, splits long paths and answers path requests on behalf of others. Best for a node on the internet.</div></div></div><div class="optrow"><span class="radio"></span><div class="col" style="padding-top:8px"><div class="sb">Repeater</div><div class="bs mute">Passes on messages, but does not split paths. Use it if your node is often offline.</div></div></div>`
       : `<div class="bs">You follow a host on another computer. Its role is set on that computer (Host settings there); a radio's role is set when you connect to the radio over Bluetooth.</div>`;
-    return gtitle("Role — how this node helps others") + card2(roles) + gtitle("Regions") + card2(`<div class="bs mute">Channel messages marked with a region (e.g. #help@nordjylland) only travel where nodes have that region. Leave empty to get everything.</div><div class="row"><div class="ofield grow"><label>e.g. dk, nordjylland</label><input id="regions" value="${esc(UI.regions ?? N.regions?.names ?? "")}"></div><button class="btn text" data-act="saveRegions">Save</button></div>${!N.regions && ns ? `<div class="bs amb">${esc(ns)}</div>` : ""}`) +
+    const st = N.site, su = UI.site || {};
+    const siteCard = gtitle("Site — for a fixed node") + card2(`<div class="bs mute">For a radio on a roof or mast. The node sends this in its announces, so maps and coverage pictures use the real antenna height, gain and power. Everything here is public: anyone can read it.</div>${st ? `
+      <div class="row" style="gap:4px"><div class="ofield grow"><label>Antenna height, m</label><input id="siteH" inputmode="decimal" value="${esc(su.h ?? (st.heightDm ? (st.heightDm / 10).toString() : ""))}"></div><div class="ofield grow"><label>Antenna gain, dBi</label><input id="siteG" inputmode="decimal" value="${esc(su.g ?? (st.heightDm ? (st.gainHdb / 2).toString() : ""))}"></div></div>
+      <div class="ofield"><label>Owner: name or call sign (and a contact, if you want it public)</label><input id="siteO" maxlength="40" value="${esc(su.o ?? st.owner ?? "")}"></div>
+      ${st.heightDm && st.txDbm ? `<div class="bs">Transmit power ${st.txDbm} dBm (from the radio's settings).</div>` : ""}
+      <div class="row"><button class="btn text" data-act="saveSite">Save</button>${st.heightDm ? `<button class="btn text" data-act="clearSite">Not a fixed node</button>` : ""}</div>` : ns ? `<div class="bs amb">${esc(ns)}</div>` : "<div>Fetching…</div>"}`);
+    return gtitle("Role — how this node helps others") + card2(roles) + siteCard + gtitle("Regions") + card2(`<div class="bs mute">Channel messages marked with a region (e.g. #help@nordjylland) only travel where nodes have that region. Leave empty to get everything.</div><div class="row"><div class="ofield grow"><label>e.g. dk, nordjylland</label><input id="regions" value="${esc(UI.regions ?? N.regions?.names ?? "")}"></div><button class="btn text" data-act="saveRegions">Save</button></div>${!N.regions && ns ? `<div class="bs amb">${esc(ns)}</div>` : ""}`) +
       (N.radio ? gtitle("Radio") + card2(`<div class="md">${(N.radio.freq / 1e6).toFixed(3)} MHz · SF${N.radio.sf} · ${(N.radio.bw / 1e3).toFixed(1)} kHz · ${N.radio.power} dBm</div><div class="bs mute">All Må:rse radios use the same settings, so everyone hears everyone.</div>`) : "");
   }
   if (p === "APP") return `<div class="row" style="padding:8px 16px"><span class="grow">Notify about direct messages</span><span class="sw on"></span></div><div class="row" style="padding:8px 16px"><span class="grow">Notify about channel messages</span><span class="sw"></span></div>` + hint("Alerts always notify. Severe, actual alerts use their own loud channel; change it in Android's notification settings.");
@@ -912,6 +919,7 @@ document.addEventListener("input", (e) => {
   else if (id === "pgurl") UI.pgInput = v;
   else if (id === "pgq") { UI.pgQ = v; render(); }
   else if (id === "myname") UI.myname = v;
+  else if (id === "siteH" || id === "siteG" || id === "siteO") { UI.site = UI.site || {}; UI.site[id.slice(4).toLowerCase()] = v; }
   else if (id === "regions") UI.regions = v;
 });
 document.addEventListener("keydown", (e) => {
@@ -984,6 +992,12 @@ function act(a, el) {
     case "linkDev": { const a = ($("#linkaddr")?.value || "").trim().toLowerCase(); if (/^[0-9a-f]{32}$/.test(a)) { N.lastError = null; send(Cmd.linkDevice(req(), a)); } else N.lastError = "Enter the 32-character address the new device shows."; break; }
     case "removeDev": personSetup(PersonOp.REMOVE, d.a); break;
     case "verify": { const k = N.keys[d.a]; if (N.verified[d.a] === (k && hexOf(k))) delete N.verified[d.a]; else if (k) N.verified[d.a] = hexOf(k); break; }
+    case "saveSite": {
+      const h = parseFloat(($("#siteH")?.value || "").replace(",", ".")) || 0, g = parseFloat(($("#siteG")?.value || "").replace(",", ".")) || 0;
+      send(Cmd.setSite(Math.max(0, Math.min(65535, Math.round(h * 10))), Math.max(-128, Math.min(127, Math.round(g * 2))), ($("#siteO")?.value || "").trim()));
+      send(Cmd.getSite()); send(Cmd.announce()); UI.site = undefined; break;
+    }
+    case "clearSite": { send(Cmd.setSite(0, 0, "")); send(Cmd.getSite()); UI.site = undefined; break; }
     case "saveName": { const v = ($("#myname")?.value || "").trim(); send(Cmd.setName(v)); send(Cmd.getName()); send(Cmd.announce()); UI.myname = undefined; break; }
     case "saveRegions": send(Cmd.setRegions(N.regions?.strict || false, ($("#regions")?.value || "").trim())); send(Cmd.getRegions()); break;
     case "prec": { const sh = N.sharing; send(Cmd.setSharing(+d.i, Math.round(sh.lat * 1e7), Math.round(sh.lon * 1e7), sh.telemetry)); send(Cmd.getSharing()); break; }

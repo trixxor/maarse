@@ -52,6 +52,9 @@ const Cmd = {
   getSharing: () => frame(0x23),
   setName: (name) => frame(0x24, (w) => w.text(name)),
   getName: () => frame(0x25),
+  // Site of a fixed node: antenna height (0.1 m), gain (0.5 dB), power (filled in by the node), owner.
+  setSite: (heightDm, gainHdb, owner) => frame(0x3a, (w) => w.u16(heightDm).u8(gainHdb & 0xff).u8(0).text(owner)),
+  getSite: () => frame(0x3b),
   getBackbones: () => frame(0x39),
   // History on maarse-host (maarse-host/src/history.rs), as Proto.kt.
   histGet: (req, conv, before, limit) => frame(0x30, (w) => { w.u16(req); if (conv) w.addr(conv); else w.bytes(new Uint8Array(16)); w.u64(before).u8(limit); }),
@@ -132,6 +135,7 @@ function decodeEvent(f) {
     case 0xa2: return { t: "Sharing", prec: r.u8(1), lat: r.i32(2) / 1e7, lon: r.i32(6) / 1e7, telemetry: r.u8(10) !== 0 };
     case 0xa3: return nodeInfo(r.addr(1), r.u8(17), sub(18));
     case 0xa4: return { t: "Name", name: r.txt(1) };
+    case 0xbb: return { t: "Site", heightDm: r.u8(1) | r.u8(2) << 8, gainHdb: r.u8(3) << 24 >> 24, txDbm: r.u8(4) << 24 >> 24, owner: r.txt(5) };
     case 0xa7: return { t: "CarryAcked", msgId: r.u64(1) };
     case 0xb4: return { t: "IdentityChanged", addr: r.addr(1) };
     case 0x89: { const ml = r.u8(29); return { t: "FileIncoming", fileId: r.u64(1), from: r.addr(9), size: r.u32(25), mime: r.txt(30, Math.min(30 + ml, f.length)), name: r.txt(Math.min(30 + ml, f.length)) }; }

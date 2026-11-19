@@ -36,6 +36,18 @@ pub fn enabled() -> bool {
     ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static PUBLIC_MAP: Mutex<String> = Mutex::new(String::new());
+
+/// The public map JSON (see `Node::public_map`), refreshed every 10 s.
+pub fn set_public_map(s: String) {
+    *PUBLIC_MAP.lock().unwrap_or_else(|e| e.into_inner()) = s;
+}
+
+pub fn public_map() -> String {
+    let s = PUBLIC_MAP.lock().unwrap_or_else(|e| e.into_inner());
+    if s.is_empty() { "{}".into() } else { s.clone() }
+}
+
 pub fn set_telemetry(s: String) {
     *TELEMETRY.lock().unwrap_or_else(|e| e.into_inner()) = s;
 }

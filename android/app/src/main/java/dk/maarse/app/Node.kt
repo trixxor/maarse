@@ -49,6 +49,8 @@ object Node : LinkListener {
     val radio = MutableStateFlow<RadioCfg?>(null)
     val regions = MutableStateFlow<Ev.Regions?>(null)
     val sharing = MutableStateFlow<Ev.Sharing?>(null)
+    /** Site of the node (fixed nodes: antenna height, gain, owner). */
+    val site = MutableStateFlow<Ev.Site?>(null)
     val neighbors = MutableStateFlow<List<Neighbor>>(emptyList())
     val alerts = MutableStateFlow<List<Ev.Alert>>(emptyList())
     val dismissed = MutableStateFlow<Set<String>>(emptySet())
@@ -218,6 +220,7 @@ object Node : LinkListener {
         link.send(Cmd.getStats())
         link.send(Cmd.getRegions())
         link.send(Cmd.getSharing())
+        link.send(Cmd.getSite())
         // Only a radio has radio settings (a host answers with an error).
         if (prefs.mode == Mode.BLE) link.send(Cmd.getRadio())
         person.value = null
@@ -341,6 +344,8 @@ object Node : LinkListener {
     fun updatePosition(ctx: Context = app) {
         val sh = sharing.value ?: return
         if (sh.prec == 0 || !hasLocation(ctx)) return
+        // A fixed node keeps the position its owner set for the site.
+        if ((site.value?.heightDm ?: 0) > 0) return
         lastPosition = System.currentTimeMillis()
         val lm = ctx.getSystemService(android.location.LocationManager::class.java)
         val use = { l: android.location.Location? ->
@@ -712,6 +717,7 @@ object Node : LinkListener {
             is Ev.Radio -> radio.value = ev.cfg
             is Ev.Regions -> regions.value = ev
             is Ev.Sharing -> sharing.value = ev
+            is Ev.Site -> site.value = ev
             is Ev.Neighbors -> neighbors.update { if (ev.part == 0) ev.items else it + ev.items }
             is Ev.Trace -> {
                 traceSent.remove(ev.dest)?.let { t -> traceRtt.update { m -> m + (ev.dest to (System.currentTimeMillis() - t)) } }

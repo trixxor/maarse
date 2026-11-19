@@ -142,6 +142,13 @@ pub enum Command {
     SetName { name: Text },
     /// 0x25: get the display name. Reply: `Name`.
     GetName,
+    /// 0x3a: set the site of a fixed node (antenna height, gain, owner; see
+    /// [`crate::appdata::Site`]). Stored and sent in announces while the
+    /// height is set; height 0 clears it. The node fills in its own transmit
+    /// power. Reply: `Site`.
+    SetSite(crate::appdata::Site),
+    /// 0x3b: get the site. Reply: `Site`.
+    GetSite,
     /// 0x28: set the Wi-Fi backbone settings (local only: USB or Bluetooth,
     /// never through `Remote`, as it carries the password). Saved; the node
     /// restarts to apply them. Reply: `Wifi`. Nodes without Wi-Fi answer
@@ -553,6 +560,8 @@ pub enum Event {
     Sharing(Sharing),
     /// 0xa4: the node's own display name (empty = none).
     Name { name: Text },
+    /// 0xbb: the node's site (height 0 = not set).
+    Site(crate::appdata::Site),
     /// 0xa5: call data from `from` (see `SendCall`).
     Call { from: Address, data: Text },
     /// 0xa6: Wi-Fi backbone status (see [`wifi_state`]). `ip` is 0.0.0.0
@@ -1146,6 +1155,8 @@ impl Command {
             Command::GetWifi => W::new(0x29).done(),
             Command::SetModemKey { passphrase } => W::new(0x2d).b(passphrase).done(),
             Command::GetName => W::new(0x25).done(),
+            Command::SetSite(site) => W::new(0x3a).b(&site.to_bytes()).done(),
+            Command::GetSite => W::new(0x3b).done(),
             Command::RequestPage { req, dest, path } => W::new(0x26).b(&req.to_le_bytes()).b(&dest.0).b(path).done(),
             Command::PostBoard { req, dest, path, text } => W::new(0x2e).b(&req.to_le_bytes()).b(&dest.0).b(&[path.len() as u8]).b(path).b(text).done(),
             Command::SendCall { dest, data } => W::new(0x27).b(&dest.0).b(data).done(),
@@ -1238,6 +1249,8 @@ impl Command {
             0x29 => Command::GetWifi,
             0x2d => Command::SetModemKey { passphrase: r.text()? },
             0x25 => Command::GetName,
+            0x3a => Command::SetSite(crate::appdata::Site::from_bytes(r.text()?.as_slice()).ok_or(FrameError::TooShort)?),
+            0x3b => Command::GetSite,
             0x26 => Command::RequestPage { req: r.u16()?, dest: r.addr()?, path: r.text()? },
             0x2e => {
                 let (req, dest) = (r.u16()?, r.addr()?);
@@ -1432,6 +1445,7 @@ impl Event {
                 w.done()
             }
             Event::Sharing(s) => W::new(0xa2).b(&s.to_bytes()).done(),
+            Event::Site(site) => W::new(0xbb).b(&site.to_bytes()).done(),
             Event::Name { name } => W::new(0xa4).b(name).done(),
             Event::Call { from, data } => W::new(0xa5).b(&from.0).b(data).done(),
             Event::CarryAcked { msg_id } => W::new(0xa7).b(&msg_id.to_le_bytes()).done(),
@@ -1683,6 +1697,7 @@ impl Event {
                 }
                 Event::Neighbors { part, last, items }
             }
+            0xbb => Event::Site(crate::appdata::Site::from_bytes(r.text()?.as_slice()).ok_or(FrameError::TooShort)?),
             0xa2 => Event::Sharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
             0xa3 => {
                 let (addr, hops) = (r.addr()?, r.u8()?);
@@ -2118,6 +2133,11 @@ mod tests {
         let sh = Sharing { precision: 2, lat_e7: 561_567_000, lon_e7: -102_107_000, telemetry: true };
         roundtrip_cmd(Command::SetSharing(sh));
         roundtrip_ev(Event::Sharing(sh));
+        let site = crate::appdata::Site { height_dm: 150, gain_hdb: -2, tx_dbm: 22, owner: crate::appdata::clean_owner("OZ1ABC".as_bytes()) };
+        roundtrip_cmd(Command::SetSite(site.clone()));
+        roundtrip_cmd(Command::GetSite);
+        roundtrip_ev(Event::Site(site));
+        roundtrip_ev(Event::Site(Default::default()));
         assert_eq!(Command::SetSharing(Sharing::default()).encode()[2], 0x22);
         roundtrip_ev(Event::TraceResult {
             req: 3,

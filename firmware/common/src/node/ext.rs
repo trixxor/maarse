@@ -18,6 +18,8 @@ pub(super) struct Ext {
     pub(super) sharing: Sharing,
     /// Our display name (empty = none).
     pub(super) name: appdata::Name,
+    /// Our site (antenna height, gain, owner); sent in announces while set.
+    pub(super) site: appdata::Site,
     /// Trace routes in progress: target -> req.
     traces: heapless::Vec<(Address, u16), 4>,
     pub(super) next_power: Instant,
@@ -28,6 +30,7 @@ impl Ext {
         Ext {
             sharing: Sharing::default(),
             name: appdata::Name::new(),
+            site: appdata::Site::default(),
             traces: heapless::Vec::new(),
             next_power: Instant::now() + Duration::from_secs(5),
         }
@@ -52,6 +55,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             | if self.router.mobile { appdata::ROLE_MOBILE } else { 0 };
         appdata::push_role_bridge(&mut v, self.router.role.as_u8(), flags, self.router.chosen_bridge(now_ms()));
         appdata::push_caps(&mut v, appdata::MY_CAPS);
+        // The site carries the radio's own transmit power.
+        let site = appdata::Site { tx_dbm: self.radio.tx_power_dbm, ..self.ext.site.clone() };
+        appdata::push_site(&mut v, &site);
         v
     }
 
@@ -109,6 +115,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 log("Sharing saved; shown in the next announce");
             }
             Command::GetName => emit(&Event::Name { name: text(&self.ext.name) }),
+            Command::GetSite => emit(&Event::Site(appdata::Site { tx_dbm: self.radio.tx_power_dbm, ..self.ext.site.clone() })),
+            Command::SetSite(site) => {
+                self.ext.site = site;
+                self.settings.save_site(&self.ext.site);
+                emit(&Event::Site(appdata::Site { tx_dbm: self.radio.tx_power_dbm, ..self.ext.site.clone() }));
+                log("Site saved; shown in the next announce");
+            }
             Command::SetName { name } => {
                 self.ext.name = appdata::clean_name(&name).unwrap_or_default();
                 self.settings.save_name(&self.ext.name);

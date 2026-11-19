@@ -140,6 +140,16 @@ pub struct NodeInfo {
     pub via_backbone: bool,
     pub snr: Option<i8>,
     pub path_id: u16,
+    /// Site of a fixed node (from its announce): antenna height (m), gain
+    /// (dBi), transmit power (dBm), owner.
+    #[serde(default)]
+    pub site_h: Option<f32>,
+    #[serde(default)]
+    pub site_gain: Option<f32>,
+    #[serde(default)]
+    pub site_tx: Option<i8>,
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -517,6 +527,12 @@ impl Telemetry {
         if let Some(name) = &app.name {
             n.name = String::from_utf8_lossy(name).into_owned();
         }
+        if let Some(site) = app.site.as_ref().filter(|s| s.is_set()) {
+            n.site_h = Some(site.height_dm as f32 / 10.0);
+            n.site_gain = Some(site.gain_hdb as f32 / 2.0);
+            n.site_tx = Some(site.tx_dbm);
+            n.owner = (!site.owner.is_empty()).then(|| String::from_utf8_lossy(&site.owner).into_owned());
+        }
         if let Some(r) = app.role.and_then(maarse_core::router::Role::from_u8) {
             n.role = Some(format!("{r:?}"));
         }
@@ -709,6 +725,21 @@ impl Telemetry {
 
     pub fn modem_radio(&mut self, link: &str, text: String) {
         self.modems.entry(link.to_string()).or_default().radio = text;
+    }
+
+    /// The public map (`--public-map`): nodes heard in the last 7 days that
+    /// share a position, with role and site. Nothing about messages.
+    pub fn public_nodes(&self) -> Vec<Value> {
+        let since = now_s().saturating_sub(7 * 24 * 3600);
+        self.nodes
+            .iter()
+            .filter(|(_, n)| n.precision > 0 && n.last_seen >= since && n.lat.is_some() && n.lon.is_some())
+            .map(|(a, n)| {
+                json!({"addr": a, "name": n.name, "role": n.role, "mobile": n.mobile, "lat": n.lat, "lon": n.lon, "precision": n.precision,
+                    "height_m": n.site_h, "gain_dbi": n.site_gain, "tx_dbm": n.site_tx, "owner": n.owner,
+                    "last_seen": n.last_seen, "hops": n.last_hops, "path_id": n.path_id})
+            })
+            .collect()
     }
 
     /// Everything for the dashboard; `me` is our own position if known.

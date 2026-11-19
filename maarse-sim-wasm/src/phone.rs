@@ -49,6 +49,8 @@ pub struct Phone {
     admins: heapless::Vec<Address, 4>,
     regions: (bool, String),
     pub(crate) sharing: Option<maarse_core::companion::Sharing>,
+    /// Site of a fixed node (antenna height, gain, owner).
+    site: maarse_core::appdata::Site,
     wifi: Option<maarse_core::companion::WifiSettings>,
     /// Trace routes waiting for their answer: (destination, request).
     traces: Vec<(Address, u16)>,
@@ -91,6 +93,14 @@ fn txt(s: &str) -> maarse_core::companion::Text {
 }
 
 impl Engine {
+    /// The node's site as the firmware reports it: the stored one, with the
+    /// radio's transmit power.
+    fn phone_site(&self, node: usize) -> maarse_core::appdata::Site {
+        let p = &self.phones.attached[&node];
+        let tx = p.radio.map(|r| r.tx_power_dbm).unwrap_or(self.sc.tx_dbm as i8);
+        maarse_core::appdata::Site { tx_dbm: tx, ..p.site.clone() }
+    }
+
     pub(crate) fn phone_emit(&mut self, node: usize, ev: &Event) {
         let now = self.now;
         let host = self.at_host(node);
@@ -505,6 +515,22 @@ impl Engine {
                     p.name = s.clone();
                 }
                 self.phone_emit(node, &Event::Name { name: txt(&s) });
+            }
+            Command::GetSite => {
+                let site = self.phone_site(node);
+                self.phone_emit(node, &Event::Site(site));
+            }
+            Command::SetSite(site) => {
+                // The antenna height is the simulated node's own: links change.
+                if site.is_set() {
+                    self.nodes[node].h = site.height_dm as f64 / 10.0;
+                    self.relink(node);
+                }
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.site = site;
+                }
+                let site = self.phone_site(node);
+                self.phone_emit(node, &Event::Site(site));
             }
             Command::SetTime { .. } => {}
             Command::AnnounceNow => {

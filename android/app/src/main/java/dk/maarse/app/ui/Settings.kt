@@ -257,6 +257,11 @@ internal fun NodeSection(radioPart: Boolean = false) {
 
     }
 
+    if (radioPart) {
+    GroupTitle("Site — for a fixed node")
+    Card2 { SiteCard() }
+    }
+
     if (!radioPart) {
     GroupTitle("Share my position")
     Card2 {
@@ -450,5 +455,58 @@ fun ServerPanel() {
         Hint("This phone is a backbone node and post office. It stops by itself if it leaves Wi-Fi or the charger.")
         Hint("Dashboard with telemetry, connections and settings: http://<this phone's address>:8080")
         HostFiles.adminPassword(ctx)?.let { Hint("Admin password (first start): $it") }
+    }
+}
+
+
+/** Site of a fixed node (repeater, anchor, host on a roof or mast): where it
+ *  stands, how high the antenna is, its gain and who owns it. Sent in the
+ *  node's announces, so maps and coverage pictures can use the real numbers. */
+@SuppressLint("MissingPermission")
+@Composable
+private fun SiteCard() {
+    val ctx = LocalContext.current
+    val site by Node.site.collectAsState()
+    val sharing by Node.sharing.collectAsState()
+    val s = site
+    var height by remember(s) { mutableStateOf(if ((s?.heightDm ?: 0) > 0) "%.1f".format(s!!.heightDm / 10.0) else "") }
+    var gain by remember(s) { mutableStateOf(if (s != null && s.heightDm > 0) "%.1f".format(s.gainHdb / 2.0) else "") }
+    var owner by remember(s) { mutableStateOf(s?.owner ?: "") }
+    var lat by remember(sharing) { mutableStateOf(sharing?.takeIf { it.prec > 0 && it.lat != 0.0 }?.let { "%.5f".format(java.util.Locale.ROOT, it.lat) } ?: "") }
+    var lon by remember(sharing) { mutableStateOf(sharing?.takeIf { it.prec > 0 && it.lon != 0.0 }?.let { "%.5f".format(java.util.Locale.ROOT, it.lon) } ?: "") }
+    Text("For a radio on a roof or mast. The node sends this in its announces, so maps and coverage pictures use the real antenna height, gain and power. Everything here is public: anyone can read it.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (s == null) { Text("Fetching…"); return }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(height, { height = it.filter { c -> c.isDigit() || c == '.' || c == ',' }.take(6) }, Modifier.weight(1f), label = { Text("Antenna height, m") }, singleLine = true)
+        OutlinedTextField(gain, { gain = it.filter { c -> c.isDigit() || c == '.' || c == ',' || c == '-' }.take(5) }, Modifier.weight(1f), label = { Text("Antenna gain, dBi") }, singleLine = true)
+    }
+    OutlinedTextField(owner, { owner = it.take(40) }, Modifier.fillMaxWidth(), label = { Text("Owner: name or call sign (and a contact, if you want it public)") }, singleLine = true)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(lat, { lat = it.take(12) }, Modifier.weight(1f), label = { Text("Latitude") }, singleLine = true)
+        OutlinedTextField(lon, { lon = it.take(12) }, Modifier.weight(1f), label = { Text("Longitude") }, singleLine = true)
+    }
+    TextButton(onClick = {
+        if (!Node.hasLocation(ctx)) return@TextButton
+        val lm = ctx.getSystemService(android.location.LocationManager::class.java)
+        lm.getProviders(true).mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time }?.let {
+            lat = "%.5f".format(java.util.Locale.ROOT, it.latitude); lon = "%.5f".format(java.util.Locale.ROOT, it.longitude)
+        }
+    }) { Text("Use this phone's position (stand at the mast)") }
+    if ((s.txDbm) != 0 && s.heightDm > 0) Text("Transmit power ${s.txDbm} dBm (from the radio's settings).", style = MaterialTheme.typography.bodySmall)
+    Row {
+        TextButton(onClick = {
+            val h = height.replace(',', '.').toDoubleOrNull() ?: 0.0
+            val g = gain.replace(',', '.').toDoubleOrNull() ?: 0.0
+            Node.send(Cmd.setSite((h * 10).toInt().coerceIn(0, 65535), (g * 2).toInt().coerceIn(-128, 127), owner.trim()))
+            val la = lat.replace(',', '.').toDoubleOrNull(); val lo = lon.replace(',', '.').toDoubleOrNull()
+            if (h > 0 && la != null && lo != null) {
+                // A site's position is shared precisely: it is a mast, not a person.
+                Node.send(Cmd.setSharing(3, (la * 1e7).toInt(), (lo * 1e7).toInt(), sharing?.telemetry ?: true))
+                Node.send(Cmd.getSharing())
+            }
+            Node.send(Cmd.getSite()); Node.send(Cmd.announce())
+        }) { Text("Save") }
+        if (s.heightDm > 0) TextButton(onClick = { Node.send(Cmd.setSite(0, 0, "")); Node.send(Cmd.getSite()) }) { Text("Not a fixed node") }
     }
 }

@@ -624,7 +624,7 @@ impl Node {
             max_file: cfg.max_file,
             rx_link: None,
             rx_snr: None,
-            tele: cfg.backbone.then(|| Box::new(crate::telemetry::Telemetry::load(&cfg.data_dir.join("telemetry.json")))),
+            tele: (cfg.backbone || cfg.public_map).then(|| Box::new(crate::telemetry::Telemetry::load(&cfg.data_dir.join("telemetry.json")))),
             next_tele: Instant::now() + Duration::from_secs(5),
             next_tele_save: Instant::now() + Duration::from_secs(300),
             last_forwarded: 0,
@@ -3011,8 +3011,9 @@ impl Node {
         self.backbone_upkeep();
         if crate::debug::enabled() {
             self.debug_snapshot();
-            self.telemetry_upkeep();
         }
+        // Telemetry exists on maarse-server and with --public-map.
+        self.telemetry_upkeep();
         // Every 10 minutes: tell each trunk's far end who is on our side.
         if Instant::now() >= self.next_summary {
             self.next_summary = Instant::now() + Duration::from_secs(600);
@@ -3567,6 +3568,8 @@ impl Node {
             | Command::GetSharing
             | Command::SetName { .. }
             | Command::GetName
+            | Command::SetSite(_)
+            | Command::GetSite
             | Command::RequestPage { .. }
             | Command::PostBoard { .. }
             | Command::SendCall { .. } => {}
@@ -4008,6 +4011,35 @@ impl Node {
         }
     }
 
+    /// The public map: this host (position, site), the nodes it knows with a
+    /// shared position, and the radio links its own radio hears (SNR, RSSI,
+    /// packets, last heard). See `--public-map`.
+    fn public_map(&self) -> serde_json::Value {
+        let now = self.now_ms();
+        let pos = self.ext.sharing.position().map(|p| (p.lat_e7 as f64 / 1e7, p.lon_e7 as f64 / 1e7));
+        let site = &self.ext.site;
+        let nodes = self.tele.as_ref().map(|t| t.public_nodes()).unwrap_or_default();
+        let links: Vec<serde_json::Value> = self
+            .router
+            .neighbors
+            .sorted()
+            .iter()
+            .filter(|n| n.rssi != 0 || n.snr != 0)
+            .map(|n| {
+                serde_json::json!({"path_id": n.id, "addr": n.addr.map(|a| crate::debug::hex(&a.0)), "snr": n.snr, "rssi": n.rssi,
+                    "packets": n.count, "age_s": now.saturating_sub(n.last_ms) / 1000})
+            })
+            .collect();
+        serde_json::json!({
+            "version": 1,
+            "host": {"addr": crate::debug::hex(&self.addr.0), "name": self.ext.name, "lat": pos.map(|p| p.0), "lon": pos.map(|p| p.1),
+                "height_m": site.is_set().then(|| site.height_dm as f32 / 10.0), "gain_dbi": site.is_set().then(|| site.gain_hdb as f32 / 2.0),
+                "tx_dbm": site.is_set().then_some(site.tx_dbm), "owner": (!site.owner.is_empty()).then(|| String::from_utf8_lossy(&site.owner).into_owned())},
+            "nodes": nodes,
+            "links": links,
+        })
+    }
+
     /// maarse-server: forwarded counts into the minute series, the
     /// telemetry JSON for the dashboard every 10 s, saved every 5 min.
     fn telemetry_upkeep(&mut self) {
@@ -4022,6 +4054,17 @@ impl Node {
         if now >= self.next_tele {
             self.next_tele = now + Duration::from_secs(10);
             crate::debug::set_telemetry(t.json(me).to_string());
+            if crate::web::PUBLIC_MAP.load(std::sync::atomic::Ordering::Relaxed) {
+                let map = self.public_map();
+                crate::debug::set_public_map(map.to_string());
+            }
+            if now >= self.next_tele_save {
+                self.next_tele_save = now + Duration::from_secs(300);
+                if let Some(t) = self.tele.as_ref() {
+                    t.save(&self.data_dir.join("telemetry.json"));
+                }
+            }
+            return;
         }
         if now >= self.next_tele_save {
             self.next_tele_save = now + Duration::from_secs(300);
@@ -4104,6 +4147,7 @@ pub(super) mod file_interop_tests {
             udp_broadcast: None,
             open_browser: false,
             require_key: false,
+            public_map: false,
             max_file: 1024 * 1024,
             filebox_per_recipient: 20 << 20,
             filebox_total: 200 << 20,

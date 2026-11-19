@@ -874,6 +874,9 @@ const Cmd = {
   getSharing: () => frame(0x23),
   setName: (name) => frame(0x24, enc.encode(name)),
   getName: () => frame(0x25),
+  // Site of a fixed node: antenna height (0.1 m), gain (0.5 dB), power (the node fills it in), owner.
+  setSite: (heightDm, gainHdb, owner) => frame(0x3a, [heightDm & 0xff, heightDm >> 8 & 0xff, gainHdb & 0xff, 0], enc.encode(owner)),
+  getSite: () => frame(0x3b),
   // Wi-Fi backbone (ESP32 nodes): enabled | ssid (len-prefixed) | password (len-prefixed) | peer
   setWifi: (enabled, ssid, password, peer, modem = false) => {
     const s = enc.encode(ssid).slice(0, 32), p = enc.encode(password).slice(0, 64);
@@ -964,6 +967,7 @@ function decodeEvent(f) {
     case 0xa2: return { type: "sharing", prec: f[1], lat: i32(f, 2) / 1e7, lon: i32(f, 6) / 1e7, telemetry: !!f[10] };
     case 0xb4: return { type: "identityChanged", addr: a(1), identity: f.slice(17, 81) };
     case 0xa4: return { type: "name", name: txt(1) };
+    case 0xbb: return { type: "site", heightDm: f[1] | f[2] << 8, gainHdb: s8(f[3]), txDbm: s8(f[4]), owner: txt(5) };
     case 0xa5: return { type: "call", from: a(1), data: f.slice(17) };
     case 0xa7: return { type: "carryAcked", msgId: readU64(f, 1) };
     case 0xa6: {
@@ -1593,6 +1597,7 @@ function onEvent(ev) {
     case "sharing": state.sharing = ev; if (state.view === "diag") renderChat(); break;
     case "call": onCallData(ev.from, ev.data); break;
     case "name": state.myName = ev.name; updateMe(); if (state.view === "diag") renderChat(); break;
+    case "site": state.site = ev; if (state.view === "diag") renderChat(); break;
     case "wifi": state.wifi = ev; if (state.view === "radio") renderChat(); break;
     case "nodeInfo": {
       const old = state.nodeInfo.get(ev.addr) || {};
@@ -2256,6 +2261,31 @@ function renderDiag(box) {
   const lbl = el("label"); lbl.style.display = "block"; lbl.style.marginTop = "6px"; lbl.append(tel, " Share telemetry (battery, uptime, energy status)");
   sw.append(r1, lbl, save);
 
+  // Site of a fixed node
+  const stw = sec("Site — for a fixed node", "For a radio or host on a roof or mast. Sent in the announces, so maps and coverage pictures use the real antenna height, gain and power. " +
+    "Everything here is public: anyone can read it. The position is the one under \"Sharing in announces\" (saved as precise here: a mast, not a person).");
+  const st = state.site || { heightDm: 0, gainHdb: 0, txDbm: 0, owner: "" };
+  const sH = el("input", { type: "number", min: "0", max: "6553", step: "0.5", placeholder: "Antenna height, m", value: st.heightDm ? (st.heightDm / 10).toString() : "" });
+  const sG = el("input", { type: "number", min: "-64", max: "63", step: "0.5", placeholder: "Gain, dBi", value: st.heightDm ? (st.gainHdb / 2).toString() : "" });
+  const sO = el("input", { placeholder: "Owner: name or call sign (and a contact, if you want it public)", value: st.owner || "", maxLength: 40 });
+  sO.style.flex = "1";
+  const sSave = el("button", { textContent: "Save site", className: "primary" });
+  sSave.onclick = () => {
+    const h = parseFloat(sH.value.replace(",", ".")) || 0, g = parseFloat(sG.value.replace(",", ".")) || 0;
+    if (enc.encode(sO.value.trim()).length > 40) { log("The owner text is too long (at most 40 bytes)"); return; }
+    transport?.send(Cmd.setSite(Math.max(0, Math.min(65535, Math.round(h * 10))), Math.max(-128, Math.min(127, Math.round(g * 2))), sO.value.trim()));
+    const la = parseFloat(lat.value.replace(",", ".")), lo = parseFloat(lon.value.replace(",", "."));
+    if (h > 0 && la && lo) transport?.send(Cmd.setSharing(3, Math.round(la * 1e7), Math.round(lo * 1e7), tel.checked));
+    transport?.send(Cmd.getSite()); transport?.send(Cmd.getSharing());
+  };
+  const sClear = el("button", { textContent: "Not a fixed node" });
+  sClear.onclick = () => { transport?.send(Cmd.setSite(0, 0, "")); transport?.send(Cmd.getSite()); };
+  const sr = el("div", { className: "row" }); sr.style.marginTop = "8px"; sr.append(sH, sG);
+  const sr2 = el("div", { className: "row" }); sr2.style.marginTop = "6px"; sr2.append(sO);
+  const sr3 = el("div", { className: "row" }); sr3.style.marginTop = "6px"; sr3.append(sSave, st.heightDm ? sClear : "");
+  stw.append(sr, sr2, sr3);
+  if (st.heightDm && st.txDbm) stw.append(el("div", { className: "muted" }, `Transmit power ${st.txDbm} dBm (from the radio's settings).`));
+
   // Known positions and telemetry
   const kw = sec("Other nodes' position and telemetry", "From received announces. No maps are fetched from outside.");
   const known = [...state.nodeInfo.values()];
@@ -2432,7 +2462,7 @@ function renderFirmware(box) {
 
 function setView(v) {
   if (v !== "backup") { bkReset(); bk.msg = ""; bk.qr = null; }
-  else if (transport && !state.target) { transport.send(Cmd.getRegions()); transport.send(Cmd.getSharing()); transport.send(Cmd.getStats()); }
+  else if (transport && !state.target) { transport.send(Cmd.getRegions()); transport.send(Cmd.getSharing()); transport.send(Cmd.getSite()); transport.send(Cmd.getStats()); }
   state.view = v;
   markTab(tabOfView(v));
   for (const b of document.querySelectorAll("nav.tools button")) b.classList.toggle("active", b.dataset.view === v && (v !== "diag" || b.closest(".pane") === $("pane-" + state.tab)));

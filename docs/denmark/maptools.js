@@ -33,6 +33,7 @@
     { id: "search", ic: "🔍", tx: "Find an address or place", run: () => toggleSearch() },
     { id: "ruler", ic: "📏", tx: "Ruler: measure a line", run: () => toggleRuler() },
     { id: "profile", ic: "📡", tx: "Radio path between two points", run: () => (mode === "profile" ? T.cancelProfile() || setMode(null) : T.startProfile()) },
+    { id: "realworld", ic: "🌍", tx: "Real world: the real network", run: () => window.DKRealWorld && DKRealWorld.show() },
     { id: "coverage", ic: "📶", tx: "Coverage map", run: () => window.DKCoverage && DKCoverage.start() },
     { id: "heights", ic: "⛰", tx: "Show heights", run: () => { T.showHeights(!T.heightsShown); paint(); } },
     "-",

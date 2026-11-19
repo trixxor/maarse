@@ -125,6 +125,12 @@ pub trait Settings {
     fn load_name(&mut self) -> maarse_core::appdata::Name {
         Default::default()
     }
+    /// Stores the site of a fixed node. Default: not stored.
+    fn save_site(&mut self, _site: &maarse_core::appdata::Site) {}
+    /// Stored site; the default is none.
+    fn load_site(&mut self) -> maarse_core::appdata::Site {
+        Default::default()
+    }
     /// Saves the Wi-Fi backbone settings. Default: not saved.
     fn save_wifi(&mut self, _w: &maarse_core::companion::WifiSettings) {}
     /// Stores the Wi-Fi modem key (`None` = none). Default: not stored.
@@ -414,6 +420,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         crate::bus::KNOWN_NODES.store(n.known.len() as u32, Relaxed);
         n.ext.sharing = n.settings.load_sharing();
         n.ext.name = n.settings.load_name();
+        n.ext.site = n.settings.load_site();
         let (strict, names) = n.settings.load_regions();
         n.apply_regions(strict, names);
         n.admins = n.settings.load_admins();
@@ -1200,6 +1207,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             | Command::GetSharing
             | Command::SetName { .. }
             | Command::GetName
+            | Command::SetSite(_)
+            | Command::GetSite
             | Command::SetRangeTest(_)
             | Command::GetRangeTest => {}
             Command::FileBegin { req, dest, size, mime, name } => {

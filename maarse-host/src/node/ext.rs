@@ -21,6 +21,25 @@ pub(super) struct Ext {
     pub(super) name: String,
     /// Display names heard in others' announces. Shown only; not proven.
     pub(super) names: HashMap<Address, (appdata::Name, u8)>,
+    /// Our site (antenna height, gain, power, owner), stored in `site.txt`;
+    /// sent in announces while the height is set.
+    pub(super) site: appdata::Site,
+}
+
+/// `site.txt`: "height_dm gain_hdb tx_dbm" on the first line, the owner on the second.
+fn load_site(data_dir: &std::path::Path) -> appdata::Site {
+    let s = fs::read_to_string(data_dir.join("site.txt")).unwrap_or_default();
+    let mut lines = s.lines();
+    let v: Vec<i64> = lines.next().unwrap_or("").split_whitespace().filter_map(|x| x.parse().ok()).collect();
+    match v[..] {
+        [h, g, t] => appdata::Site {
+            height_dm: h.clamp(0, u16::MAX as i64) as u16,
+            gain_hdb: g.clamp(-128, 127) as i8,
+            tx_dbm: t.clamp(-128, 127) as i8,
+            owner: appdata::clean_owner(lines.next().unwrap_or("").as_bytes()),
+        },
+        _ => appdata::Site::default(),
+    }
 }
 
 impl Ext {
@@ -41,7 +60,7 @@ impl Ext {
             .and_then(|s| appdata::clean_name(s.as_bytes()))
             .map(|n| String::from_utf8_lossy(&n).into_owned())
             .unwrap_or_default();
-        Ext { traces: HashMap::new(), sharing, mqtt, name, names: HashMap::new() }
+        Ext { traces: HashMap::new(), sharing, mqtt, name, names: HashMap::new(), site: load_site(data_dir) }
     }
 }
 
@@ -64,6 +83,7 @@ impl Node {
         let pages = if !self.pages.off && super::pages::find_page(&self.data_dir.join("pages"), "index").is_some() { appdata::CAP_PAGES } else { 0 };
         appdata::push_caps(&mut v, appdata::MY_CAPS | appdata::CAP_SEQ | appdata::CAP_CALL_DG | appdata::CAP_FILE_PULL | pages);
         self.person_app_data(&mut v);
+        appdata::push_site(&mut v, &self.ext.site);
         v.to_vec()
     }
 
@@ -99,6 +119,19 @@ impl Node {
                 self.announce();
             }
             Command::GetName => self.send_client(id, &Event::Name { name: text(self.ext.name.as_bytes()) }),
+            Command::GetSite => self.send_client(id, &Event::Site(self.ext.site.clone())),
+            Command::SetSite(site) => {
+                self.ext.site = site;
+                let s = &self.ext.site;
+                let _ = fs::write(
+                    self.data_dir.join("site.txt"),
+                    format!("{} {} {}
+{}
+", s.height_dm, s.gain_hdb, s.tx_dbm, String::from_utf8_lossy(&s.owner)),
+                );
+                self.broadcast(&Event::Site(self.ext.site.clone()));
+                self.announce();
+            }
             Command::SetName { name } => {
                 self.ext.name = appdata::clean_name(&name)
                     .map(|n| String::from_utf8_lossy(&n).into_owned())

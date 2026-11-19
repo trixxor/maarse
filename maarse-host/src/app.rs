@@ -137,6 +137,10 @@ pub struct Config {
     pub udp_peers: Vec<String>,
     pub udp_broadcast: Option<u16>,
     pub open_browser: bool,
+    /// `--public-map`: serve this host's map data (its site, the nodes it
+    /// knows with a shared position, and the radio links it hears) at
+    /// `/api/public/map` to everyone.
+    pub public_map: bool,
     /// `--require-key`: the access key also from 127.0.0.1.
     pub require_key: bool,
     pub max_file: u32,
@@ -417,6 +421,9 @@ Usage: maarse-host [options]
   --sign-issuer-cert <root key> <issuer hex> <name> <days> <out> [events] [max severity]
                         sign an issuer certificate with a root key and exit
   --no-browser          do not open the browser automatically
+  --public-map          share this host's map data (its site, nodes with a
+                        shared position, the radio links it hears) with
+                        everyone at /api/public/map (for map pages)
   --require-key         ask for the access key from this machine too (for
                         phones and shared computers, where other programs
                         can reach 127.0.0.1)
@@ -469,6 +476,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         udp_broadcast: None,
         open_browser: true,
         require_key: false,
+        public_map: false,
         max_file: maarse_hostrules::filebox::MAX_FILE_DEFAULT,
         filebox_per_recipient: 20 << 20,
         filebox_total: 200 << 20,
@@ -550,6 +558,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--udp-broadcast" => c.udp_broadcast = Some(val("--udp-broadcast")?.parse().map_err(|_| "--udp-broadcast: invalid port")?),
             "--no-browser" => c.open_browser = false,
             "--require-key" => c.require_key = true,
+            "--public-map" => c.public_map = true,
             "--service" => {
                 c.service = true;
                 c.open_browser = false;
@@ -900,6 +909,7 @@ pub fn run(cli: Vec<String>) {
         settings::report(format!("  MQTT:     {} (topics under {}/)", m.addr, m.prefix), false);
     }
     web::REQUIRE_KEY.store(cfg.require_key, std::sync::atomic::Ordering::Relaxed);
+    web::PUBLIC_MAP.store(cfg.public_map, std::sync::atomic::Ordering::Relaxed);
     if let Some(addr) = cfg.http {
         let token = web::access_token(&cfg.data_dir);
         match web::spawn(addr, token.clone(), cfg.data_dir.clone(), tx.clone()) {

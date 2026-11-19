@@ -44,7 +44,7 @@
   }
 
   // ---------- settings and sites ----------
-  const S = { sf: 9, hr: 1.5, extra: 0, radius: 30, ht: 15, gain: 6, power: 20 };
+  const S = { sf: 9, hr: 1.5, extra: 0, radius: 30, ht: 15, gain: 6, power: 20, cal: 0 };   // cal: correction from real measurements (dB)
   const sites = [];   // { id, ll, h, gain, name, node, marker, rays }
   let nextId = 1;
 
@@ -53,7 +53,7 @@
   function computeSite(s) {
     const R = S.radius * 1000, NS = Math.ceil(R / STEP);
     const mLat = 111320, mLon = 111320 * Math.cos(s.ll.lat * Math.PI / 180);
-    const budget = S.power + s.gain - S.extra + heightDb(S.hr) - (NOISE + SNR_MIN[S.sf]);
+    const budget = (s.tx ?? S.power) + s.gain - S.extra + S.cal + heightDb(S.hr) - (NOISE + SNR_MIN[S.sf]);
     const g0 = groundAt(s.ll.lat, s.ll.lng), g = new Float32Array(NS + 1), top = g0 + s.h;
     s.rays = [];
     for (let r = 0; r < RAYS; r++) {
@@ -210,6 +210,36 @@
   }
   function recomputeAll() { withGrid(() => sites.forEach(computeSite)); }
 
+  // Predicted received power (dBm) from a site to a point, with the same
+  // model (used to compare with measured links). `site`: {lat, lon, h, gain, tx};
+  // `rx`: {lat, lon, h, gain}.
+  async function predictRx(site, rx) {
+    await loadGrid();
+    const a = L.latLng(site.lat, site.lon), b = L.latLng(rx.lat, rx.lon), d = Math.max(1, map.distance(a, b));
+    const n = Math.max(2, Math.ceil(d / STEP));
+    const g = Array.from({ length: n + 1 }, (_, k) => groundAt(a.lat + (b.lat - a.lat) * k / n, a.lng + (b.lng - a.lng) * k / n));
+    const near = Math.min(n, 60);
+    let sum = 0; for (let k = 1; k <= near; k++) sum += g[k];
+    const hEffA = site.h + Math.max(0, g[0] - sum / near);
+    sum = 0; for (let k = n - 1; k >= n - near; k--) sum += g[k];
+    const hEffB = rx.h + Math.max(0, g[n] - sum / near);
+    let vmax = 0;
+    for (let i = 1; i < n; i++) {
+      const d1 = d * i / n, d2 = d - d1;
+      const rel = g[i] - (g[0] + (g[n] - g[0]) * d1 / d) - (site.h + (rx.h - site.h) * d1 / d);
+      vmax = Math.max(vmax, rel * Math.sqrt(2 * d / (LAMBDA * d1 * d2)));
+    }
+    const hills = vmax > 0 ? 20 * Math.log10(Math.sqrt((vmax - 0.1) ** 2 + 1) + vmax - 0.1) + 0.9 : 0;
+    return (site.tx ?? S.power) + site.gain + (rx.gain || 0) + heightDb(hEffA) + heightDb(hEffB) - (31.2 + 30 * Math.log10(d)) - hills;
+  }
+  // Real sites (real-world mode): replaces the sites with these.
+  function setSites(list) {
+    show(true);
+    sites.length = 0; siteLayer.clearLayers();
+    withGrid(() => { for (const x of list) { const s = makeSite([x.lat, x.lon], x.h, x.gain, x.name, -1); s.tx = x.tx; computeSite(s); } });
+  }
+  function setCalibration(db) { S.cal = db; recomputeAll(); }
+
   // ---------- the card on the map ----------
   const card = document.createElement("div");
   card.id = "cv-card"; card.className = "ov hidden";
@@ -272,5 +302,5 @@
     show(true);
     if (at) addPoint(at); else if (!sites.length) pick(true);
   }
-  window.DKCoverage = { start, clear: clearAll, show };
+  window.DKCoverage = { start, clear: clearAll, show, predictRx, setSites, setCalibration, noise: NOISE };
 })();

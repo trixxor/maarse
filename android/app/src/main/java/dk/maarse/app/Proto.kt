@@ -68,6 +68,9 @@ object Cmd {
     fun getSharing() = frame(0x23)
     fun setName(name: String) = frame(0x24) { text(name) }
     fun getName() = frame(0x25)
+    // Site of a fixed node: antenna height (0.1 m), gain (0.5 dB), power (filled in by the node), owner.
+    fun setSite(heightDm: Int, gainHdb: Int, owner: String) = frame(0x3a) { u16(heightDm); u8(gainHdb and 0xff); u8(0); bytes(owner.toByteArray()) }
+    fun getSite() = frame(0x3b)
     fun setModemKey(pass: String) = frame(0x2d) { text(pass) }
     fun sendAlert(req: Int, m: AlertForm, text: String) = frame(0x2c) {
         u16(req); u8(m.status); u8(m.kind); u8(m.event); u8(m.severity); u16(m.expires); u32(m.reference); u8(0); text(text)
@@ -136,6 +139,8 @@ sealed class Ev {
     data class Neighbors(val part: Int, val last: Boolean, val items: List<Neighbor>) : Ev()
     data class Sharing(val prec: Int, val lat: Double, val lon: Double, val telemetry: Boolean) : Ev()
     data class Name(val name: String) : Ev()
+    /** Site of a fixed node; heightDm 0 = not set. */
+    data class Site(val heightDm: Int, val gainHdb: Int, val txDbm: Int, val owner: String) : Ev()
     data class NodeInfo(val addr: String, val hops: Int, val name: String?, val mv: Int?, val usb: Boolean?, val lat: Double?, val lon: Double?, val caps: Int? = null) : Ev()
     data class IdentityChanged(val addr: String) : Ev()
     data class Alert(
@@ -217,6 +222,7 @@ fun decodeEvent(f: ByteArray): Ev {
         0xa2 -> Ev.Sharing(r.u8(1), r.i32(2) / 1e7, r.i32(6) / 1e7, r.u8(10) != 0)
         0xa3 -> nodeInfo(r.addr(1), r.u8(17), f.copyOfRange(minOf(18, f.size), f.size))
         0xa4 -> Ev.Name(r.txt(1))
+        0xbb -> Ev.Site(r.u16(1), r.s8(3), r.s8(4), r.txt(5))
         0xa7 -> Ev.CarryAcked(r.u64(1))
         0xac -> alert(r)
         0xb4 -> Ev.IdentityChanged(r.addr(1))

@@ -151,13 +151,14 @@
     <label>Antenna heights <input type="number" id="hm-ha" value="2" min="0" max="200" style="width:55px"> m and <input type="number" id="hm-hb" value="2" min="0" max="200" style="width:55px"> m above ground</label>
     <button id="hm-pick">Pick two points</button>`;
   tab.insertBefore(sec, tab.firstChild);
-  // The result floats on the map, next to the path.
+  // Results float on the map: one card with a tab per radio path.
   const float = document.createElement("div");
   float.id = "hm-float"; float.className = "ov hidden";
-  float.style.cssText = "left:54px;bottom:44px;width:330px;max-height:calc(100% - 120px);overflow:auto;padding:8px 10px";
-  float.innerHTML = `<h4 style="margin:0 0 4px;display:flex;justify-content:space-between">Radio path <button class="x" id="hm-close" style="border:0;background:transparent" title="Close">✕</button></h4><div id="hm-prof"></div>`;
+  float.style.cssText = "left:54px;bottom:44px;width:340px;max-height:calc(100% - 120px);overflow:auto;padding:8px 10px";
+  float.innerHTML = `<h4 style="margin:0 0 4px;display:flex;justify-content:space-between;align-items:center">Radio paths <span><button id="hm-new" title="Add another radio path" style="font-size:12px;padding:1px 6px">+ path</button> <button class="x" id="hm-close" style="border:0;background:transparent" title="Remove all paths">✕</button></span></h4>
+    <div id="hm-tabs" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px"></div><div id="hm-prof"></div>`;
   $("mapwrap").appendChild(float);
-  $("hm-close").onclick = () => { float.classList.add("hidden"); profLayer.clearLayers(); };
+  L.DomEvent.disableClickPropagation(float); L.DomEvent.disableScrollPropagation(float);
 
   $("hm-on").onchange = () => { if ($("hm-on").checked) layer.addTo(map); else map.removeLayer(layer); };
   $("hm-op").oninput = () => layer.setOpacity(+$("hm-op").value);
@@ -168,8 +169,35 @@
     heightAt(e.latlng.lat, e.latlng.lng).then((h) => { if (t === hoverT) $("hm-at").textContent = `Height here: ${Math.max(0, h).toFixed(0)} m (${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)})`; }, () => {});
   });
 
-  // ---------- profile ----------
-  const profLayer = L.layerGroup().addTo(map);
+  // ---------- precise heights (optional key) ----------
+  const D2 = window.DKDhm;
+  const keyBox = document.createElement("div");
+  keyBox.innerHTML = `
+    <h3>Precise heights (optional)</h3>
+    <p class="hint">With your own free key from <a href="https://dataforsyningen.dk" target="_blank" rel="noopener">dataforsyningen.dk</a> the radio paths use Danmarks Højdemodel (ground to ~2 m, trees and buildings too) and name what stands in the way (GeoDanmark). The key stays in this browser. Without a key: the built-in heights (~30 m).</p>
+    <label>Key <input id="hm-key" type="password" autocomplete="off" size="20" placeholder="no key: built-in heights"> <button id="hm-key-save">Save and test</button></label>
+    <label><input type="checkbox" id="hm-surface" checked> Count trees and buildings (surface model)</label>
+    <p class="hint" id="hm-key-note"></p>`;
+  sec.appendChild(keyBox);
+  function keyNote() { $("hm-key-note").textContent = D2 && D2.key ? "A key is saved: radio paths use DHM." : "No key: radio paths use the built-in heights."; }
+  if (D2) {
+    $("hm-key").value = D2.key;
+    keyNote();
+    $("hm-key-save").onclick = async () => {
+      D2.setKey($("hm-key").value);
+      if (!D2.key) { keyNote(); recomputeAll(); return; }
+      $("hm-key-note").textContent = "Testing the key…";
+      try { const h = await D2.test(); $("hm-key-note").textContent = `The key works: DHM answered (${h.toFixed(1)} m at a test spot). Radio paths now use DHM.`; recomputeAll(); }
+      catch (e) { $("hm-key-note").textContent = "The key did not work (" + e.message + "). Radio paths use the built-in heights."; }
+    };
+    $("hm-surface").onchange = () => recomputeAll();
+  }
+
+  // ---------- radio paths ----------
+  const COLORS = ["#2563eb", "#9333ea", "#0891b2", "#db2777", "#65a30d", "#ea580c"];
+  const paths = [];
+  let nextId = 1, shown = null;
+  const pickLayer = L.layerGroup().addTo(map);
   let picks = null;
   // A click near a node takes the node's spot and antenna height.
   function snap(ev) { return snapAt(map.mouseEventToContainerPoint(ev)); }
@@ -183,107 +211,177 @@
   }
   function addPick(p) {
     picks.push(p);
-    L.circleMarker(p.ll, { radius: 6, color: "#111", fillColor: "#fff", fillOpacity: 1, weight: 2 }).addTo(profLayer);
-    if (picks.length === 2) { const [a, b] = picks; picks = null; map.getContainer().style.cursor = ""; $("hm-pick").textContent = "Pick two points"; api.onMode && api.onMode(null); profile(a, b); }
+    L.circleMarker(p.ll, { radius: 6, color: "#111", fillColor: "#fff", fillOpacity: 1, weight: 2 }).addTo(pickLayer);
+    if (picks.length === 2) {
+      const [a, b] = picks; picks = null; pickLayer.clearLayers();
+      map.getContainer().style.cursor = ""; $("hm-pick").textContent = "Add a radio path"; api.onMode && api.onMode(null);
+      addPath(a, b);
+    }
   }
   // Capture clicks before Leaflet (and the simulator's own map clicks) see them.
   map.getContainer().parentElement.addEventListener("click", (ev) => {
-    if (!picks || !map.getContainer().contains(ev.target) || ev.target.closest(".leaflet-control")) return;
+    if (!picks || !map.getContainer().contains(ev.target) || ev.target.closest(".leaflet-control") || ev.target.closest("#hm-float")) return;
     ev.stopPropagation(); ev.preventDefault();
     addPick(snap(ev));
   }, true);
   function startProfile(from) {
-    profLayer.clearLayers(); float.classList.add("hidden");
+    pickLayer.clearLayers();
     picks = []; map.getContainer().style.cursor = "crosshair";
     $("hm-pick").textContent = from ? "Click the second point…" : "Click the first point…";
     api.onMode && api.onMode("profile");
     if (from) addPick({ ll: from });
   }
-  function cancelProfile() { if (picks) { picks = null; profLayer.clearLayers(); map.getContainer().style.cursor = ""; $("hm-pick").textContent = "Pick two points"; } }
+  function cancelProfile() { if (picks) { picks = null; pickLayer.clearLayers(); map.getContainer().style.cursor = ""; $("hm-pick").textContent = "Add a radio path"; } }
+  $("hm-pick").textContent = "Add a radio path";
   $("hm-pick").onclick = () => startProfile();
+  $("hm-new").onclick = () => startProfile();
+  $("hm-close").onclick = () => { while (paths.length) removePath(paths[0]); };
 
-  // The two ends stay on the map as handles: drag one and the path is
+  function handleIcon(col) {
+    return L.divIcon({ className: "", iconSize: [18, 18], iconAnchor: [9, 9],
+      html: `<div style="width:14px;height:14px;border-radius:50%;background:#fff;border:3px solid ${col};box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:grab"></div>` });
+  }
+  // Each path keeps its two ends as handles: drag one and that path is
   // checked again where it is dropped (on a node: that node's spot and height).
-  const handleIcon = L.divIcon({ className: "", iconSize: [18, 18], iconAnchor: [9, 9],
-    html: '<div style="width:14px;height:14px;border-radius:50%;background:#fff;border:3px solid #111;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:grab"></div>' });
-  let pathLine = null, busy = 0;
-  function handles(pa, pb) {
-    const ends = [pa, pb];
-    ends.forEach((p, k) => {
-      const m = L.marker(p.ll, { draggable: true, icon: handleIcon, title: "Drag to move this end", zIndexOffset: 1000 }).addTo(profLayer);
-      m.on("drag", () => { if (pathLine) pathLine.setLatLngs(k ? [ends[0].ll, m.getLatLng()] : [m.getLatLng(), ends[1].ll]); });
+  function addPath(pa, pb) {
+    const p = { id: nextId++, pa, pb, run: 0, html: "", verdictCol: "#888" };
+    p.col = COLORS[(p.id - 1) % COLORS.length];
+    p.layer = L.layerGroup().addTo(map);
+    p.line = L.polyline([pa.ll, pb.ll], { color: p.col, weight: 4, dashArray: "8 6" }).addTo(p.layer);
+    p.line.on("click", () => show(p));
+    p.line.bindTooltip(`Path ${p.id}`, { sticky: true });
+    [pa, pb].forEach((e, k) => {
+      const m = L.marker(e.ll, { draggable: true, icon: handleIcon(p.col), title: `Path ${p.id}: drag to move this end`, zIndexOffset: 1000 }).addTo(p.layer);
+      m.on("drag", () => p.line.setLatLngs(k ? [p.pa.ll, m.getLatLng()] : [m.getLatLng(), p.pb.ll]));
       m.on("dragend", () => {
         const moved = snapAt(map.latLngToContainerPoint(m.getLatLng()));
-        if (k) profile(ends[0], moved); else profile(moved, ends[1]);
+        m.setLatLng(moved.ll);
+        if (k) p.pb = moved; else p.pa = moved;
+        show(p);
+        compute(p);
       });
     });
+    paths.push(p);
+    show(p);
+    compute(p);
   }
-  async function profile(pa, pb) {
-    const a = pa.ll, b = pb.ll, run = ++busy;
-    profLayer.clearLayers();
-    handles(pa, pb);
-    pathLine = L.polyline([a, b], { color: "#888", weight: 3, dashArray: "6 6", interactive: false }).addTo(profLayer);
-    float.classList.remove("hidden");
-    const D = map.distance(a, b), N = Math.max(40, Math.min(400, Math.round(D / 25)));
-    $("hm-prof").innerHTML = `<p class="hint">Reading heights…</p>`;
-    let g;
-    try { g = await Promise.all(Array.from({ length: N + 1 }, (_, i) => heightAt(a.lat + (b.lat - a.lat) * i / N, a.lng + (b.lng - a.lng) * i / N).then((h) => Math.max(0, h)))); }
-    catch (e) { $("hm-prof").innerHTML = `<p class="hint">Could not load heights (needs internet).</p>`; return; }
+  function removePath(p) {
+    map.removeLayer(p.layer);
+    paths.splice(paths.indexOf(p), 1);
+    if (shown === p) shown = paths[paths.length - 1] || null;
+    render();
+  }
+  function show(p) { shown = p; render(); }
+  function render() {
+    float.classList.toggle("hidden", !paths.length);
+    $("hm-tabs").innerHTML = paths.map((p) => `<span style="display:inline-flex;align-items:center;border:2px solid ${p.col};border-radius:12px;${p === shown ? `background:${p.col};color:#fff;` : ""}font-size:12px"><button data-p="${p.id}" style="border:0;background:transparent;color:inherit;padding:1px 4px 1px 8px">Path ${p.id} <span style="color:${p === shown ? "#fff" : p.verdictCol}">●</span></button><button data-x="${p.id}" title="Remove path ${p.id}" style="border:0;background:transparent;color:inherit;padding:1px 6px 1px 2px">✕</button></span>`).join("");
+    $("hm-tabs").querySelectorAll("button[data-p]").forEach((b) => b.onclick = () => show(paths.find((p) => p.id === +b.dataset.p)));
+    $("hm-tabs").querySelectorAll("button[data-x]").forEach((b) => b.onclick = () => removePath(paths.find((p) => p.id === +b.dataset.x)));
+    $("hm-prof").innerHTML = shown ? shown.html : "";
+    paths.forEach((p) => p.line.setStyle({ weight: p === shown ? 5 : 3, opacity: p === shown ? 1 : 0.7 }));
+  }
+  function recomputeAll() { paths.forEach(compute); }
+
+  async function compute(p) {
+    const pa = p.pa, pb = p.pb, a = pa.ll, b = pb.ll, run = ++p.run;
+    p.line.setLatLngs([a, b]);
+    p.html = `<p class="hint">Reading heights…</p>`; if (shown === p) render();
+    const D = map.distance(a, b);
+    const useDhm = !!(D2 && D2.key);
+    const surf = useDhm && $("hm-surface").checked;
+    let N = useDhm ? Math.max(40, Math.min(1000, Math.round(D / 2))) : Math.max(40, Math.min(400, Math.round(D / 25)));
+    let g = null, terrain, source = "", note = "";
+    if (useDhm) {
+      try {
+        const r = await D2.profile(a, b, N);
+        terrain = r.terrain;
+        g = surf ? r.surface.map((s, i) => Math.max(s, r.terrain[i])) : r.terrain;
+        source = `DHM ${surf ? "surface (trees and buildings)" : "terrain"}, ${r.res.toFixed(1)} m steps`;
+      } catch (e) { note = `DHM failed (${e.message}); built-in heights used. `; N = Math.max(40, Math.min(400, Math.round(D / 25))); }
+    }
+    if (!g) {
+      try { g = await Promise.all(Array.from({ length: N + 1 }, (_, i) => heightAt(a.lat + (b.lat - a.lat) * i / N, a.lng + (b.lng - a.lng) * i / N).then((h) => Math.max(0, h)))); }
+      catch (e) { if (run === p.run) { p.html = `<p class="hint">Could not load heights (needs internet).</p>`; render(); } return; }
+      terrain = g; source = "built-in (Terrarium / SRTM, ~30 m)";
+    }
+    if (run !== p.run) return;   // a newer drag already started another check
     const antA = pa.h ?? (+$("hm-ha").value || 0), antB = pb.h ?? (+$("hm-hb").value || 0);
-    const ha = g[0] + antA, hb = g[N] + antB;
+    const ha = terrain[0] + antA, hb = terrain[N] + antB;
     const lambda = 299.792458 / FREQ_MHZ, Re = 6371000 * 4 / 3;
     let worst = Infinity, worstI = 0, blocked = false;
     const rows = g.map((h, i) => {
       const d1 = D * i / N, d2 = D - d1;
       const bulge = d1 * d2 / (2 * Re);
-      const ground = h + bulge;                    // ground raised by the earth's curve
       const los = ha + (hb - ha) * i / N;
       const fz = Math.sqrt(lambda * d1 * d2 / Math.max(1, D));
+      const top = (i === 0 || i === N ? terrain[i] : h) + bulge;     // the ends stand on the ground
       if (i > 0 && i < N) {
-        const clear = fz > 0 ? (los - ground) / fz : 99;   // 1 = whole first zone free, 0 = grazing
+        const clear = fz > 0 ? (los - top) / fz : 99;   // 1 = whole first zone free, 0 = grazing
         if (clear < worst) { worst = clear; worstI = i; }
-        if (ground > los) blocked = true;
+        if (top > los) blocked = true;
       }
-      return { d1, ground, los, fz };
+      return { d1, ground: terrain[i] + bulge, top, los, fz };
     });
-    const verdict = blocked && worst < -0.3 ? ["Blocked: the ground cuts the line of sight (the signal must bend over it).", "#c62828"]
-      : blocked ? ["Grazing: the ground just touches the line of sight.", "#ef6c00"]
+    const verdict = blocked && worst < -0.3 ? ["Blocked: something cuts the line of sight (the signal must bend over it).", "#c62828"]
+      : blocked ? ["Grazing: the line of sight is just touched.", "#ef6c00"]
       : worst < 0.6 ? ["Line of sight, but the Fresnel zone is less than 60 % clear: expect extra loss.", "#ef6c00"]
       : ["Clear: line of sight and at least 60 % of the Fresnel zone free.", "#2e7d32"];
     // Free-space loss plus a single knife-edge at the worst point (ITU-R P.526).
     const fspl = 32.44 + 20 * Math.log10(D / 1000) + 20 * Math.log10(FREQ_MHZ);
     const v = -Math.SQRT2 * worst;   // Fresnel-Kirchhoff parameter from the clearance ratio
     const knife = v > -0.78 ? 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) ** 2 + 1) + v - 0.1) : 0;
-    if (run !== busy) return;   // a newer drag already started another check
-    pathLine.setStyle({ color: verdict[1] });
+
+    // What stands in the way: with DHM, the tallest objects above the
+    // ground that reach into the Fresnel zone, named by GeoDanmark.
+    let obstacles = "";
+    if (surf && source) {
+      const hits = [];
+      rows.forEach((r, i) => { if (i > 0 && i < N && r.top - r.ground > 2 && r.top > r.los - 0.6 * r.fz) hits.push(i); });
+      const groups = [];
+      for (const i of hits) { const last = groups[groups.length - 1]; if (last && i - last[last.length - 1] <= 3) last.push(i); else groups.push([i]); }
+      const reach = (i) => rows[i].top - rows[i].los;
+      const tops = groups.map((gr) => gr.reduce((m, i) => (reach(i) > reach(m) ? i : m), gr[0])).sort((x, y) => reach(y) - reach(x)).slice(0, 4);
+      const named = await Promise.all(tops.map(async (i) => ({ i, what: await D2.whatIsAt(a.lat + (b.lat - a.lat) * i / N, a.lng + (b.lng - a.lng) * i / N) })));
+      if (run !== p.run) return;
+      obstacles = named.length
+        ? `<h4 style="margin:6px 0 2px;font-size:12px">In the way (trees, buildings)</h4><table>${named.sort((x, y) => x.i - y.i).map(({ i, what }) =>
+          `<tr><td>${(rows[i].d1 / 1000).toFixed(2)} km</td><td>${esc2(what.join(", ") || "unnamed object")}</td><td class="n">${(rows[i].top - rows[i].ground).toFixed(1)} m tall</td></tr>`).join("")}</table>`
+        : `<p class="hint">No trees or buildings reach into the Fresnel zone.</p>`;
+    }
+    p.verdictCol = verdict[1];
+    p.line.setStyle({ color: verdict[1] });
+    if (p.worst) p.layer.removeLayer(p.worst);
     const wp = [a.lat + (b.lat - a.lat) * worstI / N, a.lng + (b.lng - a.lng) * worstI / N];
-    L.circleMarker(wp, { radius: 5, color: verdict[1], fillOpacity: 0.8 }).bindTooltip("Worst point").addTo(profLayer);
+    p.worst = L.circleMarker(wp, { radius: 5, color: verdict[1], fillOpacity: 0.8 }).bindTooltip(`Path ${p.id}: worst point`).addTo(p.layer);
 
     const W = 300, H = 140, P = 4;
-    const top = Math.max(...rows.map((r) => Math.max(r.ground, r.los + r.fz))) + 5, bot = Math.min(...rows.map((r) => Math.min(r.ground, r.los - r.fz))) - 2;
+    const top = Math.max(...rows.map((r) => Math.max(r.top, r.los + r.fz))) + 5, bot = Math.min(...rows.map((r) => Math.min(r.ground, r.los - r.fz))) - 2;
     const X = (i) => P + (W - 2 * P) * i / N, Y = (h) => H - 18 - (H - 26) * (h - bot) / (top - bot);
     const pts = (f) => rows.map((r, i) => `${X(i).toFixed(1)},${Y(f(r)).toFixed(1)}`).join(" ");
-    const svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="Ground profile between the two points">
-      <polygon points="${X(0)},${H - 18} ${pts((r) => r.ground)} ${X(N)},${H - 18}" fill="#8d6e63" opacity=".75"/>
+    const svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="Ground profile of path ${p.id}">
+      <polygon points="${X(0)},${H - 18} ${pts((r) => r.top)} ${X(N)},${H - 18}" fill="#2e7d32" opacity=".55"/>
+      <polygon points="${X(0)},${H - 18} ${pts((r) => r.ground)} ${X(N)},${H - 18}" fill="#8d6e63" opacity=".85"/>
       <polyline points="${pts((r) => r.los + r.fz)}" fill="none" stroke="#64b5f6" stroke-dasharray="3 3"/>
       <polyline points="${pts((r) => r.los - r.fz)}" fill="none" stroke="#64b5f6" stroke-dasharray="3 3"/>
       <polyline points="${pts((r) => r.los)}" fill="none" stroke="${verdict[1]}" stroke-width="2"/>
       <line x1="${X(worstI)}" x2="${X(worstI)}" y1="8" y2="${H - 18}" stroke="${verdict[1]}" stroke-dasharray="2 3"/>
       <text x="${P}" y="${H - 4}" font-size="10" fill="var(--mute)">0</text>
-      <text x="${W - P}" y="${H - 4}" font-size="10" fill="var(--mute)" text-anchor="end">${(D / 1000).toFixed(1)} km</text>
+      <text x="${W - P}" y="${H - 4}" font-size="10" fill="var(--mute)" text-anchor="end">${(D / 1000).toFixed(2)} km</text>
       <text x="${P}" y="10" font-size="10" fill="var(--mute)">${top.toFixed(0)} m</text></svg>`;
-    $("hm-prof").innerHTML = `${svg}
+    p.html = `${svg}
       <p style="color:${verdict[1]};font-weight:600;margin:4px 0">${verdict[0]}</p>
       <table>
         <tr><td>Distance</td><td class="n">${(D / 1000).toFixed(2)} km</td></tr>
         <tr><td>Ends</td><td class="n">${esc2(pa.name || "point")} · ${esc2(pb.name || "point")}</td></tr>
         <tr><td>Antennas</td><td class="n">${antA} m / ${antB} m above ground</td></tr>
-        <tr><td>Ground at the ends</td><td class="n">${g[0].toFixed(0)} m / ${g[N].toFixed(0)} m</td></tr>
-        <tr><td>Worst point</td><td class="n">${(rows[worstI].d1 / 1000).toFixed(1)} km, ${worst > 50 ? "far above" : (worst * 100).toFixed(0) + " % of the zone free"}</td></tr>
+        <tr><td>Ground at the ends</td><td class="n">${terrain[0].toFixed(1)} m / ${terrain[N].toFixed(1)} m</td></tr>
+        <tr><td>Worst point</td><td class="n">${(rows[worstI].d1 / 1000).toFixed(2)} km, ${worst > 50 ? "far above" : (worst * 100).toFixed(0) + " % of the zone free"}</td></tr>
         <tr><td>Free-space loss</td><td class="n">${fspl.toFixed(0)} dB</td></tr>
         <tr><td>Extra loss from the obstacle</td><td class="n">≈ ${knife.toFixed(0)} dB</td></tr>
-      </table>
-      <p class="hint">Brown: ground, lifted by the earth's curve. Blue dashes: first Fresnel zone. Only the single worst obstacle is counted; trees and houses are not in the height data.</p>`;
+        <tr><td>Heights</td><td class="n">${esc2(source)}</td></tr>
+      </table>${obstacles}
+      <p class="hint">${esc2(note)}Brown: ground; green: trees and buildings (with a key); both lifted by the earth's curve. Blue dashes: first Fresnel zone. Only the single worst obstacle is counted for the loss.</p>`;
+    render();
   }
 
   // ---------- hills in the engine ----------

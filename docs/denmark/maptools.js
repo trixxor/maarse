@@ -152,7 +152,10 @@
     foundLayer.clearLayers();
     if (r.ext) map.flyToBounds([[r.ext[1], r.ext[0]], [r.ext[3], r.ext[2]]], { maxZoom: 16, duration: 0.8 });
     else map.flyTo(r.ll, 15, { duration: 0.8 });
-    const mk = L.marker(r.ll, { title: r.main }).addTo(foundLayer);
+    // A drawn pin: Leaflet's default marker is an image file this page does not ship.
+    const pin = L.divIcon({ className: "", iconSize: [26, 34], iconAnchor: [13, 33], popupAnchor: [0, -30],
+      html: '<svg width="26" height="34" viewBox="0 0 26 34" aria-hidden="true"><path d="M13 1C6.4 1 1 6.3 1 12.8 1 22 13 33 13 33s12-11 12-20.2C25 6.3 19.6 1 13 1z" fill="#e11d48" stroke="#fff" stroke-width="2"/><circle cx="13" cy="13" r="4.5" fill="#fff"/></svg>' });
+    const mk = L.marker(r.ll, { title: r.main, icon: pin }).addTo(foundLayer);
     let h = "";
     try { h = ` · height ${Math.max(0, await T.heightAt(r.ll.lat, r.ll.lng)).toFixed(0)} m`; } catch { /* offline */ }
     mk.bindPopup(`<b>${esc(r.main)}</b><br><span class="hint">${esc(r.sub)}${h}</span><br><button class="mt-from">Radio path from here</button> <button class="mt-clear">Remove</button>`).openPopup();

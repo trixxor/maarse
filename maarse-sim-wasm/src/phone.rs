@@ -38,6 +38,14 @@ pub struct Phone {
     pub(crate) link_drops: u64,
     /// Waiting to be linked by a master device until then (ms), 0 = no.
     awaiting_until: u64,
+    /// Node settings as the firmware keeps them (Get*/Set*).
+    pub(crate) radio: Option<maarse_core::companion::RadioConfig>,
+    admins: heapless::Vec<Address, 4>,
+    regions: (bool, String),
+    pub(crate) sharing: Option<maarse_core::companion::Sharing>,
+    wifi: Option<maarse_core::companion::WifiSettings>,
+    /// Trace routes waiting for their answer: (destination, request).
+    traces: Vec<(Address, u16)>,
 }
 
 /// A person made on a phone (linked devices, maarse-host `node/person.rs`).
@@ -213,7 +221,7 @@ impl Engine {
                     version: PROTOCOL_VERSION,
                     max_text: (maarse_core::companion::MAX_TEXT - 1) as u8,
                     max_file,
-                    identity: None,
+                    identity: Some(self.node_key(node)),
                 };
                 self.phone_emit(node, &info);
                 let chans: Vec<(Address, String)> = self.phones.attached[&node].channels.clone();
@@ -225,7 +233,7 @@ impl Engine {
                 for o in others {
                     if self.knows(node, o) {
                         let addr = self.nodes[o].router.addr;
-                        self.phone_emit(node, &Event::Heard { addr, hops: 0, identity: None });
+                        self.phone_emit(node, &Event::Heard { addr, hops: 0, identity: Some(self.node_key(o)) });
                     }
                 }
                 if !self.nodes[node].alive() {
@@ -314,10 +322,95 @@ impl Engine {
                     self.phone_emit(node, &ev);
                 }
             }
-            Command::GetSharing | Command::GetRadio | Command::GetAdmins | Command::GetRegions | Command::GetWifi | Command::GetRangeTest | Command::OtaStatus => {
-                self.phone_err(node, 0, error_code::BAD_FRAME, &not_yet("node settings (radio, sharing, admins, regions, Wi-Fi, range test, updates)"));
+            Command::GetRadio => {
+                let r = self.phone_radio(node);
+                self.phone_emit(node, &Event::Radio(r));
             }
-            Command::TraceRoute { req, .. } => self.phone_err(node, req, error_code::BAD_FRAME, &not_yet("trace route")),
+            Command::SetRadio(r) => {
+                // The node's spreading factor follows; frequency, bandwidth
+                // and power are one setting for the whole simulated country
+                // (Break > Radio settings), as the radio model is shared.
+                if (7..=12).contains(&r.sf) {
+                    self.nodes[node].sf = r.sf;
+                }
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.radio = Some(r);
+                }
+                self.phone_emit(node, &Event::Radio(r));
+                self.build_links();
+                self.phone_emit(node, &Event::Log { text: txt("Radio saved. Simulator: this node's spreading factor changed; frequency, bandwidth and power are set for all nodes in Break > Radio settings") });
+            }
+            Command::GetAdmins => {
+                let admins = self.phones.attached[&node].admins.clone();
+                self.phone_emit(node, &Event::Admins { admins });
+            }
+            Command::SetAdmins { admins } => {
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.admins = admins.clone();
+                }
+                self.phone_emit(node, &Event::Admins { admins });
+            }
+            Command::GetRegions => {
+                let (strict, names) = self.phones.attached[&node].regions.clone();
+                self.phone_emit(node, &Event::Regions { strict, names: txt(&names) });
+            }
+            Command::SetRegions { strict, names } => {
+                let names = String::from_utf8_lossy(&names).into_owned();
+                let mut r = maarse_core::region::Regions::new();
+                for n in names.split([',', ' ']).filter(|n| !n.is_empty()) {
+                    let _ = r.push(maarse_core::region::region_id(n));
+                }
+                self.nodes[node].router.regions = r;
+                self.nodes[node].router.strict_region = strict;
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.regions = (strict, names.clone());
+                }
+                self.phone_emit(node, &Event::Regions { strict, names: txt(&names) });
+            }
+            Command::SetRole { role } => {
+                if let Some(r) = maarse_core::Role::from_u8(role) {
+                    self.nodes[node].router.set_role(r);
+                    self.phone_emit(node, &Event::Log { text: txt("Role saved") });
+                }
+            }
+            Command::GetSharing => {
+                let sh = self.phone_sharing(node);
+                self.phone_emit(node, &Event::Sharing(sh));
+            }
+            Command::SetSharing(sh) => {
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.sharing = Some(sh);
+                }
+                self.phone_emit(node, &Event::Sharing(sh));
+                self.phone_emit(node, &Event::Log { text: txt("Sharing saved; shown in the next announce") });
+            }
+            Command::GetWifi => {
+                let w = self.phones.attached[&node].wifi.clone().unwrap_or_default();
+                self.phone_emit(node, &Event::Wifi { enabled: w.enabled, modem: w.modem, state: 0, ip: [0; 4], ssid: w.ssid.clone(), peer: w.peer.clone() });
+            }
+            Command::SetWifi(w) => {
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.wifi = Some(w.clone());
+                }
+                self.phone_emit(node, &Event::Wifi { enabled: w.enabled, modem: w.modem, state: 0, ip: [0; 4], ssid: w.ssid.clone(), peer: w.peer.clone() });
+                self.phone_emit(node, &Event::Log { text: txt("Wi-Fi saved. Simulator: a node's own Wi-Fi link is drawn as a link on the map (Build), not from this setting") });
+            }
+            Command::OtaStatus => {
+                self.phone_emit(node, &Event::OtaState { req: 0, state: 0, next: 0, size: 0, version: 0, current: 0, text: txt("Simulator: no firmware updates in the simulated world") });
+            }
+            Command::TraceRoute { req, dest } => {
+                let dest = self.person_device_addr(&dest).unwrap_or(dest);
+                if let Some(p) = self.phones.attached.get_mut(&node) {
+                    p.traces.retain(|t| t.0 != dest);
+                    p.traces.push((dest, req));
+                }
+                let mut token = [0u8; 16];
+                self.rng.fill(&mut token[..]);
+                let now = self.now;
+                let actions = self.nodes[node].router.send_trace(dest, token, now);
+                self.apply(node, actions.into_iter().collect(), None);
+                self.phone_emit(node, &Event::Sent { req, msg_id: 0 });
+            }
             Command::FileBegin { req, dest, size, mime, name } => {
                 let Some(&to) = self.addr_idx.get(&dest) else {
                     return self.phone_err(node, req, error_code::UNKNOWN_DEST, "Simulator: no node with this address in this world");
@@ -387,7 +480,17 @@ impl Engine {
             }
             Command::PersonSetup { req, op, text: t } => self.person_setup(node, req, op, &t),
             Command::LinkDevice { req, device } => self.link_device(node, req, device),
-            Command::JoinPrivateChannel { .. } => self.phone_err(node, 0, error_code::BAD_FRAME, &not_yet("private channels")),
+            Command::JoinPrivateChannel { key, name } => {
+                let ch = maarse_crypto::channel_address(&key);
+                let label = String::from_utf8_lossy(&name).into_owned();
+                let _ = self.nodes[node].router.subscribe(ch);
+                if let Some(p) = self.phones.attached.get_mut(&node)
+                    && !p.channels.iter().any(|(a, _)| *a == ch)
+                {
+                    p.channels.push((ch, label.clone()));
+                }
+                self.phone_emit(node, &Event::ChannelJoined { channel: ch, name: txt(&label) });
+            }
             other => self.phone_err(node, 0, error_code::BAD_FRAME, &not_yet(&format!("command {:?}", core::mem::discriminant(&other)))),
         }
     }
@@ -400,12 +503,20 @@ impl Engine {
             return;
         }
         match ptype {
+            PacketType::Probe => {
+                // A trace route answer (firmware ext.rs on_trace).
+                let Some(r) = maarse_core::diag::parse_response(payload) else { return };
+                let Some(p) = self.phones.attached.get_mut(&node) else { return };
+                let Some(i) = p.traces.iter().position(|t| t.0 == dest) else { return };
+                let (_, req) = p.traces.remove(i);
+                self.phone_emit(node, &Event::TraceResult { req, dest, path: r.path.iter().copied().collect(), out: r.out.iter().copied().collect(), back: r.back.iter().copied().collect() });
+            }
             PacketType::Announce => {
                 if let Some(&who) = self.addr_idx.get(&dest)
                     && who != node
                     && self.nodes[who].kind.is_user()
                 {
-                    self.phone_emit(node, &Event::Heard { addr: dest, hops, identity: None });
+                    self.phone_emit(node, &Event::Heard { addr: dest, hops, identity: Some(self.node_key(who)) });
                     // The announce's app data (name, capabilities such as
                     // pages), as the firmware passes it on: keys (64) |
                     // timestamp (4) | app data length | app data | ...
@@ -453,6 +564,49 @@ impl Engine {
         // From a device of a person: shown as the person (maarse-host person_peer).
         let from = self.person_of_node(sender).map_or(self.nodes[sender].router.addr, |k| self.phones.persons[k].addr);
         self.phone_emit(node, &Event::DirectReceived { from, hops, text: text(body) });
+    }
+
+    /// A node's public key (64 bytes) for safety numbers. The simulator's
+    /// nodes route with random addresses; this key is derived from the seed
+    /// and the node number with the real key code (maarse_crypto::Identity),
+    /// so both ends compute the same safety number.
+    pub(crate) fn node_key(&self, node: usize) -> [u8; 64] {
+        use sha2::{Digest, Sha512};
+        let mut h = Sha512::new();
+        h.update(b"maarse/sim/node-key");
+        h.update(self.sc.seed.to_le_bytes());
+        h.update((node as u64).to_le_bytes());
+        let secret: [u8; 64] = h.finalize().into();
+        maarse_crypto::Identity::from_secret_bytes(&secret).public().to_bytes()
+    }
+
+    /// The radio settings a phone sees: what it saved, else the firmware
+    /// default with this node's spreading factor and the scenario's band.
+    fn phone_radio(&self, node: usize) -> maarse_core::companion::RadioConfig {
+        if let Some(r) = self.phones.attached.get(&node).and_then(|p| p.radio) {
+            return r;
+        }
+        let mut r = maarse_core::companion::RadioConfig::EU_DEFAULT;
+        r.sf = self.nodes[node].sf;
+        if self.sc.freq_mhz > 0.0 {
+            r.freq_hz = (self.sc.freq_mhz * 1e6) as u32;
+        }
+        if self.sc.bw_hz > 0 {
+            r.bw_hz = self.sc.bw_hz;
+        }
+        r.tx_power_dbm = self.sc.tx_dbm as i8;
+        r.duty_permille = crate::engine::effective_duty(&self.sc) as u16;
+        r
+    }
+
+    /// What a phone shares in its announces (default: nothing, the node's
+    /// place pre-filled for when it is switched on).
+    pub(crate) fn phone_sharing(&self, node: usize) -> maarse_core::companion::Sharing {
+        if let Some(s) = self.phones.attached.get(&node).and_then(|p| p.sharing) {
+            return s;
+        }
+        let n = &self.sc.nodes[node];
+        maarse_core::companion::Sharing { precision: 0, lat_e7: (n.lat * 1e7) as i32, lon_e7: (n.lon * 1e7) as i32, telemetry: false }
     }
 
     /// The person (index in `phones.persons`) `node` is a live device of.
@@ -752,10 +906,28 @@ mod tests {
         );
         let sent = a.iter().find_map(|ev| if let Event::Sent { req: 7, msg_id } = ev { Some(*msg_id) } else { None }).expect("no Sent");
         assert!(a.iter().any(|ev| matches!(ev, Event::Acked { msg_id } if *msg_id == sent)), "{a:?}");
-        // What is not simulated says so.
+        // Trace route: the answer comes back with the path and the SNRs.
         e.phone_cmd(0, &Command::TraceRoute { req: 9, dest: b_addr }.encode());
+        e.run_until(260_000, usize::MAX);
         let a = frames(&e.phone_events(0));
-        assert!(matches!(&a[..], [Event::Error { req: 9, .. }]), "{a:?}");
+        assert!(a.iter().any(|ev| matches!(ev, Event::TraceResult { req: 9, dest, out, .. } if *dest == b_addr && !out.is_empty())), "{a:?}");
+        // Settings: regions, sharing, admins and a private channel.
+        e.phone_cmd(0, &Command::SetRegions { strict: false, names: text(b"midtjylland") }.encode());
+        e.phone_cmd(0, &Command::SetSharing(maarse_core::companion::Sharing { precision: 2, lat_e7: 0, lon_e7: 0, telemetry: true }).encode());
+        e.phone_cmd(0, &Command::JoinPrivateChannel { key: [7; 32], name: text(b"family") }.encode());
+        e.phone_cmd(0, &Command::GetRadio.encode());
+        let a = frames(&e.phone_events(0));
+        assert!(a.iter().any(|ev| matches!(ev, Event::Regions { names, .. } if &names[..] == b"midtjylland")), "{a:?}");
+        assert!(a.iter().any(|ev| matches!(ev, Event::ChannelJoined { channel, .. } if *channel == maarse_crypto::channel_address(&[7; 32]))), "{a:?}");
+        assert!(a.iter().any(|ev| matches!(ev, Event::Radio(r) if r.sf == 9)), "{a:?}");
+        assert!(!a.iter().any(|ev| matches!(ev, Event::Error { .. })), "{a:?}");
+        // B hears A's announce with the position and name it now shares.
+        e.phone_cmd(0, &Command::AnnounceNow.encode());
+        e.run_until(300_000, usize::MAX);
+        let b = frames(&e.phone_events(2));
+        assert!(b.iter().any(|ev| matches!(ev, Event::NodeInfo { addr, position: Some(_), telemetry: Some(_), .. } if *addr == a_addr)), "{b:?}");
+        // Keys for safety numbers: the same key for A in A's Info and in B's Heard.
+        assert!(b.iter().any(|ev| matches!(ev, Event::Heard { addr, identity: Some(k), .. } if *addr == a_addr && *k == e.node_key(0))), "{b:?}");
     }
 
     /// Linked devices from phones: A creates an account, B waits and is

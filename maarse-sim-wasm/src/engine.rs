@@ -3776,7 +3776,23 @@ impl Engine {
         // or the phone's name), the role field (forwarders read the mobile
         // flag from it) and the capabilities (CAP_PAGES for a host with pages).
         let name = self.announce_name(node);
-        let mut app = maarse_core::appdata::build(None, false, None, None, name.as_deref().map(str::as_bytes));
+        // A phone's sharing settings (firmware ext.rs): position at the chosen
+        // precision, and telemetry (battery from the energy model).
+        let (pos, tel) = match self.phones.attached.get(&node).and_then(|p| p.sharing) {
+            Some(sh) => {
+                let precision = maarse_core::appdata::Precision::from_u8(sh.precision);
+                let n = &self.nodes[node];
+                let (lat, lon) = to_ll(n.x, n.y);
+                let pos = (precision != maarse_core::appdata::Precision::Off).then_some(maarse_core::appdata::Position { precision, lat_e7: (lat * 1e7) as i32, lon_e7: (lon * 1e7) as i32 });
+                let tel = sh.telemetry.then(|| {
+                    let f = if n.battery_max > 0.0 { (n.battery_wh / n.battery_max).clamp(0.0, 1.0) } else { 1.0 };
+                    maarse_core::appdata::Telemetry { battery_mv: (3300.0 + 900.0 * f) as u16, ext_power: n.battery_max <= 0.0, energy: (f * 3.0).round() as u8, uptime_s: (self.now / 1000) as u32, temp_dc: None }
+                });
+                (pos, tel)
+            }
+            None => (None, None),
+        };
+        let mut app = maarse_core::appdata::build(None, false, pos, tel.as_ref(), name.as_deref().map(str::as_bytes));
         let rt = &self.nodes[node].router;
         let flags = if rt.mobile { maarse_core::appdata::ROLE_MOBILE } else { 0 };
         maarse_core::appdata::push_role(&mut app, rt.role.as_u8(), flags);

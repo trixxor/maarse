@@ -14,7 +14,7 @@ Status as of 2026-11-19.
 |---|---|---|
 | Direct messages, acks, textz compression | maarse-core router, content | real |
 | Sequence numbers, "2 messages missing" | maarse-hostrules seq, maarse-host node/seq.rs | shared rule: numbered between hosts/app users, gaps shown on phones, Results |
-| Public and private channels | router, companion | real (public + hashtag channels from phones; private: not yet) |
+| Public and private channels | router, companion | real (public, hashtag and private channels from phones) |
 | Store-carry-forward, carried notice | router carry | real |
 | Post offices: deposit, sync, replicas, quotas, expiry | maarse-core mail.rs, maarse-host node.rs | model on core rules; host-to-host over radio/trunks without TCP; retries per the host's rules |
 | Hold messages from unknown senders | router | real |
@@ -68,7 +68,7 @@ Status as of 2026-11-19.
 | Key requests, host key cache | router, maarse-host | real |
 | Linked devices (one person, many devices) | maarse-host node/person.rs | phones: create (real 24 words), restore, wait, link over the network, remove, leave, sync; messages to the account reach every device; backups not yet |
 | Recovery phrase, identity restore | maarse-crypto recovery | real derivation; lost device restored after N min with empty state, mail from post offices (Break, phone ↺) |
-| Safety numbers | web client, app | not yet (phones get no identity yet) |
+| Safety numbers | web client, app | phones get a key per node (derived with the real key code) in Info/Heard; the web client shows safety numbers (the Android app has none) |
 
 ## Routing and radio
 
@@ -111,8 +111,8 @@ Status as of 2026-11-19.
 | Web client | maarse-client | real (in the phones) |
 | Firmware: Heltec V4, XIAO nRF52840, Heltec display | firmware/ | router real; display not shown |
 | Phone ↔ radio over Bluetooth / USB, link drops | app, firmware | model: link drops (see below) |
-| Range test, trace route, neighbours, remote admin | router, companion | neighbours real; others not yet |
-| Position and telemetry sharing | appdata | not yet |
+| Range test, trace route, neighbours, remote admin | router, companion | neighbours and trace route real; range test and remote admin: see below |
+| Position and telemetry sharing | appdata | real app data: phones' sharing settings put position (chosen precision) and telemetry (battery from the energy model) in announces; NodeInfo to other phones |
 | Firmware update (USB/BT only) | firmware, web flasher | not simulated (shown as reboot) |
 | MeshCore gateway, MQTT bridge | maarse-host | not yet |
 

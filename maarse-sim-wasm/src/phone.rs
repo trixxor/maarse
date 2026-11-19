@@ -23,7 +23,13 @@ const PHONE_POST: &[u8] = b"PHC";
 
 #[derive(Default)]
 pub struct Phone {
-    events: VecDeque<Vec<u8>>,
+    /// One event queue per screen (phone window, PC) on this node: maarse-host
+    /// serves several clients at once.
+    screens: std::collections::BTreeMap<u32, VecDeque<Vec<u8>>>,
+    /// Message history on a host (maarse_hostrules::history), shared by the screens.
+    hist: Vec<maarse_hostrules::history::Item>,
+    hist_read: HashMap<Address, u64>,
+    hist_next: u64,
     decoder: FrameDecoder,
     pub(crate) name: String,
     /// Channels the phone joined: (address, name).
@@ -69,6 +75,8 @@ pub struct Phones {
     counter: u64,
     /// Persons made on phones.
     pub persons: Vec<PersonRec>,
+    /// The screen whose command is being handled (its replies go only to it).
+    cur_screen: Option<u32>,
     /// Link grants on their way: (message, person, device).
     pending_links: Vec<(usize, usize, usize)>,
     /// Remote admin commands and replies on their way: message -> frame.
@@ -99,11 +107,168 @@ impl Engine {
             }
             return;
         }
-        if p.events.len() >= MAX_QUEUED {
-            p.events.pop_front();
-            p.dropped += 1;
+        // Replies go to the screen that asked; what happens on the node goes
+        // to every screen (maarse-host send_client / broadcast).
+        let broadcast = matches!(
+            ev,
+            Event::DirectReceived { .. } | Event::ChannelReceived { .. } | Event::Acked { .. } | Event::CarryAcked { .. } | Event::Deposited { .. }
+                | Event::Heard { .. } | Event::NodeInfo { .. } | Event::RouteLearned { .. } | Event::FileIncoming { .. } | Event::FileChunk { .. }
+                | Event::FileDone { .. } | Event::Call { .. } | Event::Person(_) | Event::DeviceLinked { .. } | Event::ChannelJoined { .. }
+        );
+        let only = if broadcast { None } else { self.phones.cur_screen };
+        let f = ev.encode().to_vec();
+        if p.screens.is_empty() {
+            p.screens.insert(0, VecDeque::new());
         }
-        p.events.push_back(ev.encode().to_vec());
+        for (id, q) in p.screens.iter_mut() {
+            if only.is_some_and(|o| o != *id) {
+                continue;
+            }
+            if q.len() >= MAX_QUEUED {
+                q.pop_front();
+                p.dropped += 1;
+            }
+            q.push_back(f.clone());
+        }
+        if matches!(ev, Event::DirectReceived { .. } | Event::ChannelReceived { .. } | Event::Acked { .. } | Event::Deposited { .. } | Event::CarryAcked { .. }) {
+            self.hist_note(node, ev);
+        }
+    }
+
+    /// Raw frames (history events) to one screen or all.
+    fn phone_raw(&mut self, node: usize, frame: Vec<u8>, only: Option<u32>, except: Option<u32>) {
+        let Some(p) = self.phones.attached.get_mut(&node) else { return };
+        for (id, q) in p.screens.iter_mut() {
+            if only.is_some_and(|o| o != *id) || except == Some(*id) {
+                continue;
+            }
+            q.push_back(frame.clone());
+        }
+    }
+
+    /// The host's history follows what happens (maarse-host node/hist.rs).
+    fn hist_note(&mut self, node: usize, ev: &Event) {
+        use maarse_hostrules::history::*;
+        if !self.at_host(node) {
+            return;
+        }
+        let ts = (1_700_000_000 + self.now / 1000) as u32;
+        let Some(p) = self.phones.attached.get_mut(&node) else { return };
+        let mut add = |kind: u8, conv: Address, from: Address, hops: u8, content: &[u8]| {
+            p.hist_next += 1;
+            p.hist.push(Item { id: p.hist_next, ts, kind, outgoing: false, state: ST_RECEIVED, hops, msg_id: 0, conv, from, content: content.to_vec() });
+        };
+        match ev {
+            Event::DirectReceived { from, hops, text } => add(KIND_DIRECT, *from, *from, *hops, text),
+            Event::ChannelReceived { channel, from, hops, text, .. } => add(KIND_CHANNEL, *channel, *from, *hops, text),
+            Event::Acked { msg_id } | Event::Deposited { msg_id } | Event::CarryAcked { msg_id } => {
+                let st = match ev {
+                    Event::Acked { .. } => ST_ACKED,
+                    Event::Deposited { .. } => ST_DEPOSITED,
+                    _ => ST_CARRIED,
+                };
+                if let Some(it) = p.hist.iter_mut().rev().find(|i| i.msg_id == *msg_id && i.outgoing) {
+                    it.state = st;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A message sent from one screen: in the history, and live to the others.
+    fn hist_sent(&mut self, node: usize, kind: u8, conv: Address, msg_id: u64, text: &[u8]) {
+        use maarse_hostrules::history::*;
+        if !self.at_host(node) {
+            return;
+        }
+        let ts = (1_700_000_000 + self.now / 1000) as u32;
+        let me = self.nodes[node].router.addr;
+        let screen = self.phones.cur_screen;
+        let Some(p) = self.phones.attached.get_mut(&node) else { return };
+        p.hist_next += 1;
+        let it = Item { id: p.hist_next, ts, kind, outgoing: true, state: ST_SENT, hops: 0, msg_id, conv, from: me, content: text.to_vec() };
+        p.hist.push(it.clone());
+        self.phone_raw(node, item_frame(&it, true), None, screen);
+    }
+
+    /// History commands 0x30-0x33 (maarse-host only; firmware nodes answer
+    /// "invalid frame" as the firmware does).
+    fn hist_command(&mut self, node: usize, bytes: &[u8]) {
+        use maarse_hostrules::history::*;
+        let screen = self.phones.cur_screen;
+        if !self.at_host(node) {
+            return self.phone_err(node, 0, error_code::BAD_FRAME, "invalid frame");
+        }
+        let Some(cmd) = parse_command(bytes) else { return };
+        match cmd {
+            HistCmd::Get { req, conv, before, limit } => {
+                let p = &self.phones.attached[&node];
+                let mut v: Vec<&Item> = p.hist.iter().filter(|i| conv.is_none_or(|c| i.conv == c) && (before == 0 || i.id < before)).collect();
+                let more = v.len() > limit as usize;
+                let skip = v.len().saturating_sub((limit as usize).min(MAX_PAGE));
+                v.drain(..skip);
+                let frames: Vec<Vec<u8>> = v.iter().map(|i| item_frame(i, false)).collect();
+                let oldest = v.first().map_or(0, |i| i.id);
+                let n = frames.len() as u8;
+                for f in frames {
+                    self.phone_raw(node, f, screen, None);
+                }
+                self.phone_raw(node, end_frame(req, conv, n, more, oldest), screen, None);
+            }
+            HistCmd::MarkRead { conv, up_to } => {
+                let p = self.phones.attached.get_mut(&node).unwrap();
+                let mark = if up_to == 0 { p.hist_next } else { up_to };
+                p.hist_read.insert(conv, mark);
+                let unread = p.hist.iter().filter(|i| i.conv == conv && i.id > mark && !i.outgoing).count();
+                self.phone_raw(node, read_mark_frame(conv, mark, unread), None, None);
+            }
+            HistCmd::GetReadState => {
+                let p = &self.phones.attached[&node];
+                let mut convs: Vec<Address> = p.hist.iter().map(|i| i.conv).collect();
+                convs.sort_by_key(|a| a.0);
+                convs.dedup();
+                let frames: Vec<Vec<u8>> = convs
+                    .into_iter()
+                    .map(|c| {
+                        let mark = p.hist_read.get(&c).copied().unwrap_or(0);
+                        let unread = p.hist.iter().filter(|i| i.conv == c && i.id > mark && !i.outgoing).count();
+                        read_mark_frame(c, mark, unread)
+                    })
+                    .collect();
+                for f in frames {
+                    self.phone_raw(node, f, screen, None);
+                }
+            }
+            HistCmd::Delete { conv, flags, ts, content } => {
+                let p = self.phones.attached.get_mut(&node).unwrap();
+                if flags & DEL_CONVERSATION != 0 {
+                    p.hist.retain(|i| i.conv != conv);
+                } else {
+                    let out = flags & DEL_OUTGOING != 0;
+                    p.hist.retain(|i| !(i.conv == conv && i.outgoing == out && i.content == content && i.ts.abs_diff(ts) <= 120));
+                }
+                let mut b = conv.0.to_vec();
+                b.push(flags);
+                b.extend_from_slice(&ts.to_le_bytes());
+                b.extend_from_slice(&content);
+                self.phone_raw(node, frame(EV_DELETED, &b), None, None);
+            }
+        }
+    }
+
+    /// HistoryInfo, sent on connect so the client uses the history.
+    fn hist_info(&mut self, node: usize) {
+        use maarse_hostrules::history::*;
+        if !self.at_host(node) {
+            return;
+        }
+        let screen = self.phones.cur_screen;
+        let p = &self.phones.attached[&node];
+        let mut b = vec![1u8];
+        b.extend_from_slice(&90u16.to_le_bytes());
+        b.extend_from_slice(&(p.hist.len() as u32).to_le_bytes());
+        b.extend_from_slice(&p.hist_next.to_le_bytes());
+        self.phone_raw(node, frame(EV_INFO, &b), screen, None);
     }
 
     fn phone_err(&mut self, node: usize, req: u16, code: u8, msg: &str) {
@@ -150,6 +315,19 @@ impl Engine {
     }
 
     pub fn phone_cmd(&mut self, node: usize, bytes: &[u8]) -> Value {
+        self.phone_cmd_on(node, 0, bytes)
+    }
+
+    /// `phone_cmd {node, screen, frame}`: bytes from one screen.
+    pub fn phone_cmd_on(&mut self, node: usize, screen: u32, bytes: &[u8]) -> Value {
+        self.phones.attached.entry(node).or_default().screens.entry(screen).or_default();
+        self.phones.cur_screen = Some(screen);
+        let r = self.phone_cmd_inner(node, bytes);
+        self.phones.cur_screen = None;
+        r
+    }
+
+    fn phone_cmd_inner(&mut self, node: usize, bytes: &[u8]) -> Value {
         // No link to the radio: what the phone sends never arrives.
         if self.phones.attached.get(&node).is_some_and(|p| self.now < p.link_down_until) && !self.at_host(node) {
             return json!({"handled": 0, "link": false});
@@ -179,6 +357,10 @@ impl Engine {
         }
         let n = frames.len();
         for f in frames {
+            if maarse_hostrules::history::is_history_command(&f) {
+                self.hist_command(node, &f);
+                continue;
+            }
             match Command::decode(&f) {
                 Ok(c) => self.phone_command(node, c),
                 Err(maarse_core::companion::FrameError::UnknownType(t)) => {
@@ -193,14 +375,30 @@ impl Engine {
 
     /// `phone_events {node}`: all queued event frames (each length-prefixed).
     pub fn phone_events(&mut self, node: usize) -> Value {
+        self.phone_events_on(node, 0)
+    }
+
+    /// `phone_events {node, screen}`: the queued frames for one screen.
+    pub fn phone_events_on(&mut self, node: usize, screen: u32) -> Value {
         let Some(p) = self.phones.attached.get_mut(&node) else { return json!({"frames": [], "attached": false}) };
-        let frames: Vec<Vec<u8>> = p.events.drain(..).collect();
+        let frames: Vec<Vec<u8>> = p.screens.entry(screen).or_default().drain(..).collect();
         let link = self.now >= p.link_down_until;
         json!({"frames": frames, "attached": true, "dropped": p.dropped, "alive": self.nodes[node].alive(), "link": link, "link_drops": p.link_drops})
     }
 
     pub fn phone_detach(&mut self, node: usize) {
         self.phones.attached.remove(&node);
+    }
+
+    /// One screen goes; the node keeps its phone state while others remain.
+    pub fn phone_detach_screen(&mut self, node: usize, screen: u32) {
+        let gone = self.phones.attached.get_mut(&node).is_some_and(|p| {
+            p.screens.remove(&screen);
+            p.screens.is_empty()
+        });
+        if gone {
+            self.phones.attached.remove(&node);
+        }
     }
 
     fn channel_for(&self, name: &str) -> (Address, String) {
@@ -233,6 +431,7 @@ impl Engine {
                     identity: Some(self.node_key(node)),
                 };
                 self.phone_emit(node, &info);
+                self.hist_info(node);
                 let chans: Vec<(Address, String)> = self.phones.attached[&node].channels.clone();
                 for (ch, name) in chans {
                     self.phone_emit(node, &Event::ChannelJoined { channel: ch, name: txt(&name) });
@@ -293,6 +492,7 @@ impl Engine {
                 let m = self.send_payload(node, to, payload);
                 let msg_id = self.msgs[m].id;
                 self.phone_emit(node, &Event::Sent { req, msg_id });
+                self.hist_sent(node, maarse_hostrules::history::KIND_DIRECT, dest, msg_id, &t);
                 if self.msgs[m].unsent {
                     self.phone_err(node, req, error_code::UNKNOWN_DEST, "Simulator: the recipient's keys are unknown to this node");
                 }
@@ -309,6 +509,7 @@ impl Engine {
                         let msg_id = packet_id(PacketType::Channel, &channel, &payload);
                         self.apply(node, actions.into_iter().collect(), None);
                         self.phone_emit(node, &Event::Sent { req, msg_id });
+                        self.hist_sent(node, maarse_hostrules::history::KIND_CHANNEL, channel, msg_id, &t);
                     }
                     Err(e) => self.phone_err(node, req, error_code::NOT_IN_CHANNEL, &format!("Simulator: channel send failed ({e:?})")),
                 }
@@ -1087,9 +1288,13 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|f| {
+            .filter_map(|f| {
                 let b: Vec<u8> = f.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u8).collect();
-                Event::decode(&b[2..]).unwrap()
+                // History frames (0xB0-0xB9) are maarse-host's own, not companion events.
+                if maarse_hostrules::history::EV_ITEM <= b[2] && b[2] <= maarse_hostrules::history::EV_DELETED && !matches!(b[2], 0xb4..=0xb8) {
+                    return None;
+                }
+                Some(Event::decode(&b[2..]).unwrap())
             })
             .collect()
     }
@@ -1185,6 +1390,53 @@ mod tests {
             let f = frames(&e.phone_events(n));
             assert!(f.iter().any(|ev| matches!(ev, Event::DirectReceived { text: t, .. } if &t[..] == b"to the account")), "node {n}: {f:?}");
         }
+    }
+
+    /// Two screens on one host share its history: a message sent from screen
+    /// 1 shows live on screen 2, both get what arrives, and the history can be
+    /// read back.
+    #[test]
+    fn two_screens_share_the_hosts_history() {
+        use maarse_hostrules::history::{EV_END, EV_INFO, EV_ITEM};
+        let sc = json!({"seed": 5, "duration_s": 600, "nodes": [
+            {"kind": "host", "lat": 56.0, "lon": 9.0},
+            {"kind": "repeater", "lat": 56.0, "lon": 9.05},
+            {"kind": "handheld", "lat": 56.0, "lon": 9.08}
+        ], "traffic": {"direct_per_min": 0, "channel_per_min": 0}});
+        let mut e = create(&sc.to_string()).unwrap();
+        e.run_until(20_000, usize::MAX);
+        let raw = |v: &Value| -> Vec<Vec<u8>> { v["frames"].as_array().unwrap().iter().map(|f| f.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u8).collect::<Vec<u8>>()[2..].to_vec()).collect() };
+        for s in [1, 2] {
+            e.phone_cmd_on(0, s, &Command::GetInfo.encode());
+        }
+        e.phone_cmd_on(2, 1, &Command::GetInfo.encode());
+        let f1 = raw(&e.phone_events_on(0, 1));
+        assert!(f1.iter().any(|f| f[0] == EV_INFO), "history info on connect");
+        raw(&e.phone_events_on(0, 2));
+        let h = e.nodes[2].router.addr;
+        e.phone_cmd_on(0, 1, &Command::SendDirect { req: 1, dest: h, text: text(b"from screen 1") }.encode());
+        let f2 = raw(&e.phone_events_on(0, 2));
+        assert!(f2.iter().any(|f| f[0] == EV_ITEM && f.ends_with(b"from screen 1")), "live on the other screen");
+        assert!(!f2.iter().any(|f| matches!(Event::decode(f), Ok(Event::Sent { .. }))), "the reply only to the screen that sent");
+        // An answer from the handheld reaches both screens.
+        let a = e.nodes[0].router.addr;
+        e.phone_cmd_on(2, 1, &Command::SendDirect { req: 2, dest: a, text: text(b"hello host") }.encode());
+        e.run_until(200_000, usize::MAX);
+        for s in [1, 2] {
+            let f = frames(&e.phone_events_on(0, s));
+            assert!(f.iter().any(|ev| matches!(ev, Event::DirectReceived { text: t, .. } if &t[..] == b"hello host")), "screen {s}");
+        }
+        // The history: both messages, then the end frame.
+        let mut get = vec![0x30u8, 9, 0];
+        get.extend_from_slice(&[0; 16]);
+        get.extend_from_slice(&0u64.to_le_bytes());
+        get.push(50);
+        let mut fr = ((get.len()) as u16).to_le_bytes().to_vec();
+        fr.extend_from_slice(&get);
+        e.phone_cmd_on(0, 2, &fr);
+        let f = raw(&e.phone_events_on(0, 2));
+        assert_eq!(f.iter().filter(|x| x[0] == EV_ITEM).count(), 2, "{f:?}");
+        assert_eq!(f.last().map(|x| x[0]), Some(EV_END));
     }
 
     /// Remote admin of a repeater, an alert from a phone at a host, an

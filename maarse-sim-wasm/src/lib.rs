@@ -131,11 +131,11 @@ pub fn call(e: &mut Engine, cmd: &Value) -> Value {
         "follow" => e.follow(u("msg")),
         "phone_cmd" if u("node") < e.nodes.len() => {
             let bytes: Vec<u8> = cmd["frame"].as_array().map(|a| a.iter().map(|b| b.as_u64().unwrap_or(0) as u8).collect()).unwrap_or_default();
-            e.phone_cmd(u("node"), &bytes)
+            e.phone_cmd_on(u("node"), cmd["screen"].as_u64().unwrap_or(0) as u32, &bytes)
         }
-        "phone_events" if u("node") < e.nodes.len() => e.phone_events(u("node")),
+        "phone_events" if u("node") < e.nodes.len() => e.phone_events_on(u("node"), cmd["screen"].as_u64().unwrap_or(0) as u32),
         "phone_detach" if u("node") < e.nodes.len() => {
-            e.phone_detach(u("node"));
+            e.phone_detach_screen(u("node"), cmd["screen"].as_u64().unwrap_or(0) as u32);
             json!({"ok": true})
         }
         "alert" if u("index") < e.alerts.len() => e.alert_summary(u("index"), true),

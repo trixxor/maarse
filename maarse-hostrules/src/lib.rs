@@ -16,6 +16,7 @@
 pub mod calls;
 pub mod filebox;
 pub mod guard;
+pub mod history;
 pub mod pagelock;
 pub mod pages;
 pub mod rules;

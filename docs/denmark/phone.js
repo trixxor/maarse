@@ -204,7 +204,7 @@
 
   function closePhone(p) {
     const s = sim();
-    if (s && p.node >= 0) { try { s.call({ cmd: "phone_detach", node: p.node }); } catch (e) { /* old engine */ } }
+    if (s && p.node >= 0) { try { s.call({ cmd: "phone_detach", node: p.node, screen: LETTERS.indexOf(p.id) + 1 }); } catch (e) { /* old engine */ } }
     if (picking === p) stopPicking();
     p.win.remove();
     phones.splice(phones.indexOf(p), 1);
@@ -360,7 +360,7 @@
     if (!s || p.node < 0) return;
     if (d.text) return; // JSON over the socket is maarse-host only (MeshCore); not simulated
     p.sent++;
-    try { s.call({ cmd: "phone_cmd", node: p.node, frame: d.frame }); }
+    try { s.call({ cmd: "phone_cmd", node: p.node, screen: LETTERS.indexOf(p.id) + 1, frame: d.frame }); }
     catch (err) { status(p, "Engine: " + err.message); }
     pump(p);
   });
@@ -369,7 +369,7 @@
     const s = sim();
     if (!s || p.node < 0 || !p.ready || p.state !== "on") return;
     let r;
-    try { r = s.call({ cmd: "phone_events", node: p.node }); } catch (e) { return; }
+    try { r = s.call({ cmd: "phone_events", node: p.node, screen: LETTERS.indexOf(p.id) + 1 }); } catch (e) { return; }
     p.link = r.link;
     const alive = r.alive !== false;
     const changed = alive !== p.alive;

@@ -68,6 +68,14 @@ pub struct Scenario {
     /// every km inside the area costs `db_per_km`, heights ignored).
     #[serde(default)]
     pub clutter_model: String,
+    /// Use the ground height grid loaded with the `terrain` call: hills
+    /// block and diffract links, and hilltops see further (terrain.rs).
+    #[serde(default)]
+    pub terrain: bool,
+    /// Antenna height (m) per node kind ("repeater": 30, ...) for nodes
+    /// without their own `h`; kinds not listed keep the built-in default.
+    #[serde(default)]
+    pub heights: std::collections::BTreeMap<String, f64>,
     /// Every node announces every `announce_s` seconds (the firmware default
     /// is 12 h): the first time at a random moment within the interval, then
     /// every interval ±10 %. 0 = no periodic announces. A rebooted node
@@ -261,6 +269,8 @@ impl Default for Scenario {
             events: Vec::new(),
             clutter: Vec::new(),
             clutter_model: String::new(),
+            terrain: false,
+            heights: Default::default(),
             announce_s: 0.0,
             relay_hops: 4,
             auto_relay_after_s: 600.0,

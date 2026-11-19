@@ -197,6 +197,7 @@
   function rebuild() {
     if (sim) sim.free();
     sim = null;
+    if (window.DKTerrain) scenario.terrain = DKTerrain.on;   // terrain.js: hills on the links
     try { sim = new Engine.Sim(scenario); }
     catch (e) { showNote("Scenario error: " + e.message); return; }
     lastSeq = 0; jsPending = []; overlay = null; followMsg = -1; journeyKey = "";
@@ -204,6 +205,7 @@
     hiLayer.clearLayers(); animLayer.clearLayers(); $("card").classList.add("hidden");
     state = sim.state();
     computeTowns(); drawNodes(); drawClutter(); drawDisasters();
+    if (window.DKTerrain) DKTerrain.syncHeights();
     updateClock(); renderStats(); renderTimeline(); fillSenders(); renderAlerts(); renderHud(); renderFeed(true); drawHist();
     $("sc-info").textContent = `${scenario.name || "scenario"}: ${scenario.nodes.length} nodes, ${scenario.links.length} backbone links, ${scenario.events.length} timeline events.${scenario.nodes.length > perf.maxNodes ? ` Over this browser's limit of ${perf.maxNodes} nodes (Build > Performance): it may run slowly.` : ""}`;
   }
@@ -1506,7 +1508,7 @@
     let h = `<h3>${esc(name(selected))}</h3>
       <div class="row"><button id="in-from">Send from here</button><button id="in-to">Send to here</button><button id="in-announce">Announce: show reach</button></div>
       <label>Kind <select id="in-kind">${opt(n.kind, Object.keys(KIND_COLOR))}</select> Label <input id="in-label" value="${esc(n.label || "")}" size="12"></label>
-      <label>SF <select id="in-sf">${opt(n.sf || "default", ["default", 7, 8, 9, 10, 11, 12])}</select> Antenna m <input id="in-h" type="number" step="0.5" style="width:60px" value="${n.h || ""}" placeholder="auto"></label>
+      <label>SF <select id="in-sf">${opt(n.sf || "default", ["default", 7, 8, 9, 10, 11, 12])}</select> Antenna m <input id="in-h" type="number" step="0.5" style="width:60px" value="${n.h || ""}" placeholder="${ins ? ins.h : "auto"}"><span id="in-ground" class="hint"></span></label>
       <label>Battery Wh <input id="in-batt" type="number" style="width:70px" value="${n.battery_wh ?? ""}" placeholder="auto"> Carry copies <input id="in-carry" type="number" style="width:50px" min="0" max="8" value="${n.carry || 0}"></label>
       <label>Wander radius m <input id="in-wander" type="number" style="width:70px" value="${n.wander_m || ""}" placeholder="0"> speed km/h <input id="in-speed" type="number" style="width:55px" value="${n.speed_kmh || ""}"></label>
       <label><input type="checkbox" id="in-net" ${n.internet ? "checked" : ""}> Internet</label>
@@ -1527,6 +1529,13 @@
         ${ins.links.length ? `<h3>Backbone</h3><p class="hint">${ins.links.map(l => `${l.kind} → ${esc(name(l.peer))} ${l.ok ? "up" : "down"}`).join(" · ")}</p>` : ""}`;
     }
     box.innerHTML = h;
+    if (window.DKTerrain && ins) {
+      const sel = selected;
+      DKTerrain.heightAt(n.lat, n.lon).then((g) => {
+        const el = $("in-ground");
+        if (el && sel === selected) el.textContent = ` ground ${Math.max(0, g).toFixed(0)} m, top ${(Math.max(0, g) + ins.h).toFixed(0)} m above sea`;
+      }, () => {});
+    }
     box.querySelectorAll("tr[data-n]").forEach(r => r.onclick = () => selectNode(+r.dataset.n, true));
     $("in-apply").onclick = () => {
       n.kind = $("in-kind").value; n.label = $("in-label").value;

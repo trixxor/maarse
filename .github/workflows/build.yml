@@ -24,6 +24,7 @@ jobs:
           python3 tools/build_denmark_sim.py
           node tools/denmark_sim_test.mjs
           node tools/phone_parity_test.mjs
+          node tools/terrain_test.mjs
       - name: Upload (Linux)
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4

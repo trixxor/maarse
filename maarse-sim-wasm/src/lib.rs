@@ -17,6 +17,7 @@
 
 pub mod engine;
 pub mod scenario;
+pub mod terrain;
 
 use engine::Engine;
 use serde_json::{Value, json};
@@ -67,6 +68,46 @@ fn content_file(e: &mut Engine, cmd: &Value) -> Value {
         Ok(k) => e.item_json(k),
         Err((_, why)) => json!({"state": "refused", "why": why, "bytes": bytes}),
     }
+}
+
+/// `terrain {lat0, lon0, dlat, dlon, w, h, data}`: loads the ground height
+/// grid (base64 of zlib-deflated bytes, one metre per step, row 0 = lat0)
+/// for every engine built after it with `"terrain": true`; no `data` clears it.
+fn set_terrain(cmd: &Value) -> Value {
+    let Some(b64) = cmd["data"].as_str() else {
+        terrain::set(None);
+        return json!({"ok": true, "cells": 0});
+    };
+    let f = |k: &str| cmd[k].as_f64().unwrap_or(0.0);
+    let (w, h) = (cmd["w"].as_u64().unwrap_or(0) as usize, cmd["h"].as_u64().unwrap_or(0) as usize);
+    let z = match base64(b64).and_then(|raw| miniz_oxide::inflate::decompress_to_vec_zlib(&raw).ok()) {
+        Some(z) if z.len() == w * h && w > 1 && h > 1 => z,
+        _ => return json!({"error": "bad terrain grid"}),
+    };
+    terrain::set(Some(terrain::Grid { lat0: f("lat0"), lon0: f("lon0"), dlat: f("dlat"), dlon: f("dlon"), w, h, z }));
+    json!({"ok": true, "cells": w * h})
+}
+
+fn base64(s: &str) -> Option<Vec<u8>> {
+    let val = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0);
+    for c in s.bytes().filter(|&c| c != b'=' && !c.is_ascii_whitespace()) {
+        acc = (acc << 6) | val(c)? as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
 }
 
 /// Runs one command on an engine. Commands (`cmd`):
@@ -139,6 +180,8 @@ pub fn call(e: &mut Engine, cmd: &Value) -> Value {
             json!({"ok": true})
         }
         "alert" if u("index") < e.alerts.len() => e.alert_summary(u("index"), true),
+        "terrain" => set_terrain(cmd),
+        "terrain_loss" if u("a") < e.nodes.len() && u("b") < e.nodes.len() => json!({"db": e.terrain_loss(u("a"), u("b"))}),
         "rules" => {
             // The firmware's radio default (maarse_core::companion::RadioConfig::EU_DEFAULT).
             let r = maarse_core::companion::RadioConfig::EU_DEFAULT;

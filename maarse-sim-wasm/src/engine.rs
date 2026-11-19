@@ -53,6 +53,7 @@ pub mod phone;
 // Files, voice, pictures, Pages, calls and the IP tunnel; see transfer.rs.
 #[path = "transfer.rs"]
 pub mod transfer;
+use crate::terrain;
 
 /// Projection centre (Denmark).
 const LAT0: f64 = 56.0;
@@ -666,6 +667,8 @@ pub struct Engine {
     ids: HashMap<u16, usize>,
     addr_idx: HashMap<Address, usize>,
     clutter: Vec<LossArea>,
+    /// Ground heights, when the scenario asks for terrain (terrain.rs).
+    terrain: Option<std::sync::Arc<terrain::Grid>>,
     degrade: Vec<LossArea>,
     /// DHT backbone: gateway host per node (-1 = none), recomputed when dirty.
     gw: Vec<i32>,
@@ -884,7 +887,7 @@ impl Engine {
                 kind,
                 x,
                 y,
-                h: if spec.h > 0.0 { spec.h } else { kind.default_h() },
+                h: if spec.h > 0.0 { spec.h } else { sc.heights.get(kind.name()).copied().filter(|h| *h > 0.0).unwrap_or(kind.default_h()) },
                 sf,
                 dead: DeadWhy::Alive,
                 powered: true,
@@ -986,6 +989,7 @@ impl Engine {
             phones: Default::default(),
             xf: Default::default(),
             clutter: Vec::new(),
+            terrain: None,
             degrade: Vec::new(),
             gw: Vec::new(),
             gw_dirty: true,
@@ -1064,6 +1068,7 @@ impl Engine {
                 a
             })
             .collect();
+        e.terrain = if e.sc.terrain { terrain::get() } else { None };
         e.build_links();
         e.seed_neighbors();
         // Timeline, sorted by time (stable).
@@ -1152,10 +1157,8 @@ impl Engine {
             return None;
         }
         let d = (na.x - nb.x).hypot(na.y - nb.y);
-        if d > horizon_m(na.h, nb.h) {
-            return None;
-        }
-        let g = na.kind.ant_db() + nb.kind.ant_db() + height_db(na.h) + height_db(nb.h) - self.extra_loss(a, b);
+        let (ha, hb, hills) = self.heights(a, b, d)?;
+        let g = na.kind.ant_db() + nb.kind.ant_db() + height_db(ha) + height_db(hb) - self.extra_loss(a, b) - hills;
         let r = self.radio(na.sf);
         let rx = r.rx_dbm(d, g);
         (r.snr(rx) >= r.snr_min - 6.0).then_some(rx as f32)
@@ -1174,9 +1177,54 @@ impl Engine {
         clutter + degrade
     }
 
+    /// Ground height (m) under node `i`; 0 without terrain.
+    fn ground(&self, i: usize) -> f64 {
+        match &self.terrain {
+            Some(t) => {
+                let (la, lo) = to_ll(self.nodes[i].x, self.nodes[i].y);
+                t.at(la, lo)
+            }
+            None => 0.0,
+        }
+    }
+
+    /// Effective antenna heights of the link a-b and the extra loss over
+    /// hills; `None` beyond the radio horizon. Without terrain: the heights
+    /// above the ground and no extra loss. With terrain (terrain.rs) a node
+    /// above the ground along the path counts as taller.
+    fn heights(&self, a: usize, b: usize, d: f64) -> Option<(f64, f64, f64)> {
+        let (na, nb) = (&self.nodes[a], &self.nodes[b]);
+        let Some(t) = &self.terrain else {
+            return (d <= horizon_m(na.h, nb.h)).then_some((na.h, nb.h, 0.0));
+        };
+        // Cheap bound first: no node is taller than its height above sea.
+        if d > horizon_m(na.h + self.ground(a), nb.h + self.ground(b)) {
+            return None;
+        }
+        let f = if self.sc.freq_mhz > 0.0 { self.sc.freq_mhz } else { 869.525 };
+        let p = t.path(to_ll(na.x, na.y), to_ll(nb.x, nb.y), d, na.h, nb.h, f);
+        (d <= horizon_m(p.ha_eff, p.hb_eff)).then_some((p.ha_eff, p.hb_eff, p.excess_db))
+    }
+
+    /// Extra loss (dB) from the hills between two nodes, negative when the
+    /// nodes stand above the ground between them (terrain.rs); 0 without terrain.
+    pub fn terrain_loss(&self, a: usize, b: usize) -> f64 {
+        let (na, nb) = (&self.nodes[a], &self.nodes[b]);
+        let d = (na.x - nb.x).hypot(na.y - nb.y);
+        match (&self.terrain, self.heights(a, b, d)) {
+            (Some(_), Some((ha, hb, hills))) => hills - (height_db(ha) - height_db(na.h)) - (height_db(hb) - height_db(nb.h)),
+            (Some(t), None) => {
+                let f = if self.sc.freq_mhz > 0.0 { self.sc.freq_mhz } else { 869.525 };
+                t.path(to_ll(na.x, na.y), to_ll(nb.x, nb.y), d, na.h, nb.h, f).excess_db
+            }
+            _ => 0.0,
+        }
+    }
+
     fn build_links(&mut self) {
         self.grid.clear();
-        let maxh = self.nodes.iter().map(|n| n.h).fold(1.5, f64::max);
+        let top = if self.terrain.is_some() { (0..self.nodes.len()).map(|i| self.ground(i)).fold(0.0, f64::max) } else { 0.0 };
+        let maxh = self.nodes.iter().map(|n| n.h).fold(1.5, f64::max) + top;
         self.max_range = horizon_m(maxh, maxh);
         for (i, n) in self.nodes.iter().enumerate() {
             self.grid.entry(Self::cell(n.x, n.y)).or_default().push(i as u32);
@@ -3744,10 +3792,8 @@ impl Engine {
             return None;
         }
         let d = (na.x - nb.x).hypot(na.y - nb.y);
-        if d > horizon_m(na.h, nb.h) {
-            return None;
-        }
-        let g = na.kind.ant_db() + nb.kind.ant_db() + height_db(na.h) + height_db(nb.h) - self.extra_loss(a, b);
+        let (ha, hb, hills) = self.heights(a, b, d)?;
+        let g = na.kind.ant_db() + nb.kind.ant_db() + height_db(ha) + height_db(hb) - self.extra_loss(a, b) - hills;
         let fade = self.rng.gen_range(-3.0..3.0);
         let r = self.radio(sf);
         let rx = r.rx_dbm(d, g) + fade;

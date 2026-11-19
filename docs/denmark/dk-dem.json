@@ -1,0 +1,9 @@
+{
+ "lat0": 54.5,
+ "lon0": 7.9,
+ "dlat": 0.0025,
+ "dlon": 0.004,
+ "w": 1851,
+ "h": 1321,
+ "source": "Terrarium elevation tiles (AWS open data, SRTM), zoom 10"
+}

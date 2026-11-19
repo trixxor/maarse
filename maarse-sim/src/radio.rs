@@ -14,6 +14,11 @@ pub struct Radio {
     pub extra_db_m: f64,
     /// Path loss at 1 m (free space at the carrier frequency).
     pub loss_1m_db: f64,
+    /// Path loss exponent n (loss grows 10·n dB per decade of distance);
+    /// 3 until calibrated against field measurements.
+    pub path_n: f64,
+    /// Extra loss (dB) on every link from calibration (cables, body, ...).
+    pub offset_db: f64,
 }
 
 impl Radio {
@@ -47,13 +52,15 @@ impl Radio {
             snr_min,
             extra_db_m: 0.0,
             loss_1m_db,
+            path_n: 3.0,
+            offset_db: 0.0,
         }
     }
 
     pub fn rx_dbm(&self, dist_m: f64, gain_db: f64) -> f64 {
         let d = dist_m.max(1.0);
-        let path_loss = self.loss_1m_db + 30.0 * d.log10();
-        self.tx_dbm + gain_db - path_loss - self.extra_db_m * d
+        let path_loss = self.loss_1m_db + 10.0 * self.path_n * d.log10();
+        self.tx_dbm + gain_db - path_loss - self.extra_db_m * d - self.offset_db
     }
 
     pub fn snr(&self, rx_dbm: f64) -> f64 {

@@ -50,6 +50,9 @@ pub struct Scenario {
     /// Carrier frequency (MHz) and bandwidth (Hz) of every node. 0 = 868 MHz / 125 kHz.
     pub freq_mhz: f64,
     pub bw_hz: u32,
+    /// Radio model calibration from field measurements
+    /// (tools/calibrate_radio.py): path loss exponent (0 = 3) and offset.
+    pub radio_cal: RadioCal,
     /// Length of a "run to end" (comparisons, headless test), seconds.
     #[serde(default = "d_dur")]
     pub duration_s: u64,
@@ -249,6 +252,7 @@ impl Default for Scenario {
             tx_dbm: 20.0,
             freq_mhz: 0.0,
             bw_hz: 0,
+            radio_cal: RadioCal::default(),
             duration_s: 1800,
             features: Features::default(),
             nodes: Vec::new(),
@@ -673,4 +677,13 @@ pub struct TimedEvent {
     /// `flood`: packets a second (0 = 1000) for `duration_s` seconds (0 = 60).
     pub per_s: u32,
     pub duration_s: f64,
+}
+
+/// Radio model calibration (see tools/calibrate_radio.py).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct RadioCal {
+    /// Path loss exponent n; 0 = the model's default (3).
+    pub path_n: f64,
+    pub offset_db: f64,
 }

@@ -806,7 +806,7 @@ fn ptype_name(p: PacketType) -> &'static str {
 impl Engine {
     pub fn new(sc: Scenario) -> Engine {
         let mut rng = SmallRng::seed_from_u64(sc.seed);
-        let radios: Vec<Radio> = (7..=12).map(|sf| Radio::with_band(sf, sc.tx_dbm, sc.freq_mhz, sc.bw_hz)).collect();
+        let radios: Vec<Radio> = (7..=12).map(|sf| calibrated(Radio::with_band(sf, sc.tx_dbm, sc.freq_mhz, sc.bw_hz), &sc.radio_cal)).collect();
         let public_channel = Address([0xc0; 16]);
         let bulletin_channel = bulletin::channel();
         // The authority's signing key is derived from the seed, so runs repeat.
@@ -4482,7 +4482,8 @@ impl Engine {
                     self.sc.tx_dbm = ev.tx_dbm;
                 }
                 let (tx, f, bw) = (self.sc.tx_dbm, self.sc.freq_mhz, self.sc.bw_hz);
-                self.radios = (7..=12).map(|sf| Radio::with_band(sf, tx, f, bw)).collect();
+                let cal = self.sc.radio_cal;
+                self.radios = (7..=12).map(|sf| calibrated(Radio::with_band(sf, tx, f, bw), &cal)).collect();
                 self.build_links();
                 // A new channel can fall in a stricter sub-band.
                 let duty = effective_duty(&self.sc);
@@ -5150,4 +5151,13 @@ pub(crate) fn effective_duty(sc: &Scenario) -> u32 {
     let f = if sc.freq_mhz > 0.0 { (sc.freq_mhz * 1e6) as u32 } else { maarse_core::companion::RadioConfig::EU_DEFAULT.freq_hz };
     let bw = if sc.bw_hz > 0 { sc.bw_hz } else { 125_000 };
     sc.duty_permille.min(maarse_core::duty::eu_band_permille(f, bw))
+}
+
+/// The radio model with the scenario's field calibration applied.
+fn calibrated(mut r: Radio, cal: &RadioCal) -> Radio {
+    if cal.path_n > 0.0 {
+        r.path_n = cal.path_n;
+    }
+    r.offset_db = cal.offset_db;
+    r
 }

@@ -80,5 +80,17 @@ const Reuse = (() => {
     return new Blob([h, pcm], { type: "audio/wav" });
   }
 
-  return { markup, voiceEncode, voiceDecode, wavBlob };
+  // ---------- safety numbers (the client's own code between its markers) ----------
+  let safety = null;
+  async function safetyNumber(keyA, keyB) {
+    if (!safety) {
+      const html = await load();
+      const code = between(html, "// <safety-number>", "// </safety-number>");
+      if (!code) throw new Error("the safety number code was not found in client.html");
+      safety = new Function(code + "\n;return safetyNumber;")();
+    }
+    return safety(keyA, keyB);
+  }
+
+  return { markup, voiceEncode, voiceDecode, wavBlob, safetyNumber };
 })();

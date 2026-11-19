@@ -141,6 +141,7 @@ fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
                 Card2 { Text("%.4f, %.4f".format(it.lat, it.lon)) }
             }
         }
+        SafetyNumber(addr)
         GroupTitle("Address")
         Card2 {
             SelectionContainer { Text(addr, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
@@ -148,6 +149,42 @@ fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
         }
     }
     if (naming) NicknameDialog(addr) { naming = false }
+}
+
+/**
+ * The safety number with a contact (as the web client's "Verify key"):
+ * compare it with theirs in person or on a call; then mark it verified.
+ */
+@Composable
+private fun SafetyNumber(addr: String) {
+    Node.keys.collectAsState().value
+    Node.verified.collectAsState().value
+    val mine by Node.myKey.collectAsState()
+    val num = remember(addr, mine, Node.keys.value[addr]) { Node.safetyNumber(addr) }
+    GroupTitle("Safety number")
+    Card2 {
+        when {
+            mine == null -> Text("The node has not reported its own key (older firmware?).", style = MaterialTheme.typography.bodySmall)
+            num == null -> Text("The contact's key is not known yet. Wait for an announce from it.", style = MaterialTheme.typography.bodySmall)
+            else -> {
+                if (Node.keyChanged(addr)) Text("⚠ The contact's key has changed since you verified it. Compare the number again before you trust it.",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                Text("Compare these numbers with the ones on their screen, in person or on a call where you know their voice. If they are the same, nobody is in between.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // 12 groups of 5 digits, 4 per row.
+                num.chunked(5).chunked(4).forEach { row ->
+                    Row(Modifier.padding(vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        row.forEach { Text(it, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium) }
+                    }
+                }
+                val ok = Node.isVerified(addr)
+                if (ok) Text("✓ Verified", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                androidx.compose.material3.TextButton(onClick = { Node.setVerified(addr, !ok) }) {
+                    Text(if (ok) "Remove verification" else "Mark as verified")
+                }
+            }
+        }
+    }
 }
 
 @Composable

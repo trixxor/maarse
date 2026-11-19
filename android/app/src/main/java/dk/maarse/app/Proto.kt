@@ -114,13 +114,15 @@ data class Neighbor(val id: Int, val prefix: String, val snr: Int, val rssi: Int
 
 /** Replies and events from the node. */
 sealed class Ev {
-    data class Info(val addr: String, val repeater: Boolean, val version: Int, val maxText: Int, val maxFile: Long) : Ev()
+    /** `identity`: the node's public key (hex, 64 bytes), for safety numbers. */
+    data class Info(val addr: String, val repeater: Boolean, val version: Int, val maxText: Int, val maxFile: Long, val identity: String? = null) : Ev()
     data class Sent(val req: Int, val msgId: Long) : Ev()
     data class Direct(val from: String, val hops: Int, val text: String) : Ev()
     data class Channel(val channel: String, val from: String, val hops: Int, val text: String) : Ev()
     data class Acked(val msgId: Long) : Ev()
     data class Route(val dest: String, val hops: Int) : Ev()
-    data class Heard(val addr: String, val hops: Int) : Ev()
+    /** `identity`: the node's public key (hex, 64 bytes), when the host sends it. */
+    data class Heard(val addr: String, val hops: Int, val identity: String? = null) : Ev()
     data class Joined(val channel: String, val name: String) : Ev()
     data class Log(val text: String) : Ev()
     data class Error(val req: Int, val code: Int, val text: String) : Ev()
@@ -187,13 +189,13 @@ fun decodeEvent(f: ByteArray): Ev {
     if (f.isEmpty()) return Ev.Unknown(0)
     val r = Rd(f)
     return when (val t = r.u8(0)) {
-        0x81 -> Ev.Info(r.addr(1), r.u8(17) != 0, r.u8(18), r.u8(19), if (f.size >= 24) r.u32(20) else 0)
+        0x81 -> Ev.Info(r.addr(1), r.u8(17) != 0, r.u8(18), r.u8(19), if (f.size >= 24) r.u32(20) else 0, if (f.size >= 88) f.copyOfRange(24, 88).hex() else null)
         0x82 -> Ev.Sent(r.u16(1), r.u64(3))
         0x83 -> Ev.Direct(r.addr(1), r.u8(17), r.txt(18))
         0x84 -> Ev.Channel(r.addr(1), r.addr(17), r.u8(33), r.txt(34))
         0x85 -> Ev.Acked(r.u64(1))
         0x86 -> Ev.Route(r.addr(1), r.u8(17))
-        0x87 -> Ev.Heard(r.addr(1), r.u8(17))
+        0x87 -> Ev.Heard(r.addr(1), r.u8(17), if (f.size >= 82) f.copyOfRange(18, 82).hex() else null)
         0x88 -> Ev.Joined(r.addr(1), r.txt(17))
         0x8e -> Ev.Log(r.txt(1))
         0x8f -> Ev.Error(r.u16(1), r.u8(3), r.txt(4))

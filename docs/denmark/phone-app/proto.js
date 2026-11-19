@@ -97,13 +97,13 @@ function decodeEvent(f) {
   const t = r.u8(0);
   const sub = (o) => f.subarray(Math.min(o, f.length));
   switch (t) {
-    case 0x81: return { t: "Info", addr: r.addr(1), repeater: r.u8(17) !== 0, version: r.u8(18), maxText: r.u8(19), maxFile: f.length >= 24 ? r.u32(20) : 0 };
+    case 0x81: return { t: "Info", addr: r.addr(1), repeater: r.u8(17) !== 0, version: r.u8(18), maxText: r.u8(19), maxFile: f.length >= 24 ? r.u32(20) : 0, identity: f.length >= 88 ? f.slice(24, 88) : null };
     case 0x82: return { t: "Sent", req: r.u16(1), msgId: r.u64(3) };
     case 0x83: return { t: "Direct", from: r.addr(1), hops: r.u8(17), text: r.txt(18) };
     case 0x84: return { t: "Channel", channel: r.addr(1), from: r.addr(17), hops: r.u8(33), text: r.txt(34) };
     case 0x85: return { t: "Acked", msgId: r.u64(1) };
     case 0x86: return { t: "Route", dest: r.addr(1), hops: r.u8(17) };
-    case 0x87: return { t: "Heard", addr: r.addr(1), hops: r.u8(17) };
+    case 0x87: return { t: "Heard", addr: r.addr(1), hops: r.u8(17), identity: f.length >= 82 ? f.slice(18, 82) : null };
     case 0x88: return { t: "Joined", channel: r.addr(1), name: r.txt(17) };
     case 0x8e: return { t: "Log", text: r.txt(1) };
     case 0x8f: return { t: "Error", req: r.u16(1), code: r.u8(3), text: r.txt(4) };

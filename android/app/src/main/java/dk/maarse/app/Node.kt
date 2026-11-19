@@ -40,6 +40,11 @@ object Node : LinkListener {
     val announces = MutableStateFlow<List<Triple<String, Int, Long>>>(emptyList())
     private var infoAt = 0L
     val nicknames = MutableStateFlow<Map<String, String>>(emptyMap())
+    /** Our node's public key and the contacts' keys (hex), for safety numbers. */
+    val myKey = MutableStateFlow<String?>(null)
+    val keys = MutableStateFlow<Map<String, String>>(emptyMap())
+    /** Verified contacts: address -> the key that was verified. */
+    val verified = MutableStateFlow<Map<String, String>>(emptyMap())
     val stats = MutableStateFlow<Map<Int, Int>>(emptyMap())
     val radio = MutableStateFlow<RadioCfg?>(null)
     val regions = MutableStateFlow<Ev.Regions?>(null)
@@ -83,6 +88,8 @@ object Node : LinkListener {
         db = Db(app)
         prefs = Prefs(app)
         nicknames.value = prefs.nicknames
+        keys.value = prefs.keys
+        verified.value = prefs.verified
         dismissed.value = prefs.dismissedAlerts
         channels.value = db.channels()
         nodes.value = db.nodes().associateBy { it.addr }
@@ -515,6 +522,27 @@ object Node : LinkListener {
 
     fun joinChannel(name: String) { send(Cmd.join(name.trim().removePrefix("#"))) }
 
+    /** The safety number with `addr`, or null while a key is missing. */
+    fun safetyNumber(addr: String): String? {
+        val mine = myKey.value ?: return null
+        val theirs = keys.value[addr] ?: return null
+        return Safety.number(mine.unhex(), theirs.unhex())
+    }
+
+    /** Verified, and the key is still the one that was verified? */
+    fun isVerified(addr: String): Boolean = verified.value[addr]?.let { it == keys.value[addr] } == true
+
+    /** Verified earlier, but the contact's key has changed since. */
+    fun keyChanged(addr: String): Boolean = verified.value[addr]?.let { it != keys.value[addr] } == true
+
+    fun setVerified(addr: String, on: Boolean) {
+        val m = verified.value.toMutableMap()
+        val k = keys.value[addr]
+        if (on && k != null) m[addr] = k else m.remove(addr)
+        verified.value = m
+        prefs.verified = m
+    }
+
     fun setNickname(addr: String, nick: String) {
         val m = nicknames.value.toMutableMap()
         if (nick.isBlank()) m.remove(addr) else m[addr] = nick.trim()
@@ -610,6 +638,7 @@ object Node : LinkListener {
             is Ev.Info -> {
                 infoAt = System.currentTimeMillis()
                 me.value = Me(ev.addr, ev.maxText, ev.maxFile, ev.repeater, ev.version, me.value?.name ?: "")
+                myKey.value = ev.identity
                 note("Node ${shortAddr(ev.addr)} (protocol v${ev.version}, ${ev.maxText} bytes per message)")
             }
             is Ev.Name -> me.update { it?.copy(name = ev.name) }
@@ -618,6 +647,12 @@ object Node : LinkListener {
                 db.saveChannel(ev.channel, ev.name)
             }
             is Ev.Heard -> {
+                ev.identity?.let { k ->
+                    if (keys.value[ev.addr] != k) {
+                        keys.value = keys.value + (ev.addr to k)
+                        prefs.keys = keys.value
+                    }
+                }
                 // Right after connecting the node lists every node it knows
                 // (as Heard with 0 hops); those are not new announces.
                 if (ev.addr != me.value?.addr && System.currentTimeMillis() - infoAt > 3000) announces.update { l ->

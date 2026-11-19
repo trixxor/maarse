@@ -28,7 +28,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const $ = (s, r = document) => r.querySelector(s);
 
 // ---------- node state (Node.kt) ----------
-const N = {
+const N = { myKey: null, keys: {}, verified: {}, safety: {},
   online: true, alive: true, offlineWhy: "",
   me: null, infoAt: 0,
   stats: {}, neighbors: [], log: [], channels: {}, nodes: {}, nick: {}, announces: [],
@@ -180,10 +180,11 @@ function simNote(text) {
 
 function onEvent(ev) {
   switch (ev.t) {
-    case "Info": N.infoAt = Date.now(); N.me = { addr: ev.addr, maxText: ev.maxText, maxFile: ev.maxFile, repeater: ev.repeater, version: ev.version, name: N.me?.name || "" }; note(`Node ${shortAddr(ev.addr)} (protocol v${ev.version}, ${ev.maxText} bytes per message)`); break;
+    case "Info": N.myKey = ev.identity; N.infoAt = Date.now(); N.me = { addr: ev.addr, maxText: ev.maxText, maxFile: ev.maxFile, repeater: ev.repeater, version: ev.version, name: N.me?.name || "" }; note(`Node ${shortAddr(ev.addr)} (protocol v${ev.version}, ${ev.maxText} bytes per message)`); break;
     case "Name": if (N.me) N.me.name = ev.name; break;
     case "Joined": N.channels[ev.channel] = ev.name; break;
     case "Heard":
+      if (ev.identity) N.keys[ev.addr] = ev.identity;
       if (ev.addr !== N.me?.addr && Date.now() - N.infoAt > 3000) {
         const now = Date.now();
         N.announces = [[ev.addr, ev.hops, now]].concat(N.announces.filter((a) => !(a[0] === ev.addr && now - a[2] < 60000))).slice(0, 200);
@@ -572,7 +573,32 @@ function contactScreen(addr) {
     <div class="actions"><button class="action" data-act="open" data-c="dm:${addr}">${icon("chatFilled")}<span class="ll">Message</span></button>${Calls.possible() ? `<button class="action" data-act="call" data-a="${addr}">${icon("call")}<span class="ll">Call</span></button>` : `<button class="action" data-act="trace" data-a="${addr}">${icon("route")}<span class="ll">Route</span></button>`}<button class="action" data-act="nick" data-a="${addr}">${icon("edit")}<span class="ll">Name</span></button></div>
     ${t ? gtitle("Route") + card2(`<div class="sb">${t.path.length} hops</div><div class="bs">Signal out: ${t.out.map((x) => x + " dB").join(" · ")}</div><div class="bs">Signal back: ${t.back.map((x) => x + " dB").join(" · ")}</div>`) : ""}
     ${n?.lat != null ? gtitle("Position (shared by them)") + card2(`${n.lat.toFixed(4)}, ${n.lon.toFixed(4)}`) : ""}
+    ${safetyCard(addr)}
     ${gtitle("Address")}${card2(`<div class="bs mono">${addr}</div><div class="bs mute">Messages to this address are end-to-end encrypted. Short form: ${shortAddr(addr)}</div>`)}<div style="height:24px"></div></div>`;
+}
+
+// Safety number (Nodes.kt SafetyNumber), computed with the web client's own code.
+const hexOf = (b) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+function safetyCard(addr) {
+  const theirs = N.keys[addr];
+  let body;
+  if (!N.myKey) body = `<div class="bs">The node has not reported its own key (older firmware?).</div>`;
+  else if (!theirs) body = `<div class="bs">The contact's key is not known yet. Wait for an announce from it.</div>`;
+  else {
+    const key = hexOf(N.myKey) + ":" + hexOf(theirs);
+    if (N.safety[key] === undefined) {
+      N.safety[key] = null;
+      Reuse.safetyNumber(N.myKey, theirs).then((n) => { N.safety[key] = n; render(); }).catch((e) => { N.safety[key] = "error: " + e.message; render(); });
+    }
+    const num = N.safety[key];
+    const ver = N.verified[addr], ok = ver === hexOf(theirs), changed = ver && !ok;
+    body = (changed ? `<div class="bs err">⚠ The contact's key has changed since you verified it. Compare the number again before you trust it.</div>` : "") +
+      `<div class="bs mute">Compare these numbers with the ones on their screen, in person or on a call where you know their voice. If they are the same, nobody is in between.</div>` +
+      (num && !num.startsWith("error") ? `<div class="safety">${num.match(/.{5}/g).map((g) => `<span>${g}</span>`).join("")}</div>` : `<div class="bs">${esc(num || "Computing…")}</div>`) +
+      (ok ? `<div class="sb pri">✓ Verified</div>` : "") +
+      `<button class="btn text" data-act="verify" data-a="${addr}">${ok ? "Remove verification" : "Mark as verified"}</button>`;
+  }
+  return gtitle("Safety number") + card2(body);
 }
 
 function networkScreen() {
@@ -883,6 +909,7 @@ function act(a, el) {
     case "addCancel": UI.adding = false; break;
     case "linkDev": { const a = ($("#linkaddr")?.value || "").trim().toLowerCase(); if (/^[0-9a-f]{32}$/.test(a)) { N.lastError = null; send(Cmd.linkDevice(req(), a)); } else N.lastError = "Enter the 32-character address the new device shows."; break; }
     case "removeDev": personSetup(PersonOp.REMOVE, d.a); break;
+    case "verify": { const k = N.keys[d.a]; if (N.verified[d.a] === (k && hexOf(k))) delete N.verified[d.a]; else if (k) N.verified[d.a] = hexOf(k); break; }
     case "saveName": { const v = ($("#myname")?.value || "").trim(); send(Cmd.setName(v)); send(Cmd.getName()); send(Cmd.announce()); UI.myname = undefined; break; }
     case "saveRegions": send(Cmd.setRegions(N.regions?.strict || false, ($("#regions")?.value || "").trim())); send(Cmd.getRegions()); break;
     case "prec": { const sh = N.sharing; send(Cmd.setSharing(+d.i, Math.round(sh.lat * 1e7), Math.round(sh.lon * 1e7), sh.telemetry)); send(Cmd.getSharing()); break; }

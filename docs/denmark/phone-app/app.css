@@ -214,3 +214,6 @@ button { cursor:pointer; }
    panels should not select text). */
 body { -webkit-user-select:none; user-select:none; }
 input, textarea, select, [contenteditable="true"], [contenteditable=""] { -webkit-user-select:text; user-select:text; }
+
+/* Safety number: 12 groups of 5 digits, 4 per row (Nodes.kt) */
+.safety { display: grid; grid-template-columns: repeat(4, max-content); gap: 4px 14px; font-family: "Roboto Mono", monospace; font-weight: 600; font-size: 16px; margin: 6px 0; }

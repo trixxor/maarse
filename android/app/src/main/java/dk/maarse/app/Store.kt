@@ -202,6 +202,16 @@ class Prefs(ctx: Context) {
         get() = runCatching { JSONObject(p.getString("nicknames", "{}")!!).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.getOrDefault(emptyMap())
         set(v) = p.edit().putString("nicknames", JSONObject(v).toString()).apply()
 
+    /** Public keys heard per address (hex), for safety numbers. */
+    var keys: Map<String, String>
+        get() = runCatching { JSONObject(p.getString("keys", "{}")!!).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.getOrDefault(emptyMap())
+        set(v) = p.edit().putString("keys", JSONObject(v).toString()).apply()
+
+    /** Contacts marked as verified: address -> the key that was verified. */
+    var verified: Map<String, String>
+        get() = runCatching { JSONObject(p.getString("verified", "{}")!!).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.getOrDefault(emptyMap())
+        set(v) = p.edit().putString("verified", JSONObject(v).toString()).apply()
+
     var dismissedAlerts: Set<String>
         get() = p.getStringSet("dismissed", emptySet()) ?: emptySet()
         set(v) = p.edit().putStringSet("dismissed", v).apply()

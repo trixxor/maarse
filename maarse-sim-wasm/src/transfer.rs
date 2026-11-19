@@ -2243,7 +2243,8 @@ mod tests {
 
     #[test]
     fn phone_link_drop_loses_what_arrives_meanwhile() {
-        let mut e = world(json!({}));
+        // The firmware before hold_direct (2026-11-19).
+        let mut e = world(json!({"features": {"hold_direct": false}}));
         // A phone on handheld 3 (firmware node, Bluetooth to the radio).
         e.phone_cmd(3, &[]);
         e.phone_link_drop(3, 120_000);

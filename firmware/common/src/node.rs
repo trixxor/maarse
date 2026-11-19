@@ -33,6 +33,8 @@ use maarse_crypto::{
 mod files;
 
 
+/// A USB client counts as gone after this long without a frame.
+const CLIENT_GONE_S: u32 = 60;
 /// Attempts per slice when an announce stamp is computed. 256 SHA-256 blocks
 /// take about 20 ms on a 64 MHz Cortex-M4; then the executor gets a turn.
 const STAMP_CHUNK: u32 = 256;
@@ -616,6 +618,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             self.next_mobile_check = Instant::now() + Duration::from_secs(5);
             return;
         }
+        self.hold_direct_step();
         let actions = self.router.tick(now_ms());
         self.apply(actions);
         self.file_tick();
@@ -1672,6 +1675,36 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 log("Recipient not answering: message handed to our post office");
             }
             i += 1;
+        }
+    }
+
+    /// Is a client (phone or PC) connected: Bluetooth, or a USB frame in the
+    /// last minute (the web client and apps poll every 5-20 s)?
+    fn client_present(&self) -> bool {
+        if crate::bus::BLE_CONNECTED.load(Relaxed) {
+            return true;
+        }
+        let usb = crate::bus::USB_LAST_RX.load(Relaxed);
+        usb != 0 && (Instant::now().as_secs() as u32).saturating_sub(usb) < CLIENT_GONE_S
+    }
+
+    /// A handheld used as a phone's own node (companion, not a modem) with
+    /// no phone connected: direct messages are not acknowledged, so senders
+    /// keep them (retries, post office, carry) instead of us acknowledging
+    /// messages the phone never gets (frames for a client are dropped when
+    /// it connects). When a client connects: deliver again and ask the post
+    /// offices. Repeaters and relays always acknowledge (remote admin).
+    fn hold_direct_step(&mut self) {
+        let hold = !self.modem && self.router.role == Role::Client && !self.client_present();
+        if hold == self.router.hold_direct {
+            return;
+        }
+        self.router.hold_direct = hold;
+        if hold {
+            log("No client connected: direct messages wait at the post office until one connects");
+        } else {
+            log("Client connected: delivering messages again and asking the post offices");
+            self.mail_sync();
         }
     }
 

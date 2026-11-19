@@ -184,9 +184,15 @@ always have #public.
   seen by the phone 76/73/78 % → 87/89/96 %; p90 delivery time rises
   (57-100 s → up to 7-8 min, the messages wait for the phone); airtime about
   the same. Small samples (23-40 messages to the phones per run).
-  **Firmware not done yet:** set hold_direct when in companion mode and no
-  client is connected (BLE_CONNECTED false and no USB frame lately), clear it
-  and send a MailSync when one connects.
+  **Firmware done 2026-11-19:** `hold_direct_step` in firmware/common
+  node.rs: companion mode (not a modem), role Client, no client (Bluetooth
+  not connected and no USB frame for 60 s) -> hold; a client connects ->
+  deliver again + MailSync. Repeaters and relays always acknowledge (remote
+  admin). The nRF build now sets BLE_CONNECTED and USB_LAST_RX too (only
+  the ESP did). Bench test on the Heltec (COM6): logs "Client connected"
+  6 s after a frame, "No client connected" after 60 s silent, connected
+  again on the next frame. XIAO built, not flashed (COM7 held by a running
+  maarse-host). The simulator has hold_direct on by default now.
 
 - Presets ran without post offices (`mail: ""`) although hosts and firmware
   have them: fixed, the standard scenario now uses `mail: "post"`.

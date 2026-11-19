@@ -4,7 +4,15 @@ Status: proposal, 2026-11-18. Nothing built yet. Planning and mockup done;
 waiting for the user's go. The sections further down are the history of how
 the plan grew; **section 0 is the current state.**
 
-## 0. Where we are (updated 2026-11-18)
+## 0. Where we are (updated 2026-11-19)
+
+**End of 2026-11-19:** steps 0-15 done or nearly (see the table); the
+feature inventory (docs/maybe/feature-inventory.md) lists every feature and
+how it is simulated. Not simulated by choice: MeshCore gateway, MQTT
+bridge, serial/KISS/UDP links. Models only: range test, safety-number keys.
+Open: radio calibration needs field data (tools/calibrate_radio.py is
+ready); XIAO not flashed with the hold_direct firmware; whether the Heltec
+display should count as a reader for hold_direct.
 
 **Mockup**: https://claude.ai/artifact/3zYfi5pfNCtcdTM8gMbcqb (9 boards,
 private). Source copy in `docs/mockups/denmark-sim-v3/` (`.dc.html` boards +

@@ -67,7 +67,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/newlib"
           for d in /tmp/libnewlib*.deb; do dpkg -x "$d" "$RUNNER_TEMP/newlib"; done
           # The include folder has moved between Ubuntu releases: find it.
-          inc=$(dirname "$(find "$RUNNER_TEMP/newlib" -path '*arm-none-eabi*' -name stdint.h | grep -v '/machine/\|/sys/' | head -1)")
+          # Ubuntu 24.04: /usr/lib/arm-none-eabi/include; 26.04: /usr/include/newlib.
+          inc=$(dirname "$(find "$RUNNER_TEMP/newlib" -name stdint.h \( -path '*arm-none-eabi*' -o -path '*newlib*' \) | grep -v '/machine/\|/sys/\|/ssp/' | head -1)")
           echo "newlib headers: $inc"; test -f "$inc/string.h"
           echo "BINDGEN_EXTRA_CLANG_ARGS=-I$inc" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable

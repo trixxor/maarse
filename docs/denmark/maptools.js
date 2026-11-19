@@ -33,6 +33,7 @@
     { id: "search", ic: "🔍", tx: "Find an address or place", run: () => toggleSearch() },
     { id: "ruler", ic: "📏", tx: "Ruler: measure a line", run: () => toggleRuler() },
     { id: "profile", ic: "📡", tx: "Radio path between two points", run: () => (mode === "profile" ? T.cancelProfile() || setMode(null) : T.startProfile()) },
+    { id: "coverage", ic: "📶", tx: "Coverage map", run: () => window.DKCoverage && DKCoverage.start() },
     { id: "heights", ic: "⛰", tx: "Show heights", run: () => { T.showHeights(!T.heightsShown); paint(); } },
     "-",
     { id: "forest", ic: "🌲", tx: "Draw a forest area", run: () => side("terrain", "btn-clutter") },
@@ -191,6 +192,7 @@
     try { h = Math.max(0, await T.heightAt(ll.lat, ll.lng)).toFixed(0) + " m"; } catch { h = "unknown (offline)"; }
     const items = [
       { label: "Radio path from here…", run: () => T.startProfile(ll) },
+      { label: "Coverage from here", run: () => window.DKCoverage && DKCoverage.start(ll) },
       { label: "Measure from here…", run: () => { if (mode === "ruler") stopRuler(); toggleRuler(ll); } },
       { label: T.heightsShown ? "Hide the height map" : "Show the height map", run: () => { T.showHeights(!T.heightsShown); paint(); } },
       { label: "Copy the position", run: () => navigator.clipboard && navigator.clipboard.writeText(`${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)}`) },

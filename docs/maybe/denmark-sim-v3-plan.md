@@ -169,9 +169,24 @@ always have #public.
   (`firmware/{nrf,esp}/src/ble.rs`: "Old frames from before the connection
   are thrown away"). A message that arrives at the radio while the phone is
   away is delivered (and acknowledged) by the radio but never shown.
-  Proposal (needs the user's yes): keep unread messages in flash on the
-  node and hand them to the phone when it connects (a small inbox, like the
-  post office's 4 per recipient).
+  Only in **companion mode** (the phone uses the radio as its node: web
+  client over Web Bluetooth/Serial, Android without the modem bridge). In
+  **modem mode** nothing is lost: the host acknowledges, so while it is away
+  nothing is acknowledged and senders retry and deposit at a post office.
+  **Chosen instead of an inbox in flash (user, 2026-11-19):** Router::hold_direct
+  (maarse-core): a node with nobody reading does not deliver or acknowledge
+  direct messages (Data/Fragment, a message in a path request, carry), so
+  they take the normal retry → post office → MailSync path. No flash wear,
+  nothing lost on power loss, the sender sees "mailbox" instead of a false
+  "delivered". Built in core (off by default) and the simulator (feature
+  hold_direct). Measured (tools/sim-experiments/hold_direct.mjs, Denmark,
+  40 phones each 10 min without Bluetooth, 1 h, seeds 3-5): lost 6/4/7 → 0;
+  seen by the phone 76/73/78 % → 87/89/96 %; p90 delivery time rises
+  (57-100 s → up to 7-8 min, the messages wait for the phone); airtime about
+  the same. Small samples (23-40 messages to the phones per run).
+  **Firmware not done yet:** set hold_direct when in companion mode and no
+  client is connected (BLE_CONNECTED false and no USB frame lately), clear it
+  and send a MailSync when one connects.
 
 - Presets ran without post offices (`mail: ""`) although hosts and firmware
   have them: fixed, the standard scenario now uses `mail: "post"`.

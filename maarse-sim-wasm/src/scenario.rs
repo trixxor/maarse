@@ -321,6 +321,10 @@ impl Default for Scenario {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Features {
+    /// Proposed firmware rule: a companion node whose phone is away does not
+    /// acknowledge direct messages (Router::hold_direct), so they go to the
+    /// post office instead of being lost; synced when the phone is back.
+    pub hold_direct: bool,
     /// Hosts announce at start and every 10 minutes, as maarse-host does
     /// (`ANNOUNCE_EVERY`), with their name and capabilities (pages).
     pub host_announce: bool,
@@ -397,6 +401,7 @@ pub struct Features {
 impl Default for Features {
     fn default() -> Self {
         Features {
+            hold_direct: false,
             host_announce: true,
             duty_bands: true,
             guard: true,

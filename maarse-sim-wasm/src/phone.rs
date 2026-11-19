@@ -102,6 +102,11 @@ impl Engine {
         let Some(p) = self.phones.attached.get_mut(&node) else { return };
         p.link_down_until = now + ms;
         p.link_drops += 1;
+        // The proposed firmware rule: a companion node without its phone does
+        // not acknowledge direct messages (hosts read their own).
+        if self.sc.features.hold_direct && !self.at_host(node) {
+            self.nodes[node].router.hold_direct = true;
+        }
         self.stats.phone_link_drops += 1;
         self.tr(format!("{{\"t\":{now},\"ev\":\"event\",\"what\":\"phone_link_drop\",\"n\":{node},\"ms\":{ms}}}"));
         self.schedule_phone_reconnect(node, now + ms);
@@ -114,6 +119,12 @@ impl Engine {
         if self.now < p.link_down_until {
             return;
         }
+        let held = std::mem::take(&mut self.nodes[node].router.hold_direct);
+        if held && self.sc.mail == "post" && self.nodes[node].alive() {
+            // Back: ask the post offices for what senders left there meanwhile.
+            self.mail_sync(node);
+        }
+        let Some(p) = self.phones.attached.get_mut(&node) else { return };
         let (ev, msgs) = (p.lost_events, p.lost_msgs);
         p.lost_events = 0;
         p.lost_msgs = 0;

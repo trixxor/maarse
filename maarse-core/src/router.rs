@@ -465,6 +465,8 @@ pub struct RouterStats {
     /// Carry packets sent and messages delivered to us by carrying.
     pub carry_handoffs: u32,
     pub carry_delivered: u32,
+    /// Direct messages left unacknowledged because of `hold_direct`.
+    pub held_direct: u32,
     /// Smart carry: carried messages a moving carrier tried to route on arrival.
     pub carry_rerouted: u32,
     /// Delivered notices sent (see "Delivered notice").
@@ -637,6 +639,11 @@ pub struct Router<const R: usize, const D: usize> {
     /// Load control: path request quota and longer flood delays when the
     /// measured channel load is high (see [`crate::qos::ChannelLoad`]).
     pub load_control: bool,
+    /// Nobody reads our messages right now (a companion node whose phone is
+    /// away): direct messages to us are neither delivered nor acknowledged,
+    /// so the sender keeps them (retries, post office, carry) instead of
+    /// seeing "delivered" for a message the phone never gets.
+    pub hold_direct: bool,
     load: crate::qos::ChannelLoad,
     load_high: bool,
     path_quota: crate::qos::PathQuota,
@@ -728,6 +735,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             heard_hops: heapless::Vec::new(),
             drop_unacked_routes: false,
             load_control: false,
+            hold_direct: false,
             load: crate::qos::ChannelLoad::new(),
             load_high: false,
             path_quota: crate::qos::PathQuota::new(),
@@ -1864,6 +1872,11 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let from = u16::from_be_bytes([pkt.payload[3], pkt.payload[4]]);
         let msg = &pkt.payload[5..];
         let id = packet_id(PacketType::Data, &h.dest, msg);
+        if h.dest == self.addr && self.hold_direct {
+            // The carrier keeps it until our phone is back.
+            self.stats.held_direct += 1;
+            return;
+        }
         if h.dest == self.addr {
             if self.dedup.insert(id) {
                 self.stats.carry_delivered += 1;
@@ -2206,6 +2219,11 @@ impl<const R: usize, const D: usize> Router<R, D> {
             // If the request contains a message, it is delivered now. The reply
             // then also works as an acknowledgement.
             let data = &stamp::strip(PacketType::PathRequest, pkt.payload)[16..];
+            if !data.is_empty() && self.hold_direct {
+                // The reply would acknowledge the message: stay quiet.
+                self.stats.held_direct += 1;
+                return;
+            }
             if !data.is_empty()
                 && self
                     .dedup
@@ -2426,6 +2444,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     payload: Buf::from_slice(&p).unwrap_or_default(),
                     hops: h.hops,
                 });
+            }
+            _ if h.dest == self.addr && self.hold_direct && matches!(h.ptype, PacketType::Data | PacketType::Fragment) => {
+                // Nobody to hand it to: no delivery, no acknowledgement.
+                self.stats.held_direct += 1;
             }
             _ if h.dest == self.addr => {
                 // A repeated message is not delivered again, but acknowledged again,

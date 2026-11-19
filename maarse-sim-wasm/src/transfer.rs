@@ -2219,6 +2219,29 @@ mod tests {
     }
 
     #[test]
+    fn hold_direct_keeps_messages_for_an_absent_phone() {
+        // The same drop with and without the proposed rule.
+        for hold in [false, true] {
+            let mut e = world(json!({"mail": "post", "features": {"hold_direct": hold}}));
+            e.phone_cmd(3, &[]);
+            e.phone_link_drop(3, 180_000);
+            let m = e.send_message(4, 3);
+            run(&mut e, 400);
+            let s = e.summary();
+            if hold {
+                assert_eq!(s["phone_lost_msgs"], json!(0), "{s}");
+                assert!(e.nodes[3].router.stats.held_direct > 0, "{s}");
+                assert!(s["mail_deposits"].as_u64().unwrap() > 0, "went to the post office: {s}");
+                let t = e.msgs[m].delivered_ms.expect("delivered after the phone came back");
+                assert!(t >= e.msgs[m].sent_ms + 180_000, "not before the phone was back");
+                assert!(!e.nodes[3].router.hold_direct, "released on reconnect");
+            } else {
+                assert!(s["phone_lost_msgs"].as_u64().unwrap() >= 1, "{s}");
+            }
+        }
+    }
+
+    #[test]
     fn phone_link_drop_loses_what_arrives_meanwhile() {
         let mut e = world(json!({}));
         // A phone on handheld 3 (firmware node, Bluetooth to the radio).

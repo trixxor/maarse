@@ -262,7 +262,8 @@ int main(int argc, char** argv) {
           std::filesystem::remove(rename, itemError);
           if (!wanted.empty()) node.renameTo(wanted.c_str());
         }
-        if (std::filesystem::remove(folder / "announce", itemError)) node.sendSelfAdvert(false);
+        if (std::filesystem::remove(folder / "announce", itemError)) node.sendSelfAdvert(false);        // zero hop: only direct neighbours hear it
+        if (std::filesystem::remove(folder / "announce-flood", itemError)) node.sendSelfAdvert(true);   // flood: repeaters pass it on
         if (std::filesystem::is_regular_file(folder / "scan", itemError)) node.startServiceScan();
         const auto send = folder / "public-send.txt";
         if (std::filesystem::is_regular_file(send, itemError)) {

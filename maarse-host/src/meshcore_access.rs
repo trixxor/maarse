@@ -196,6 +196,7 @@ fn valid_operation(operation: &str) -> bool {
         "access"
             | "ensure"
             | "announce"
+            | "announce-flood"
             | "scan"
             | "scan-results"
             | "public-history"
@@ -369,7 +370,7 @@ fn radio_operation(dir: &Path, person: &str, operation: &str) -> io::Result<serd
     }
     let node = dir.join("meshcore-nodes").join(person);
     match operation {
-        "announce" | "scan" => {
+        "announce" | "announce-flood" | "scan" => {
             fs::OpenOptions::new()
                 .create(true)
                 .append(true)

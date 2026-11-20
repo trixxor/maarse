@@ -11,7 +11,7 @@ The screen shows the setup address and code, or the current Wi-Fi address and ba
 
 ## Build
 
-Use the [gateway build script](../../README.md#build-on-windows). The outbound gateway is available for Heltec V4 OLED and TFT displays.
+Use the [web flasher](../../README.md#flash-from-the-browser) or the [gateway build scripts](../../README.md#build-on-linux). The outbound gateway is available for Heltec V4 OLED and TFT displays.
 
 ## Backbone transport
 

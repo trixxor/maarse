@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$meshCoreRevision = '75b04ef06def54b348400cb1b138afb6749ffd4f'
+$meshCoreRevision = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'MESHCORE_REVISION') -Raw).Trim()
 $meshCoreSource = Join-Path $PSScriptRoot 'src'
 
 if (-not (Test-Path -LiteralPath $meshCoreSource)) {

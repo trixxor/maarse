@@ -40,6 +40,9 @@ jobs:
           - { board: xiao-nrf52840, kind: nrf }
           - { board: heltec-v4, kind: esp }
           - { board: xiao-esp32s3, kind: esp }
+          # MeshCore gateway for the Må:rse backbone (firmware/meshcore-gateway).
+          - { board: heltec-v4-gateway, kind: gateway, env: heltec_v4_kiss_backbone }
+          - { board: heltec-v4-tft-gateway, kind: gateway, env: heltec_v4_kiss_backbone_tft }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,6 +54,7 @@ jobs:
         with:
           targets: thumbv7em-none-eabihf
       - name: libclang and ARM C headers for bindgen (nrf-sdc-sys)
+        if: matrix.kind != 'gateway'
         # On Ubuntu 26.04 libnewlib-arm-none-eabi pulls in a full ARM gcc and a
         # 487 MB libstdc++, which made this step hang. bindgen only needs the
         # newlib C headers, so unpack those two packages without dependencies.
@@ -78,6 +82,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Signing key
+        if: matrix.kind != 'gateway'
         env:
           KEY_B64: ${{ secrets.MAARSE_SIGN_KEY_B64 }}
         run: |
@@ -92,6 +97,16 @@ jobs:
               --pubkey "$MAARSE_RELEASE_PUBKEY"
           fi
       - run: ./scripts/build-firmware.sh ${{ matrix.board }}
+        if: matrix.kind != 'gateway'
+      - uses: actions/setup-python@v5
+        if: matrix.kind == 'gateway'
+        with:
+          python-version: "3.12"
+      - name: Gateway firmware (MeshCore with the backbone link, merged image)
+        if: matrix.kind == 'gateway'
+        run: |
+          pip install --quiet "platformio==6.2.0" "esptool==4.8.1"
+          firmware/meshcore-gateway/build.sh "${{ matrix.env }}" "dist/maarse-${{ matrix.board }}.bin"
       - name: Trim the merged ESP image (padded with 0xFF to the full flash)
         if: matrix.kind == 'esp'
         run: |
@@ -108,6 +123,7 @@ jobs:
             dist/maarse-${{ matrix.board }}.uf2
             dist/maarse-${{ matrix.board }}.bin
             dist/maarse-${{ matrix.board }}-ota.*
+            dist/meshcore-license.txt
           if-no-files-found: ignore
 
   publish:

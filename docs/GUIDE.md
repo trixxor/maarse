@@ -716,6 +716,7 @@ host WebSocket is `/ws` and accepts messages and frames up to 64 KiB.
 ### Connect a Heltec V4 radio
 
 The Heltec V4 gateway firmware is built from [the MeshCore gateway project](../firmware/meshcore-gateway/README.md).
+From v0.7.6 it can be installed from the web flasher: choose **Heltec V4 MeshCore gateway (OLED)** or **(TFT)**. An update keeps the gateway's Wi-Fi and backbone settings when the board already runs the gateway.
 On first boot, join `maarse-gate` and open `http://192.168.4.1/` to configure Wi-Fi and the backbone.
 
 On the dashboard, open **Connections → Gateway setup**. Enter the gateway port

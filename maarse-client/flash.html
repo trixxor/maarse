@@ -87,10 +87,14 @@ code { font-size:13px; }
 
 <script type="module">
 // Boards. ESP32-S3 boards take the merged image (`dist/maarse-<board>.bin`,
-// flashed from 0x0); nRF52840 boards take the UF2 file.
+// flashed from 0x0); nRF52840 boards take the UF2 file. Gateway boards run
+// the MeshCore gateway (firmware/meshcore-gateway): a LoRa radio that
+// connects to a Må:rse backbone server over Wi-Fi.
 const BOARDS = [
   { id: "heltec-v4", name: "Heltec WiFi LoRa 32 V4", chip: "ESP32-S3", kind: "esp", file: "maarse-heltec-v4.bin" },
   { id: "xiao-esp32s3", name: "Seeed XIAO ESP32-S3 + Wio-SX1262", chip: "ESP32-S3", kind: "esp", file: "maarse-xiao-esp32s3.bin" },
+  { id: "heltec-v4-gateway", name: "Heltec V4 MeshCore gateway (OLED)", chip: "ESP32-S3", kind: "esp", gateway: true, file: "maarse-heltec-v4-gateway.bin", note: "MeshCore radio for a Må:rse backbone server, over Wi-Fi" },
+  { id: "heltec-v4-tft-gateway", name: "Heltec V4 MeshCore gateway (TFT)", chip: "ESP32-S3", kind: "esp", gateway: true, file: "maarse-heltec-v4-tft-gateway.bin", note: "MeshCore radio for a Må:rse backbone server, over Wi-Fi" },
   { id: "xiao-nrf52840", name: "Seeed XIAO nRF52840 + Wio-SX1262", chip: "nRF52840", kind: "nrf", file: "maarse-xiao-nrf52840.uf2" },
   { id: "wismesh-tag", name: "RAK WisMesh Tag", chip: "nRF52840", kind: "nrf", file: "maarse-wismesh-tag.uf2" },
 ];
@@ -115,7 +119,7 @@ if (!("serial" in navigator)) $("nosupport").classList.remove("hidden");
 for (const b of BOARDS) {
   const l = document.createElement("label");
   l.className = "board";
-  l.innerHTML = `<input type="radio" name="board" value="${b.id}"${b === board ? " checked" : ""}><span>${b.name}<small>${b.chip} · file <code>${b.file}</code></small></span>`;
+  l.innerHTML = `<input type="radio" name="board" value="${b.id}"${b === board ? " checked" : ""}><span>${b.name}<small>${b.note ? b.note + " · " : ""}${b.chip} · file <code>${b.file}</code></small></span>`;
   l.querySelector("input").onchange = () => { board = b; image = null; $("file").value = ""; $("fileinfo").textContent = ""; refresh(); loadRelease(); };
   $("boards").append(l);
 }
@@ -216,6 +220,34 @@ function trimmed(u) {
   return u.subarray(0, end);
 }
 
+// The partition table sits at 0x8000: 32-byte entries starting with 0xAA 0x50.
+// Returns the NVS partition (type data, subtype nvs) of an image, or null.
+const PARTITION_TABLE = 0x8000, PARTITION_TABLE_LEN = 0xC00;
+function nvsArea(u) {
+  for (let o = PARTITION_TABLE; o + 32 <= Math.min(u.length, PARTITION_TABLE + PARTITION_TABLE_LEN); o += 32) {
+    if (u[o] !== 0xAA || u[o + 1] !== 0x50) break;
+    if (u[o + 2] === 1 && u[o + 3] === 2) {
+      const start = rd32(u, o + 4), end = start + rd32(u, o + 8);
+      return end < u.length ? { start, end } : null;
+    }
+  }
+  return null;
+}
+
+// True when the board's partition table equals the image's. Then the
+// settings in NVS belong to the same firmware and can be kept. If the table
+// cannot be read, everything is written, which is always safe.
+async function samePartitions(loader, u) {
+  try {
+    const onBoard = await loader.readFlash(PARTITION_TABLE, PARTITION_TABLE_LEN);
+    const fresh = u.subarray(PARTITION_TABLE, PARTITION_TABLE + PARTITION_TABLE_LEN);
+    return onBoard.length >= fresh.length && fresh.every((byte, i) => byte === onBoard[i]);
+  } catch (e) {
+    log("Could not read the board's partition table, so everything is written: " + (e?.message || e));
+    return false;
+  }
+}
+
 function toBinaryString(u) {
   let s = "";
   for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
@@ -242,17 +274,33 @@ $("esp-go").onclick = async () => {
       await loader.eraseFlash();
     }
     const data = trimmed(image.bytes);
-    log(`Writing ${(data.length / 1024).toFixed(0)} KB from 0x0 ...`);
+    let parts = [{ data, address: 0 }];
+    let keptSettings = false;
+    const nvs = board.gateway && !$("erase").checked ? nvsArea(data) : null;
+    if (nvs && await samePartitions(loader, data)) {
+      // The board already has this layout: skip its NVS, which holds the
+      // gateway's Wi-Fi and backbone settings.
+      parts = [{ data: data.subarray(0, nvs.start), address: 0 }, { data: data.subarray(nvs.end), address: nvs.end }];
+      keptSettings = true;
+      log("The board already has this gateway layout: keeping its Wi-Fi and backbone settings.");
+    }
+    const total = parts.reduce((sum, part) => sum + part.data.length, 0);
+    log(`Writing ${(total / 1024).toFixed(0)} KB ...`);
     await loader.writeFlash({
-      fileArray: [{ data: toBinaryString(data), address: 0 }],
+      fileArray: parts.map(part => ({ data: toBinaryString(part.data), address: part.address })),
       flashSize: "keep", flashMode: "keep", flashFreq: "keep",
       eraseAll: false, compress: true,
-      reportProgress: (_i, written, total) => { $("bar").value = written / total; },
+      reportProgress: (i, written, size) => {
+        const before = parts.slice(0, i).reduce((sum, part) => sum + part.data.length, 0);
+        $("bar").value = (before + written / size * parts[i].data.length) / total;
+      },
     });
     log("Restarting the board ...");
     await loader.hardReset();
     $("bar").value = 1;
-    log("Done. The board runs Må:rse now. Open the web client and connect.", "ok");
+    if (!board.gateway) log("Done. The board runs Må:rse now. Open the web client and connect.", "ok");
+    else if (keptSettings) log("Done. The gateway kept its settings and connects to the backbone again.", "ok");
+    else log("Done. Join the Wi-Fi maarse-gate and open http://192.168.4.1/ to set up the gateway. The setup code is on its display.", "ok");
   } catch (e) {
     log("Failed: " + (e?.message || e), "bad");
     if (e?.name !== "NotFoundError") log("Try the BOOT + RST steps above and flash again.");

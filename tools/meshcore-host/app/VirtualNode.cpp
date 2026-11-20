@@ -355,7 +355,8 @@ void VirtualNode::repeaterRequest(bool login, const std::string& key, const char
       added.id = mesh::Identity(bytes);
       StrHelper::strncpy(added.name, heard.name[0] ? heard.name : key.substr(0, 8).c_str(), sizeof(added.name));
       added.type = heard.type;
-      added.out_path_len = OUT_PATH_UNKNOWN;
+      // A neighbour heard directly (a scan answer) is reached with an empty path; anything else by flood.
+      added.out_path_len = heard.hops == 0 ? 0 : OUT_PATH_UNKNOWN;
       added.lastmod = getRTCClock()->getCurrentTime();
       if (addContact(added)) { saveContacts(); contact = lookupContactByPubKey(bytes, PUB_KEY_SIZE); }
       break;

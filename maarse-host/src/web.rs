@@ -432,6 +432,42 @@ fn server_http(mut stream: TcpStream, mut req: Vec<u8>, head_end: usize, data_di
                 Err(e) => send(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", "", e.as_bytes()),
             }
         }
+        ("GET", "/api/meshcore/gateway") => {
+            send(&mut stream, "200 OK", jsn, "", crate::meshcore_gateway::config_json(data_dir).to_string().as_bytes())
+        }
+        ("POST", "/api/meshcore/gateway/token") => {
+            let host = header(&head, "host").unwrap_or("");
+            if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
+                return send(&mut stream, "403 Forbidden", jsn, "", b"{\"error\":\"Wrong origin.\"}");
+            }
+            match crate::meshcore_gateway::create_token(data_dir) {
+                Ok(token) => send(&mut stream, "200 OK", jsn, "", serde_json::json!({"token": token}).to_string().as_bytes()),
+                Err(error) => send(&mut stream, "500 Internal Server Error", jsn, "", serde_json::json!({"error": error}).to_string().as_bytes()),
+            }
+        }
+        ("POST", "/api/meshcore/gateway") => {
+            let host = header(&head, "host").unwrap_or("");
+            if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
+                return send(&mut stream, "403 Forbidden", jsn, "", b"{\"error\":\"Wrong origin.\"}");
+            }
+            let body = match request_body(&mut stream, &mut req, head_end, 64 * 1024, HTTP_TIMEOUT) {
+                Ok(body) => body,
+                Err(error) => return send(&mut stream, "400 Bad Request", jsn, "", serde_json::json!({"error": error}).to_string().as_bytes()),
+            };
+            let Ok(update) = serde_json::from_slice::<serde_json::Value>(body) else {
+                return send(&mut stream, "400 Bad Request", jsn, "", b"{\"error\":\"Send the gateway settings as JSON.\"}");
+            };
+            match crate::meshcore_gateway::save_config(data_dir, &update) {
+                Ok(()) => {
+                    crate::debug::push("admin", serde_json::json!({"op": "gateway settings saved, restarting", "ip": ip.to_string()}));
+                    send(&mut stream, "200 OK", "text/plain; charset=utf-8", "", b"Saved. Restarting ...");
+                    drop(stream);
+                    thread::sleep(Duration::from_millis(400));
+                    crate::settings::restart();
+                }
+                Err(error) => send(&mut stream, "400 Bad Request", jsn, "", serde_json::json!({"error": error}).to_string().as_bytes()),
+            }
+        }
         _ => send(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "", b"Not found"),
     }
 }
@@ -482,37 +518,6 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
             match crate::settings::save(data_dir, &text) {
                 Ok(()) => restart_soon(stream),
                 Err(e) => reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", &e),
-            }
-        }
-        ("GET", "/api/meshcore/gateway") => {
-            let body = crate::meshcore_gateway::config_json(data_dir);
-            reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body.to_string())
-        }
-        ("POST", "/api/meshcore/gateway/token") => {
-            let host = header(&head, "host").unwrap_or("");
-            if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
-                return reply(&mut stream, "403 Forbidden", "application/json; charset=utf-8", "{\"error\":\"Wrong origin.\"}");
-            }
-            match crate::meshcore_gateway::create_token(data_dir) {
-                Ok(token) => reply(&mut stream, "200 OK", "application/json; charset=utf-8", &serde_json::json!({"token": token}).to_string()),
-                Err(error) => reply(&mut stream, "500 Internal Server Error", "application/json; charset=utf-8", &serde_json::json!({"error": error}).to_string()),
-            }
-        }
-        ("POST", "/api/meshcore/gateway") => {
-            let host = header(&head, "host").unwrap_or("");
-            if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
-                return reply(&mut stream, "403 Forbidden", "application/json; charset=utf-8", "{\"error\":\"Wrong origin.\"}");
-            }
-            let body = match request_body(&mut stream, &mut req, head_end, 64 * 1024, HTTP_TIMEOUT) {
-                Ok(body) => body,
-                Err(error) => return reply(&mut stream, "400 Bad Request", "application/json; charset=utf-8", &serde_json::json!({"error": error}).to_string()),
-            };
-            let Ok(update) = serde_json::from_slice::<serde_json::Value>(body) else {
-                return reply(&mut stream, "400 Bad Request", "application/json; charset=utf-8", "{\"error\":\"Send the gateway settings as JSON.\"}");
-            };
-            match crate::meshcore_gateway::save_config(data_dir, &update) {
-                Ok(()) => restart_soon(stream),
-                Err(error) => reply(&mut stream, "400 Bad Request", "application/json; charset=utf-8", &serde_json::json!({"error": error}).to_string()),
             }
         }
         ("POST", "/api/restart") => restart_soon(stream),
@@ -725,6 +730,54 @@ fn websocket(stream: UpgradeStream, token: &str, tx: Sender<In>) {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    /// The gateway routes are used by the server dashboard, so they must be
+    /// served by `server_http` behind the admin login. They were once placed in
+    /// the PC host's `api` only, where the server never routes them.
+    #[test]
+    fn server_dashboard_serves_gateway_routes() {
+        let dir = std::env::temp_dir().join(format!("maarse-web-gateway-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::admin::set_password(&dir, "a long test password").unwrap();
+        let session = crate::admin::login(&dir, IpAddr::from([127, 0, 0, 1]), "a long test password").unwrap();
+        let cookie = format!("Cookie: maarse_session={session}\r\n");
+
+        let config = dashboard_request(&dir, &format!("GET /api/meshcore/gateway HTTP/1.1\r\nHost: localhost\r\n{cookie}\r\n"));
+        assert!(config.starts_with("HTTP/1.1 200"), "{config}");
+        assert!(config.contains("\"listen\""), "{config}");
+
+        let token = dashboard_request(&dir, &format!(
+            "POST /api/meshcore/gateway/token HTTP/1.1\r\nHost: localhost\r\nOrigin: http://localhost\r\n{cookie}Content-Length: 0\r\n\r\n"
+        ));
+        assert!(token.starts_with("HTTP/1.1 200"), "{token}");
+        assert!(token.contains("\"token\""), "{token}");
+
+        let other_origin = dashboard_request(&dir, &format!(
+            "POST /api/meshcore/gateway/token HTTP/1.1\r\nHost: localhost\r\nOrigin: http://evil.example\r\n{cookie}Content-Length: 0\r\n\r\n"
+        ));
+        assert!(other_origin.starts_with("HTTP/1.1 403"), "{other_origin}");
+
+        let no_login = dashboard_request(&dir, "GET /api/meshcore/gateway HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert!(no_login.starts_with("HTTP/1.1 401"), "{no_login}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn dashboard_request(dir: &Path, request: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let request = request.to_string();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            stream.write_all(request.as_bytes()).unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            response
+        });
+        let (mut stream, _) = listener.accept().unwrap();
+        let (request, head_end) = read_head(&mut stream, Instant::now() + HTTP_TIMEOUT).unwrap();
+        server_http(stream, request, head_end, dir);
+        client.join().unwrap()
+    }
 
     #[test]
     fn tokenless_authorities_identify_the_local_listener() {

@@ -472,6 +472,23 @@ mod tests {
     }
 
     #[test]
+    fn save_config_rejects_bad_input_before_writing() {
+        let dir = std::env::temp_dir().join(format!("maarse-save-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for update in [
+            serde_json::json!({"listen": "nonsense", "host": "backbone.example.org"}),
+            serde_json::json!({"listen": "0.0.0.0:0", "host": "backbone.example.org"}),
+            serde_json::json!({"listen": "0.0.0.0:4343", "host": "bad host"}),
+            serde_json::json!({"listen": "0.0.0.0:4343"}),
+        ] {
+            assert!(save_config(&dir, &update).is_err(), "{update}");
+        }
+        assert!(!dir.join(TOKEN_FILE).exists());
+        assert!(!dir.join(AUTHORITY_CERT_FILE).exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn tls_config_rejects_garbage() {
         assert!(tls_config(b"not pem", b"not pem").is_err());
     }

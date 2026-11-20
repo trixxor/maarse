@@ -665,48 +665,80 @@ backbone and choose **Check access**. Once granted, choose **Create MeshCore
 identity**. A master device and its linked devices use the same public key.
 Serve the dashboard and `/meshcore/session` behind an HTTPS reverse proxy that
 forwards WebSocket upgrades. The development worker described below must be
-running to create a new identity. Both clients can queue an announcement and
-a scan and fetch scan results. MeshCore **Public** has its own messages and unread
-counter under **Settings → MeshCore**. Account contains the setup controls.
-The separate MeshCore page appears once the account has a MeshCore identity. The Settings tab displays a separate
-MeshCore unread count across direct messages and joined channels,
-refreshed about every 30 seconds while the client is
-connected and the saved backbone is reachable. Use **Refresh messages** to load recent
-messages and **Mark read** to advance the shared read position on both clients.
-Public messages are limited to 90 UTF-8 bytes. A sent item is recorded when the
-worker queues it in the mesh. For direct messages, open a conversation with the contact's full MeshCore
-public key. The worker must have heard an advert from the contact. Direct
-messages are limited to 60 UTF-8 bytes and share their history and read
-position across clients. A queued message has no confirmed delivery status
-in this interface.
+running to create a new identity. Both clients show MeshCore beside Må:rse in the same places.
 
-Under **Channels**, join a name such as `#local` to use the MeshCore hashtag
-key, or supply the private channel's 16-byte key as 32 hex digits. The two
-clients share the channel list, chat history and read position. Leave a
-channel to stop receiving it on this identity. The worker supports seven
-named channels in addition to Public.
+**Chats.** A **MeshCore** switch sits next to the conversation list (Android: the
+chip row at the top of Chats; web: the switch at the top of the Chats pane) and
+shows an unread count. The list holds Public, the joined channels and the direct
+messages, newest first. A conversation shows the messages with their times and
+what happened to your own: a channel message says "Heard by N repeaters" with the
+best SNR (the worker counts the different repeaters that pass the packet on), a
+direct message says "Delivered" once it is acknowledged. The new-chat button joins
+a channel or writes to a node's public key. Public and channel messages are limited
+to 90 UTF-8 bytes, direct messages to 60. Under `Channels`, a name such as `#local`
+uses the MeshCore hashtag key; a private channel takes its 16-byte key as 32 hex
+digits. The worker supports seven named channels in addition to Public.
 
-Open **Repeater administration** and enter the full public key of a repeater
-whose advert the worker has heard. Enter its password and fetch the login
-response. Once the repeater grants administrator access, enter a MeshCore CLI
-command such as `get name` and use **Fetch response** to read its reply. The
-worker expires the administrator session after ten minutes. Passwords pass
-through the HTTPS backbone and its local worker queue, where the request is
-removed when picked up. Keep that data directory private. Repeater login and
-settings changes have not been verified on a physical repeater.
+**Nodes.** A **Må:rse | MeshCore** switch sits at the top. In MeshCore mode:
+- **Scan now** asks the radio for nodes in direct range and shows the progress
+  (waiting, scanning with a count and the names found, complete). Nodes found by a
+  scan or by adverts are listed with type, hops, SNR and when they were heard.
+- **Advert** sends either a flood advert (repeaters pass it on) or a zero-hop
+  advert (only nodes in direct range hear it).
+- Filters: All, Favourites, Repeaters, Chat, Rooms, Sensors. The star marks a
+  favourite; favourites are stored per person on the backbone, so they follow the
+  account to every device.
+- A node's page shows last heard, hops, SNR/RSSI. **Send message** opens a direct
+  chat in Chats; **Log in** is for repeaters, rooms and sensors.
 
-The planned client entry is a separate MeshCore area, shown only when the
-backbone confirms access for the signed-in person. This area has its own unread
-count, chats and channels, with discovery and radio status under Nodes. Repeater
-settings open from a repeater's details after MeshCore confirms admin access.
-An offline gateway should be visible in MeshCore while cached conversations
-remain readable.
+**When MeshCore is not reachable** the switch is grey and says why: the node is not
+connected, the backbone cannot be reached, the account has no access, or the
+backbone is reached but the radio gateway is not connected to it. The client tries
+as soon as the node is online and again every 10 seconds after a failure.
 
-The backbone will own one MeshCore identity per person address and use the
-Må:rse linked-device relationship to authorize access. Both clients will read
-the same history and use the same public key. Permission changes must be
-enforced by the service, including on existing sessions. The radio connection
-uses a separate gateway credential and carries KISS frames.
+**Name.** Your Må:rse name (Settings → Your name) is also the MeshCore node's name;
+it goes out with the next advert.
+
+**Repeaters, rooms and sensors.** Log in with the node's own password. It is not
+stored and is sent over the radio; MeshCore allows 15 characters, and a repeater
+stays silent when the password is wrong. A node heard only in a scan is added as a
+contact for the login. The administrator password opens the admin screen with the
+three tabs of the MeshCore app: **Status** (battery, clock, uptime, airtime,
+RSSI/SNR, noise floor, packet counters), **Command Line**, and **Settings** (name,
+public key, radio settings, and the tools Owner Info, Advert, Advert Intervals,
+Position, Sync Clock, Access Control, Admin and Guest Password, Manage Regions,
+Neighbours, Network Settings, Repeat Settings, Telemetry, Reboot and Version). The
+guest password gives Status and Telemetry. Sensors report their readings as
+telemetry (voltage, temperature, humidity, pressure, position and other Cayenne
+LPP values). Change Identity Key is only possible over the repeater's USB serial
+port. The worker expires an administrator session after ten minutes. Passwords
+pass through the HTTPS backbone and the worker queue, where the request is removed
+when picked up. Keep that data directory private.
+
+Checked on a physical repeater: login, `ver`, status, telemetry, `get name`,
+`get radio`, `get tx`, `get flood.max`, `neighbors`, `region`. Not checked: the
+`set` commands, reboot, `setperm` and region changes, and changing the radio
+settings.
+
+Two people on the same gateway hear each other: the worker lets every person's node
+hear the others' transmissions. A direct message needs the other's advert first.
+
+MeshCore needs an internet connection to the backbone (the HTTPS session). It is not
+carried over a LoRa-only link to the backbone.
+
+The backbone owns one MeshCore identity per person address and uses the Må:rse
+linked-device relationship to authorize access. Both clients read the same history
+and use the same public key. Permission changes are enforced by the service,
+including on existing sessions. The radio connection uses a separate gateway
+credential and carries KISS frames.
+
+Operations on `/meshcore/session` (the node signs the operation; payloads travel
+with operation number 9): `access`, `ensure`, `overview` (conversation list),
+`nodes` (heard nodes, scan state, favourites), `favorite:KEY:1|0`, `scan`,
+`announce` (zero hop), `announce-flood`, `set-name:HEX`, `public-*`, `direct-*`,
+`channel-*`, and `repeater-login`, `repeater-command`, `repeater-status`,
+`repeater-request:KEY:status|telemetry|acl` and `repeater-data:KEY:KIND`. Every
+reply says whether the gateway is connected.
 
 The HTTP listener permits up to 64 simultaneous connections, including
 WebSockets, with a 16 KiB request header limit. Uploads carry an explicit

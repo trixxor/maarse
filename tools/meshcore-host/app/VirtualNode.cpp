@@ -341,8 +341,24 @@ void VirtualNode::repeaterRequest(bool login, const std::string& key, const char
   if (key.size() != 2 * PUB_KEY_SIZE || !std::all_of(key.begin(), key.end(), [](unsigned char c) { return std::isxdigit(c); }) ||
       !mesh::Utils::fromHex(bytes, PUB_KEY_SIZE, key.c_str())) return;
   const ContactInfo* contact = lookupContactByPubKey(bytes, PUB_KEY_SIZE);
-  if (!contact || contact->type != ADV_TYPE_REPEATER) {
-    publishRepeater(key, "Repeater is unknown. Receive its advert before connecting.");
+  if (!contact) {
+    // Heard in a scan (or an advert that made no contact): add it, so a login can be sent. A login
+    // needs only the public key; the path is found by flooding the first request.
+    for (const auto& heard : _heard) {
+      if (memcmp(heard.pub_key, bytes, PUB_KEY_SIZE) != 0) continue;
+      if (heard.type != ADV_TYPE_REPEATER && heard.type != ADV_TYPE_ROOM) break;
+      ContactInfo added{};
+      added.id = mesh::Identity(bytes);
+      StrHelper::strncpy(added.name, heard.name[0] ? heard.name : key.substr(0, 8).c_str(), sizeof(added.name));
+      added.type = heard.type;
+      added.out_path_len = OUT_PATH_UNKNOWN;
+      added.lastmod = getRTCClock()->getCurrentTime();
+      if (addContact(added)) { saveContacts(); contact = lookupContactByPubKey(bytes, PUB_KEY_SIZE); }
+      break;
+    }
+  }
+  if (!contact || (contact->type != ADV_TYPE_REPEATER && contact->type != ADV_TYPE_ROOM)) {
+    publishRepeater(key, "This node has not been heard yet. Run Scan now (or wait for its advert), then log in.");
     return;
   }
   uint32_t timeout = 0;

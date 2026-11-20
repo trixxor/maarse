@@ -17,7 +17,7 @@
 #
 #  What it installs:
 #    /usr/local/bin/maarse-server          the program
-#    /etc/default/maarse-server            the options (MAARSE_ARGS)
+#    /var/lib/maarse-server/settings.txt   all settings (the dashboard edits it too)
 #    /etc/systemd/system/maarse-server.service
 #    /var/lib/maarse-server                data: identity, telemetry, mail, admin password
 #    /opt/maarse/src                       the source code it was built from
@@ -32,6 +32,7 @@ CONF=/etc/default/maarse-server
 UNIT=/etc/systemd/system/maarse-server.service
 BIN=/usr/local/bin/maarse-server
 SVC_USER=maarse
+SETTINGS=$DATA/settings.txt
 
 # Questions are read from the terminal, also when the script is piped.
 TTY=/dev/tty
@@ -60,6 +61,52 @@ ask_yn() { # ask_yn "Question" y|n -> 0 for yes
 ask_secret() { # ask_secret "Question" -> REPLY (not echoed)
   printf '%s: ' "$1" >"$TTY"
   stty -echo <"$TTY"; IFS= read -r REPLY <"$TTY" || true; stty echo <"$TTY"; printf '\n' >"$TTY"
+}
+
+# Turns an option string ("--listen 0.0.0.0:4242 --peer a --no-relay") into one option per line.
+args_to_lines() {
+  local word line=""
+  for word in $1; do
+    case "$word" in
+      --*) [ -n "$line" ] && printf '%s\n' "$line"; line="$word" ;;
+      *)   line="$line $word" ;;
+    esac
+  done
+  [ -n "$line" ] && printf '%s\n' "$line"
+  return 0
+}
+
+# Options that can appear several times; every other option has one value.
+is_list_option() {
+  case "$1" in
+    --peer|--seed-dns|--region|--trunk|--dht|--dht-allow-private|--block|--udp-peer|--bulletin-key|--alert-root|--mail-replica-id|--node) return 0 ;;
+  esac
+  return 1
+}
+
+# Older versions kept the options in $CONF (MAARSE_ARGS="..."). All settings live in
+# $SETTINGS now, which the dashboard edits too. This moves the options there, after
+# the lines already in the file, which is what they overrode before: an option with
+# one value replaces its earlier line. Safe to repeat: $CONF is renamed afterwards.
+migrate_args() {
+  [ -f "$CONF" ] || return 0
+  local args line flag
+  args=$(sed -n 's/^MAARSE_ARGS="\(.*\)"[[:space:]]*$/\1/p' "$CONF" | tail -n1)
+  # The server is installed (it has a $CONF), so the settings file exists from now on.
+  mkdir -p "$DATA"
+  touch "$SETTINGS"
+  if [ -n "$args" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      flag="${line%% *}"
+      is_list_option "$flag" || sed -i "/^$flag /d;/^$flag\$/d" "$SETTINGS"
+      printf '%s\n' "$line" >>"$SETTINGS"
+    done < <(args_to_lines "$args")
+    chown "$SVC_USER:$SVC_USER" "$SETTINGS" 2>/dev/null || true
+    chmod 0600 "$SETTINGS"
+    info "moved the options from $CONF into $SETTINGS (the dashboard edits that file)"
+  fi
+  mv "$CONF" "$CONF.migrated"
 }
 
 UPDATE=0
@@ -137,11 +184,13 @@ chmod 0700 "$DATA"
 # ---------------------------------------------------------------- settings
 bold "5/6  Settings"
 CHANGE=y
+migrate_args
 if [ "$UPDATE" = 1 ]; then
-  [ -f "$CONF" ] || die "--update: not installed yet (no $CONF); run without --update first"
+  [ -f "$SETTINGS" ] || die "--update: not installed yet (no $SETTINGS); run without --update first"
   CHANGE=n
-elif [ -f "$CONF" ]; then
-  info "Current settings: $(grep -E '^MAARSE_ARGS=' "$CONF" | cut -d= -f2-)"
+elif [ -f "$SETTINGS" ]; then
+  info "Current settings ($SETTINGS):"
+  grep -v '^#' "$SETTINGS" | sed 's/^\(--modem-key\) .*/\1 ****/; s/^/    /'
   ask_yn "Keep the current settings?" y && CHANGE=n
 fi
 
@@ -210,15 +259,17 @@ if [ "$CHANGE" = y ]; then
 
   # Check the options with the program itself before saving them.
   if ! "$BIN" --help >/dev/null 2>&1; then die "the installed program does not run"; fi
-  cat >"$CONF" <<EOF
-# Options for maarse-server (see: maarse-server --help). Written by install-server.sh.
-# Settings saved from the dashboard (Settings tab) are kept in $DATA/settings.txt;
-# options here win over them.
-MAARSE_ARGS="$ARGS"
-EOF
-  info "saved $CONF"
+  [ -f "$SETTINGS" ] && cp "$SETTINGS" "$SETTINGS.bak"
+  {
+    echo "# maarse-server settings. Edit here or in the dashboard (Settings tab), then restart the server."
+    echo "# One option per line, as on the command line (maarse-server --help). Written by install-server.sh."
+    args_to_lines "$ARGS"
+  } >"$SETTINGS"
+  chown "$SVC_USER:$SVC_USER" "$SETTINGS" 2>/dev/null || true
+  chmod 0600 "$SETTINGS"
+  info "saved $SETTINGS"
 else
-  ARGS=$(grep -E '^MAARSE_ARGS=' "$CONF" | cut -d= -f2- | tr -d '"')
+  ARGS=$(grep -v '^#' "$SETTINGS" | tr '\n' ' ')
   MODEM=$(printf '%s' "$ARGS" | sed -n 's/.*--serial \([^ ]*\).*/\1/p')
   PORT=$(printf '%s' "$ARGS" | sed -n 's/.*--listen [^ ]*:\([0-9]*\).*/\1/p'); PORT="${PORT:-4242}"
   HTTP=$(printf '%s' "$ARGS" | sed -n 's/.*--http \([^ ]*\).*/\1/p')
@@ -259,8 +310,7 @@ After=network-online.target
 Type=simple
 User=$SVC_USER
 Group=$SVC_USER
-EnvironmentFile=-$CONF
-ExecStart=$BIN --service --data $DATA \$MAARSE_ARGS
+ExecStart=$BIN --service --data $DATA
 Restart=on-failure
 RestartSec=3
 StartLimitIntervalSec=0
@@ -331,7 +381,7 @@ bold "Done."
 info "Version:     $(git -C "$SRC" log -1 --format='%h %ad %s' --date=short 2>/dev/null)"
 info "Status:      systemctl status maarse-server"
 info "Log:         journalctl -u maarse-server -f"
-info "Settings:    $CONF (or the dashboard's Settings tab), then: systemctl restart maarse-server"
+info "Settings:    the dashboard's Settings tab, or $SETTINGS and then: systemctl restart maarse-server"
 info "Update:      sudo bash $SRC/scripts/install-server.sh"
 if [ -n "$HTTPS_DOMAIN" ]; then
   info "Dashboard:   https://$HTTPS_DOMAIN/"

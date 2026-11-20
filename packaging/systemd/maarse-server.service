@@ -3,9 +3,15 @@
 # Install:
 #   sudo install -m 0755 target/release/maarse-server /usr/local/bin/maarse-server
 #   sudo install -m 0644 packaging/systemd/maarse-server.service /etc/systemd/system/
-#   echo 'MAARSE_ARGS="--public-addr backbone.example.org:4242"' | sudo tee /etc/default/maarse-server
+#   sudo install -d -m 0700 /var/lib/maarse-server
+#   echo '--public-addr backbone.example.org:4242' | sudo tee /var/lib/maarse-server/settings.txt
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now maarse-server
+#
+# All settings are in settings.txt in the data folder, one option per line as on the
+# command line (maarse-server --help). The dashboard's Settings tab edits the same
+# file. The service itself takes no options. scripts/install-server.sh does all of
+# this and more.
 #
 # Open TCP port 4242 in the firewall (e.g. sudo ufw allow 4242/tcp).
 # Status lines every 10 minutes: journalctl -u maarse-server -f
@@ -17,8 +23,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/default/maarse-server
-ExecStart=/usr/local/bin/maarse-server --service --data /var/lib/maarse-server $MAARSE_ARGS
+ExecStart=/usr/local/bin/maarse-server --service --data /var/lib/maarse-server
 Restart=on-failure
 RestartSec=3
 StartLimitIntervalSec=0

@@ -27,7 +27,9 @@ const char SetupPage[] PROGMEM = R"HTML(<!doctype html><html lang="en"><head><me
 <label>Wi-Fi password <input name="password" type="password" maxlength="64" autocomplete="off"></label>
 <small>Leave the password empty for an open network. Use a 2.4 GHz network.</small>
 <details><summary>Backbone connection</summary>
-<small>Fill in all fields to set or replace the backbone. Leave them blank to keep the saved backbone settings.</small>
+<small>Paste the pairing code from the backbone dashboard (Connections, Pair a gateway). It works once, for ten minutes. The gateway then fetches its own token and restarts. Leave everything blank to keep the saved backbone settings.</small>
+<label>Pairing code <textarea name="pairing" rows="2" maxlength="200" autocomplete="off" spellcheck="false"></textarea></label>
+<small>Or fill in all of the following fields by hand instead of a pairing code.</small>
 <label>Server DNS name <input name="host" maxlength="253" autocomplete="off"></label>
 <label>Port <input name="port" type="number" min="1" max="65535" placeholder="5056"></label>
 <label>Gateway token <input name="token" type="password" maxlength="128" autocomplete="off"></label>
@@ -97,6 +99,51 @@ bool validToken(const String& token) {
     if (!asciiAlnum(value) && value != '-' && value != '_') return false;
   }
   return true;
+}
+
+bool lowerHex(const String& value, size_t length) {
+  if (value.length() != length) return false;
+  for (size_t i = 0; i < length; ++i) {
+    const char c = value[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+  }
+  return true;
+}
+
+bool base64Body(const String& body) {
+  if (body.length() < 100 || body.length() > 3000) return false;
+  for (size_t i = 0; i < body.length(); ++i) {
+    const char c = body[i];
+    if (!asciiAlnum(c) && c != '+' && c != '/' && c != '=') return false;
+  }
+  return true;
+}
+
+// A pairing code from the backbone dashboard: MP1;host;port;secret;pin.
+// secret: 20 hex characters. pin: 32 hex characters, the start of the SHA-256 of
+// the server's certificate. The gateway keeps "pair-<secret>-<pin>" as its token
+// until the server has given it a token and its authority certificate.
+bool parsePairing(const String& code, GatewayBackbone& out) {
+  String parts[5];
+  size_t count = 0, start = 0;
+  for (size_t i = 0; i <= code.length(); ++i) {
+    if (i == code.length() || code[i] == ';') {
+      if (count == 5) return false;
+      parts[count++] = code.substring(start, i);
+      start = i + 1;
+    }
+  }
+  if (count != 5 || parts[0] != "MP1") return false;
+  String host = parts[1];
+  host.toLowerCase();
+  const String& secret = parts[3];
+  const String& pin = parts[4];
+  char* end = nullptr;
+  const unsigned long port = strtoul(parts[2].c_str(), &end, 10);
+  if (parts[2].isEmpty() || *end || !port || port > 65535) return false;
+  if (!validDns(host) || !lowerHex(secret, 20) || !lowerHex(pin, 32)) return false;
+  out.port = static_cast<uint16_t>(port);
+  return copyField(out.host, host) && copyField(out.token, String("pair-") + secret + "-" + pin);
 }
 
 void appendHtml(String& out, const String& input) {
@@ -275,7 +322,24 @@ void GatewayWifi::networks() {
   _http.send(200, "text/html; charset=utf-8", options);
 }
 
+bool GatewayWifi::completePairing(const char* token, const char* authorityBody) {
+  const String body(authorityBody);
+  if (!_storeReady || !validToken(String(token)) || !base64Body(body)) return false;
+  String pem = F("-----BEGIN CERTIFICATE-----\n");
+  for (size_t i = 0; i < body.length(); i += 64) {
+    pem += body.substring(i, i + 64 < body.length() ? i + 64 : body.length());
+    pem += '\n';
+  }
+  pem += F("-----END CERTIFICATE-----\n");
+  // Changed in place: a copy of the settings is 4.5 KB, too much for this stack.
+  if (!copyField(_active.backbone.token, String(token)) || !copyField(_active.backbone.ca, pem)) return false;
+  return _prefs.putBytes(ActiveKey, &_active, sizeof(_active)) == sizeof(_active);
+}
+
 bool GatewayWifi::backboneForm(GatewayBackbone& target) {
+  String pairing = _http.arg("pairing");
+  pairing.trim();
+  if (!pairing.isEmpty()) return parsePairing(pairing, target);
   String host = _http.arg("host"), port = _http.arg("port"), token = _http.arg("token"), ca = _http.arg("ca");
   host.trim(); port.trim(); token.trim(); ca.trim();
   if (host.isEmpty() && port.isEmpty() && token.isEmpty() && ca.isEmpty()) {

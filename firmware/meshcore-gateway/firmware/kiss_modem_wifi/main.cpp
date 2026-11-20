@@ -67,7 +67,16 @@ static void drawStatus() {
         display.print(WiFi.localIP().toString().c_str());
         display.setCursor(0, 38);
         if (!wifi.settings().backbone.configured()) display.print("Backbone not set");
-        else display.print(tcp.online() ? "Backbone online" : "Backbone connecting");
+        else if (wifi.settings().backbone.pairing()) {
+          if (tcp.pairingFailed()) {
+            display.print(tcp.pairingWrongServer() ? "Wrong server" : "Pairing refused");
+            display.setCursor(0, 50);
+            display.print("Hold button 5 s");
+          } else {
+            display.print(tcp.pairedToken() ? "Paired, restarting" : "Pairing...");
+          }
+        } else if (tcp.online()) display.print("Backbone online");
+        else display.print(tcp.problem() ? tcp.problem() : "Backbone connecting");
         break;
     }
   }
@@ -263,9 +272,13 @@ void setup() {
   Serial.begin(115200);   // USB: log only (IP address etc.)
 #ifdef KISS_BACKBONE
   setupButton.begin();
-  board.periph_power.claim();
-  delay(20);
+  // Do not claim board.periph_power for the screen. MeshCore's Heltec V4 variant
+  // calls GPIO36 "active high", but on the V4 it is active low: board.begin()
+  // leaves it low, which powers the OLED, and claim() would drive it high and
+  // switch the OLED off. The Må:rse firmware measured this on a real V4. The
+  // display is also created without a power pin (see variants/heltec_v4/target.cpp).
   screenPresent = display.begin();
+  Serial.printf("[display] %s\n", screenPresent ? "ready" : "not found");
   wifi.begin(WIFI_HOSTNAME);
   tcp.begin(wifi.settings().backbone);
   wakeScreen(millis());
@@ -287,6 +300,18 @@ void loop() {
 #ifdef KISS_BACKBONE
   handleButtonAndScreen();
   wifi.poll();
+  // A pairing succeeded: keep the token and the authority the server gave us and
+  // start again with them. If saving fails it is not retried on every pass.
+  static bool pairingSaveFailed = false;
+  if (const char* token = tcp.pairedToken(); token && !pairingSaveFailed) {
+    if (wifi.completePairing(token, tcp.pairedAuthority())) {
+      Serial.println("[pairing] Paired, restarting with the new token");
+      delay(500);
+      ESP.restart();
+    }
+    pairingSaveFailed = true;
+    Serial.println("[pairing] Could not save the pairing; hold the button 5 s and pair again");
+  }
   if (!modem->isActuallyTransmitting() && tcp.poll(wifi.online())) modem->begin();
 #else
   wifiLoop();

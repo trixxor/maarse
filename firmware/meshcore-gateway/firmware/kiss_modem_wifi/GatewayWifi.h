@@ -12,7 +12,11 @@ struct GatewayBackbone {
   char token[129];
   char ca[4097];
 
-  bool configured() const { return host[0] && port && token[0] && ca[0]; }
+  // A gateway that has a pairing code has no authority certificate yet: it gets
+  // that from the server when it pairs.
+  bool configured() const { return host[0] && port && token[0] && (ca[0] || pairing()); }
+  // Right after a pairing code was entered the token is "pair-<secret>-<pin>".
+  bool pairing() const { return strncmp(token, "pair-", 5) == 0; }
 };
 
 struct GatewaySettings {
@@ -29,6 +33,9 @@ public:
   void begin(const char* hostname);
   void poll();
   bool reset();
+  // Saves the token and the authority certificate (base64 body) the server handed
+  // out in a pairing; true when they are stored.
+  bool completePairing(const char* token, const char* authorityBody);
   State state() const { return _state; }
   bool online() const { return _state == State::Online && WiFi.status() == WL_CONNECTED; }
   const GatewaySettings& settings() const { return _active; }

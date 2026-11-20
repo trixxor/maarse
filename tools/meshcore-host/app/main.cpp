@@ -233,8 +233,10 @@ int main(int argc, char** argv) {
           std::getline(input, key);
           std::getline(input, value);
           input.close();
-          if (std::filesystem::remove(admin, itemError) && (operation == "repeater-login" || operation == "repeater-command") && value.size() <= 60) {
-            node.repeaterRequest(operation == "repeater-login", key, value.c_str());
+          if (std::filesystem::remove(admin, itemError) && operation == "repeater-request") {
+            node.repeaterData(key, value);
+          } else if (operation == "repeater-login" || operation == "repeater-command") {
+            if (value.size() <= 60) node.repeaterRequest(operation == "repeater-login", key, value.c_str());
           }
         }
         const auto channel = folder / "channel-send.txt";

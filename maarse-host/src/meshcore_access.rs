@@ -216,12 +216,14 @@ fn valid_operation(operation: &str) -> bool {
         }
         if matches!(
             verb,
-            "repeater-login" | "repeater-command" | "repeater-status"
+            "repeater-login" | "repeater-command" | "repeater-status" | "repeater-request" | "repeater-data"
         ) {
             let (key, value) = rest.split_once(':').unwrap_or((rest, ""));
             return direct_key(key)
                 && if verb == "repeater-status" {
                     value.is_empty()
+                } else if verb == "repeater-data" {
+                    matches!(value, "status" | "telemetry" | "acl")
                 } else {
                     value.len() <= 120 && valid_message(value)
                 };
@@ -395,7 +397,22 @@ fn radio_operation(dir: &Path, person: &str, operation: &str) -> io::Result<serd
             let verb = fields.next().unwrap();
             let key = fields.next().unwrap().to_ascii_lowercase();
             reply["repeater"] = key.as_str().into();
-            if verb == "repeater-status" {
+            if verb == "repeater-data" {
+                // What a binary request brought back: status, telemetry (sensor readings) or the access list.
+                let kind = fields.next().unwrap_or_default();
+                reply["repeaterKind"] = kind.into();
+                reply["repeaterData"] = match fs::read(node.join(format!("repeater-{key}-{kind}.txt"))) {
+                    Ok(text) => String::from_utf8_lossy(&text).into_owned().into(),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => "".into(),
+                    Err(error) => return Err(error),
+                };
+            } else if verb == "repeater-status" {
+                // The reply number rises with every reply, so a client can tell a new answer from an old one.
+                reply["repeaterSeq"] = fs::read_to_string(node.join(format!("repeater-{key}.seq")))
+                    .ok()
+                    .and_then(|seq| seq.trim().parse::<u64>().ok())
+                    .unwrap_or(0)
+                    .into();
                 let status = node.join(format!("repeater-{key}.txt"));
                 match fs::read(status) {
                     Ok(text) => {
@@ -931,6 +948,26 @@ mod tests {
         fs::write(node.join("scan.txt"), "0 5\n").unwrap();
         let done = radio_operation(&dir, person, "nodes").unwrap();
         assert_eq!((done["scan"]["active"].as_bool(), done["scan"]["found"].as_u64()), (Some(false), Some(5)));
+
+        // Status, telemetry and the access list, and the reply numbers.
+        let k3 = "3".repeat(64);
+        fs::write(node.join(format!("repeater-{k3}-telemetry.txt")), "1 Temperature 21.5 C
+").unwrap();
+        fs::write(node.join(format!("repeater-{k3}.txt")), "v1.17.1").unwrap();
+        fs::write(node.join(format!("repeater-{k3}.seq")), "7").unwrap();
+        let data = radio_operation(&dir, person, &format!("repeater-data:{k3}:telemetry")).unwrap();
+        assert_eq!((data["repeaterKind"].as_str(), data["repeaterData"].as_str()), (Some("telemetry"), Some("1 Temperature 21.5 C
+")));
+        let status = radio_operation(&dir, person, &format!("repeater-status:{k3}")).unwrap();
+        assert_eq!((status["repeaterSeq"].as_u64(), status["repeaterStatus"].as_str()), (Some(7), Some("v1.17.1")));
+        assert!(valid_operation(&format!("repeater-data:{k3}:acl")) && !valid_operation(&format!("repeater-data:{k3}:other")));
+        let request = radio_operation(&dir, person, &format!("repeater-request:{k3}:{}", hex("status"))).unwrap();
+        assert_eq!(request["queued"], "repeater-request");
+        let job = fs::read_to_string(node.join("repeater-job.txt")).unwrap();
+        assert_eq!(job, format!("repeater-request
+{k3}
+status"));
+        fs::remove_file(node.join("repeater-job.txt")).unwrap();
 
         // Only well-formed requests are accepted.
         assert!(valid_operation("overview") && valid_operation("nodes"));

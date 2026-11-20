@@ -95,6 +95,17 @@ private:
   unsigned long _repeaterDeadline = 0;
   bool _repeaterAdmin = false;
   bool _repeaterPending = false;
+  bool _repeaterGuest = false;       // logged in without administrator rights: status and telemetry only
+  unsigned _repeaterSeq = 0;         // counts what is published, so a client can tell a new reply from an old one
+  // A binary request to the logged-in node: status, telemetry (sensor readings) or the access list.
+  bool _requestPending = false;
+  uint32_t _requestTag = 0;
+  std::string _requestKind;
+  unsigned long _requestDeadline = 0;
+public:
+  void repeaterData(const std::string& key, const std::string& kind);
+private:
+  void publishRequestResult(const std::string& kind, const std::string& body);
   void publishRepeater(const std::string& key, const char* text);
   unsigned long _scan_until = 0;
   void startScan(int secs, uint8_t filter);

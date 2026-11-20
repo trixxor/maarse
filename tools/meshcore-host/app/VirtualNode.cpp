@@ -332,6 +332,7 @@ static std::string contactKey(const ContactInfo& contact) {
 }
 
 void VirtualNode::publishRepeater(const std::string& key, const char* text) {
+  if (FILE* seq = fopen(path(("repeater-" + key + ".seq").c_str()).c_str(), "wb")) { fprintf(seq, "%u", ++_repeaterSeq); fclose(seq); }
   const auto name = path(("repeater-" + key + ".txt").c_str());
   const auto temporary = name + ".new";
   if (FILE* file = fopen(temporary.c_str(), "wb")) {
@@ -385,12 +386,148 @@ void VirtualNode::repeaterRequest(bool login, const std::string& key, const char
   }
 }
 
+// ---- binary requests: status, telemetry, access list
+static std::string lppText(const uint8_t* d, size_t n) {
+  // Cayenne LPP as MeshCore sensors send it: channel, type, value. One "<channel> <label> <value>" line each.
+  std::string out;
+  char line[96];
+  size_t i = 0;
+  const auto s16 = [&](size_t at) { return (int16_t)(d[at] << 8 | d[at + 1]); };
+  const auto u16 = [&](size_t at) { return (uint16_t)(d[at] << 8 | d[at + 1]); };
+  const auto s24 = [&](size_t at) { int32_t v = d[at] << 16 | d[at + 1] << 8 | d[at + 2]; return (v & 0x800000) ? v - 0x1000000 : v; };
+  const auto u32 = [&](size_t at) { return (uint32_t)d[at] << 24 | (uint32_t)d[at + 1] << 16 | (uint32_t)d[at + 2] << 8 | d[at + 3]; };
+  while (i + 2 <= n) {
+    const uint8_t channel = d[i], type = d[i + 1];
+    i += 2;
+    size_t need = 0;
+    switch (type) {
+      case 0: case 1: case 102: case 104: case 120: case 142: need = 1; break;
+      case 2: case 3: case 101: case 103: case 115: case 116: case 117: case 121: case 125: case 128: case 132: need = 2; break;
+      case 118: case 130: case 131: case 133: need = 4; break;
+      case 113: case 134: need = 6; break;
+      case 135: need = 3; break;
+      case 136: need = 9; break;
+      default: need = 0;
+    }
+    if (need == 0 || i + need > n) break;
+    switch (type) {
+      case 0: case 1: snprintf(line, sizeof(line), "%u Digital %u", channel, d[i]); break;
+      case 2: case 3: snprintf(line, sizeof(line), "%u Analog %.2f", channel, s16(i) / 100.0); break;
+      case 101: snprintf(line, sizeof(line), "%u Light %u lux", channel, u16(i)); break;
+      case 102: snprintf(line, sizeof(line), "%u Presence %u", channel, d[i]); break;
+      case 103: snprintf(line, sizeof(line), "%u Temperature %.1f \u00B0C", channel, s16(i) / 10.0); break;
+      case 104: snprintf(line, sizeof(line), "%u Humidity %.1f %%", channel, d[i] / 2.0); break;
+      case 113: snprintf(line, sizeof(line), "%u Acceleration %.2f %.2f %.2f g", channel, s16(i) / 1000.0, s16(i + 2) / 1000.0, s16(i + 4) / 1000.0); break;
+      case 115: snprintf(line, sizeof(line), "%u Pressure %.1f hPa", channel, u16(i) / 10.0); break;
+      case 116: snprintf(line, sizeof(line), "%u Voltage %.2f V", channel, u16(i) / 100.0); break;
+      case 117: snprintf(line, sizeof(line), "%u Current %.3f A", channel, u16(i) / 1000.0); break;
+      case 118: snprintf(line, sizeof(line), "%u Frequency %u Hz", channel, u32(i)); break;
+      case 120: snprintf(line, sizeof(line), "%u Percentage %u %%", channel, d[i]); break;
+      case 121: snprintf(line, sizeof(line), "%u Altitude %d m", channel, s16(i)); break;
+      case 125: snprintf(line, sizeof(line), "%u Concentration %u ppm", channel, u16(i)); break;
+      case 128: snprintf(line, sizeof(line), "%u Power %u W", channel, u16(i)); break;
+      case 130: snprintf(line, sizeof(line), "%u Distance %.3f m", channel, u32(i) / 1000.0); break;
+      case 131: snprintf(line, sizeof(line), "%u Energy %.3f kWh", channel, u32(i) / 1000.0); break;
+      case 132: snprintf(line, sizeof(line), "%u Direction %u deg", channel, u16(i)); break;
+      case 133: snprintf(line, sizeof(line), "%u Time %u", channel, u32(i)); break;
+      case 134: snprintf(line, sizeof(line), "%u Gyro %.2f %.2f %.2f", channel, s16(i) / 100.0, s16(i + 2) / 100.0, s16(i + 4) / 100.0); break;
+      case 135: snprintf(line, sizeof(line), "%u Colour %02X%02X%02X", channel, d[i], d[i + 1], d[i + 2]); break;
+      case 136: snprintf(line, sizeof(line), "%u Position %.5f %.5f %.2f m", channel, s24(i) / 10000.0, s24(i + 3) / 10000.0, s24(i + 6) / 100.0); break;
+      case 142: snprintf(line, sizeof(line), "%u Switch %u", channel, d[i]); break;
+      default: line[0] = 0;
+    }
+    out += line;
+    out += "\n";
+    i += need;
+  }
+  return out;
+}
+
+void VirtualNode::publishRequestResult(const std::string& kind, const std::string& body) {
+  const auto name = path(("repeater-" + _repeaterKey + "-" + kind + ".txt").c_str());
+  const auto temporary = name + ".new";
+  if (FILE* file = fopen(temporary.c_str(), "wb")) {
+    fwrite(body.data(), 1, body.size(), file);
+    if (fclose(file) == 0) portable::replaceFile(temporary.c_str(), name.c_str());
+  }
+}
+
+void VirtualNode::repeaterData(const std::string& key, const std::string& kind) {
+  uint8_t bytes[PUB_KEY_SIZE];
+  if (key.size() != 2 * PUB_KEY_SIZE || !mesh::Utils::fromHex(bytes, PUB_KEY_SIZE, key.c_str())) return;
+  if ((kind != "status" && kind != "telemetry" && kind != "acl") || key != _repeaterKey || (!_repeaterAdmin && !_repeaterGuest) ||
+      static_cast<long>(millis() - _repeaterDeadline) >= 0) {
+    _repeaterKey = key;
+    publishRequestResult(kind, "ERROR Log in first.\n");
+    return;
+  }
+  if (kind == "acl" && !_repeaterAdmin) { publishRequestResult(kind, "ERROR The access list needs the administrator password.\n"); return; }
+  const ContactInfo* contact = lookupContactByPubKey(bytes, PUB_KEY_SIZE);
+  if (!contact) { publishRequestResult(kind, "ERROR Node unknown.\n"); return; }
+  uint8_t request[5] = {0};
+  uint8_t length = 1;
+  if (kind == "status") request[0] = 0x01;
+  else if (kind == "telemetry") { request[0] = 0x03; length = 5; }   // the next bytes: all permissions
+  else { request[0] = 0x05; length = 3; }
+  uint32_t timeout = 0;
+  if (sendRequest(*contact, request, length, _requestTag, timeout) == MSG_SEND_FAILED) {
+    publishRequestResult(kind, "ERROR Could not send the request.\n");
+    return;
+  }
+  _requestKind = kind;
+  _requestPending = true;
+  _requestDeadline = millis() + timeout + 4000;
+}
+
 void VirtualNode::onContactResponse(const ContactInfo& contact, const uint8_t* data, uint8_t len) {
+  if (_requestPending && !_repeaterPending && contactKey(contact) == _repeaterKey && len >= 4 && memcmp(data, &_requestTag, 4) == 0) {
+    _requestPending = false;
+    const uint8_t* body = data + 4;
+    const size_t size = len - 4;
+    std::string out;
+    char line[96];
+    if (_requestKind == "status") {
+      struct Stats {
+        uint16_t batt_milli_volts, curr_tx_queue_len;
+        int16_t noise_floor, last_rssi;
+        uint32_t n_packets_recv, n_packets_sent, total_air_time_secs, total_up_time_secs;
+        uint32_t n_sent_flood, n_sent_direct, n_recv_flood, n_recv_direct;
+        uint16_t err_events;
+        int16_t last_snr;
+        uint16_t n_direct_dups, n_flood_dups;
+        uint32_t total_rx_air_time_secs, n_recv_errors;
+      } s = {};
+      memcpy(&s, body, std::min(size, sizeof(s)));
+      snprintf(line, sizeof(line), "battery_mv %u\nqueue %u\nnoise_floor %d\nlast_rssi %d\nlast_snr %.2f\n", s.batt_milli_volts, s.curr_tx_queue_len, s.noise_floor, s.last_rssi, s.last_snr / 4.0);
+      out += line;
+      snprintf(line, sizeof(line), "recv %u\nsent %u\ntx_airtime %u\nrx_airtime %u\nuptime %u\n", s.n_packets_recv, s.n_packets_sent, s.total_air_time_secs, s.total_rx_air_time_secs, s.total_up_time_secs);
+      out += line;
+      snprintf(line, sizeof(line), "sent_flood %u\nsent_direct %u\nrecv_flood %u\nrecv_direct %u\n", s.n_sent_flood, s.n_sent_direct, s.n_recv_flood, s.n_recv_direct);
+      out += line;
+      snprintf(line, sizeof(line), "dups_flood %u\ndups_direct %u\nerrors %u\nrecv_errors %u\n", s.n_flood_dups, s.n_direct_dups, s.err_events, s.n_recv_errors);
+      out += line;
+    } else if (_requestKind == "telemetry") {
+      out = lppText(body, size);
+      if (out.empty()) out = "EMPTY\n";
+    } else {
+      for (size_t i = 0; i + 7 <= size; i += 7) {
+        char hex[13];
+        mesh::Utils::toHex(hex, &body[i], 6);
+        snprintf(line, sizeof(line), "%s %u\n", hex, body[i + 6]);
+        out += line;
+      }
+      if (out.empty()) out = "EMPTY\n";
+    }
+    publishRequestResult(_requestKind, out);
+    return;
+  }
   if (!_repeaterPending || contactKey(contact) != _repeaterKey) return;
   _repeaterPending = false;
-  _repeaterAdmin = len >= 7 && data[4] == 0 && (data[6] & 1) != 0;
+  const bool accepted = len >= 7 && data[4] == 0;
+  _repeaterAdmin = accepted && (data[6] & 1) != 0;
+  _repeaterGuest = accepted && !_repeaterAdmin;
   _repeaterDeadline = millis() + 600000;
-  publishRepeater(_repeaterKey, _repeaterAdmin ? "Administrator login accepted." : "Repeater did not grant administrator access.");
+  publishRepeater(_repeaterKey, _repeaterAdmin ? "Administrator login accepted." : _repeaterGuest ? "Guest login accepted. Status and sensor readings are available; settings need the administrator password." : "Login was not accepted.");
 }
 
 void VirtualNode::onCommandDataRecv(const ContactInfo& contact, mesh::Packet*, uint32_t, const char* text) {
@@ -717,6 +854,10 @@ void VirtualNode::loop() {
     publishRepeater(_repeaterKey, _repeaterPending ? "No answer from the repeater. It was reached by radio, but a repeater stays silent when the password is wrong: check the admin password and try again." : "Administrator session expired.");
     _repeaterPending = false;
     _repeaterAdmin = false;
+  }
+  if (_requestPending && static_cast<long>(millis() - _requestDeadline) >= 0) {
+    _requestPending = false;
+    publishRequestResult(_requestKind, "ERROR No answer from the node.\n");
   }
   if (_scan_tag && (long)(millis() - _scan_until) > 0) {
     printScan();

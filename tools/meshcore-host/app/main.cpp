@@ -125,7 +125,8 @@ int main(int argc, char** argv) {
   if (!service && names.empty()) names.push_back("PC-Node");
 
   KissHub hub;
-  hub.verbose = verbose;
+  // MAARSE_WORKER_VERBOSE=1 in the service environment logs every frame to and from the modem.
+  hub.verbose = verbose || std::getenv("MAARSE_WORKER_VERBOSE") != nullptr;
   if (!(tcp.empty() ? hub.open(port, lp) : hub.openTcp(tcp, lp))) return 1;
 
   SystemRNG rng;

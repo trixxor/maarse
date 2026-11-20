@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -99,7 +102,17 @@ fun ChatsScreen(onOpen: (String) -> Unit, onAlerts: () -> Unit = {}) {
             dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
         )
     }
-    Box(Modifier.fillMaxSize()) {
+    val mc by Node.meshcoreAccess.collectAsState()
+    val link by Node.mcLink.collectAsState()
+    val showMeshcore = link.state != 0
+    val ready = link.state == 2 && mc.allowed && mc.key != null
+    if (!ready) MeshCoreMode.on = false
+    Column(Modifier.fillMaxSize()) {
+    if (showMeshcore) McChips(link.copy(state = if (ready || link.state != 2) link.state else 1), !MeshCoreMode.on, { MeshCoreMode.on = false },
+        MeshCoreMode.on, { MeshCoreMode.on = true }, if (mc.totalUnread > 0) "MeshCore (${mc.totalUnread})" else "MeshCore")
+    if (ready && MeshCoreMode.on) {
+        MeshCoreChats()
+    } else Box(Modifier.weight(1f).fillMaxWidth()) {
         if (convs.isEmpty()) Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("No conversations yet", style = MaterialTheme.typography.titleMedium)
             Text("Join a channel or write to someone with the button below. People who write to you show up here.",
@@ -154,7 +167,23 @@ fun ChatsScreen(onOpen: (String) -> Unit, onAlerts: () -> Unit = {}) {
             containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary,
         ) { Icon(Icons.Default.Edit, "New chat") }
     }
+    }
     if (adding) NewChatDialog(onDone = { adding = false; it?.let(onOpen) })
+}
+
+/** Chats tab: true while the MeshCore messages and channels are shown instead of the conversation list. */
+object MeshCoreMode {
+    var on by mutableStateOf(false)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MeshCoreChips(unread: Int) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = !MeshCoreMode.on, onClick = { MeshCoreMode.on = false }, label = { Text("Chats") })
+        FilterChip(selected = MeshCoreMode.on, onClick = { MeshCoreMode.on = true },
+            label = { Text(if (unread > 0) "MeshCore ($unread)" else "MeshCore") })
+    }
 }
 
 @Composable

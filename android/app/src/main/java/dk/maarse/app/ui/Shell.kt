@@ -79,7 +79,7 @@ enum class Tab(val title: String) { CHATS("Chats"), PAGES("Pages"), CONTACTS("No
 
 /** Pages behind "You". */
 enum class MePage(val title: String) {
-    ACCOUNT("Account and devices"), MESHCORE("MeshCore"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and background"),
+    ACCOUNT("Account and devices"), MESHCORE("MeshCore setup"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and background"),
     CONNECTION("All connection options"), HOST("Internet link and post office"),
 }
 
@@ -131,7 +131,7 @@ fun AppShell(nav: Nav) {
     LaunchedEffect(Unit) {
         while (true) {
             Node.pollMeshcoreUnread()
-            delay(30_000)
+            delay(5_000)
         }
     }
     BackHandler(nav.welcome == null && nav.canGoBack) { nav.back() }
@@ -179,12 +179,8 @@ private fun BottomBar(nav: Nav) {
                 selected = nav.tab == t, onClick = { nav.select(t) }, label = { Text(t.title) },
                 colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer),
                 icon = {
-                    val n = when (t) {
-                        Tab.CHATS -> unread.values.sum()
-                        Tab.SETTINGS -> meshcore.totalUnread
-                        else -> 0
-                    }
-                    if (n > 0) BadgedBox(badge = { Badge { Text(if (t == Tab.SETTINGS) "MC $n" else "$n") } }) { Icon(icon, null) } else Icon(icon, null)
+                    val n = if (t == Tab.CHATS) unread.values.sum() else 0
+                    if (n > 0) BadgedBox(badge = { Badge { Text("$n") } }) { Icon(icon, null) } else Icon(icon, null)
                 },
             )
         }
@@ -223,7 +219,7 @@ private fun Home(nav: Nav) {
         Box(Modifier.weight(1f)) {
             when (nav.tab) {
                 Tab.CHATS -> ChatsScreen(onOpen = { nav.go(Screen.Chat(it)) }, onAlerts = { nav.go(Screen.Net(NetPage.ALERTS)) })
-                Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onPages = { nav.select(Tab.PAGES, reset = false) }, onAnnounces = { nav.go(Screen.Net(NetPage.ANNOUNCES)) })
+                Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onMeshcoreChat = { nav.select(Tab.CHATS, reset = false) }, onPages = { nav.select(Tab.PAGES, reset = false) }, onAnnounces = { nav.go(Screen.Net(NetPage.ANNOUNCES)) })
                 Tab.NETWORK -> NetworkScreen(onPage = { nav.go(Screen.Net(it)) })
                 Tab.SETTINGS -> MeScreen(nav)
                 Tab.PAGES -> {}
@@ -362,8 +358,9 @@ private fun MeScreen(nav: Nav) {
                 PersonState.AWAITING -> "Waiting to be linked"
                 else -> "One address for your phone, PC and more"
             }) { nav.go(Screen.Page(MePage.ACCOUNT)) }
-            if (meshcore.allowed && meshcore.key != null) GroupRow("MeshCore",
-                if (meshcore.totalUnread > 0) "${meshcore.totalUnread} unread" else "Channels, direct messages and nodes") {
+            // Setup only: the messages and channels are in Chats, next to the conversations.
+            if (me != null) GroupRow("MeshCore setup",
+                if (meshcore.key != null) "Access and identity. Messages are in Chats" else "Backbone address and access") {
                 nav.go(Screen.Page(MePage.MESHCORE))
             }
             if (p?.state == PersonState.MEMBER) GroupRow("Sync now", "Fetch your mail and copies from your other devices (also done at start-up)") {
@@ -398,7 +395,14 @@ private fun MePageContent(p: MePage) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
         when (p) {
             MePage.ACCOUNT -> if (me != null) AccountSection() else Hint("Connect first.")
-            MePage.MESHCORE -> if (me != null) MeshCoreAccessSection() else Hint("Connect first.")
+            MePage.MESHCORE -> if (me == null) Hint("Connect first.") else {
+                val account by Node.person.collectAsState()
+                if (account != null && account?.state != PersonState.MEMBER) {
+                    // MeshCore proves access with the account: set that up first, right here.
+                    Hint(Node.meshcoreAccountNote() ?: "MeshCore needs an account.")
+                    AccountSection()
+                } else MeshCoreAccessSection(setup = true)
+            }
             MePage.NODE -> if (me != null) NodeSection() else Hint("Connect first.")
             MePage.RADIO -> if (me != null) NodeSection(radioPart = true) else Hint("Connect first.")
             MePage.APP -> AppSection()
@@ -437,7 +441,7 @@ private fun WelcomeAccount(nav: Nav) {
     val me by Node.me.collectAsState()
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Step 2 of 2 · Your account", Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("Create an account, or link this phone to the one on your computer. You can do it later under You.",
+        Text("Create your account, or link this phone to the one on your computer.",
             Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (me == null) Hint("Starting the node…") else {
             var name by remember { mutableStateOf(me?.name ?: "") }
@@ -451,6 +455,13 @@ private fun WelcomeAccount(nav: Nav) {
             }
             AccountSection()
         }
-        OutlinedButton(onClick = { nav.home() }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Done") }
+        val account by Node.person.collectAsState()
+        OutlinedButton(onClick = { nav.home() }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+            Text(if (account?.state == PersonState.NONE) "Later" else "Done")
+        }
+        if (account?.state == PersonState.NONE) {
+            Text("You can do this later under Settings → Account and devices. MeshCore needs an account.",
+                Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }

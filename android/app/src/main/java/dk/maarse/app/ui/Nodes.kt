@@ -49,7 +49,15 @@ private fun reach(n: NodeEntry): String = buildList {
 
 /** People and nodes heard, newest first. */
 @Composable
-fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}, onAnnounces: () -> Unit = {}) {
+fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}, onAnnounces: () -> Unit = {}, onMeshcoreChat: () -> Unit = {}) {
+    val mcState by Node.meshcoreAccess.collectAsState()
+    val link by Node.mcLink.collectAsState()
+    val showMc = link.state != 0
+    if (link.state != 2 || !mcState.allowed) McNav.nodeMode = false
+    if (showMc && McNav.nodeMode) {
+        Column(Modifier.fillMaxSize()) { McNodeChips(); MeshCoreNodes(onMeshcoreChat) }
+        return
+    }
     val nodes by Node.nodes.collectAsState()
     Node.nicknames.collectAsState().value
     var filter by remember { mutableStateOf("") }
@@ -57,6 +65,7 @@ fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}, onAnno
         .filter { filter.isBlank() || Node.label(it.addr).contains(filter, true) || it.addr.startsWith(filter.lowercase()) }
         .sortedWith(compareByDescending<NodeEntry> { Node.nicknames.value.containsKey(it.addr) }.thenByDescending { it.lastHeard })
     Column(Modifier.fillMaxSize()) {
+        if (showMc) McNodeChips()
         OutlinedTextField(
             filter, { filter = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), singleLine = true,
             placeholder = { Text("Search by name or address") }, leadingIcon = { Icon(Icons.Default.Search, null) },

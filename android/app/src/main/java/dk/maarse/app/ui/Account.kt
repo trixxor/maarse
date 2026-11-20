@@ -103,10 +103,14 @@ fun AccountSection() {
 private fun NoAccount() {
     var restoring by remember { mutableStateOf(false) }
     var words by remember { mutableStateOf("") }
-    Hint("With an account, friends write to one address and the message reaches all your devices (phone, PC …). Your sent messages show on all of them too.")
+    Text("Is this your first device with Må:rse?", Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+    Hint("With an account, friends write to one address and the message reaches all your devices (phone, PC …). Your sent messages show on all of them too. MeshCore needs an account as well.")
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Button(onClick = { Node.personSetup(PersonOp.CREATE) }) { Text("Create an account (this is the master device)") }
-        OutlinedButton(onClick = { Node.personSetup(PersonOp.AWAIT_LINK) }) { Text("Link this device to my account") }
+        Button(onClick = { Node.personSetup(PersonOp.CREATE) }) { Text("Yes, create my account (this device becomes the master)") }
+        OutlinedButton(onClick = { Node.personSetup(PersonOp.AWAIT_LINK) }) { Text("No, I already have an account on another device (link this one)") }
+        Text("Already have an account on your computer or another phone? Choose \"No\": two accounts would mean two addresses.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         TextButton(onClick = { restoring = !restoring }) { Text("Restore an account (backup file or 24 words)") }
         if (restoring) {
             val ctx = LocalContext.current
@@ -286,7 +290,7 @@ fun MeshCoreAccessSection(setup: Boolean = false) {
         if (key != null) {
             SelectionContainer { Text("MeshCore public key: $key", fontFamily = FontFamily.Monospace) }
             if (setup) {
-                Hint("Open MeshCore from Settings to use your channels and radio.")
+                Hint("Open MeshCore from Chats to use your channels and radio.")
                 return@Column
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {

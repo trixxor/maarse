@@ -483,6 +483,81 @@
   .filters { display: flex; gap: 6px; padding: 2px 4px 8px; overflow-x: auto; }
   .filters button { padding: 4px 11px; border-radius: 999px; font-size: 12.5px; color: var(--muted); }
   .filters button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  /* MeshCore mode: the Chats pane shows only its heading and the Chats/MeshCore switch. */
+  #mc-list { display: none; }
+  #pane-chats.mc-mode > #mc-list { display: block !important; }
+  #pane-chats.mc-mode > :not(.pane-head):not(#chat-mode):not(#mc-list) { display: none !important; }
+  #pane-nodes.mc-mode > :not(.pane-head):not(#node-net) { display: none !important; }
+  /* MeshCore: the same lists as Må:rse, in amber (design mockups). */
+  .conv .av.mc { color: #e9b25a; background: #3a2c10; border-color: transparent; }
+  .conv .av.mp { color: #e8f1ec; background: #1d2a24; border-color: transparent; }
+  .badge.mc { background: #e9b25a; color: #2a1b00; min-width: 20px; text-align: center; }
+  #chat-mode button[data-cm="meshcore"].on, #node-net button[data-nn="meshcore"].on { background: #e9b25a; border-color: #e9b25a; color: #2a1b00; }
+  #chat-mode button:disabled, #node-net button:disabled { opacity: .45; cursor: not-allowed; }
+  .mc-linknote { font-size: 12px; color: #e9b25a; padding: 2px 4px 8px; }
+  .mc-linknote.busy { color: var(--muted); }
+  .mc-tag { display: inline-block; font-size: 12px; font-weight: 600; color: #e9b25a; background: #3a2c10; border-radius: 10px; padding: 2px 9px; }
+  .mc-row { display: flex; gap: 12px; align-items: center; padding: 9px 6px; cursor: pointer; border-radius: 10px; }
+  .mc-row:hover { background: var(--bg); }
+  .mc-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .mc-row .t b { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mc-row .t small, .mc-row .r small { color: var(--muted); font-size: 13px; }
+  .mc-row .r { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; font-size: 12px; }
+  .mc-ico { flex: none; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; font-weight: 700; }
+  .mc-ico.chat, .mc-ico.sensor { background: #1d2a24; color: #e8f1ec; }
+  .mc-ico.repeater { background: #3a2c10; color: #e9b25a; }
+  .mc-ico.room { background: #12342a; color: #5cc8a1; }
+  .mc-sec { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; letter-spacing: .06em; color: var(--muted); padding: 14px 6px 4px; }
+  .mc-pills { display: flex; gap: 8px; flex-wrap: wrap; padding: 6px 0; }
+  .mc-pills button { height: 30px; border-radius: 15px; border: 1px solid var(--line); background: transparent; color: var(--muted); padding: 0 12px; font-size: 13px; cursor: pointer; }
+  .mc-pills button.on { border-color: #e9b25a; background: #3a2c10; color: #e9b25a; }
+  .mc-star { background: none; border: 0; color: var(--muted); font-size: 20px; cursor: pointer; }
+  .mc-star.on { color: #e9b25a; }
+  .mc-scan { border: 1px solid #e9b25a; background: transparent; color: #e9b25a; border-radius: 18px; height: 34px; padding: 0 14px; font-weight: 600; cursor: pointer; }
+  .mc-scan:disabled { opacity: .5; cursor: default; }
+  .mc-status { padding: 6px 4px 2px; font-size: 13px; color: #e9b25a; }
+  .mc-status.done { color: #5cc8a1; }
+  .mc-status small { display: block; color: var(--muted); margin-top: 4px; font-size: 12px; }
+  .mc-bar { height: 4px; border-radius: 2px; background: #3a2c10; overflow: hidden; margin-top: 6px; }
+  .mc-bar i { display: block; height: 100%; width: 35%; background: #e9b25a; animation: mcbar 1.2s infinite ease-in-out; }
+  @keyframes mcbar { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+  .mc-head { display: flex; align-items: center; gap: 10px; padding: 4px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+  .mc-head .av { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; flex: none; }
+  .mc-head .av.mc { background: #3a2c10; color: #e9b25a; } .mc-head .av.mp { background: #1d2a24; color: #e8f1ec; }
+  .mc-head .t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .mc-head .t b { font-size: 16px; } .mc-head .t small { color: #e9b25a; font-size: 12px; }
+  .mc-day { align-self: center; font-size: 12px; color: var(--muted); padding: 3px 10px; border-radius: 10px; background: var(--raised); margin: 6px auto; width: fit-content; }
+  .mc-bub { display: flex; flex-direction: column; gap: 3px; margin: 5px 0; }
+  .mc-bub.mine { align-items: flex-end; }
+  .mc-bub .b { max-width: min(520px, 78%); padding: 10px 14px; border-radius: 16px; background: #1d2a24; color: #e8f1ec; line-height: 1.35; }
+  .mc-bub.mine .b { background: #3a2c10; color: #f6e3bd; }
+  .mc-bub .m { font-size: 11px; color: var(--muted); padding: 0 6px; }
+  .mc-bub.mine .m.ok { color: #e9b25a; }
+  .mc-compose { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  .mc-compose input { flex: 1; height: 46px; border-radius: 23px; background: #1d2a24; border: 0; padding: 0 18px; color: #e8f1ec; }
+  .mc-compose .n { font-size: 11px; color: var(--muted); min-width: 40px; text-align: right; }
+  .mc-send { width: 46px; height: 46px; border-radius: 50%; border: 0; background: #e9b25a; color: #2a1b00; font-size: 18px; cursor: pointer; }
+  .mc-send:disabled { background: #3a2c10; cursor: default; }
+  .mc-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+  .mc-facts div { background: var(--raised); border-radius: 12px; padding: 10px 14px; font-weight: 600; }
+  .mc-facts small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+  .mc-big { background: #e9b25a; color: #2a1b00; border: 0; border-radius: 24px; height: 46px; padding: 0 24px; font-weight: 600; cursor: pointer; width: 100%; }
+  .mc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .mc-actions button { border-radius: 18px; border: 1px solid var(--line); background: transparent; color: var(--text); height: 34px; padding: 0 14px; cursor: pointer; }
+  .mc-actions button.danger { border-color: #6b3a33; color: #f08a7a; }
+  .mc-console { background: #0a100d; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; min-height: 160px; max-height: 40vh; overflow: auto; }
+  .mc-console .typed { color: var(--muted); }
+  .mc-banner { background: #1f5a37; color: #fff; padding: 8px 14px; border-radius: 10px; margin: 8px 0; font-size: 13px; }
+  .mc-banner.guest { background: #3a4a1f; }
+  .mc-tab { display: grid; gap: 12px; padding: 6px 0 20px; }
+  .mc-item > div { font-size: 18px; } .mc-item small { display: block; font-size: 15px; color: var(--muted); margin-top: 2px; }
+  .mc-field { background: var(--raised); border-radius: 14px; padding: 12px 14px; display: grid; gap: 6px; }
+  .mc-fhead { display: flex; align-items: center; gap: 4px; } .mc-fhead small { flex: 1; color: var(--muted); }
+  .mc-note, .mc-msg { color: var(--muted); font-size: 12px; } .mc-msg.err { color: #f08a7a; }
+  .mc-big.danger { background: #6b3a33; color: #f08a7a; }
+  .mc-sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 50; }
+  .mc-sheet > div { background: var(--raised); border-radius: 18px; padding: 20px; width: min(420px, 92vw); display: grid; gap: 12px; }
+  .mc-sheet .row { display: flex; gap: 10px; justify-content: flex-end; }
   .conv { padding: 9px 8px; border-radius: 12px; }
   .conv .av { width: 38px; height: 38px; font-size: 15px; }
   .conv .t { flex: 1; min-width: 0; display: grid; }
@@ -690,6 +765,9 @@
       <!-- Chats -->
       <div class="pane" id="pane-chats">
         <div class="pane-head"><h2>Chats</h2></div>
+        <div class="filters" id="chat-mode"><button data-cm="chats" class="on">Chats</button><button data-cm="meshcore" id="btn-mc-mode" hidden>MeshCore<span id="mc-mode-unread"></span></button></div>
+        <div id="mc-linknote" class="mc-linknote" hidden></div>
+        <div id="mc-list"></div>
         <div class="filters" id="chat-filters"><button data-f="all" class="on">All</button><button data-f="dm">People</button><button data-f="ch">Channels</button><button data-f="unread">Unread</button></div>
         <nav class="tools list" aria-label="Pinned"><button id="btn-alerts" data-view="alerts"><svg class="i"><use href="#i-bell"/></svg><span>Alerts<small id="alerts-sub">Verified public warnings</small></span></button></nav>
         <div id="channels"></div>
@@ -714,6 +792,8 @@
       <!-- Nodes -->
       <div class="pane" id="pane-nodes" hidden>
         <div class="pane-head"><h2>Nodes</h2></div>
+        <div class="filters" id="node-net"><button data-nn="marse" class="on">Må:rse</button><button data-nn="meshcore" id="btn-mc-nodes" hidden>MeshCore</button></div>
+        <div id="mc-linknote2" class="mc-linknote" hidden></div>
         <div class="filters" id="node-view"><button data-nv="list" class="on">List</button><button data-nv="map">Map</button></div>
         <nav class="tools list" aria-label="Announces and pages">
           <button id="btn-announces" data-view="announces"><svg class="i"><use href="#i-wave"/></svg><span>Announces<small id="ann-sub">Who announces themselves, live</small></span></button>
@@ -750,7 +830,7 @@
         <nav class="tools list">
           <button id="btn-myqr" data-view="myqr" disabled><svg class="i"><use href="#i-qr"/></svg><span>Contact card and QR code<small>Let others add you</small></span></button>
           <button id="btn-diag2" data-view="diag" disabled><svg class="i"><use href="#i-pin"/></svg><span>Name, position and telemetry<small>What your announces share</small></span></button>
-          <button id="btn-meshcore" data-view="meshcore" hidden><svg class="i"><use href="#i-globe"/></svg><span>MeshCore<small>Channels, direct messages and nodes</small></span></button>
+          <button id="btn-meshcore" data-view="meshcore-setup" disabled><svg class="i"><use href="#i-globe"/></svg><span>MeshCore setup<small>Access and identity. Messages are in Chats</small></span></button>
           <button id="btn-account" data-view="account" disabled title="One account for your phone, PC and more (maarse-host)"><svg class="i"><use href="#i-key"/></svg><span>Account and linked devices<small>One address for all your devices</small></span><span class="badge" id="account-meshcore-unread" aria-label="Unread MeshCore messages" hidden></span></button>
           <button id="btn-backup" data-view="backup"><svg class="i"><use href="#i-key"/></svg><span>Backup and recovery<small id="bk-sub">Recovery phrase and encrypted backup</small></span></button>
         </nav>
@@ -1296,12 +1376,19 @@ function renderChat() {
   if (state.view === "settings" || state.view === "connections") return renderSettings(box, "connections");
   if (state.view === "computer") return renderSettings(box, "computer");
   if (state.view === "account") return renderAccount(box);
-  if (state.view === "meshcore") {
-    $("chat-title").textContent = "MeshCore";
-    $("chat-sub").textContent = "";
+  if (state.view === "meshcore") return renderMeshcoreChats(box);
+  if (state.view === "mcnodes") return renderMeshcoreNodes(box);
+  if (state.view === "meshcore-setup") {
+    $("chat-title").textContent = "MeshCore setup";
+    $("chat-sub").textContent = "Backbone address, access and identity";
     const panel = el("div", { className: "secure" });
     box.append(panel);
-    appendMeshcoreAccess(panel, false);
+    if (acct.p && acct.p.state !== 2) {
+      const open = el("button", { className: "primary", textContent: "Set up my account", onclick: () => setView("account") });
+      panel.append(el("p", { textContent: accountNeededNote() }), open);
+      return;
+    }
+    appendMeshcoreAccess(panel, true);
     return;
   }
   if (state.view === "service") return renderService(box);
@@ -1416,6 +1503,7 @@ function setConnected(on, name) {
   if (!on) $("btn-myqr").disabled = true;
   $("btn-settings").disabled = $("btn-computer").disabled = !(on && transport instanceof WsTransport);
   $("btn-account").disabled = !(on && transport instanceof WsTransport);
+  $("btn-meshcore").disabled = !on;
   if (on && transport instanceof WsTransport) transport.send(Cmd.getPerson());
   $("btn-service").disabled = !(on && transport instanceof WsTransport);
   if (!$("btn-service").disabled && store.get("openServiceOnConnect", false)) { store.set("openServiceOnConnect", false); $("btn-service").click(); }
@@ -1526,10 +1614,22 @@ function onEvent(ev) {
         meshcoreAccess.channels = [];
         meshcoreAccess.channel = null;
         meshcoreAccess.repeater = null;
+        meshcoreAccess.conversations = [];
+        meshcoreAccess.nodes = [];
         updateMeshcoreUnread();
       }
       acct.p = ev;
       $("btn-sync").disabled = !(transport && ev.state === 2);
+      // A device without an account is asked once whether it is the first device or
+      // has to be linked. After that the question waits in Settings, and MeshCore says so.
+      if (ev.state === 0 && transport instanceof WsTransport) {
+        try {
+          if (!localStorage.getItem("maarse-account-asked")) {
+            localStorage.setItem("maarse-account-asked", "1");
+            setView("account");
+          }
+        } catch {}
+      }
       if (state.view === "account") renderChat();
       break;
     case "personPhrase": acct.phrase = ev.phrase; if (state.view === "account") renderChat(); break;
@@ -2504,6 +2604,12 @@ function setView(v) {
   else if (transport && !state.target) { transport.send(Cmd.getRegions()); transport.send(Cmd.getSharing()); transport.send(Cmd.getSite()); transport.send(Cmd.getStats()); }
   state.view = v;
   markTab(tabOfView(v));
+  // MeshCore replaces the conversation list in the Chats pane; the switch stays.
+  $("pane-chats").classList.toggle("mc-mode", v === "meshcore");
+  for (const b of $("chat-mode").querySelectorAll("button")) b.classList.toggle("on", (b.dataset.cm === "meshcore") === (v === "meshcore"));
+  $("pane-nodes").classList.toggle("mc-mode", v === "mcnodes");
+  for (const b of $("node-net").querySelectorAll("button")) b.classList.toggle("on", (b.dataset.nn === "meshcore") === (v === "mcnodes"));
+  mcEnter(v);
   for (const b of document.querySelectorAll("nav.tools button")) b.classList.toggle("active", b.dataset.view === v && (v !== "diag" || b.closest(".pane") === $("pane-" + state.tab)));
   mobileSide(false); $("messages").scrollTop = 0;
   clearInterval(state.statsTimer);
@@ -4927,7 +5033,7 @@ function linkAddr(s) {
   return m ? m[0] : s.trim().toLowerCase();
 }
 
-const meshcoreAccess = { result: null, pending: null, note: "", messages: [], unread: 0, lastId: 0, totalUnread: 0, denied: false, direct: null, contacts: [], channel: null, channels: [], repeater: null };
+const meshcoreAccess = { conversations: [], nodes: [], scanning: false, result: null, pending: null, note: "", messages: [], unread: 0, lastId: 0, totalUnread: 0, denied: false, direct: null, contacts: [], channel: null, channels: [], repeater: null };
 const meshcoreOperations = ["access", "ensure", "announce", "scan", "scan-results", "public-history", "public-send", "public-read", "direct-list", "", "", "", "channel-list"];
 
 function receiveMeshcoreProof(event) {
@@ -4945,21 +5051,824 @@ function receiveMeshcoreProof(event) {
     signature: hex(proof.slice(193, 257)), list: hex(proof.slice(257)) }));
 }
 
+// ---- MeshCore as chats and nodes: the same overview as Må:rse, in amber (the design mockups).
+const mc = { open: null, node: null, filter: "all", queue: [], done: null, sig: "", timer: null, loggedIn: null, loggedAt: "",
+  log: [], lastStatus: "", scanAskedAt: 0, next: 0, sentName: "", last: 0, link: { state: 0, note: "" } };
+const MC_TYPES = ["Node", "Chat", "Repeater", "Room", "Sensor"];
+const MC_CLASS = ["chat", "chat", "repeater", "room", "sensor"];
+
+function mcEndpoint() { return localStorage.getItem("maarse-meshcore-backbone") || ""; }
+
+// Every reply says whether MeshCore can be used: backbone reached, access granted, gateway connected.
+function mcLinkFrom(data) {
+  const ok = data.allowed !== false;
+  const gatewayDown = data.gateway && data.gateway.connected === false;
+  mc.link = !ok ? { state: 3, note: "This account has no MeshCore access on the backbone." }
+    : gatewayDown ? { state: 3, note: "Reached the backbone, but the MeshCore gateway is not connected to it." }
+    : { state: 2, note: "" };
+  mc.next = Date.now() + (!ok ? 60000 : mc.link.state === 2 ? 30000 : 10000);
+  if (data.scan) meshcoreAccess.scan = data.scan;
+  if (mc.link.state === 2) mcSyncName();
+  updateMeshcoreUnread();
+}
+
+// The Maarse name is also the MeshCore node's name.
+function mcSyncName() {
+  const name = (state.myName || "").trim().slice(0, 31);
+  if (name && name !== mc.sentName && enc.encode(name).length <= 31) { mc.sentName = name; mcAsk("set-name:" + hex(enc.encode(name))); }
+}
+
+// The backbone takes one request at a time (a new session closes the last), so they wait in line.
+function mcAsk(payload, after) {
+  mc.queue.push({ payload, after });
+  mcPump();
+}
+function mcPump() {
+  if (meshcoreAccess.pending || mc.done || !mc.queue.length) return;
+  const next = mc.queue.shift();
+  mc.done = () => { next.after?.(); setTimeout(mcPump, 0); };
+  connectMeshcoreAccess(mcEndpoint(), 9, next.payload, true);   // 9: the node signs any payload
+  if (!meshcoreAccess.pending) mcRequestDone();   // it could not start (no account, bad address)
+}
+function mcRequestDone() {
+  const f = mc.done; mc.done = null;
+  mcRefreshUi();
+  f?.();
+}
+
+function mcClock(ts) { const d = new Date(ts * 1000); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+function mcDayDiff(ts) { const d = new Date(ts * 1000), n = new Date(); return Math.round((new Date(n.getFullYear(), n.getMonth(), n.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5); }
+function mcListTime(ts) {
+  if (!ts) return "";
+  const days = mcDayDiff(ts);
+  return days <= 0 ? mcClock(ts) : days === 1 ? "Yesterday" : days < 7 ? new Date(ts * 1000).toLocaleDateString("en", { weekday: "short" }) : new Date(ts * 1000).toLocaleDateString("en", { day: "numeric", month: "numeric" });
+}
+function mcDayName(ts) { const days = mcDayDiff(ts); return days <= 0 ? "Today" : days === 1 ? "Yesterday" : new Date(ts * 1000).toLocaleDateString("en", { day: "numeric", month: "numeric", year: "numeric" }); }
+function mcAgo(seen) {
+  if (!seen) return "not heard yet";
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - seen);
+  return s < 90 ? "just now" : s < 5400 ? Math.round(s / 60) + " min ago" : s < 129600 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " d ago";
+}
+const mcSnr = n => "SNR " + (n.snr > 0 ? "+" : "") + Math.round(n.snr);
+const mcHops = h => h + " hop" + (h === 1 ? "" : "s");
+
+// Called by setView: start and stop the refreshing, show the lists.
+function mcEnter(view) {
+  const on = view === "meshcore" || view === "mcnodes";
+  if (on && !mc.timer) mc.timer = setInterval(mcTick, 2000);
+  if (!on && mc.timer) { clearInterval(mc.timer); mc.timer = null; }
+  if (on) mcRefresh();
+  if (view === "meshcore") renderMeshcoreList();
+}
+// Every 2 s while a scan runs, else every 15 s (every 6 s inside a conversation).
+function mcTick() {
+  if (!["meshcore", "mcnodes"].includes(state.view)) return;
+  const scanning = meshcoreAccess.scan && (meshcoreAccess.scan.waiting || meshcoreAccess.scan.active) || Date.now() - mc.scanAskedAt < 25000;
+  const every = scanning ? 2000 : state.view === "meshcore" && mc.open ? 6000 : 15000;
+  if (Date.now() - mc.last >= every) mcRefresh();
+}
+function mcRefresh() {
+  if (!meshcoreAccess.result?.publicKey || mc.link.state !== 2) return;
+  mc.last = Date.now();
+  mcAsk(state.view === "mcnodes" ? "nodes" : "overview");
+  if (state.view === "meshcore" && mc.open) mcAsk(mcHistoryPayload(mc.open));
+}
+
+// Redraws only what changed, so a message being typed is not lost.
+function mcRefreshUi() {
+  renderMeshcoreList();
+  const sig = JSON.stringify([state.view, mc.open, mc.node, mcMessages(), meshcoreAccess.nodes, meshcoreAccess.scan, meshcoreAccess.repeater, mc.log.length, mc.loggedIn, mc.filter]);
+  if (sig !== mc.sig) {
+    mc.sig = sig;
+    if (["meshcore", "mcnodes"].includes(state.view)) renderChat();
+  }
+}
+
+function mcPayload(o, verb, argument = "") {
+  if (o.kind === "public") return argument ? "public-" + verb + ":" + argument : "public-history";
+  const stem = o.kind === "channel" ? "channel" : "direct";
+  return argument ? stem + "-" + verb + ":" + o.id + ":" + argument : stem + "-" + verb + ":" + o.id;
+}
+function mcHistoryPayload(o) { return o.kind === "public" ? "public-history" : mcPayload(o, "history"); }
+function mcMessages() {
+  const o = mc.open;
+  if (!o) return [];
+  if (o.kind === "public") return meshcoreAccess.messages || [];
+  if (o.kind === "channel") return meshcoreAccess.channel?.channel === o.id ? meshcoreAccess.channel.messages || [] : [];
+  return meshcoreAccess.direct?.contact === o.id ? meshcoreAccess.direct.messages || [] : [];
+}
+function mcLastId() {
+  const o = mc.open;
+  if (!o) return 0;
+  if (o.kind === "public") return meshcoreAccess.lastId || 0;
+  return (o.kind === "channel" ? meshcoreAccess.channel?.lastId : meshcoreAccess.direct?.lastId) || 0;
+}
+
+function mcOpenConversation(row) {
+  mc.open = { kind: row.kind, id: row.id, title: row.title };
+  mc.sig = "";
+  renderMeshcoreList();
+  renderChat();
+  mcAsk(mcHistoryPayload(mc.open), () => {
+    const last = mcLastId();
+    if (last) mcAsk(mcPayload(mc.open, "read", String(last)), () => mcAsk("overview"));
+  });
+}
+
+function mcRow(row) {
+  const active = mc.open && mc.open.kind === row.kind && mc.open.id === row.id;
+  const initial = row.kind === "direct" ? ((row.title.match(/[\p{L}\p{N}]/u) || ["?"])[0]).toUpperCase() : "#";
+  const d = el("div", { className: "conv" + (active ? " active" : ""), title: row.title },
+    el("span", { className: "av " + (row.kind === "direct" ? "mp" : "mc"), textContent: initial }),
+    el("div", { className: "t" },
+      el("div", { style: "display:flex;gap:8px;align-items:baseline" }, el("span", { className: "name", textContent: row.title }), el("small", { textContent: mcListTime(row.time) })),
+      el("small", { textContent: row.last ? (row.mine ? "You: " : "") + row.last : "No messages yet" })));
+  if (row.unread) d.append(el("span", { className: "badge mc", textContent: row.unread }));
+  d.onclick = () => mcOpenConversation(row);
+  return d;
+}
+
+function renderMeshcoreList() {
+  const box = $("mc-list");
+  box.replaceChildren();
+  const rows = meshcoreAccess.conversations || [];
+  if (!rows.length) box.append(el("p", { className: "hint", textContent: mc.link.state === 2 ? "Loading conversations…" : "MeshCore is not available yet." }));
+  for (const row of rows) box.append(mcRow(row));
+  const add = el("button", { type: "button", className: "mc-scan", textContent: "＋ New chat" });
+  add.style.margin = "10px 6px";
+  add.onclick = () => { mc.open = null; mc.sig = ""; renderChat(); };
+  box.append(add);
+}
+
+// What a message shows under its bubble: time, then delivery or the repeaters that passed it on.
+function mcMeta(o, m) {
+  const time = m.timestamp ? mcClock(m.timestamp) : "";
+  if (!m.mine) return { text: time, ok: false };
+  let state, ok = false;
+  if (o.kind === "direct") { state = m.delivered ? "Delivered" : "Sent"; ok = !!m.delivered; }
+  else if (m.repeats > 0) { state = "Heard by " + m.repeats + " repeater" + (m.repeats === 1 ? "" : "s") + (m.snr ? " · best SNR " + (m.snr > 0 ? "+" : "") + Math.round(m.snr) : ""); ok = true; }
+  else if (m.repeats === 0) state = "Sent · not heard by a repeater yet";
+  else state = "Sent";
+  return { text: time + " · " + state, ok };
+}
+
+// Main panel of the Chats tab in MeshCore mode: one conversation, or where to start one.
+function renderMeshcoreChats(box) {
+  const o = mc.open;
+  const panel = el("div", { className: "secure" });
+  box.append(panel);
+  if (!o) {
+    $("chat-title").textContent = "MeshCore";
+    $("chat-sub").textContent = "Choose a conversation on the left, or start one";
+    const join = el("input", { placeholder: "#channel, e.g. #hike", ariaLabel: "Channel name" });
+    const go = el("button", { type: "button", textContent: "Join channel" });
+    go.onclick = () => {
+      const name = join.value.trim().toLowerCase().replace(/^#/, "");
+      if (!/^[a-z0-9-]{1,24}$/.test(name)) { meshcoreAccess.note = "Channel names use a-z, 0-9 and -, up to 24 characters."; return renderChat(); }
+      mcAsk("channel-join:" + name, () => mcAsk("overview"));
+    };
+    const key = el("input", { placeholder: "A node's public key (64 hex digits)", ariaLabel: "Public key" });
+    const write = el("button", { type: "button", textContent: "Write to a node" });
+    write.onclick = () => {
+      const k = key.value.trim().toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(k)) { meshcoreAccess.note = "A public key is 64 hex digits. You can also open a node under Nodes."; return renderChat(); }
+      mcOpenConversation({ kind: "direct", id: k, title: k.slice(0, 8) + "…" });
+    };
+    panel.append(el("h3", { textContent: "Start a conversation" }),
+      el("div", { className: "row" }, join, go), el("div", { className: "row" }, key, write),
+      el("p", { className: "hint", textContent: "Public and the channels you join are on the left. Write to a node from Nodes, where you also see who is nearby." }));
+    if (meshcoreAccess.note) panel.append(el("p", { role: "status", textContent: meshcoreAccess.note }));
+    return;
+  }
+  const node = o.kind === "direct" ? (meshcoreAccess.nodes || []).find(n => n.key === o.id) : null;
+  $("chat-title").textContent = o.title;
+  $("chat-sub").textContent = "";
+  const sub = o.kind === "public" ? "MeshCore · public channel" : o.kind === "channel" ? "MeshCore · channel"
+    : "MeshCore" + (node ? " · " + mcHops(node.hops) + " · " + mcSnr(node) : " · direct message");
+  const head = el("div", { className: "mc-head" },
+    el("span", { className: "av " + (o.kind === "direct" ? "mp" : "mc"), textContent: o.kind === "direct" ? ((o.title.match(/[\p{L}\p{N}]/u) || ["?"])[0]).toUpperCase() : "#", style: "width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-weight:700" }),
+    el("div", { className: "t" }, el("b", { textContent: o.title }), el("small", { textContent: sub })));
+  if (node) {
+    const star = el("button", { type: "button", className: "mc-star" + (node.favorite ? " on" : ""), textContent: node.favorite ? "★" : "☆", ariaLabel: "Favourite" });
+    star.onclick = () => mcAsk("favorite:" + node.key + ":" + (node.favorite ? 0 : 1), () => mcAsk("nodes"));
+    head.append(star);
+  }
+  const list = el("div");
+  const messages = mcMessages();
+  if (!messages.length) list.append(el("p", { className: "hint", textContent: "No messages yet. Say hello." }));
+  messages.forEach((m, i) => {
+    if (m.timestamp && (i === 0 || mcDayName(messages[i - 1].timestamp) !== mcDayName(m.timestamp))) list.append(el("div", { className: "mc-day", textContent: mcDayName(m.timestamp) }));
+    const meta = mcMeta(o, m);
+    list.append(el("div", { className: "mc-bub" + (m.mine ? " mine" : "") }, el("div", { className: "b", textContent: m.text }),
+      el("div", { className: "m" + (meta.ok ? " ok" : ""), textContent: meta.text })));
+  });
+  const max = o.kind === "direct" ? 60 : 90;
+  const text = el("input", { placeholder: "Write a message", ariaLabel: "Message" });
+  const count = el("span", { className: "n", textContent: "0/" + max });
+  const send = el("button", { type: "button", className: "mc-send", textContent: "➤", ariaLabel: "Send", disabled: true });
+  text.oninput = () => {
+    while (enc.encode(text.value).length > max) text.value = text.value.slice(0, -1);
+    count.textContent = enc.encode(text.value).length + "/" + max;
+    send.disabled = !text.value.trim();
+  };
+  const submit = () => {
+    const bytes = enc.encode(text.value.trim());
+    if (!bytes.length || bytes.length > max) return;
+    mcAsk(mcPayload(o, "send", hex(bytes)), () => mcAsk(mcHistoryPayload(o), () => mcAsk("overview")));
+    text.value = ""; text.oninput();
+  };
+  send.onclick = submit;
+  text.onkeydown = e => { if (e.key === "Enter") submit(); };
+  panel.append(head, list, el("div", { className: "mc-compose" }, text, count, send));
+  setTimeout(() => { box.scrollTop = box.scrollHeight; }, 0);
+}
+
+// What the scan is doing, and what it has found so far.
+function mcScanStatus() {
+  const scan = meshcoreAccess.scan || {}, asked = mc.scanAskedAt, since = Date.now() - asked;
+  const answered = (meshcoreAccess.nodes || []).filter(n => n.hops === 0 && n.seen >= asked / 1000 - 2).sort((a, b) => b.seen - a.seen);
+  const total = Math.max(scan.found || 0, answered.length);
+  let text, running;
+  if (scan.active) { text = "Scanning for nearby MeshCore nodes… " + total + " found so far"; running = true; }
+  else if (scan.waiting) { text = "Waiting for the radio to start the scan…"; running = true; }
+  else if (asked && since < 8000) { text = "Asking the radio to scan…"; running = true; }
+  else if (asked && since < 30000 && !total) { text = "Scan finished: no node answered. Nodes more than one hop away are found by their adverts instead."; running = false; }
+  else if (asked && since < 30000) { text = "Scan complete: " + total + " node" + (total === 1 ? "" : "s") + " answered"; running = false; }
+  else return null;
+  const box = el("div", { className: "mc-status" + (running ? "" : " done") }, text);
+  if (running) box.append(el("div", { className: "mc-bar" }, el("i")));
+  if (answered.length) box.append(el("small", { textContent: answered.slice(0, 4).map(n => n.name || n.key.slice(0, 8) + "…").join(" · ") + (answered.length > 4 ? " · +" + (answered.length - 4) + " more" : "") }));
+  return box;
+}
+
+// Nodes tab in MeshCore mode: who is nearby, favourites, and logging in to repeaters.
+function renderMeshcoreNodes(box) {
+  const panel = el("div", { className: "secure mcnodes" });
+  box.append(panel);
+  const nodes = meshcoreAccess.nodes || [];
+  const detail = mc.node && nodes.find(n => n.key === mc.node);
+  if (detail) return renderMeshcoreNode(panel, detail);
+  mc.node = null;
+  $("chat-title").textContent = "Nodes · MeshCore";
+  $("chat-sub").textContent = "Heard by your MeshCore radio";
+  const sc = meshcoreAccess.scan || {};
+  const scan = el("button", { type: "button", className: "mc-scan", textContent: sc.active ? "Scanning…" : "Scan now", disabled: !!(sc.waiting || sc.active) });
+  scan.onclick = () => { mc.scanAskedAt = Date.now(); mc.sig = ""; mcAsk("scan", () => mcAsk("nodes")); mcRefreshUi(); };
+  const advert = el("button", { type: "button", className: "mc-scan", textContent: "Advert" });
+  advert.onclick = () => mcAdvertSheet();
+  panel.append(el("div", { className: "row" }, advert, scan));
+  if (mc.advertNote) panel.append(el("div", { className: "mc-status done", textContent: mc.advertNote }));
+  const status = mcScanStatus();
+  if (status) panel.append(status);
+  const pills = el("div", { className: "mc-pills" });
+  for (const [id, label] of [["all", "All"], ["fav", "Favourites"], ["2", "Repeaters"], ["1", "Chat"], ["3", "Rooms"], ["4", "Sensors"]]) {
+    const b = el("button", { type: "button", textContent: label, className: mc.filter === id ? "on" : "" });
+    b.onclick = () => { mc.filter = id; mc.sig = ""; mcRefreshUi(); };
+    pills.append(b);
+  }
+  panel.append(pills);
+  const shown = nodes.filter(n => mc.filter === "all" || (mc.filter === "fav" ? n.favorite : String(n.type) === mc.filter));
+  if (!shown.length) panel.append(el("p", { className: "hint", textContent: nodes.length ? "Nothing in this filter." : "No nodes heard yet. Choose Scan now, or wait for adverts." }));
+  const favourites = shown.filter(n => n.favorite), others = shown.filter(n => !n.favorite);
+  if (favourites.length) { panel.append(el("div", { className: "mc-sec" }, el("span", { textContent: "FAVOURITES" }))); favourites.forEach(n => panel.append(mcNodeRow(n))); }
+  if (others.length) { panel.append(el("div", { className: "mc-sec" }, el("span", { textContent: "HEARD NEARBY" }), el("span", { textContent: others.length + " node" + (others.length === 1 ? "" : "s"), style: "font-weight:400;letter-spacing:0" }))); others.forEach(n => panel.append(mcNodeRow(n))); }
+}
+
+// An advert tells other nodes you exist: zero hop reaches direct neighbours, flood is passed on by repeaters.
+function mcAdvertSheet() {
+  const sheet = el("div", { className: "mc-sheet" });
+  const close = () => sheet.remove();
+  const send = (op, note) => { mcAsk(op); mc.advertNote = note; close(); mc.sig = ""; if (state.view === "mcnodes") renderChat(); };
+  sheet.append(el("div", {}, el("b", { textContent: "Send an advert" }),
+    el("small", { textContent: "A zero-hop advert is heard only by nodes in direct radio range. A flood advert is passed on by repeaters, so far more nodes hear it, but it uses more airtime.", style: "color:var(--muted)" }),
+    el("button", { type: "button", className: "mc-big", textContent: "Flood advert", onclick: () => send("announce-flood", "Flood advert sent. Repeaters pass it on.") }),
+    el("button", { type: "button", className: "mc-big", textContent: "Zero-hop advert", onclick: () => send("announce", "Zero-hop advert sent. Nodes in direct range hear it.") }),
+    el("div", { className: "row" }, el("button", { type: "button", textContent: "Cancel", onclick: close }))));
+  sheet.onclick = e => { if (e.target === sheet) close(); };
+  document.body.append(sheet);
+}
+
+function mcNodeRow(n) {
+  const name = n.name || n.key.slice(0, 8) + "…";
+  const glyph = n.type === 2 ? "R" : n.type === 3 ? "⌂" : n.type === 4 ? "S" : ((name.match(/[\p{L}\p{N}]/u) || ["?"])[0]).toUpperCase();
+  const star = el("button", { type: "button", className: "mc-star" + (n.favorite ? " on" : ""), textContent: n.favorite ? "★" : "☆", ariaLabel: n.favorite ? "Remove from favourites" : "Add to favourites" });
+  star.onclick = e => { e.stopPropagation(); mcAsk("favorite:" + n.key + ":" + (n.favorite ? 0 : 1), () => mcAsk("nodes")); };
+  const row = el("div", { className: "mc-row", title: n.key },
+    el("span", { className: "mc-ico " + (MC_CLASS[n.type] || "chat"), textContent: glyph }),
+    el("div", { className: "t" }, el("b", { textContent: name }), el("small", { textContent: (MC_TYPES[n.type] || "Node") + " · " + mcHops(n.hops) })),
+    el("div", { className: "r" }, el("span", { textContent: n.seen ? mcSnr(n) : "" }), el("small", { textContent: mcAgo(n.seen) })), star);
+  row.onclick = () => { mc.node = n.key; mc.sig = ""; renderChat(); };
+  return row;
+}
+
+function renderMeshcoreNode(panel, n) {
+  const name = n.name || n.key.slice(0, 8) + "…";
+  const kind = (MC_TYPES[n.type] || "Node").toLowerCase();
+  $("chat-title").textContent = name;
+  $("chat-sub").textContent = "MeshCore " + kind;
+  const back = el("button", { type: "button", className: "mc-scan", textContent: "← All nodes" });
+  back.onclick = () => { mc.node = null; mc.loggedIn = null; mc.sig = ""; renderChat(); };
+  const star = el("button", { type: "button", className: "mc-star" + (n.favorite ? " on" : ""), textContent: n.favorite ? "★ Favourite" : "☆ Add to favourites" });
+  star.onclick = () => mcAsk("favorite:" + n.key + ":" + (n.favorite ? 0 : 1), () => mcAsk("nodes"));
+  const admin = n.type >= 2 && n.type <= 4;   // repeaters, rooms and sensors are logged in to
+  if (mc.loggedIn === n.key) return renderRepeaterAdmin(panel, n, name);
+  panel.append(el("div", { className: "row" }, back, star),
+    el("div", { style: "text-align:center;display:grid;gap:8px;justify-items:center;margin:12px 0" },
+      el("span", { className: "mc-ico " + (MC_CLASS[n.type] || "chat"), textContent: admin ? (n.type === 2 ? "R" : "⌂") : ((name.match(/[\p{L}\p{N}]/u) || ["?"])[0]).toUpperCase(), style: "width:72px;height:72px;font-size:28px" }),
+      el("b", { textContent: name, style: "font-size:20px" }),
+      el("div", {}, el("span", { className: "mc-tag", textContent: "MeshCore " + kind + (n.type === 1 ? " node" : "") }), " ", el("code", { textContent: n.key.slice(0, 4) + "…" + n.key.slice(-4) }))),
+    el("div", { className: "mc-facts" },
+      ...[["Last heard", mcAgo(n.seen)], ["Hops", String(n.hops)], ["SNR / RSSI", n.seen ? (n.snr > 0 ? "+" : "") + Math.round(n.snr) + " dB / " + Math.round(n.rssi) : "-"], ["Times heard", String(n.count)]]
+        .map(([k, v]) => el("div", {}, el("small", { textContent: k }), v))));
+  if (!admin) {
+    const write = el("button", { type: "button", className: "mc-big", textContent: "Send message" });
+    write.onclick = () => { mc.node = null; mcOpenConversation({ kind: "direct", id: n.key, title: name }); setView("meshcore"); };
+    panel.append(write);
+    return;
+  }
+  panel.append(el("p", { className: "hint", textContent: "Administration needs the repeater's own password. Log in to see its status and run commands." }));
+  const login = el("button", { type: "button", className: "mc-big", textContent: "Log in" });
+  login.onclick = () => mcLoginSheet(n, name);
+  panel.append(login);
+}
+
+// The login sheet: the password is not saved and only used for this session.
+function mcLoginSheet(n, name) {
+  const pw = el("input", { type: "password", placeholder: "Repeater password", ariaLabel: "Repeater password", autocomplete: "off" });
+  const sheet = el("div", { className: "mc-sheet" });
+  const close = () => sheet.remove();
+  const cancel = el("button", { type: "button", textContent: "Cancel" });
+  cancel.onclick = close;
+  const ok = el("button", { type: "button", className: "primary", textContent: "Log in" });
+  ok.onclick = () => {
+    const bytes = enc.encode(pw.value);
+    if (!bytes.length || bytes.length > 60) return;
+    mc.log = []; mc.lastStatus = ""; mc.loggedIn = n.key; mc.loggedAt = mcClock(Date.now() / 1000);
+    repStart(n);
+    mcAsk("repeater-login:" + n.key + ":" + hex(bytes));
+    pw.value = "";
+    close();
+    mc.sig = ""; renderChat();
+  };
+  pw.onkeydown = e => { if (e.key === "Enter") ok.click(); };
+  sheet.append(el("div", {}, el("b", { textContent: "Log in to " + name }), el("small", { textContent: "Sent to the repeater over the radio", style: "display:block;color:var(--muted)" }),
+    pw, el("small", { textContent: "The password is not saved. You type it each time you log in, and it is only used for this session.", style: "color:var(--muted)" }),
+    el("div", { className: "row" }, cancel, ok)));
+  sheet.onclick = e => { if (e.target === sheet) close(); };
+  document.body.append(sheet);
+  pw.focus();
+}
+
+// ---- Admin of a logged-in repeater, room or sensor: Status, Command Line and Settings (as in the MeshCore app).
+const rep = { key: null, node: null, name: "", tab: 0, tool: null, loginKind: 0, loginNote: "", status: {}, statusNote: "", clock: "",
+  telemetry: [], telemetryNote: "", acl: [], busy: 0, lock: Promise.resolve(), root: null, body: null, bar: null, polling: false };
+const repSleep = ms => new Promise(r => setTimeout(r, ms));
+const REP_PENDING = /^(Waiting for repeater|Request queued)/;
+const repReply = text => String(text || "").replace(/^> /, "").trim();
+const repFailed = text => /^(ERROR|Error|Administrator login required|Login required)/.test(text || "");
+const repDuration = s => Math.floor(s / 86400) + " days " + Math.floor(s % 86400 / 3600) + "h " + Math.floor(s % 3600 / 60) + "m " + (s % 60) + "s";
+
+function mcAskP(payload) { return new Promise(res => mcAsk(payload, () => res(meshcoreAccess.repeater))); }
+function repLock(fn) {
+  const run = rep.lock.then(async () => { rep.busy++; repBusy(); try { return await fn(); } finally { rep.busy--; repBusy(); } });
+  rep.lock = run.catch(() => {});
+  return run;
+}
+function repBusy() { if (rep.bar) rep.bar.hidden = rep.busy === 0; }
+
+// One CLI command; the answer is the repeater's text. A reply number tells a new answer from an old one.
+function repCommand(key, cmd) {
+  return repLock(async () => {
+    const bytes = enc.encode(cmd);
+    if (bytes.length > 60) return "ERROR The command is too long (60 bytes at most).";
+    await mcAskP("repeater-status:" + key);
+    const before = meshcoreAccess.repeater?.seq || 0;
+    for (let tries = 0; tries < 6; tries++) {
+      await mcAskP("repeater-command:" + key + ":" + hex(bytes));
+      if (!(meshcoreAccess.repeater?.error || "").includes("already queued")) break;
+      await repSleep(700);
+    }
+    for (let i = 0; i < 22; i++) {
+      await repSleep(1500);
+      await mcAskP("repeater-status:" + key);
+      const r = meshcoreAccess.repeater;
+      if (r && r.key === key && r.seq > before && !REP_PENDING.test(r.status)) return r.status;
+    }
+    return "ERROR No answer from the repeater. Try again.";
+  });
+}
+// A binary request: "status", "telemetry" or "acl".
+function repRequest(key, kind) {
+  return repLock(async () => {
+    const payload = "repeater-request:" + key + ":" + hex(enc.encode(kind));
+    for (let tries = 0; tries < 6; tries++) {
+      await mcAskP(payload);
+      if (!(meshcoreAccess.repeater?.error || "").includes("already queued")) break;
+      await repSleep(700);
+    }
+    for (let i = 0; i < 18; i++) {
+      await repSleep(1500);
+      await mcAskP("repeater-data:" + key + ":" + kind);
+      const r = meshcoreAccess.repeater;
+      if (r && r.kind === kind && (r.data || "").trim()) return r.data;
+    }
+    return "ERROR No answer from the node. Try again.";
+  });
+}
+
+// After the login: wait for the answer (administrator, guest or not accepted), then draw the screen.
+function repStart(n) {
+  rep.key = n.key; rep.node = n; rep.name = n.name || n.key.slice(0, 8) + "…"; rep.tab = 0; rep.tool = null; rep.loginKind = 0; rep.loginNote = "";
+  rep.status = {}; rep.statusNote = ""; rep.clock = ""; rep.telemetry = []; rep.acl = []; rep.root = null;
+  (async () => {
+    for (let i = 0; i < 20 && rep.key === n.key && rep.loginKind === 0; i++) {
+      await repSleep(1500);
+      await mcAskP("repeater-status:" + n.key);
+      const r = meshcoreAccess.repeater, s = r && r.key === n.key ? r.status : "";
+      if (!s || /^(Waiting for repeater login|Request queued)/.test(s)) continue;
+      if (/^Administrator login accepted/.test(s)) rep.loginKind = 1;
+      else if (/^Guest login accepted/.test(s)) rep.loginKind = 2;
+      else { rep.loginKind = 3; rep.loginNote = s; }
+    }
+    if (rep.loginKind === 0) { rep.loginKind = 3; rep.loginNote = "No answer from the repeater."; }
+    if (rep.key === n.key) { mc.sig = ""; if (state.view === "mcnodes") renderChat(); }
+  })();
+}
+
+function repEl(tag, cls, text) { const e = el(tag, cls ? { className: cls } : {}); if (text !== undefined) e.textContent = text; return e; }
+function repButton(label, onclick, cls) { const b = el("button", { type: "button", className: cls || "", textContent: label }); b.onclick = onclick; return b; }
+
+// A setting: read with the refresh button, change and apply with the check button.
+function repField(key, f) {
+  const wrap = repEl("div", "mc-field");
+  const message = repEl("small", "mc-msg");
+  let input, current = "";
+  const read = async () => {
+    if (!f.get) return;
+    const r = await repCommand(key, f.get);
+    if (repFailed(r)) { message.textContent = r.replace(/^ERROR /, ""); return; }
+    current = repReply(r); message.textContent = "";
+    if (f.kind === "onoff" || f.kind === "loop") for (const b of input.querySelectorAll("button")) b.classList.toggle("on", b.dataset.v === current);
+    else input.value = current;
+  };
+  const apply = async () => {
+    const v = f.kind === "onoff" || f.kind === "loop" ? current : input.value.trim();
+    if (!v) return;
+    const r = await repCommand(key, f.set(v));
+    message.textContent = repFailed(r) ? r.replace(/^ERROR /, "") : (repReply(r) || "OK");
+  };
+  if (f.kind === "onoff" || f.kind === "loop") {
+    input = repEl("div", "mc-pills");
+    for (const o of f.kind === "onoff" ? ["on", "off"] : ["off", "minimal", "moderate", "strict"]) {
+      const b = repButton(o, () => { current = o; for (const x of input.querySelectorAll("button")) x.classList.toggle("on", x === b); });
+      b.dataset.v = o; input.append(b);
+    }
+  } else {
+    input = el("input", { type: f.kind === "password" ? "password" : "text", autocomplete: "off", ariaLabel: f.label });
+  }
+  const head = repEl("div", "mc-fhead", "");
+  head.append(el("small", { textContent: f.label }));
+  if (f.get) head.append(repButton("⟳", read, "mc-star"));
+  head.append(repButton("✓", apply, "mc-star on"));
+  wrap.append(head, input);
+  if (f.note) wrap.append(el("small", { textContent: f.note, className: "mc-note" }));
+  wrap.append(message);
+  read();
+  return wrap;
+}
+
+const REP_TOOLS = [
+  { id: "owner", title: "Owner Info", sub: "Add public contact details.", fields: [{ label: "Owner info", get: "get owner.info", set: v => "set owner.info " + v, note: "Shown to anyone who asks the repeater. Up to about 45 characters." }] },
+  { id: "advert", title: "Advert", sub: "Repeater will send a flood advert.", actions: [["Send flood advert", "advert"], ["Send zero-hop advert", "advert.zerohop"]] },
+  { id: "intervals", title: "Advert Intervals", sub: "Set auto advert intervals.", fields: [
+    { label: "Zero-hop advert interval (minutes, 0 = off)", get: "get advert.interval", set: v => "set advert.interval " + v },
+    { label: "Flood advert interval (hours, 0 = off)", get: "get flood.advert.interval", set: v => "set flood.advert.interval " + v }] },
+  { id: "position", title: "Position", sub: "Set repeater position on the map.", fields: [
+    { label: "Latitude", get: "get lat", set: v => "set lat " + v }, { label: "Longitude", get: "get lon", set: v => "set lon " + v }] },
+  { id: "clock", title: "Sync Clock", sub: "Updates the repeater clock.", actions: [["Sync clock to now", "clock sync"], ["Show repeater clock", "clock"]] },
+  { id: "access", title: "Access Control", sub: "Add or remove users." },
+  { id: "adminpw", title: "Admin Password", sub: "Set remote management password.", fields: [{ label: "New admin password (15 characters at most)", kind: "password", set: v => "password " + v, note: "You are logged in with the old one until the repeater restarts." }] },
+  { id: "guestpw", title: "Guest Password", sub: "Set repeater status password.", fields: [{ label: "Guest password", get: "get guest.password", set: v => "set guest.password " + v }] },
+  { id: "identity", title: "Change Identity Key", sub: "Allows choosing a new prefix." },
+  { id: "regions", title: "Manage Regions", sub: "Configure regions to repeat." },
+  { id: "neighbours", title: "Neighbours", sub: "View zero hop neighbours." },
+  { id: "network", title: "Network Settings", sub: "Configure Mesh Network", fields: [
+    { label: "Maximum flood hops", get: "get flood.max", set: v => "set flood.max " + v },
+    { label: "Maximum flood hops for adverts", get: "get flood.max.advert", set: v => "set flood.max.advert " + v },
+    { label: "Loop detection", get: "get loop.detect", set: v => "set loop.detect " + v, kind: "loop" },
+    { label: "Allow read-only logins", get: "get allow.read.only", set: v => "set allow.read.only " + v, kind: "onoff" }] },
+  { id: "repeat", title: "Repeat Settings", sub: "Turn repeat mode on or off.", fields: [{ label: "Repeat other nodes' packets", get: "get repeat", set: v => "set repeat " + v, kind: "onoff" }] },
+  { id: "telemetry", title: "Telemetry", sub: "Fetch and view telemetry." },
+  { id: "reboot", title: "Reboot", sub: "Reboot the repeater.", actions: [["Reboot now", "reboot", "The repeater is off the air for a moment and you are logged out.", true]] },
+  { id: "version", title: "Version", sub: "Get repeater firmware version.", actions: [["Show firmware version", "ver"]] },
+];
+
+function repNodeName(prefix) {
+  const p = prefix.toLowerCase(), n = (meshcoreAccess.nodes || []).find(x => x.key.startsWith(p));
+  return (n && n.name) || p.slice(0, 8) + "…";
+}
+
+function repStatusTab(key, admin) {
+  const box = repEl("div", "mc-tab");
+  const load = async () => {
+    rep.statusNote = "";
+    const text = await repRequest(key, "status");
+    if (repFailed(text)) { rep.statusNote = text.replace(/^ERROR /, ""); paint(); return; }
+    rep.status = {};
+    for (const line of text.split("\n")) { const i = line.indexOf(" "); if (i > 0) rep.status[line.slice(0, i)] = line.slice(i + 1); }
+    paint();
+    if (admin) { const c = await repCommand(key, "clock"); if (!repFailed(c)) { rep.clock = repReply(c); paint(); } }
+  };
+  const item = (label, value) => { const d = repEl("div", "mc-item"); d.append(repEl("div", "", label), repEl("small", "", value)); d.querySelector("small").style.whiteSpace = "pre-line"; return d; };
+  function paint() {
+    box.replaceChildren();
+    const s = rep.status;
+    if (rep.statusNote) box.append(repEl("p", "mc-msg err", rep.statusNote));
+    else if (!Object.keys(s).length) box.append(repEl("p", "hint", "Asking the node for its status…"));
+    if (s.battery_mv) { const mv = +s.battery_mv; box.append(item("Battery", Math.max(0, Math.min(100, Math.round((mv - 3000) / 12))) + "% / " + (mv / 1000).toFixed(2) + "v")); }
+    if (rep.clock) box.append(item("Clock", rep.clock));
+    if (s.uptime) box.append(item("Uptime", repDuration(+s.uptime)));
+    if (s.tx_airtime) box.append(item("Total Airtime", "TX: " + repDuration(+s.tx_airtime) + "\nRX: " + repDuration(+s.rx_airtime)));
+    if (s.last_rssi) box.append(item("Last RSSI", s.last_rssi));
+    if (s.last_snr) box.append(item("Last SNR", s.last_snr));
+    if (s.noise_floor) box.append(item("Noise Floor", s.noise_floor + "dB"));
+    if (s.sent) box.append(item("Packets Sent", s.sent + "  (flood " + s.sent_flood + ", direct " + s.sent_direct + ")"));
+    if (s.recv) box.append(item("Packets Received", s.recv + "  (flood " + s.recv_flood + ", direct " + s.recv_direct + ")"));
+    if (s.dups_flood) box.append(item("Duplicates", "flood " + s.dups_flood + ", direct " + s.dups_direct));
+    if (s.errors) box.append(item("Errors", "events " + s.errors + ", receive errors " + s.recv_errors + "  ·  queue " + s.queue));
+    box.append(repButton("⟳ Refresh", load, "mc-scan"));
+  }
+  paint(); load();
+  return box;
+}
+
+function repTerminalTab(key) {
+  const box = repEl("div", "mc-tab");
+  const log = repEl("div", "mc-console");
+  const draw = () => {
+    log.replaceChildren();
+    if (!mc.log.length) log.textContent = "Type a command. Replies take a few seconds over the radio.";
+    for (const line of mc.log) log.append(el("div", { className: line.typed ? "typed" : "", textContent: (line.typed ? "> " : "") + line.text }));
+    log.scrollTop = log.scrollHeight;
+  };
+  const run = async text => {
+    if (!text.trim()) return;
+    mc.log.push({ typed: true, text: text.trim() }); draw();
+    const r = await repCommand(key, text.trim());
+    mc.log.push({ typed: false, text: repReply(r.replace(/^ERROR /, "")) }); draw();
+  };
+  const actions = repEl("div", "mc-actions");
+  for (const [label, cmd] of [["Version", "ver"], ["Clock", "clock"], ["Neighbours", "neighbors"], ["Advert", "advert"], ["Stats", "stats-core"]]) actions.append(repButton(label, () => run(cmd)));
+  const text = el("input", { placeholder: "Command", ariaLabel: "Command" });
+  const send = repButton("➤", () => { run(text.value); text.value = ""; }, "mc-send");
+  text.onkeydown = e => { if (e.key === "Enter") send.onclick(); };
+  box.append(actions, log, el("div", { className: "mc-compose" }, text, send));
+  draw();
+  return box;
+}
+
+function repRadioCard(key) {
+  const wrap = repEl("div", "mc-field");
+  const inputs = {};
+  const message = repEl("small", "mc-msg");
+  const head = repEl("div", "mc-fhead");
+  head.append(el("small", { textContent: "The radio settings must match the rest of the network." }));
+  const read = async () => {
+    const r = repReply(await repCommand(key, "get radio")).split(",");
+    if (r.length >= 4) { inputs.freq.value = r[0]; inputs.bw.value = r[1]; inputs.sf.value = r[2]; inputs.cr.value = r[3]; message.textContent = ""; } else message.textContent = "Could not read the radio settings.";
+    const p = await repCommand(key, "get tx"); if (!repFailed(p)) inputs.power.value = repReply(p);
+  };
+  const apply = async () => {
+    if (!confirm("Change the radio settings?\n\nIf these do not match the rest of your network, you can no longer reach this repeater by radio. The change takes effect after a reboot.")) return;
+    const r = await repCommand(key, "set radio " + [inputs.freq, inputs.bw, inputs.sf, inputs.cr].map(i => i.value.trim()).join(","));
+    let out = repFailed(r) ? r.replace(/^ERROR /, "") : (repReply(r) || "OK");
+    if (inputs.power.value.trim()) out += " · " + (repReply(await repCommand(key, "set tx " + inputs.power.value.trim())) || "OK");
+    message.textContent = out;
+  };
+  head.append(repButton("⟳", read, "mc-star"), repButton("✓", apply, "mc-star on"));
+  wrap.append(head);
+  for (const [id, label] of [["freq", "Frequency (MHz)"], ["bw", "Bandwidth (kHz)"], ["sf", "Spreading factor"], ["cr", "Coding rate"], ["power", "Transmit power (dBm)"]]) {
+    inputs[id] = el("input", { ariaLabel: label, placeholder: label }); wrap.append(el("small", { textContent: label, className: "mc-note" }), inputs[id]);
+  }
+  wrap.append(message);
+  read();
+  return wrap;
+}
+
+function repSettingsTab(key) {
+  const box = repEl("div", "mc-tab");
+  const section = title => box.append(repEl("h3", "", title));
+  section("Public Info");
+  box.append(repField(key, { label: "Name", get: "get name", set: v => "set name " + v }));
+  const pk = repEl("div", "mc-field"); pk.append(el("small", { textContent: "Public key" }), el("code", { textContent: key, style: "word-break:break-all;font-size:12px" }));
+  box.append(pk);
+  section("Radio Settings");
+  box.append(repRadioCard(key));
+  section("Extra Tools");
+  for (const tool of REP_TOOLS) {
+    const row = repEl("div", "mc-row");
+    row.append(repEl("div", "t")); row.firstChild.append(el("b", { textContent: tool.title }), el("small", { textContent: tool.sub }));
+    row.append(el("span", { textContent: "›", style: "font-size:22px;color:var(--muted)" }));
+    row.onclick = () => { rep.tool = tool.id; repPaint(); };
+    box.append(row);
+  }
+  return box;
+}
+
+function repToolScreen(key, id) {
+  const tool = REP_TOOLS.find(x => x.id === id);
+  const box = repEl("div", "mc-tab");
+  box.append(el("h3", { textContent: tool.title }), el("small", { textContent: tool.sub, className: "mc-note" }));
+  const result = repEl("div", "mc-console"); result.hidden = true; result.style.minHeight = "0";
+  const show = text => { result.hidden = false; result.textContent = repReply(String(text).replace(/^ERROR /, "")); };
+  for (const f of tool.fields || []) box.append(repField(key, f));
+  for (const [label, cmd, warn, danger] of tool.actions || []) {
+    const b = repButton(label, async () => { if (warn && !confirm(label + "?\n\n" + warn)) return; show(await repCommand(key, cmd)); }, "mc-big" + (danger ? " danger" : ""));
+    box.append(b);
+  }
+  box.append(result);
+  if (id === "identity") box.append(repEl("p", "hint", "A new identity key can only be set from the repeater's own USB serial port, not over the radio. Use the MeshCore flasher or a serial terminal for that."));
+  if (id === "telemetry") box.append(repTelemetryPanel(key));
+  if (id === "access") box.append(repAccessPanel(key));
+  if (id === "regions") box.append(repRegionsPanel(key));
+  if (id === "neighbours") box.append(repNeighboursPanel(key));
+  return box;
+}
+
+function repTelemetryPanel(key) {
+  const box = repEl("div");
+  const load = async () => {
+    const text = await repRequest(key, "telemetry");
+    box.replaceChildren(repButton("⟳ Refresh", load, "mc-scan"));
+    if (repFailed(text)) { box.append(repEl("p", "mc-msg err", text.replace(/^ERROR /, ""))); return; }
+    if (text.trim() === "EMPTY") { box.append(repEl("p", "hint", "The node reports no sensor readings.")); return; }
+    const grid = repEl("div", "mc-facts");
+    for (const line of text.split("\n").filter(Boolean)) {
+      const [ch, label, ...rest] = line.split(" ");
+      const d = repEl("div"); d.append(el("small", { textContent: label + " · channel " + ch }), rest.join(" ")); grid.append(d);
+    }
+    box.append(grid);
+  };
+  box.append(repButton("⟳ Refresh", load, "mc-scan")); load();
+  return box;
+}
+
+function repAccessPanel(key) {
+  const box = repEl("div");
+  const note = repEl("p", "mc-msg");
+  const list = repEl("div");
+  const load = async () => {
+    const text = await repRequest(key, "acl");
+    list.replaceChildren();
+    if (repFailed(text)) { note.textContent = text.replace(/^ERROR /, ""); return; }
+    note.textContent = "";
+    const rows = text.trim() === "EMPTY" ? [] : text.split("\n").filter(Boolean);
+    if (!rows.length) list.append(repEl("p", "hint", "No users in the access list."));
+    for (const line of rows) {
+      const [prefix, perm] = line.split(" ");
+      const full = (meshcoreAccess.nodes || []).find(x => x.key.startsWith(prefix.toLowerCase()))?.key;
+      const d = repEl("div", "mc-field");
+      d.append(el("b", { textContent: repNodeName(prefix) }), el("small", { textContent: prefix + "  ·  " + ({ 3: "Admin", 2: "Read / write", 1: "Guest" }[(+perm) & 3] || "No access") }));
+      if (full) d.append(repButton("Remove", async () => { note.textContent = repReply(await repCommand(key, "setperm " + full + " 0")); load(); }, "mc-scan"));
+      list.append(d);
+    }
+  };
+  const add = repEl("div", "mc-field");
+  const newKey = el("input", { placeholder: "Public key (64 characters)", ariaLabel: "Public key" });
+  const perm = el("select", { ariaLabel: "Permission" });
+  for (const [v, l] of [["1", "Guest"], ["2", "Read / write"], ["3", "Admin"]]) perm.append(el("option", { value: v, textContent: l }));
+  add.append(el("b", { textContent: "Add a user" }), newKey, perm, repButton("Add", async () => {
+    const k = newKey.value.trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(k)) { note.textContent = "A public key is 64 hex digits."; return; }
+    note.textContent = repReply(await repCommand(key, "setperm " + k + " " + perm.value)); newKey.value = ""; load();
+  }, "mc-scan"));
+  box.append(repButton("⟳ Refresh", load, "mc-scan"), note, list, add);
+  load();
+  return box;
+}
+
+function repRegionsPanel(key) {
+  const box = repEl("div");
+  const out = repEl("div", "mc-console"); out.style.minHeight = "0";
+  const run = async cmd => { out.textContent = repReply((await repCommand(key, cmd)).replace(/^ERROR /, "")); };
+  const name = el("input", { placeholder: "Region name", ariaLabel: "Region name" });
+  const actions = repEl("div", "mc-actions");
+  for (const [label, cmd] of [["Add", "region put"], ["Remove", "region remove"], ["Allow flood", "region allowf"], ["Deny flood", "region denyf"]])
+    actions.append(repButton(label, () => { if (name.value.trim()) run(cmd + " " + name.value.trim()); }));
+  box.append(repButton("⟳ Refresh", () => run("region"), "mc-scan"), out, name, actions, repButton("Save regions", () => run("region save"), "mc-big"));
+  run("region");
+  return box;
+}
+
+function repNeighboursPanel(key) {
+  const box = repEl("div");
+  const list = repEl("div");
+  const load = async () => {
+    const text = repReply((await repCommand(key, "neighbors")).replace(/^ERROR /, ""));
+    list.replaceChildren();
+    const rows = text.split("\n").map(l => l.split(":")).filter(p => p.length >= 3 && p[0].length >= 4);
+    if (!rows.length) { list.append(repEl("p", "hint", text || "No neighbours.")); return; }
+    for (const r of rows) { const d = repEl("div", "mc-field"); d.append(el("b", { textContent: repNodeName(r[0]) }), el("small", { textContent: r[0] + "  ·  heard " + (+r[1] < 90 ? r[1] + " s" : +r[1] < 5400 ? Math.round(r[1] / 60) + " min" : +r[1] < 129600 ? Math.round(r[1] / 3600) + " h" : Math.round(r[1] / 86400) + " d") + " ago  ·  SNR " + (r[2] / 4).toFixed(1) })); list.append(d); }
+  };
+  box.append(repButton("⟳ Refresh", load, "mc-scan"), list); load();
+  return box;
+}
+
+// Redraws the body (tab or tool); the header and tab bar stay.
+function repPaint() {
+  if (!rep.root) return;
+  const admin = rep.loginKind === 1;
+  rep.body.replaceChildren();
+  for (const b of rep.tabs.querySelectorAll("button")) b.classList.toggle("on", +b.dataset.tab === rep.tab && !rep.tool);
+  rep.tabs.hidden = !!rep.tool;
+  rep.back.onclick = () => { if (rep.tool) { rep.tool = null; repPaint(); } else { mc.loggedIn = null; rep.key = null; mc.sig = ""; renderChat(); } };
+  if (rep.tool) rep.body.append(repToolScreen(rep.key, rep.tool));
+  else if (rep.tab === 0) rep.body.append(repStatusTab(rep.key, admin));
+  else if (rep.tab === 1) rep.body.append(repTerminalTab(rep.key));
+  else rep.body.append(repSettingsTab(rep.key));
+}
+
+function renderRepeaterAdmin(panel, n, name) {
+  const key = n.key;
+  $("chat-title").textContent = name;
+  $("chat-sub").textContent = "MeshCore " + (MC_TYPES[n.type] || "node").toLowerCase();
+  if (rep.key !== key) repStart(n);
+  if (rep.loginKind === 0) {
+    panel.append(repEl("h3", "", "Logging in to " + name + "…"), repEl("p", "hint", "The password is sent over the radio. This takes a few seconds."), repEl("div", "mc-bar")).lastChild.append(el("i"));
+    return;
+  }
+  if (rep.loginKind === 3) {
+    panel.append(repEl("h3", "", "Could not log in to " + name), repEl("p", "mc-msg err", rep.loginNote),
+      repButton("Try again", () => { mc.loggedIn = null; rep.key = null; mc.sig = ""; renderChat(); }, "mc-big"));
+    return;
+  }
+  const admin = rep.loginKind === 1;
+  if (!rep.root) {
+    rep.root = repEl("div", "mc-admin");
+    rep.back = repButton("← " + (admin ? "Repeater Admin" : "Sensor"), () => {}, "mc-scan");
+    const head = repEl("div", "row"); head.append(rep.back, repButton("Log out", () => { mc.loggedIn = null; rep.key = null; mc.sig = ""; renderChat(); }, "mc-scan"));
+    const banner = repEl("div", "mc-banner" + (admin ? "" : " guest"), admin ? "You are logged in as an Admin" : "Logged in as a guest: status and sensor readings only");
+    rep.bar = repEl("div", "mc-bar"); rep.bar.append(el("i")); rep.bar.hidden = true;
+    rep.tabs = repEl("div", "mc-pills");
+    const tabs = admin ? [["Status", 0], ["Command Line", 1], ["Settings", 2]] : [["Status", 0]];
+    for (const [label, i] of tabs) { const b = repButton(label, () => { rep.tab = i; rep.tool = null; repPaint(); }); b.dataset.tab = i; rep.tabs.append(b); }
+    if (!admin) { const b = repButton("Telemetry", () => { rep.tool = "telemetry"; repPaint(); }); rep.tabs.append(b); }
+    rep.body = repEl("div");
+    rep.root.append(head, banner, rep.bar, rep.tabs, rep.body);
+    repPaint();
+  }
+  panel.append(rep.root);
+}
+
 function updateMeshcoreUnread() {
   for (const badge of document.querySelectorAll("#tab-meshcore-unread, #account-meshcore-unread, [data-mirror='tab-meshcore-unread']")) {
     badge.hidden = meshcoreAccess.totalUnread === 0;
     badge.textContent = `MC ${meshcoreAccess.totalUnread}`;
   }
-  $("btn-meshcore").hidden = !meshcoreAccess.result?.publicKey || meshcoreAccess.denied;
+  // The switch shows as soon as a backbone is set. It is grey, with the reason, while MeshCore cannot be reached.
+  const known = !!mcEndpoint() && mc.link.state !== 0;
+  const ready = mc.link.state === 2 && !!meshcoreAccess.result?.publicKey && !meshcoreAccess.denied;
+  for (const id of ["btn-mc-mode", "btn-mc-nodes"]) { $(id).hidden = !known; $(id).disabled = !ready; }
+  for (const id of ["mc-linknote", "mc-linknote2"]) {
+    const note = $(id);
+    note.hidden = !known || ready;
+    note.className = "mc-linknote" + (mc.link.state === 1 ? " busy" : "");
+    note.textContent = mc.link.state === 1 ? "Connecting to MeshCore…" : "MeshCore is not available. " + mc.link.note + " Trying again…";
+  }
+  $("mc-mode-unread").textContent = meshcoreAccess.totalUnread ? ` (${meshcoreAccess.totalUnread})` : "";
+  if (!ready && (state.view === "meshcore" || state.view === "mcnodes")) {
+    const fromNodes = state.view === "mcnodes";
+    setView("chat");
+    if (fromNodes) setTab("nodes");
+  }
 }
 
-setInterval(() => {
-  const address = localStorage.getItem("maarse-meshcore-backbone");
-  if (address && transport && acct.p?.state === 2 && !meshcoreAccess.pending && !meshcoreAccess.denied &&
-      !document.hidden && !["account", "meshcore"].includes(state.view)) connectMeshcoreAccess(address, 5, "", true);
-}, 30000);
+function mcPoll() {
+  const address = mcEndpoint();
+  if (!address || document.hidden) return;
+  if (!transport) { mc.link = { state: 3, note: "Your node is not connected, so MeshCore cannot be reached." }; mc.next = 0; updateMeshcoreUnread(); return; }
+  if (acct.p?.state !== 2) { mc.link = { state: 3, note: accountNeededNote() || "MeshCore needs an account." }; updateMeshcoreUnread(); return; }
+  if (meshcoreAccess.pending || mc.done || Date.now() < mc.next || ["account", "meshcore-setup"].includes(state.view)) return;
+  mc.next = Date.now() + 10000;
+  connectMeshcoreAccess(address, 5, "", true);
+}
+setInterval(mcPoll, 3000);
+
+// MeshCore proves access with the account, so a device without one cannot ask.
+function accountNeededNote() {
+  return acct.p?.state === 1
+    ? "MeshCore needs an account. This device is waiting to be linked: finish that on your master device first."
+    : "MeshCore needs an account. Create one, or link this device to the account on your other device, first.";
+}
 
 function connectMeshcoreAccess(value, operation, payload = "", background = false) {
+  if (acct.p && acct.p.state !== 2) {
+    if (!background) {
+      meshcoreAccess.note = accountNeededNote();
+      renderChat();
+    }
+    return;
+  }
   let url;
   try {
     url = new URL(value);
@@ -4978,6 +5887,7 @@ function connectMeshcoreAccess(value, operation, payload = "", background = fals
     meshcoreAccess.note = "Checking access...";
   }
   localStorage.setItem("maarse-meshcore-backbone", url.origin);
+  if (mc.link.state !== 2) { mc.link = { state: 1, note: "" }; updateMeshcoreUnread(); }
   const socket = new WebSocket(url.origin.replace(/^https:/, "wss:") + "/meshcore/session");
   const pending = { socket, operation, payload, req: null, received: 0 };
   meshcoreAccess.pending = pending;
@@ -4991,8 +5901,17 @@ function connectMeshcoreAccess(value, operation, payload = "", background = fals
       pending.req = state.nextReq++ & 0xffff;
       transport?.send(Cmd.meshcoreProof(pending.req, operation, challenge, payload));
     } else if (typeof data.allowed === "boolean" && pending.received) {
+      if (data.allowed === false && background && meshcoreAccess.result?.allowed && (payload === "overview" || payload === "nodes" || payload.startsWith("favorite:"))) {
+        // An older backbone refuses the new list requests: keep what we have.
+        meshcoreAccess.note = "The backbone server does not support this yet. Update the server.";
+        meshcoreAccess.pending = null;
+        socket.close();
+        mcRequestDone();
+        return;
+      }
       if (!background || !meshcoreAccess.result || !data.allowed) meshcoreAccess.result = data;
       meshcoreAccess.denied = !data.allowed;
+      mcLinkFrom(data);
       if (data.allowed === false) {
         meshcoreAccess.messages = [];
         meshcoreAccess.unread = 0;
@@ -5004,8 +5923,14 @@ function connectMeshcoreAccess(value, operation, payload = "", background = fals
         meshcoreAccess.channel = null;
         meshcoreAccess.repeater = null;
       }
-      if (data.repeater) meshcoreAccess.repeater = { key: data.repeater, status: data.repeaterStatus || (data.queued ? "Request queued." : "") };
+      if (data.repeater) {
+        const before = meshcoreAccess.repeater && meshcoreAccess.repeater.key === data.repeater ? meshcoreAccess.repeater : {};
+        meshcoreAccess.repeater = { key: data.repeater, status: data.repeaterStatus !== undefined ? (data.repeaterStatus || (data.queued ? "Request queued." : "")) : (before.status || ""),
+          seq: data.repeaterSeq !== undefined ? data.repeaterSeq : (before.seq || 0), kind: data.repeaterKind ?? before.kind ?? "", data: data.repeaterData ?? before.data ?? "", error: data.error || "" };
+      }
       if (Array.isArray(data.contacts)) meshcoreAccess.contacts = data.contacts;
+      if (Array.isArray(data.conversations)) meshcoreAccess.conversations = data.conversations;
+      if (Array.isArray(data.nodes)) { meshcoreAccess.nodes = data.nodes; meshcoreAccess.scanning = !!data.scanning; }
       if (Array.isArray(data.channels)) {
         meshcoreAccess.channels = data.channels;
         if (!data.channels.includes(meshcoreAccess.channel?.channel)) meshcoreAccess.channel = null;
@@ -5029,7 +5954,8 @@ function connectMeshcoreAccess(value, operation, payload = "", background = fals
         data.allowed ? "MeshCore access granted." : "MeshCore access is unavailable for this account.");
       meshcoreAccess.pending = null;
       socket.close();
-      if (!background && ["account", "meshcore"].includes(state.view)) renderChat();
+      if (!background && ["account", "meshcore", "meshcore-setup"].includes(state.view)) renderChat();
+      mcRequestDone();
     }
   };
   socket.onclose = () => {
@@ -5038,8 +5964,12 @@ function connectMeshcoreAccess(value, operation, payload = "", background = fals
     meshcoreAccess.pending = null;
     if (!background) {
       meshcoreAccess.note = "Could not verify access. Check the backbone address and node connection.";
-      if (["account", "meshcore"].includes(state.view)) renderChat();
+      if (["account", "meshcore", "meshcore-setup"].includes(state.view)) renderChat();
     }
+    mc.link = { state: 3, note: "Could not connect to the backbone. Check its address and your connection." };
+    mc.next = Date.now() + 10000;
+    updateMeshcoreUnread();
+    mcRequestDone();
   };
   if (!background) renderChat();
 }
@@ -5239,10 +6169,11 @@ function renderAccount(box) {
   }
   if (!p) { w.append(el("p", { className: "hint", textContent: "Fetching …" })); return; }
   if (p.state === 0) {
-    w.append(el("p", { textContent: "With an account, friends write to one address and the message reaches all your devices. Messages you send show on all of them too." }));
-    const mk = el("button", { className: "primary", textContent: "Create an account (this is the master device)" });
+    w.append(el("h3", { textContent: "Is this your first device with Må:rse?" }),
+      el("p", { textContent: "With an account, friends write to one address and the message reaches all your devices. Messages you send show on all of them too. MeshCore also needs an account." }));
+    const mk = el("button", { className: "primary", textContent: "Yes, create my account (this device becomes the master)" });
     mk.onclick = () => send(Cmd.personSetup(r(), 1));
-    const wait = el("button", { textContent: "Link this device to my account" });
+    const wait = el("button", { textContent: "No, I already have an account on another device (link this one)" });
     wait.onclick = () => send(Cmd.personSetup(r(), 3));
     const ta = el("textarea", { placeholder: "The 24 words, separated by spaces", rows: 3 });
     ta.style.width = "100%";
@@ -5263,9 +6194,12 @@ function renderAccount(box) {
         send(Cmd.personSetup(r(), 8, code.value.trim().toLowerCase()));
       } catch (e) { acct.err = "Could not send the file: " + e.message; renderChat(); }
     };
-    w.append(el("div", { className: "row" }, mk, wait), el("h3", { textContent: "Restore" }),
+    const restore = el("details", {}, el("summary", { textContent: "Restore an account from a backup" }),
       el("p", { className: "hint", textContent: "From a backup file and its 6-word code:" }), file, code, rb,
       el("p", { className: "hint", textContent: "Or from the 24 words:" }), ta, rs);
+    w.append(el("div", { className: "row" }, mk, wait),
+      el("p", { className: "hint", textContent: "Already have an account on your phone or another computer? Choose \"No\": two accounts would mean two addresses." }),
+      restore);
   } else if (p.state === 1) {
     const cancel = el("button", { textContent: "Cancel" });
     cancel.onclick = () => send(Cmd.personSetup(r(), 5));
@@ -5390,7 +6324,12 @@ function renderSettings(box, part = "connections") {
   };
   wrap.append(el("div", { className: "row" }, save, restart), out);
 }
-$("btn-meshcore").onclick = () => setView("meshcore");
+$("btn-meshcore").onclick = () => setView("meshcore-setup");
+// Chats tab switch: conversations, or MeshCore messages and channels (usage, not setup).
+$("chat-mode").querySelector('[data-cm="chats"]').onclick = () => setView("chat");
+$("btn-mc-mode").onclick = () => setView("meshcore");
+$("node-net").querySelector('[data-nn="marse"]').onclick = () => $("node-view").querySelector('[data-nv="list"]').click();
+$("btn-mc-nodes").onclick = () => setView("mcnodes");
 $("btn-account").onclick = () => { acct.err = ""; setView("account"); transport?.send(Cmd.getPerson()); };
 $("btn-settings").onclick = () => { hs.data = null; hs.msg = ""; setView("connections"); hsLoad(); };
 $("btn-computer").onclick = () => { hs.data = null; hs.msg = ""; setView("computer"); hsLoad(); };
@@ -5817,7 +6756,7 @@ function pwaTitle() {
 Object.assign(state, { tab: "chats", activity: [], airHist: [], nodeSel: null, chatFilter: "all", nodeFilter: "all", stripTimer: null });
 var VIEW_TAB = { chat: "chats", remote: "chats", alerts: "chats", node: "nodes", map: "nodes", pages: "pages", announces: "nodes",
   network: "network", activity: "network", status: "network", range: "settings", radio: "settings", firmware: "settings",
-  settings: "settings", connections: "settings", computer: "settings", service: "settings", backup: "settings", myqr: "settings", account: "settings", meshcore: "settings" };
+  settings: "settings", connections: "settings", computer: "settings", service: "settings", backup: "settings", myqr: "settings", account: "settings", "meshcore-setup": "settings", meshcore: "chats", mcnodes: "nodes" };
 
 // The phone tabs are a copy of the rail (without ids, so ids stay unique).
 {

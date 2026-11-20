@@ -590,8 +590,52 @@ object Node : LinkListener {
         val busy: Boolean = false, val results: List<String> = emptyList(), val messages: List<String> = emptyList(),
         val unread: Int = 0, val lastId: Long = 0, val contacts: List<String> = emptyList(),
         val direct: MeshCoreDirect? = null, val channels: List<String> = emptyList(), val channel: MeshCoreDirect? = null,
-        val repeaterKey: String = "", val repeaterStatus: String = "", val totalUnread: Int = 0)
-    data class MeshCoreDirect(val contact: String, val messages: List<String>, val unread: Int = 0, val lastId: Long = 0)
+        val repeaterKey: String = "", val repeaterStatus: String = "", val totalUnread: Int = 0,
+        val repeaterSeq: Long = 0, val repeaterKind: String = "", val repeaterData: String = "",
+        val conversations: List<McConversation> = emptyList(), val nodes: List<McNode> = emptyList(), val scanning: Boolean = false,
+        val items: List<McMessage> = emptyList(), val scan: McScan = McScan())
+    /** One row of the MeshCore conversation list; kind is public, channel or direct. */
+    data class McConversation(val kind: String, val id: String, val title: String, val last: String, val mine: Boolean,
+                              val unread: Int, val time: Long)
+    /** A MeshCore node heard by the user's radio; type 1 chat, 2 repeater, 3 room, 4 sensor. */
+    data class McNode(val key: String, val name: String, val type: Int, val hops: Int, val snr: Double, val rssi: Double,
+                      val seen: Long, val count: Int, val favorite: Boolean)
+    /** One request to the backbone. A waiting caller gets the new state when the answer is in (null if it failed). */
+    class McTask(val payload: String, val done: kotlinx.coroutines.CompletableDeferred<MeshCoreAccess?>? = null)
+    private val mcQueue = ArrayDeque<McTask>()
+    private var mcCurrent: McTask? = null
+
+    /** Like [mcAsk], but waits for the answer. */
+    suspend fun mcCall(payload: String): MeshCoreAccess? {
+        val done = kotlinx.coroutines.CompletableDeferred<MeshCoreAccess?>()
+        main.post { if (mcQueue.size < 40) { mcQueue.addLast(McTask(payload, done)); mcPump() } else done.complete(null) }
+        return kotlinx.coroutines.withTimeoutOrNull(40_000) { done.await() }
+    }
+
+    /** The backbone takes one request at a time, so MeshCore requests wait in line. Any payload is signed with operation 9. */
+    fun mcAsk(payload: String) {
+        if (mcQueue.size < 20 && mcQueue.none { it.payload == payload && it.done == null }) mcQueue.addLast(McTask(payload))
+        mcPump()
+    }
+    private fun mcPump() {
+        if (meshcoreSocket != null || mcQueue.isEmpty()) return
+        val address = prefs.meshcoreBackbone
+        if (address.isEmpty()) { mcQueue.clear(); return }
+        val task = mcQueue.removeFirst()
+        mcCurrent = task
+        checkMeshcoreAccess(address, 9, task.payload, background = true)
+        if (meshcoreSocket == null) { mcCurrent = null; task.done?.complete(null) }   // it could not start
+    }
+    data class MeshCoreDirect(val contact: String, val messages: List<String>, val unread: Int = 0, val lastId: Long = 0,
+                              val items: List<McMessage> = emptyList())
+    /** A message in a MeshCore conversation. repeats: repeaters that passed our message on (-1: not known); delivered: acknowledged. */
+    data class McMessage(val id: Long, val text: String, val mine: Boolean, val ts: Long, val repeats: Int = -1,
+                         val delivered: Boolean = false, val snr: Double = 0.0)
+    /** Scan progress from the radio: waiting for it to start, listening now, nodes that answered so far. */
+    data class McScan(val waiting: Boolean = false, val active: Boolean = false, val found: Int = 0)
+    /** Can MeshCore be used now? state 0 not tried, 1 connecting, 2 ready, 3 not available (note says why). */
+    data class McLink(val state: Int = 0, val note: String = "")
+    val mcLink = MutableStateFlow(McLink())
     val meshcoreAccess = MutableStateFlow(MeshCoreAccess())
     private data class MeshCoreAttempt(val request: Int, val operation: Int, val payload: String, val socket: okhttp3.WebSocket,
                                        var received: Int = 0, var proof: ByteArray? = null)
@@ -600,20 +644,56 @@ object Node : LinkListener {
 
     private var meshcoreDenied = false
 
+    private var mcNextPoll = 0L
+    private var mcSentName = ""
+
+    /** Called every few seconds. Tries MeshCore as soon as the node is up; a failure is retried after 10 s. */
     fun pollMeshcoreUnread() {
-        if (conn.value.state != Conn.State.ONLINE || person.value?.state != PersonState.MEMBER ||
-            meshcoreSocket != null || meshcoreDenied) return
         val address = prefs.meshcoreBackbone
-        if (address.isNotEmpty()) checkMeshcoreAccess(address, 5, background = true)
+        if (address.isEmpty()) return
+        if (conn.value.state != Conn.State.ONLINE) {
+            mcLink.value = McLink(3, "Your node is not connected, so MeshCore cannot be reached.")
+            mcNextPoll = 0
+            return
+        }
+        if (person.value?.state != PersonState.MEMBER) {
+            mcLink.value = McLink(3, meshcoreAccountNote().orEmpty())
+            return
+        }
+        if (meshcoreSocket != null || System.currentTimeMillis() < mcNextPoll) return
+        mcNextPoll = System.currentTimeMillis() + 10_000L
+        checkMeshcoreAccess(address, 5, background = true)
+    }
+
+    /** The Maarse name is also the MeshCore node's name. */
+    private fun syncMeshcoreName() {
+        val name = me.value?.name?.trim().orEmpty().take(31)
+        if (name.isNotEmpty() && name != mcSentName && name.toByteArray().size <= 31) {
+            mcSentName = name
+            mcAsk("set-name:${name.toByteArray().hex()}")
+        }
+    }
+
+    /** MeshCore proves access with the account, so a device without one cannot ask. */
+    fun meshcoreAccountNote(): String? = when (person.value?.state) {
+        null, PersonState.MEMBER -> null
+        PersonState.AWAITING -> "MeshCore needs an account. This device is waiting to be linked: finish that on your master device first."
+        else -> "MeshCore needs an account. Create one, or link this device to the account on your other device, first (Settings → Account and devices)."
     }
 
     fun checkMeshcoreAccess(address: String, operation: Int, payload: String = "", background: Boolean = false) {
+        meshcoreAccountNote()?.let { note ->
+            mcLink.value = McLink(3, note)
+            if (!background) meshcoreAccess.value = MeshCoreAccess(note)
+            return
+        }
         val origin = address.toHttpUrlOrNull()?.takeIf { it.isHttps && it.username.isEmpty() && it.password.isEmpty() }
         if (origin == null) {
             if (!background) meshcoreAccess.value = MeshCoreAccess("Enter the HTTPS address of the backbone.")
             return
         }
         prefs.meshcoreBackbone = origin.toString()
+        if (mcLink.value.state != 2) mcLink.value = McLink(1)
         meshcoreSocket?.cancel()
         meshcoreAttempt = null
         if (!background) {
@@ -630,10 +710,31 @@ object Node : LinkListener {
                     if (json.optInt("version") == 1 && challenge.matches(Regex("[0-9a-f]{64}")) && meshcoreAttempt == null) {
                         val request = req()
                         meshcoreAttempt = MeshCoreAttempt(request, operation, payload, socket)
+                        android.util.Log.i("MaarseMeshCore", "challenge received, asking the node for a proof")
                         send(Cmd.meshcoreProof(request, operation, challenge.unhex(), payload))
                     } else if (json.has("allowed") && (meshcoreAttempt?.received ?: 0) > 0) {
                         val allowed = json.optBoolean("allowed")
+                        // An older backbone refuses the new list requests: keep what we have instead of acting as if access was lost.
+                        val sent = meshcoreAttempt?.payload.orEmpty()
+                        if (!allowed && background && meshcoreAccess.value.allowed &&
+                            (sent == "overview" || sent == "nodes" || sent.startsWith("favorite:"))) {
+                            meshcoreSocket = null
+                            meshcoreAttempt = null
+                            meshcoreAccess.update { it.copy(text = "The backbone server does not support this yet. Update the server.") }
+                            socket.close(1000, null)
+                            main.post { mcPump() }
+                            return@post
+                        }
                         meshcoreDenied = !allowed
+                        val gateway = json.optJSONObject("gateway")
+                        mcLink.value = when {
+                            !allowed -> McLink(3, "This account has no MeshCore access on the backbone.")
+                            gateway != null && !gateway.optBoolean("connected") ->
+                                McLink(3, "Reached the backbone, but the MeshCore gateway is not connected to it.")
+                            else -> McLink(2)
+                        }
+                        mcNextPoll = System.currentTimeMillis() + if (!allowed) 60_000L else if (mcLink.value.state == 2) 30_000L else 10_000L
+                        if (mcLink.value.state == 2) syncMeshcoreName()
                         val key = json.optString("publicKey").takeIf { it.matches(Regex("[0-9a-f]{64}")) }
                         val results = json.optJSONArray("results")?.let { array ->
                             List(array.length()) { array.optString(it) }
@@ -657,6 +758,13 @@ object Node : LinkListener {
                                 (if (message.optBoolean("mine")) "You: " else "") + message.optString("text")
                             }
                         }
+                        val items = json.optJSONArray("messages")?.let { array ->
+                            List(array.length()) { index ->
+                                val o = array.getJSONObject(index)
+                                McMessage(o.optLong("id"), o.optString("text"), o.optBoolean("mine"), o.optLong("timestamp"),
+                                    if (o.has("repeats")) o.optInt("repeats") else -1, o.optBoolean("delivered"), o.optDouble("snr", 0.0))
+                            }
+                        }
                         val contacts = json.optJSONArray("contacts")?.let { array -> List(array.length()) { array.optString(it) } }
                             ?: previous.contacts
                         val channels = json.optJSONArray("channels")?.let { array -> List(array.length()) { array.optString(it) } }
@@ -666,39 +774,68 @@ object Node : LinkListener {
                         val channel = if (channelName == null) activeChannel else {
                             val old = activeChannel?.takeIf { it.contact == channelName }
                             MeshCoreDirect(channelName, messages ?: old?.messages.orEmpty(),
-                                json.optInt("unread", old?.unread ?: 0), json.optLong("lastId", old?.lastId ?: 0))
+                                json.optInt("unread", old?.unread ?: 0), json.optLong("lastId", old?.lastId ?: 0), items ?: old?.items.orEmpty())
                         }
                         val contact = json.optString("contact").takeIf { it.matches(Regex("[0-9a-f]{64}")) }
                         val direct = if (contact == null) previous.direct else {
                             val old = previous.direct?.takeIf { it.contact == contact }
                             MeshCoreDirect(contact, messages ?: old?.messages.orEmpty(),
-                                json.optInt("unread", old?.unread ?: 0), json.optLong("lastId", old?.lastId ?: 0))
+                                json.optInt("unread", old?.unread ?: 0), json.optLong("lastId", old?.lastId ?: 0), items ?: old?.items.orEmpty())
                         }
                         meshcoreAccess.value = if (allowed) MeshCoreAccess(if (background) previous.text else status, true, key,
                             results = if (background) previous.results else results,
                             messages = if (contact == null && channelName == null) messages ?: previous.messages else previous.messages,
+                            items = if (contact == null && channelName == null) items ?: previous.items else previous.items,
+                            scan = json.optJSONObject("scan")?.let { McScan(it.optBoolean("waiting"), it.optBoolean("active"), it.optInt("found")) } ?: previous.scan,
                             unread = if (contact == null && channelName == null) json.optInt("unread", previous.unread) else previous.unread,
                             lastId = if (contact == null && channelName == null) json.optLong("lastId", previous.lastId) else previous.lastId,
                             contacts = contacts, direct = direct, channels = channels, channel = channel,
                             repeaterKey = json.optString("repeater", previous.repeaterKey),
                             totalUnread = json.optInt("totalUnread", previous.totalUnread),
+                            conversations = json.optJSONArray("conversations")?.let { array -> List(array.length()) {
+                                val o = array.getJSONObject(it)
+                                McConversation(o.optString("kind"), o.optString("id"), o.optString("title"), o.optString("last"),
+                                    o.optBoolean("mine"), o.optInt("unread"), o.optLong("time"))
+                            } } ?: previous.conversations,
+                            nodes = json.optJSONArray("nodes")?.let { array -> List(array.length()) {
+                                val o = array.getJSONObject(it)
+                                McNode(o.optString("key"), o.optString("name"), o.optInt("type"), o.optInt("hops"), o.optDouble("snr"),
+                                    o.optDouble("rssi"), o.optLong("seen"), o.optInt("count"), o.optBoolean("favorite"))
+                            } } ?: previous.nodes,
+                            scanning = if (json.has("nodes")) json.optBoolean("scanning") else previous.scanning,
+                            repeaterSeq = json.optLong("repeaterSeq", previous.repeaterSeq),
+                            repeaterKind = if (json.has("repeaterKind")) json.optString("repeaterKind") else previous.repeaterKind,
+                            repeaterData = if (json.has("repeaterData")) json.optString("repeaterData") else previous.repeaterData,
                             repeaterStatus = if (json.has("repeater")) json.optString("repeaterStatus").ifEmpty {
                                 if (json.has("queued")) "Request queued." else ""
                             } else previous.repeaterStatus) else MeshCoreAccess(if (background) "" else status)
                         socket.close(1000, null)
+                        mcCurrent?.done?.complete(meshcoreAccess.value)
+                        mcCurrent = null
+                        main.post { mcPump() }
                     }
                 }
             }
+            override fun onOpen(socket: okhttp3.WebSocket, response: okhttp3.Response) {
+                android.util.Log.i("MaarseMeshCore", "connected to the backbone: HTTP ${response.code}")
+            }
             override fun onFailure(socket: okhttp3.WebSocket, t: Throwable, response: okhttp3.Response?) {
+                android.util.Log.w("MaarseMeshCore", "the connection failed: ${t.javaClass.simpleName}: ${t.message} (HTTP ${response?.code})")
                 main.post { finishMeshcoreAccess(socket, background) }
             }
             override fun onClosed(socket: okhttp3.WebSocket, code: Int, reason: String) {
+                android.util.Log.w("MaarseMeshCore", "the server closed the connection: $code $reason")
                 main.post { finishMeshcoreAccess(socket, background) }
             }
         }
         val socket = http.newWebSocket(okhttp3.Request.Builder().url(url).build(), listener)
         meshcoreSocket = socket
-        main.postDelayed({ if (meshcoreSocket === socket) { socket.cancel(); finishMeshcoreAccess(socket, background) } }, 12_000)
+        main.postDelayed({
+            if (meshcoreSocket === socket) {
+                android.util.Log.w("MaarseMeshCore", "timed out after 12 s: challenge received=${meshcoreAttempt != null}, proof bytes from the node=${meshcoreAttempt?.received}")
+                socket.cancel(); finishMeshcoreAccess(socket, background)
+            }
+        }, 12_000)
     }
 
     private fun finishMeshcoreAccess(socket: okhttp3.WebSocket, background: Boolean) {
@@ -706,6 +843,11 @@ object Node : LinkListener {
         meshcoreSocket = null
         meshcoreAttempt = null
         if (!background) meshcoreAccess.value = MeshCoreAccess("Could not verify access. Check the backbone address and node connection.")
+        mcLink.value = McLink(3, "Could not connect to the backbone. Check its address and your connection.")
+        mcCurrent?.done?.complete(null)
+        mcCurrent = null
+        mcNextPoll = System.currentTimeMillis() + 10_000L
+        main.post { mcPump() }
     }
 
     private fun acceptMeshcoreProof(event: Ev.MeshCoreProof) {
@@ -717,6 +859,7 @@ object Node : LinkListener {
         event.bytes.copyInto(proof, event.offset)
         attempt.received += event.bytes.size
         if (attempt.received != event.total) return
+        android.util.Log.i("MaarseMeshCore", "proof complete (${event.total} bytes), sending it to the server")
         attempt.socket.send(org.json.JSONObject()
             .put("operation", attempt.payload.ifEmpty { listOf("access", "ensure", "announce", "scan", "scan-results", "public-history", "public-send", "public-read", "direct-list", "", "", "", "channel-list")[attempt.operation] })
             .put("device", proof.copyOfRange(0, 64).hex())

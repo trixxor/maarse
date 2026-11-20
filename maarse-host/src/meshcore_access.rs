@@ -170,7 +170,15 @@ pub fn session(stream: impl io::Read + io::Write, dir: &Path) {
         Some((proof, operation)) => {
             let person = proof.person.to_string();
             match radio_operation(dir, &person, &operation) {
-                Ok(reply) => reply,
+                Ok(mut reply) => {
+                    // So a client can tell "backbone reachable" from "radio gateway connected".
+                    let gateway = crate::meshcore_gateway::status();
+                    reply["gateway"] = serde_json::json!({
+                        "connected": gateway["gatewayConnected"],
+                        "worker": gateway["workerConnected"],
+                    });
+                    reply
+                }
                 Err(_) => {
                     serde_json::json!({"allowed": true, "person": person, "error": "Radio worker is unavailable"})
                 }
@@ -199,6 +207,9 @@ fn valid_operation(operation: &str) -> bool {
         return true;
     }
     if let Some((verb, rest)) = operation.split_once(':') {
+        if verb == "set-name" {
+            return valid_message(rest) && unhex(rest).is_some_and(|name| name.len() <= 31);
+        }
         if verb == "favorite" {
             let (key, value) = rest.split_once(':').unwrap_or((rest, ""));
             return direct_key(key) && matches!(value, "0" | "1");
@@ -323,6 +334,28 @@ fn conversation_history(
         recent.push_back(serde_json::json!({"id": id, "text": text, "timestamp": timestamp, "mine": direction == "out"}));
         last_id = id;
     }
+    // What happened to our messages (heard.txt: "<time> <repeaters that passed it on> <best SNR> <acknowledged>").
+    if let Ok(heard) = fs::read_to_string(node.join(format!("{name}-heard.txt"))) {
+        let heard: std::collections::HashMap<u64, (u64, f64, bool)> = heard
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split(' ');
+                let time = fields.next()?.parse().ok()?;
+                let repeats = fields.next()?.parse().ok()?;
+                let snr = fields.next()?.parse().ok()?;
+                Some((time, (repeats, snr, fields.next()? == "1")))
+            })
+            .collect();
+        for message in recent.iter_mut().filter(|m| m["mine"] == true) {
+            if let Some(&(repeats, snr, delivered)) = message["timestamp"].as_u64().and_then(|time| heard.get(&time)) {
+                message["repeats"] = repeats.into();
+                message["delivered"] = delivered.into();
+                if repeats > 0 {
+                    message["snr"] = snr.into();
+                }
+            }
+        }
+    }
     Ok((recent, unread, last_id))
 }
 
@@ -441,7 +474,18 @@ fn radio_operation(dir: &Path, person: &str, operation: &str) -> io::Result<serd
                 b["favorite"].as_bool().cmp(&a["favorite"].as_bool()).then(b["seen"].as_u64().cmp(&a["seen"].as_u64()))
             });
             reply["nodes"] = serde_json::json!(nodes);
-            reply["scanning"] = node.join("scan").exists().into();
+            let queued = node.join("scan").exists();
+            let (active, found) = scan_state(&node);
+            reply["scanning"] = queued.into();
+            // waiting: asked for, the radio has not started; active: listening now; found: nodes that answered.
+            reply["scan"] = serde_json::json!({"waiting": queued && !active, "active": queued && active, "found": found});
+        }
+        operation if operation.starts_with("set-name:") => {
+            let name = unhex(&operation["set-name:".len()..]).unwrap_or_default();
+            let pending = node.join("name.tmp");
+            fs::write(&pending, &name)?;
+            fs::rename(pending, node.join("name.txt"))?;
+            reply["queued"] = "set-name".into();
         }
         operation if operation.starts_with("favorite:") => {
             let mut fields = operation.split(':').skip(1);
@@ -616,6 +660,15 @@ fn radio_operation(dir: &Path, person: &str, operation: &str) -> io::Result<serd
         _ => unreachable!("operation was verified"),
     }
     Ok(reply)
+}
+
+/// The radio worker's scan progress (scan.txt: "<1 while scanning> <nodes answered>").
+fn scan_state(node: &Path) -> (bool, u64) {
+    let text = fs::read_to_string(node.join("scan.txt")).unwrap_or_default();
+    let mut fields = text.split_whitespace();
+    let active = fields.next() == Some("1");
+    let found = fields.next().and_then(|found| found.parse().ok()).unwrap_or(0);
+    (active, found)
 }
 
 /// The names the radio worker knows, by public key: heard nodes and contacts.
@@ -858,6 +911,26 @@ mod tests {
         assert_eq!((list[0]["name"].as_str(), list[0]["favorite"].as_bool()), (Some("Mette"), Some(true)));
         radio_operation(&dir, person, &format!("favorite:{mette}:0")).unwrap();
         assert_eq!(radio_operation(&dir, person, "nodes").unwrap()["nodes"][0]["name"], "Skagen");
+
+        // What happened to a sent message: repeaters that passed it on, or the acknowledgement.
+        fs::write(node.join(format!("direct-{mette}-heard.txt")), "950 2 6.5 1
+").unwrap();
+        let history = radio_operation(&dir, person, &format!("direct-history:{mette}")).unwrap();
+        let sent = &history["messages"][1];
+        assert_eq!((sent["mine"].as_bool(), sent["repeats"].as_u64(), sent["delivered"].as_bool(), sent["snr"].as_f64()), (Some(true), Some(2), Some(true), Some(6.5)));
+        assert!(history["messages"][0].get("repeats").is_none());
+
+        // Scan progress: asked for, then listening with a count, then finished.
+        fs::write(node.join("scan"), "").unwrap();
+        let waiting = radio_operation(&dir, person, "nodes").unwrap();
+        assert_eq!((waiting["scan"]["waiting"].as_bool(), waiting["scan"]["active"].as_bool()), (Some(true), Some(false)));
+        fs::write(node.join("scan.txt"), "1 3\n").unwrap();
+        let running = radio_operation(&dir, person, "nodes").unwrap();
+        assert_eq!((running["scan"]["active"].as_bool(), running["scan"]["found"].as_u64()), (Some(true), Some(3)));
+        fs::remove_file(node.join("scan")).unwrap();
+        fs::write(node.join("scan.txt"), "0 5\n").unwrap();
+        let done = radio_operation(&dir, person, "nodes").unwrap();
+        assert_eq!((done["scan"]["active"].as_bool(), done["scan"]["found"].as_u64()), (Some(false), Some(5)));
 
         // Only well-formed requests are accepted.
         assert!(valid_operation("overview") && valid_operation("nodes"));

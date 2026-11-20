@@ -147,6 +147,9 @@ void VirtualNode::onContactPathUpdated(const ContactInfo& contact) {
 }
 
 ContactInfo* VirtualNode::processAck(const uint8_t* data) {
+  for (auto& sent : _sent) {
+    if (sent.ack && !sent.delivered && memcmp(data, &sent.ack, 4) == 0) { sent.delivered = true; _sentDirty = true; }
+  }
   if (expected_ack_crc && memcmp(data, &expected_ack_crc, 4) == 0) {
     printf("%s [%s] Got ACK! (round trip: %lu ms)\n", ts().c_str(), tag(), _ms->getMillis() - last_msg_sent);
     expected_ack_crc = 0;
@@ -230,7 +233,13 @@ bool VirtualNode::sendChannelMessage(const ChannelDetails& details, const std::s
   const size_t length = strlen(reinterpret_cast<const char*>(&temp[5]));
   auto packet = createGroupDatagram(PAYLOAD_TYPE_GRP_TXT, details.channel, temp, 5 + length);
   if (!packet) return false;
+  Sent sent;
+  sent.conversation = conversation;
+  sent.timestamp = timestamp;
+  packet->calculatePacketHash(sent.hash);
+  sent.tracksHash = true;
   sendFlood(packet);
+  trackSent(sent);
   logMessage(conversation, true, timestamp, message);
   return true;
 }
@@ -255,7 +264,59 @@ void VirtualNode::sendDirect(const std::string& contact, const char* message) {
     return;
   }
   remove(errorFile.c_str());
+  Sent sent;
+  sent.conversation = conversation;
+  sent.timestamp = timestamp;
+  sent.ack = ack;
+  trackSent(sent);
   logMessage(conversation, true, timestamp, message);
+}
+
+void VirtualNode::trackSent(const Sent& sent) {
+  if (!_service) return;
+  if (_sent.size() >= 40) _sent.erase(_sent.begin());
+  _sent.push_back(sent);
+  _sentDirty = true;
+}
+
+// A repeater passing on our own channel message sends it again with its id on the path:
+// every different repeater heard counts once.
+void VirtualNode::logRx(mesh::Packet* packet, int, float) {
+  if (!_service || _sent.empty()) return;
+  uint8_t hash[MAX_HASH_SIZE];
+  packet->calculatePacketHash(hash);
+  const uint8_t count = packet->getPathHashCount();
+  if (count == 0) return;
+  const uint8_t repeater = packet->path[(count - 1) * packet->getPathHashSize()];
+  for (auto& sent : _sent) {
+    if (!sent.tracksHash || memcmp(sent.hash, hash, MAX_HASH_SIZE) != 0) continue;
+    bool known = false;
+    for (unsigned i = 0; i < sent.seenCount; ++i) known = known || sent.seen[i] == repeater;
+    if (known) return;
+    if (sent.seenCount < sizeof(sent.seen)) sent.seen[sent.seenCount++] = repeater;
+    sent.repeats++;
+    if (packet->getSNR() > sent.snr) sent.snr = packet->getSNR();
+    _sentDirty = true;
+    return;
+  }
+}
+
+void VirtualNode::publishSent() {
+  std::vector<std::string> done;
+  for (const auto& first : _sent) {
+    if (std::find(done.begin(), done.end(), first.conversation) != done.end()) continue;
+    done.push_back(first.conversation);
+    const auto temporary = path((first.conversation + "-heard.new").c_str());
+    FILE* output = fopen(temporary.c_str(), "wb");
+    if (!output) continue;
+    for (const auto& sent : _sent) {
+      if (sent.conversation != first.conversation) continue;
+      fprintf(output, "%u %u %.1f %d\n", sent.timestamp, sent.repeats, sent.snr, sent.delivered ? 1 : 0);
+    }
+    if (fclose(output) == 0) portable::replaceFile(temporary.c_str(), path((first.conversation + "-heard.txt").c_str()).c_str());
+  }
+  _sentDirty = false;
+  _sentPublishedAt = millis();
 }
 
 static std::string contactKey(const ContactInfo& contact) {
@@ -480,6 +541,19 @@ void VirtualNode::onControlDataRecv(mesh::Packet* packet) {
   r.snr_in = packet->getSNR();
   r.rssi = _vradio.getLastRSSI();
   _scan.push_back(r);
+  {
+    Heard* h = nullptr;
+    for (auto& x : _heard) if (memcmp(x.pub_key, r.pub_key, PUB_KEY_SIZE) == 0) { h = &x; break; }
+    if (!h) { _heard.push_back({}); h = &_heard.back(); memcpy(h->pub_key, r.pub_key, PUB_KEY_SIZE); }
+    h->type = r.type;
+    h->hops = 0;
+    h->snr = r.snr_in;
+    h->rssi = r.rssi;
+    h->last_seen = getRTCClock()->getCurrentTime();
+    h->count++;
+    _heardChanged = true;
+    _scanDirty = true;
+  }
   std::string n = nameFor(r.pub_key);
   printf("%s [%s] SCAN: %-8s %02X%02X%02X%02X  %-20s  snr ud %+.1f / ind %+.1f dB, rssi %.0f\n", ts().c_str(), tag(),
          typeName(r.type), r.pub_key[0], r.pub_key[1], r.pub_key[2], r.pub_key[3], n.c_str(), r.snr_out, r.snr_in, r.rssi);
@@ -499,10 +573,29 @@ void VirtualNode::startScan(int secs, uint8_t filter) {
   printf("[%s] scanning %d s for nearby nodes (zero hop discover)...\n", tag(), secs);
 }
 
+void VirtualNode::renameTo(const char* name) {
+  if (strncmp(_prefs.node_name, name, sizeof(_prefs.node_name)) == 0) return;
+  StrHelper::strncpy(_prefs.node_name, name, sizeof(_prefs.node_name));
+  savePrefs();
+  sendSelfAdvert(false);   // tell the neighbours the new name
+}
+
 void VirtualNode::startServiceScan() {
   if (_scan_tag) return;
   startScan(10, 0xFF);
   _serviceScan = _scan_tag != 0;
+  if (_serviceScan) publishScanState(true);
+}
+
+// scan.txt: "<1 while scanning, else 0> <nodes answered so far>", for the dashboard's progress line.
+void VirtualNode::publishScanState(bool active) {
+  const auto temporary = path("scan.new");
+  FILE* output = fopen(temporary.c_str(), "wb");
+  if (!output) return;
+  fprintf(output, "%d %zu\n", active ? 1 : 0, _scan.size());
+  if (fclose(output) == 0) portable::replaceFile(temporary.c_str(), path("scan.txt").c_str());
+  _scanDirty = false;
+  _scanPublishedAt = millis();
 }
 
 void VirtualNode::publishScan() {
@@ -588,7 +681,11 @@ void VirtualNode::publishNodes() {
 
 void VirtualNode::loop() {
   BaseChatMesh::loop();
-  if (_service && _heardChanged && (_nodesPublishedAt == 0 || millis() - _nodesPublishedAt >= 10000)) {
+  // While a scan runs the list is published every second, so answers show up as they arrive.
+  const unsigned long every = _serviceScan ? 1000 : 10000;
+  if (_service && _serviceScan && _scanDirty && millis() - _scanPublishedAt >= 1000) publishScanState(true);
+  if (_service && _sentDirty && millis() - _sentPublishedAt >= 1000) publishSent();
+  if (_service && _heardChanged && (_nodesPublishedAt == 0 || millis() - _nodesPublishedAt >= every)) {
     _heardChanged = false;
     _nodesPublishedAt = millis();
     publishNodes();
@@ -600,7 +697,7 @@ void VirtualNode::loop() {
   }
   if (_scan_tag && (long)(millis() - _scan_until) > 0) {
     printScan();
-    if (_serviceScan) publishScan();
+    if (_serviceScan) { publishScan(); publishScanState(false); publishNodes(); }
     _serviceScan = false;
     _scan_tag = 0;
   }

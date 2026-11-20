@@ -57,6 +57,32 @@ class VirtualNode : public BaseChatMesh, ContactVisitor {
   };
   std::vector<Heard> _heard;
   bool _heardChanged = false;
+  bool _scanDirty = false;
+public:
+  void renameTo(const char* name);
+private:
+  // What happened to the messages sent from here: repeaters that passed a channel message on,
+  // and whether a direct message was acknowledged. Published as <conversation>-heard.txt.
+  struct Sent {
+    std::string conversation;
+    uint32_t timestamp = 0;
+    uint8_t hash[MAX_HASH_SIZE] = {};
+    bool tracksHash = false;
+    uint32_t ack = 0;
+    unsigned repeats = 0;
+    float snr = -99;
+    bool delivered = false;
+    uint8_t seen[24] = {};
+    unsigned seenCount = 0;
+  };
+  std::vector<Sent> _sent;
+  bool _sentDirty = false;
+  unsigned long _sentPublishedAt = 0;
+  void trackSent(const Sent& sent);
+  void publishSent();
+  void logRx(mesh::Packet* packet, int len, float score) override;
+  unsigned long _scanPublishedAt = 0;
+  void publishScanState(bool active);
   unsigned long _nodesPublishedAt = 0;
   void publishNodes();
   struct ScanResult { uint8_t pub_key[PUB_KEY_SIZE]; uint8_t type; float snr_out, snr_in, rssi; };

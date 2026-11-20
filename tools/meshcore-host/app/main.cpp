@@ -226,6 +226,16 @@ int main(int argc, char** argv) {
         if (std::filesystem::is_regular_file(request, itemError) && publishPublicKey(folder, node)) {
           std::filesystem::remove(request, itemError);
         }
+        // The person's Maarse name becomes the node's name: name.txt holds it as plain text.
+        const auto rename = folder / "name.txt";
+        if (std::filesystem::is_regular_file(rename, itemError)) {
+          std::ifstream input(rename, std::ios::binary);
+          std::string wanted;
+          std::getline(input, wanted);
+          input.close();
+          std::filesystem::remove(rename, itemError);
+          if (!wanted.empty()) node.renameTo(wanted.c_str());
+        }
         if (std::filesystem::remove(folder / "announce", itemError)) node.sendSelfAdvert(false);
         if (std::filesystem::is_regular_file(folder / "scan", itemError)) node.startServiceScan();
         const auto send = folder / "public-send.txt";

@@ -48,6 +48,8 @@ webp = { version = "0.3", default-features = false }
 argon2 = "0.5.3"
 rcgen = "0.14"
 time = "0.3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+subtle = "2"
 
 [features]
 default = ["tun"]
@@ -56,7 +58,3 @@ tun = ["dep:tun-rs"]
 
 [dev-dependencies]
 maarse-fuzz = { version = "0.1.0", path = "../maarse-fuzz" }
-
-[target.'cfg(not(target_os = "android"))'.dependencies]
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-subtle = "2"

@@ -435,6 +435,19 @@ fn server_http(mut stream: TcpStream, mut req: Vec<u8>, head_end: usize, data_di
         ("GET", "/api/meshcore/gateway") => {
             send(&mut stream, "200 OK", jsn, "", crate::meshcore_gateway::config_json(data_dir).to_string().as_bytes())
         }
+        ("POST", "/api/meshcore/gateway/pairing") => {
+            let host = header(&head, "host").unwrap_or("");
+            if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
+                return send(&mut stream, "403 Forbidden", jsn, "", b"{\"error\":\"Wrong origin.\"}");
+            }
+            match crate::meshcore_gateway::create_pairing(data_dir) {
+                Ok((code, expires)) => {
+                    crate::debug::push("admin", serde_json::json!({"op": "gateway pairing code created", "ip": ip.to_string()}));
+                    send(&mut stream, "200 OK", jsn, "", serde_json::json!({"code": code, "expires": expires}).to_string().as_bytes())
+                }
+                Err(error) => send(&mut stream, "400 Bad Request", jsn, "", serde_json::json!({"error": error}).to_string().as_bytes()),
+            }
+        }
         ("POST", "/api/meshcore/gateway/token") => {
             let host = header(&head, "host").unwrap_or("");
             if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
@@ -756,6 +769,17 @@ mod tests {
             "POST /api/meshcore/gateway/token HTTP/1.1\r\nHost: localhost\r\nOrigin: http://evil.example\r\n{cookie}Content-Length: 0\r\n\r\n"
         ));
         assert!(other_origin.starts_with("HTTP/1.1 403"), "{other_origin}");
+
+        // A pairing code needs the gateway name and port to be saved first.
+        let pairing = dashboard_request(&dir, &format!(
+            "POST /api/meshcore/gateway/pairing HTTP/1.1\r\nHost: localhost\r\nOrigin: http://localhost\r\n{cookie}Content-Length: 0\r\n\r\n"
+        ));
+        assert!(pairing.starts_with("HTTP/1.1 400"), "{pairing}");
+        assert!(pairing.contains("Save the gateway name and port first"), "{pairing}");
+        let pairing_other_origin = dashboard_request(&dir, &format!(
+            "POST /api/meshcore/gateway/pairing HTTP/1.1\r\nHost: localhost\r\nOrigin: http://evil.example\r\n{cookie}Content-Length: 0\r\n\r\n"
+        ));
+        assert!(pairing_other_origin.starts_with("HTTP/1.1 403"), "{pairing_other_origin}");
 
         let no_login = dashboard_request(&dir, "GET /api/meshcore/gateway HTTP/1.1\r\nHost: localhost\r\n\r\n");
         assert!(no_login.starts_with("HTTP/1.1 401"), "{no_login}");

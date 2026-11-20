@@ -31,6 +31,16 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_INTERVAL: Duration = Duration::from_millis(20);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const HELLO: &[u8] = b"MAARSE-KISS/1 ";
+/// First line of a pairing exchange: `MAARSE-PAIR/1 <secret>`. The server answers
+/// `PAIRED <token>` and a second line with the authority certificate (the base64
+/// body), or `ERR`, and closes the connection.
+const PAIR_HELLO: &[u8] = b"MAARSE-PAIR/1 ";
+/// Longest pairing code the dashboard hands out. It has to be easy to copy.
+const PAIRING_CODE_MAX: usize = 120;
+/// A pairing code works for this long, and once.
+const PAIRING_LIFETIME: u64 = 10 * 60;
+/// Wrong secrets tolerated before the pending code is cancelled.
+const PAIRING_MAX_FAILURES: u8 = 5;
 // The gateway firmware waits two seconds for "OK". The worker has to be
 // connected inside that window, so a worker that starts a moment late is
 // given a short grace period instead of an immediate refusal.
@@ -53,6 +63,16 @@ static GATEWAY_UP: AtomicBool = AtomicBool::new(false);
 static WORKER_UP: AtomicBool = AtomicBool::new(false);
 static CONNECTED_SINCE: AtomicU64 = AtomicU64::new(0);
 static ADDRESS: Mutex<String> = Mutex::new(String::new());
+static PAIRED_AT: AtomicU64 = AtomicU64::new(0);
+
+/// A pairing code that has been created and not yet used or expired.
+struct Pairing {
+    secret_hash: [u8; 32],
+    expires: u64,
+    failures: u8,
+}
+
+static PAIRING: Mutex<Option<Pairing>> = Mutex::new(None);
 
 pub fn spawn(address: SocketAddr, worker_address: SocketAddr, data: &Path) -> io::Result<()> {
     if !worker_address.ip().is_loopback() {
@@ -80,7 +100,7 @@ pub fn spawn(address: SocketAddr, worker_address: SocketAddr, data: &Path) -> io
                 // Read per connection, so dashboard changes apply without a restart.
                 match gateway_credentials(&data) {
                     Ok((config, token_hash)) => {
-                        let _ = serve(socket, &worker, config, &token_hash);
+                        let _ = serve(socket, &worker, config, &token_hash, &data);
                     }
                     Err(error) => {
                         crate::settings::report(format!("MeshCore gateway refused: {error}"), true);
@@ -96,7 +116,13 @@ pub fn spawn(address: SocketAddr, worker_address: SocketAddr, data: &Path) -> io
 /// Gateway state for the backbone dashboard.
 pub fn status() -> serde_json::Value {
     let gateway_up = GATEWAY_UP.load(Ordering::Relaxed);
+    let pairing_expires = PAIRING
+        .lock()
+        .map(|pending| pending.as_ref().map(|p| p.expires).filter(|&expires| expires > unix_now()).unwrap_or(0))
+        .unwrap_or(0);
     serde_json::json!({
+        "pairingExpires": pairing_expires,
+        "pairedAt": PAIRED_AT.load(Ordering::Relaxed),
         "enabled": ENABLED.load(Ordering::Relaxed),
         "address": ADDRESS.lock().map(|shown| shown.clone()).unwrap_or_default(),
         "gatewayConnected": gateway_up,
@@ -136,6 +162,7 @@ fn serve(
     worker: &TcpListener,
     config: Arc<ServerConfig>,
     token_hash: &[u8],
+    data: &Path,
 ) -> io::Result<()> {
     socket.set_write_timeout(Some(WRITE_TIMEOUT))?;
     socket.set_nodelay(true)?;
@@ -158,6 +185,9 @@ fn serve(
             return Ok(());
         }
         hello.push(byte[0]);
+    }
+    if let Some(secret) = hello.strip_prefix(PAIR_HELLO) {
+        return pair(&mut radio, secret, data);
     }
     let Some(token) = hello.strip_prefix(HELLO) else {
         return Ok(());
@@ -182,6 +212,111 @@ fn serve(
         && relay(&mut radio, &mut worker, &mut buffer)?
     {}
     Ok(())
+}
+
+/// Answers a pairing request: a valid, unused, unexpired secret gets a new
+/// gateway token (which replaces the old one); anything else gets `ERR`.
+fn pair(
+    radio: &mut StreamOwned<ServerConnection, GatewaySocket>,
+    secret: &[u8],
+    data: &Path,
+) -> io::Result<()> {
+    let reply = if take_pairing(secret) {
+        match create_token(data).and_then(|token| authority_body(data).map(|authority| (token, authority))) {
+            Ok((token, authority)) => {
+                PAIRED_AT.store(unix_now(), Ordering::Relaxed);
+                crate::settings::report("MeshCore gateway paired; it has a new token", false);
+                format!("PAIRED {token}\n{authority}\n")
+            }
+            Err(error) => {
+                crate::settings::report(format!("MeshCore gateway pairing failed: {error}"), true);
+                "ERR\n".to_string()
+            }
+        }
+    } else {
+        "ERR\n".to_string()
+    };
+    radio.write_all(reply.as_bytes())?;
+    radio.flush()?;
+    radio.conn.send_close_notify();
+    radio.flush()
+}
+
+/// Checks a secret against the pending code. A match uses the code up; too many
+/// wrong secrets cancel it.
+fn take_pairing(secret: &[u8]) -> bool {
+    let mut pending = PAIRING.lock().unwrap_or_else(|error| error.into_inner());
+    let Some(code) = pending.as_mut() else { return false };
+    if unix_now() >= code.expires {
+        *pending = None;
+        return false;
+    }
+    if bool::from(Sha256::digest(secret).as_slice().ct_eq(&code.secret_hash)) {
+        *pending = None;
+        return true;
+    }
+    code.failures += 1;
+    if code.failures >= PAIRING_MAX_FAILURES {
+        *pending = None;
+        crate::settings::report("MeshCore pairing code cancelled after too many wrong attempts", true);
+    }
+    false
+}
+
+/// The base64 body of the authority certificate: one line, without the PEM markers.
+fn authority_body(data: &Path) -> Result<String, String> {
+    let body: String = read_trimmed(&data.join(AUTHORITY_CERT_FILE))
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect();
+    if body.is_empty() {
+        return Err("The gateway authority certificate is missing.".into());
+    }
+    Ok(body)
+}
+
+/// The first 16 bytes of the SHA-256 of the server certificate, in hex. The
+/// gateway checks this against the certificate it is shown, before it sends
+/// the pairing secret, so a server it has never met can be recognised.
+fn certificate_pin(data: &Path) -> Result<String, String> {
+    let pem = fs::read(data.join(CERT_FILE)).map_err(|e| e.to_string())?;
+    let der = CertificateDer::pem_slice_iter(&pem)
+        .next()
+        .ok_or_else(|| "The gateway certificate is missing.".to_string())?
+        .map_err(|_| "The gateway certificate is not valid PEM.".to_string())?;
+    Ok(Sha256::digest(der.as_ref())[..16].iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// Creates a pairing code for a new gateway, replacing any pending one:
+/// `MP1;<name>;<port>;<secret>;<pin>`, at most 120 characters. The secret works
+/// once, for ten minutes. The pin identifies this server's certificate. The
+/// gateway checks it, sends the secret, and gets its own token and the authority
+/// certificate over that connection.
+pub fn create_pairing(data: &Path) -> Result<(String, u64), String> {
+    let host = read_trimmed(&data.join(HOST_FILE));
+    if !valid_host(&host) {
+        return Err("Save the gateway name and port first.".into());
+    }
+    let port = config_listen(data)
+        .parse::<SocketAddr>()
+        .map_err(|_| "Save the gateway name and port first.".to_string())?
+        .port();
+    ensure_certificates(data, &host)?;
+    authority_body(data)?;
+    let pin = certificate_pin(data)?;
+    // 80 bits: the code works once, for ten minutes, and is cancelled after five wrong guesses.
+    let mut bytes = [0u8; 10];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut bytes);
+    let secret: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let code = format!("MP1;{host};{port};{secret};{pin}");
+    if code.len() > PAIRING_CODE_MAX {
+        return Err(format!("The gateway name is too long for a pairing code of at most {PAIRING_CODE_MAX} characters. Use a shorter name."));
+    }
+    let expires = unix_now() + PAIRING_LIFETIME;
+    let mut secret_hash = [0u8; 32];
+    secret_hash.copy_from_slice(&Sha256::digest(secret.as_bytes()));
+    *PAIRING.lock().unwrap_or_else(|error| error.into_inner()) = Some(Pairing { secret_hash, expires, failures: 0 });
+    Ok((code, expires))
 }
 
 fn accept_worker(listener: &TcpListener) -> io::Result<TcpStream> {
@@ -252,18 +387,22 @@ fn unix_now() -> u64 {
 /// What the dashboard shows and edits: the listen address (kept in settings.txt),
 /// the gateway name, the token, and the authority certificate the gateway trusts.
 pub fn config_json(data: &Path) -> serde_json::Value {
-    let listen = crate::settings::load(data)
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("--meshcore-gateway").map(|value| value.trim().to_string()))
-        .unwrap_or_default();
     serde_json::json!({
-        "listen": listen,
+        "listen": config_listen(data),
         "host": read_trimmed(&data.join(HOST_FILE)),
         "token": read_trimmed(&data.join(TOKEN_FILE)),
         "authorityPem": read_trimmed(&data.join(AUTHORITY_CERT_FILE)),
         "certificateExpires": read_trimmed(&data.join(EXPIRES_FILE)).parse::<u64>().unwrap_or(0),
         "overriddenByCommandLine": crate::cli_args().iter().any(|arg| arg == "--meshcore-gateway"),
     })
+}
+
+/// The saved gateway listen address ("0.0.0.0:4343"), or empty.
+fn config_listen(data: &Path) -> String {
+    crate::settings::load(data)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("--meshcore-gateway").map(|value| value.trim().to_string()))
+        .unwrap_or_default()
 }
 
 fn read_trimmed(path: &Path) -> String {
@@ -403,14 +542,14 @@ fn gateway_credentials(data: &Path) -> Result<(Arc<ServerConfig>, Vec<u8>), Stri
     if !valid_host(&host) {
         return Err("no gateway name is set in the dashboard".into());
     }
+    // Without a token the hash is empty: no gateway can connect with a token yet,
+    // but a gateway can still pair and get one.
     let token = read_trimmed(&data.join(TOKEN_FILE));
-    if !valid_token(token.as_bytes()) {
-        return Err("no gateway token is set in the dashboard".into());
-    }
+    let token_hash = if valid_token(token.as_bytes()) { Sha256::digest(token.as_bytes()).to_vec() } else { Vec::new() };
     ensure_certificates(data, &host)?;
     let certificate = fs::read(data.join(CERT_FILE)).map_err(|e| e.to_string())?;
     let key = fs::read(data.join(KEY_FILE)).map_err(|e| e.to_string())?;
-    Ok((tls_config(&certificate, &key)?, Sha256::digest(token.as_bytes()).to_vec()))
+    Ok((tls_config(&certificate, &key)?, token_hash))
 }
 
 fn valid_host(host: &str) -> bool {
@@ -505,6 +644,102 @@ mod tests {
         assert!(handshake(config.clone(), &authority, "backbone.example.org").is_ok());
         assert!(handshake(config, &authority, "other.example.org").is_err());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// One test function, because the pending pairing code is process-wide state.
+    #[test]
+    fn pairing_gives_a_new_token_once() {
+        let dir = std::env::temp_dir().join(format!("maarse-pairing-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(crate::settings::file(&dir), "--meshcore-gateway 0.0.0.0:4343\n").unwrap();
+        fs::write(dir.join(HOST_FILE), "backbone.example.org").unwrap();
+        let old_token = create_token(&dir).unwrap();
+
+        // The code carries the name, the port, a secret and a pin of the server certificate.
+        let (code, expires) = create_pairing(&dir).unwrap();
+        assert!(expires > unix_now());
+        let fields: Vec<&str> = code.split(';').collect();
+        assert_eq!(fields.len(), 5, "{code}");
+        assert_eq!((fields[0], fields[1], fields[2]), ("MP1", "backbone.example.org", "4343"));
+        // The gateway firmware expects a secret of 20 and a pin of 32 hex characters.
+        assert_eq!(fields[3].len(), 20);
+        assert_eq!(fields[4].len(), 32);
+        assert!(fields[3..].iter().all(|field| field.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))));
+        assert!(code.len() <= PAIRING_CODE_MAX, "{}", code.len());
+        println!("pairing code length: {}", code.len());
+        // The pin is what a gateway computes from the certificate it is shown.
+        let shown = CertificateDer::pem_slice_iter(&fs::read(dir.join(CERT_FILE)).unwrap()).next().unwrap().unwrap();
+        let expected: String = Sha256::digest(shown.as_ref())[..16].iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(fields[4], expected);
+        let authority = fs::read_to_string(dir.join(AUTHORITY_CERT_FILE)).unwrap();
+        let authority_line: String = authority.lines().filter(|line| !line.starts_with("-----")).collect();
+        let secret = fields[3].to_string();
+
+        // A wrong secret is refused and does not use the code up.
+        assert_eq!(pair_over_tls(&dir, &authority, &"0".repeat(20)), "ERR");
+        // The right secret gives a new token and the authority, and replaces the old token.
+        let reply = pair_over_tls(&dir, &authority, &secret);
+        let mut lines = reply.lines();
+        let token = lines.next().unwrap().strip_prefix("PAIRED ").unwrap_or_else(|| panic!("{reply}"));
+        assert!(valid_token(token.as_bytes()));
+        assert_ne!(token, old_token);
+        assert_eq!(read_trimmed(&dir.join(TOKEN_FILE)), token);
+        assert_eq!(lines.next(), Some(authority_line.as_str()));
+        // A code works once.
+        assert_eq!(pair_over_tls(&dir, &authority, &secret), "ERR");
+
+        // An expired code is refused, and five wrong secrets cancel a code.
+        let (code, _) = create_pairing(&dir).unwrap();
+        let secret = code.split(';').nth(3).unwrap().to_string();
+        PAIRING.lock().unwrap().as_mut().unwrap().expires = unix_now() - 1;
+        assert_eq!(pair_over_tls(&dir, &authority, &secret), "ERR");
+        let (code, _) = create_pairing(&dir).unwrap();
+        let secret = code.split(';').nth(3).unwrap().to_string();
+        for _ in 0..PAIRING_MAX_FAILURES {
+            assert_eq!(pair_over_tls(&dir, &authority, &"1".repeat(32)), "ERR");
+        }
+        assert_eq!(pair_over_tls(&dir, &authority, &secret), "ERR");
+
+        // A gateway name that makes the code longer than the limit is refused.
+        fs::write(dir.join(HOST_FILE), format!("{}.example.org", "a".repeat(60))).unwrap();
+        assert!(create_pairing(&dir).unwrap_err().contains("too long"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Connects as a gateway that trusts only `authority`, sends a pairing request
+    /// and returns the server's reply line.
+    fn pair_over_tls(dir: &Path, authority: &str, secret: &str) -> String {
+        let (config, token_hash) = gateway_credentials(dir).unwrap();
+        let mut roots = RootCertStore::empty();
+        for certificate in CertificateDer::pem_slice_iter(authority.as_bytes()) {
+            roots.add(certificate.unwrap()).unwrap();
+        }
+        let client = ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = TcpListener::bind("127.0.0.1:0").unwrap();
+        worker.set_nonblocking(true).unwrap();
+        let data = dir.to_path_buf();
+        let gateway = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            let _ = serve(socket, &worker, config, &token_hash, &data);
+        });
+        let reply = {
+            let socket = TcpStream::connect(address).unwrap();
+            let name = ServerName::try_from("backbone.example.org").unwrap();
+            let connection = ClientConnection::new(Arc::new(client), name).unwrap();
+            let mut stream = StreamOwned::new(connection, socket);
+            stream.write_all(format!("MAARSE-PAIR/1 {secret}\n").as_bytes()).unwrap();
+            let mut reply = String::new();
+            let _ = stream.read_to_string(&mut reply);
+            reply
+        };
+        gateway.join().unwrap();
+        reply.trim().to_string()
     }
 
     fn gateway_credentials_for_test(dir: &Path) -> (Arc<ServerConfig>, Vec<u8>) {

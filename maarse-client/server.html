@@ -278,8 +278,14 @@
       </div>
       <div class="row" style="margin-top:12px"><button class="b on" id="mc-save">Save and restart</button></div>
       <div class="msg" id="mc-cfg-msg"></div>
-      <h2 style="margin-top:18px">Settings for the gateway</h2>
-      <p class="help">Enter these in the gateway's setup page (Backbone connection): the name, the port, the token and the authority certificate below. The authority only has to be entered once; it stays the same when the server certificate is renewed.</p>
+      <h2 style="margin-top:18px">Pair a gateway</h2>
+      <p class="help">Save the port and name above first. Create a pairing code, then paste it into the gateway's setup page (<b>Pairing code</b>) together with its Wi-Fi. The code works once and for ten minutes. The gateway then contacts this server, gets its own token and restarts. A new pairing replaces the old gateway's token.</p>
+      <div class="row"><button class="b on" id="mc-pair">Create pairing code</button><span class="help" id="mc-pair-left"></span></div>
+      <textarea id="mc-pair-code" readonly rows="2" hidden style="width:100%;margin-top:8px;font:inherit;font-family:var(--mono,monospace)"></textarea>
+      <div class="row" id="mc-pair-copy-row" hidden style="margin-top:8px"><button class="b" id="mc-pair-copy">Copy code</button></div>
+      <div class="msg" id="mc-pair-msg"></div>
+      <h2 style="margin-top:18px">Manual setup <small>without a pairing code</small></h2>
+      <p class="help">Instead of a pairing code you can enter these in the gateway's setup page (Backbone connection): the name, the port, the token and the authority certificate below. The authority only has to be entered once; it stays the same when the server certificate is renewed.</p>
       <textarea id="mc-copybox" readonly rows="10" style="width:100%;font:inherit;font-family:var(--mono,monospace)"></textarea>
       <div class="row" style="margin-top:8px"><button class="b" id="mc-select">Select all</button><button class="b" id="mc-copy-ca">Copy authority certificate</button></div>
     </section>
@@ -791,6 +797,8 @@ async function loadMeshcore() { try { M = await get("/api/meshcore"); renderMesh
 function renderMeshcore() {
   if (!M) return;
   const gw = M.gateway;
+  // The server used up the pairing code: the gateway has its own token now.
+  if (pair.expires && gw.pairedAt >= pair.created) pairDone("The gateway paired and has its own token. It restarts and connects now.", true);
   const state = !gw.enabled ? "off" : gw.gatewayConnected ? "connected" : "waiting";
   tiles("mc-tiles", [
     [state, "gateway (Heltec V4 over TLS)"],
@@ -869,6 +877,38 @@ async function saveGateway() {
 $("mc-save").onclick = saveGateway;
 $("mc-newtoken-btn").onclick = () => createToken(true);
 $("mc-select").onclick = () => { const box = $("mc-copybox"); box.focus(); box.select(); };
+
+// Pairing: a code that works once for ten minutes. The gateway uses it to fetch its own token.
+let pair = { expires: 0, timer: null };
+function pairDone(text, good) {
+  clearInterval(pair.timer); pair.expires = 0;
+  $("mc-pair-code").hidden = $("mc-pair-copy-row").hidden = true; $("mc-pair-code").value = "";
+  $("mc-pair-left").textContent = "";
+  $("mc-pair-msg").className = good ? "msg good" : "msg"; $("mc-pair-msg").textContent = text;
+}
+function pairTick() {
+  const left = pair.expires - Math.floor(Date.now() / 1000);
+  if (left <= 0) return pairDone("The pairing code has expired. Create a new one.", false);
+  $("mc-pair-left").textContent = `valid for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+}
+$("mc-pair").onclick = async () => {
+  const msg = $("mc-pair-msg");
+  msg.className = "msg"; msg.textContent = "";
+  try {
+    const r = await fetch("/api/meshcore/gateway/pairing", { method: "POST", credentials: "same-origin" });
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.className = "msg bad"; msg.textContent = b.error || "Could not create a pairing code."; return; }
+    pair.expires = b.expires; pair.created = b.expires - 600; // both from the server's clock
+    $("mc-pair-code").value = b.code; $("mc-pair-code").hidden = $("mc-pair-copy-row").hidden = false;
+    msg.className = "msg"; msg.textContent = "Paste this code into the gateway's setup page. It works once.";
+    clearInterval(pair.timer); pair.timer = setInterval(pairTick, 1000); pairTick();
+  } catch { msg.className = "msg bad"; msg.textContent = "Could not reach the server."; }
+};
+$("mc-pair-copy").onclick = async () => {
+  const box = $("mc-pair-code");
+  try { await navigator.clipboard.writeText(box.value); $("mc-pair-msg").className = "msg good"; $("mc-pair-msg").textContent = "Pairing code copied."; }
+  catch { box.focus(); box.select(); $("mc-pair-msg").className = "msg"; $("mc-pair-msg").textContent = "Press Ctrl+C to copy the selected code."; }
+};
 $("mc-copy-ca").onclick = async () => {
   const pem = $("mc-copybox").dataset.authority;
   if (!pem) { $("mc-cfg-msg").className = "msg bad"; $("mc-cfg-msg").textContent = "The authority certificate is created on save."; return; }

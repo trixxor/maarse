@@ -14,7 +14,6 @@ macro_rules! eprintln {
 
 mod admin;
 mod meshcore_access;
-#[cfg(not(target_os = "android"))]
 mod meshcore_gateway;
 mod debug;
 mod telemetry;

@@ -714,7 +714,7 @@ void VirtualNode::loop() {
     publishNodes();
   }
   if ((_repeaterPending || _repeaterAdmin) && static_cast<long>(millis() - _repeaterDeadline) >= 0) {
-    publishRepeater(_repeaterKey, _repeaterPending ? "Repeater login timed out." : "Administrator session expired.");
+    publishRepeater(_repeaterKey, _repeaterPending ? "No answer from the repeater. It was reached by radio, but a repeater stays silent when the password is wrong: check the admin password and try again." : "Administrator session expired.");
     _repeaterPending = false;
     _repeaterAdmin = false;
   }

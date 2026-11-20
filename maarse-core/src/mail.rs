@@ -19,7 +19,8 @@
 //!   is a host, fetches the copies from the replicas over TCP first
 //!   ([`OP_FETCH`]). A node that has moved also sends [`OP_SYNC`] to its
 //!   previous home post office, which may be reachable only over LoRa.
-//! * **Delivered mail is deleted everywhere** ([`OP_DELIVERED`]).
+//! * Hosts remove locally delivered mail; other copies expire. The legacy
+//!   unauthenticated [`OP_DELIVERED`] opcode is retained for decoding.
 //!
 //! `Deposit` payload: `recipient (16) | op (1) | body`.
 //!
@@ -28,7 +29,7 @@
 //! | `STORE` (0) | the message, sealed to the recipient (static seal) |
 //! | `SYNC` (1) | IDs the recipient already has (u32 BE each): deliver the rest to it |
 //! | `FETCH` (2) | the asker's address (16), then IDs it already has: send the rest to the asker as `STORE` |
-//! | `DELIVERED` (3) | IDs that have been delivered: delete them |
+//! | `DELIVERED` (3) | Legacy IDs that have been delivered. Updated hosts ignore it. |
 //!
 //! A mail ID is the first 4 bytes of the message's packet ID
 //! (`packet_id(Data, recipient, sealed)`), so every copy has the same ID.

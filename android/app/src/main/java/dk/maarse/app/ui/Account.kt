@@ -39,6 +39,7 @@ import dk.maarse.app.Node
 import dk.maarse.app.PersonOp
 import dk.maarse.app.PersonState
 import dk.maarse.app.shortAddr
+import dk.maarse.app.hex
 
 /** A QR code as a bitmap (zxing), black on white so any camera reads it. */
 private fun qrBitmap(text: String, size: Int = 512): android.graphics.Bitmap {
@@ -89,7 +90,10 @@ fun AccountSection() {
                 TextButton(onClick = { Node.personSetup(PersonOp.CANCEL) }) { Text("Cancel") }
             }
         }
-        PersonState.MEMBER -> Member()
+        PersonState.MEMBER -> {
+            Member()
+            MeshCoreAccessSection(setup = true)
+        }
     }
     err?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
     Dialogs()
@@ -253,5 +257,143 @@ private fun Dialogs() {
             text = { Text("Device ${l.index} (${shortAddr(l.device)}) belongs to the account now.\n\nCheck words: ${l.words}\n\nThe new device showed the same words while it waited. If they differ, remove the device.") },
             confirmButton = { TextButton(onClick = { Node.linked.value = null }) { Text("OK") } },
         )
+    }
+}
+
+
+@Composable
+fun MeshCoreAccessSection(setup: Boolean = false) {
+    val access by Node.meshcoreAccess.collectAsState()
+    var address by remember { mutableStateOf(Node.prefs.meshcoreBackbone) }
+    var message by remember { mutableStateOf("") }
+    var contact by remember { mutableStateOf("") }
+    var directText by remember { mutableStateOf("") }
+    var channelName by remember { mutableStateOf("") }
+    var channelKey by remember { mutableStateOf("") }
+    var channelText by remember { mutableStateOf("") }
+    var section by remember { mutableStateOf("Public") }
+    var repeaterKey by remember { mutableStateOf("") }
+    var repeaterPassword by remember { mutableStateOf("") }
+    var repeaterCommand by remember { mutableStateOf("") }
+    if (setup) SectionTitle("MeshCore setup")
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (setup || access.key == null) {
+            OutlinedTextField(address, { address = it }, label = { Text("Backbone HTTPS address") }, singleLine = true)
+            OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 0) }, enabled = !access.busy) { Text("Check access") }
+        }
+        if (access.text.isNotEmpty()) Text(access.text)
+        val key = access.key
+        if (key != null) {
+            SelectionContainer { Text("MeshCore public key: $key", fontFamily = FontFamily.Monospace) }
+            if (setup) {
+                Hint("Open MeshCore from Settings to use your channels and radio.")
+                return@Column
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (item in listOf("Public", "Channels", "Direct")) {
+                    TextButton(onClick = { section = item }, enabled = section != item) { Text(item) }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (item in listOf("Nodes", "Repeater")) {
+                    TextButton(onClick = { section = item }, enabled = section != item) { Text(item) }
+                }
+            }
+            when (section) {
+                "Public" -> {
+                    Text(if (access.unread > 0) "Public (${access.unread} unread)" else "Public", style = MaterialTheme.typography.titleMedium)
+                    OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 5) }, enabled = !access.busy) { Text("Refresh messages") }
+                    OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 7, "public-read:${access.lastId}") },
+                        enabled = access.unread > 0 && !access.busy) { Text("Mark read") }
+                    for (entry in access.messages) Text(entry)
+                    OutlinedTextField(message, { message = it }, label = { Text("Message to MeshCore Public") }, singleLine = true)
+                    val bytes = message.trim().encodeToByteArray()
+                    Button(onClick = { Node.checkMeshcoreAccess(address.trim(), 6, "public-send:${bytes.hex()}"); message = "" },
+                        enabled = bytes.size in 1..90 && !access.busy) { Text("Send") }
+                }
+                "Channels" -> {
+                    Text("Channels", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(channelName, { channelName = it }, label = { Text("Channel name") }, singleLine = true)
+                    OutlinedTextField(channelKey, { channelKey = it }, label = { Text("Optional 32-digit hex key") }, singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+                    val joinName = channelName.trim().lowercase().removePrefix("#")
+                    val joinKey = channelKey.trim()
+                    OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 13, "channel-join:$joinName:$joinKey"); channelKey = "" },
+                        enabled = !access.busy && joinName.matches(Regex("[a-z0-9-]{1,24}")) && (joinKey.isEmpty() || joinKey.matches(Regex("[a-fA-F0-9]{32}")))) { Text("Join channel") }
+                    OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 12) }, enabled = !access.busy) { Text("Refresh channels") }
+                    for (channel in access.channels) OutlinedButton(onClick = {
+                        Node.checkMeshcoreAccess(address.trim(), 15, "channel-history:$channel")
+                    }, enabled = !access.busy) { Text("#$channel") }
+                    access.channel?.let { channel ->
+                        Text("#${channel.contact}")
+                        OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 14, "channel-leave:${channel.contact}") },
+                            enabled = !access.busy) { Text("Leave channel") }
+                        if (channel.unread > 0) OutlinedButton(onClick = {
+                            Node.checkMeshcoreAccess(address.trim(), 17, "channel-read:${channel.contact}:${channel.lastId}")
+                        }, enabled = !access.busy) { Text("Mark ${channel.unread} read") }
+                        for (entry in channel.messages) Text(entry)
+                        OutlinedTextField(channelText, { channelText = it }, label = { Text("Channel message") }, singleLine = true)
+                        val channelBytes = channelText.trim().encodeToByteArray()
+                        Button(onClick = {
+                            Node.checkMeshcoreAccess(address.trim(), 16, "channel-send:${channel.contact}:${channelBytes.hex()}")
+                            channelText = ""
+                        }, enabled = channelBytes.size in 1..90 && !access.busy) { Text("Send channel message") }
+                    }
+                }
+                "Direct" -> {
+                    Text("Direct messages", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(contact, { contact = it }, label = { Text("Contact public key") }, singleLine = true)
+                    val keyText = contact.trim().lowercase()
+                    OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 9, "direct-history:$keyText") },
+                        enabled = keyText.matches(Regex("[0-9a-f]{64}")) && !access.busy) { Text("Open conversation") }
+                    OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 8) }, enabled = !access.busy) { Text("Find conversations") }
+                    for (item in access.contacts) OutlinedButton(onClick = {
+                        contact = item
+                        Node.checkMeshcoreAccess(address.trim(), 9, "direct-history:$item")
+                    }, enabled = !access.busy) { Text(item.take(12)) }
+                    access.direct?.let { direct ->
+                        Text(direct.contact.take(12))
+                        OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 9, "direct-history:${direct.contact}") },
+                            enabled = !access.busy) { Text("Refresh conversation") }
+                        if (direct.unread > 0) OutlinedButton(onClick = {
+                            Node.checkMeshcoreAccess(address.trim(), 11, "direct-read:${direct.contact}:${direct.lastId}")
+                        }, enabled = !access.busy) { Text("Mark ${direct.unread} read") }
+                        for (entry in direct.messages) Text(entry)
+                        OutlinedTextField(directText, { directText = it }, label = { Text("Direct message") }, singleLine = true)
+                        val directBytes = directText.trim().encodeToByteArray()
+                        Button(onClick = {
+                            Node.checkMeshcoreAccess(address.trim(), 10, "direct-send:${direct.contact}:${directBytes.hex()}")
+                            directText = ""
+                        }, enabled = directBytes.size in 1..60 && !access.busy) { Text("Send direct message") }
+                    }
+                }
+                "Nodes" -> {
+                    for ((operation, label) in listOf(2 to "Announce", 3 to "Scan nearby nodes", 4 to "Fetch scan results")) {
+                        OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), operation) }, enabled = !access.busy) { Text(label) }
+                    }
+                    for (result in access.results) Text(result)
+                }
+                "Repeater" -> {
+                    val target = repeaterKey.ifEmpty { access.repeaterKey }.trim().lowercase()
+                    val validTarget = target.matches(Regex("[0-9a-f]{64}")) && !access.busy
+                    OutlinedTextField(repeaterKey.ifEmpty { access.repeaterKey }, { repeaterKey = it }, label = { Text("Repeater public key") }, singleLine = true)
+                    OutlinedTextField(repeaterPassword, { repeaterPassword = it }, label = { Text("Repeater password") }, singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+                    val passwordBytes = repeaterPassword.encodeToByteArray()
+                    OutlinedButton(onClick = {
+                        Node.checkMeshcoreAccess(address.trim(), 18, "repeater-login:$target:${passwordBytes.hex()}")
+                        repeaterPassword = ""
+                    }, enabled = validTarget && passwordBytes.size in 1..60) { Text("Log in to repeater") }
+                    OutlinedTextField(repeaterCommand, { repeaterCommand = it }, label = { Text("Repeater command, e.g. get name") }, singleLine = true)
+                    val commandBytes = repeaterCommand.trim().encodeToByteArray()
+                    OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 19, "repeater-command:$target:${commandBytes.hex()}") },
+                        enabled = validTarget && commandBytes.size in 1..60) { Text("Run command") }
+                    OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 20, "repeater-status:$target") }, enabled = validTarget) { Text("Fetch response") }
+                    if (access.repeaterStatus.isNotEmpty()) SelectionContainer { Text(access.repeaterStatus) }
+                }
+            }
+        } else if (access.allowed) Button(onClick = { Node.checkMeshcoreAccess(address.trim(), 1) }, enabled = !access.busy) {
+            Text("Create MeshCore identity")
+        }
     }
 }

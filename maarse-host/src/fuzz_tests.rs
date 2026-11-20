@@ -12,14 +12,13 @@ const MAX_MSG: usize = 4096;
 
 fn record() -> Record {
     let id = Identity::from_secret_bytes(&[5; 64]);
-    Record {
-        dest: id.address(),
-        gw: Address([9; 16]),
-        ep: "10.0.0.1:4000".into(),
-        hops: 2,
-        age_s: 10,
-        announce: id.announce(1, b"x").unwrap().to_vec(),
-    }
+    Record::signed(
+        &id,
+        id.address(),
+        "10.0.0.1:4000".into(),
+        2,
+        id.announce(1, b"x").unwrap().to_vec(),
+    )
 }
 
 #[test]

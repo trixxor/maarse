@@ -733,11 +733,11 @@ impl Telemetry {
         let since = now_s().saturating_sub(7 * 24 * 3600);
         self.nodes
             .iter()
-            .filter(|(_, n)| n.precision > 0 && n.last_seen >= since && n.lat.is_some() && n.lon.is_some())
+            .filter(|(_, n)| !n.mobile && n.precision > 0 && n.last_seen >= since && n.lat.is_some() && n.lon.is_some())
             .map(|(a, n)| {
                 json!({"addr": a, "name": n.name, "role": n.role, "mobile": n.mobile, "lat": n.lat, "lon": n.lon, "precision": n.precision,
-                    "height_m": n.site_h, "gain_dbi": n.site_gain, "tx_dbm": n.site_tx, "owner": n.owner,
-                    "last_seen": n.last_seen, "hops": n.last_hops, "path_id": n.path_id})
+                    "height_m": n.site_h, "gain_dbi": n.site_gain, "tx_dbm": n.site_tx,
+                    "last_seen": n.last_seen, "position_source": "self_reported"})
             })
             .collect()
     }

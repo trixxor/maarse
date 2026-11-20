@@ -4,7 +4,7 @@
 //! and keeps one TCP connection to a maarse-host (`peer`, `host:port`), framed
 //! like the hosts' backbone: `length (u16 LE) | packet`. The node connects
 //! out, so it works behind a phone hotspot (NAT); the host needs `--listen`
-//! (default `0.0.0.0:4242`) reachable from the network, e.g. over a VPN or a
+//! (configure `--listen`) reachable from the network, e.g. over a VPN or a
 //! forwarded port.
 //!
 //! Packets flow to and from the node through `bus::NET_RX` / `bus::NET_TX`;

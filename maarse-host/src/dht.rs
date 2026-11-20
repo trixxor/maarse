@@ -30,10 +30,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 use maarse_core::Address;
-use maarse_crypto::verify_announce;
+use maarse_crypto::{Identity, PublicIdentity, verify_announce};
 
 /// Contacts per bucket and the number of nodes a record is stored on.
 pub const K: usize = 8;
@@ -45,6 +45,9 @@ pub const RECORD_TTL: Duration = Duration::from_secs(2 * 3600);
 pub const REPUBLISH: Duration = Duration::from_secs(30 * 60);
 /// First two bytes on a DHT connection.
 pub const MAGIC: [u8; 2] = [0xD7, 0xD7];
+pub const AUTH_MAGIC: [u8; 2] = [0xD7, 0xD8];
+pub const MUTUAL_MAGIC: [u8; 2] = [0xD7, 0xD9];
+const REPLY_PROOF_LEN: usize = 128;
 /// Timeout for one request.
 pub const RPC_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_EP: usize = 100;
@@ -55,6 +58,7 @@ const MAX_EP: usize = 100;
 /// copy until the records expire (see "Full replication").
 pub const FULL_REPLICA_MAX: usize = 64;
 const MAX_MSG: usize = 4096;
+const MAX_RECORDS: usize = 8192;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Contact {
@@ -128,9 +132,59 @@ pub struct Record {
     /// Age in seconds when the record was sent/received.
     pub age_s: u32,
     pub announce: Vec<u8>,
+    proof: Option<RouteProof>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RouteProof {
+    identity: PublicIdentity,
+    issued: u64,
+    signature: [u8; 64],
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 impl Record {
+    pub fn signed(gateway: &Identity, dest: Address, ep: String, hops: u8, announce: Vec<u8>) -> Self {
+        let issued = unix_now();
+        let mut record = Self { dest, gw: gateway.address(), ep, hops, age_s: 0, announce, proof: None };
+        record.proof = Some(RouteProof {
+            identity: gateway.public(),
+            issued,
+            signature: gateway.sign_dht_route(&record.route_claim(issued)),
+        });
+        record
+    }
+
+    fn route_claim(&self, issued: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.dest.0);
+        bytes.extend_from_slice(&self.gw.0);
+        bytes.extend_from_slice(&issued.to_le_bytes());
+        bytes.push(self.hops);
+        bytes.extend_from_slice(&(self.ep.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(self.ep.as_bytes());
+        bytes.extend_from_slice(&self.announce);
+        bytes
+    }
+
+    fn proof_is_fresh(proof: &RouteProof) -> bool {
+        let now = unix_now();
+        proof.issued <= now.saturating_add(120)
+            && now.saturating_sub(proof.issued) < RECORD_TTL.as_secs()
+    }
+
+    pub fn verified_gateway(&self) -> bool {
+        let Some(proof) = &self.proof else { return false };
+        Self::proof_is_fresh(proof) && proof.identity.address() == self.gw
+            && proof.identity.verify_dht_route(&self.route_claim(proof.issued), &proof.signature)
+    }
+
     /// Is the announce genuine and the record sensible?
     pub fn valid(&self) -> bool {
         !self.ep.is_empty()
@@ -138,6 +192,7 @@ impl Record {
             && self.announce.len() <= maarse_core::MAX_PACKET
             && (self.age_s as u64) < RECORD_TTL.as_secs()
             && verify_announce(&self.dest, &self.announce).is_ok()
+            && (self.proof.is_none() || self.verified_gateway())
     }
 }
 
@@ -225,8 +280,11 @@ impl Table {
         if c.ep.is_empty() || c.ep.len() > MAX_EP {
             return;
         }
-        let known = self.buckets[i].iter().any(|(x, _)| x.id == c.id);
-        if !known && !self.room_for_net(&c.ep) {
+        let known = self.buckets[i].iter().find(|(x, _)| x.id == c.id);
+        if known.is_some_and(|(existing, _)| existing.ep != c.ep) {
+            return;
+        }
+        if known.is_none() && !self.room_for_net(&c.ep) {
             // Many identities from one network: a cheap way to take over
             // part of the table (Sybil), so at most MAX_PER_NET of them.
             return;
@@ -325,11 +383,34 @@ impl Store {
             return false;
         }
         if let Some((old, at)) = self.map.get(&r.dest) {
+            if old.proof.is_some() && r.proof.is_none() && old.proof.as_ref().is_some_and(Record::proof_is_fresh) {
+                return false;
+            }
+            if r.proof.is_some() && old.proof.is_none() {
+                self.map.insert(r.dest, (r, Instant::now()));
+                return true;
+            }
+            if let (Some(previous), Some(new)) = (&old.proof, &r.proof)
+                && old.gw == r.gw && new.issued < previous.issued
+            {
+                return false;
+            }
+            let timestamp = maarse_crypto::announce_timestamp(&r.announce);
+            let old_timestamp = maarse_crypto::announce_timestamp(&old.announce);
+            if timestamp < old_timestamp {
+                return false;
+            }
             let old_age = Self::age(old, at);
             let better = r.hops < old.hops
                 || (r.hops == old.hops && r.age_s as u64 <= old_age)
                 || old_age > 2 * REPUBLISH.as_secs();
             if !better {
+                return false;
+            }
+        }
+        if !self.map.contains_key(&r.dest) && self.map.len() >= MAX_RECORDS {
+            self.expire();
+            if self.map.len() >= MAX_RECORDS {
                 return false;
             }
         }
@@ -340,7 +421,7 @@ impl Store {
     pub fn get(&self, dest: &Address) -> Option<Record> {
         let (r, at) = self.map.get(dest)?;
         let age = Self::age(r, at);
-        (age < RECORD_TTL.as_secs()).then(|| Record {
+        (age < RECORD_TTL.as_secs() && (r.proof.as_ref().is_none_or(Record::proof_is_fresh))).then(|| Record {
             age_s: age as u32,
             ..r.clone()
         })
@@ -348,7 +429,7 @@ impl Store {
 
     pub fn expire(&mut self) {
         self.map
-            .retain(|_, (r, at)| Self::age(r, at) < RECORD_TTL.as_secs());
+            .retain(|_, (r, at)| Self::age(r, at) < RECORD_TTL.as_secs() && r.proof.as_ref().is_none_or(Record::proof_is_fresh));
     }
 
     pub fn len(&self) -> usize {
@@ -438,6 +519,11 @@ fn put_record(out: &mut Vec<u8>, r: &Record) {
     out.extend_from_slice(&r.age_s.to_le_bytes());
     out.extend_from_slice(&(r.announce.len() as u16).to_le_bytes());
     out.extend_from_slice(&r.announce);
+    if let Some(proof) = &r.proof {
+        out.extend_from_slice(&proof.issued.to_le_bytes());
+        out.extend_from_slice(&proof.identity.to_bytes());
+        out.extend_from_slice(&proof.signature);
+    }
 }
 
 fn get_record(rd: &mut Rd) -> Option<Record> {
@@ -448,6 +534,17 @@ fn get_record(rd: &mut Rd) -> Option<Record> {
     let age_s = u32::from_le_bytes(rd.take(4)?.try_into().ok()?);
     let n = u16::from_le_bytes(rd.take(2)?.try_into().ok()?) as usize;
     let announce = rd.take(n)?.to_vec();
+    let proof = if rd.0.is_empty() {
+        None
+    } else {
+        let bytes = rd.take(136)?;
+        if !rd.0.is_empty() { return None }
+        Some(RouteProof {
+            issued: u64::from_le_bytes(bytes[..8].try_into().ok()?),
+            identity: PublicIdentity::from_bytes(&bytes[8..72])?,
+            signature: bytes[72..].try_into().ok()?,
+        })
+    };
     Some(Record {
         dest,
         gw,
@@ -455,6 +552,7 @@ fn get_record(rd: &mut Rd) -> Option<Record> {
         hops,
         age_s,
         announce,
+        proof,
     })
 }
 
@@ -598,40 +696,137 @@ pub fn decode_resp(b: &[u8]) -> Option<(Address, Resp)> {
 // ---------------------------------------------------------------------------
 // Network (blocking; run in separate threads)
 
-/// One request to `ep`. Only answers if everything succeeds within the time limit.
-pub fn rpc(ep: &str, me: &Address, my_ep: Option<&str>, req: &Req) -> Option<(Address, Resp)> {
-    let addr = ep.to_socket_addrs().ok()?.next()?;
-    let mut s = TcpStream::connect_timeout(&addr, RPC_TIMEOUT).ok()?;
-    s.set_read_timeout(Some(RPC_TIMEOUT)).ok()?;
-    s.set_write_timeout(Some(RPC_TIMEOUT)).ok()?;
-    let body = encode_req(me, my_ep, req);
-    let mut buf = Vec::with_capacity(body.len() + 4);
-    buf.extend_from_slice(&MAGIC);
-    buf.extend_from_slice(&(body.len() as u16).to_le_bytes());
-    buf.extend_from_slice(&body);
-    s.write_all(&buf).ok()?;
-    let mut len = [0u8; 2];
-    s.read_exact(&mut len).ok()?;
-    let n = u16::from_le_bytes(len) as usize;
-    if n > MAX_MSG {
-        return None;
+/// Resolves an endpoint once and applies policy to the address we will dial.
+pub fn resolve_peer(ep: &str, configured: &[String]) -> Option<SocketAddr> {
+    let explicit = configured.iter().any(|allowed| allowed == ep);
+    ep.to_socket_addrs().ok()?.find(|addr| addr.port() != 0 && (explicit || public_ip(addr.ip())))
+}
+
+fn public_ip(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            !ip.is_private()
+                && !ip.is_loopback()
+                && !ip.is_link_local()
+                && !ip.is_documentation()
+                && a != 0
+                && a < 224
+                && !(a == 100 && (64..=127).contains(&b))
+                && !(a == 192 && b == 0 && (c == 0 || c == 2))
+                && !(a == 198 && (b == 18 || b == 19))
+        }
+        IpAddr::V6(ip) => {
+            let [a, b, ..] = ip.segments();
+            // IPv6 global unicast, excluding IETF special use, 6to4 and documentation.
+            (0x2000..=0x3fff).contains(&a)
+                && !(a == 0x2001 && (b < 0x200 || b == 0xdb8))
+                && a != 0x2002
+                && a != 0x3fff
+        }
     }
-    let mut resp = vec![0u8; n];
-    s.read_exact(&mut resp).ok()?;
-    decode_resp(&resp)
+}
+
+/// One request to an eligible endpoint.
+pub fn rpc(peer: &Contact, configured: &[String], identity: &Identity, my_ep: Option<&str>, req: &Req, allow_legacy: bool) -> Option<(Address, Resp)> {
+    use rand_core::{OsRng, RngCore};
+
+    let addr = resolve_peer(&peer.ep, configured)?;
+    let body = encode_req(&identity.address(), my_ep, req);
+    if body.len() > MAX_MSG { return None; }
+    let mut challenge = [0u8; 32];
+    OsRng.fill_bytes(&mut challenge);
+    let (id, response) = match exchange(addr, &body, MUTUAL_MAGIC, &challenge, identity) {
+        Some(wire) => decode_signed_reply(&challenge, &body, &wire)?,
+        None if allow_legacy && configured.contains(&peer.ep) => {
+            match exchange(addr, &body, AUTH_MAGIC, &challenge, identity) {
+                Some(wire) => decode_signed_reply(&challenge, &body, &wire)?,
+                None => decode_resp(&exchange(addr, &body, MAGIC, &challenge, identity)?)?,
+            }
+        }
+        None => return None,
+    };
+    (peer.id == Address::default() || peer.id == id).then_some((id, response))
+}
+
+fn exchange(addr: SocketAddr, body: &[u8], protocol: [u8; 2], challenge: &[u8; 32], identity: &Identity) -> Option<Vec<u8>> {
+    let mut stream = TcpStream::connect_timeout(&addr, RPC_TIMEOUT).ok()?;
+    stream.set_write_timeout(Some(RPC_TIMEOUT)).ok()?;
+    stream.write_all(&protocol).ok()?;
+    if protocol != MAGIC {
+        stream.write_all(challenge).ok()?;
+    }
+    let deadline = Instant::now() + RPC_TIMEOUT;
+    let mut request = Vec::with_capacity(body.len() + 2 + REPLY_PROOF_LEN);
+    request.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    request.extend_from_slice(body);
+    if protocol == MUTUAL_MAGIC {
+        let mut server_challenge = [0; 32];
+        read_by(&mut stream, &mut server_challenge, deadline)?;
+        request.extend_from_slice(&identity.public().to_bytes());
+        request.extend_from_slice(&identity.sign_dht_request(&server_challenge, challenge, body));
+    }
+    stream.write_all(&request).ok()?;
+    let limit = MAX_MSG + if protocol != MAGIC { REPLY_PROOF_LEN } else { 0 };
+    read_frame(&mut stream, deadline, limit)
+}
+
+pub fn verify_request_proof(server_challenge: &[u8; 32], client_challenge: &[u8; 32], data: &[u8], proof: &[u8; 128]) -> Option<Address> {
+    let identity = PublicIdentity::from_bytes(&proof[..64])?;
+    let signature = proof[64..].try_into().ok()?;
+    let (claimed_sender, _, _) = decode_req(data)?;
+    (identity.address() == claimed_sender
+        && identity.verify_dht_request(server_challenge, client_challenge, data, signature))
+        .then_some(claimed_sender)
+}
+
+pub fn sign_reply(identity: &Identity, challenge: &[u8; 32], request: &[u8], mut response: Vec<u8>) -> Vec<u8> {
+    let signature = identity.sign_dht_reply(challenge, request, &response);
+    response.extend_from_slice(&identity.public().to_bytes());
+    response.extend_from_slice(&signature);
+    response
+}
+
+fn decode_signed_reply(challenge: &[u8; 32], request: &[u8], wire: &[u8]) -> Option<(Address, Resp)> {
+    let (response, proof) = wire.split_at_checked(wire.len().checked_sub(REPLY_PROOF_LEN)?)?;
+    let identity = PublicIdentity::from_bytes(proof.get(..64)?)?;
+    let signature = proof.get(64..)?.try_into().ok()?;
+    let result = decode_resp(response)?;
+    (identity.address() == result.0 && identity.verify_dht_reply(challenge, request, response, signature)).then_some(result)
+}
+
+/// Reads a complete frame with an absolute deadline, even if bytes arrive slowly.
+pub fn read_by(s: &mut TcpStream, mut buf: &mut [u8], deadline: Instant) -> Option<()> {
+    while !buf.is_empty() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        s.set_read_timeout(Some(remaining)).ok()?;
+        match s.read(buf) {
+            Ok(0) => return None,
+            Ok(n) => buf = &mut buf[n..],
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+    Some(())
 }
 
 /// Reads one request from a connection where MAGIC has already been read.
-pub fn read_request(s: &mut TcpStream) -> Option<Vec<u8>> {
-    s.set_read_timeout(Some(RPC_TIMEOUT)).ok()?;
+pub fn read_request(s: &mut TcpStream, deadline: Instant) -> Option<Vec<u8>> {
+    read_frame(s, deadline, MAX_MSG)
+}
+
+fn read_frame(s: &mut TcpStream, deadline: Instant, limit: usize) -> Option<Vec<u8>> {
     let mut len = [0u8; 2];
-    s.read_exact(&mut len).ok()?;
+    read_by(s, &mut len, deadline)?;
     let n = u16::from_le_bytes(len) as usize;
-    if n > MAX_MSG {
+    if n > limit {
         return None;
     }
     let mut b = vec![0u8; n];
-    s.read_exact(&mut b).ok()?;
+    read_by(s, &mut b, deadline)?;
     Some(b)
 }
 
@@ -805,7 +1000,59 @@ mod tests {
             hops,
             age_s: 0,
             announce: id.announce(1, &[]).unwrap().to_vec(),
+            proof: None,
         }
+    }
+
+    #[test]
+    fn request_proof_requires_the_claimed_identity_and_both_challenges() {
+        let identity = Identity::generate(&mut OsRng);
+        let request = encode_req(&identity.address(), None, &Req::Caps);
+        let client = [23; 32];
+        let server = [17; 32];
+        let mut proof = [0; 128];
+        proof[..64].copy_from_slice(&identity.public().to_bytes());
+        proof[64..].copy_from_slice(&identity.sign_dht_request(&server, &client, &request));
+        assert_eq!(verify_request_proof(&server, &client, &request, &proof), Some(identity.address()));
+        assert!(verify_request_proof(&[18; 32], &client, &request, &proof).is_none());
+        assert!(verify_request_proof(&server, &[24; 32], &request, &proof).is_none());
+        let wrong_sender = encode_req(&a(1), None, &Req::Caps);
+        proof[64..].copy_from_slice(&identity.sign_dht_request(&server, &client, &wrong_sender));
+        assert!(verify_request_proof(&server, &client, &wrong_sender, &proof).is_none());
+    }
+
+    #[test]
+    fn dht_response_proof_is_bound_to_the_request_and_challenge() {
+        let responder = Identity::generate(&mut OsRng);
+        let nonce = [17; 32];
+        let request = encode_req(&a(1), None, &Req::Ping);
+        let response = encode_resp(&responder.address(), &Resp::Pong);
+        let signed = sign_reply(&responder, &nonce, &request, response);
+        assert_eq!(decode_signed_reply(&nonce, &request, &signed), Some((responder.address(), Resp::Pong)));
+        assert!(decode_signed_reply(&[18; 32], &request, &signed).is_none());
+        assert!(decode_signed_reply(&nonce, &encode_req(&a(1), None, &Req::Caps), &signed).is_none());
+        assert!(decode_signed_reply(&nonce, &request, &signed[..signed.len()-1]).is_none());
+    }
+
+    #[test]
+    fn signed_gateway_proof_survives_wire_roundtrip_and_binds_route() {
+        let dest = Identity::generate(&mut OsRng);
+        let gateway = Identity::generate(&mut OsRng);
+        let route = Record::signed(&gateway, dest.address(), "gateway.example:4242".into(), 2,
+            dest.announce(1, &[]).unwrap().to_vec());
+        let request = Req::Store(route.clone());
+        let encoded = encode_req(&gateway.address(), None, &request);
+        assert_eq!(decode_req(&encoded), Some((gateway.address(), None, request)));
+        assert!(route.verified_gateway());
+        let mut store = Store::new();
+        assert!(store.put(route.clone()));
+        let mut altered = route;
+        altered.hops += 1;
+        assert!(!altered.valid());
+        altered.hops -= 1;
+        altered.ep = "other.example:4242".into();
+        assert!(!altered.valid());
+        assert!(!store.put(record(&dest, a(4), 0)));
     }
 
     #[test]
@@ -834,6 +1081,26 @@ mod tests {
             assert_eq!(decode_resp(&b), Some((a(2), resp)));
         }
         assert_eq!(decode_req(&[2, 1, 2]), None);
+    }
+
+    #[test]
+    fn discovered_endpoints_require_a_public_address() {
+        for endpoint in ["127.0.0.1:4242", "10.0.0.1:4242", "169.254.169.254:4242",
+            "[::ffff:127.0.0.1]:4242", "[fe80::1]:4242", "8.8.8.8:0"] {
+            assert!(resolve_peer(endpoint, &[]).is_none(), "{endpoint}");
+        }
+        assert!(resolve_peer("8.8.8.8:4242", &[]).is_some());
+        let configured = vec!["127.0.0.1:4242".into()];
+        assert!(resolve_peer("127.0.0.1:4242", &configured).is_some());
+        assert!(resolve_peer("127.0.0.1:4243", &configured).is_none());
+    }
+
+    #[test]
+    fn an_unverified_contact_cannot_replace_an_existing_endpoint() {
+        let mut table = Table::new(a(1));
+        table.insert(Contact { id: a(2), ep: "one.example:4242".into() });
+        table.insert(Contact { id: a(2), ep: "two.example:4242".into() });
+        assert_eq!(table.all()[0].ep, "one.example:4242");
     }
 
     #[test]

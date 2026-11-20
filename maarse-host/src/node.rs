@@ -14,10 +14,11 @@ mod seq;
 mod identity;
 mod alerts;
 mod debugview;
+mod announce_freshness;
 
 use crate::dht::{self, Contact, Record};
 use crate::filebox::{self, Boxed, FileBox, LORA_MAX_FILE, PathKind};
-use crate::{ClientId, Config, In, LinkId};
+use crate::{ClientId, Config, In, LinkId, LinkSender};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use std::cmp::Reverse;
@@ -98,6 +99,8 @@ const PULL_STALL: Duration = Duration::from_secs(30);
 const BEACON_DEFER_MAX: Duration = Duration::from_secs(120);
 /// A file is abandoned after this time.
 const FILE_TIMEOUT: Duration = Duration::from_secs(600);
+const MAX_INCOMING_FILES: usize = 32;
+const MAX_INCOMING_FILES_PER_SENDER: usize = 8;
 /// A page answer the reader has not taken by then is dropped (the app
 /// stops waiting for a page after a minute, for a picture after two).
 const PAGE_REPLY_TIMEOUT: Duration = Duration::from_secs(150);
@@ -107,6 +110,9 @@ const RULES: maarse_hostrules::rules::Rules = maarse_hostrules::rules::Rules::ST
 /// Without an acknowledgement within this time a message is put in the recipient's mailbox.
 const DEPOSIT_AFTER: Duration = Duration::from_millis(RULES.deposit_after_ms);
 /// The mailbox keeps at most this many messages per recipient, for this long.
+const MAX_MAIL_JOBS: usize = 16;
+const FETCHED_MAIL_CEILING: u64 = 4 * 1024 * 1024;
+const MAIL_RECORD_OVERHEAD: u64 = 16 + 8 + 2;
 const MAILBOX_PER_RECIPIENT: usize = RULES.mailbox_per_recipient;
 const MAILBOX_TTL: Duration = Duration::from_millis(RULES.mailbox_ttl_ms);
 /// How often the DHT is maintained (bootstrap, publications, expiry).
@@ -292,6 +298,7 @@ struct OutMsg {
     mail_sealed: Vec<u8>,
     sent: Instant,
     deposited: bool,
+    next_deposit: Option<Instant>,
 }
 
 struct Mail {
@@ -312,7 +319,7 @@ struct Counters {
 }
 
 pub struct Node {
-    identity: Identity,
+    identity: std::sync::Arc<Identity>,
     addr: Address,
     /// Boxed: the router is about 150 KB, too big to move around on the stack.
     router: Box<Router<1024, 4096>>,
@@ -327,7 +334,7 @@ pub struct Node {
     my_postbox: Option<Address>,
     /// Channel address -> (name, key)
     channels: HashMap<Address, (String, [u8; 32])>,
-    links: HashMap<LinkId, (String, Sender<Vec<u8>>)>,
+    links: HashMap<LinkId, (String, LinkSender)>,
     /// Regions that backbone peers have reported (strict, ids). Links without
     /// a hello (older hosts, serial) are not here and get everything.
     link_regions: HashMap<LinkId, (bool, Vec<u16>)>,
@@ -371,6 +378,7 @@ pub struct Node {
     /// Every announce we have heard (payload without stamp), to answer key
     /// requests: a host keeps all of them, a radio node cannot.
     announce_cache: HashMap<Address, Vec<u8>>,
+    announce_freshness: announce_freshness::AnnounceFreshness,
     /// Bordercast: requests from the backbone kept off the radio, by
     /// destination, and key requests answered, by destination.
     bc_dropped: HashMap<Address, Instant>,
@@ -409,6 +417,8 @@ pub struct Node {
     no_post_office: bool,
     no_relay: bool,
     mail_quota: u64,
+    mail_replica_ids: HashSet<Address>,
+    mail_jobs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Who is behind each trunk (the far end's Bloom filter), and when we
     /// next send ours.
     trunk_bloom: HashMap<LinkId, (Vec<u8>, Instant)>,
@@ -472,6 +482,7 @@ struct Dht {
     public_ep: Option<String>,
     /// Seeds (known only by endpoint).
     seeds: Vec<String>,
+    allowed_endpoints: Vec<String>,
     /// Endpoints we already have a packet connection to (or are getting one).
     peers: HashSet<String>,
     /// Gateways we connected to because of a lookup.
@@ -563,14 +574,9 @@ fn small(b: &[u8]) -> Small {
 impl Node {
     pub fn new(cfg: &Config) -> std::io::Result<Self> {
         fs::create_dir_all(&cfg.data_dir)?;
-        let key_path = cfg.data_dir.join("identity.key");
-        let identity = match fs::read(&key_path) {
-            Ok(b) if b.len() == 64 => {
-                let mut k = [0u8; 64];
-                k.copy_from_slice(&b);
-                Identity::from_secret_bytes(&k)
-            }
-            _ => {
+        let identity = match identity::read_identity(&cfg.data_dir)? {
+            Some(identity) => identity,
+            None => {
                 let id = Identity::generate(&mut OsRng);
                 identity::write_identity(&cfg.data_dir, &id.to_secret_bytes())?;
                 id
@@ -590,7 +596,7 @@ impl Node {
         router.slot_ms = 5;
 
         let mut node = Node {
-            identity,
+            identity: identity.into(),
             addr,
             router: Box::new(router),
             known: HashMap::new(),
@@ -630,6 +636,7 @@ impl Node {
             last_forwarded: 0,
             heard_via: HashMap::new(),
             announce_cache: HashMap::new(),
+            announce_freshness: announce_freshness::AnnounceFreshness::open(&cfg.data_dir.join("announce-freshness.bin"), unix_now())?,
             bc_dropped: HashMap::new(),
             pid_link: HashMap::new(),
             targeted: HashMap::new(),
@@ -652,6 +659,8 @@ impl Node {
             no_post_office: cfg.no_post_office,
             no_relay: cfg.no_relay,
             mail_quota: cfg.mail_quota_mb as u64 * 1024 * 1024,
+            mail_replica_ids: cfg.mail_replica_ids.iter().copied().collect(),
+            mail_jobs: Default::default(),
             link_stats: HashMap::new(),
             trunk_bloom: HashMap::new(),
             next_summary: Instant::now() + Duration::from_secs(60),
@@ -681,6 +690,8 @@ impl Node {
                     .chain(cfg.peers.iter())
                     .cloned()
                     .collect(),
+                allowed_endpoints: cfg.dht_seeds.iter().chain(&cfg.peers)
+                    .chain(&cfg.dht_private_endpoints).cloned().collect(),
                 peers: cfg.peers.iter().cloned().collect(),
                 dynamic: HashSet::new(),
                 heard: HashMap::new(),
@@ -958,8 +969,13 @@ impl Node {
                 self.clients.remove(&id);
                 self.uploads.retain(|(c, _), _| *c != id);
             }
-            In::DhtRequest { data, reply } => {
-                let _ = reply.send(self.dht_serve(&data));
+            In::DhtRequest { data, challenge, reply } => {
+                let response = self.dht_serve(&data);
+                let response = match challenge {
+                    Some(challenge) => dht::sign_reply(&self.identity, &challenge, &data, response),
+                    None => response,
+                };
+                let _ = reply.send(response);
             }
             In::TunPacket(p) => self.on_tun_packet(&p),
             In::LinkCaps { id, caps } => {
@@ -998,16 +1014,14 @@ impl Node {
                     _ => {}
                 }
             }
+            In::MailReplicated { msg_id } => self.mark_mail_deposited(msg_id),
             In::MailFetched { recipient, items } if self.person_mail_fetched(recipient, &items) => {}
             In::MailFetched { recipient, items } => {
                 let n = items.len();
                 for sealed in items {
                     // Fetched to hand over to a recipient on our radio: kept
                     // for delivery even without a post office here.
-                    let (npo, quota) = (self.no_post_office, self.mail_quota);
-                    (self.no_post_office, self.mail_quota) = (false, 0);
-                    self.store_mail(recipient, sealed, false);
-                    (self.no_post_office, self.mail_quota) = (npo, quota);
+                    self.store_mail_local(recipient, sealed, false, true);
                 }
                 if n > 0 {
                     self.log(format!("post office: fetched {n} message(s) for {} from the replicas", short(&recipient)));
@@ -1433,6 +1447,7 @@ impl Node {
                     mail_sealed,
                     sent: Instant::now(),
                     deposited: false,
+                    next_deposit: None,
                 },
             );
         }
@@ -1534,17 +1549,6 @@ impl Node {
                 self.counters.mail_delivered += ids.len() as u32;
                 self.save_mailbox();
                 self.update_tim();
-                let replicas = self.mail_replicas(&recipient);
-                if !replicas.is_empty() {
-                    let me = self.addr;
-                    let my_ep = self.dht.public_ep.clone();
-                    let mids: Vec<u32> = ids.iter().map(|id| (*id >> 32) as u32).collect();
-                    std::thread::spawn(move || {
-                        for c in replicas {
-                            let _ = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::MailDelivered { recipient, ids: mids.clone() });
-                        }
-                    });
-                }
             }
             Some(Pending::MailDelivery(recipient)) => {
                 // Mail for a person was sent to one of its devices under another ID.
@@ -1555,18 +1559,6 @@ impl Node {
                     t.mail_delivered(&recipient, &[(msg_id, unix_ms(mail.stored))]);
                 }
                 self.update_tim();
-                // Delete the copies too.
-                let replicas = self.mail_replicas(&recipient);
-                if !replicas.is_empty() {
-                    let me = self.addr;
-                    let my_ep = self.dht.public_ep.clone();
-                    let ids = vec![(msg_id >> 32) as u32];
-                    std::thread::spawn(move || {
-                        for c in replicas {
-                            let _ = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::MailDelivered { recipient, ids: ids.clone() });
-                        }
-                    });
-                }
                 self.counters.mail_delivered += 1;
                 self.log(format!("mailbox: delivered to {}", short(&recipient)));
                 self.save_mailbox();
@@ -1578,7 +1570,7 @@ impl Node {
 
     fn on_deliver(&mut self, ptype: PacketType, dest: Address, payload: &[u8], hops: u8) {
         match ptype {
-            PacketType::Announce if dest != self.addr => self.on_announce(dest, payload, hops),
+            PacketType::Announce if dest != self.addr => { self.on_announce(dest, payload, hops); }
             // Someone asks who we are: announce. Who another node is: answer
             // from the announces we keep.
             PacketType::KeyRequest if dest == self.addr => self.announce(),
@@ -1632,9 +1624,17 @@ impl Node {
         }
     }
 
-    fn on_announce(&mut self, dest: Address, payload: &[u8], hops: u8) {
+    fn on_announce(&mut self, dest: Address, payload: &[u8], hops: u8) -> bool {
         match verify_announce(&dest, payload) {
             Ok(a) => {
+                match self.announce_freshness.accept(dest, a.timestamp, unix_now()) {
+                    Ok(true) => {}
+                    Ok(false) => return false,
+                    Err(error) => {
+                        self.log(format!("could not persist announce freshness: {error}"));
+                        return false;
+                    }
+                }
                 if a.app_data.len() >= 17 && a.app_data[0] == APP_POSTBOX
                     && let Some(p) = Address::from_slice(&a.app_data[1..17]) {
                         self.postboxes.insert(dest, p);
@@ -1684,8 +1684,12 @@ impl Node {
                 }
                 self.retry_pending();
                 self.flush_mailbox(dest);
+                true
             }
-            Err(e) => self.log(format!("rejected announce from {}: {e:?}", short(&dest))),
+            Err(e) => {
+                self.log(format!("rejected announce from {}: {e:?}", short(&dest)));
+                false
+            }
         }
     }
 
@@ -2132,9 +2136,11 @@ impl Node {
     }
 
     fn on_file_offer(&mut self, from: Address, offer: FileOffer) {
+        let chunk_size = usize::from(offer.chunk_size);
         if offer.size > self.max_file
-            || (offer.chunks as usize) * (offer.chunk_size as usize) < offer.size as usize
-            || offer.chunk_size == 0
+            || chunk_size == 0
+            || chunk_size > CHUNK_DATA
+            || usize::from(offer.chunks) != (offer.size as usize).div_ceil(chunk_size).max(1)
         {
             self.log(format!(
                 "file from {} rejected (too large or invalid)",
@@ -2172,10 +2178,15 @@ impl Node {
         // Offered again (resent, e.g. from the sender's file mailbox): keep
         // the chunks we have, so only the rest has to come (pull: ask for it).
         if let Some(f) = self.in_files.get_mut(&file_id) {
+            if f.sender != sender || f.offer != offer { return; }
             f.active = Instant::now();
             let (got, total) = (f.got, f.offer.chunks);
             self.log(format!("file offered again by {}: {got} of {total} chunks already here", short(&from)));
             self.pull_start(file_id);
+            return;
+        }
+        if self.in_files.len() >= MAX_INCOMING_FILES
+            || self.in_files.values().filter(|file| file.sender == sender).count() >= MAX_INCOMING_FILES_PER_SENDER {
             return;
         }
         // A file from a device of a person shows in the person's conversation.
@@ -2391,7 +2402,7 @@ impl Node {
         // Everything below base, and what the request does not list as missing, has arrived.
         for i in 0..f.chunks {
             let here = i < base
-                || (i - base < content::FILE_REQUEST_SPAN && missing & (1 << (i - base)) == 0 && i < base + content::FILE_REQUEST_SPAN);
+                || (i - base < content::FILE_REQUEST_SPAN && missing & (1 << (i - base)) == 0);
             if here && !f.acked[i as usize] {
                 f.acked[i as usize] = true;
                 f.done += 1;
@@ -2405,7 +2416,7 @@ impl Node {
         }
         let want: Vec<u16> = (0..content::FILE_REQUEST_SPAN)
             .filter(|i| missing & (1 << i) != 0)
-            .map(|i| base + i)
+            .filter_map(|i| base.checked_add(i))
             .filter(|i| *i < total)
             .take(count.max(1) as usize)
             .collect();
@@ -2445,6 +2456,10 @@ impl Node {
         let Ok(n) = seal::open_chunk(&f.offer.key, payload, &mut out) else {
             return;
         };
+        let chunk_size = usize::from(f.offer.chunk_size);
+        let offset = usize::from(idx) * chunk_size;
+        let expected = (f.offer.size as usize).saturating_sub(offset).min(chunk_size);
+        if n != expected { return; }
         f.parts[idx as usize] = Some(out[..n].to_vec());
         f.got += 1;
         f.active = Instant::now();
@@ -2472,38 +2487,30 @@ impl Node {
     }
 
     fn finish_incoming(&mut self, file_id: u64) {
-        let Some(f) = self.in_files.remove(&file_id) else {
-            return;
-        };
-        // Pull: tell the sender everything is here, remember the file (a
-        // late offer is answered without taking it again) and start the
-        // next file from the same sender.
+        let Some(f) = self.in_files.remove(&file_id) else { return; };
+        let data: Vec<u8> = f.parts.into_iter().flatten().flatten().collect();
+        let valid = data.len() == f.offer.size as usize && Sha256::digest(&data)[..16] == f.offer.hash;
         let sender = f.sender;
-        self.files_done.insert(file_id, Instant::now());
-        if f.pull.is_some() {
-            let idx = PULL_REQ_INDEX + f.req_seq.min(PULL_REQ_INDEX - 1);
-            let mut ct = [0u8; 64];
-            if let Ok(n) = seal::seal_chunk(&f.offer.key, file_id, idx, &content::file_request(file_id, f.offer.chunks, 0, 0), &mut ct) {
-                let now = self.now_ms();
-                if let Ok((_, actions)) = self.router.send_typed(PacketType::Datagram, sender, &ct[..n], token(), now) {
-                    self.apply(actions.into_iter().collect());
+        // A completion receipt must only acknowledge an intact file.
+        if valid {
+            self.files_done.insert(file_id, Instant::now());
+            if f.pull.is_some() {
+                let idx = PULL_REQ_INDEX + f.req_seq.min(PULL_REQ_INDEX - 1);
+                let mut ct = [0u8; 64];
+                if let Ok(n) = seal::seal_chunk(&f.offer.key, file_id, idx, &content::file_request(file_id, f.offer.chunks, 0, 0), &mut ct) {
+                    let now = self.now_ms();
+                    if let Ok((_, actions)) = self.router.send_typed(PacketType::Datagram, sender, &ct[..n], token(), now) {
+                        self.apply(actions.into_iter().collect());
+                    }
                 }
             }
-            let next = self.in_files.iter().filter(|(_, o)| o.sender == sender).map(|(id, _)| *id).min();
-            if let Some(id) = next {
-                self.pull_start(id);
-            }
         }
-        let mut data: Vec<u8> = f.parts.into_iter().flatten().flatten().collect();
-        data.truncate(f.offer.size as usize);
-        let ok = data.len() == f.offer.size as usize && Sha256::digest(&data)[..16] == f.offer.hash;
-        if !ok {
-            self.broadcast(&Event::FileDone {
-                file_id,
-                ok: false,
-                outgoing: false,
-                text: text(b"checksum mismatch"),
-            });
+        if f.pull.is_some() {
+            let next = self.in_files.iter().filter(|(_, other)| other.sender == sender).map(|(id, _)| *id).min();
+            if let Some(id) = next { self.pull_start(id); }
+        }
+        if !valid {
+            self.broadcast(&Event::FileDone { file_id, ok: false, outgoing: false, text: text(b"checksum mismatch") });
             return;
         }
         let dir = self.data_dir.join("files");
@@ -2705,10 +2712,6 @@ impl Node {
                 self.flush_mailbox(d.recipient);
                 self.fetch_mail(d.recipient, have);
             }
-            mail::OP_DELIVERED => {
-                let ids: Vec<u32> = d.ids().collect();
-                self.drop_mail(d.recipient, &ids);
-            }
             mail::OP_BUNDLE if d.recipient == self.addr => {
                 let items: Vec<Vec<u8>> = d.bundle().map(|m| m.to_vec()).collect();
                 for m in items {
@@ -2719,71 +2722,119 @@ impl Node {
         }
     }
 
-    /// Stores a sealed message for `recipient`; with `replicate`, copies go
-    /// to the recipient's replica hosts (rendezvous hashing over the hosts in
-    /// the DHT), over TCP only.
-    /// Keeps a message for `recipient`; `false` if refused (no post office
-    /// here, or the quota is full).
+    /// Accepts mail locally and optionally sends copies to replica hosts.
     fn store_mail(&mut self, recipient: Address, sealed: Vec<u8>, replicate: bool) -> bool {
-        let over_quota = self.mail_quota > 0 && self.mail_bytes() + sealed.len() as u64 > self.mail_quota;
-        if self.no_post_office || over_quota {
-            if replicate {
-                // Mail from our own side: not kept here, but still handed to
-                // the recipient's replica post offices.
-                let replicas = self.mail_replicas(&recipient);
-                self.log(format!("post office: not kept here, sent to {} replica(s) for {}", replicas.len(), short(&recipient)));
-                let me = self.addr;
-                let my_ep = self.dht.public_ep.clone();
-                std::thread::spawn(move || {
-                    for c in replicas {
-                        let _ = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::MailStore { recipient, sealed: sealed.clone() });
-                    }
-                });
-                return true;
-            }
-            self.log(format!("post office: refused mail for {} ({})", short(&recipient), if self.no_post_office { "no post office here" } else { "quota full" }));
+        if !Self::valid_mail_size(&sealed) {
             return false;
         }
-        crate::debug::push("mail", serde_json::json!({"op": "store", "recipient": crate::debug::hex(&recipient.0), "size": sealed.len(), "replicate": replicate}));
-        if let Some(t) = self.tele.as_mut() {
-            t.mail(if replicate { "stored (sent here)" } else { "stored (copy from another host)" });
+        let stored = self.store_mail_local(recipient, sealed.clone(), replicate, false);
+        if replicate {
+            self.replicate_mail(recipient, sealed, None);
+        }
+        stored
+    }
+
+    fn replicate_mail(&self, recipient: Address, sealed: Vec<u8>, confirm: Option<u64>) {
+        let replicas = self.mail_replicas(&recipient);
+        if replicas.is_empty() {
+            return;
+        }
+        let identity = self.identity.clone();
+        let my_ep = self.dht.public_ep.clone();
+        let configured = self.dht.allowed_endpoints.clone();
+        let reply = confirm.zip(self.tx.clone());
+        let allow_legacy = self.mail_replica_ids.is_empty();
+        self.start_mail_job(move || {
+            let request = dht::Req::MailStore { recipient, sealed };
+            let mut reply = reply;
+            for c in replicas {
+                let response = dht::rpc(&c, &configured, &identity, my_ep.as_deref(), &request, allow_legacy);
+                if matches!(response, Some((_, dht::Resp::Stored(true))))
+                    && let Some((msg_id, tx)) = reply.take()
+                {
+                    let _ = tx.send(In::MailReplicated { msg_id });
+                }
+            }
+        });
+    }
+
+    fn valid_mail_size(sealed: &[u8]) -> bool {
+        !sealed.is_empty() && sealed.len() <= MAX_DIRECT_PAYLOAD
+    }
+
+    fn store_mail_local(&mut self, recipient: Address, sealed: Vec<u8>, replicate: bool, fetched: bool) -> bool {
+        if !Self::valid_mail_size(&sealed) || (self.no_post_office && !fetched) {
+            return false;
         }
         let id = maarse_core::dedup::packet_id(PacketType::Data, &recipient, &sealed);
-        let box_ = self.mailbox.entry(recipient).or_default();
-        if box_.contains_key(&id) {
+        let existing = self.mailbox.get(&recipient);
+        if existing.is_some_and(|box_| box_.contains_key(&id)) {
             return true;
         }
-        if box_.len() >= MAILBOX_PER_RECIPIENT {
+        if existing.is_some_and(|box_| box_.len() >= MAILBOX_PER_RECIPIENT) {
             self.log(format!("mailbox full for {}", short(&recipient)));
             return false;
         }
-        box_.insert(id, Mail { sealed: sealed.clone(), stored: SystemTime::now() });
+        // Fetched mail shares the main budget and has a finite ceiling even
+        // when ordinary post storage is explicitly configured as unlimited.
+        let quota = match (fetched, self.mail_quota) {
+            (true, 0) => FETCHED_MAIL_CEILING,
+            (true, quota) => quota.min(FETCHED_MAIL_CEILING),
+            (false, quota) => quota,
+        };
+        if quota > 0 && self.mail_bytes() + MAIL_RECORD_OVERHEAD + sealed.len() as u64 > quota {
+            self.log(format!("post office: quota full for {}", short(&recipient)));
+            return false;
+        }
+
+        let box_ = self.mailbox.entry(recipient).or_default();
+        box_.insert(id, Mail { sealed, stored: SystemTime::now() });
         let count = box_.len();
+        if !self.save_mailbox() {
+            let box_ = self.mailbox.get_mut(&recipient).unwrap();
+            box_.remove(&id);
+            if box_.is_empty() {
+                self.mailbox.remove(&recipient);
+            }
+            return false;
+        }
+
         if let Some(t) = self.tele.as_mut() {
+            t.mail(if replicate { "stored (sent here)" } else { "stored (copy from another host)" });
             t.mail_stored(id, &recipient, !replicate);
         }
         self.log(format!("post office: stored message for {} ({count} in total)", short(&recipient)));
-        self.save_mailbox();
         self.update_tim();
         self.mail_retry.entry(recipient).or_insert((Instant::now() + MAIL_RETRY_FIRST, 0));
-        if replicate {
-            let replicas = self.mail_replicas(&recipient);
-            if !replicas.is_empty() {
-                let me = self.addr;
-                let my_ep = self.dht.public_ep.clone();
-                std::thread::spawn(move || {
-                    for c in replicas {
-                        let _ = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::MailStore { recipient, sealed: sealed.clone() });
-                    }
-                });
-            }
+        if !fetched {
+            self.flush_mailbox(recipient);
         }
-        // Maybe the recipient is already here.
-        self.flush_mailbox(recipient);
         true
     }
 
-    /// The hosts (other than us) that keep `recipient`'s mail.
+    /// Limit network work generated by inbound mail, with no unbounded queue.
+    fn start_mail_job(&self, job: impl FnOnce() + Send + 'static) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        struct Slot(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for Slot {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Relaxed);
+            }
+        }
+
+        if self.mail_jobs.try_update(Relaxed, Relaxed, |active| {
+            (active < MAX_MAIL_JOBS).then_some(active + 1)
+        }).is_err() {
+            return false;
+        }
+        let slot = Slot(self.mail_jobs.clone());
+        std::thread::Builder::new().spawn(move || {
+            let _slot = slot;
+            job();
+        }).is_ok()
+    }
+
     fn mail_replicas(&self, recipient: &Address) -> Vec<Contact> {
         // Only hosts that keep mail (unknown counts as yes, as before).
         let mut contacts: Vec<Contact> = self
@@ -2791,10 +2842,13 @@ impl Node {
             .table
             .all()
             .into_iter()
+            .filter(|c| self.mail_replica_ids.is_empty() || self.mail_replica_ids.contains(&c.id))
             .filter(|c| self.caps_of.get(&c.id).is_none_or(|(k, _)| k.post_office))
             .collect();
         let mut addrs: Vec<Address> = contacts.iter().map(|c| c.id).collect();
-        if self.dht.public_ep.is_some() && !self.no_post_office {
+        if self.dht.public_ep.is_some() && !self.no_post_office
+            && (self.mail_replica_ids.is_empty() || self.mail_replica_ids.contains(&self.addr))
+        {
             addrs.push(self.addr);
         }
         // Rendezvous hashing: the REPLICAS highest scores (as mail::replicas).
@@ -2823,13 +2877,14 @@ impl Node {
         if self.fetch_asked.get(&recipient).is_some_and(|t| t.elapsed() < Duration::from_secs(30)) {
             return;
         }
-        self.fetch_asked.insert(recipient, Instant::now());
-        let me = self.addr;
+        let identity = self.identity.clone();
         let my_ep = self.dht.public_ep.clone();
-        std::thread::spawn(move || {
+        let configured = self.dht.allowed_endpoints.clone();
+        let allow_legacy = self.mail_replica_ids.is_empty();
+        if self.start_mail_job(move || {
             let mut items: Vec<Vec<u8>> = Vec::new();
             for c in replicas {
-                if let Some((_, dht::Resp::Mail(v))) = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::MailFetch { recipient, have: have.clone() }) {
+                if let Some((_, dht::Resp::Mail(v))) = dht::rpc(&c, &configured, &identity, my_ep.as_deref(), &dht::Req::MailFetch { recipient, have: have.clone() }, allow_legacy) {
                     for m in v {
                         if !items.contains(&m) {
                             items.push(m);
@@ -2838,20 +2893,9 @@ impl Node {
                 }
             }
             let _ = tx.send(In::MailFetched { recipient, items });
-        });
-    }
-
-    /// Deletes delivered messages (by mail ID).
-    fn drop_mail(&mut self, recipient: Address, ids: &[u32]) {
-        crate::debug::push("mail", serde_json::json!({"op": "delivered elsewhere, deleted", "recipient": crate::debug::hex(&recipient.0), "ids": ids.len()}));
-        if let Some(t) = self.tele.as_mut() {
-            t.mail("deleted (delivered elsewhere)");
+        }) {
+            self.fetch_asked.insert(recipient, Instant::now());
         }
-        if let Some(m) = self.mailbox.get_mut(&recipient) {
-            m.retain(|id, _| !ids.contains(&((*id >> 32) as u32)));
-        }
-        self.save_mailbox();
-        self.update_tim();
     }
 
     /// Recipients with mail waiting, told in our hellos ("mail waiting").
@@ -2951,34 +2995,56 @@ impl Node {
         let Some(m) = self.outbox.get_mut(&msg_id) else {
             return;
         };
-        if m.deposited || 16 + m.mail_sealed.len() > MAX_DIRECT_PAYLOAD {
+        if m.deposited || m.mail_sealed.len() + 16 > MAX_DIRECT_PAYLOAD || !Self::valid_mail_size(&m.mail_sealed) {
             return;
         }
-        m.deposited = true;
+        m.next_deposit = Some(Instant::now() + Duration::from_secs(60));
         let (dest, sealed) = (m.dest, m.mail_sealed.clone());
-        self.log(format!("recipient not answering; keeping the message in our post office for {}", short(&dest)));
-        self.store_mail(dest, sealed, true);
-        self.counters.deposits += 1;
-        self.broadcast(&Event::Deposited { msg_id });
+        let stored = self.store_mail_local(dest, sealed.clone(), true, false);
+        if stored {
+            self.mark_mail_deposited(msg_id);
+        }
+        self.replicate_mail(dest, sealed, (!stored).then_some(msg_id));
     }
 
-    fn save_mailbox(&self) {
-        // Format: recipient (16) | stored (u64 sec.) | length (u16) | message
-        let mut b = Vec::new();
-        for (r, mails) in &self.mailbox {
-            for m in mails.values() {
-                b.extend_from_slice(&r.0);
-                let t = m
-                    .stored
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                b.extend_from_slice(&t.to_le_bytes());
-                b.extend_from_slice(&(m.sealed.len() as u16).to_le_bytes());
-                b.extend_from_slice(&m.sealed);
-            }
+    fn mark_mail_deposited(&mut self, msg_id: u64) {
+        if let Some(message) = self.outbox.get_mut(&msg_id)
+            && !message.deposited
+        {
+            message.deposited = true;
+            self.counters.deposits += 1;
+            self.broadcast(&Event::Deposited { msg_id });
         }
-        let _ = fs::write(self.data_dir.join("mailbox.bin"), b);
+    }
+
+    fn save_mailbox(&self) -> bool {
+        let path = self.data_dir.join("mailbox.bin");
+        let temp = path.with_extension("tmp");
+        let result = (|| -> std::io::Result<()> {
+            use std::io::Write;
+
+            let mut writer = std::io::BufWriter::new(fs::File::create(&temp)?);
+            // Format: recipient (16) | stored (u64 sec.) | length (u16) | message
+            for (recipient, mails) in &self.mailbox {
+                for mail in mails.values() {
+                    let stored = mail.stored.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                    writer.write_all(&recipient.0)?;
+                    writer.write_all(&stored.to_le_bytes())?;
+                    writer.write_all(&(mail.sealed.len() as u16).to_le_bytes())?;
+                    writer.write_all(&mail.sealed)?;
+                }
+            }
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+            drop(writer);
+            fs::rename(&temp, &path)
+        })();
+        if let Err(err) = result {
+            let _ = fs::remove_file(&temp);
+            eprintln!("Could not save mailbox {}: {err}", path.display());
+            return false;
+        }
+        true
     }
 
     fn load_mailbox(&mut self) {
@@ -3070,7 +3136,8 @@ impl Node {
         let late: Vec<u64> = self
             .outbox
             .iter()
-            .filter(|(_, m)| !m.deposited && now.duration_since(m.sent) > after)
+            .filter(|(_, m)| !m.deposited && now.duration_since(m.sent) > after
+                && m.next_deposit.is_none_or(|retry| now >= retry))
             .map(|(id, _)| *id)
             .collect();
         for id in late {
@@ -3262,7 +3329,7 @@ impl Node {
 
     /// Bytes of mail kept for others.
     fn mail_bytes(&self) -> u64 {
-        self.mailbox.values().flat_map(|m| m.values()).map(|x| x.sealed.len() as u64).sum()
+        self.mailbox.values().flat_map(|m| m.values()).map(|mail| MAIL_RECORD_OVERHEAD + mail.sealed.len() as u64).sum()
     }
 
     /// What this host offers the backbone (see `dht::Caps`).
@@ -3723,9 +3790,14 @@ impl Node {
         if crate::guard::node_blocked(&from) {
             return dht::encode_resp(&me, &dht::Resp::Stored(false));
         }
-        if let Some(ep) = from_ep {
-            self.dht.table.insert(Contact { id: from, ep });
-        }
+        let rsp_contact = match (&from_ep, &req) {
+            (Some(ep), dht::Req::Store(record))
+                if record.gw == from && &record.ep == ep && record.verified_gateway() =>
+            {
+                Some(Contact { id: from, ep: ep.clone() })
+            }
+            _ => None,
+        };
         let resp = match req {
             dht::Req::Ping => dht::Resp::Pong,
             dht::Req::FindNode(t) => dht::Resp::Nodes(self.dht_closest(&t)),
@@ -3735,6 +3807,9 @@ impl Node {
             },
             dht::Req::Store(r) => {
                 let ok = self.dht.store.put(r);
+                if ok && let Some(contact) = rsp_contact {
+                    self.dht.table.insert(contact);
+                }
                 dht::Resp::Stored(ok)
             }
             dht::Req::MailStore { recipient, sealed } => {
@@ -3748,10 +3823,8 @@ impl Node {
                     .map(|m| m.iter().filter(|(id, _)| !have.contains(&((**id >> 32) as u32))).map(|(_, v)| v.sealed.clone()).collect())
                     .unwrap_or_default(),
             ),
-            dht::Req::MailDelivered { recipient, ids } => {
-                self.drop_mail(recipient, &ids);
-                dht::Resp::Stored(true)
-            }
+            // Legacy peers may still send this unauthenticated operation.
+            dht::Req::MailDelivered { .. } => dht::Resp::Stored(false),
         };
         dht::encode_resp(&me, &resp)
     }
@@ -3796,7 +3869,9 @@ impl Node {
             return;
         }
         let me = self.addr;
+        let identity = self.identity.clone();
         let my_ep = self.dht.public_ep.clone();
+        let configured = self.dht.allowed_endpoints.clone();
         // Small backbone: store on every known host (see dht.rs "Full replication").
         let everyone = if publish.is_some() && self.dht.table.len() <= dht::FULL_REPLICA_MAX {
             self.dht.table.all()
@@ -3804,14 +3879,14 @@ impl Node {
             Vec::new()
         };
         std::thread::spawn(move || {
-            let ask = |c: &Contact, r: &dht::Req| dht::rpc(&c.ep, &me, my_ep.as_deref(), r);
+            let ask = |c: &Contact, r: &dht::Req| dht::rpc(c, &configured, &identity, my_ep.as_deref(), r, true);
             let result = dht::lookup(&me, start, &target, want_value, ask);
             let is_publish = publish.is_some();
             if let Some(rec) = publish {
                 let mut done: HashSet<String> = HashSet::new();
                 for c in result.closest.iter().chain(everyone.iter()) {
                     if done.insert(c.ep.clone()) {
-                        let _ = dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::Store(rec.clone()));
+                        let _ = dht::rpc(c, &configured, &identity, my_ep.as_deref(), &dht::Req::Store(rec.clone()), true);
                     }
                 }
             }
@@ -3854,18 +3929,22 @@ impl Node {
             // unless we hear it over our own radio: a DHT record can be old
             // (a phone that was online earlier), and trusting it sent our
             // acks to the backbone while the phone was right here on LoRa.
+            let trusted_route = rec.verified_gateway() || self.dht.allowed_endpoints.contains(&rec.ep);
             let on_our_radio = self.heard_via.get(&rec.dest).is_some_and(|(l, tcp, _)| !*tcp && self.links.contains_key(l));
-            if !on_our_radio && (rec.hops == 0 || self.known.contains_key(&rec.dest)) {
-                self.dht_hosts.insert(rec.dest);
-            }
+            let eligible_host = !on_our_radio && (rec.hops == 0 || self.known.contains_key(&rec.dest));
             // The announce is genuine (checked in lookup): we now know the
             // keys. It did not come in on a link: no rx_link, or on_announce
             // would note the node as heard on whatever link the latest
             // packet used (often the backbone).
             let rx = self.rx_link.take();
-            self.on_announce(rec.dest, &rec.announce, rec.hops.saturating_add(1));
+            let accepted = self.on_announce(rec.dest, &rec.announce, rec.hops.saturating_add(1));
             self.rx_link = rx;
-            self.dht_connect(&rec);
+            if accepted && trusted_route {
+                if eligible_host {
+                    self.dht_hosts.insert(rec.dest);
+                }
+                self.dht_connect(&rec);
+            }
         }
         for (id, req, msg) in waiting {
             match self.send_sealed(target, &content::text(&msg), Pending::Message) {
@@ -3900,7 +3979,7 @@ impl Node {
         self.dht.peers.insert(rec.ep.clone());
         self.dht.dynamic.insert(rec.ep.clone());
         self.broadcast_log(format!("Connecting to gateway {} (found in the DHT)", rec.ep));
-        crate::links::spawn_tcp_peer(rec.ep.clone(), tx);
+        crate::links::spawn_discovered_tcp_peer(rec.ep.clone(), self.dht.allowed_endpoints.clone(), tx);
     }
 
     /// Looks up an unknown address if we do not already know a route.
@@ -3956,7 +4035,7 @@ impl Node {
                 for c in cands.into_iter().take(self.min_peers - up.len()) {
                     self.dht.peers.insert(c.ep.clone());
                     self.broadcast_log(format!("Backbone: connecting to {} to keep {} links", c.ep, self.min_peers));
-                    crate::links::spawn_tcp_peer(c.ep, tx.clone());
+                    crate::links::spawn_discovered_tcp_peer(c.ep, self.dht.allowed_endpoints.clone(), tx.clone());
                 }
             }
         }
@@ -3973,13 +4052,14 @@ impl Node {
                     .filter(|c| self.caps_of.get(&c.id).is_none_or(|(_, t)| t.elapsed() > Duration::from_secs(1800)))
                     .take(6)
                     .collect();
-                let me = self.addr;
                 let my_ep = self.dht.public_ep.clone();
                 for c in due {
                     let tx = tx.clone();
                     let my_ep = my_ep.clone();
+                    let configured = self.dht.allowed_endpoints.clone();
+                    let identity = self.identity.clone();
                     std::thread::spawn(move || {
-                        let caps = match dht::rpc(&c.ep, &me, my_ep.as_deref(), &dht::Req::Caps) {
+                        let caps = match dht::rpc(&c, &configured, &identity, my_ep.as_deref(), &dht::Req::Caps, true) {
                             Some((_, dht::Resp::Caps(k))) => Some(k),
                             _ => None,
                         };
@@ -4011,32 +4091,19 @@ impl Node {
         }
     }
 
-    /// The public map: this host (position, site), the nodes it knows with a
-    /// shared position, and the radio links its own radio hears (SNR, RSSI,
-    /// packets, last heard). See `--public-map`.
+    /// The public map: this host and fixed nodes that share a position.
+    /// See `--public-map`.
     fn public_map(&self) -> serde_json::Value {
-        let now = self.now_ms();
         let pos = self.ext.sharing.position().map(|p| (p.lat_e7 as f64 / 1e7, p.lon_e7 as f64 / 1e7));
         let site = &self.ext.site;
         let nodes = self.tele.as_ref().map(|t| t.public_nodes()).unwrap_or_default();
-        let links: Vec<serde_json::Value> = self
-            .router
-            .neighbors
-            .sorted()
-            .iter()
-            .filter(|n| n.rssi != 0 || n.snr != 0)
-            .map(|n| {
-                serde_json::json!({"path_id": n.id, "addr": n.addr.map(|a| crate::debug::hex(&a.0)), "snr": n.snr, "rssi": n.rssi,
-                    "packets": n.count, "age_s": now.saturating_sub(n.last_ms) / 1000})
-            })
-            .collect();
         serde_json::json!({
             "version": 1,
             "host": {"addr": crate::debug::hex(&self.addr.0), "name": self.ext.name, "lat": pos.map(|p| p.0), "lon": pos.map(|p| p.1),
                 "height_m": site.is_set().then(|| site.height_dm as f32 / 10.0), "gain_dbi": site.is_set().then(|| site.gain_hdb as f32 / 2.0),
                 "tx_dbm": site.is_set().then_some(site.tx_dbm), "owner": (!site.owner.is_empty()).then(|| String::from_utf8_lossy(&site.owner).into_owned())},
             "nodes": nodes,
-            "links": links,
+            "links": [],
         })
     }
 
@@ -4110,14 +4177,7 @@ impl Node {
                 continue;
             };
             *last = Some(Instant::now());
-            let rec = Record {
-                dest,
-                gw: self.addr,
-                ep: ep.clone(),
-                hops: *hops,
-                age_s: 0,
-                announce: announce.clone(),
-            };
+            let rec = Record::signed(&self.identity, dest, ep.clone(), *hops, announce.clone());
             self.dht.store.put(rec.clone());
             self.dht_spawn(dest, false, Some(rec));
         }
@@ -4147,6 +4207,7 @@ pub(super) mod file_interop_tests {
             udp_broadcast: None,
             open_browser: false,
             require_key: false,
+            allow_legacy_web_token: false,
             public_map: false,
             max_file: 1024 * 1024,
             filebox_per_recipient: 20 << 20,
@@ -4154,12 +4215,14 @@ pub(super) mod file_interop_tests {
             postbox: None,
             public_addr: None,
             dht_seeds: Vec::new(),
+            dht_private_endpoints: Vec::new(),
             seed_dns: Vec::new(),
             min_peers: 0,
             backbone: false,
             no_post_office: false,
             no_relay: false,
             mail_quota_mb: 0,
+            mail_replica_ids: Vec::new(),
             no_pages: false,
             pages_burst_lora: 5,
             pages_burst_net: 60,
@@ -4175,9 +4238,8 @@ pub(super) mod file_interop_tests {
             repeater_role: false,
             trunks: Vec::new(),
             no_bordercast: false,
-            meshcore: None,
-            meshcore_baud: 115_200,
-            meshcore_bridge: Vec::new(),
+            meshcore_gateway: None,
+            meshcore_worker: std::net::SocketAddr::from(([127, 0, 0, 1], 5057)),
             mqtt: None,
             history_days: None,
             tun: false,
@@ -4189,6 +4251,33 @@ pub(super) mod file_interop_tests {
             issuer_key: None,
             issuer_cert: None,
         }
+    }
+
+    #[test]
+    fn incoming_files_bound_bookkeeping_and_validate_sizes() {
+        let unique = OsRng.next_u64();
+        let dir = std::env::temp_dir().join(format!("maarse-file-bounds-{unique}"));
+        let mut node = Node::new(&cfg(dir.clone())).unwrap();
+        let sender = Address([4; 16]);
+        let data = b"short file";
+        let (_, mut offer) = Outgoing::new(1, [9; 32], node.addr, data, b"text/plain", b"test.txt", 0).unwrap();
+        offer.chunks = 2;
+        node.on_file_offer(sender, offer.clone());
+        assert!(node.in_files.is_empty());
+        offer.chunks = 1;
+        for id in 1..=MAX_INCOMING_FILES_PER_SENDER as u64 + 1 {
+            offer.file_id = id;
+            node.on_file_offer(sender, offer.clone());
+        }
+        assert_eq!(node.in_files.len(), MAX_INCOMING_FILES_PER_SENDER);
+        let mut sealed = [0; 255];
+        let used = seal::seal_chunk(&offer.key, 1, 0, b"short", &mut sealed).unwrap();
+        node.on_chunk(&sealed[..used]);
+        assert_eq!(node.in_files[&1].got, 0);
+        let used = seal::seal_chunk(&offer.key, 1, 0, data, &mut sealed).unwrap();
+        node.on_chunk(&sealed[..used]);
+        assert!(!node.in_files.contains_key(&1));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -4280,7 +4369,7 @@ mod filebox_node_tests {
     fn heard(n: &mut Node, peer: Address, link: &str, hops: u8) {
         let (tx, _rx) = channel();
         let id = n.links.len() as LinkId + 1;
-        n.links.insert(id, (link.to_string(), tx));
+        n.links.insert(id, (link.to_string(), tx.into()));
         n.heard_via.insert(peer, (id, crate::extra_links::is_backbone(link), hops));
     }
 
@@ -4328,7 +4417,7 @@ mod filebox_node_tests {
     }
 
     #[test]
-    fn deposit_ops_store_and_delete() {
+    fn deposit_stores_and_refuses_unsigned_remote_deletion() {
         use maarse_core::mail;
         let (mut n, _rx, dir) = node("postoffice");
         let r = Address([3; 16]);
@@ -4344,8 +4433,14 @@ mod filebox_node_tests {
         d.push(mail::OP_DELIVERED);
         d.extend_from_slice(&id.to_be_bytes());
         n.on_deposit(&d, 0);
-        assert_eq!(n.mailbox.get(&r).map(|m| m.len()), Some(0));
-        assert!(n.router.mail_waiting.is_empty());
+        assert_eq!(n.mailbox.get(&r).map(|m| m.len()), Some(1));
+        assert!(n.router.mail_waiting.contains(&r.path_id()));
+        let request = dht::encode_req(&Address([4; 16]), None, &dht::Req::MailDelivered {
+            recipient: r,
+            ids: vec![id],
+        });
+        assert_eq!(dht::decode_resp(&n.dht_serve(&request)), Some((n.addr, dht::Resp::Stored(false))));
+        assert_eq!(n.mailbox.get(&r).map(|m| m.len()), Some(1));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -4650,15 +4745,37 @@ mod caps_tests {
     #[test]
     fn quota_is_kept_and_told() {
         let mut n = node("quota", |c| c.mail_quota_mb = 1);
-        n.mail_quota = 2000; // bytes, small for the test
-        let msg = |b: u8| vec![b; 900];
+        n.mail_quota = 300; // bytes, small for the test
+        let msg = |b: u8| vec![b; 100];
         assert_eq!(ask(&mut n, dht::Req::MailStore { recipient: Address([3; 16]), sealed: msg(1) }), dht::Resp::Stored(true));
         assert_eq!(ask(&mut n, dht::Req::MailStore { recipient: Address([4; 16]), sealed: msg(2) }), dht::Resp::Stored(true));
         assert_eq!(ask(&mut n, dht::Req::MailStore { recipient: Address([5; 16]), sealed: msg(3) }), dht::Resp::Stored(false), "over the quota");
+        n.handle(In::MailFetched { recipient: Address([5; 16]), items: vec![msg(3)] });
+        assert!(!n.mailbox.contains_key(&Address([5; 16])), "fetched mail must honor the quota");
         let dht::Resp::Caps(c) = ask(&mut n, dht::Req::Caps) else { panic!() };
         assert!(c.post_office && c.mail_free_mb == 0, "still a post office, but full");
     }
 
+
+    #[test]
+    fn failed_mailbox_write_is_not_acknowledged() {
+        let mut n = node("disk-failure", |_| {});
+        let recipient = Address([3; 16]);
+        fs::create_dir(n.data_dir.join("mailbox.tmp")).unwrap();
+        assert_eq!(ask(&mut n, dht::Req::MailStore { recipient, sealed: vec![1; 40] }), dht::Resp::Stored(false));
+        assert!(!n.mailbox.contains_key(&recipient));
+        assert!(!n.data_dir.join("mailbox.bin").exists());
+    }
+
+    #[test]
+    fn replica_allowlist_restricts_the_placement_pool() {
+        let approved = Address([7; 16]);
+        let mut n = node("restricted-replicas", |cfg| cfg.mail_replica_ids = vec![approved]);
+        n.dht.table.insert(Contact { id: approved, ep: "8.8.8.8:4242".into() });
+        n.dht.table.insert(Contact { id: Address([1; 16]), ep: "9.9.9.9:4242".into() });
+        assert_eq!(n.mail_replicas(&Address([3; 16])).into_iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![approved]);
+    }
 
     #[test]
     fn replicas_skip_hosts_without_a_post_office() {
@@ -4688,8 +4805,8 @@ mod next_hop_tests {
         let mut n = Node::new(&file_interop_tests::cfg(dir)).unwrap();
         let (ta, ra) = channel();
         let (tb, rb) = channel();
-        n.links.insert(1, ("tcp in 10.0.0.1:1".into(), ta));
-        n.links.insert(2, ("tcp in 10.0.0.2:1".into(), tb));
+        n.links.insert(1, ("tcp in 10.0.0.1:1".into(), ta.into()));
+        n.links.insert(2, ("tcp in 10.0.0.2:1".into(), tb.into()));
         (n, ra, rb)
     }
 
@@ -4747,7 +4864,7 @@ mod radio_file_e2e_tests {
         let (etx, ev) = channel();
         n.clients.insert(1, etx);
         let (ltx, out) = channel();
-        n.handle(In::LinkUp { id: 1, name: "modem 127.0.0.1:47081".into(), tx: ltx });
+        n.handle(In::LinkUp { id: 1, name: "modem 127.0.0.1:47081".into(), tx: ltx.into() });
         // Resends and file timeouts run in housekeeping (Node::run schedules it).
         n.schedule(HOUSEKEEPING_EVERY, Timer::Housekeeping);
         Side { n, out, ev, _dir: dir }

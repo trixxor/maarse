@@ -179,6 +179,7 @@ class Prefs(ctx: Context) {
     var bleAddress: String? get() = p.getString("ble", null); set(v) = p.edit().putString("ble", v).apply()
     var bleName: String? get() = p.getString("bleName", null); set(v) = p.edit().putString("bleName", v).apply()
     var remoteAddr: String get() = p.getString("remote", "") ?: ""; set(v) = p.edit().putString("remote", v).apply()
+    var meshcoreBackbone: String get() = p.getString("meshcoreBackbone", "") ?: ""; set(v) = p.edit().putString("meshcoreBackbone", v).apply()
     var remoteKey: String get() = p.getString("remoteKey", "") ?: ""; set(v) = p.edit().putString("remoteKey", v).apply()
     /** Should the app connect at start (the user pressed Connect and not Disconnect)? */
     var running: Boolean get() = p.getBoolean("running", false); set(v) = p.edit().putBoolean("running", v).apply()

@@ -6,7 +6,7 @@
 
 [**▶ Open the Mesh Lab**](https://trixxor.github.io/maarse/simulator/): race Må:rse against Meshtastic, MeshCore and Reticulum in your browser
 · [Denmark simulator](https://trixxor.github.io/maarse/denmark/): build and break a national network, real router code in WebAssembly ([how it works](docs/denmark/README.md))
-· [Technical guide](docs/GUIDE.md) · [Full comparison](compare.md)
+· [HTML manual](docs/manual/index.html) · [Technical guide](docs/GUIDE.md) · [Full comparison](compare.md)
 
 ![Status: prototype](https://img.shields.io/badge/status-prototype-orange) ![Rust, no heap](https://img.shields.io/badge/firmware-Rust%2C%20no%20heap-blue) ![Licence MIT or Apache-2.0](https://img.shields.io/badge/licence-MIT%20%2F%20Apache--2.0-green)
 
@@ -189,7 +189,6 @@ Someone with a radio receiver and no keys can read this from a direct message:
 | 📄 **`maarse://` pages** | Tiny compressed pages served from a host. Not HTML, so a page can never run code on your device. |
 | 🌲 **Forest mode and carry** | Handheld relays when there are no repeaters, and edge bridges: the person on the hill who hears a repeater relays for the group. Messages carried by people on the move. |
 | 🤝 **Neighbours and keys** | Small hello packets tell neighbours roles and coverage within seconds; a node asks the network for a key it lacks; contacts you talk to are pinned and kept in flash; cars say they move so routes to them are refreshed. |
-| 🔁 **Gateway to MeshCore** | Bridges a Må:rse channel and a MeshCore channel both ways, tried on hardware. |
 | 🏠 **Home Assistant** | MQTT bridge with auto-discovery for battery, position and telemetry. |
 | 🔐 **Identity** | 24-word recovery phrase, encrypted backup, safety numbers with QR codes. |
 | 🛠️ **Operations** | Signed firmware updates over USB, Bluetooth and the network. The host runs as a service with a live log page and a Windows tray icon. Repeaters can be managed remotely by administrators. |
@@ -207,7 +206,7 @@ Someone with a radio receiver and no keys can read this from a direct message:
      Linux:    ./scripts/start-host.sh
 3. The browser opens http://127.0.0.1:8080 and connects.
 4. To reach hosts elsewhere: --peer <a backbone node>:4242, or run your own
-   with maarse-server --public-addr <your address>:4242 (dedicated server
+   with maarse-server --listen <bind address>:4242 --public-addr <advertised address>:4242 (dedicated server
    with an admin dashboard, docs/GUIDE.md).
    On Debian/Ubuntu: sudo bash scripts/install-server.sh installs it as a
    service and asks for the settings.
@@ -220,7 +219,7 @@ To flash a radio, run `scripts/build-firmware.ps1 <board> -Flash` on Windows or 
 ## FAQ
 
 <details><summary><b>Can Må:rse talk to Meshtastic or MeshCore radios?</b></summary>
-Not directly; they are different protocols. A host can bridge a Må:rse channel and a MeshCore channel both ways (tried on hardware). There is no Meshtastic bridge.
+Må:rse, Meshtastic and MeshCore use different radio protocols.
 </details>
 <details><summary><b>Do I need the internet?</b></summary>
 No. Radios talk to each other directly and through repeaters. The internet only joins areas that radio cannot reach.

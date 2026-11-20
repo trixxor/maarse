@@ -37,7 +37,7 @@ fn hex(b: &[u8]) -> String {
 
 fn usage() -> ! {
     eprintln!(
-        "Usage:\n  maarse-sign keygen <private.key>\n  maarse-sign sign --board <board> --version <x.y.z> (--key <file> | --dev-key) <firmware.elf|.uf2|.bin> <out>\n  maarse-sign verify (--pubkey <hex> | --dev-key) <out.bin> <out.manifest>\n  maarse-sign sign-release --key <file> <dir>\n  maarse-sign verify-release --pubkey <hex> <dir>\nBoards: xiao-nrf52840, wismesh-tag, heltec-v4, xiao-esp32s3"
+        "Usage:\n  maarse-sign keygen <private.key>\n  maarse-sign check-release-key --pubkey <hex> [--key <file>]\n  maarse-sign sign --board <board> --version <x.y.z> (--key <file> | --dev-key) <firmware.elf|.uf2|.bin> <out>\n  maarse-sign verify (--pubkey <hex> | --dev-key) <out.bin> <out.manifest>\n  maarse-sign sign-release --key <file> <dir>\n  maarse-sign verify-release --pubkey <hex> <dir>\nBoards: xiao-nrf52840, wismesh-tag, heltec-v4, xiao-esp32s3"
     );
     exit(2)
 }
@@ -116,6 +116,20 @@ fn main() {
         }
     }
     match args.first().map(String::as_str) {
+        Some("check-release-key") => {
+            if dev || !pos.is_empty() {
+                usage();
+            }
+            let public = pubkey.as_deref().and_then(ota::parse_hex32)
+                .filter(ota::valid_release_key)
+                .unwrap_or_else(|| die("configure a valid non-development MAARSE_RELEASE_PUBKEY"));
+            if let Some(path) = key.as_deref()
+                && read_key(path).verifying_key().to_bytes() != public
+            {
+                die("the signing key does not match MAARSE_RELEASE_PUBKEY");
+            }
+            println!("Release key configuration verified");
+        }
         Some("keygen") => {
             let [path] = pos.as_slice() else { usage() };
             let mut seed = [0u8; 32];

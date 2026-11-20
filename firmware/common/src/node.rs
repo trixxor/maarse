@@ -96,6 +96,12 @@ pub trait Settings {
     fn save_radio(&mut self, cfg: &RadioConfig);
     fn save_admins(&mut self, admins: &[Address]);
     fn load_admins(&mut self) -> heapless::Vec<Address, 4>;
+    fn load_control_limits(&mut self) -> Option<heapless::Vec<(Address, u32), 4>> {
+        None
+    }
+    fn save_control_limits(&mut self, _limits: &[(Address, u32)]) -> bool {
+        false
+    }
     /// Stores the node's role. Default: not stored.
     fn save_role(&mut self, _role: u8) {}
     /// Stored role; the default (and older flash without a role) is repeater.
@@ -187,7 +193,7 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     router: &'static mut Router<256, 1024>,
     identity: Identity,
     addr: Address,
-    known: FnvIndexMap<Address, PublicIdentity, 128>,
+    known: FnvIndexMap<Address, (PublicIdentity, u32), 128>,
     /// Contacts we have written to or heard from (kept in flash, never
     /// evicted from `known`).
     pinned: heapless::Vec<Address, PINNED_MAX>,
@@ -251,6 +257,8 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     started: Instant,
     admins: heapless::Vec<Address, 4>,
     control_seen: FnvIndexMap<Address, u32, 4>,
+    control_limits: heapless::Vec<(Address, u32), 4>,
+    control_counters_ready: bool,
     /// Unix time at start-up, once the client has told us the time.
     boot_unix: Option<u32>,
     /// Mail from the mailbox that has been sent and awaits acknowledgement: msg_id -> mail ID.
@@ -377,6 +385,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             started: Instant::now(),
             admins: heapless::Vec::new(),
             control_seen: FnvIndexMap::new(),
+            control_limits: heapless::Vec::new(),
+            control_counters_ready: false,
             boot_unix: None,
             mail_inflight: FnvIndexMap::new(),
             mail_delivered: 0,
@@ -397,7 +407,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             let FwNode { settings, known, pinned, .. } = &mut *n;
             settings.known_load(&mut |b| {
                 if let Some(p) = PublicIdentity::from_bytes(b) {
-                    let _ = known.insert(p.address(), p);
+                    let _ = known.insert(p.address(), (p, 0));
                     if !pinned.contains(&p.address()) {
                         let _ = pinned.push(p.address());
                     }
@@ -424,6 +434,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let (strict, names) = n.settings.load_regions();
         n.apply_regions(strict, names);
         n.admins = n.settings.load_admins();
+        if let Some(mut limits) = n.settings.load_control_limits() {
+            limits.retain(|(admin, _)| n.admins.contains(admin));
+            for &(admin, limit) in &limits {
+                let _ = n.control_seen.insert(admin, limit);
+            }
+            n.control_limits = limits;
+            n.control_counters_ready = true;
+        }
         let role = n.settings.load_role();
         n.apply_role_value(role);
         n.apply_radio_timing();
@@ -880,15 +898,19 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             }
             PacketType::Announce if dest != self.addr => {
                 if let Ok(a) = verify_announce(&dest, payload) {
-                    let new = !self.known.contains_key(&dest);
-                    if self.known.insert(dest, a.identity).is_err() {
+                    let previous = self.known.get(&dest);
+                    if previous.is_some_and(|(_, timestamp)| *timestamp > a.timestamp) {
+                        return;
+                    }
+                    let new = previous.is_none();
+                    if self.known.insert(dest, (a.identity, a.timestamp)).is_err() {
                         // Full: forget the oldest contact that is not pinned
                         // (strangers go first; the people we talk to stay).
                         let pinned = &self.pinned;
                         if let Some(k) = self.known.keys().find(|k| !pinned.contains(k)).copied() {
                             self.known.remove(&k);
                         }
-                        let _ = self.known.insert(dest, a.identity);
+                        let _ = self.known.insert(dest, (a.identity, a.timestamp));
                     }
                     if new {
                         self.open_pending();
@@ -1053,7 +1075,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         name: text(name.as_bytes()),
                     });
                 }
-                for (a, id) in self.known.iter() {
+                for (a, (id, _)) in self.known.iter() {
                     emit(&Event::Heard { addr: *a, hops: 0, identity: Some(id.to_bytes()) });
                 }
                 if !self.radio_ok {
@@ -1148,6 +1170,16 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::SetAdmins { admins } => {
                 self.admins = admins;
                 self.settings.save_admins(&self.admins);
+                self.control_limits.retain(|(admin, _)| self.admins.contains(admin));
+                let mut i = self.control_seen.len();
+                while i > 0 {
+                    i -= 1;
+                    if let Some(admin) = self.control_seen.keys().nth(i).copied()
+                        && !self.admins.contains(&admin)
+                    {
+                        self.control_seen.remove(&admin);
+                    }
+                }
                 emit(&Event::Admins { admins: self.admins.clone() });
             }
             Command::GetAdmins => emit(&Event::Admins { admins: self.admins.clone() }),
@@ -1258,7 +1290,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         } else {
             plain
         };
-        let Some(recipient) = self.known.get(&dest).copied() else {
+        let Some(recipient) = self.known.get(&dest).map(|(id, _)| *id) else {
             // Ask the network for the key; the message goes when it comes.
             let Ok(p) = heapless::Vec::from_slice(plain) else {
                 return err(req, error_code::TOO_LARGE, "The message is too long");
@@ -1345,7 +1377,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     /// A new session with `peer` and an empty resync message, so the other party switches.
     fn resync(&mut self, peer: Address) {
-        let Some(id) = self.known.get(&peer).copied() else {
+        let Some(id) = self.known.get(&peer).map(|(id, _)| *id) else {
             return;
         };
         if self.resynced.get(&peer).is_some_and(|t| t.elapsed() < RESYNC_EVERY) {
@@ -1363,7 +1395,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     /// Encrypts and sends a direct message.
     fn send_plain(&mut self, dest: Address, plain: &[u8]) -> Result<u64, &'static str> {
-        let recipient = *self.known.get(&dest).ok_or("The recipient has not been heard yet")?;
+        let recipient = self.known.get(&dest).map(|(id, _)| *id).ok_or("The recipient has not been heard yet")?;
         let mut ct = [0u8; 255];
         let n = self.seal(&recipient, plain, &mut ct).map_err(|_| "The message is too long")?;
         let mut token = [0u8; 16];
@@ -1374,6 +1406,27 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             .map_err(|_| "The queue is full")?;
         self.apply(actions);
         Ok(msg_id)
+    }
+
+    /// Persist a high-water mark before allowing a state-changing remote command.
+    /// One flash write reserves a short range, including commands in one OTA transfer.
+    fn reserve_control_counter(&mut self, from: Address, counter: u32) -> bool {
+        const RESERVATION: u32 = 60;
+        if !self.control_counters_ready { return false; }
+        let mut updated = self.control_limits.clone();
+        if let Some((_, limit)) = updated.iter_mut().find(|(admin, _)| *admin == from) {
+            if counter <= *limit {
+                return true;
+            }
+            *limit = counter.saturating_add(RESERVATION);
+        } else if updated.push((from, counter.saturating_add(RESERVATION))).is_err() {
+            return false;
+        }
+        if !self.settings.save_control_limits(&updated) {
+            return false;
+        }
+        self.control_limits = updated;
+        true
     }
 
     /// A control command over radio. The sender is proven by the encryption
@@ -1395,8 +1448,15 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         if counter <= last || !fresh {
             return;
         }
+        let command = Command::decode(frame);
+        let updates_node = matches!(&command,
+            Ok(Command::SetRadio(_) | Command::SetRole { .. } | Command::OtaBegin { .. }
+                | Command::OtaChunk { .. } | Command::OtaEnd { .. }));
+        if updates_node && !self.reserve_control_counter(from, counter) {
+            return reply(self, deny("Could not reserve a persistent remote command counter"));
+        }
         let _ = self.control_seen.insert(from, counter);
-        match Command::decode(frame) {
+        match command {
             Ok(Command::GetStats) => {
                 let items = self.stats();
                 let more = self.more_stats();
@@ -1493,7 +1553,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     &self.identity,
                     payload,
                     &mut self.sessions,
-                    |a| known.get(a).copied(),
+                    |a| known.get(a).map(|(id, _)| *id),
                     &mut out,
                 );
                 if let Ok(o) = &res
@@ -1575,19 +1635,19 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         if self.pinned.contains(&a) {
             return;
         }
-        let Some(id) = self.known.get(&a).copied() else { return };
+        let Some(id) = self.known.get(&a).map(|(id, _)| *id) else { return };
         if self.pinned.is_full() {
             // The oldest pin makes room; rewrite the sector with the rest.
             self.pinned.remove(0);
             let _ = self.pinned.push(a);
             let FwNode { settings, known, pinned, .. } = self;
-            settings.known_reset(&mut pinned.iter().filter_map(|p| known.get(p)).map(|p| p.to_bytes()));
+            settings.known_reset(&mut pinned.iter().filter_map(|p| known.get(p)).map(|(id, _)| id.to_bytes()));
             return;
         }
         let _ = self.pinned.push(a);
         if !self.settings.known_add(&id.to_bytes()) {
             let FwNode { settings, known, pinned, .. } = self;
-            settings.known_reset(&mut pinned.iter().filter_map(|p| known.get(p)).map(|p| p.to_bytes()));
+            settings.known_reset(&mut pinned.iter().filter_map(|p| known.get(p)).map(|(id, _)| id.to_bytes()));
         }
     }
 

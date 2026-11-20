@@ -31,9 +31,9 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=MAARSE_RELEASE_PUBKEY");
     println!("cargo:rerun-if-env-changed=MAARSE_FW_VERSION");
-    if env::var_os("MAARSE_RELEASE_PUBKEY").is_none() {
+    if env::var("MAARSE_RELEASE_PUBKEY").map_or(true, |key| key.is_empty()) {
         println!(
-            "cargo:warning=MAARSE_RELEASE_PUBKEY is not set: the firmware trusts the PUBLIC development key for updates. For development only!"
+            "cargo:warning=MAARSE_RELEASE_PUBKEY is not set: over-the-air firmware updates are disabled."
         );
     }
     println!("cargo:rustc-link-arg=--nmagic");

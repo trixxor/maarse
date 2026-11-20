@@ -174,17 +174,19 @@
   const keyBox = document.createElement("div");
   keyBox.innerHTML = `
     <h3>Precise heights (optional)</h3>
-    <p class="hint">With your own free key from <a href="https://dataforsyningen.dk" target="_blank" rel="noopener">dataforsyningen.dk</a> the radio paths use Danmarks Højdemodel (ground to ~2 m, trees and buildings too) and name what stands in the way (GeoDanmark). The key stays in this browser. Without a key: the built-in heights (~30 m).</p>
-    <label>Key <input id="hm-key" type="password" autocomplete="off" size="20" placeholder="no key: built-in heights"> <button id="hm-key-save">Save and test</button></label>
+    <p class="hint">With your own free key from <a href="https://dataforsyningen.dk" target="_blank" rel="noopener">dataforsyningen.dk</a> the radio paths use Danmarks Højdemodel (ground to ~2 m, trees and buildings too) and name what stands in the way (GeoDanmark). The key is sent to Dataforsyningen. Remembering it gives pages on this web origin access to the saved key. Without a key: the built-in heights (~30 m).</p>
+    <label>Key <input id="hm-key" type="password" autocomplete="off" size="20" placeholder="no key: built-in heights"> <button id="hm-key-save">Use and test</button></label>
+    <label><input type="checkbox" id="hm-key-remember"> Remember the key on this device</label>
     <label><input type="checkbox" id="hm-surface" checked> Count trees and buildings (surface model)</label>
     <p class="hint" id="hm-key-note"></p>`;
   sec.appendChild(keyBox);
-  function keyNote() { $("hm-key-note").textContent = D2 && D2.key ? "A key is saved: radio paths use DHM." : "No key: radio paths use the built-in heights."; }
+  function keyNote() { $("hm-key-note").textContent = D2 && D2.key ? "A key is set: radio paths use DHM." : "No key: radio paths use the built-in heights."; }
   if (D2) {
     $("hm-key").value = D2.key;
+    $("hm-key-remember").checked = D2.remembered;
     keyNote();
     $("hm-key-save").onclick = async () => {
-      D2.setKey($("hm-key").value);
+      D2.setKey($("hm-key").value, $("hm-key-remember").checked);
       if (!D2.key) { keyNote(); recomputeAll(); return; }
       $("hm-key-note").textContent = "Testing the key…";
       try { const h = await D2.test(); $("hm-key-note").textContent = `The key works: DHM answered (${h.toFixed(1)} m at a test spot). Radio paths now use DHM.`; recomputeAll(); }

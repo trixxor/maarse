@@ -45,6 +45,7 @@ tun-rs = { version = "2.8", optional = true }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # Lossy WebP for page pictures (the image crate only writes lossless WebP).
 webp = { version = "0.3", default-features = false }
+argon2 = "0.5.3"
 
 [features]
 default = ["tun"]
@@ -53,3 +54,7 @@ tun = ["dep:tun-rs"]
 
 [dev-dependencies]
 maarse-fuzz = { version = "0.1.0", path = "../maarse-fuzz" }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+subtle = "2"

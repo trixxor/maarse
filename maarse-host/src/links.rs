@@ -24,13 +24,13 @@
 //! Every link is also kept in a small registry for the device list in the
 //! web client (`/api/devices`, see [`devices_json`]).
 
-use crate::{In, next_id};
+use crate::{In, LinkSender, next_id};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{Sender, channel, sync_channel};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use maarse_core::MAX_PACKET;
 use maarse_core::companion::FrameDecoder;
 
@@ -217,18 +217,21 @@ pub fn spawn_tcp_listener(addr: SocketAddr, tx: Sender<In>) -> std::io::Result<(
                 // or an ordinary packet connection.
                 let mut first = [0u8; 2];
                 let mut s = stream;
-                if s.read_exact(&mut first).is_err() {
+                let deadline = Instant::now() + crate::dht::RPC_TIMEOUT;
+                if s.set_write_timeout(Some(crate::dht::RPC_TIMEOUT)).is_err()
+                    || crate::dht::read_by(&mut s, &mut first, deadline).is_none()
+                {
                     return;
                 }
-                if first == crate::dht::MAGIC {
+                if matches!(first, crate::dht::MAGIC | crate::dht::AUTH_MAGIC | crate::dht::MUTUAL_MAGIC) {
                     if ip.is_some_and(|ip| !crate::guard::dht_allowed(ip)) {
                         return; // too many DHT requests from this address
                     }
-                    serve_dht(s, &tx);
+                    serve_dht(s, &tx, deadline, first);
                 } else if first == MODEM_HELLO {
                     let name = name.replace("tcp in", "wifi-modem");
                     run_tcp_modem(s, name, tx);
-                } else {
+                } else if s.set_read_timeout(None).is_ok() {
                     run_tcp(s, name, tx, Some(u16::from_le_bytes(first)), ip);
                 }
             });
@@ -277,6 +280,15 @@ pub fn resolve_seeds(name: &str) -> Vec<String> {
     v
 }
 
+/// Applies the DHT address policy before connecting to a discovered peer.
+pub fn spawn_discovered_tcp_peer(peer: String, configured: Vec<String>, tx: Sender<In>) {
+    thread::spawn(move || {
+        if let Some(addr) = crate::dht::resolve_peer(&peer, &configured) {
+            spawn_tcp_peer(addr.to_string(), tx);
+        }
+    });
+}
+
 pub fn spawn_tcp_peer(peer: String, tx: Sender<In>) {
     thread::spawn(move || {
         loop {
@@ -290,12 +302,37 @@ pub fn spawn_tcp_peer(peer: String, tx: Sender<In>) {
 }
 
 /// Answers one DHT request via the node's main loop.
-fn serve_dht(mut s: TcpStream, tx: &Sender<In>) {
-    let Some(data) = crate::dht::read_request(&mut s) else {
+fn serve_dht(mut s: TcpStream, tx: &Sender<In>, deadline: Instant, protocol: [u8; 2]) {
+    use rand_core::{OsRng, RngCore};
+
+    let challenge = if protocol != crate::dht::MAGIC {
+        let mut nonce = [0u8; 32];
+        if crate::dht::read_by(&mut s, &mut nonce, deadline).is_none() { return; }
+        Some(nonce)
+    } else {
+        None
+    };
+    let server_challenge = if protocol == crate::dht::MUTUAL_MAGIC {
+        let mut nonce = [0; 32];
+        OsRng.fill_bytes(&mut nonce);
+        if s.write_all(&nonce).is_err() { return; }
+        Some(nonce)
+    } else {
+        None
+    };
+    let Some(data) = crate::dht::read_request(&mut s, deadline) else {
         return;
     };
+    if let (Some(server_challenge), Some(client_challenge)) = (server_challenge, challenge) {
+        let mut proof = [0; 128];
+        if crate::dht::read_by(&mut s, &mut proof, deadline).is_none()
+            || crate::dht::verify_request_proof(&server_challenge, &client_challenge, &data, &proof).is_none()
+        {
+            return;
+        }
+    }
     let (rtx, rrx) = channel();
-    if tx.send(In::DhtRequest { data, reply: rtx }).is_err() {
+    if tx.send(In::DhtRequest { data, challenge, reply: rtx }).is_err() {
         return;
     }
     if let Ok(resp) = rrx.recv_timeout(crate::dht::RPC_TIMEOUT) {
@@ -317,7 +354,10 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
-    let (wtx, wrx) = channel::<Vec<u8>>();
+    if writer.set_write_timeout(Some(crate::dht::RPC_TIMEOUT)).is_err() {
+        return;
+    }
+    let (wtx, wrx) = sync_channel::<Vec<u8>>(256);
     thread::spawn(move || {
         for pkt in wrx {
             let mut buf = Vec::with_capacity(pkt.len() + 2);
@@ -331,7 +371,7 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
         let _ = writer.shutdown(std::net::Shutdown::Both);
     });
     register_tcp(id, &name, "backbone", &stream);
-    if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
+    if tx.send(In::LinkUp { id, name, tx: LinkSender::Bounded(wtx) }).is_err() {
         unregister(id);
         return;
     }
@@ -341,18 +381,35 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
     // Incoming links are rate limited; outgoing ones (we chose the peer) not.
     let mut rate = ip.map(|_| crate::guard::Rate::default());
     loop {
+        let length_already_read = first.is_some();
         if let Some(f) = first.take() {
             len = f.to_le_bytes();
-        } else if reader.read_exact(&mut len).is_err() {
+        } else if reader.set_read_timeout(None).is_err() || reader.read_exact(&mut len[..1]).is_err() {
             break;
+        }
+        let deadline = Instant::now() + crate::dht::RPC_TIMEOUT;
+        if !length_already_read {
+            if crate::dht::read_by(&mut reader, &mut len[1..], deadline).is_none() {
+                break;
+            }
         }
         let n = u16::from_le_bytes(len) as usize;
         if n == 0 || n > MAX_PACKET {
             break; // Invalid stream: close.
         }
         let mut data = vec![0u8; n];
-        if reader.read_exact(&mut data).is_err() {
+        if crate::dht::read_by(&mut reader, &mut data, deadline).is_none() {
             break;
+        }
+        if let (Some(r), Some(ip)) = (rate.as_mut(), ip) {
+            match r.on_packet(data.len()) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(b) => {
+                    crate::guard::ban(ip, std::time::Duration::from_millis(b.ms), b.why);
+                    break;
+                }
+            }
         }
         if let Some((strict, regions)) = parse_region_hello(&data) {
             if let Some(caps) = parse_hello_caps(&data) {
@@ -370,14 +427,6 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
                     break;
                 }
                 continue;
-            }
-            match r.on_packet(data.len()) {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(b) => {
-                    crate::guard::ban(ip, std::time::Duration::from_millis(b.ms), b.why);
-                    break;
-                }
             }
         }
         note_rx(id, None);
@@ -422,18 +471,19 @@ fn modem_challenge(s: &mut TcpStream) -> Result<(), &'static str> {
     f.extend_from_slice(&((3 + NONCE_LEN) as u16).to_le_bytes());
     f.extend_from_slice(&CHALLENGE);
     f.extend_from_slice(&nonce);
+    s.set_write_timeout(Some(crate::dht::RPC_TIMEOUT)).map_err(|_| "could not configure the modem socket")?;
     s.write_all(&f).map_err(|_| "could not send the challenge")?;
-    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    let deadline = Instant::now() + crate::dht::RPC_TIMEOUT;
     // The modem may send a few LoRa packets before its answer.
     for _ in 0..16 {
         let mut len = [0u8; 2];
-        s.read_exact(&mut len).map_err(|_| "no answer to the modem key challenge (old firmware or no key)")?;
+        crate::dht::read_by(s, &mut len, deadline).ok_or("no answer to the modem key challenge (old firmware or no key)")?;
         let n = u16::from_le_bytes(len) as usize;
         if n == 0 || n > MAX_PACKET + 1 {
             return Err("not a modem stream");
         }
         let mut d = vec![0u8; n];
-        s.read_exact(&mut d).map_err(|_| "connection lost during the challenge")?;
+        crate::dht::read_by(s, &mut d, deadline).ok_or("connection lost during the challenge")?;
         if d[0] == RESPONSE_MARK && d[1..].starts_with(&RESPONSE) {
             let _ = s.set_read_timeout(None);
             return if check(&key, &nonce, &d[4..]) { Ok(()) } else { Err("wrong modem key") };
@@ -455,7 +505,8 @@ fn run_tcp_modem(mut stream: TcpStream, name: String, tx: Sender<In>) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
-    let (wtx, wrx) = channel::<Vec<u8>>();
+    if writer.set_write_timeout(Some(crate::dht::RPC_TIMEOUT)).is_err() { return; }
+    let (wtx, wrx) = sync_channel::<Vec<u8>>(256);
     thread::spawn(move || {
         for pkt in wrx {
             let mut buf = Vec::with_capacity(pkt.len() + 2);
@@ -469,22 +520,22 @@ fn run_tcp_modem(mut stream: TcpStream, name: String, tx: Sender<In>) {
         let _ = writer.shutdown(std::net::Shutdown::Both);
     });
     register_tcp(id, &name, "wifi-modem", &stream);
-    if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
+    if tx.send(In::LinkUp { id, name, tx: LinkSender::Bounded(wtx) }).is_err() {
         unregister(id);
         return;
     }
     let mut reader = stream;
     let mut len = [0u8; 2];
     loop {
-        if reader.read_exact(&mut len).is_err() {
-            break;
-        }
+        if reader.set_read_timeout(None).is_err() || reader.read_exact(&mut len[..1]).is_err() { break; }
+        let deadline = Instant::now() + crate::dht::RPC_TIMEOUT;
+        if crate::dht::read_by(&mut reader, &mut len[1..], deadline).is_none() { break; }
         let n = u16::from_le_bytes(len) as usize;
         if n < 2 || n > MAX_PACKET + 1 {
             break; // Not a modem stream: close.
         }
         let mut data = vec![0u8; n];
-        if reader.read_exact(&mut data).is_err() {
+        if crate::dht::read_by(&mut reader, &mut data, deadline).is_none() {
             break;
         }
         // The modem's own counters (marker 0x7E): telemetry, not a packet.
@@ -610,7 +661,7 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
     }
     let mut last_modem_cmd = std::time::Instant::now();
     register(id, &name, kind);
-    if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
+    if tx.send(In::LinkUp { id, name, tx: wtx.into() }).is_err() {
         unregister(id);
         return;
     }

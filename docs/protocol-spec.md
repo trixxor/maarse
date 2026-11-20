@@ -213,6 +213,13 @@ of the `Data` (or `Fragment`, `Deposit`) packet.
 
 ### 4.1 Announce payload
 
+After verifying the signature, the host checks the signed Unix timestamp
+against its clock and its persistent per-destination timestamp. The window
+runs from seven days in the past to ten minutes in the future. A zero
+timestamp remains available for clockless firmware when no recent dated
+announcement from that identity is known. Equal timestamps can recur. This
+is a receiver policy and preserves the wire encoding.
+
 Source: `maarse-crypto/src/lib.rs` (`Identity::announce`, `verify_announce`).
 
 Sent as packet type 2 with destination = the announcing node's address, no
@@ -829,9 +836,8 @@ Source: `maarse-crypto/src/ota.rs`. Manifest (`MANIFEST_LEN` = 112):
 
 A node installs only if the signature matches its built-in release key, the
 board ID matches and the version is newer (an older version may be allowed
-only locally, with flag `OTA_ALLOW_DOWNGRADE`). The development key is derived
-from the public text `"maarse/dev-release-key/NOT-FOR-RELEASES"` and must not
-be trusted in releases. Release archives are signed separately:
+only locally, with flag `OTA_ALLOW_DOWNGRADE`). OTA is disabled when the configured
+public key is missing, invalid, weak or the public development key. Release archives are signed separately:
 Ed25519 over `"maarse-release-v1\n" | SHA-256(SHA256SUMS file)`.
 
 Staging: blocks of `BLOCK` = 4096 bytes, progress on a meta page `"OTM1"`,
@@ -918,6 +924,11 @@ its own values (`FILE_WINDOW` = 8, `CHUNK_TIMEOUT` = 20 s, `FILE_TIMEOUT` =
 ## 8. Mailboxes and the backbone
 
 ### 8.1 Post offices (Deposit, MailSync)
+
+The managed replica policy filters the placement pool by operator-configured
+host identities and requires the mutual DHT exchange for replica RPCs. It
+does not change the local mailbox or the LoRa packet formats. Hosts that
+coordinate placement and retrieval should use the same policy.
 
 Source: `maarse-core/src/mail.rs`, `maarse-host/src/node.rs` (post office),
 `firmware/common/src/node.rs` (`mail_step`).
@@ -1096,7 +1107,39 @@ gateway part is not signed by `dest`; a lying gateway can at most drop
 | `RPC_TIMEOUT` | 3 s |
 | `FULL_REPLICA_MAX` | 64 |
 
+Gateway route proofs bind the destination, gateway, endpoint, hop count, issue
+time and complete node announce with an Ed25519 signature under the gateway's
+identity. The proof authenticates the gateway's claim. The destination's signed
+announce identifies the destination. A gateway can still make an incorrect
+reachability claim. An unsigned legacy record may supply a node announcement,
+but a new outbound gateway connection requires a valid proof or an explicitly
+configured endpoint. The proof is an optional trailing 136-byte extension to a
+record: 8-byte little-endian Unix issue time, 64-byte public gateway identity,
+and 64-byte signature. Legacy relays may drop this extension when forwarding a
+record, so upgrade the DHT seed and gateway hosts before relying on automatic
+gateway connections across a mixed deployment.
+
 ### 8.4 DHT wire protocol
+
+For mutual DHT identity authentication, TCP starts with `D7 D9` and a
+random 32-byte client challenge. The server issues its own random 32-byte
+challenge. After the length-prefixed request, the client sends its 64-byte
+public identity and 64-byte Ed25519 signature over both challenges and the
+exact request. The receiving host verifies that this identity derives the
+sender address in the request before it handles the operation. The response
+uses the signed reply format below. An eligible, explicitly configured
+endpoint can try older exchanges if the newer exchange yields no response.
+DHT identity authentication does not encrypt traffic or authenticate a
+particular recipient's authorization to access their mail.
+
+For authenticated replies, TCP starts with `D7 D8`, a random 32-byte challenge,
+then the existing length-prefixed request. The length-prefixed response appends
+the 64-byte responder identity and a 64-byte Ed25519 signature. The signed
+digest binds the challenge and both request and response bytes. An expected
+contact address must match the responder identity. A configured endpoint can
+fall back to legacy `D7 D7` if the signed exchange returns no frame. Discovered
+endpoints require signed replies. This exchange authenticates the responder
+and leaves request authentication and transport encryption to other layers.
 
 One request per TCP connection:
 
@@ -1117,7 +1160,7 @@ response = type (1) | responder ID (16) | body
 | 0x04 | Store | record |
 | 0x05 | MailStore | recipient (16) \| length (u16 LE) \| sealed message |
 | 0x06 | MailFetch | recipient (16) \| count (1) \| count × have ID (u32 BE) |
-| 0x07 | MailDelivered | recipient (16) \| count (1) \| count × ID (u32 BE) |
+| 0x07 | MailDelivered (legacy) | recipient (16) \| count (1) \| count × ID (u32 BE). Updated hosts refuse this unauthenticated deletion request. |
 | 0x81 | Pong | – |
 | 0x82 | Nodes | count (1, at most 16) \| count × (ID (16) \| endpoint (str)) |
 | 0x83 | Value | record |
@@ -1329,6 +1372,13 @@ maarse-server asks its modem every 30 s for its telemetry.
 
 ### 9.7 Local-only commands
 
+State-changing radio administration, including remote OTA operations, remains
+restricted to the administrator list. The receiver persists a per-administrator
+reserved counter ceiling before applying a change. On restart it rejects
+counters at or below that ceiling. The reservation covers 60 additional counter
+values to limit flash writes during a burst. Read-only commands do not reserve
+flash. This policy preserves the existing control wire format.
+
 `SetAdmins`, `SetWifi`, `SetIdentity` and `SetRangeTest` are refused when they
 arrive through `Remote`. Through `Remote`, firmware accepts `GetStats`,
 `GetRadio`, `SetRadio`, `SetRole` and the OTA commands (downgrade flag
@@ -1393,3 +1443,72 @@ Discrepancies found while writing this document. The spec follows the code.
    field, which `appdata::build` guarantees.
 10. **`maarse-core/src/lib.rs`** refers to "Må:rse – protocol specification
     v0.1"; this document replaces that reference.
+
+
+### MeshCore service enrollment (working copy)
+
+`/meshcore/session` uses a WebSocket behind the backbone's HTTPS endpoint. It
+sends a one-use 32-byte random challenge as hexadecimal with `version: 1`.
+The client requests `PersonSetup` operation 10 from its local host, with an
+operation byte (`0` access, `1` ensure, `2` announce, `3` scan, `4` scan-results,
+`5` public-history, `6` public-send, `7` public-read, `8` direct-list,
+`9` direct-history, `10` direct-send, `11` direct-read, `12` channel-list,
+`13` channel-join, `14` channel-leave, `15` channel-history, `16` channel-send,
+`17` channel-read, `18` repeater-login, `19` repeater-command, `20` repeater-status) followed by the raw
+challenge. For operation bytes 6, 7, 9–11 and 13–20, append the exact operation string
+including its argument so the signature covers the payload.
+The host sends `0xbc` proof chunks with request, offset and total as little-endian
+`u16` values followed by the bytes. Concatenate the 64-byte device public
+identity, 129-byte certificate, 64-byte signature and signed device list.
+
+The WebSocket request contains the corresponding operation name and `device`,
+`certificate`, `signature` and `list` as lowercase hexadecimal. The Ed25519
+signature covers SHA-256 of `maarse/meshcore-access/v1`, the challenge, the
+length of the operation (little-endian `u64`), the operation bytes and the
+16-byte person address. The backbone verifies device membership, compares the
+signed device list with the highest version it has stored, and checks the
+administrator's grant before acting. Device revocation takes effect on that
+backbone once it has received a newer signed device list; grant revocation is
+checked on every request. The connection returns `allowed`, and for permitted
+users the person and a nullable `publicKey`. An `ensure` request may also return
+an error if the radio worker is unavailable. `announce` and `scan` acknowledge
+that the action was queued. `scan-results` reports `scanning` while pending and
+returns `results` once complete. `public-history` returns up to 100 recent
+Public messages, `unread`, `lastId` and `totalUnread`. History and read responses include `totalUnread` across Public, joined channels and direct conversations. The operation `public-send:<hex>` queues
+a message of at most 90 UTF-8 bytes, and `public-read:<lastId>` advances the
+person's shared read cursor monotonically. Public send is acknowledged as
+queued. `direct-list` lists the public keys of conversations with stored
+history. `direct-history:<key>` and `direct-read:<key>:<lastId>` use the same
+response and read cursor as Public, scoped to the 64-hex-digit contact key.
+`direct-send:<key>:<hex>` queues up to 60 UTF-8 bytes. The worker looks up the
+contact among adverts it has heard and reports failures in the next history
+read. Direct-message delivery acknowledgements are not exposed by this API.
+
+Channel requests use `channel-join:<name>:<hex-key>`, `channel-leave:<name>`,
+`channel-history:<name>`, `channel-send:<name>:<hex-text>` and
+`channel-read:<name>:<lastId>`. An empty key selects the first 16 bytes of
+SHA-256 of `#` followed by the channel name. Channel keys stay in the private
+worker directory and the channel list returns names only.
+
+Repeater requests are `repeater-login:<key>:<hex-password>`,
+`repeater-command:<key>:<hex-command>` and `repeater-status:<key>`. The worker
+requires an administrator bit from the repeater's MeshCore login reply before
+sending a command. `repeater-status` returns the latest login or CLI response.
+The temporary login queue is removed on pickup or after roughly one second
+if the worker is unavailable.
+
+
+### Host receive limits (working copy)
+
+The PC host validates an incoming file offer against the configured maximum and
+requires exactly `max(1, ceil(size / chunk_size))` chunks. Each chunk must match
+its expected authenticated plaintext length. The host accepts up to 32 active
+incoming files, with at most eight per sender. A pull-completion receipt is
+issued after checking the received size and digest. These checks use the
+existing wire format.
+
+The page server serves regular files of up to 2 MiB from its own page tree.
+Symbolic links and Windows reparse points are excluded. Image conversion also
+limits decoded dimensions to 4096 by 4096 pixels. Unreadable access rules deny
+access to the affected content. The operator still owns and protects the data
+directory against concurrent local changes.

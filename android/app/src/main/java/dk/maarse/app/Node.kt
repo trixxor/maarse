@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** Connection state shown at the top of every screen. */
 data class Conn(val mode: Mode, val state: State, val text: String) {
@@ -181,12 +182,18 @@ object Node : LinkListener {
             Mode.PHONE -> {
                 val key = HostFiles.accessKey(app)
                 if (key == null) { scheduleRetry(); conn.value = Conn(mode, Conn.State.CONNECTING, "Starting the node…"); null }
-                else WsLink("ws://127.0.0.1:${HostFiles.PORT}/ws?token=$key", "This phone", this)
+                else WsLink("ws://127.0.0.1:${HostFiles.PORT}/ws", "This phone", this, key)
             }
             Mode.REMOTE -> {
-                val addr = prefs.remoteAddr.trim().removePrefix("http://").removePrefix("ws://").trimEnd('/')
-                if (addr.isEmpty()) { conn.value = Conn(mode, Conn.State.OFF, "Enter the host's address in Settings"); prefs.running = false; null }
-                else WsLink("ws://$addr/ws?token=${prefs.remoteKey.trim()}", "Host $addr", this)
+                val origin = remoteOrigin()
+                if (origin == null) {
+                    conn.value = Conn(mode, Conn.State.OFF, "Enter a valid host address in Settings")
+                    prefs.running = false
+                    null
+                } else {
+                    val url = origin.newBuilder().addPathSegment("ws").build()
+                    WsLink(url.toString(), "Host ${origin.host}", this, prefs.remoteKey.trim())
+                }
             }
             // The server has no chat client; the app only shows its state.
             Mode.SERVER -> { conn.value = Conn(mode, Conn.State.ONLINE, "Server running"); null }
@@ -579,16 +586,173 @@ object Node : LinkListener {
 
     private val http by lazy { okhttp3.OkHttpClient() }
 
-    private fun remoteUrl(path: String): String {
-        val addr = prefs.remoteAddr.trim().removePrefix("http://").removePrefix("ws://").trimEnd('/')
-        return "http://$addr$path?token=${prefs.remoteKey.trim()}"
+    data class MeshCoreAccess(val text: String = "", val allowed: Boolean = false, val key: String? = null,
+        val busy: Boolean = false, val results: List<String> = emptyList(), val messages: List<String> = emptyList(),
+        val unread: Int = 0, val lastId: Long = 0, val contacts: List<String> = emptyList(),
+        val direct: MeshCoreDirect? = null, val channels: List<String> = emptyList(), val channel: MeshCoreDirect? = null,
+        val repeaterKey: String = "", val repeaterStatus: String = "", val totalUnread: Int = 0)
+    data class MeshCoreDirect(val contact: String, val messages: List<String>, val unread: Int = 0, val lastId: Long = 0)
+    val meshcoreAccess = MutableStateFlow(MeshCoreAccess())
+    private data class MeshCoreAttempt(val request: Int, val operation: Int, val payload: String, val socket: okhttp3.WebSocket,
+                                       var received: Int = 0, var proof: ByteArray? = null)
+    private var meshcoreSocket: okhttp3.WebSocket? = null
+    private var meshcoreAttempt: MeshCoreAttempt? = null
+
+    private var meshcoreDenied = false
+
+    fun pollMeshcoreUnread() {
+        if (conn.value.state != Conn.State.ONLINE || person.value?.state != PersonState.MEMBER ||
+            meshcoreSocket != null || meshcoreDenied) return
+        val address = prefs.meshcoreBackbone
+        if (address.isNotEmpty()) checkMeshcoreAccess(address, 5, background = true)
+    }
+
+    fun checkMeshcoreAccess(address: String, operation: Int, payload: String = "", background: Boolean = false) {
+        val origin = address.toHttpUrlOrNull()?.takeIf { it.isHttps && it.username.isEmpty() && it.password.isEmpty() }
+        if (origin == null) {
+            if (!background) meshcoreAccess.value = MeshCoreAccess("Enter the HTTPS address of the backbone.")
+            return
+        }
+        prefs.meshcoreBackbone = origin.toString()
+        meshcoreSocket?.cancel()
+        meshcoreAttempt = null
+        if (!background) {
+            meshcoreDenied = false
+            meshcoreAccess.update { it.copy(text = "Checking access...", busy = true) }
+        }
+        val url = origin.newBuilder().encodedPath("/meshcore/session").query(null).fragment(null).build()
+        val listener = object : okhttp3.WebSocketListener() {
+            override fun onMessage(socket: okhttp3.WebSocket, text: String) {
+                main.post {
+                    if (meshcoreSocket !== socket) return@post
+                    val json = runCatching { org.json.JSONObject(text) }.getOrNull() ?: run { socket.cancel(); return@post }
+                    val challenge = json.optString("challenge")
+                    if (json.optInt("version") == 1 && challenge.matches(Regex("[0-9a-f]{64}")) && meshcoreAttempt == null) {
+                        val request = req()
+                        meshcoreAttempt = MeshCoreAttempt(request, operation, payload, socket)
+                        send(Cmd.meshcoreProof(request, operation, challenge.unhex(), payload))
+                    } else if (json.has("allowed") && (meshcoreAttempt?.received ?: 0) > 0) {
+                        val allowed = json.optBoolean("allowed")
+                        meshcoreDenied = !allowed
+                        val key = json.optString("publicKey").takeIf { it.matches(Regex("[0-9a-f]{64}")) }
+                        val results = json.optJSONArray("results")?.let { array ->
+                            List(array.length()) { array.optString(it) }
+                        }.orEmpty()
+                        val status = json.optString("error").ifEmpty {
+                            when {
+                                json.optString("queued") == "announce" -> "Announcement queued."
+                                json.optString("queued") in listOf("public-send", "direct-send", "channel-send") -> "Message queued."
+                                json.optString("queued") == "scan" || json.optBoolean("scanning") -> "Scan in progress. Fetch results in about 10 seconds."
+                                json.has("results") -> if (results.isEmpty()) "No nodes found." else "Scan complete."
+                                allowed -> "MeshCore access granted."
+                                else -> "MeshCore access is unavailable for this account."
+                            }
+                        }
+                        meshcoreSocket = null
+                        meshcoreAttempt = null
+                        val previous = meshcoreAccess.value
+                        val messages = json.optJSONArray("messages")?.let { array ->
+                            List(array.length()) { index ->
+                                val message = array.getJSONObject(index)
+                                (if (message.optBoolean("mine")) "You: " else "") + message.optString("text")
+                            }
+                        }
+                        val contacts = json.optJSONArray("contacts")?.let { array -> List(array.length()) { array.optString(it) } }
+                            ?: previous.contacts
+                        val channels = json.optJSONArray("channels")?.let { array -> List(array.length()) { array.optString(it) } }
+                            ?: previous.channels
+                        val channelName = json.optString("channel").takeIf { it.matches(Regex("[a-z0-9-]{1,24}")) }
+                        val activeChannel = previous.channel?.takeIf { it.contact in channels }
+                        val channel = if (channelName == null) activeChannel else {
+                            val old = activeChannel?.takeIf { it.contact == channelName }
+                            MeshCoreDirect(channelName, messages ?: old?.messages.orEmpty(),
+                                json.optInt("unread", old?.unread ?: 0), json.optLong("lastId", old?.lastId ?: 0))
+                        }
+                        val contact = json.optString("contact").takeIf { it.matches(Regex("[0-9a-f]{64}")) }
+                        val direct = if (contact == null) previous.direct else {
+                            val old = previous.direct?.takeIf { it.contact == contact }
+                            MeshCoreDirect(contact, messages ?: old?.messages.orEmpty(),
+                                json.optInt("unread", old?.unread ?: 0), json.optLong("lastId", old?.lastId ?: 0))
+                        }
+                        meshcoreAccess.value = if (allowed) MeshCoreAccess(if (background) previous.text else status, true, key,
+                            results = if (background) previous.results else results,
+                            messages = if (contact == null && channelName == null) messages ?: previous.messages else previous.messages,
+                            unread = if (contact == null && channelName == null) json.optInt("unread", previous.unread) else previous.unread,
+                            lastId = if (contact == null && channelName == null) json.optLong("lastId", previous.lastId) else previous.lastId,
+                            contacts = contacts, direct = direct, channels = channels, channel = channel,
+                            repeaterKey = json.optString("repeater", previous.repeaterKey),
+                            totalUnread = json.optInt("totalUnread", previous.totalUnread),
+                            repeaterStatus = if (json.has("repeater")) json.optString("repeaterStatus").ifEmpty {
+                                if (json.has("queued")) "Request queued." else ""
+                            } else previous.repeaterStatus) else MeshCoreAccess(if (background) "" else status)
+                        socket.close(1000, null)
+                    }
+                }
+            }
+            override fun onFailure(socket: okhttp3.WebSocket, t: Throwable, response: okhttp3.Response?) {
+                main.post { finishMeshcoreAccess(socket, background) }
+            }
+            override fun onClosed(socket: okhttp3.WebSocket, code: Int, reason: String) {
+                main.post { finishMeshcoreAccess(socket, background) }
+            }
+        }
+        val socket = http.newWebSocket(okhttp3.Request.Builder().url(url).build(), listener)
+        meshcoreSocket = socket
+        main.postDelayed({ if (meshcoreSocket === socket) { socket.cancel(); finishMeshcoreAccess(socket, background) } }, 12_000)
+    }
+
+    private fun finishMeshcoreAccess(socket: okhttp3.WebSocket, background: Boolean) {
+        if (meshcoreSocket !== socket) return
+        meshcoreSocket = null
+        meshcoreAttempt = null
+        if (!background) meshcoreAccess.value = MeshCoreAccess("Could not verify access. Check the backbone address and node connection.")
+    }
+
+    private fun acceptMeshcoreProof(event: Ev.MeshCoreProof) {
+        val attempt = meshcoreAttempt ?: return
+        if (event.req != attempt.request || event.offset != attempt.received || event.total !in 326..1024 ||
+            event.offset + event.bytes.size > event.total) return
+        val proof = attempt.proof ?: ByteArray(event.total).also { attempt.proof = it }
+        if (proof.size != event.total) return
+        event.bytes.copyInto(proof, event.offset)
+        attempt.received += event.bytes.size
+        if (attempt.received != event.total) return
+        attempt.socket.send(org.json.JSONObject()
+            .put("operation", attempt.payload.ifEmpty { listOf("access", "ensure", "announce", "scan", "scan-results", "public-history", "public-send", "public-read", "direct-list", "", "", "", "channel-list")[attempt.operation] })
+            .put("device", proof.copyOfRange(0, 64).hex())
+            .put("certificate", proof.copyOfRange(64, 193).hex())
+            .put("signature", proof.copyOfRange(193, 257).hex())
+            .put("list", proof.copyOfRange(257, proof.size).hex()).toString())
+    }
+
+    private fun remoteOrigin(): okhttp3.HttpUrl? {
+        val address = prefs.remoteAddr.trim()
+        val url = when {
+            address.startsWith("wss://", ignoreCase = true) -> "https://" + address.substring(6)
+            address.startsWith("ws://", ignoreCase = true) -> "http://" + address.substring(5)
+            "://" in address -> address
+            else -> "http://$address"
+        }.toHttpUrlOrNull() ?: return null
+        return url.takeIf {
+            it.username.isEmpty() && it.password.isEmpty() && it.encodedPath == "/" &&
+                it.query == null && it.fragment == null
+        }
+    }
+
+    private fun remoteRequest(path: String): okhttp3.Request.Builder {
+        val origin = requireNotNull(remoteOrigin()) { "Invalid host address" }
+        val url = requireNotNull(origin.resolve(path))
+        return okhttp3.Request.Builder().url(url).apply {
+            val key = prefs.remoteKey.trim()
+            if (key.isNotEmpty()) header("Authorization", "Bearer $key")
+        }
     }
 
     /** The backup the host just wrote (phone: its folder; elsewhere: over HTTP). */
     fun readBackup(done: (ByteArray?) -> Unit) {
         Thread {
             val b = runCatching {
-                if (prefs.mode == Mode.REMOTE) http.newCall(okhttp3.Request.Builder().url(remoteUrl("/api/account-backup")).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes() else null }
+                if (prefs.mode == Mode.REMOTE) http.newCall(remoteRequest("/api/account-backup").build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes() else null }
                 else java.io.File(HostFiles.dataDir(app, false), "account-backup.maarse").readBytes()
             }.getOrNull()
             main.post { done(b) }
@@ -602,7 +766,7 @@ object Node : LinkListener {
             val ok = runCatching {
                 if (prefs.mode == Mode.REMOTE) {
                     val body = okhttp3.RequestBody.create(null, file)
-                    http.newCall(okhttp3.Request.Builder().url(remoteUrl("/api/account-restore")).post(body).build()).execute().use { it.isSuccessful }
+                    http.newCall(remoteRequest("/api/account-restore").post(body).build()).execute().use { it.isSuccessful }
                 } else {
                     java.io.File(HostFiles.dataDir(app, false), "account-restore.maarse").writeBytes(file); true
                 }
@@ -697,9 +861,19 @@ object Node : LinkListener {
                 note("Error: ${ev.text}")
             }
             is Ev.FileLimit -> fileLimitWaiter?.invoke(ev)
-            is Ev.Person -> person.value = ev
+            is Ev.Person -> {
+                if (person.value?.person != ev.person || ev.state != PersonState.MEMBER) {
+                    meshcoreSocket?.cancel()
+                    meshcoreSocket = null
+                    meshcoreAttempt = null
+                    meshcoreDenied = false
+                    meshcoreAccess.value = MeshCoreAccess()
+                }
+                person.value = ev
+            }
             is Ev.PersonPhrase -> phrase.value = ev.phrase
             is Ev.PersonBackup -> backupCode.value = ev.code
+            is Ev.MeshCoreProof -> acceptMeshcoreProof(ev)
             is Ev.DeviceLinked -> { linked.value = ev; note("Device linked: ${shortAddr(ev.device)} (${ev.words})") }
             is Ev.Direct -> {
                 heard(ev.from) { it.copy(hops = ev.hops) }

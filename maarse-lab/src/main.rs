@@ -11,10 +11,10 @@ mod jobs;
 
 use serde_json::{Value, json};
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicUsize, Ordering}};
 use std::thread;
 use std::time::Duration;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
@@ -108,6 +108,10 @@ fn main() {
         }
         i += 1;
     }
+    if !addr.ip().is_loopback() {
+        eprintln!("The test lab must listen on a loopback address");
+        std::process::exit(2);
+    }
     let root = root.unwrap_or_else(find_root);
     let data = root.join("maarse-lab-data");
     let _ = std::fs::create_dir_all(&data);
@@ -126,9 +130,22 @@ fn main() {
     if browser {
         open_browser(&url);
     }
+    let active = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming().flatten() {
-        thread::spawn(move || handle(stream));
+        if active.load(Ordering::Relaxed) >= 16 { continue; }
+        active.fetch_add(1, Ordering::Relaxed);
+        let slot = LabConnection(active.clone());
+        let _ = thread::Builder::new().name("lab-client".into()).spawn(move || {
+            let _slot = slot;
+            handle(stream);
+        });
     }
+}
+
+struct LabConnection(Arc<AtomicUsize>);
+
+impl Drop for LabConnection {
+    fn drop(&mut self) { self.0.fetch_sub(1, Ordering::Relaxed); }
 }
 
 fn open_browser(url: &str) {
@@ -145,6 +162,8 @@ fn open_browser(url: &str) {
 }
 
 fn handle(stream: TcpStream) {
+    let timeout = Some(Duration::from_secs(5));
+    if stream.set_read_timeout(timeout).is_err() || stream.set_write_timeout(timeout).is_err() { return; }
     let mut peek = [0u8; 2048];
     let n = stream.peek(&mut peek).unwrap_or(0);
     let head = String::from_utf8_lossy(&peek[..n]).to_ascii_lowercase();
@@ -179,24 +198,33 @@ fn http(mut stream: TcpStream) {
     let _ = stream.write_all(body.as_bytes());
 }
 
-/// Only pages from the same host may control the lab (it starts processes).
+fn local_browser(host: &str, origin: Option<&str>, listener: SocketAddr) -> bool {
+    let Ok(authority) = host.parse::<tungstenite::http::uri::Authority>() else { return false };
+    let name = authority.host();
+    let local = name.eq_ignore_ascii_case("localhost")
+        || name.trim_matches(['[', ']']).parse::<IpAddr>().is_ok_and(|ip| ip == listener.ip());
+    listener.ip().is_loopback() && local && (authority.port_u16().unwrap_or(80) == listener.port())
+        && origin.is_some_and(|origin| origin == format!("http://{host}"))
+}
+
+/// Only pages from the actual loopback listener may control the lab.
 #[allow(clippy::result_large_err)]
-fn same_origin(req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
+fn same_origin(req: &Request, resp: Response, listener: SocketAddr) -> Result<Response, ErrorResponse> {
     let h = req.headers();
-    let host = h.get("host").and_then(|v| v.to_str().ok()).unwrap_or("");
-    match h.get("origin").and_then(|v| v.to_str().ok()) {
-        None => Ok(resp),
-        Some(o) if o == format!("http://{host}") => Ok(resp),
-        Some(_) => {
-            let mut r = ErrorResponse::new(Some("Wrong origin".into()));
-            *r.status_mut() = tungstenite::http::StatusCode::FORBIDDEN;
-            Err(r)
-        }
-    }
+    let host = h.get("host").and_then(|value| value.to_str().ok()).unwrap_or("");
+    let origin = h.get("origin").and_then(|value| value.to_str().ok());
+    if local_browser(host, origin, listener) { return Ok(resp); }
+    let mut response = ErrorResponse::new(Some("A local lab page is required".into()));
+    *response.status_mut() = tungstenite::http::StatusCode::FORBIDDEN;
+    Err(response)
 }
 
 fn websocket(stream: TcpStream) {
-    let Ok(mut ws) = tungstenite::accept_hdr(stream, same_origin) else {
+    let Ok(listener) = stream.local_addr() else { return };
+    let config = tungstenite::protocol::WebSocketConfig {
+        max_frame_size: Some(16 * 1024), max_message_size: Some(16 * 1024), ..Default::default()
+    };
+    let Ok(mut ws) = tungstenite::accept_hdr_with_config(stream, |request: &Request, response: Response| same_origin(request, response, listener), Some(config)) else {
         return;
     };
     let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(20)));
@@ -257,5 +285,19 @@ fn command(v: &Value) {
         "simstop" => jobs::sim_stop(),
         "clearhist" => jobs::clear_history(),
         _ => broadcast(&json!({"type":"error","text":"unknown command"})),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_loopback_browser_can_control_the_lab() {
+        let address = "127.0.0.1:8090".parse().unwrap();
+        assert!(local_browser("127.0.0.1:8090", Some("http://127.0.0.1:8090"), address));
+        assert!(local_browser("localhost:8090", Some("http://localhost:8090"), address));
+        assert!(!local_browser("example.test:8090", Some("http://example.test:8090"), address));
+        assert!(!local_browser("localhost:8090", None, address));
     }
 }

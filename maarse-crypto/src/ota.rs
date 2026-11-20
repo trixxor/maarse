@@ -68,12 +68,16 @@ pub mod board {
 }
 
 /// The development key's seed: SHA-256 of this text. It is PUBLIC - anyone
-/// can sign with it. Firmware built without `MAARSE_RELEASE_PUBKEY` trusts
-/// it and warns about it.
+/// can sign with it. Use it only in test tooling and test vectors.
 pub const DEV_SEED_TEXT: &[u8] = b"maarse/dev-release-key/NOT-FOR-RELEASES";
 
 pub fn dev_signing_key() -> SigningKey {
     SigningKey::from_bytes(&Sha256::digest(DEV_SEED_TEXT).into())
+}
+
+/// Checks that the configured Ed25519 public key decodes and is not weak.
+pub fn valid_release_key(key: &[u8; 32]) -> bool {
+    *key != dev_public_key() && VerifyingKey::from_bytes(key).is_ok_and(|key| !key.is_weak())
 }
 
 pub fn dev_public_key() -> [u8; 32] {
@@ -663,6 +667,14 @@ pub mod tests {
         r.begin(&mut f, m, &policy(64 * 1024), false).unwrap();
         assert_eq!(send_all(&mut r, &mut f, &img, 0, 128), Err(OtaError::Flash));
         assert_eq!(r.next, 3 * 128);
+    }
+
+    #[test]
+    fn release_policy_refuses_public_development_and_weak_keys() {
+        assert!(!valid_release_key(&dev_public_key()));
+        assert!(!valid_release_key(&[0; 32]));
+        let private = SigningKey::from_bytes(&[42; 32]);
+        assert!(valid_release_key(&private.verifying_key().to_bytes()));
     }
 
     #[test]

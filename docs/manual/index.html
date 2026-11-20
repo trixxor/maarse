@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Må:rse manual for users, radio operators and protocol developers.">
+<title>Må:rse Manual</title>
+<style>
+:root{color-scheme:light;--ink:#162734;--muted:#4c626f;--line:#d8e4e7;--accent:#006d69;--soft:#e6f4f0;--night:#092d3d;--mint:#98f1d9;--paper:#f7faf9;font:16px/1.64 system-ui,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink)}a{color:var(--accent)}a:hover{text-decoration-thickness:2px}button,input{font:inherit}button{cursor:pointer}button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #df9d48;outline-offset:3px}h1,h2,h3,h4{line-height:1.15;letter-spacing:-.025em;color:var(--night)}h2{font-size:clamp(1.8rem,3vw,2.45rem);margin:0 0 1rem}h3{font-size:1.35rem;margin:2rem 0 .6rem}h4{font-size:1.05rem}p{margin:.7rem 0 1rem}li+li{margin-top:.35rem}code,pre{font-family:Consolas,"Courier New",monospace}code{background:#e9f1f2;padding:.09em .25em;border-radius:.22em;overflow-wrap:anywhere}pre{padding:1rem 1.25rem;background:#102e3b;color:#edf9fa;overflow:auto;border-radius:.65rem;line-height:1.52}pre code{background:none;padding:0;overflow-wrap:normal}table{width:100%;border-collapse:collapse;font-size:.95rem;margin:1.25rem 0;background:white}th,td{padding:.72rem .82rem;text-align:left;border:1px solid var(--line);vertical-align:top}thead th{background:var(--soft)}caption{text-align:left;font-weight:700;padding-bottom:.35rem}.table-wrap{overflow-x:auto;margin:1.25rem 0}.table-wrap table{margin:0}.skip{position:absolute;left:.75rem;top:-8rem;padding:.75rem;background:white;z-index:100}.skip:focus{top:.8rem}
+header{background:var(--night);color:white;position:sticky;top:0;z-index:10;border-bottom:1px solid #2b5160}.top{max-width:1440px;margin:auto;display:flex;align-items:center;gap:1rem;padding:.65rem clamp(.9rem,3vw,2.1rem)}.brand{font-size:1.3rem;color:white;font-weight:800;letter-spacing:-.06em;text-decoration:none;white-space:nowrap}.brand span{color:var(--mint)}.tagline{color:#c2d9e0;font-size:.9rem}.search-button,.nav-toggle{color:white;background:#153d4d;border:1px solid #54747d;border-radius:.55rem;padding:.42rem .75rem}.search-button{margin-left:auto}.nav-toggle{display:none}.layout{max-width:1440px;margin:auto;display:grid;grid-template-columns:240px minmax(0,1fr);gap:2.5rem;padding:1.8rem clamp(.9rem,3vw,2.1rem) 4rem}.sidebar{position:sticky;top:5rem;align-self:start;max-height:calc(100vh - 6rem);overflow:auto;padding-right:1rem;border-right:1px solid var(--line)}.sidebar p{font-weight:800;font-size:.83rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:.75rem 0 .35rem}.sidebar a{display:block;text-decoration:none;padding:.3rem .45rem;border-radius:.35rem;font-size:.93rem;color:var(--ink)}.sidebar a:hover,.sidebar a[aria-current]{background:var(--soft);color:var(--accent)}main{min-width:0;max-width:1040px}.hero{background:radial-gradient(ellipse at 90% 0%,#14645e 0%,transparent 48%),var(--night);padding:clamp(1.6rem,5vw,3.6rem);border-radius:1rem;color:white;overflow:hidden}.hero h1{color:white;font-size:clamp(2.55rem,7vw,5rem);line-height:1;margin:.4rem 0 1rem;letter-spacing:-.07em}.hero p{max-width:41rem;font-size:1.12rem;color:#d9f0f0}.hero .overline{color:var(--mint);font-size:.91rem;font-weight:750;letter-spacing:.03em}.hero-links{display:flex;gap:.65rem;flex-wrap:wrap;margin-top:1.35rem}.hero-links a{border:1px solid #779d9f;color:white;text-decoration:none;padding:.47rem .8rem;border-radius:.55rem}.hero-links a:first-child{background:var(--mint);color:#102b32;border-color:var(--mint)}.hero-links a:hover{outline:2px solid #b3eee0}.hero small{display:block;margin-top:1.5rem;color:#c7e3e4}
+section{padding:clamp(1.1rem,3vw,2.05rem);margin:1.3rem 0;background:white;border:1px solid var(--line);border-radius:.85rem;scroll-margin-top:5rem}h3[id],h4[id]{scroll-margin-top:5rem}.choices{display:grid;grid-template-columns:repeat(3,1fr);gap:.65rem}.choices a{display:flex;flex-direction:column;gap:.2rem;padding:.8rem;border:1px solid var(--line);border-radius:.65rem;text-decoration:none;background:#fbfdfc}.choices a:hover{background:var(--soft)}.choices span{font-size:.91rem;color:var(--muted)}.note,aside:not(.sidebar){border-left:4px solid #238276;background:#eef7f4;padding:.8rem 1rem;margin:1rem 0;border-radius:0 .4rem .4rem 0}.sources{margin:1.15rem 0 0;color:var(--muted);font-size:.89rem;overflow-wrap:anywhere}summary{cursor:pointer;font-weight:650}.flow{padding:1rem 1.15rem;background:#eef7f5;border:1px solid #cfe4de;border-radius:.65rem;margin:1.25rem 0}.flow h3{margin:.15rem 0 1.2rem}.track{position:relative;display:grid;grid-template-columns:repeat(4,1fr);gap:.25rem;padding:.75rem 0 1.65rem;isolation:isolate}.track::after{content:"";position:absolute;height:2px;background:#8db3ae;left:12.5%;right:12.5%;bottom:.85rem;z-index:-1}.track span{font-size:.88rem;justify-self:center;text-align:center;max-width:100%;padding:.15rem .3rem;border-radius:.25rem}.track span.active{background:#136b60;color:white}.packet{width:.78rem;height:.78rem;position:absolute;bottom:.52rem;left:var(--packet,12.5%);transform:translateX(-50%);background:#b04a11;border-radius:50%;transition:left .75s cubic-bezier(.2,.7,.1,1)}.flow-controls{display:flex;gap:.45rem;flex-wrap:wrap}.flow-controls button,dialog button{border:1px solid #8ca9a5;border-radius:.4rem;background:white;color:#133d3a;padding:.32rem .66rem}.flow-controls button:disabled{opacity:.5;cursor:default}.flow-status{min-height:1.5rem;color:#215a50;font-weight:700;margin:.45rem 0}.flow-steps{padding-left:1.4rem}.flow-steps .active{font-weight:700;color:#0c6055}dialog{border:1px solid #a6c4c2;border-radius:.7rem;width:min(94vw,610px);padding:1.2rem;color:var(--ink);max-height:78vh}dialog::backdrop{background:#082b3aba}.search-row{display:flex;gap:.5rem}.search-row input{flex:1;min-width:0;padding:.55rem;border:1px solid #81a4a1;border-radius:.4rem}.results{padding:0;list-style:none}.results a{display:block;padding:.55rem;border-bottom:1px solid var(--line);text-decoration:none}.results span{display:block;font-size:.88rem;color:var(--muted)}footer{padding:.4rem;color:var(--muted)}
+@media(max-width:830px){.layout{grid-template-columns:1fr;gap:1rem}.sidebar{display:none;position:static;max-height:none;border:1px solid var(--line);border-radius:.6rem;padding:.65rem;margin:0}.sidebar.visible{display:block}.nav-toggle{display:block}.top .tagline{display:none}}@media(max-width:500px){.choices{grid-template-columns:1fr}.track span{font-size:.75rem}th,td{padding:.5rem}.layout{padding-top:.9rem}}@media(prefers-reduced-motion:reduce){.packet{transition:none}}@media print{header,.sidebar,.flow-controls,dialog{display:none!important}.layout{display:block;padding:0}.hero{color:var(--ink);background:white}.hero h1,.hero p,.hero small,.hero .overline{color:var(--ink)}section{padding:0;border:0}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip navigation</a>
+<header><div class="top"><a class="brand" href="#main">Må<span>:</span>rse</a><span class="tagline">Project manual</span><button id="search-open" class="search-button" type="button">Search <kbd>/</kbd></button><button id="nav-toggle" class="nav-toggle" type="button" aria-controls="sidebar" aria-expanded="false">Contents</button></div></header>
+<div class="layout">
+<nav class="sidebar" id="sidebar" aria-label="Manual contents">
+<p>Start and use</p><a href="#start">Get started</a><a href="#clients">Clients and connection modes</a><a href="#messaging">Messages, contacts and channels</a><a href="#post-office">Post offices and offline delivery</a><a href="#media">Files, pictures, voice and calls</a><a href="#pages-alerts">Pages and public alerts</a><a href="#identity">Linked devices and recovery</a>
+<p>Build and operate</p><a href="#hardware">Radio hardware and firmware</a><a href="#operations">Run a host or server</a><a href="#links">Transport and backbone</a><a href="#dht">DHT and gateway discovery</a><a href="#technology">Routing, packets and encryption</a><a href="#diagnostics">Diagnostics and integrations</a><a href="#simulation">Simulation and testing</a>
+<p>Reference</p><a href="#operator-cli">Common CLI options</a><a href="#glossary">Glossary and source materials</a><a href="#editorial">Documentation approach</a>
+</nav>
+<main id="main">
+<div class="hero"><div class="overline">LoRa · IP backbone · store and forward</div><h1>Må:rse Manual</h1><p>Get your first message through, run a node or post office, and understand what happens to a packet between the sender and receiver.</p><div class="hero-links"><a href="#start">Get started</a><a href="#post-office">Watch offline delivery</a><a href="#dht">Understand the DHT</a></div><small>Working-copy reference · 19 November 2026</small></div>
+<section id="start" data-source="README.md; docs/GUIDE.md; docs/user/messages.md">
+<h2>Get started</h2>
+<p>Må:rse is a message network for LoRa radios and computers. A local group can communicate with matching radios and a usable path. Hosts can connect radio groups over an IP backbone, or operate over IP alone. A browser or Android app is the interface you use to read and send messages. The radio or host behind it supplies the network identity and routes the packets.</p>
+<div class="choices">
+<a href="#clients"><strong>Connect a client</strong><span>Browser, PWA and Android modes</span></a>
+<a href="#hardware"><strong>Set up a radio</strong><span>Boards, firmware and flashing</span></a>
+<a href="#operations"><strong>Run a host</strong><span>Backbone, gateways and services</span></a>
+</div>
+<h3>Send your first message</h3>
+<ol><li>Start two hosts or connect two clients to separate radios. For a host-only trial, link the hosts over TCP. For a radio-only trial, keep both radios close and match their regional settings, frequency, bandwidth and spreading factor.</li><li>Open the client connected to your own node. Read its address and exchange addresses with the other person. Select the contact or use the address field to open a direct conversation.</li><li>Send a short message. Check the receiver’s conversation and wait for the delivery receipt on the sender. Compare safety numbers if you need to verify the identity.</li><li>If delivery fails, check client connection first, then check whether either node has heard the other. Use traces or the server dashboard when a gateway sits in the middle.</li></ol>
+<pre><code># From the repository on Windows
+.\scripts\start-host.bat
+# From the repository on Linux
+./scripts/start-host.sh</code></pre>
+<p>The ordinary host serves its web interface at <code>http://127.0.0.1:8080/</code> by default. Setup and access details vary by build and mode. See <a href="#operations">host operation</a> for public web access, credentials and deployment.</p>
+</section>
+
+<section id="clients" data-source="docs/GUIDE.md; maarse-client/index.html; android/app/src/main/java/dk/maarse/app/Node.kt">
+<h2>Clients and connection modes</h2>
+<table><thead><tr><th>Mode</th><th>Where networking runs</th><th>When to choose it</th></tr></thead><tbody>
+<tr><td>Browser attached to a host</td><td>The host, reached via WebSocket</td><td>Desktop chat, pages, history and administration through an existing local or remote host</td></tr>
+<tr><td>Browser attached to a radio</td><td>The radio, reached via Web Serial or Web Bluetooth where supported</td><td>A direct companion session with a USB or BLE radio</td></tr>
+<tr><td>Android attached to a radio</td><td>The radio, reached over Bluetooth</td><td>Using the radio identity directly in the phone app</td></tr>
+<tr><td>Android as a node</td><td>An embedded host on the phone</td><td>Backbone messaging or account features on the phone, with an optional LoRa modem where configured</td></tr>
+<tr><td>Android attached to a host</td><td>The machine running that host</td><td>Accessing your home node remotely over a reachable HTTPS or private network endpoint</td></tr>
+<tr><td>Android server mode</td><td>A service on the phone</td><td>Operating a server. The app presents service state in this mode.</td></tr>
+</tbody></table>
+<h3>Connect and recover a session</h3>
+<p>Use the client’s connection screen to choose a host, USB or Bluetooth. Plug in a data-capable cable for USB. For Bluetooth, keep the radio within range and allow the permissions requested by the client. If you reconnect to a different node, expect a different node address and potentially a different local conversation history. A host access key authorizes the connection to that particular host. Account recovery material and the access key serve different purposes.</p>
+<p>Install the browser client as a PWA from a compatible browser if you want a separate app window. A cached client can open while the network is unavailable. Sending still requires an active route through a host or radio. Check which node the interface shows as connected before troubleshooting message delivery.</p>
+<h3>History and local data</h3>
+<p>Several browser windows connected to one host can read that host’s history. This is useful when a computer remains on and several screens use the same node. Linked-device accounts connect separate nodes and use sibling sync, described under <a href="#identity">identity and accounts</a>. A host’s data directory contains identity, history and settings. Protect it as you would the node itself.</p>
+</section>
+
+<section id="messaging" data-source="docs/user/messages.md; docs/GUIDE.md; docs/protocol-spec.md; maarse-core/src/textz.rs">
+<h2>Messages, contacts and channels</h2>
+<h3>Direct messages and delivery states</h3>
+<p>Start a direct conversation with a node address or linked account. The sender needs the recipient’s public identity. If it lacks that identity, it can request keys through the mesh. A displayed name is a label. Use the address or a verified safety number when identity matters.</p>
+<table><thead><tr><th>Status</th><th>Meaning</th><th>What to check</th></tr></thead><tbody>
+<tr><td>Pending or waiting</td><td>The client or node is still trying to send or get a receipt.</td><td>Verify the current connection and wait for route discovery.</td></tr>
+<tr><td>Delivered</td><td>The sending node saw a delivery receipt for the message.</td><td>Delivery confirms receipt by a node. There is no implication that a person has read it.</td></tr>
+<tr><td>Carried</td><td>Store-carry-forward helped the message or receipt cross a temporary gap.</td><td>Delivery speed depends on when the networks or nodes meet again.</td></tr>
+<tr><td>Waiting in a post office</td><td>A host accepted the message for offline delivery.</td><td>Storage and replica availability determine how long it can be handed over.</td></tr>
+<tr><td>Failed</td><td>The client or node reported a send failure.</td><td>Read the error and check the recipient’s key, node reachability, or the chosen transport.</td></tr>
+</tbody></table>
+<p>Text is optimized for short messages. Compression can reduce airtime for suitable input, and the practical text budget can depend on packet overhead. Send long text or media as a file. Capable hosts can number messages per conversation and display a gap when earlier numbered messages have yet to arrive.</p>
+<h3>Contacts and names</h3>
+<p>Hear or add a node, open its details and choose to message it. Locally assigned contact names help identify conversations and can take precedence over announced names. A display name is shared in announcements and can be copied by anyone. Capable firmware retains selected contacts and persistently stores their public identities so those nodes can be recognized after a restart.</p>
+<h3>Public, hashtag, private and regional channels</h3>
+<p>Use a channel when a message is intended for a group. Public and hashtag channels have publicly derivable keys, so anyone can read or send to them. A private channel uses a shared secret. Give it only to intended participants and rotate it after a loss of access. A shared key gives every participant the ability to write, and displayed sender names have no independent authentication. Channels do not provide a direct-message-style receipt from every recipient.</p>
+<p>A regional channel adds a forwarding scope. Nodes configured for regions can restrict where eligible channel traffic is relayed. Regions express a routing policy. Radio signals can cross a region boundary, and region membership does not grant privacy.</p>
+</section>
+
+<section id="post-office" data-source="docs/user/post-office.md; maarse-core/src/mail.rs; maarse-host/src/node.rs; maarse-hostrules/src/rules.rs">
+<h2>Post offices and offline delivery</h2>
+<p>When a direct delivery remains unacknowledged, a host can deposit a sealed copy. A recipient can come back on another link or through another gateway, and the host there can try to obtain and hand over a copy. This is useful when a radio is outside coverage, its client is disconnected, or a route is temporarily unavailable.</p>
+<div class="flow" data-flow="mail">
+<h3>Watch a message wait and arrive</h3>
+<div class="track" aria-label="Sender, post office, replicas and recipient"><span>Sender</span><span>Post office</span><span>Replica hosts</span><span>Recipient</span><i class="packet" aria-hidden="true"></i></div>
+<div class="flow-controls"><button data-act="prev" type="button">Previous</button><button data-act="play" type="button">Play</button><button data-act="next" type="button">Next step</button></div>
+<p class="flow-status" aria-live="polite"></p>
+<ol class="flow-steps"><li data-node="0">The sender tries direct delivery and waits for a receipt.</li><li data-node="1">After the deposit delay, a reachable host can accept the sealed message for later delivery.</li><li data-node="2">The backbone can keep copies at eligible replica hosts selected from the recipient’s address.</li><li data-node="1">A gateway that hears the returning recipient can fetch eligible copies and attempt delivery.</li><li data-node="3">The recipient gets the message, and the sender may see a delivery receipt. Other replicas age out under the current working-copy rules.</li></ol>
+</div>
+<h3>Retention, replicas and receipts</h3>
+<p>Managed networks can repeat <code>--mail-replica-id &lt;node address&gt;</code> to select from approved host identities. Posting and retrieval hosts need a shared policy, and remote replica requests in this mode require mutual DHT authentication. The local post office can still keep a local copy.</p>
+<p>The standard host rule sets a deposit delay of 45 seconds, a limit of 100 text items per recipient, and a retention period of seven days for stored text. Current host defaults limit ordinary text storage to 200 MB, and fetched relay mail has an additional ceiling. Hosts attempt replication according to availability and advertised capacity. A stored status reports acceptance by a host or replica. The number of surviving copies depends on operational conditions.</p>
+<p>Replica selection uses rendezvous hashing: rank eligible post-office IDs using the recipient’s address and select up to three positions. On reconnect, presence signals and sync can trigger a lookup or delivery. The sending and receiving hosts may use different links. A delivery acknowledgement originated by a reachable node and the eventual expiry of replicated ciphertext are distinct events.</p>
+<h3>Carry, flash storage and file mail</h3>
+<p>Carry allows mobile relays to move messages across disconnected parts of the mesh without first finding an end-to-end route. A host post office keeps sealed text on disk. Some firmware can keep a small local flash mailbox. File mail is a separate host subsystem with separate per-recipient and total capacity. Choose based on the content and path available.</p>
+<aside class="note"><strong>Trust boundary.</strong> The current work rejects legacy unsigned remote deletion. Authenticated recipient fetch and replacement remote receipts are unfinished. A post office can still observe addressing, timings and ciphertext size, and can delay, discard or retain encrypted copies. The static sealed text path has no forward secrecy against later compromise of the recipient’s long-term key.</aside>
+</section>
+
+<section id="media" data-source="docs/GUIDE.md; docs/protocol-spec.md; maarse-crypto/src/files.rs; maarse-client/index.html">
+<h2>Files, pictures, voice and calls</h2>
+<table><thead><tr><th>Feature</th><th>Transport behavior</th><th>How to use it</th></tr></thead><tbody>
+<tr><td>File transfer</td><td>Offer, transfer of encrypted chunks, acknowledgement and retry. LoRa and host paths have different budgets.</td><td>Choose a file in a direct conversation. Follow the progress or refusal status. Ask the recipient to check their client if an offer remains pending.</td></tr>
+<tr><td>Pictures</td><td>Client and host can prepare smaller image forms for limited radio paths.</td><td>Choose the smaller picture mode on a LoRa route. On IP, larger versions can be practical.</td></tr>
+<tr><td>Voice messages</td><td>A recorded clip is encoded with Codec2 and carried as a file. The project guide describes a 1200-bit/s mode and up to 20 seconds in the browser.</td><td>Record and send in a direct conversation. The recipient’s compatible client shows audio playback.</td></tr>
+<tr><td>Live calls</td><td>Opus audio flows over an all-TCP path in a supported web client. LoRa and standalone radio firmware do not carry live calls.</td><td>Connect both users to hosts with a TCP path and a compatible browser. Open the direct conversation and use Call when available.</td></tr>
+</tbody></table>
+<p>The technical guide describes up to 8 KB on radio and a 1 MB default host limit for files. Treat these as nominal budgets for the relevant path and build. A slow link, missing chunks, settings or duty-cycle constraints can make transfers impractical well before the size limit.</p>
+</section>
+
+<section id="pages-alerts" data-source="docs/GUIDE.md; docs/denmark/AREA-ALERTS.md; docs/protocol-spec.md; maarse-host/src/pagefiles.rs">
+<h2>Pages, notice boards and public alerts</h2>
+<h3>Browse and publish <code>maarse://</code> pages</h3>
+<p>Use the page browser in a compatible client. Enter a <code>maarse://</code> address with the serving node’s address and page path. A host can serve small pages from its <code>pages</code> directory. <code>pages/index.mu</code> is the root page, and <code>pages/about.mu</code> can be reached at <code>/about</code>. The client renders supported markup, links and images. It does not execute the remote page as browser HTML or JavaScript.</p>
+<pre><code># Field station
+
+The station is available on the local mesh.
+
+[Equipment](/equipment)</code></pre>
+<p>Keep pages compact for LoRa. Use compressed text and small images suited to the selected link. The host also supports page locks and notice-board functions. Their access rules are managed by the serving host. See the project guide and client capability before sharing sensitive material there.</p>
+<h3>Trusted alerts and signed bulletins</h3>
+<p>Public alerts use issuer keys and certificates scoped by trusted roots. Recipient policy checks signature, scope, validity and replay information. An issuer can publish updates or cancellation where authorized. Exercise and test states help clients distinguish practice traffic. Ordinary channel messages do not carry this alert authority.</p>
+<p>Operators must provision trust roots and issuer policy before field use. Receiver software must support the alert data and presentation. Signed bulletins are a related mechanism with their own verification path. Neither a public alert nor a bulletin provides confidential group messaging.</p>
+</section>
+
+<section id="identity" data-source="docs/GUIDE.md; docs/maybe/multi-device.md; maarse-crypto/src/person.rs; maarse-host/src/node/person.rs">
+<h2>Identity, linked devices and recovery</h2>
+<h3>Node identity and safety numbers</h3>
+<p>A node address is derived from the public identity. It changes when a different identity is imported or generated. Display names help recognition, and safety numbers help verify that the keys at both ends match. Compare the number or QR code with the other person through a trusted channel before relying on the identity for sensitive communication.</p>
+<h3>One account on several devices</h3>
+<p>A person account groups host-backed devices with their own keys. The master authorizes a new device with a signed certificate and device list. Start linking on the new device, then approve it on the master by address or QR and compare the check words. The host, web client and Android app implement account features. A standalone radio can carry packets as a modem for a host-backed device.</p>
+<p>Devices share received and sent copies through sibling synchronization. The recipient’s most recent announcements can influence which device gets the direct attempt. Offline person mail may be held under the person address and encrypted to the account’s weekly inbox key. Device removal updates the signed list, starts a new inbox chain for remaining siblings, and can take time to propagate to devices that are currently offline.</p>
+<h3>Backup and recovery</h3>
+<table><thead><tr><th>Material</th><th>Purpose</th><th>Handling</th></tr></thead><tbody>
+<tr><td>24-word recovery phrase</td><td>Restores the corresponding identity or account where supported.</td><td>Keep a private offline copy. Treat knowing the words as control of the identity.</td></tr>
+<tr><td>Encrypted account backup and its six-word code</td><td>Transfers account state for restoring a master to another device in the implemented host workflow.</td><td>Keep the file and code securely and separately. Verify the restored address and review the device list.</td></tr>
+<tr><td>Host access key</td><td>Authorizes a client to use one host’s web and WebSocket service.</td><td>Share only with trusted clients for that host. Use secure transport for remote access.</td></tr>
+</tbody></table>
+</section>
+
+
+<section id="hardware" data-source="README.md:198; docs/GUIDE.md:196,419,755,770; firmware/nrf/build.rs; firmware/esp/Cargo.toml">
+<h2>Radio hardware and firmware</h2>
+<p>Firmware protects state-changing radio administration across reboot using flash-backed counter reservations. Immediately after a reboot, a legitimate remote administrator may need to wait for the previous counter range to pass. The radio rejects a change if it cannot persist its reservation. Local companion access still uses USB or Bluetooth.</p>
+
+<p>Choose the firmware image for the board you actually have. The two ESP32-S3 targets support Wi-Fi backbone operation. The nRF52840 targets use USB or Bluetooth for companion access. The host can run without radio hardware and exchange packets with other hosts over the backbone.</p>
+<table>
+<caption>Firmware targets in the project</caption>
+<thead><tr><th scope="col">Board</th><th scope="col">Build target</th><th scope="col">Board-specific notes</th></tr></thead>
+<tbody>
+<tr><th scope="row">Heltec V4</th><td><code>heltec-v4</code></td><td>ESP32-S3, USB, Bluetooth or Wi-Fi, battery voltage measurement and an onboard display. The firmware's default radio setting is 10 dBm before the board's external amplifier. Verify the PA revision before relying on a power figure.</td></tr>
+<tr><th scope="row">Seeed XIAO ESP32-S3 with LoRa expansion</th><td><code>xiao-esp32s3</code></td><td>ESP32-S3 with USB, Bluetooth or Wi-Fi. The project describes battery voltage as unavailable without a divider. Verify the exact LoRa board and antenna band.</td></tr>
+<tr><th scope="row">Seeed XIAO nRF52840 with Wio-SX1262</th><td><code>xiao-nrf52840</code></td><td>USB and Bluetooth, voltage measurement, USB power detection. Its UF2 bootloader layout starts the application at <code>0x27000</code>.</td></tr>
+<tr><th scope="row">RAK WisMesh Tag</th><td><code>wismesh-tag</code></td><td>RAK4630/nRF52840, USB and Bluetooth, voltage measurement. Its UF2 bootloader layout starts the application at <code>0x26000</code>.</td></tr>
+</tbody></table>
+<p>The repository records specific hardware exercises, including Heltec V4.3 Wi-Fi association, reconnect and Bluetooth switching. Other board and feature combinations require their own validation. A successful build establishes compiler compatibility for that configuration. Physical receive, transmit, battery and update behavior need board-level checks.</p>
+<h3 id="flash-operator">Flash and verify a radio</h3>
+<ol>
+<li>Read the board marking, confirm the radio and antenna band, and choose the matching firmware artifact.</li>
+<li>Use a USB data cable. Enter the board's flash or UF2 mode as required. The host serves a browser flasher at <code>/flash.html</code>. Chrome and Edge are the browsers named in the project guide for that workflow.</li>
+<li>For a local build, use the board identifier with one of the commands below. For Windows native builds, install the toolchain dependencies for that board first.</li>
+<li>Connect to the resulting node over the available companion link. Read its version and node address, check the radio settings, and send a short message to a nearby node configured for the same radio.</li>
+</ol>
+<pre><code># Linux, from the project root
+./scripts/build-firmware.sh heltec-v4 flash /dev/ttyACM0
+
+# Windows PowerShell, from the project root
+.\scripts\build-firmware.ps1 xiao-nrf52840 -Flash</code></pre>
+<h3>Radio settings, regulatory limits and power</h3>
+<p>Nodes must share frequency, bandwidth, spreading factor and coding rate to hear each other on a given LoRa network. Transmit power and duty budget determine when and how strongly a node transmits. Choose them for your region, board, antenna and permitted operating conditions. The radio's configured output and effective radiated power can differ because of an amplifier, cable and antenna. Verify the applicable rules for the band before transmitting. The firmware uses its duty scheduler to defer transmissions when airtime runs out, so a working link can still take time to deliver.</p>
+<p>Lower spreading factors use shorter airtime. Higher spreading factors can help weak links at a substantial airtime cost. Start with two nearby nodes and known-good settings. Change one parameter at a time and record it in range tests. Firmware with a voltage reading also adapts routing effort as battery energy falls. A voltage reading is useful as a trend and requires calibration for precise state-of-charge or power measurements.</p>
+</section>
+
+<section id="operations" data-source="docs/GUIDE.md:5,79,91,140,196,218,494,531,629,770,839; maarse-host/src/app.rs:335; scripts/install-server.sh">
+<h2>Run a host or server</h2>
+<p><code>maarse-host</code> runs a software node, can serve the web client, and can connect to a radio modem. Choose it for a desktop user, a local gateway, or a radio installation with a computer. <code>maarse-server</code> uses the same host core with backbone defaults and an admin dashboard. Choose it for an always-on deployment that should accept configured backbone peers, keep post-office copies or relay for nodes behind NAT.</p>
+<h3>Local host setup</h3>
+<pre><code># From the repository root, Linux
+./scripts/start-host.sh
+
+# From the repository root, Windows
+scripts\start-host.bat
+
+# Example: a locally accessible host with a USB LoRa modem
+maarse-host --data ./maarse-data --http 127.0.0.1:8080 --listen off --serial /dev/ttyACM0</code></pre>
+<p>Open <code>http://127.0.0.1:8080/</code> on the host machine. For Windows use the radio's COM port, such as <code>COM3</code>, in place of <code>/dev/ttyACM0</code>. If a modem never appears, verify its firmware mode, data cable, serial access and baud rate. Confirm from the Devices list that the modem link is up. A companion connection to a standalone radio controls that radio's own node. A radio in modem mode instead transmits packets for the host node and takes its routing decisions from the host.</p>
+<h3>Dedicated server deployment</h3>
+<ol>
+<li>Use a persistent data directory and run one instance per identity and set of listening ports. On Debian/Ubuntu the repository provides <code>scripts/install-server.sh</code> for interactive service setup. Windows host service packaging and tray controls are described in the technical guide.</li>
+<li>Set the backbone listener explicitly and restrict reachability according to the network you run. Use <code>--public-addr</code> to advertise a reachable DHT gateway endpoint. Add intended peers or DHT seeds. Advertise the address that clients can actually reach, including its port.</li>
+<li>Keep the web listener on loopback when publishing it through a reverse proxy. Use <code>--require-key</code> so local proxy traffic is checked too. Store the host access key separately from the dashboard admin password. When a local client uses a hostname other than <code>localhost</code>, use the access key. The initial admin password is kept in the data directory rather than printed in logs. Changing it ends existing dashboard sessions.</li>
+<li>For Internet-facing administration, terminate HTTPS at a reverse proxy. The installer includes a Caddy recipe for Let’s Encrypt, forwarding HTTP and WebSocket to the loopback listener and adding Secure to admin cookies. Set up the DNS name and certificate on the actual server. Restrict the raw backbone listener independently.</li>
+<li>Check service status, logs, dashboard, connected links and a bidirectional test message before making the endpoint available to others.</li>
+</ol>
+<pre><code># Example arguments for a privately managed server behind a web proxy
+maarse-server --data /var/lib/maarse-server \
+  --http 127.0.0.1:8080 --require-key \
+  --listen 192.168.1.20:4242 --public-addr 192.168.1.20:4242</code></pre>
+<p>This example uses a private IP. Configure the endpoint explicitly on the peers that need to contact it. The running binary's <code>--help</code>, service arguments and effective dashboard settings should guide deployment. The installer identifies the service configuration file and data directory. Use the project's platform instructions when migrating an existing service.</p>
+<h3 id="operator-cli">Common command-line settings</h3>
+<table>
+<caption>Host and server options to check when changing topology</caption>
+<thead><tr><th scope="col">Option</th><th scope="col">Purpose</th><th scope="col">Operational effect</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code>--data &lt;folder&gt;</code></th><td>Identity and runtime files</td><td>Changing directories can start a distinct node. Protect the directory and preserve it during migration.</td></tr>
+<tr><th scope="row"><code>--http &lt;addr:port&gt;</code></th><td>Web server and companion WebSocket</td><td>The reviewed working copy defaults to <code>127.0.0.1:8080</code>. <code>off</code> disables it.</td></tr>
+<tr><th scope="row"><code>--listen &lt;addr:port&gt;</code></th><td>Incoming TCP backbone and DHT</td><td>The CLI default is <code>127.0.0.1:4242</code>. Supply the intended interface address to accept remote peers, or use <code>off</code> to disable the listener.</td></tr>
+<tr><th scope="row"><code>--peer</code>, <code>--dht</code>, <code>--public-addr</code></th><td>Packet peer, DHT bootstrap seed, published gateway endpoint</td><td>Use remote endpoints reachable from the initiating host. A DHT-only seed differs from a persistent packet link.</td></tr>
+<tr><th scope="row"><code>--serial</code>, <code>--baud</code>, <code>--modem-ip</code></th><td>LoRa modem through USB/serial or IP</td><td>Default serial modem baud is 115200. Set the correct modem role and matching key when required.</td></tr>
+<tr><th scope="row"><code>--no-post-office</code>, <code>--mail-quota-mb</code></th><td>Text post-office policy</td><td>The reviewed copy defaults to 200 MB. A value of zero selects unlimited normal mail storage. Relay and fetched-cache policy have independent limits.</td></tr>
+<tr><th scope="row"><code>--file-mailbox-mb</code>, <code>--file-mailbox-recipient-mb</code>, <code>--max-file</code></th><td>Disk file storage and transfer limits</td><td>Typical defaults are 200 MB total, 20 MB per recipient and 1024 KB maximum file on a TCP-only route. LoRa limits are smaller.</td></tr>
+<tr><th scope="row"><code>--history-days</code>, <code>--no-history</code></th><td>Conversation history retention</td><td>History on a host is a separate feature from post-office storage for offline destinations.</td></tr>
+<tr><th scope="row"><code>--block</code>, <code>--no-relay</code>, <code>--min-peers</code></th><td>Peer filtering, NAT relay and connection targets</td><td>Review these together for private backbones. Automatic peer selection follows DHT endpoint policy.</td></tr>
+<tr><th scope="row"><code>--region</code>, <code>--strict-region</code>, <code>--no-bordercast</code></th><td>Forwarding policy</td><td>Audit effects on channels and on which path requests enter radio coverage.</td></tr>
+<tr><th scope="row"><code>--public-map</code>, <code>--require-key</code>, <code>--service</code></th><td>Public map, local web access checks and service integration</td><td>Publishing a map is an explicit choice. Keep credentials and maps distinct.</td></tr>
+</tbody></table>
+<h3>Data, authentication and updates</h3>
+<p>The data directory holds the node identity, settings, and optional history, account state, logs and post-office files. An identity backup and a disk copy of message history serve different purposes. Keep private identity material, access keys and admin password files out of logs and shared archives. The browser and Android client use headers for web credentials in the reviewed implementation. Query-string keys are disabled by default. Operators may temporarily enable the legacy client path with <code>--allow-legacy-web-token</code> on a trusted network. Use HTTPS/WSS when a client crosses an untrusted network.</p>
+<p>New admin passwords use Argon2id in the reviewed code. Existing password records are readable during migration and acquire the new format when the password is reset. Use the installer or the documented admin-password procedure. Treat the dashboard login and companion API access as separate credentials.</p>
+<p>Use signed releases and verify the correct board and version before applying an OTA update. Firmware checks the manifest, board identifier, image hash and signature before activation. For a remote update, the radio must authorize the administrator and accept the newer version. The reviewed firmware disables OTA without a usable configured release key and refuses the public development key. Release CI validates the public key and checks any configured private signing key against it before building. Device behavior for a particular binary depends on its build settings. USB recovery depends on the board bootloader and remains an important maintenance route.</p>
+</section>
+
+<section id="links" data-source="docs/GUIDE.md:196,218,334,407,494,531,629; docs/protocol-spec.md:994–1142; maarse-host/src/links.rs; maarse-host/src/dht.rs:221,610,661; maarse-host/src/node.rs:2818,3949; tools/dht_test.py">
+<h2>Links, backbone and gateway discovery</h2>
+<p>A mesh can combine inexpensive handheld radios, fixed repeaters and better-connected hosts. LoRa carries packets where compatible radios can hear one another. A host-to-host TCP or UDP link can move packets between areas, and a radio modem can give a host local coverage. The choice of link changes airtime, file limits and failure modes.</p>
+<table>
+<caption>Packet and companion links</caption>
+<thead><tr><th scope="col">Link</th><th scope="col">Setup</th><th scope="col">Purpose and limits</th></tr></thead>
+<tbody>
+<tr><th scope="row">LoRa modem</th><td><code>--serial &lt;port&gt;</code>, optional <code>--baud</code></td><td>A radio antenna for the host. Airtime and LoRa route limits apply. The default USB/serial baud is 115200.</td></tr>
+<tr><th scope="row">TCP backbone</th><td><code>--listen</code>, <code>--peer &lt;host:port&gt;</code></td><td>Persistent packet stream and the usual Internet path. DHT requests share the listener but use their own framing. The plain TCP transport has no built-in TLS.</td></tr>
+<tr><th scope="row">UDP backbone</th><td><code>--udp-listen</code>, <code>--udp-peer</code> or <code>--udp-broadcast</code></td><td>One framed packet per datagram. Broadcast can discover peers on a LAN. Routed traffic uses Må:rse retries above UDP. Broadcast announcements and channel floods do not gain a reliable transport.</td></tr>
+<tr><th scope="row">Serial host link</th><td><code>--serial-link &lt;port&gt;[:baud]</code></td><td>Host-to-host framed serial with escaping and a CRC. At 230400 baud or higher, the host classifies it as backbone. Choose a lower setting for a genuinely slow air path.</td></tr>
+<tr><th scope="row">KISS serial or TCP</th><td><code>--kiss</code> or <code>--kiss-tcp</code></td><td>A slow packet-radio link through a compatible TNC. The KISS delay, persistence and slot settings are tunable. AX.25 identification is available with <code>--kiss-callsign</code>. Confirm permitted payload and identification rules for the band.</td></tr>
+<tr><th scope="row">LoRa trunk</th><td><code>--trunk &lt;port&gt;[:baud]</code></td><td>Long-distance backup link between sites, normally using directional antennas. The host selectively forwards traffic using route knowledge and summaries of remote nodes. The modem enforces airtime.</td></tr>
+<tr><th scope="row">Companion link</th><td>USB, Nordic UART Bluetooth, or client WebSocket</td><td>Connects the user interface to one node. It carries commands and events, such as sending a message and receiving a delivery indication.</td></tr>
+</tbody>
+</table>
+<h3>ESP32-S3 Wi-Fi</h3>
+<p>With the compatible firmware, connect by USB or Bluetooth first. In the web client's Radio panel, set the Wi-Fi network, password, host address and mode. Saving the settings can restart the radio. The firmware uses one of Bluetooth and Wi-Fi at a time. Use USB or the supported board button workflow to switch back.</p>
+<dl>
+<dt>Mesh node mode</dt><dd>The board has its own node identity and routing state. It peers with a host and can continue local mesh operation when the Internet link goes away.</dd>
+<dt>Wi-Fi LoRa modem mode</dt><dd>The host owns routing and identity for traffic using the radio. Configure a modem passphrase on both ends where required. Some setups have the host dial a listening modem with <code>--modem-ip</code>. The firmware can fall back to its saved standalone node role after a prolonged outage and return to modem operation when the host reconnects.</dd>
+</dl>
+<p>A modem challenge proves knowledge of the configured key for the modem role. Administration of the host and security of ordinary backbone links use separate controls. Consult the Devices list, IP status and modem counters to distinguish a Wi-Fi association from an actual connection to a host.</p>
+<h3 id="dht">Backbone DHT</h3>
+<p>The TCP listener defaults to loopback. Set <code>--listen &lt;bind address&gt;:4242</code> to accept traffic from another machine, including incoming modem sessions on the same listener. For a private backbone, choose an authenticated VPN interface and list your peers or seeds there.</p>
+<p>New hosts prefer the <code>D7 D9</code> exchange. Both sides use fresh challenges and sign the corresponding request or response. The request signature identifies the calling host. Ownership of a destination mailbox is a separate check. Configured endpoints can fall back to older exchanges for migration; newly discovered endpoints require the modern exchange. DHT traffic and ordinary backbone packets still require transport encryption on untrusted links.</p>
+
+<div class="flow" data-flow="dht">
+<h3>Watch a host discover a gateway</h3>
+<div class="track" aria-label="Client, local host, DHT peer and remote gateway"><span>Client</span><span>Local host</span><span>DHT peer</span><span>Gateway</span><i class="packet" aria-hidden="true"></i></div>
+<div class="flow-controls"><button data-act="prev" type="button">Previous</button><button data-act="play" type="button">Play</button><button data-act="next" type="button">Next step</button></div>
+<p class="flow-status" aria-live="polite"></p>
+<ol class="flow-steps"><li data-node="0">The client addresses a message to a node the host has not heard.</li><li data-node="1">The local host starts a lookup among known contacts and configured seeds.</li><li data-node="2">A peer returns a route claim and the destination announcement. Modern exchanges can authenticate the DHT responder separately from the gateway signer.</li><li data-node="1">The host validates the evidence and applies endpoint and compatibility policy.</li><li data-node="3">An eligible gateway can be connected for ordinary packet forwarding. Reachability is confirmed by actual delivery.</li></ol>
+</div>
+<p>The distributed hash table, or DHT, is the hosts' shared directory. A route record says which gateway claims it can reach a particular node and where that gateway can be contacted. A host looks up a previously unknown destination, learns a candidate gateway, and tries to establish a packet link to deliver the waiting message. The post office also uses the list of known hosts to select candidate replica holders.</p>
+<p>A route record includes the destination's signed announcement. A modern record also has a gateway signature over the endpoint, hop count, issue time and announcement. The request/reply handshake and the gateway record prove different things. The handshake proves control of the connected DHT identities, while the gateway signer may be a different host. An authenticated claim can still give an inaccurate estimate of actual reachability. Legacy fallback on operator-configured endpoints may lack either proof.</p>
+<p>The working-copy hardening retains the address of an existing contact when a discovered record proposes a different one. Automatically discovered endpoints must resolve to eligible public addresses before the host attempts to dial them. Configure private hosts with <code>--peer</code> or <code>--dht</code>, or use <code>--dht-allow-private &lt;host:port&gt;</code> for a private endpoint that should remain discoverable without becoming a bootstrap seed. A stable hostname can keep the endpoint string constant through a public IP change. Explicitly reconfigure a changed endpoint when the old one should be retired.</p>
+<p>The current design is Kademlia-like. It compares 16-byte addresses using XOR distance, refreshes published records periodically and expires stale entries. Hosts replicate records more broadly in small networks. Route discovery, message delivery and confidentiality are different steps. A lookup can succeed while the subsequent link or message still fails. A returned route can affect reachability and expose metadata to the chosen gateway even when the message payload stays encrypted.</p>
+</section>
+
+<section id="technology" data-source="docs/protocol-spec.md:41,66,90,212,365,632,839,856,919,1143,1338; maarse-core/src/router.rs; maarse-core/src/packet.rs; maarse-core/src/companion.rs; maarse-crypto/src/lib.rs; maarse-crypto/src/ratchet.rs; maarse-host/src/node/person.rs; firmware/common/src/ota.rs">
+<h2>How the network works</h2>
+<aside class="note"><strong>Host announce freshness.</strong> The host saves the latest accepted dated timestamp per identity and rejects older statements after restart. Its accepted window extends from seven days in the past to ten minutes in the future. Clockless announcements are accepted while no recent dated statement is known, and equal timestamps can still recur. This check also applies when a host learns an announcement through the DHT.</aside>
+
+<h3>Node roles</h3>
+<dl>
+<dt>Client</dt><dd>A regular endpoint that uses existing forwarding infrastructure. This reduces duplicate traffic where repeaters are already available.</dd>
+<dt>Repeater</dt><dd>Fixed or deliberately placed infrastructure that forwards eligible traffic and participates in path discovery. A repeater role alone does not turn a radio into a full host post office.</dd>
+<dt>Relay</dt><dd>A limited forwarding node for handheld groups without infrastructure. It can carry copies of otherwise undeliverable messages until it meets another node.</dd>
+<dt>Anchor</dt><dd>Infrastructure that can participate in longer routes by splitting them into segments.</dd>
+<dt>Auto</dt><dd>A firmware role that uses observed repeater coverage to decide when a handheld should relay. A node near the edge can temporarily bridge covered and uncovered neighbours. Stabilisation timers prevent immediate role changes whenever signal conditions fluctuate.</dd>
+</dl>
+<h3>From first packet to delivery</h3>
+<ol>
+<li><strong>Identify the recipient.</strong> A node address identifies its public keys. An announcement attributes its contents to that node and may carry its display name, role, position or capabilities. The project distinguishes a full address from a shorter path ID, which exists to save bytes in forwarding headers.</li>
+<li><strong>Discover a path if needed.</strong> A limited path request propagates until there is a route to the target. The request can carry the first encrypted direct message. Repeaters suppress eligible duplicate floods. Nodes apply a proof-of-work stamp to selected packet types as a traffic cost.</li>
+<li><strong>Send along the path.</strong> Later packets can use the discovered route instead of repeating discovery. Per-hop forwarding and retry logic handle local reception problems. The destination's acknowledgement indicates network delivery and has a different purpose from a per-hop forwarding signal or a human read receipt.</li>
+<li><strong>Recover when the path breaks.</strong> The router can remove a stale route, try local repair around an unavailable hop, or start a fresh request. Some roles and offline paths can carry or store the message instead of expecting immediate delivery.</li>
+</ol>
+<p>The radio scheduler prioritises time-sensitive acknowledgements and responses ahead of bulk fragments and background announcements. It spaces work using settings such as spreading factor and airtime budget. Ten nodes sending on the same channel share that resource. A successful short message is a better initial connectivity test than a burst of large files.</p>
+<h3>Carry, post offices and file mailboxes</h3>
+<ul>
+<li><strong>Carry</strong> temporarily spreads a bounded number of encrypted copies among eligible relay encounters. The copy lifetime is short. A delivery notice can stop further carrying.</li>
+<li><strong>Post office</strong> stores encrypted text for people or nodes that are offline. Host replicas can improve availability, subject to topology, quota and expiry. The reviewed host refuses legacy unauthenticated remote deletion requests. Other copies may stay until their configured lifetime expires. Full recipient-authenticated fetching and deletion are still protocol work.</li>
+<li><strong>File mailbox</strong> is a separate sender-host disk feature. A file can wait for the recipient to reappear, subject to the route limit, disk quotas and expiry. A file too large for the eventual LoRa route waits for a suitable route. Radio flash and a host file mailbox have different capacity and durability.</li>
+</ul>
+<h3>Security and privacy model</h3>
+<table>
+<caption>Check the guarantee at the appropriate layer</caption>
+<thead><tr><th scope="col">Mechanism</th><th scope="col">What it protects or proves</th><th scope="col">Limits</th></tr></thead>
+<tbody>
+<tr><th scope="row">Identity and announces</th><td>Ed25519 and X25519 public keys underpin node identity. The announcement signature binds the advertised data to those keys.</td><td>Location is self-reported. Public roles, names, addresses, signal conditions and traffic patterns can support observation. Freshness checks also depend on clock and retained state.</td></tr>
+<tr><th scope="row">Encrypted direct messages</th><td>The static seal uses authenticated encryption and an ephemeral sender contribution. Tested ratchet code offers stronger conversation key separation when the relevant session is in use.</td><td>The protocol documents the ratchet as draft. Offline delivery and compatibility can use static or account-inbox paths. Key compromise has different effects for each format.</td></tr>
+<tr><th scope="row">Channels</th><td>A private channel shares a key among participants. Public and hashtag channels are designed for accounts that can derive the channel key.</td><td>Public and hashtag traffic can be read and authored by others. A shared group key does not identify an individual member as the author.</td></tr>
+<tr><th scope="row">Files and linked accounts</th><td>Offers/chunks have their own encrypted transfer machinery. Linked accounts use device certificates, a signed device list and rotating inbox state.</td><td>History and account secrets are endpoint data. Remove lost devices and protect account recovery material and every endpoint that holds it.</td></tr>
+<tr><th scope="row">Signed alerts</th><td>A configured trust root can certify issuers and restrict what they may publish. Alert messages have expiry, serial and update/cancel handling.</td><td>Set trust roots deliberately. Test and exercise alerts carry different semantics from live alerts. A valid signature attributes an alert to an issuer and does not independently verify its real-world facts.</td></tr>
+<tr><th scope="row">TLS and firmware signatures</th><td>HTTPS/WSS protects the client-to-proxy web hop. Firmware signatures authenticate an update to an embedded release key.</td><td>They govern different trust relationships. Neither supplies authenticated public DHT federation for raw backbone peers.</td></tr>
+</tbody>
+</table>
+<p>Verify a contact's safety number or QR with the person through a trusted channel when establishing identity matters. Treat password files, device data directories, recovery phrases and account backup codes as private credentials. Consider which observable metadata your use case can tolerate even when the message contents are encrypted.</p>
+<h3>Wire protocol and integration</h3>
+<p>The <strong>radio packet format</strong> defines packet types, addresses, paths, payload bounds and deduplication. The <strong>companion protocol</strong> uses length-prefixed command and event records over USB, Bluetooth or WebSocket. A UI should expose a feature only when the attached host or board supports the command and capabilities. The <strong>TCP packet backbone</strong> carries the mesh packets in length-prefixed frames, while DHT RPC has its own message set on the same listener. Use the repository protocol tables for byte order, type IDs, command availability and version handling. Prefer the parser, encoder and compatibility tests when the prose disagrees with current code.</p>
+<p>OTA packages include board identity, version, image size, hash and signature. Staging limits and local/remote apply policy differ by board and firmware configuration. Transport and authorization must be validated separately from the image’s signature. Use a version-matched image for every board in a rollout and check the device after restart.</p>
+</section>
+
+<section id="diagnostics" data-source="docs/GUIDE.md:419,441,449,453,494,531,629,663,738; docs/FIELD-TEST.md; maarse-host/src/telemetry.rs; maarse-host/src/extra_links.rs; maarse-host/src/mqtt.rs">
+<h2>Diagnostics, telemetry and integrations</h2>
+<p>Start with the link closest to the user. The host's Devices list describes active packet and modem links, last activity, counters and supported modem readings. The node Status view describes its identity, role, battery, radio configuration and routing counters. The server dashboard adds network-wide observations from the vantage point of that host.</p>
+<table>
+<caption>What to check when a link or feature fails</caption>
+<thead><tr><th scope="col">Symptom</th><th scope="col">First checks</th></tr></thead>
+<tbody>
+<tr><th scope="row">Client cannot connect</th><td>Confirm the connection mode, host URL, HTTP listener or USB/Bluetooth connection. Check the applicable credential. With HTTPS use WSS to the correct proxy and verify it forwards WebSocket upgrades.</td></tr>
+<tr><th scope="row">Nearby nodes never appear</th><td>Verify that radio frequency, bandwidth, spreading factor and coding rate match. Check modem mode, antenna, Device link status and the Neighbours view.</td></tr>
+<tr><th scope="row">Small texts work, large transfers stall</th><td>Check route class, file size, airtime and repeater load. The most constrained hop dictates usable throughput. Try a short text and a much smaller file separately.</td></tr>
+<tr><th scope="row">Remote contact missing</th><td>Check packet link status, advertised address, reachability and DHT discovery policy. Allow an intended private gateway explicitly. Compare the route and timestamps from each end.</td></tr>
+<tr><th scope="row">Offline delivery delayed</th><td>Check whether the item is being carried, held in a text post office or waiting in the sender-host file mailbox. Check quota, expiry and recipient reachability.</td></tr>
+<tr><th scope="row">Range or power differs from plan</th><td>Record board revision, radio parameters, antenna height and orientation, GPS points, environment, interference, packet loss and power source. Measure multiple passes before drawing a conclusion.</td></tr>
+</tbody>
+</table>
+<p>Use trace route for a hop-by-hop view where supported. Compare RSSI, signal-to-noise ratio, noise floor and packet counts over time. Signal measurements describe the receiver's observation of a specific transmission; use repeated readings in both directions to identify an asymmetric or intermittent link.</p>
+<p>Position and telemetry in announces are configurable. Review which fields you share and whether a server republishes any data before enabling the public map. Fixed-node positions remain self-reported. MQTT can forward received telemetry to a broker and supports Home Assistant discovery. Review the broker's visibility, credentials and retained data before linking it.</p>
+<p>The optional MeshCore service uses a separate identity and channels. A backbone administrator grants access by Må:rse person address. Set up the identity under Account, then open MeshCore from Settings on Android or web. Both clients share the same identity, chats and read position. A Heltec V4 can initiate a TLS connection to the backbone as a remote LoRa radio. Repeater administration uses the repeater's own MeshCore login. The optional IP tunnel is a separate host integration requiring platform support and administrative privileges. Prefer a TCP-based route for larger payloads and enable LoRa carriage only deliberately.</p>
+</section>
+
+<section id="simulation" data-source="docs/denmark/README.md:27,101,158,880,943; docs/GUIDE.md:709,738; docs/FIELD-TEST.md; maarse-sim/src/trace.rs; tools/dht_test.py">
+<h2>Simulate, test and measure</h2>
+<p>The Denmark simulator is an interactive way to explore routing, coverage, mobility, backbones, offline delivery and outages. Start with the same scenario for each comparison. Inspect routes, traffic, airtime and delivery events before changing one variable, such as repeater placement, an outage, spreading factor or node movement. Keep the scenario parameters and random seed when comparing outcomes.</p>
+<p>Map and terrain layers help explain coverage estimates. Some enhanced height sources can use a user-provided Dataforsyningen key. Follow the simulator's instructions for whether that key stays in memory or is remembered, and avoid publishing a key in scenario files or screenshots. Map estimates depend on terrain resolution, propagation assumptions and antenna inputs.</p>
+<p>The simulator combines real routing logic with scenario-specific abstractions. Some modeled behavior, including the simulator's described home-routing design, may have no corresponding deployed protocol. Simulated coverage, latency and success rates are useful for comparing scenarios. Use physical field tests to confirm performance for an installation.</p>
+<h3>Verification ladder</h3>
+<ol>
+<li><strong>Component tests</strong> verify packet codecs, protocol handling, cryptography and routing logic.</li>
+<li><strong>Local integration tests</strong> exercise clients, packet links and host interactions. The DHT integration scenario uses five local hosts and explicit permissions for private gateways to verify delivery and a return acknowledgement.</li>
+<li><strong>Board builds</strong> establish whether a specific firmware target compiles with the selected options.</li>
+<li><strong>Field measurements</strong> validate antenna, radio, battery, congestion and regional configuration. Use the field-test guide to record both successes and failures, including packets seen, ACKs, SNR, elapsed time and power.</li>
+<li><strong>Release validation</strong> confirms an exact version, distribution artifact, update workflow and compatibility with deployed peers.</li>
+</ol>
+<p>The CLI simulator can produce an event trace for later analysis. The test lab adds repeatable experiment tooling. Record which environment produced every result so an operator can distinguish a build result from a physical or production observation.</p>
+</section>
+
+<section id="glossary" data-source="README.md; docs/protocol-spec.md; docs/GUIDE.md">
+<h2>Glossary and source materials</h2>
+<dl><dt><strong>Announce</strong></dt><dd>A signed statement about a node and information it chooses to advertise.</dd><dt><strong>ACK</strong></dt><dd>An acknowledgement. Link or hop ACKs support delivery along the route. An end-to-end receipt reports that the receiving node got the message.</dd><dt><strong>Companion</strong></dt><dd>A client interface to a node over an appropriate link. The companion commands and events are distinct from transmitted radio packets.</dd><dt><strong>DHT</strong></dt><dd>A distributed lookup table that helps hosts find gateways and other backbone contacts.</dd><dt><strong>Gateway</strong></dt><dd>A host that provides reachability between links or to nodes behind it.</dd><dt><strong>Post office</strong></dt><dd>A node or host that stores sealed messages for later handover.</dd><dt><strong>Receipt</strong></dt><dd>Evidence of delivery at the relevant protocol layer. A storage confirmation and a recipient delivery receipt establish different events.</dd><dt><strong>RSSI and SNR</strong></dt><dd>Measurements of received signal strength and signal relative to noise.</dd><dt><strong>Trunk</strong></dt><dd>A link between hosts or network segments. A directional LoRa trunk can provide a low-bandwidth backup path.</dd></dl>
+<p>Use the <a href="https://github.com/trixxor/maarse/blob/main/docs/GUIDE.md">technical guide</a> for installation and configuration detail, the <a href="https://github.com/trixxor/maarse/blob/main/docs/protocol-spec.md">protocol specification</a> for wire layouts and command tables, and the <a href="https://github.com/trixxor/maarse/blob/main/docs/FIELD-TEST.md">field-test guide</a> for evidence collection. Links to the public repository can differ from this working-copy snapshot.</p>
+</section>
+<section id="editorial" data-source="docs.meshcore.io; meshtastic.org; reticulum.network">
+<h2>Documentation approach and sources</h2>
+<table><thead><tr><th>Reference</th><th>What it emphasizes</th><th>How this manual applies it</th></tr></thead><tbody>
+<tr><td><a href="https://docs.meshcore.io/">MeshCore Docs</a></td><td>Direct access to CLI commands, companion interfaces, radio presets and wire formats.</td><td>Keep operator options and protocol explanations easy to locate. Expose primary source references in each chapter.</td></tr>
+<tr><td><a href="https://meshtastic.org/docs/getting-started/">Meshtastic Getting Started</a></td><td>A hardware-first path from firmware flashing and configuration to joining a mesh. Configuration is separate from onboarding.</td><td>Let readers choose their device and connection mode, complete a first message, then move on to deployment.</td></tr>
+<tr><td><a href="https://reticulum.network/manual/index.html">Reticulum Manual</a></td><td>High-level concepts alongside interface configuration, network design, security and developer reference.</td><td>Explain packet flow, trust and transport boundaries alongside concrete usage, with separate explanations of routing, post and the DHT.</td></tr>
+</tbody></table>
+<p>This manual records the November 2026 Må:rse working copy. Features with platform limits, draft security work and simulator-specific behavior are labeled in their respective chapters. Use a deployed node’s reported build and capabilities when checking a specific installation.</p>
+</section>
+
+<footer>Må:rse project documentation</footer>
+</main>
+</div>
+<dialog id="search"><form method="dialog" class="search-row"><input id="query" type="search" placeholder="Search the manual" aria-label="Search the manual" autocomplete="off"><button type="submit">Close</button></form><p id="search-count" aria-live="polite"></p><ul id="results" class="results"></ul></dialog>
+<script>
+"use strict";
+const main = document.querySelector("main");
+const sections = [...main.querySelectorAll("section[id]")];
+for (const table of main.querySelectorAll("table")) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "table-wrap";
+  table.before(wrapper);
+  wrapper.append(table);
+}
+for (const chapter of sections) {
+  if (!chapter.dataset.source) continue;
+  const source = document.createElement("details");
+  source.className = "sources";
+  const title = document.createElement("summary");
+  title.textContent = "Source references";
+  const paths = document.createElement("p");
+  paths.textContent = chapter.dataset.source;
+  source.append(title, paths);
+  chapter.append(source);
+}
+const sidebar = document.querySelector("#sidebar");
+const navToggle = document.querySelector("#nav-toggle");
+function setMenu(open) {
+  sidebar.classList.toggle("visible",open);
+  navToggle.setAttribute("aria-expanded",String(open));
+}
+navToggle.addEventListener("click",()=>setMenu(!sidebar.classList.contains("visible")));
+const navLinks = [...sidebar.querySelectorAll("a")];
+for (const link of navLinks) link.addEventListener("click",()=>setMenu(false));
+function selectHash() {
+  for (const link of navLinks) {
+    if (link.hash === location.hash) link.setAttribute("aria-current","location");
+    else link.removeAttribute("aria-current");
+  }
+}
+window.addEventListener("hashchange",selectHash);
+selectHash();
+const search = document.querySelector("#search");
+const query = document.querySelector("#query");
+const results = document.querySelector("#results");
+const count = document.querySelector("#search-count");
+const index = sections.map(chapter => ({
+  id:chapter.id,
+  title:chapter.querySelector("h2").textContent,
+  text:chapter.textContent.replace(/\s+/g," ").trim()
+}));
+function renderSearch() {
+  results.replaceChildren();
+  const terms = query.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = terms.length ? index.filter(item=>terms.every(term=>item.text.toLowerCase().includes(term))) : index;
+  count.textContent = terms.length ? matches.length + (matches.length === 1 ? " chapter found" : " chapters found") : "Browse chapters or search by topic";
+  for (const item of matches) {
+    const listItem = document.createElement("li");
+    const link = document.createElement("a");
+    link.href = "#" + item.id;
+    link.textContent = item.title;
+    if (terms.length) {
+      const excerpt = document.createElement("span");
+      const matchIndex = item.text.toLowerCase().indexOf(terms[0]);
+      excerpt.textContent = item.text.slice(Math.max(0,matchIndex-30),matchIndex+100).trim() + "…";
+      link.append(excerpt);
+    }
+    link.addEventListener("click",()=>search.close());
+    listItem.append(link);
+    results.append(listItem);
+  }
+}
+function openSearch() { if (!search.open) search.showModal(); renderSearch(); query.focus(); }
+document.querySelector("#search-open").addEventListener("click",openSearch);
+query.addEventListener("input",renderSearch);
+document.addEventListener("keydown",event=>{
+  if (event.key === "/" && !event.altKey && !event.ctrlKey && !event.metaKey &&
+      !["INPUT","TEXTAREA"].includes(event.target.tagName) && !search.open) {
+    event.preventDefault();
+    openSearch();
+  }
+});
+for (const flow of document.querySelectorAll("[data-flow]")) {
+  const steps = [...flow.querySelectorAll(".flow-steps li")];
+  const nodes = [...flow.querySelectorAll(".track span")];
+  const packet = flow.querySelector(".packet");
+  const status = flow.querySelector(".flow-status");
+  const prev = flow.querySelector('[data-act="prev"]');
+  const next = flow.querySelector('[data-act="next"]');
+  const play = flow.querySelector('[data-act="play"]');
+  let step = 0;
+  let timer;
+  function draw() {
+    const position = Number(steps[step].dataset.node);
+    packet.style.setProperty("--packet", 12.5 + 25 * position + "%");
+    nodes.forEach((node,i)=>node.classList.toggle("active",i===position));
+    steps.forEach((item,i)=>{
+      item.classList.toggle("active",i===step);
+      if (i===step) item.setAttribute("aria-current","step");
+      else item.removeAttribute("aria-current");
+    });
+    status.textContent = "Step " + (step+1) + " of " + steps.length;
+    prev.disabled = step===0;
+    next.disabled = step===steps.length-1;
+    play.textContent = timer ? "Pause" : step===steps.length-1 ? "Replay" : "Play";
+  }
+  function stop() { clearInterval(timer); timer=undefined; }
+  prev.addEventListener("click",()=>{stop();step--;draw();});
+  next.addEventListener("click",()=>{stop();step++;draw();});
+  play.addEventListener("click",()=>{
+    if (timer) { stop(); draw(); return; }
+    if (step===steps.length-1) step=0;
+    timer=setInterval(()=>{
+      step++;
+      if (step===steps.length-1) stop();
+      draw();
+    },1900);
+    draw();
+  });
+  draw();
+}
+</script>
+</body>
+</html>

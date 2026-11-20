@@ -51,6 +51,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -77,7 +79,7 @@ enum class Tab(val title: String) { CHATS("Chats"), PAGES("Pages"), CONTACTS("No
 
 /** Pages behind "You". */
 enum class MePage(val title: String) {
-    ACCOUNT("Account and devices"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and background"),
+    ACCOUNT("Account and devices"), MESHCORE("MeshCore"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and background"),
     CONNECTION("All connection options"), HOST("Internet link and post office"),
 }
 
@@ -126,6 +128,12 @@ class Nav(start: Screen) {
 
 @Composable
 fun AppShell(nav: Nav) {
+    LaunchedEffect(Unit) {
+        while (true) {
+            Node.pollMeshcoreUnread()
+            delay(30_000)
+        }
+    }
     BackHandler(nav.welcome == null && nav.canGoBack) { nav.back() }
     PagesNav.open = { nav.select(Tab.PAGES, reset = false) }
     PagesNav.contact = { nav.go(Screen.Contact(it)) }
@@ -160,6 +168,7 @@ fun AppShell(nav: Nav) {
 @Composable
 private fun BottomBar(nav: Nav) {
     val unread by Node.unread.collectAsState()
+    val meshcore by Node.meshcoreAccess.collectAsState()
     NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Tab.entries.forEach { t ->
             val icon: ImageVector = when (t) {
@@ -170,8 +179,12 @@ private fun BottomBar(nav: Nav) {
                 selected = nav.tab == t, onClick = { nav.select(t) }, label = { Text(t.title) },
                 colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer),
                 icon = {
-                    val n = if (t == Tab.CHATS) unread.values.sum() else 0
-                    if (n > 0) BadgedBox(badge = { Badge { Text("$n") } }) { Icon(icon, null) } else Icon(icon, null)
+                    val n = when (t) {
+                        Tab.CHATS -> unread.values.sum()
+                        Tab.SETTINGS -> meshcore.totalUnread
+                        else -> 0
+                    }
+                    if (n > 0) BadgedBox(badge = { Badge { Text(if (t == Tab.SETTINGS) "MC $n" else "$n") } }) { Icon(icon, null) } else Icon(icon, null)
                 },
             )
         }
@@ -320,6 +333,7 @@ private fun ConnectionSheet(onDismiss: () -> Unit, onMore: () -> Unit) {
 
 @Composable
 private fun MeScreen(nav: Nav) {
+    val meshcore by Node.meshcoreAccess.collectAsState()
     val me by Node.me.collectAsState()
     val p by Node.person.collectAsState()
     val conn by Node.conn.collectAsState()
@@ -348,6 +362,10 @@ private fun MeScreen(nav: Nav) {
                 PersonState.AWAITING -> "Waiting to be linked"
                 else -> "One address for your phone, PC and more"
             }) { nav.go(Screen.Page(MePage.ACCOUNT)) }
+            if (meshcore.allowed && meshcore.key != null) GroupRow("MeshCore",
+                if (meshcore.totalUnread > 0) "${meshcore.totalUnread} unread" else "Channels, direct messages and nodes") {
+                nav.go(Screen.Page(MePage.MESHCORE))
+            }
             if (p?.state == PersonState.MEMBER) GroupRow("Sync now", "Fetch your mail and copies from your other devices (also done at start-up)") {
                 Node.personSetup(dk.maarse.app.PersonOp.SYNC)
             }
@@ -380,6 +398,7 @@ private fun MePageContent(p: MePage) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
         when (p) {
             MePage.ACCOUNT -> if (me != null) AccountSection() else Hint("Connect first.")
+            MePage.MESHCORE -> if (me != null) MeshCoreAccessSection() else Hint("Connect first.")
             MePage.NODE -> if (me != null) NodeSection() else Hint("Connect first.")
             MePage.RADIO -> if (me != null) NodeSection(radioPart = true) else Hint("Connect first.")
             MePage.APP -> AppSection()

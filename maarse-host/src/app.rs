@@ -13,6 +13,9 @@ macro_rules! eprintln {
 }
 
 mod admin;
+mod meshcore_access;
+#[cfg(not(target_os = "android"))]
+mod meshcore_gateway;
 mod debug;
 mod telemetry;
 mod dht;
@@ -24,7 +27,6 @@ mod history;
 #[cfg(test)]
 mod fuzz_tests;
 mod links;
-mod meshcore;
 mod mqtt;
 mod node;
 mod pagefiles;
@@ -37,9 +39,31 @@ mod web;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender};
 
 pub type LinkId = u32;
+
+/// Writes to a link without blocking the node's routing loop.
+#[derive(Clone)]
+pub enum LinkSender {
+    Unbounded(Sender<Vec<u8>>),
+    Bounded(SyncSender<Vec<u8>>),
+}
+
+impl From<Sender<Vec<u8>>> for LinkSender {
+    fn from(sender: Sender<Vec<u8>>) -> Self {
+        Self::Unbounded(sender)
+    }
+}
+
+impl LinkSender {
+    pub fn send(&self, packet: Vec<u8>) -> Result<(), std::sync::mpsc::TrySendError<Vec<u8>>> {
+        match self {
+            Self::Unbounded(sender) => sender.send(packet).map_err(|err| std::sync::mpsc::TrySendError::Disconnected(err.0)),
+            Self::Bounded(sender) => sender.try_send(packet),
+        }
+    }
+}
 pub type ClientId = u32;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
@@ -54,7 +78,7 @@ pub enum In {
     LinkUp {
         id: LinkId,
         name: String,
-        tx: Sender<Vec<u8>>,
+        tx: LinkSender,
     },
     LinkDown {
         id: LinkId,
@@ -99,6 +123,7 @@ pub enum In {
         frame: Vec<u8>,
     },
     /// Mail fetched from the replica hosts for `recipient` (post offices).
+    MailReplicated { msg_id: u64 },
     MailFetched {
         recipient: maarse_core::Address,
         items: Vec<Vec<u8>>,
@@ -106,6 +131,7 @@ pub enum In {
     /// A DHT request from another backbone host; the answer is sent on `reply`.
     DhtRequest {
         data: Vec<u8>,
+        challenge: Option<[u8; 32]>,
         reply: Sender<Vec<u8>>,
     },
     /// An IP packet from the TUN adapter (`--tun`).
@@ -143,6 +169,7 @@ pub struct Config {
     pub public_map: bool,
     /// `--require-key`: the access key also from 127.0.0.1.
     pub require_key: bool,
+    pub allow_legacy_web_token: bool,
     pub max_file: u32,
     /// The file mailbox quota per recipient and in total (bytes; 0 disables it).
     pub filebox_per_recipient: u64,
@@ -153,6 +180,7 @@ pub struct Config {
     pub public_addr: Option<String>,
     /// DHT seeds (lookups only, no packet connection).
     pub dht_seeds: Vec<String>,
+    pub dht_private_endpoints: Vec<String>,
     /// DNS names that resolve to several backbone nodes (`--seed-dns`),
     /// resolved at start-up into peers.
     pub seed_dns: Vec<String>,
@@ -177,6 +205,7 @@ pub struct Config {
     pub no_relay: bool,
     /// Most mail kept for others, MB (`--mail-quota-mb`; 0 = no limit).
     pub mail_quota_mb: u32,
+    pub mail_replica_ids: Vec<maarse_core::Address>,
     /// The page server: do not share pages (`--no-pages`), pages per 30 s
     /// per reader over LoRa and over the internet (`--pages-burst-lora`,
     /// `--pages-burst-net`), notes kept per board (`--board-keep`), seconds
@@ -200,10 +229,8 @@ pub struct Config {
     /// Re-flood every path request from TCP on the radio, as before
     /// (`--no-bordercast`).
     pub no_bordercast: bool,
-    /// MeshCore gateway: serial port to a companion_radio_usb node.
-    pub meshcore: Option<String>,
-    pub meshcore_baud: u32,
-    pub meshcore_bridge: Vec<meshcore::Mapping>,
+    pub meshcore_gateway: Option<SocketAddr>,
+    pub meshcore_worker: SocketAddr,
     /// MQTT bridge (`--mqtt`).
     pub mqtt: Option<mqtt::MqttConfig>,
     /// Message history: number of days to keep (`None` = `--no-history`).
@@ -309,7 +336,7 @@ Usage: maarse-host [options]
 
   --data <folder>       where identity and settings are stored (default: maarse-data)
   --http <addr:port>    web client and WebSocket (default: 127.0.0.1:8080, 'off' disables)
-  --listen <addr:port>  accept backbone connections over TCP (default: 0.0.0.0:4242, 'off' disables)
+  --listen <addr:port>  accept backbone connections over TCP (default: 127.0.0.1:4242, 'off' disables)
   --peer <host:port>    connect to another maarse-host (can be repeated)
   --serial <port>       LoRa node in modem mode, e.g. COM3 or /dev/ttyACM0
   --baud <rate>         serial baud rate (default: 115200)
@@ -358,11 +385,16 @@ Usage: maarse-host [options]
                         others can look up the addresses I can reach
   --dht <host:port>     DHT seed (lookups only, can be repeated). --peer and
                         --public are also used as seeds
+  --dht-allow-private <host:port>
+                        allow a private DHT-discovered endpoint without using
+                        it as a seed (can be repeated)
   --seed-dns <name[:port]>
                         a DNS name with several backbone nodes behind it;
                         all of them become peers (can be repeated)
   --set-admin-password <password>
                         maarse-server: set the dashboard's admin password and exit
+  --set-admin-password-stdin
+                        set the dashboard password from one line on stdin and exit
   --no-post-office      do not keep mail for others (told to the backbone,
                         so no one picks this host as a replica)
   --modem-key <passphrase>
@@ -379,7 +411,9 @@ Usage: maarse-host [options]
                         keeps its own list in blocked.txt
   --no-relay            do not relay for hosts behind NAT (only addresses
                         heard over our own radio are published)
-  --mail-quota-mb <N>   keep at most N MB of mail for others (0 = no limit)
+  --mail-replica-id <address>
+                        allow this authenticated host in replica selection (repeatable)
+  --mail-quota-mb <N>   keep at most N MB of mail for others (default: 200, 0 = no limit)
   --min-peers <N>       keep at least N backbone links, connecting to nodes
                         from the DHT when there are fewer (default 0;
                         maarse-server 6)
@@ -394,13 +428,8 @@ Usage: maarse-host [options]
                         routes at the host, so a route may be 12 hops per side)
   --no-bordercast       put every path request from TCP on the radio (default:
                         only for nodes heard over our own radio, or on a retry)
-  --meshcore <port>     gateway to MeshCore: a MeshCore node running the
-                        companion_radio_usb firmware on this port, e.g. COM5
-  --meshcore-baud <rate>
-                        baud rate for the MeshCore node (default: 115200)
-  --meshcore-bridge <maarse-channel>=<meshcore-channel>
-                        link two channels, e.g. public=public or
-                        #aarhus=#aarhus (can be repeated; default: public=public)
+  --meshcore-gateway <addr:port>  accept outbound MeshCore gateways over TLS
+  --meshcore-worker <addr:port>  loopback KISS listener for the radio worker (default: 127.0.0.1:5057)
   --mqtt <host:port>    MQTT bridge: publish received telemetry, positions and
                         channel messages as JSON, with Home Assistant discovery
   --mqtt-prefix <topic> topic prefix (default: maarse)
@@ -424,6 +453,8 @@ Usage: maarse-host [options]
   --public-map          share this host's map data (its site, nodes with a
                         shared position, the radio links it hears) with
                         everyone at /api/public/map (for map pages)
+  --allow-legacy-web-token
+                        allow deprecated URL query keys during upgrades
   --require-key         ask for the access key from this machine too (for
                         phones and shared computers, where other programs
                         can reach 127.0.0.1)
@@ -462,8 +493,8 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
     let mut c = Config {
         data_dir: default_data_dir(),
         // The server's dashboard is reached from elsewhere, behind its login.
-        http: Some(if backbone { "0.0.0.0:8080" } else { "127.0.0.1:8080" }.parse().unwrap()),
-        listen: Some("0.0.0.0:4242".parse().unwrap()),
+        http: Some("127.0.0.1:8080".parse().unwrap()),
+        listen: Some("127.0.0.1:4242".parse().unwrap()),
         peers: Vec::new(),
         serial: None,
         baud: 115_200,
@@ -475,7 +506,8 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         udp_peers: Vec::new(),
         udp_broadcast: None,
         open_browser: true,
-        require_key: false,
+        require_key: backbone,
+        allow_legacy_web_token: false,
         public_map: false,
         max_file: maarse_hostrules::filebox::MAX_FILE_DEFAULT,
         filebox_per_recipient: 20 << 20,
@@ -483,12 +515,14 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         postbox: None,
         public_addr: None,
         dht_seeds: Vec::new(),
+        dht_private_endpoints: Vec::new(),
         seed_dns: Vec::new(),
         min_peers: if backbone { 6 } else { 0 },
         backbone,
         no_post_office: false,
         no_relay: false,
-        mail_quota_mb: 0,
+        mail_quota_mb: 200,
+        mail_replica_ids: Vec::new(),
         no_pages: false,
         pages_burst_lora: maarse_hostrules::pages::BURST_LORA,
         pages_burst_net: maarse_hostrules::pages::BURST_NET,
@@ -504,9 +538,8 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         repeater_role: false,
         trunks: Vec::new(),
         no_bordercast: false,
-        meshcore: None,
-        meshcore_baud: 115_200,
-        meshcore_bridge: Vec::new(),
+        meshcore_gateway: None,
+        meshcore_worker: SocketAddr::from(([127, 0, 0, 1], 5057)),
         mqtt: None,
         history_days: Some(90),
         tun: false,
@@ -558,6 +591,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--udp-broadcast" => c.udp_broadcast = Some(val("--udp-broadcast")?.parse().map_err(|_| "--udp-broadcast: invalid port")?),
             "--no-browser" => c.open_browser = false,
             "--require-key" => c.require_key = true,
+            "--allow-legacy-web-token" => c.allow_legacy_web_token = true,
             "--public-map" => c.public_map = true,
             "--service" => {
                 c.service = true;
@@ -576,6 +610,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--issuer-key" => c.issuer_key = Some(PathBuf::from(val("--issuer-key")?)),
             "--issuer-cert" => c.issuer_cert = Some(PathBuf::from(val("--issuer-cert")?)),
             "--dht" => c.dht_seeds.push(val("--dht")?),
+            "--dht-allow-private" => c.dht_private_endpoints.push(val("--dht-allow-private")?),
             "--seed-dns" => c.seed_dns.push(val("--seed-dns")?),
             "--no-post-office" => c.no_post_office = true,
             "--no-relay" => c.no_relay = true,
@@ -601,6 +636,20 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
                 }
                 c.modem_key = Some(k);
             }
+            "--mail-replica-id" => {
+                let value = val("--mail-replica-id")?;
+                if value.len() != 32 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err("--mail-replica-id: the address must be 32 hex characters".into());
+                }
+                let bytes: Vec<_> = (0..32).step_by(2)
+                    .map(|i| u8::from_str_radix(&value[i..i + 2], 16).unwrap())
+                    .collect();
+                let id = maarse_core::Address::from_slice(&bytes).unwrap();
+                if id == maarse_core::Address::default() {
+                    return Err("--mail-replica-id: the bootstrap placeholder cannot be a replica ID".into());
+                }
+                c.mail_replica_ids.push(id);
+            }
             "--mail-quota-mb" => c.mail_quota_mb = val("--mail-quota-mb")?.parse().map_err(|_| "--mail-quota-mb: invalid number")?,
             "--no-pages" => c.no_pages = true,
             "--no-previews" => c.no_previews = true,
@@ -621,16 +670,12 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
                 c.trunks.push((port, baud));
             }
             "--no-bordercast" => c.no_bordercast = true,
-            "--meshcore" => c.meshcore = Some(val("--meshcore")?),
-            "--meshcore-baud" => {
-                c.meshcore_baud = val("--meshcore-baud")?
-                    .parse()
-                    .map_err(|_| "--meshcore-baud: invalid number")?
+            "--meshcore-gateway" => {
+                c.meshcore_gateway = Some(val("--meshcore-gateway")?.parse().map_err(|_| "invalid MeshCore gateway address")?);
             }
-            "--meshcore-bridge" => c
-                .meshcore_bridge
-                .push(meshcore::parse_mapping(&val("--meshcore-bridge")?)?),
-
+            "--meshcore-worker" => {
+                c.meshcore_worker = val("--meshcore-worker")?.parse().map_err(|_| "invalid MeshCore worker address")?;
+            }
             "--mqtt" => {
                 c.mqtt = Some(mqtt::MqttConfig {
                     addr: val("--mqtt")?,
@@ -742,12 +787,24 @@ pub fn run(cli: Vec<String>) {
     if let Some(code) = alert_tools(&cli) {
         std::process::exit(code);
     }
-    if server_mode() && cli.first().map(String::as_str) == Some("--set-admin-password") {
+    let first = cli.first().map(String::as_str);
+    if server_mode() && matches!(first, Some("--set-admin-password" | "--set-admin-password-stdin")) {
+        use std::io::Read;
         let dir = cli.iter().position(|a| a == "--data").and_then(|i| cli.get(i + 1)).map(PathBuf::from).unwrap_or_else(default_data_dir);
-        let Some(pw) = cli.get(1).filter(|p| p.len() >= 8 && !p.starts_with("--")) else {
-            eprintln!("--set-admin-password <password> [--data <folder>]: at least 8 characters");
-            std::process::exit(2);
+        let from_stdin = first == Some("--set-admin-password-stdin");
+        let mut input = String::new();
+        let pw = if from_stdin {
+            match std::io::stdin().lock().take(4097).read_to_string(&mut input) {
+                Ok(size) if size <= 4096 => input.strip_suffix("\n").unwrap_or(&input).trim_end_matches('\r'),
+                _ => { eprintln!("Could not read the admin password from stdin"); std::process::exit(2); }
+            }
+        } else {
+            cli.get(1).filter(|p| !p.starts_with("--")).map(String::as_str).unwrap_or("")
         };
+        if pw.len() < 8 || pw.contains(['\r', '\n', '\0']) {
+            eprintln!("The admin password must be a single line of at least 8 characters");
+            std::process::exit(2);
+        }
         match admin::set_password(&dir, pw) {
             Ok(()) => {
                 let _ = std::fs::remove_file(dir.join("admin-password.txt"));
@@ -806,8 +863,13 @@ pub fn run(cli: Vec<String>) {
     if cfg.backbone {
         debug::enable();
         admin::load_sessions(&cfg.data_dir);
-        if let Some(pw) = admin::ensure_password(&cfg.data_dir) {
-            println!("  Admin password (first start; also in {}): {pw}", cfg.data_dir.join("admin-password.txt").display());
+        match admin::ensure_password(&cfg.data_dir) {
+            Ok(Some(_)) => println!("  Initial admin password is in {}", cfg.data_dir.join("admin-password.txt").display()),
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Could not initialise dashboard authentication: {error}. Use --set-admin-password-stdin with the same data directory.");
+                std::process::exit(1);
+            }
         }
     }
     let (tx, rx) = std::sync::mpsc::channel();
@@ -901,14 +963,23 @@ pub fn run(cli: Vec<String>) {
             Err(e) => settings::report(format!("  UDP:      could not bind {bind}: {e}"), true),
         }
     }
-    if let Some(port) = &cfg.meshcore {
-        settings::report(format!("  MeshCore: {port} @ {} baud (companion_radio_usb)", cfg.meshcore_baud), false);
-        meshcore::spawn(port.clone(), cfg.meshcore_baud, cfg.meshcore_bridge.clone(), cfg.data_dir.clone(), tx.clone());
-    }
     if let Some(m) = &cfg.mqtt {
         settings::report(format!("  MQTT:     {} (topics under {}/)", m.addr, m.prefix), false);
     }
+    #[cfg(not(target_os = "android"))]
+    if let Some(address) = cfg.meshcore_gateway {
+        if !server_mode() {
+            eprintln!("--meshcore-gateway requires maarse-server");
+            std::process::exit(2);
+        }
+        if let Err(err) = meshcore_gateway::spawn(address, cfg.meshcore_worker, &cfg.data_dir) {
+            eprintln!("MeshCore gateway: {err}");
+            std::process::exit(2);
+        }
+        settings::report(format!("  MeshCore gateway: {address}; radio worker: {}", cfg.meshcore_worker), false);
+    }
     web::REQUIRE_KEY.store(cfg.require_key, std::sync::atomic::Ordering::Relaxed);
+    web::ALLOW_LEGACY_WEB_TOKEN.store(cfg.allow_legacy_web_token, std::sync::atomic::Ordering::Relaxed);
     web::PUBLIC_MAP.store(cfg.public_map, std::sync::atomic::Ordering::Relaxed);
     if let Some(addr) = cfg.http {
         let token = web::access_token(&cfg.data_dir);
@@ -920,14 +991,16 @@ pub fn run(cli: Vec<String>) {
                 } else {
                     settings::report(format!("  Web client: {url}"), false);
                 }
-                if !addr.ip().is_loopback() && !cfg.backbone {
-                    let shown = if addr.ip().is_unspecified() { format!("<this-pc>:{}", addr.port()) } else { addr.to_string() };
-                    println!("  Remote access: requires the access key (see {})", cfg.data_dir.join("access-key.txt").display());
-                    println!("    Browser: http://{shown}/#token={token}");
-                    println!("    App:     address {shown}, key {token}");
+                if !addr.ip().is_loopback() || cfg.require_key {
+                    println!("  Access key file: {}", cfg.data_dir.join("access-key.txt").display());
                 }
                 if cfg.open_browser && !settings::restarted() {
-                    open_browser(&url);
+                    let launch_url = if cfg.require_key && !cfg.backbone {
+                        format!("{url}#token={token}")
+                    } else {
+                        url
+                    };
+                    open_browser(&launch_url);
                 }
             }
             Err(e) => settings::report(format!("  Web client: could not start on {addr}: {e}"), true),

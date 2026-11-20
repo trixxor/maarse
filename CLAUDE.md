@@ -30,3 +30,7 @@ Every user-facing change in the Android app must also be made in the PC
 host's web client (maarse-client, served by maarse-host), and the other way
 round, in the same piece of work, without being asked. Before reporting a
 feature as done, check both; say plainly if one side is not done.
+
+## Documentation updates
+
+Apply the [documentation synchronization rule in AGENTS.md](AGENTS.md) whenever changing behavior, defaults, deployment, security, protocols or compatibility.

@@ -1,0 +1,755 @@
+//! Backbone administrator grants, keyed by Må:rse person address.
+
+use std::{collections::BTreeSet, fs, io, path::Path, sync::Mutex};
+
+static GRANTS: Mutex<()> = Mutex::new(());
+
+fn person_address(value: &str) -> Option<String> {
+    let value = value.trim();
+    (value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| value.to_ascii_lowercase())
+}
+
+fn read_grants(dir: &Path) -> io::Result<BTreeSet<String>> {
+    match fs::read_to_string(dir.join("meshcore-access.txt")) {
+        Ok(text) => text
+            .lines()
+            .map(|value| {
+                person_address(value).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "invalid MeshCore grant")
+                })
+            })
+            .collect(),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(BTreeSet::new()),
+        Err(err) => Err(err),
+    }
+}
+
+pub fn set_grant(dir: &Path, person: &str, allowed: bool) -> io::Result<()> {
+    let person = person_address(person).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Enter a 32-character hexadecimal person address.",
+        )
+    })?;
+    let _guard = GRANTS.lock().unwrap_or_else(|err| err.into_inner());
+    let mut grants = read_grants(dir)?;
+    if allowed {
+        grants.insert(person);
+    } else {
+        grants.remove(&person);
+    }
+    let pending = dir.join("meshcore-access.tmp");
+    fs::write(&pending, grants.into_iter().collect::<Vec<_>>().join("\n"))?;
+    fs::rename(pending, dir.join("meshcore-access.txt"))
+}
+
+// Keep the highest verified list locally so an older, valid signature cannot
+// re-enable a revoked device after this backbone has seen the newer list.
+fn authorize_device(
+    dir: &Path,
+    proof: &maarse_crypto::meshcore_access::AuthorizedDevice,
+) -> io::Result<()> {
+    let _guard = GRANTS.lock().unwrap_or_else(|err| err.into_inner());
+    let person = proof.person.to_string();
+    if !read_grants(dir)?.contains(&person) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "MeshCore access is not granted",
+        ));
+    }
+    let lists = dir.join("meshcore-device-lists");
+    fs::create_dir_all(&lists)?;
+    let path = lists.join(&person);
+    let current = proof.list.to_bytes();
+    match fs::read(&path) {
+        Ok(saved) => {
+            let version = saved
+                .get(..4)
+                .and_then(|bytes| bytes.try_into().ok())
+                .map(u32::from_le_bytes)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "invalid saved device list")
+                })?;
+            if proof.list.version < version
+                || (proof.list.version == version && saved != current.as_slice())
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "stale or conflicting device list",
+                ));
+            }
+            if proof.list.version == version {
+                return Ok(());
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    let pending = path.with_extension("tmp");
+    fs::write(&pending, current.as_slice())?;
+    fs::rename(pending, path)
+}
+
+pub fn page(dir: &Path) -> io::Result<String> {
+    let _guard = GRANTS.lock().unwrap_or_else(|err| err.into_inner());
+    let grants = read_grants(dir)?;
+    let mut page = String::from(
+        r#"<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeshCore access</title><style>
+:root{color-scheme:light dark}body{max-width:44rem;margin:2rem auto;padding:0 1rem;font:1rem system-ui}
+form{display:flex;gap:.5rem;flex-wrap:wrap;margin:1rem 0}input,button{font:inherit;padding:.45rem}li{margin:.5rem 0;overflow-wrap:anywhere}
+</style><a href="/">Backbone dashboard</a><h1>MeshCore access</h1>
+<p>Grant or revoke access by Må:rse person address.</p>
+<form method="post" action="/meshcore-access"><label>Person address<br>
+<input name="person" required pattern="[0-9a-fA-F]{32}" maxlength="32" spellcheck="false"></label>
+<button name="action" value="grant">Grant</button><button name="action" value="revoke">Revoke</button></form>
+<h2>Allowed people</h2>"#,
+    );
+    if grants.is_empty() {
+        page.push_str("<p>No permissions granted.</p>");
+    } else {
+        page.push_str("<ul>");
+        for person in grants {
+            page.push_str(&format!("<li><code>{person}</code></li>"));
+        }
+        page.push_str("</ul>");
+    }
+    Ok(page)
+}
+
+#[derive(serde::Deserialize)]
+struct DeviceProof {
+    device: String,
+    certificate: String,
+    list: String,
+    signature: String,
+    operation: Option<String>,
+}
+
+fn unhex(value: &str) -> Option<Vec<u8>> {
+    if !value.is_ascii() || !value.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..value.len())
+        .step_by(2)
+        .map(|offset| u8::from_str_radix(&value[offset..offset + 2], 16).ok())
+        .collect()
+}
+
+pub fn session(stream: impl io::Read + io::Write, dir: &Path) {
+    use maarse_crypto::{PublicIdentity, meshcore_access::verify_request, person::LIST_MAX_LEN};
+    use rand_core::{OsRng, RngCore};
+    use tungstenite::{Message, protocol::WebSocketConfig};
+
+    let config = WebSocketConfig {
+        max_message_size: Some(2048),
+        max_frame_size: Some(2048),
+        ..Default::default()
+    };
+    let Ok(mut socket) = tungstenite::accept_with_config(stream, Some(config)) else {
+        return;
+    };
+    let mut challenge = [0u8; 32];
+    OsRng.fill_bytes(&mut challenge);
+    let challenge_hex: String = challenge.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hello = serde_json::json!({"challenge": challenge_hex, "version": 1});
+    if socket.send(Message::Text(hello.to_string())).is_err() {
+        return;
+    }
+    let Ok(Message::Text(response)) = socket.read() else {
+        return;
+    };
+    let proof = (|| {
+        let response: DeviceProof = serde_json::from_str(&response).ok()?;
+        let public: [u8; maarse_crypto::PUBLIC_IDENTITY_LEN] =
+            unhex(&response.device)?.try_into().ok()?;
+        let device = PublicIdentity::from_bytes(&public)?;
+        let certificate = unhex(&response.certificate)?.try_into().ok()?;
+        let signature = unhex(&response.signature)?.try_into().ok()?;
+        let list = unhex(&response.list)?;
+        if list.len() > LIST_MAX_LEN {
+            return None;
+        }
+        let operation = response.operation.as_deref().unwrap_or("access");
+        if !valid_operation(operation) {
+            return None;
+        }
+        let proof = verify_request(
+            &device,
+            &certificate,
+            &list,
+            &challenge,
+            operation.as_bytes(),
+            &signature,
+        )
+        .ok()?;
+        authorize_device(dir, &proof).ok()?;
+        Some((proof, operation.to_owned()))
+    })();
+    let reply = match proof {
+        Some((proof, operation)) => {
+            let person = proof.person.to_string();
+            match radio_operation(dir, &person, &operation) {
+                Ok(reply) => reply,
+                Err(_) => {
+                    serde_json::json!({"allowed": true, "person": person, "error": "Radio worker is unavailable"})
+                }
+            }
+        }
+        None => serde_json::json!({"allowed": false}),
+    };
+    let _ = socket.send(Message::Text(reply.to_string()));
+    let _ = socket.close(None);
+}
+
+fn valid_operation(operation: &str) -> bool {
+    if matches!(
+        operation,
+        "access"
+            | "ensure"
+            | "announce"
+            | "scan"
+            | "scan-results"
+            | "public-history"
+            | "direct-list"
+            | "channel-list"
+    ) {
+        return true;
+    }
+    if let Some((verb, rest)) = operation.split_once(':') {
+        if matches!(
+            verb,
+            "repeater-login" | "repeater-command" | "repeater-status"
+        ) {
+            let (key, value) = rest.split_once(':').unwrap_or((rest, ""));
+            return direct_key(key)
+                && if verb == "repeater-status" {
+                    value.is_empty()
+                } else {
+                    value.len() <= 120 && valid_message(value)
+                };
+        }
+        if verb.starts_with("channel-") {
+            let (name, argument) = rest.split_once(':').unwrap_or((rest, ""));
+            return channel_name(name)
+                && match verb {
+                    "channel-join" => {
+                        argument.is_empty() || (argument.len() == 32 && unhex(argument).is_some())
+                    }
+                    "channel-leave" | "channel-history" => argument.is_empty(),
+                    "channel-read" => argument.parse::<u64>().is_ok(),
+                    "channel-send" => argument.len() <= 180 && valid_message(argument),
+                    _ => false,
+                };
+        }
+        if matches!(verb, "direct-history" | "direct-send" | "direct-read") {
+            let (key, argument) = rest.split_once(':').unwrap_or((rest, ""));
+            return direct_key(key)
+                && match verb {
+                    "direct-history" => argument.is_empty(),
+                    "direct-read" => argument.parse::<u64>().is_ok(),
+                    _ => argument.len() <= 120 && valid_message(argument),
+                };
+        }
+    }
+    if let Some(body) = operation.strip_prefix("public-send:") {
+        return body.len() <= 180 && valid_message(body);
+    }
+    operation
+        .strip_prefix("public-read:")
+        .is_some_and(|id| id.parse::<u64>().is_ok())
+}
+
+fn channel_name(name: &str) -> bool {
+    (1..=24).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn channels(node: &Path) -> io::Result<std::collections::BTreeMap<String, String>> {
+    match fs::read_to_string(node.join("channels.txt")) {
+        Ok(data) => Ok(data
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter(|(name, key)| channel_name(name) && key.len() == 32 && unhex(key).is_some())
+            .map(|(name, key)| (name.into(), key.into()))
+            .collect()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(error) => Err(error),
+    }
+}
+
+fn direct_key(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_message(value: &str) -> bool {
+    unhex(value)
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .is_some_and(|message| !message.trim().is_empty() && !message.chars().any(char::is_control))
+}
+
+fn conversation_history(
+    node: &Path,
+    name: &str,
+) -> io::Result<(std::collections::VecDeque<serde_json::Value>, u64, u64)> {
+    use std::io::BufRead;
+    let last_read = match fs::read_to_string(node.join(format!("{name}-read.txt"))) {
+        Ok(value) => value.parse::<u64>().unwrap_or(0),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(error),
+    };
+    let mut recent = std::collections::VecDeque::with_capacity(100);
+    let mut unread = 0;
+    let mut last_id = 0;
+    let log = match fs::File::open(node.join(format!("{name}-history.txt"))) {
+        Ok(log) => log,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok((recent, unread, last_id));
+        }
+        Err(error) => return Err(error),
+    };
+    for (index, line) in std::io::BufReader::new(log).lines().enumerate() {
+        let line = line?;
+        let mut fields = line.splitn(3, ' ');
+        let (Some(direction), Some(timestamp), Some(body)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let Some(text) = unhex(body).and_then(|bytes| String::from_utf8(bytes).ok()) else {
+            continue;
+        };
+        let Ok(timestamp) = timestamp.parse::<u32>() else {
+            continue;
+        };
+        if !matches!(direction, "in" | "out") {
+            continue;
+        }
+        let id = index as u64 + 1;
+        if direction == "in" && id > last_read {
+            unread += 1;
+        }
+        if recent.len() == 100 {
+            recent.pop_front();
+        }
+        recent.push_back(serde_json::json!({"id": id, "text": text, "timestamp": timestamp, "mine": direction == "out"}));
+        last_id = id;
+    }
+    Ok((recent, unread, last_id))
+}
+
+fn radio_operation(dir: &Path, person: &str, operation: &str) -> io::Result<serde_json::Value> {
+    let key = provision(dir, person, operation == "ensure")?;
+    let mut reply = serde_json::json!({"allowed": true, "person": person, "publicKey": key});
+    if key.is_none() || matches!(operation, "access" | "ensure") {
+        return Ok(reply);
+    }
+    let node = dir.join("meshcore-nodes").join(person);
+    match operation {
+        "announce" | "scan" => {
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(node.join(operation))?;
+            reply["queued"] = operation.into();
+        }
+        "scan-results" => {
+            if node.join("scan").exists() {
+                reply["scanning"] = true.into();
+            } else {
+                match fs::read_to_string(node.join("scan-results.txt")) {
+                    Ok(lines) => {
+                        reply["results"] =
+                            serde_json::json!(lines.lines().take(100).collect::<Vec<_>>())
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                        reply["results"] = serde_json::json!([])
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+        operation if operation.starts_with("repeater-") => {
+            let mut fields = operation.split(':');
+            let verb = fields.next().unwrap();
+            let key = fields.next().unwrap().to_ascii_lowercase();
+            reply["repeater"] = key.as_str().into();
+            if verb == "repeater-status" {
+                let status = node.join(format!("repeater-{key}.txt"));
+                match fs::read(status) {
+                    Ok(text) => {
+                        reply["repeaterStatus"] = String::from_utf8_lossy(&text).into_owned().into()
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        reply["repeaterStatus"] = "Login required.".into()
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                let _guard = GRANTS.lock().unwrap_or_else(|error| error.into_inner());
+                let job = node.join("repeater-job.txt");
+                if job.exists() {
+                    reply["error"] = "A repeater request is already queued.".into();
+                    return Ok(reply);
+                }
+                let value = unhex(fields.next().unwrap()).ok_or(io::ErrorKind::InvalidInput)?;
+                let mut record = format!("{verb}\n{key}\n").into_bytes();
+                record.extend(value);
+                let pending = job.with_extension("tmp");
+                fs::write(&pending, record)?;
+                fs::rename(pending, &job)?;
+                if verb == "repeater-login" {
+                    for _ in 0..10 {
+                        if !job.exists() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    match fs::remove_file(job) {
+                        Ok(()) => {
+                            reply["error"] =
+                                "Radio worker did not accept the login request.".into();
+                            return Ok(reply);
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+                reply["queued"] = verb.into();
+            }
+        }
+        "channel-list" => {
+            reply["channels"] = serde_json::json!(channels(&node)?.into_keys().collect::<Vec<_>>());
+        }
+        operation
+            if operation.starts_with("channel-join:")
+                || operation.starts_with("channel-leave:") =>
+        {
+            use sha2::{Digest, Sha256};
+            let _guard = GRANTS.lock().unwrap_or_else(|error| error.into_inner());
+            let mut configured = channels(&node)?;
+            let mut fields = operation.split(':');
+            let verb = fields.next().unwrap();
+            let name = fields.next().unwrap();
+            if verb == "channel-join" {
+                if configured.len() >= 7 && !configured.contains_key(name) {
+                    reply["error"] = "All seven channel slots are in use.".into();
+                    return Ok(reply);
+                }
+                let key = fields
+                    .next()
+                    .filter(|key| !key.is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        Sha256::digest(format!("#{name}"))[..16]
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect()
+                    });
+                if configured
+                    .get(name)
+                    .is_some_and(|existing| !existing.eq_ignore_ascii_case(&key))
+                    || configured.iter().any(|(existing, secret)| {
+                        existing != name && secret.eq_ignore_ascii_case(&key)
+                    })
+                {
+                    reply["error"] = "That name or channel key is already in use.".into();
+                    return Ok(reply);
+                }
+                configured.insert(name.into(), key);
+            } else {
+                configured.remove(name);
+            }
+            let pending = node.join("channels.tmp");
+            let records: String = configured
+                .iter()
+                .map(|(name, key)| format!("{name} {key}\n"))
+                .collect();
+            fs::write(&pending, records)?;
+            fs::rename(pending, node.join("channels.txt"))?;
+            reply["channels"] = serde_json::json!(configured.into_keys().collect::<Vec<_>>());
+        }
+        "direct-list" => {
+            let conversations = direct_conversations(&node)?;
+            reply["contacts"] = serde_json::json!(conversations);
+        }
+        operation
+            if operation == "public-history"
+                || operation.starts_with("direct-history:")
+                || operation.starts_with("channel-history:") =>
+        {
+            let name = conversation_name(operation);
+            let (messages, unread, last_id) = conversation_history(&node, &name)?;
+            if let Some(contact) = name.strip_prefix("direct-") {
+                reply["contact"] = contact.into();
+                if let Ok(error) = fs::read_to_string(node.join(format!("{name}-error.txt"))) {
+                    reply["error"] = error.into();
+                }
+            }
+            if let Some(channel) = name.strip_prefix("channel-") {
+                reply["channel"] = channel.into();
+            }
+            reply["messages"] = serde_json::json!(messages);
+            reply["unread"] = unread.into();
+            reply["lastId"] = last_id.into();
+            reply["totalUnread"] = total_unread(&node, &name, if name.starts_with("channel-") && !channels(&node)?.contains_key(&name[8..]) { 0 } else { unread })?.into();
+        }
+        operation
+            if operation.starts_with("public-send:")
+                || operation.starts_with("direct-send:")
+                || operation.starts_with("channel-send:") =>
+        {
+            let _guard = GRANTS.lock().unwrap_or_else(|err| err.into_inner());
+            let name = conversation_name(operation);
+            let request = node.join(if name == "public" {
+                "public-send.txt"
+            } else {
+                if name.starts_with("channel-") {
+                    "channel-send.txt"
+                } else {
+                    "direct-send.txt"
+                }
+            });
+            if request.exists() {
+                reply["error"] = "A message is already queued. Try again shortly.".into();
+            } else {
+                let message = unhex(operation.rsplit(':').next().unwrap_or(""))
+                    .ok_or(io::ErrorKind::InvalidInput)?;
+                let pending = request.with_extension("tmp");
+                if let Some(contact) = name.strip_prefix("direct-") {
+                    let mut record = contact.as_bytes().to_vec();
+                    record.extend(message);
+                    fs::write(&pending, record)?;
+                    reply["queued"] = "direct-send".into();
+                } else if let Some(channel) = name.strip_prefix("channel-") {
+                    if !channels(&node)?.contains_key(channel) {
+                        reply["error"] = "Join the channel before sending.".into();
+                        return Ok(reply);
+                    }
+                    let mut record = format!("{channel}\n").into_bytes();
+                    record.extend(message);
+                    fs::write(&pending, record)?;
+                    reply["queued"] = "channel-send".into();
+                } else {
+                    fs::write(&pending, message)?;
+                    reply["queued"] = "public-send".into();
+                }
+                fs::rename(pending, request)?;
+            }
+        }
+        operation
+            if operation.starts_with("public-read:")
+                || operation.starts_with("direct-read:")
+                || operation.starts_with("channel-read:") =>
+        {
+            let _guard = GRANTS.lock().unwrap_or_else(|err| err.into_inner());
+            let requested = operation
+                .rsplit(':')
+                .next()
+                .unwrap_or("")
+                .parse::<u64>()
+                .map_err(io::Error::other)?;
+            let name = conversation_name(operation);
+            let (_, _, last_id) = conversation_history(&node, &name)?;
+            let read = node.join(format!("{name}-read.txt"));
+            let previous = fs::read_to_string(&read)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            let pending = read.with_extension("tmp");
+            fs::write(&pending, previous.max(requested.min(last_id)).to_string())?;
+            fs::rename(pending, read)?;
+            let (_, unread, _) = conversation_history(&node, &name)?;
+            if let Some(contact) = name.strip_prefix("direct-") {
+                reply["contact"] = contact.into();
+            }
+            if let Some(channel) = name.strip_prefix("channel-") {
+                reply["channel"] = channel.into();
+            }
+            reply["unread"] = unread.into();
+            reply["totalUnread"] = total_unread(&node, &name, if name.starts_with("channel-") && !channels(&node)?.contains_key(&name[8..]) { 0 } else { unread })?.into();
+        }
+        _ => unreachable!("operation was verified"),
+    }
+    Ok(reply)
+}
+
+fn direct_conversations(node: &Path) -> io::Result<Vec<String>> {
+    let mut conversations = Vec::new();
+    for entry in fs::read_dir(node)? {
+        let name = entry?.file_name();
+        let Some(key) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("direct-"))
+            .and_then(|name| name.strip_suffix("-history.txt"))
+        else {
+            continue;
+        };
+        if direct_key(key) {
+            conversations.push(key.to_owned());
+        }
+    }
+    conversations.sort_unstable();
+    Ok(conversations)
+}
+
+fn unread_only(node: &Path, name: &str) -> io::Result<u64> {
+    use std::io::BufRead;
+    let last_read = match fs::read_to_string(node.join(format!("{name}-read.txt"))) {
+        Ok(value) => value.parse::<usize>().unwrap_or(0),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(error),
+    };
+    let log = match fs::File::open(node.join(format!("{name}-history.txt"))) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    let mut log = std::io::BufReader::new(log);
+    let mut record = String::new();
+    let mut unread = 0;
+    let mut index = 0;
+    while log.read_line(&mut record)? != 0 {
+        index += 1;
+        if index > last_read && let Some(payload) = record.trim_end_matches(['\r', '\n']).strip_prefix("in ")
+            && let Some((timestamp, body)) = payload.split_once(' ')
+            && timestamp.parse::<u32>().is_ok()
+            && unhex(body).is_some_and(|bytes| std::str::from_utf8(&bytes).is_ok()) {
+            unread += 1;
+        }
+        record.clear();
+    }
+    Ok(unread)
+}
+
+fn total_unread(node: &Path, current: &str, current_unread: u64) -> io::Result<u64> {
+    let mut unread = current_unread;
+    if current != "public" {
+        unread = unread.saturating_add(unread_only(node, "public")?);
+    }
+    for contact in direct_conversations(node)? {
+        let name = format!("direct-{contact}");
+        if name != current { unread = unread.saturating_add(unread_only(node, &name)?); }
+    }
+    for name in channels(node)?.into_keys() {
+        let name = format!("channel-{name}");
+        if name != current { unread = unread.saturating_add(unread_only(node, &name)?); }
+    }
+    Ok(unread)
+}
+
+fn conversation_name(operation: &str) -> String {
+    if operation.starts_with("direct-") {
+        let key = operation
+            .split(':')
+            .nth(1)
+            .expect("validated direct operation");
+        format!("direct-{}", key.to_ascii_lowercase())
+    } else if operation.starts_with("channel-") {
+        format!(
+            "channel-{}",
+            operation
+                .split(':')
+                .nth(1)
+                .expect("validated channel operation")
+        )
+    } else {
+        "public".into()
+    }
+}
+
+fn provision(dir: &Path, person: &str, create: bool) -> io::Result<Option<String>> {
+    let root = dir.join("meshcore-nodes");
+    let node = root.join(person);
+    let key_path = node.join("public-key.txt");
+    let read_key = || match fs::read_to_string(&key_path) {
+        Ok(key) if key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+            Ok(Some(key))
+        }
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid MeshCore public key",
+        )),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    };
+    let key = read_key()?;
+    if key.is_some() || !create {
+        return Ok(key);
+    }
+    fs::create_dir_all(&node)?;
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(node.join("provision"))?;
+    for _ in 0..30 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Some(key) = read_key()? {
+            return Ok(Some(key));
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "MeshCore worker did not provision the identity",
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use maarse_crypto::{
+        Identity,
+        meshcore_access::{sign_request, verify_request},
+        person::{DeviceCert, DeviceEntry, DeviceList},
+    };
+    use rand_core::{OsRng, RngCore};
+
+    #[test]
+    fn access_requires_grant_and_rejects_older_device_lists() {
+        let path =
+            std::env::temp_dir().join(format!("maarse-meshcore-access-{}", OsRng.next_u64()));
+        fs::create_dir(&path).unwrap();
+        let master = Identity::generate(&mut OsRng);
+        let device = Identity::generate(&mut OsRng);
+        let person = master.address();
+        let certificate = DeviceCert::issue(&master, &device.address(), 0).to_bytes();
+        let request = b"access";
+        let challenge = [1; 32];
+        let signature = sign_request(&device, &challenge, request, &person);
+        let proof_for = |version| {
+            let list = DeviceList::issue(
+                &master,
+                version,
+                &[DeviceEntry {
+                    addr: device.address(),
+                    revoked: false,
+                }],
+            )
+            .unwrap();
+            verify_request(
+                &device.public(),
+                &certificate,
+                list.to_bytes().as_slice(),
+                &challenge,
+                request,
+                &signature,
+            )
+            .unwrap()
+        };
+        let old = proof_for(1);
+        let new = proof_for(2);
+        assert!(authorize_device(&path, &old).is_err());
+        set_grant(&path, &person.to_string(), true).unwrap();
+        authorize_device(&path, &old).unwrap();
+        authorize_device(&path, &new).unwrap();
+        authorize_device(&path, &new).unwrap();
+        assert!(authorize_device(&path, &old).is_err());
+        set_grant(&path, &person.to_string(), false).unwrap();
+        assert!(authorize_device(&path, &new).is_err());
+        fs::remove_dir_all(path).unwrap();
+    }
+}

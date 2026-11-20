@@ -48,7 +48,7 @@ pub(super) fn lock_files(root: &Path, path: &str, page: Option<&Path>) -> Vec<Pa
     let mut v: Vec<PathBuf> = page.map(Path::to_path_buf).into_iter().collect();
     for folder in lock_folders(path) {
         let idx = root.join(folder).join("index.mu");
-        if idx.is_file() && !v.contains(&idx) {
+        if !v.contains(&idx) && !fs::symlink_metadata(&idx).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) {
             v.push(idx);
         }
     }
@@ -62,8 +62,8 @@ pub(super) fn board_file(page: &Path) -> PathBuf {
 }
 
 /// The note lines kept for a board, newest last.
-pub(super) fn read_notes(file: &Path) -> Vec<String> {
-    fs::read_to_string(file).unwrap_or_default().lines().filter(|l| is_note(l)).map(str::to_string).collect()
+pub(super) fn read_notes(root: &Path, file: &Path) -> Vec<String> {
+    crate::pagefiles::read_markup(root, file).unwrap_or_default().lines().filter(|l| is_note(l)).map(str::to_string).collect()
 }
 
 /// What a reader gets for a locked page.
@@ -81,7 +81,7 @@ pub(super) enum Access {
 impl Node {
     /// Members of `pages/.groups` group `name`.
     fn group(&self, root: &Path, name: &str) -> Vec<Address> {
-        let text = fs::read_to_string(root.join(".groups")).unwrap_or_default();
+        let text = crate::pagefiles::read_markup(root, &root.join(".groups")).unwrap_or_default();
         text.lines()
             .filter_map(|l| {
                 let mut w = l.split_whitespace();
@@ -115,7 +115,8 @@ impl Node {
         let mut result = Access::Open;
         let now = unix_now();
         for f in lock_files(&root, path, page) {
-            let lock = lock_of(&fs::read_to_string(&f).unwrap_or_default());
+            let Ok(markup) = crate::pagefiles::read_markup(&root, &f) else { return Access::Hidden };
+            let lock = lock_of(&markup);
             if !lock.applies(now) {
                 continue;
             }
@@ -137,7 +138,7 @@ impl Node {
         if !outside_code(markup).any(|l| l.trim_start().starts_with("@board")) {
             return markup.to_string();
         }
-        let notes = read_notes(&board_file(page));
+        let notes = read_notes(&self.pages_dir(), &board_file(page));
         let mut out = String::with_capacity(markup.len() + notes.len() * 80);
         let mut fence = false;
         for line in markup.lines() {
@@ -167,7 +168,7 @@ impl Node {
     pub(super) fn on_board_post(&mut self, from: Address, path: &str, text: &[u8]) -> Result<(), &'static str> {
         let root = self.pages_dir();
         let page = super::pages::find_page(&root, path).ok_or("no such page")?;
-        let markup = fs::read_to_string(&page).map_err(|_| "no such page")?;
+        let markup = crate::pagefiles::read_markup(&root, &page).map_err(|_| "no such page")?;
         if !has_board(&markup) {
             return Err("this page has no notice board");
         }
@@ -183,7 +184,8 @@ impl Node {
         let name = self.ext.names.get(&from).map(|(n, _)| String::from_utf8_lossy(n).replace(['\t', '\n'], " ")).unwrap_or_default();
         let name = if from == self.addr && name.is_empty() { self.ext.name.replace(['\t', '\n'], " ") } else { name };
         let file = board_file(&page);
-        let mut notes = read_notes(&file);
+        crate::pagefiles::checked_path(&root, &file).map_err(|_| "unsafe board path")?;
+        let mut notes = read_notes(&root, &file);
         notes.push(format!("{now}\t{}\t{name}\t{text}", hex(&from)));
         let skip = notes.len().saturating_sub(self.pages.board_keep);
         let body = notes[skip..].join("\n") + "\n";
@@ -207,7 +209,7 @@ impl Node {
 
 /// The preview token of a picture file, e.g. `~1200x800:Aa0…`.
 pub(crate) fn preview_token(data: &[u8]) -> Option<String> {
-    let img = image::load_from_memory(data).ok()?;
+    let img = super::pages::decode_picture(data)?;
     let (w, h) = (img.width(), img.height());
     let small = img.resize_exact(4, 3, image::imageops::FilterType::Triangle).to_rgb8();
     Some(maarse_hostrules::pagelock::preview_from_pixels(w, h, small.as_raw()))

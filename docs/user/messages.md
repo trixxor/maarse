@@ -47,8 +47,8 @@ for me?", and the message arrives. Anna's phone then shows *✓ Delivered*.
 Good to know:
 
 - A post office keeps messages for **7 days**.
-- Every message is kept in **three** post offices, so one broken office does
-  not lose it.
+- A host can keep copies in up to three replica positions. Availability,
+  quota and successful storage determine how many copies actually exist.
 - If your phone's connection to its radio drops for a while (Bluetooth out
   of range, say), the radio does not pretend it delivered messages to you.
   They wait at the post office, and you get them when your phone reconnects.

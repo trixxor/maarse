@@ -19,6 +19,7 @@ pub mod bulletin;
 pub mod files;
 pub mod ota;
 pub mod person;
+pub mod meshcore_access;
 pub mod ratchet;
 pub mod recovery;
 pub mod seal;
@@ -40,6 +41,17 @@ pub const MAX_APP_DATA: usize =
 /// Domain separation, so an announce signature cannot be reused for anything else.
 const ANNOUNCE_CONTEXT: &[u8] = b"maarse/announce/v0";
 
+fn dht_route_digest(route: &[u8]) -> [u8; 32] {
+    Sha256::new().chain_update(b"maarse/dht-route/v1").chain_update(route).finalize().into()
+}
+
+fn dht_exchange_digest(context: &[u8], challenge: &[u8; 32], request: &[u8], response: &[u8]) -> [u8; 32] {
+    Sha256::new().chain_update(context)
+        .chain_update(challenge)
+        .chain_update((request.len() as u64).to_le_bytes()).chain_update(request)
+        .chain_update(response).finalize().into()
+}
+
 /// Public part of an identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicIdentity {
@@ -56,6 +68,21 @@ impl PublicIdentity {
         let mut a = [0u8; 16];
         a.copy_from_slice(&digest[..16]);
         Address(a)
+    }
+
+    pub fn verify_dht_reply(&self, challenge: &[u8; 32], request: &[u8], response: &[u8], signature: &[u8; SIGNATURE_LEN]) -> bool {
+        let Ok(key) = VerifyingKey::from_bytes(&self.sign) else { return false };
+        key.verify_strict(&dht_exchange_digest(b"maarse/dht-reply/v1", challenge, request, response), &Signature::from_bytes(signature)).is_ok()
+    }
+
+    pub fn verify_dht_request(&self, server_challenge: &[u8; 32], client_challenge: &[u8; 32], request: &[u8], signature: &[u8; SIGNATURE_LEN]) -> bool {
+        let Ok(key) = VerifyingKey::from_bytes(&self.sign) else { return false };
+        key.verify_strict(&dht_exchange_digest(b"maarse/dht-request/v1", server_challenge, request, client_challenge), &Signature::from_bytes(signature)).is_ok()
+    }
+
+    pub fn verify_dht_route(&self, route: &[u8], signature: &[u8; SIGNATURE_LEN]) -> bool {
+        let Ok(key) = VerifyingKey::from_bytes(&self.sign) else { return false };
+        key.verify_strict(&dht_route_digest(route), &Signature::from_bytes(signature)).is_ok()
     }
 
     pub fn to_bytes(&self) -> [u8; PUBLIC_IDENTITY_LEN] {
@@ -123,6 +150,18 @@ impl Identity {
         self.public().address()
     }
 
+    pub fn sign_dht_reply(&self, challenge: &[u8; 32], request: &[u8], response: &[u8]) -> [u8; SIGNATURE_LEN] {
+        self.sign.sign(&dht_exchange_digest(b"maarse/dht-reply/v1", challenge, request, response)).to_bytes()
+    }
+
+    pub fn sign_dht_request(&self, server_challenge: &[u8; 32], client_challenge: &[u8; 32], request: &[u8]) -> [u8; SIGNATURE_LEN] {
+        self.sign.sign(&dht_exchange_digest(b"maarse/dht-request/v1", server_challenge, request, client_challenge)).to_bytes()
+    }
+
+    pub fn sign_dht_route(&self, route: &[u8]) -> [u8; SIGNATURE_LEN] {
+        self.sign.sign(&dht_route_digest(route)).to_bytes()
+    }
+
     pub(crate) fn signing_key(&self) -> &SigningKey {
         &self.sign
     }
@@ -168,6 +207,11 @@ pub enum AnnounceError {
     /// The address does not match the keys.
     WrongAddress,
     BadSignature,
+}
+
+/// Reads the timestamp from an announcement that has already been verified.
+pub fn announce_timestamp(verified: &[u8]) -> Option<u32> {
+    Some(u32::from_be_bytes(verified.get(64..68)?.try_into().ok()?))
 }
 
 /// Verifies an announce against the packet's destination address.

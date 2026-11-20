@@ -19,9 +19,7 @@ on:
         required: true
 
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 
 concurrency:
   group: release
@@ -44,6 +42,8 @@ jobs:
           - { board: xiao-esp32s3, kind: esp }
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Version without the v
         run: echo "MAARSE_FW_VERSION=${MAARSE_FW_VERSION#v}" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
@@ -82,8 +82,14 @@ jobs:
           KEY_B64: ${{ secrets.MAARSE_SIGN_KEY_B64 }}
         run: |
           if [ -n "$KEY_B64" ]; then
-            echo "$KEY_B64" | base64 -d > "$RUNNER_TEMP/sign.key"
+            umask 077
+            printf '%s' "$KEY_B64" | base64 -d > "$RUNNER_TEMP/sign.key"
+            cargo run --locked -q -p maarse-uf2 --bin maarse-sign -- check-release-key \
+              --pubkey "$MAARSE_RELEASE_PUBKEY" --key "$RUNNER_TEMP/sign.key"
             echo "MAARSE_SIGN_KEY=$RUNNER_TEMP/sign.key" >> "$GITHUB_ENV"
+          elif [ -n "$MAARSE_RELEASE_PUBKEY" ]; then
+            cargo run --locked -q -p maarse-uf2 --bin maarse-sign -- check-release-key \
+              --pubkey "$MAARSE_RELEASE_PUBKEY"
           fi
       - run: ./scripts/build-firmware.sh ${{ matrix.board }}
       - name: Trim the merged ESP image (padded with 0xFF to the full flash)
@@ -105,6 +111,10 @@ jobs:
           if-no-files-found: ignore
 
   publish:
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
     needs: firmware
     runs-on: ubuntu-latest
     environment:
@@ -112,12 +122,16 @@ jobs:
       url: ${{ steps.pages.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           path: fw
           pattern: fw-*
           merge-multiple: true
       - name: Checksums and site
+        env:
+          PAGES_CNAME: ${{ vars.PAGES_CNAME }}
         run: |
           V="${MAARSE_FW_VERSION#v}"
           (cd fw && sha256sum * > SHA256SUMS && ls -la)
@@ -132,7 +146,7 @@ jobs:
           cat > site/firmware/index.json <<EOF
           {"version":"$V","commit":"$GITHUB_SHA","built":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
           EOF
-          [ -n "${{ vars.PAGES_CNAME }}" ] && echo "${{ vars.PAGES_CNAME }}" > site/CNAME || true
+          [ -n "$PAGES_CNAME" ] && printf '%s\n' "$PAGES_CNAME" > site/CNAME || true
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version) }}

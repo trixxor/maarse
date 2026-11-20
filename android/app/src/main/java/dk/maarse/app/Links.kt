@@ -141,11 +141,13 @@ class BleLink(ctx: Context, private val address: String, private val l: LinkList
 }
 
 /** maarse-host over WebSocket: the phone's own host, or a host elsewhere (VPN). */
-class WsLink(private val url: String, override val name: String, private val l: LinkListener) : Link {
+class WsLink(url: String, override val name: String, private val l: LinkListener, token: String = "") : Link {
     private val main = Handler(Looper.getMainLooper())
     private var closed = false
     private val decoder = FrameDecoder()
-    private val ws: WebSocket = client.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
+    private val ws: WebSocket = client.newWebSocket(Request.Builder().url(url).apply {
+        if (token.isNotEmpty()) header("Authorization", "Bearer $token")
+    }.build(), object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) { main.post { l.onOpen(this@WsLink) } }
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             val b = bytes.toByteArray()

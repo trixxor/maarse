@@ -1,12 +1,13 @@
 //! Web client over HTTP and the companion protocol over WebSocket (same port).
 
 use crate::{In, next_id};
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::io::{self, Cursor, Read, Write};
+use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use maarse_core::companion::FrameDecoder;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::{Error as WsError, Message};
@@ -36,75 +37,119 @@ pub fn access_token(data_dir: &std::path::Path) -> String {
     t
 }
 
-pub fn spawn(addr: SocketAddr, token: String, data_dir: PathBuf, tx: Sender<In>) -> std::io::Result<()> {
+const MAX_WEB_CONNECTIONS: usize = 64;
+const MAX_HTTP_HEAD: usize = 16 * 1024;
+const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct ConnectionSlot(Arc<AtomicUsize>);
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+pub fn spawn(addr: SocketAddr, token: String, data_dir: PathBuf, tx: Sender<In>) -> io::Result<()> {
     let listener = crate::settings::bind(addr)?;
-    let token = std::sync::Arc::new(token);
-    let data_dir = std::sync::Arc::new(data_dir);
+    let token = Arc::new(token);
+    let data_dir = Arc::new(data_dir);
+    let active = Arc::new(AtomicUsize::new(0));
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let (tx, token, dd) = (tx.clone(), token.clone(), data_dir.clone());
-            thread::spawn(move || handle(stream, &token, &dd, tx));
+            if active.load(Ordering::Relaxed) >= MAX_WEB_CONNECTIONS { continue; }
+            active.fetch_add(1, Ordering::Relaxed);
+            let slot = ConnectionSlot(active.clone());
+            let (tx, token, data_dir) = (tx.clone(), token.clone(), data_dir.clone());
+            let _ = thread::Builder::new().name("web-client".into()).spawn(move || {
+                let _slot = slot;
+                handle(stream, &token, &data_dir, tx);
+            });
         }
     });
     Ok(())
 }
 
-/// Does the connection come from this computer (loopback or its own IP)?
-fn is_local(stream: &TcpStream) -> bool {
-    match (stream.peer_addr(), stream.local_addr()) {
-        (Ok(p), Ok(l)) => p.ip().is_loopback() || p.ip() == l.ip(),
-        _ => false,
+fn local_ip(stream: &TcpStream) -> Option<IpAddr> {
+    let local = stream.local_addr().ok()?.ip();
+    let peer = stream.peer_addr().ok()?.ip();
+    (peer.is_loopback() || peer == local).then_some(local)
+}
+
+fn set_deadline(stream: &TcpStream, deadline: Instant) -> io::Result<()> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() { return Err(io::ErrorKind::TimedOut.into()); }
+    stream.set_read_timeout(Some(remaining))
+}
+
+fn read_head(stream: &mut TcpStream, deadline: Instant) -> io::Result<(Vec<u8>, usize)> {
+    let mut request = Vec::with_capacity(1024);
+    let mut buffer = [0; 1024];
+    while request.len() < MAX_HTTP_HEAD {
+        set_deadline(stream, deadline)?;
+        let limit = (MAX_HTTP_HEAD - request.len()).min(buffer.len());
+        let n = stream.read(&mut buffer[..limit])?;
+        if n == 0 { return Err(io::ErrorKind::UnexpectedEof.into()); }
+        let start = request.len().saturating_sub(3);
+        request.extend_from_slice(&buffer[..n]);
+        if let Some(end) = request[start..].windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+            return Ok((request, start + end + 4));
+        }
     }
+    Err(io::ErrorKind::InvalidData.into())
+}
+
+// Hand the already-read bytes to tungstenite, including any frame bytes read
+// together with the handshake. HTTP handlers reuse the same request buffer.
+struct UpgradeStream {
+    socket: TcpStream,
+    prefix: Cursor<Vec<u8>>,
+}
+
+impl Read for UpgradeStream {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.prefix.read(buffer)?;
+        if count > 0 { Ok(count) } else { self.socket.read(buffer) }
+    }
+}
+
+impl Write for UpgradeStream {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> { self.socket.write(bytes) }
+    fn flush(&mut self) -> io::Result<()> { self.socket.flush() }
 }
 
 fn handle(mut stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
-    // The public map (`--public-map`): open to everyone, for map pages on
-    // other sites (the Denmark simulator's real-world mode), no login.
-    {
-        let mut peek = [0u8; 64];
-        let n = stream.peek(&mut peek).unwrap_or(0);
-        if peek[..n].starts_with(b"GET /api/public/map") {
-            let mut sink = [0u8; 4096];
-            let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
-            let _ = stream.read(&mut sink);
-            return if PUBLIC_MAP.load(std::sync::atomic::Ordering::Relaxed) {
-                reply(&mut stream, "200 OK", "application/json", &crate::debug::public_map())
-            } else {
-                reply(&mut stream, "404 Not Found", "application/json", "{\"error\":\"this host does not share a public map (--public-map)\"}")
-            };
-        }
-    }
-    if crate::server_mode() {
-        // maarse-server: only the admin dashboard, behind a login; no chat
-        // client and no WebSocket.
-        return server_http(stream, data_dir);
-    }
-    let mut peek = [0u8; 2048];
-    let n = stream.peek(&mut peek).unwrap_or(0);
-    let head = String::from_utf8_lossy(&peek[..n]).to_ascii_lowercase();
-    if head.contains("upgrade: websocket") {
-        let path = head.split_whitespace().nth(1).unwrap_or("");
-        if path == "/mc" || path.starts_with("/mc?") {
-            mc_socket(stream, token);
+    if stream.set_write_timeout(Some(HTTP_TIMEOUT)).is_err() { return; }
+    let Ok((request, end)) = read_head(&mut stream, Instant::now() + HTTP_TIMEOUT) else { return };
+    let Ok(head) = std::str::from_utf8(&request[..end]) else { return };
+    let mut request_line = head.lines().next().unwrap_or("").split_whitespace();
+    let (Some(method), Some(target)) = (request_line.next(), request_line.next()) else { return };
+    let path = target.split('?').next().unwrap_or("");
+    if method == "GET" && path == "/api/public/map" {
+        return if PUBLIC_MAP.load(Ordering::Relaxed) {
+            reply(&mut stream, "200 OK", "application/json", &crate::debug::public_map())
         } else {
-            websocket(stream, token, tx);
-        }
-    } else {
-        http(stream, token, data_dir);
+            reply(&mut stream, "404 Not Found", "application/json", "{\"error\":\"this host does not share a public map (--public-map)\"}")
+        };
     }
+    let upgrade = method == "GET" && header(head, "upgrade").is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    if crate::server_mode() {
+        if upgrade && path == "/meshcore/session" {
+            let _ = stream.set_read_timeout(Some(HTTP_TIMEOUT));
+            return crate::meshcore_access::session(UpgradeStream { socket: stream, prefix: Cursor::new(request) }, data_dir);
+        }
+        return server_http(stream, request, end, data_dir);
+    }
+    if upgrade {
+        if path != "/ws" {
+            return reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "Not found.");
+        }
+        return websocket(UpgradeStream { socket: stream, prefix: Cursor::new(request) }, token, tx);
+    }
+    http(stream, request, end, token, data_dir);
 }
 
-fn http(mut stream: TcpStream, token: &str, data_dir: &Path) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let mut req = Vec::new();
-    let mut buf = [0u8; 1024];
-    while !req.windows(4).any(|w| w == b"\r\n\r\n") && req.len() < 16 * 1024 {
-        match stream.read(&mut buf) {
-            Ok(0) | Err(_) => return,
-            Ok(n) => req.extend_from_slice(&buf[..n]),
-        }
-    }
-    let line = String::from_utf8_lossy(&req).into_owned();
+fn http(mut stream: TcpStream, req: Vec<u8>, head_end: usize, token: &str, data_dir: &Path) {
+    let line = String::from_utf8_lossy(&req[..head_end]).into_owned();
     let mut words = line.split_whitespace();
     let method = words.next().unwrap_or("GET").to_string();
     let target = words.next().unwrap_or("/");
@@ -126,12 +171,7 @@ fn http(mut stream: TcpStream, token: &str, data_dir: &Path) {
         "/icon-512.png" => ("200 OK", "image/png", ICON_512),
         _ => ("404 Not Found", "text/plain; charset=utf-8", "Not found".as_bytes()),
     };
-    let resp = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    let _ = stream.write_all(resp.as_bytes());
-    let _ = stream.write_all(body);
+    send(&mut stream, status, ctype, "", body);
 }
 
 // ---------- maarse-server: login and dashboard ----------
@@ -168,17 +208,29 @@ fn send(stream: &mut TcpStream, status: &str, ctype: &str, extra: &str, body: &[
     let _ = stream.write_all(body);
 }
 
-fn server_http(mut stream: TcpStream, data_dir: &Path) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let mut req = Vec::new();
-    let mut buf = [0u8; 2048];
-    while !req.windows(4).any(|w| w == b"\r\n\r\n") && req.len() < 16 * 1024 {
-        match stream.read(&mut buf) {
-            Ok(0) | Err(_) => return,
-            Ok(n) => req.extend_from_slice(&buf[..n]),
-        }
+fn request_body<'a>(stream: &mut TcpStream, request: &'a mut Vec<u8>, head_end: usize, max: usize, timeout: Duration) -> Result<&'a [u8], &'static str> {
+    let head = std::str::from_utf8(&request[..head_end]).map_err(|_| "Invalid headers")?;
+    let mut lengths = head.lines().skip(1).filter_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim().eq_ignore_ascii_case("content-length").then_some(value.trim())
+    });
+    let len = lengths.next().ok_or("Missing Content-Length")?.parse::<usize>().map_err(|_| "Invalid Content-Length")?;
+    if lengths.next().is_some() || header(head, "transfer-encoding").is_some() { return Err("Ambiguous request body"); }
+    if len > max { return Err("Request body is too large"); }
+    let end = head_end + len;
+    let deadline = Instant::now() + timeout;
+    let mut buffer = [0; 4096];
+    while request.len() < end {
+        set_deadline(stream, deadline).map_err(|_| "Incomplete request body")?;
+        let limit = (end - request.len()).min(buffer.len());
+        let count = stream.read(&mut buffer[..limit]).map_err(|_| "Incomplete request body")?;
+        if count == 0 { return Err("Incomplete request body"); }
+        request.extend_from_slice(&buffer[..count]);
     }
-    let head_end = req.windows(4).position(|w| w == b"\r\n\r\n").map_or(req.len(), |p| p + 4);
+    Ok(&request[head_end..end])
+}
+
+fn server_http(mut stream: TcpStream, mut req: Vec<u8>, head_end: usize, data_dir: &Path) {
     let head = String::from_utf8_lossy(&req[..head_end]).into_owned();
     let mut words = head.split_whitespace();
     let method = words.next().unwrap_or("GET").to_string();
@@ -188,15 +240,11 @@ fn server_http(mut stream: TcpStream, data_dir: &Path) {
     let html = "text/html; charset=utf-8";
     let jsn = "application/json; charset=utf-8";
     if path == "/login" && method == "POST" {
-        let len: usize = header(&head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0).min(4096);
-        let mut body = req[head_end.min(req.len())..].to_vec();
-        while body.len() < len {
-            match stream.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => body.extend_from_slice(&buf[..n]),
-            }
-        }
-        let text = String::from_utf8_lossy(&body[..len.min(body.len())]).into_owned();
+        let body = match request_body(&mut stream, &mut req, head_end, 4096, HTTP_TIMEOUT) {
+            Ok(body) => body,
+            Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+        };
+        let text = String::from_utf8_lossy(body);
         let pw = text.split('&').find_map(|kv| kv.strip_prefix("password=")).map(url_decode).unwrap_or_default();
         return match crate::admin::login(data_dir, ip, &pw) {
             Some(tok) => {
@@ -238,6 +286,36 @@ fn server_http(mut stream: TcpStream, data_dir: &Path) {
             send(&mut stream, "200 OK", jsn, "", crate::service::log_json(since).as_bytes())
         }
         ("GET", "/api/service/status") => send(&mut stream, "200 OK", jsn, "", crate::service::status_json(data_dir).as_bytes()),
+        ("GET", "/meshcore-access") => match crate::meshcore_access::page(data_dir) {
+            Ok(page) => send(&mut stream, "200 OK", html, "", page.as_bytes()),
+            Err(_) => send(&mut stream, "500 Internal Server Error", "text/plain; charset=utf-8", "", b"Could not read MeshCore grants."),
+        },
+        ("POST", "/meshcore-access") => {
+            let text_type = "text/plain; charset=utf-8";
+            let host = header(&head, "host").unwrap_or("");
+            if header(&head, "origin").is_some_and(|origin| origin != format!("http://{host}") && origin != format!("https://{host}")) {
+                return send(&mut stream, "403 Forbidden", text_type, "", b"Wrong origin.");
+            }
+            let body = match request_body(&mut stream, &mut req, head_end, 256, HTTP_TIMEOUT) {
+                Ok(body) => body,
+                Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+            };
+            let form = String::from_utf8_lossy(body);
+            let field = |key: &str| form.split('&').find_map(|item| item.split_once('=').filter(|(name, _)| *name == key).map(|(_, value)| url_decode(value)));
+            let (Some(person), Some(action)) = (field("person"), field("action")) else {
+                return send(&mut stream, "400 Bad Request", text_type, "", b"Person and action are required.");
+            };
+            let allowed = match action.as_str() {
+                "grant" => true,
+                "revoke" => false,
+                _ => return send(&mut stream, "400 Bad Request", text_type, "", b"Unknown grant action."),
+            };
+            match crate::meshcore_access::set_grant(data_dir, &person, allowed) {
+                Ok(()) => send(&mut stream, "303 See Other", html, "Location: /meshcore-access\r\n", b""),
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => send(&mut stream, "400 Bad Request", text_type, "", err.to_string().as_bytes()),
+                Err(_) => send(&mut stream, "500 Internal Server Error", text_type, "", b"Could not save MeshCore grants."),
+            }
+        }
         ("GET", "/api/settings") => send(&mut stream, "200 OK", jsn, "", crate::settings::status_json(data_dir).as_bytes()),
         // The page server's files (the dashboard's Pages tab).
         ("GET", "/api/pages/files") => send(&mut stream, "200 OK", jsn, "", crate::pagefiles::list(data_dir).to_string().as_bytes()),
@@ -256,23 +334,11 @@ fn server_http(mut stream: TcpStream, data_dir: &Path) {
             let rel = url_decode(query.split('&').find_map(|kv| kv.strip_prefix("path=")).unwrap_or(""));
             let result = match method.as_str() {
                 "PUT" => {
-                    let len: usize = header(&head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
-                    if len > crate::pagefiles::MAX_FILE {
-                        return send(&mut stream, "413 Payload Too Large", "text/plain; charset=utf-8", "", b"larger than 2 MB");
-                    }
-                    let mut body = req[head_end.min(req.len())..].to_vec();
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-                    while body.len() < len {
-                        match stream.read(&mut buf) {
-                            Ok(0) | Err(_) => break,
-                            Ok(n) => body.extend_from_slice(&buf[..n]),
-                        }
-                    }
-                    if body.len() < len {
-                        Err("the upload was cut short".to_string())
-                    } else {
-                        crate::pagefiles::write(data_dir, &rel, &body[..len])
-                    }
+                    let body = match request_body(&mut stream, &mut req, head_end, crate::pagefiles::MAX_FILE, Duration::from_secs(30)) {
+                        Ok(body) => body,
+                        Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+                    };
+                    crate::pagefiles::write(data_dir, &rel, body)
                 }
                 "DELETE" => crate::pagefiles::delete(data_dir, &rel),
                 _ => crate::pagefiles::mkdir(data_dir, &rel),
@@ -295,15 +361,11 @@ fn server_http(mut stream: TcpStream, data_dir: &Path) {
             if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
                 return send(&mut stream, "403 Forbidden", "text/plain; charset=utf-8", "", b"wrong origin");
             }
-            let len: usize = header(&head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0).min(4096);
-            let mut body = req[head_end.min(req.len())..].to_vec();
-            while body.len() < len {
-                match stream.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => body.extend_from_slice(&buf[..n]),
-                }
-            }
-            let v: serde_json::Value = serde_json::from_slice(&body[..len.min(body.len())]).unwrap_or_default();
+            let body = match request_body(&mut stream, &mut req, head_end, 4096, HTTP_TIMEOUT) {
+                Ok(body) => body,
+                Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+            };
+            let v: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
             let target = v["target"].as_str().unwrap_or("").trim().to_string();
             let result: Result<String, String> = match v["op"].as_str().unwrap_or("") {
                 "block" => crate::guard::block(&target).map(|_| format!("{target} blocked")),
@@ -329,15 +391,11 @@ fn server_http(mut stream: TcpStream, data_dir: &Path) {
             if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
                 return send(&mut stream, "403 Forbidden", "text/plain; charset=utf-8", "", b"wrong origin");
             }
-            let len: usize = header(&head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0).min(64 * 1024);
-            let mut body = req[head_end.min(req.len())..].to_vec();
-            while body.len() < len {
-                match stream.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => body.extend_from_slice(&buf[..n]),
-                }
-            }
-            let text = String::from_utf8_lossy(&body[..len.min(body.len())]).into_owned();
+            let body = match request_body(&mut stream, &mut req, head_end, 64 * 1024, HTTP_TIMEOUT) {
+                Ok(body) => body,
+                Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+            };
+            let text = String::from_utf8_lossy(body);
             if path == "/api/admin/password" {
                 let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
                 let (old, new) = (v["old"].as_str().unwrap_or(""), v["new"].as_str().unwrap_or(""));
@@ -382,19 +440,16 @@ fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 }
 
 fn reply(stream: &mut TcpStream, status: &str, ctype: &str, body: &str) {
-    let resp = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let _ = stream.write_all(resp.as_bytes());
-    let _ = stream.flush();
+    send(stream, status, ctype,
+        "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\n",
+        body.as_bytes());
 }
 
 #[allow(clippy::too_many_arguments)]
 fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str, mut req: Vec<u8>, token: &str, data_dir: &Path) {
-    let head_end = head.find("\r\n\r\n").unwrap_or(head.len());
-    let head = &head[..head_end];
-    let ok = allowed(query, header(head, "host"), header(head, "origin"), is_local(&stream), token);
+    let head_end = head.len();
+    let provided = bearer(header(head, "authorization")).or_else(|| legacy_token(query));
+    let ok = allowed(provided, header(head, "host"), header(head, "origin"), local_ip(&stream), token);
     if method == "OPTIONS" {
         return reply(&mut stream, "204 No Content", "text/plain", "");
     }
@@ -413,19 +468,11 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
             reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)
         }
         ("POST", "/api/settings") => {
-            let len: usize = header(head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
-            if len > 64 * 1024 {
-                return reply(&mut stream, "413 Payload Too Large", "text/plain", "too large");
-            }
-            let mut body = req.split_off((head_end + 4).min(req.len()));
-            let mut buf = [0u8; 4096];
-            while body.len() < len {
-                match stream.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => body.extend_from_slice(&buf[..n]),
-                }
-            }
-            let text = String::from_utf8_lossy(&body[..len.min(body.len())]).into_owned();
+            let body = match request_body(&mut stream, &mut req, head_end, 64 * 1024, HTTP_TIMEOUT) {
+                Ok(body) => body,
+                Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+            };
+            let text = String::from_utf8_lossy(body);
             match crate::settings::save(data_dir, &text) {
                 Ok(()) => restart_soon(stream),
                 Err(e) => reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", &e),
@@ -459,19 +506,11 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
             Err(_) => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "No backup has been made"),
         },
         ("POST", "/api/account-restore") => {
-            let len: usize = header(head, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
-            if len > 4096 {
-                return reply(&mut stream, "413 Payload Too Large", "text/plain", "too large");
-            }
-            let mut body = req.split_off((head_end + 4).min(req.len()));
-            let mut buf = [0u8; 4096];
-            while body.len() < len {
-                match stream.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => body.extend_from_slice(&buf[..n]),
-                }
-            }
-            match std::fs::write(data_dir.join(crate::node::RESTORE_FILE), &body[..len.min(body.len())]) {
+            let body = match request_body(&mut stream, &mut req, head_end, 4096, HTTP_TIMEOUT) {
+                Ok(body) => body,
+                Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+            };
+            match std::fs::write(data_dir.join(crate::node::RESTORE_FILE), body) {
                 Ok(()) => reply(&mut stream, "200 OK", "text/plain; charset=utf-8", "ok"),
                 Err(e) => reply(&mut stream, "500 Internal Server Error", "text/plain; charset=utf-8", &e.to_string()),
             }
@@ -509,28 +548,35 @@ fn service_worker() -> String {
 /// * From this computer (loopback or its own IP) and from a page with the same host: yes, as
 ///   before. The Origin check prevents a web site you visit from sending
 ///   messages in your name via localhost.
-/// * Everyone else (e.g. the phone over VPN, or the app, which has its own
-///   origin) must bring the access key: `ws://host/ws?token=<key>`.
-/// `--require-key`: no free pass for 127.0.0.1. On a phone every other app
-/// can reach the loopback address, so there the key is always needed.
+/// * Remote clients must supply the access key. Native clients use a bearer
+///   header and browsers offer a credential with the WebSocket subprotocol.
+///
+/// Backbone mode and `--require-key` apply the same policy to loopback.
 pub static REQUIRE_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Temporary migration switch for clients that send the key in the request URL.
+pub static ALLOW_LEGACY_WEB_TOKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// `--public-map`: serve `/api/public/map` to everyone.
 pub static PUBLIC_MAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn allowed(query: &str, host: Option<&str>, origin: Option<&str>, loopback: bool, token: &str) -> bool {
-    let given = query
-        .split('&')
-        .find_map(|kv| kv.strip_prefix("token="))
-        .unwrap_or("");
-    if !token.is_empty() && ct_eq(given.as_bytes(), token.as_bytes()) {
+fn bearer(header: Option<&str>) -> Option<&str> {
+    header?.strip_prefix("Bearer ")
+}
+
+fn legacy_token(query: &str) -> Option<&str> {
+    if !ALLOW_LEGACY_WEB_TOKEN.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    query.split('&').find_map(|parameter| parameter.strip_prefix("token="))
+}
+
+fn allowed(given: Option<&str>, host: Option<&str>, origin: Option<&str>, local: Option<IpAddr>, token: &str) -> bool {
+    if !token.is_empty() && given.is_some_and(|given| ct_eq(given.as_bytes(), token.as_bytes())) {
         return true;
     }
-    let host = host.unwrap_or("");
-    let origin_ok = match origin {
-        None => true,
-        Some(o) => o == format!("http://{host}"),
-    };
-    loopback && origin_ok && !REQUIRE_KEY.load(std::sync::atomic::Ordering::Relaxed)
+    let Some(local) = local else { return false };
+    let Some(host) = host else { return false };
+    local_authority(host, local) && origin.is_none_or(|origin| origin == format!("http://{host}"))
+        && !REQUIRE_KEY.load(Ordering::Relaxed)
 }
 
 /// Constant-time comparison (the key must not be guessable character by character).
@@ -538,77 +584,64 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-type Ws = tungstenite::WebSocket<TcpStream>;
+fn local_authority(host: &str, local: IpAddr) -> bool {
+    let Ok(authority) = host.parse::<tungstenite::http::uri::Authority>() else { return false };
+    let name = authority.host();
+    (local.is_loopback() && name.eq_ignore_ascii_case("localhost"))
+        || name.trim_matches(['[', ']']).parse::<IpAddr>().is_ok_and(|ip| ip == local)
+}
+
+type Ws = tungstenite::WebSocket<UpgradeStream>;
 
 /// WebSocket handshake with access check (see [`allowed`]).
-fn accept(stream: TcpStream, token: &str) -> Option<Ws> {
-    let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+fn accept(stream: UpgradeStream, token: &str) -> Option<Ws> {
+    let peer = stream.socket.peer_addr().map(|a| a.to_string()).unwrap_or_default();
     // Local: loopback, or the same machine via its own network address
     // (e.g. a browser on the PC opening http://<the-pc's-ip>:8080/).
-    let loopback = is_local(&stream);
+    let local = local_ip(&stream.socket);
     #[allow(clippy::result_large_err)] // the signature is given by tungstenite
-    let check = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+    let check = |req: &Request, mut resp: Response| -> Result<Response, ErrorResponse> {
         let origin = req.headers().get("origin").and_then(|v| v.to_str().ok()).unwrap_or("-");
         let h = req.headers();
         let get = |n: &str| h.get(n).and_then(|v| v.to_str().ok());
-        if allowed(req.uri().query().unwrap_or(""), get("host"), get("origin"), loopback, token) {
-            if !loopback {
+        let protocols = get("sec-websocket-protocol").unwrap_or("");
+        let offered = |name| protocols.split(',').any(|p| p.trim() == name);
+        let app_protocol = offered("maarse");
+        let provided = bearer(get("authorization"))
+            .or_else(|| {
+                if app_protocol {
+                    protocols.split(',').find_map(|p| p.trim().strip_prefix("maarse-key."))
+                } else {
+                    None
+                }
+            })
+            .or_else(|| legacy_token(req.uri().query().unwrap_or("")));
+        if allowed(provided, get("host"), get("origin"), local, token) {
+            if app_protocol {
+                resp.headers_mut().insert("sec-websocket-protocol", tungstenite::http::HeaderValue::from_static("maarse"));
+            }
+            if local.is_none() {
                 println!("[web] client connected from {peer} (origin {origin}, {})", req.uri().path());
             }
             Ok(resp)
         } else {
-            let has = req.uri().query().is_some_and(|q| q.contains("token="));
+            let has = provided.is_some();
             println!("[web] rejected {peer} (origin {origin}, {})", if has { "wrong key" } else { "no key" });
             let mut r = ErrorResponse::new(Some("Access key missing or wrong".into()));
             *r.status_mut() = tungstenite::http::StatusCode::FORBIDDEN;
             Err(r)
         }
     };
-    let ws = tungstenite::accept_hdr(stream, check).ok()?;
-    let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(30)));
+    let config = tungstenite::protocol::WebSocketConfig {
+        max_message_size: Some(64 * 1024), max_frame_size: Some(64 * 1024),
+        ..Default::default()
+    };
+    let ws = tungstenite::accept_hdr_with_config(stream, check, Some(config)).ok()?;
+    let _ = ws.get_ref().socket.set_read_timeout(Some(Duration::from_millis(30)));
     Some(ws)
 }
 
-/// `/mc`: MeshCore control with JSON text messages (see meshcore.rs).
-fn mc_socket(stream: TcpStream, token: &str) {
-    let Some(mut ws) = accept(stream, token) else { return };
-    let rx = crate::meshcore::subscribe();
-    let enabled = crate::meshcore::command(r#"{"op":"state"}"#.into());
-    if !enabled && ws.send(Message::Text(crate::meshcore::disabled_state())).is_err() {
-        return;
-    }
-    loop {
-        match ws.read() {
-            Ok(Message::Text(t)) => {
-                if !crate::meshcore::command(t.clone()) {
-                    let op = serde_json::from_str::<serde_json::Value>(&t)
-                        .ok()
-                        .and_then(|v| v["op"].as_str().map(str::to_string))
-                        .unwrap_or_default();
-                    let reply = if op == "state" {
-                        crate::meshcore::disabled_state()
-                    } else {
-                        serde_json::json!({"ev":"err","op":op,"msg":"MeshCore is not enabled"}).to_string()
-                    };
-                    if ws.send(Message::Text(reply)).is_err() {
-                        break;
-                    }
-                }
-            }
-            Ok(Message::Close(_)) => break,
-            Ok(_) => {}
-            Err(WsError::Io(e)) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
-            Err(_) => break,
-        }
-        while let Ok(s) = rx.try_recv() {
-            if ws.send(Message::Text(s)).is_err() {
-                return;
-            }
-        }
-    }
-}
-
-fn websocket(stream: TcpStream, token: &str, tx: Sender<In>) {
+fn websocket(stream: UpgradeStream, token: &str, tx: Sender<In>) {
     let Some(mut ws) = accept(stream, token) else { return };
     let id = next_id();
     let (ctx, crx) = channel::<Vec<u8>>();
@@ -648,4 +681,39 @@ fn websocket(stream: TcpStream, token: &str, tx: Sender<In>) {
         }
     }
     let _ = tx.send(In::ClientDown { id });
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn tokenless_authorities_identify_the_local_listener() {
+        let v4 = "127.0.0.1".parse().unwrap();
+        let v6 = "::1".parse().unwrap();
+        let lan = "192.0.2.17".parse().unwrap();
+        assert!(local_authority("localhost:8080", v4));
+        assert!(local_authority("[::1]:8080", v6));
+        assert!(local_authority("192.0.2.17:8080", lan));
+        assert!(!local_authority("host.example:8080", v4));
+        assert!(!local_authority("localhost:8080", lan));
+        assert!(!local_authority("192.0.2.18:8080", lan));
+    }
+
+    #[test]
+    fn request_parsing_preserves_body_and_handles_incomplete_uploads() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            stream.write_all(b"PUT /api/pages/file HTTP/1.1\r\nContent-Length: 5\r\n").unwrap();
+            stream.write_all(b"\r\nabc").unwrap();
+        });
+        let (mut stream, _) = listener.accept().unwrap();
+        let (mut request, head_end) = read_head(&mut stream, Instant::now() + HTTP_TIMEOUT).unwrap();
+        assert_eq!(request_body(&mut stream, &mut request, head_end, 64, HTTP_TIMEOUT), Err("Incomplete request body"));
+        client.join().unwrap();
+    }
 }

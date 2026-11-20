@@ -445,6 +445,38 @@ impl Node {
                 self.person_sync();
                 self.send_client(id, &Event::Log { text: text(b"Syncing with the other devices and the post offices") });
             }
+            person_op::MESHCORE_PROOF => {
+                let (raw, operation): (&[u8], &[u8]) = match t {
+                    [0, challenge @ ..] => (challenge, b"access"),
+                    [1, challenge @ ..] => (challenge, b"ensure"),
+                    [2, challenge @ ..] => (challenge, b"announce"),
+                    [3, challenge @ ..] => (challenge, b"scan"),
+                    [4, challenge @ ..] => (challenge, b"scan-results"),
+                    [5, challenge @ ..] => (challenge, b"public-history"),
+                    [8, challenge @ ..] => (challenge, b"direct-list"),
+                    [12, challenge @ ..] => (challenge, b"channel-list"),
+                    [6 | 7 | 9 | 10 | 11 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20, rest @ ..] if rest.len() > 32 => (&rest[..32], &rest[32..]),
+                    _ => return fail(self, "Invalid MeshCore operation"),
+                };
+                let Ok(challenge) = <&[u8; 32]>::try_from(raw) else {
+                    return fail(self, "Invalid MeshCore challenge");
+                };
+                let Some(member) = self.persons.me.as_ref() else {
+                    return fail(self, "This device does not belong to a person");
+                };
+                let signature = maarse_crypto::meshcore_access::sign_request(&self.identity, challenge, operation, &member.person());
+                let mut proof = Vec::new();
+                proof.extend_from_slice(&self.identity.public().to_bytes());
+                proof.extend_from_slice(&member.cert.to_bytes());
+                proof.extend_from_slice(&signature);
+                proof.extend_from_slice(&member.list.to_bytes());
+                let size = maarse_core::companion::MAX_TEXT;
+                for (index, chunk) in proof.chunks(size).enumerate() {
+                    self.send_client(id, &Event::MeshCoreProof {
+                        req, offset: (index * size) as u16, total: proof.len() as u16, data: text(chunk),
+                    });
+                }
+            }
             person_op::RESTORE_BACKUP => self.person_restore_backup(id, req, t),
             person_op::REMOVE => match parse_hex_addr(t) {
                 Some(d) => self.remove_device(id, req, d),
@@ -849,26 +881,16 @@ impl Node {
         self.person_mail_turned_up(person, asker);
     }
 
-    /// Our person's mail, fetched from its replicas: open it here and tell
-    /// the replicas it is delivered. Returns false if it is not ours.
+    /// Opens fetched mail for our person. Replica copies expire after their TTL.
     pub(super) fn person_mail_fetched(&mut self, recipient: Address, items: &[Vec<u8>]) -> bool {
         if !self.is_own_person(&recipient) {
             return false;
         }
-        let mut ids = Vec::new();
         for sealed in items {
-            ids.push(maarse_core::mail::mail_id(&recipient, sealed));
             self.open_direct(sealed.clone(), 0, true);
         }
-        if !ids.is_empty() {
-            self.log(format!("fetched {} message(s) for our person from its replicas", ids.len()));
-            let replicas = self.mail_replicas(&recipient);
-            let (me, ep) = (self.addr, self.dht.public_ep.clone());
-            std::thread::spawn(move || {
-                for c in replicas {
-                    let _ = crate::dht::rpc(&c.ep, &me, ep.as_deref(), &crate::dht::Req::MailDelivered { recipient, ids: ids.clone() });
-                }
-            });
+        if !items.is_empty() {
+            self.log(format!("fetched {} message(s) for our person from its replicas", items.len()));
         }
         true
     }

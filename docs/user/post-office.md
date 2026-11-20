@@ -24,14 +24,14 @@ shown at the time it arrives, in the right conversation.
 
 <p align="center"><img src="../img/user-post-office.svg" alt="Timeline: Anna sends, after 45 seconds without a receipt the message goes to a post office, where it waits up to 7 days until Bo is back and it is delivered" width="860"></p>
 
-### 1. Posting: nearby, and in three copies
+### 1. Posting and replication
 
 <p align="center"><img src="../img/user-po-copies.svg" alt="Anna's message goes to her nearest post office, and from there copies go over the internet to three post offices" width="860"></p>
 
 Anna's phone hands the message to the **nearest post office** it can
-reach. That office sends **copies to three post offices** across the
-network. Which three is worked out from Bo's address, so every post office
-in the country can work out where Bo's mail is, wherever Bo turns up.
+reach. That office can send copies to eligible post offices across the backbone.
+The host ranks up to three replica positions using Bo's address. The number
+of stored copies depends on available hosts, quotas and successful writes.
 
 ### 2. Waiting
 
@@ -44,7 +44,7 @@ The message is kept for up to **7 days**. Meanwhile the post office:
 
 ### 3. Picking up
 
-<p align="center"><img src="../img/user-po-pickup.svg" alt="Bo's phone asks the nearest post office for mail; that office fetches the copy from a post office far away and hands the message to Bo; the copies are then deleted" width="860"></p>
+<p align="center"><img src="../img/user-po-pickup.svg" alt="Bo's phone asks the nearest post office for mail; that office fetches the copy from a post office far away and hands the message to Bo" width="860"></p>
 
 Bo's phone asks "any mail for me?":
 
@@ -54,8 +54,8 @@ Bo's phone asks "any mail for me?":
 - every few hours anyway.
 
 The post office Bo asks does not have to be the one Anna posted at. It
-fetches the copy for him. When Bo has the message, **all copies are
-deleted**.
+can fetch a copy for him. Under the current host rules, a copy at another
+replica may remain until expiry after delivery.
 
 ## An example
 
@@ -69,14 +69,16 @@ deleted**.
 >
 > On Sunday morning Bo sails into Grenaa. His phone hears a repeater, asks
 > for mail, and the post office in Aarhus hands him Anna's message. Anna's
-> phone changes to *✓ Delivered*. The copies in Frederikshavn, Odense and
-> Copenhagen are deleted.
+> phone changes to *✓ Delivered*. Other replicas can keep sealed copies
+> until their retention period expires.
 
 ## Is it private?
 
-Yes. The message is locked for Bo **before** it leaves Anna's phone. The
-post office keeps a locked envelope: it can see who it is for, but not what
-it says. Only Bo's device can open it.
+The sending node seals the message for Bo before depositing it. A post
+office can see recipient and traffic metadata and handle ciphertext. Static
+offline mail has no forward secrecy against a later compromise of the
+recipient's long-term key. Recipient authentication at replica fetch is
+still being developed.
 
 ## Who runs the post offices?
 

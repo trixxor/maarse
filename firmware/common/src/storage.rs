@@ -14,6 +14,7 @@
 //!   0x340: "WIF1" + flags (1: bit 0 enabled, bit 1 modem) + SSID (1 + 32) + password (1 + 64) + peer (1 + 64)
 //!   0x400: "RNG1" + range test setting (15, see `rangetest::Config`), only when it should persist
 //!   0x420: "MKY1" + Wi-Fi modem key (32, see `maarse_core::modemauth`)
+//!   0x500: "CTL1" + count (1) + per-administrator remote counter ceilings (up to 4)
 //!   ```
 //!   Without "SHR1" neither position nor telemetry is shared (the default).
 //!   Only written the first time and when radio/administrators/role/regions change.
@@ -75,7 +76,11 @@ const SITE_LEN: usize = 4 + 1 + maarse_core::appdata::SITE_FIXED + maarse_core::
 const _: () = assert!(MODEM_KEY_OFF + MODEM_KEY_LEN <= SITE_OFF);
 const _: () = assert!(WIFI_OFF + WIFI_LEN <= RANGE_OFF);
 /// Used part of the page, rounded up to whole words.
-const USED: usize = (SITE_OFF + SITE_LEN).div_ceil(4) * 4;
+const CONTROL_OFF: usize = 0x500;
+const CONTROL_MAGIC: &[u8; 4] = b"CTL1";
+const CONTROL_LEN: usize = 5 + 4 * 20;
+const USED: usize = (CONTROL_OFF + CONTROL_LEN).div_ceil(4) * 4;
+const _: () = assert!(SITE_OFF + SITE_LEN <= CONTROL_OFF && USED <= PAGE as usize);
 const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
 
 const KNOWN_MAGIC: &[u8; 4] = b"KNW1";
@@ -514,6 +519,45 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
             }
         }
         v
+    }
+
+    fn load_control_limits(&mut self) -> Option<heapless::Vec<(Address, u32), 4>> {
+        let mut buf = [0xff; CONTROL_LEN.div_ceil(4) * 4];
+        self.flash.read(self.cfg + CONTROL_OFF as u32, &mut buf).ok()?;
+        let mut limits = heapless::Vec::new();
+        if &buf[..4] == CONTROL_MAGIC {
+            let count = usize::from(buf[4]);
+            if count > 4 { return None; }
+            for record in buf[5..5 + count * 20].chunks_exact(20) {
+                let address = Address::from_slice(&record[..16]).unwrap();
+                let counter = u32::from_le_bytes(record[16..20].try_into().unwrap());
+                let _ = limits.push((address, counter));
+            }
+        } else if buf.iter().any(|byte| *byte != 0xff) {
+            return None;
+        }
+        Some(limits)
+    }
+
+    fn save_control_limits(&mut self, limits: &[(Address, u32)]) -> bool {
+        if limits.len() > 4 {
+            return false;
+        }
+        let mut buf = [0xff; USED];
+        if self.flash.read(self.cfg, &mut buf).is_err() {
+            return false;
+        }
+        let stored = &mut buf[CONTROL_OFF..CONTROL_OFF + CONTROL_LEN];
+        stored.fill(0xff);
+        stored[..4].copy_from_slice(CONTROL_MAGIC);
+        stored[4] = limits.len() as u8;
+        for ((address, counter), record) in limits.iter().zip(stored[5..].chunks_exact_mut(20)) {
+            record[..16].copy_from_slice(&address.0);
+            record[16..20].copy_from_slice(&counter.to_le_bytes());
+        }
+        self.flash.erase(self.cfg, self.cfg + PAGE).is_ok()
+            && self.flash.write(self.cfg, &buf).is_ok()
+            && self.read_page() == buf
     }
 
     fn known_load(&mut self, f: &mut dyn FnMut(&[u8; 64])) {

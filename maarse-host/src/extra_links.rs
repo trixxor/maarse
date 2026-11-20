@@ -140,7 +140,7 @@ fn run_framed<S: Read + Write>(mut io: S, name: String, kind: &'static str, fram
     let id = next_id();
     let (wtx, wrx) = channel::<Vec<u8>>();
     register(id, &name, kind);
-    if tx.send(In::LinkUp { id, name, tx: wtx }).is_err() {
+    if tx.send(In::LinkUp { id, name, tx: wtx.into() }).is_err() {
         unregister(id);
         return;
     }
@@ -220,7 +220,7 @@ fn open_udp_link(sock: &UdpSocket, instance: u32, addr: SocketAddr, name: String
         }
     });
     register(id, &name, "udp");
-    tx.send(In::LinkUp { id, name, tx: wtx }).ok()?;
+    tx.send(In::LinkUp { id, name, tx: wtx.into() }).ok()?;
     Some(id)
 }
 
@@ -357,7 +357,7 @@ mod tests {
         (End { rx: a.clone(), tx: b.clone(), noise: noise.clone() }, End { rx: b, tx: a, noise })
     }
 
-    fn up(rx: &Receiver<In>) -> (String, Sender<Vec<u8>>) {
+    fn up(rx: &Receiver<In>) -> (String, crate::LinkSender) {
         match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
             In::LinkUp { name, tx, .. } => (name, tx),
             _ => panic!("expected LinkUp"),

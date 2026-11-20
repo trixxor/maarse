@@ -251,6 +251,8 @@ pub mod person_op {
     /// Sync now: fetch the person's mail from its post offices and ask the
     /// other devices for copies of what this device lacks.
     pub const SYNC: u8 = 9;
+    /// Sign a MeshCore service challenge supplied as an operation byte and 32 raw bytes.
+    pub const MESHCORE_PROOF: u8 = 10;
 }
 
 /// States in `Event::Person`.
@@ -633,6 +635,8 @@ pub enum Event {
     /// 0xb8: a backup was written (`account-backup.maarse`); its 6-word code,
     /// sent once. The node does not keep the code.
     PersonBackup { code: Text },
+    /// 0xbc: one chunk of a linked-device proof for the MeshCore service.
+    MeshCoreProof { req: u16, offset: u16, total: u16, data: Text },
 }
 
 /// Per-SF results on a range test receiver (12 bytes): sf | rx (u16) | lost
@@ -1530,6 +1534,8 @@ impl Event {
             }
             Event::PersonPhrase { phrase } => W::new(0xb7).b(phrase).done(),
             Event::PersonBackup { code } => W::new(0xb8).b(code).done(),
+            Event::MeshCoreProof { req, offset, total, data } => W::new(0xbc)
+                .b(&req.to_le_bytes()).b(&offset.to_le_bytes()).b(&total.to_le_bytes()).b(data).done(),
             Event::Power(p) => {
                 let mut w = W::new(0xab)
                     .b(&p.uptime_s.to_le_bytes())
@@ -1736,6 +1742,7 @@ impl Event {
             }
             0xb7 => Event::PersonPhrase { phrase: r.text()? },
             0xb8 => Event::PersonBackup { code: r.text()? },
+            0xbc => Event::MeshCoreProof { req: r.u16()?, offset: r.u16()?, total: r.u16()?, data: r.text()? },
             0xb4 => {
                 let addr = r.addr()?;
                 let identity = r.identity().ok_or(FrameError::TooShort)?;
@@ -1947,6 +1954,7 @@ mod tests {
         roundtrip_ev(Event::Person(PersonInfo::default()));
         roundtrip_ev(Event::PersonPhrase { phrase: text(b"abandon ability able") });
         roundtrip_ev(Event::PersonBackup { code: text(b"one two three four five six") });
+        roundtrip_ev(Event::MeshCoreProof { req: 2, offset: 240, total: 359, data: text(&[0xaa; 119]) });
         assert_eq!(Command::SetIdentity { confirm: true, secret: [1; 64] }.encode()[2], 0x34);
         assert!(Command::decode(&[0x34, 1, 2, 3]).is_err());
         roundtrip_ev(Event::OtaState {

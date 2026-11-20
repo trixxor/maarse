@@ -5,9 +5,8 @@
 //! and installation through [`OtaPort`].
 //!
 //! The release key is built in with `MAARSE_RELEASE_PUBKEY=<64 hex>` and
-//! the version with `MAARSE_FW_VERSION=x.y.z` (otherwise the crate version). Without
-//! a key the public development key is used - anyone can then sign
-//! firmware for the node. Never build releases like that.
+//! the version with `MAARSE_FW_VERSION=x.y.z` (otherwise the crate version).
+//! OTA is disabled when the release key is absent or invalid.
 
 use embassy_time::{Duration, Instant};
 use maarse_core::companion::{Command, Event, OTA_ALLOW_DOWNGRADE, ota_state, text};
@@ -24,11 +23,9 @@ pub trait OtaPort: Staging {
 }
 
 /// The release key the firmware trusts.
-pub fn release_key() -> ([u8; 32], bool) {
-    match option_env!("MAARSE_RELEASE_PUBKEY").and_then(ota::parse_hex32) {
-        Some(k) => (k, false),
-        None => (ota::dev_public_key(), true),
-    }
+fn release_key() -> Option<[u8; 32]> {
+    let key = option_env!("MAARSE_RELEASE_PUBKEY").and_then(ota::parse_hex32)?;
+    ota::valid_release_key(&key).then_some(key)
 }
 
 /// The running firmware's version (major << 16 | minor << 8 | patch).
@@ -45,6 +42,7 @@ const INSTALL_DELAY_REMOTE: Duration = Duration::from_secs(10);
 
 pub struct OtaManager {
     rx: Receiver,
+    key: Option<[u8; 32]>,
     install_at: Option<Instant>,
 }
 
@@ -55,8 +53,8 @@ impl Default for OtaManager {
 }
 
 impl OtaManager {
-    pub const fn new() -> Self {
-        OtaManager { rx: Receiver::new(), install_at: None }
+    pub fn new() -> Self {
+        OtaManager { rx: Receiver::new(), key: release_key(), install_at: None }
     }
 
     pub fn deadline(&self) -> Option<Instant> {
@@ -99,12 +97,14 @@ impl OtaManager {
         let Some(port) = port else {
             return self.state(req, ota_state::UNSUPPORTED, "This board cannot be updated over the air");
         };
+        let Some(key) = self.key else {
+            return self.state(req, ota_state::UNSUPPORTED, "OTA is disabled without a valid release key");
+        };
         if self.install_at.is_some() && !matches!(cmd, Command::OtaStatus) {
             return self.current(req, "Installing - wait for the restart");
         }
         let res = match cmd {
             Command::OtaBegin { flags, manifest, .. } => {
-                let (key, dev) = release_key();
                 let policy = Policy {
                     public_key: key,
                     board: port.board(),
@@ -114,7 +114,7 @@ impl OtaManager {
                 let downgrade = flags & OTA_ALLOW_DOWNGRADE != 0 && !remote;
                 Manifest::parse(manifest)
                     .and_then(|m| self.rx.begin(port, m, &policy, downgrade))
-                    .map(|_| if dev { "WARNING: the node trusts the development key" } else { "Ready" })
+                    .map(|_| "Ready")
             }
             Command::OtaChunk { offset, data, .. } => self.rx.chunk(port, *offset, data).map(|_| ""),
             Command::OtaEnd { apply, .. } => self.rx.end().map(|_| {

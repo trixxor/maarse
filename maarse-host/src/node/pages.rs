@@ -90,11 +90,11 @@ impl Pages {
 pub(crate) fn find_page(root: &Path, path: &str) -> Option<PathBuf> {
     let base = root.join(path);
     let file = base.with_file_name(format!("{}.mu", base.file_name()?.to_string_lossy()));
-    if file.is_file() {
+    if crate::pagefiles::checked_path(root, &file).is_ok() && file.is_file() {
         return Some(file);
     }
     let idx = base.join("index.mu");
-    idx.is_file().then_some(idx)
+    (crate::pagefiles::checked_path(root, &idx).is_ok() && idx.is_file()).then_some(idx)
 }
 
 /// Compresses a page (raw deflate, like `DecompressionStream("deflate-raw")`).
@@ -215,6 +215,16 @@ fn png_grey1(w: u32, h: u32, raw: &[u8]) -> Vec<u8> {
     out
 }
 
+pub(super) fn decode_picture(data: &[u8]) -> Option<image::DynamicImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    reader.decode().ok()
+}
+
 /// The bytes and MIME of a picture: the same steps on every route, so a
 /// page looks the same over LoRa and over the internet and no picture is ever
 /// over 8 KB. The first copy is Greyscale (or dots when smaller); Colour 4 KB
@@ -231,10 +241,10 @@ pub(crate) fn picture_for(data: &[u8], name: &str, style: PicStyle, via_lora: bo
             };
             return Some((data.to_vec(), mime));
         }
-        return colour_picture(&image::load_from_memory(data).ok()?, max).map(|b| (b, WEBP));
+        return colour_picture(&decode_picture(data)?, max).map(|b| (b, WEBP));
     }
     let max = max.min(LORA_PICTURE_MAX);
-    let img = image::load_from_memory(data).ok()?;
+    let img = decode_picture(data)?;
     match style {
         PicStyle::ForceGrey => Some((grey_picture(&img), WEBP)).filter(|(b, _)| b.len() <= max),
         PicStyle::ForceDots => {
@@ -274,7 +284,7 @@ impl Node {
         if !root.is_dir() || self.pages.off {
             return "# No pages\n\nThis node does not share pages.\n".into();
         }
-        match find_page(&root, path).and_then(|f| fs::read_to_string(f).ok()) {
+        match find_page(&root, path).and_then(|f| crate::pagefiles::read_markup(&root, &f).ok()) {
             Some(m) => m,
             None => format!("# Not found\n\nThe page `{path}` does not exist here.\n\n[Front page](/)\n"),
         }
@@ -339,7 +349,9 @@ Too many pages at once: at most {burst} in {} seconds. Wait a moment and try aga
                 super::pagelock::Access::Hidden => return locked(true),
                 _ => {}
             }
-            let made = fs::read(self.pages_dir().join(rel)).ok().and_then(|d| picture_for(&d, rel, style, via_lora, max_bytes));
+            let root = self.pages_dir();
+            let made = crate::pagefiles::read_bounded(&root, &root.join(rel)).ok()
+                .and_then(|d| picture_for(&d, rel, style, via_lora, max_bytes));
             return match made {
                 Some((d, m)) if d.len() <= max_bytes => (d, Small::from_slice(m.as_bytes()).unwrap_or_default()),
                 _ => {
@@ -397,6 +409,7 @@ The page `{path_s}` is {} KB compressed; the limit here is {} KB.
         if !path.starts_with(self.pages_dir()) || src.contains("..") {
             return None;
         }
+        crate::pagefiles::checked_path(&self.pages_dir(), &path).ok()?;
         let modified = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
         let mut cache = self.pages.previews.borrow_mut();
         if let Some((t, tok)) = cache.get(&path)
@@ -404,7 +417,7 @@ The page `{path_s}` is {} KB compressed; the limit here is {} KB.
         {
             return tok.clone();
         }
-        let tok = fs::read(&path).ok().and_then(|d| super::pagelock::preview_token(&d));
+        let tok = crate::pagefiles::read_bounded(&self.pages_dir(), &path).ok().and_then(|d| super::pagelock::preview_token(&d));
         cache.insert(path, (modified, tok.clone()));
         tok
     }

@@ -194,7 +194,7 @@ if [ "$CHANGE" = y ]; then
     fi
   fi
 
-  ARGS="--public-addr $PUBLIC_ADDR --listen 0.0.0.0:$PORT --http $HTTP --min-peers $MIN_PEERS"
+  ARGS="--public-addr $PUBLIC_ADDR --listen 0.0.0.0:$PORT --http $HTTP --require-key --min-peers $MIN_PEERS"
   for p in $PEERS; do ARGS="$ARGS --peer $p"; done
   [ -n "$SEED_DNS" ] && ARGS="$ARGS --seed-dns $SEED_DNS"
   for r in $REGIONS; do ARGS="$ARGS --region $r"; done
@@ -231,7 +231,7 @@ if [ ! -f "$DATA/admin.hash" ] || { [ "$UPDATE" = 0 ] && [ "$CHANGE" = y ] && as
     PW1=$(LC_ALL=C tr -dc 'abcdefghjkmnpqrstuvwxyzACDEFGHJKLMNPQRSTUVWXYZ23456789' </dev/urandom 2>/dev/null | head -c 18 || true)
     GENERATED=1
   fi
-  runuser -u "$SVC_USER" -- "$BIN" --set-admin-password "$PW1" --data "$DATA" >/dev/null
+  printf '%s\n' "$PW1" | runuser -u "$SVC_USER" -- "$BIN" --set-admin-password-stdin --data "$DATA" >/dev/null
   rm -f "$DATA/admin-password.txt"
 fi
 
@@ -303,7 +303,12 @@ if [ -n "$HTTPS_DOMAIN" ]; then
     cat >/etc/caddy/Caddyfile <<EOF
 # maarse-server dashboard (written by install-server.sh)
 $HTTPS_DOMAIN {
-	reverse_proxy 127.0.0.1:8080
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory
+	}
+	reverse_proxy 127.0.0.1:8080 {
+		header_down Set-Cookie "(.*)" "\$1; Secure"
+	}
 }
 EOF
   fi

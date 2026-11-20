@@ -105,6 +105,7 @@ object Cmd {
     fun linkDevice(req: Int, device: String) = frame(0x35) { u16(req); addr(device) }
     fun getPerson() = frame(0x36)
     fun personSetup(req: Int, op: Int, text: String = "") = frame(0x37) { u16(req); u8(op); text(text) }
+    fun meshcoreProof(req: Int, operation: Int, challenge: ByteArray, payload: String) = frame(0x37) { u16(req); u8(10); u8(operation); bytes(challenge); text(payload) }
 }
 
 /** `PersonSetup` operations and `Person` states (maarse-core companion.rs). */
@@ -165,6 +166,7 @@ sealed class Ev {
     data class DeviceLinked(val device: String, val index: Int, val words: String) : Ev()
     data class PersonPhrase(val phrase: String) : Ev()
     data class PersonBackup(val code: String) : Ev()
+    data class MeshCoreProof(val req: Int, val offset: Int, val total: Int, val bytes: ByteArray) : Ev()
     data class FileIncoming(val fileId: Long, val from: String, val size: Int, val mime: String, val name: String) : Ev()
     data class FileChunk(val fileId: Long, val offset: Int, val data: ByteArray) : Ev()
     data class FileProgress(val fileId: Long, val done: Int, val total: Int, val outgoing: Boolean) : Ev()
@@ -247,6 +249,7 @@ fun decodeEvent(f: ByteArray): Ev {
         }
         0xb7 -> Ev.PersonPhrase(r.txt(1))
         0xb8 -> Ev.PersonBackup(r.txt(1))
+        0xbc -> if (f.size >= 7) Ev.MeshCoreProof(r.u16(1), r.u16(3), r.u16(5), f.copyOfRange(7, f.size)) else Ev.Unknown(t)
         0xb0 -> Ev.HistoryItem(r.u64(1), r.u32(9), r.u8(13) and 1 != 0, r.u8(13) and 2 != 0, r.u8(14), r.u8(15),
             r.u8(16), r.u64(17), r.addr(25), r.addr(41), f.copyOfRange(minOf(57, f.size), f.size))
         0xb1 -> Ev.HistoryEnd(r.u16(1), r.addr(3), r.u8(19), r.u8(20) != 0, r.u64(21))

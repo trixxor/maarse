@@ -81,16 +81,16 @@ Signed updates of a node that already runs Må:rse still go through the Firmware
 maarse-host can be reached from other machines, e.g. the phone over a VPN home, when it listens on an address other than `127.0.0.1`:
 
 ```text
-maarse-host --http 0.0.0.0:8080 --serial COM6 --meshcore COM9
+maarse-host --http 0.0.0.0:8080 --serial COM6
 ```
 
-At start-up the host prints an **access key** (stored in `<data>/access-key.txt`) and a ready-made address for the browser (`http://<pc>:8080/#token=…`). Connections from the PC itself work without a key as before; all others must bring the key (`ws://…/ws?token=…`), otherwise they are rejected (HTTP 403). In the Android app: tap **maarse-host**, enter the address (e.g. the PC's VPN address `10.8.0.2:8080`) and the key; the app remembers them and reconnects by itself. The phone then uses the PC's node: MeshCore gateway, LoRa via the modem, TCP backbone and history.
+The **access key** is stored in `<data>/access-key.txt`. If needed, open the web client with `#token=…` once to give it the key. Remote requests require the key. Backbone mode and `--require-key` also require it from loopback. Tokenless local access is limited to `localhost` on loopback or the numeric IP address of the listener, with the same HTTP origin for browser requests. A non-local DNS name needs the access key. Keep `--require-key` enabled behind a reverse proxy, including configurations that rewrite the Host header to a local address. In the Android app: tap **maarse-host**, enter the address (e.g. the PC's VPN address `10.8.0.2:8080`) and the key; the app remembers them and reconnects by itself. The phone then uses the PC's node: LoRa via the modem, TCP backbone and history.
 
 Only let the host listen on a network you trust (VPN or home network). The key protects access, but the connection itself is not encrypted without a VPN.
 
 ## Running the host as a service
 
-`maarse-host --service` is meant for running under a service manager: it never opens a browser, and when settings are saved in the web client it exits with code 75 instead of starting a copy of itself, so the service manager starts it again. The host copes with being restarted at any time: a missing serial device (LoRa modem or MeshCore node) is retried every few seconds instead of stopping the host, an unplugged device is reopened when it comes back, and backbone peers (`--peer`) are reconnected every 5 seconds.
+`maarse-host --service` is meant for running under a service manager: it never opens a browser, and when settings are saved in the web client it exits with code 75 instead of starting a copy of itself, so the service manager starts it again. The host copes with being restarted at any time: a missing serial device (LoRa modem) is retried every few seconds instead of stopping the host, an unplugged device is reopened when it comes back, and backbone peers (`--peer`) are reconnected every 5 seconds.
 
 **Linux (systemd).** The unit in `packaging/systemd/maarse-host.service` runs the host as a dynamic user with its data in `/var/lib/maarse-host`, restarts it on failure, and is hardened (read-only system, no home access, no capabilities, only serial devices visible).
 
@@ -126,7 +126,7 @@ cargo build --release -p maarse-host -p maarse-tray
 
 It takes `--task`, `--data` and `--install-dir` if the defaults were changed (the Startup shortcut passes them). `-Uninstall` also removes the shortcut.
 
-**Service page and control API.** The web client's *Service* page (in the tools menu when connected to a host over WebSocket) shows the host's version, uptime, PID, data folder, whether it runs with `--service`, and its links, plus a live log with filter, pause and download, and buttons to restart or stop the host. The same HTTP endpoints can be used by other tools (for example a tray app). Like the other `/api/` endpoints they need the access key as `?token=<key>` (from `access-key.txt` in the data folder), except for requests from the same machine without a foreign `Origin` header.
+**Service page and control API.** The web client's *Service* page (in the tools menu when connected to a host over WebSocket) shows the host's version, uptime, PID, data folder, whether it runs with `--service`, and its links, plus a live log with filter, pause and download, and buttons to restart or stop the host. The same HTTP endpoints can be used by other tools (for example a tray app). Like the other `/api/` endpoints send the access key from `access-key.txt` in the `Authorization: Bearer <key>` header. Ordinary local hosts may allow same-origin loopback requests without a key.
 
 - `GET /api/service/status` returns JSON:
   - `version` (string), `pid` (number), `uptime_s` (seconds since start), `started` (Unix time in seconds)
@@ -156,7 +156,7 @@ It takes `--task`, `--data` and `--install-dir` if the defaults were changed (th
 
 **Telemetry dashboard (admin login)**
 
-`http://<server>:8080/` asks for the admin password. At the first start a random password is printed once and written to `admin-password.txt` in the data folder (delete the file once you have it); `maarse-server --set-admin-password <password>` sets another. After 5 wrong passwords from one address it is locked for 15 minutes. The dashboard is plain HTTP: over the internet put it behind HTTPS (Caddy or nginx as a reverse proxy) or use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 server`, and start with `--http 127.0.0.1:8080`).
+`http://<server>:8080/` asks for the admin password. At the first start a random password is written to `admin-password.txt` in the data folder (delete the file once you have it). The log shows the file path only. `maarse-server --set-admin-password-stdin` sets another from one line on standard input, keeping the password out of the process arguments. Changing the password invalidates all dashboard sessions, including saved ones. After 5 wrong passwords from one address it is locked for 15 minutes. The dashboard is plain HTTP: over the internet put it behind HTTPS (Caddy or nginx as a reverse proxy) or use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 server`, and start with `--http 127.0.0.1:8080`).
 
 What it collects (from everything passing through; message contents stay encrypted):
 
@@ -191,14 +191,14 @@ maarse-server --public-addr server.example.org:4242 [--peer other-server:4242] [
 
 Or fill in the settings at the top of `scripts/start-server.bat` (Windows) or `scripts/start-server.sh` (Linux) and run it: public address, port, peers, DNS seed, regions, dashboard address, admin password, optional modem and data folder. It uses `maarse-server.exe` next to the script, or the one built in the repository (building it the first time).
 
-`--public-addr` is required. Open TCP 4242 (backbone) and 8080 (dashboard, unless you use a proxy or tunnel). As a service: Linux `packaging/systemd/maarse-server.service` (instructions at the top; options in `/etc/default/maarse-server`); Windows from an elevated PowerShell: `.\packaging\windows\install-service.ps1 -Server -HostArgs '--public-addr server.example.org:4242'`. Test: `python tools/server_test.py` (two hosts behind "NAT" write to each other through a server, the dashboard needs the login, a second server finds the first again after a restart).
+`--public-addr` is required. Bind the backbone to the chosen interface with `--listen` and allow that port only where needed. Keep the dashboard on loopback behind an HTTPS proxy or tunnel. As a service: Linux `packaging/systemd/maarse-server.service` (instructions at the top; options in `/etc/default/maarse-server`); Windows from an elevated PowerShell: `.\packaging\windows\install-service.ps1 -Server -HostArgs '--listen 0.0.0.0:4242 --public-addr server.example.org:4242'`. Test: `python tools/server_test.py` (two hosts behind "NAT" write to each other through a server, the dashboard needs the login, a second server finds the first again after a restart).
 
 ## Wi-Fi backbone on ESP32-S3 nodes
 
 A Heltec V4 or XIAO ESP32-S3 can join a Wi-Fi network (for example a phone hotspot on a hilltop) and keep a TCP backbone link to a maarse-host. Everyone who can reach the node over LoRa then reaches the rest of the network: the home host, the DHT and anyone behind it.
 
 - **Setup:** connect to the node over USB or Bluetooth, open *Radio* in the web client and fill in *Wi-Fi backbone*: network name, password and host (`host:port`, port 4242 by default). Saving stores the settings in flash and restarts the node. Leaving the password empty for the same network keeps the saved one.
-- **The host side:** any maarse-host listening on its backbone port (`--listen`, default `0.0.0.0:4242`). The node connects *out*, so it works behind a hotspot's NAT, but the host must be reachable from that network: a public address, a forwarded port or a VPN.
+- **The host side:** a maarse-host listening on an address reachable by the modem, set with `--listen <bind address>:4242`. The node connects *out*, so it works behind a hotspot's NAT, but the host must be reachable from that network: a public address, a forwarded port or a VPN.
 - **How it works** (`firmware/esp/src/wifi.rs`): esp-radio's Wi-Fi driver with embassy-net (DHCP, DNS, TCP). Frames are the backbone's `length (u16 LE) | packet`; a host's region greeting is skipped. The node sends every packet over both LoRa and the link and treats packets from the link as a perfect radio link (SNR 10), like maarse-host does with TCP. The router's duplicate filter stops loops. The link reconnects every 5 s after a failure; joining is retried the same way.
 - **Edge bridge:** the host's announce carries the role *repeater*, so the node hears a repeater over the link. A node with the role *relay* then becomes an edge bridge for its LoRa group automatically (see "Edge bridge").
 - **Protocol:** command `0x28 SetWifi` (`enabled | ssid_len ssid | pass_len pass | peer`, local only: it is refused through `Remote`, as it carries the password), `0x29 GetWifi`, and event `0xa6 Wifi` (`enabled | state | ip (4) | ssid_len ssid | peer`; state 0 off, 1 joining, 2 online, 3 linked). The password is never sent back. Flash: `WIF1` at offset `0x340` of the settings page. nRF52840 boards and maarse-host answer `SetWifi` with an error.
@@ -333,6 +333,13 @@ With `carry_copies > 0` (on in firmware for the relay role with 4 copies; off fo
 
 ## Post offices and LoRa trunks (2026-11-16)
 
+For a managed backbone, repeat `--mail-replica-id <32-hex node address>`
+to restrict the remote replica pool to operator-approved host identities. Mail
+replication and fetches in this mode require mutual DHT authentication with the
+selected identity. Use the same replica policy on hosts that post and retrieve
+mail. A local post office can still hold its local copy. Without this option
+the open-backbone placement policy remains active.
+
 - **Post offices** (`maarse-core/src/mail.rs`, protocol-spec section 8.1): hosts keep mail for nodes that are offline; radio nodes only carry it. Every node picks the best post office it hears (hellos carry the class) as its home and names it in its announce. A message that has not been acknowledged within 45 s goes to the **sender's** home post office, which keeps it and sends copies to the recipient's three replica hosts (rendezvous hashing over the hosts in the DHT, over TCP). The recipient asks for its mail (`MailSync`, 2 hops) when it starts, regains a post office, sees its ID in a post office's hello ("mail waiting") or every 6 hours; its home post office fetches the copies and delivers. A node that has moved also asks its previous home office, which delivers over LoRa if TCP is down. An office without the backbone retries a delivery after 5, 15 and 35 minutes. In maarse-sim, a traveller who switches off in Aalborg and on again in Roenne gets all of the messages written meanwhile, 14 s after switching on (4 % before post offices); with the internet down and LoRa trunks to Zealand and Bornholm, 98 % arrive before the internet returns (`docs/denmark/README.md`, "Post offices and the journey to Bornholm").
 - **LoRa trunks:** `maarse-host --trunk <port>[:baud]` adds a LoRa modem with a directional antenna as a long-distance link (e.g. Aarhus - Zealand, Zealand - Bornholm). It is a backup: routed packets cross only when the trunk is their next hop, alerts always, the host's own hellos and announces, and path or key requests only when TCP cannot reach the other end and the destination is not known on this side (else on a second request). The modem enforces the duty cycle. It uses the same frequency, spreading factor and settings as every other node, so every node can always hear every other; trunks are improved with antennas and smarter software, not other channels. Every 10 minutes each end sends a summary of who is behind it (packet type 15, a Bloom filter), so requests cross only for nodes on the far side.
 
@@ -356,6 +363,14 @@ With `carry_copies > 0` (on in firmware for the relay role with 4 copies; off fo
 - Measured all together, against the chain fixes before this round: national 91 → 96 % shown and 34 % less airtime; car 70 → 97 % and 57 % less; the outage journey to Bornholm 83 → 98 % of the mail and 32 % less; forest 99.7 → 99.1 % (unchanged within noise) and 17 % less; town 59 → 61 %. See `docs/denmark/README.md`, "Smaller and fewer packets".
 
 ## Announces
+
+In the working copy, the host rejects dated announcements older than seven days
+or more than ten minutes ahead of its clock. It preserves the latest accepted
+dated timestamp per destination in its data directory and rejects older
+statements after restart. A clockless announcement is accepted while the host
+has no recent dated statement for that identity. Identical timestamps can
+still be observed again. This host policy also applies to announcements
+learned from the DHT.
 
 A node tells the network it exists with a signed announce (flooded up to 8
 hops). How often:
@@ -406,12 +421,19 @@ Channel messages can be kept within an area. A region is a lowercase name, e.g. 
 
 ## Backbone DHT
 
+The backbone TCP listener defaults to loopback. To accept remote backbone,
+DHT or incoming modem connections, configure `--listen <bind address>:4242`
+explicitly. For a private backbone, bind to the address of an authenticated
+VPN interface and use explicit peer or seed endpoints there. Public
+deployments still require an operator-selected access and transport policy.
+
 - Kademlia-like, with XOR distance on 16-byte addresses, K = 8 and 3 queries per round.
-- An entry says: "address X can be reached via gateway G at host:port". The entry contains X's signed announce, so nobody can invent addresses.
+- An entry says: "address X can be reached via gateway G at host:port". X's signed announce proves its identity. The gateway and endpoint are separate routing data.
+- Automatically discovered endpoints must resolve to an eligible public IP. On a private LAN or VPN, configure peers explicitly with `--peer host:port` or add lookup seeds with `--dht host:port`. Use `--dht-allow-private host:port` to permit a discovered gateway without adding it as a seed. A route learned from the DHT cannot replace the endpoint of an existing contact. A stable hostname allows that endpoint's public IP to change without changing the contact record.
 - Gateways publish every 30 minutes, and entries expire after 2 hours. If the DHT knows several gateways for the same address, the one with the fewest hops wins.
 - When a host sees a path request to an unknown address, it looks the address up. That also happens when a client writes to an unknown address; the message then waits for the answer.
 - When the address is found, the host connects directly to the gateway, and ordinary routing takes care of the rest.
-- DHT traffic uses the same TCP port as the backbone. It is recognised by the first two bytes (`D7 D7`).
+- DHT traffic uses the backbone TCP port. The `D7 D9` exchange authenticates both DHT addresses using fresh challenges. Configured endpoints can fall back to the signed-response `D7 D8` or legacy `D7 D7` exchange. This protects identity on the modern DHT exchange. It does not encrypt DHT traffic or authenticate ordinary backbone packet links.
 - **Full replication in small nets:** with at most 64 known DHT hosts (`dht::FULL_REPLICA_MAX`), a gateway stores its entries on *every* known host, not only the 8 closest. Every host then holds the whole table: lookups are answered locally, and if the backbone splits, each side keeps its copy until the entries expire (2 hours). When a backbone link comes up, the host republishes all its entries at once, so a healed split learns the other side's addresses again within a maintenance round.
 - Mailboxes need no sync after a split: a message waits on the *sender's* host (or one repeater's flash) and is delivered when the recipient's announce reaches it again; the duplicate filter stops double delivery.
 
@@ -511,7 +533,7 @@ The first time a node sends telemetry, Home Assistant discovery is published (`h
 
 Under **Diagnostics → Your name** in the web client you can choose a name of at most 24 bytes (command `0x24 SetName`, `0x25 GetName`, reply `0xa4 Name`). The name is sent in the announce's app data as field `0x05 | length | UTF-8` (`maarse-core/src/appdata.rs`), so older nodes skip it. maarse-host stores it in `<data>/name.txt`, the firmware in flash.
 
-Other people's names come with `NodeInfo` (`0xa3`) and are shown in the web client with `~` in front, e.g. `~Dennis`. A nickname you have given the contact yourself wins. Control characters are removed, and the name is truncated without cutting a character in half. The MeshCore bridge shows the name as `[Må Dennis]`, with brackets removed from the name.
+Other people's names come with `NodeInfo` (`0xa3`) and are shown in the web client with `~` in front, e.g. `~Dennis`. A nickname you have given the contact yourself wins. Control characters are removed, and the name is truncated without cutting a character in half.
 
 **A name proves nothing.** Anyone can call themselves anything. Use the safety number when it matters who you are writing with.
 
@@ -625,39 +647,93 @@ The client asks for the picture like a page, with the step as the first path seg
 
 **Pictures in chats.** When a picture goes over LoRa, the web client and the Android app ask how to send it: colour (up to 8 KB), grey (about 1.3 KB) or dots, each shown with its real size and air time.
 
-## Gateway to MeshCore
+## MeshCore access on the backbone
 
-`maarse-host` can bridge to an existing [MeshCore](https://github.com/meshcore-dev/MeshCore) net, so Må:rse and MeshCore users can write to each other. The host does not reimplement MeshCore's encryption. Instead it drives an ordinary MeshCore node over USB with the same companion protocol MeshCore apps use.
+The working copy removes the previous MeshCore USB bridge and its `/mc` socket.
+Remove `--meshcore`, `--meshcore-baud` and `--meshcore-bridge` from service
+arguments and saved settings before upgrading a host that used the bridge.
 
-Setup:
+On `maarse-server`, sign in to the dashboard and open **MeshCore access** to
+grant or revoke access by Må:rse person address. The grants are persisted in
+`meshcore-access.txt` in the server data directory. When using the dashboard
+remotely, use the same HTTPS reverse proxy or SSH tunnel as for other admin actions.
+On Android or web, open **Account ? MeshCore**, enter the HTTPS address of the
+backbone and choose **Check access**. Once granted, choose **Create MeshCore
+identity**. A master device and its linked devices use the same public key.
+Serve the dashboard and `/meshcore/session` behind an HTTPS reverse proxy that
+forwards WebSocket upgrades. The development worker described below must be
+running to create a new identity. Both clients can queue an announcement and
+a scan and fetch scan results. MeshCore **Public** has its own messages and unread
+counter under **Settings → MeshCore**. Account contains the setup controls.
+The separate MeshCore page appears once the account has a MeshCore identity. The Settings tab displays a separate
+MeshCore unread count across direct messages and joined channels,
+refreshed about every 30 seconds while the client is
+connected and the saved backbone is reachable. Use **Refresh messages** to load recent
+messages and **Mark read** to advance the shared read position on both clients.
+Public messages are limited to 90 UTF-8 bytes. A sent item is recorded when the
+worker queues it in the mesh. For direct messages, open a conversation with the contact's full MeshCore
+public key. The worker must have heard an advert from the contact. Direct
+messages are limited to 60 UTF-8 bytes and share their history and read
+position across clients. A queued message has no confirmed delivery status
+in this interface.
 
-1. Flash a MeshCore node (e.g. XIAO nRF52840, Heltec V3 or RAK4631) with the official **Companion Radio (USB)** firmware (`companion_radio_usb`) from MeshCore's web flasher. The BLE variant does not work, because the host talks over serial.
-2. Set the radio settings (frequency, SF, BW) like the local MeshCore net, e.g. with the MeshCore app, and give the node a name like `Må:rse-gateway`. Then close the app, because only one can use the port at a time.
-3. Start the host:
+Under **Channels**, join a name such as `#local` to use the MeshCore hashtag
+key, or supply the private channel's 16-byte key as 32 hex digits. The two
+clients share the channel list, chat history and read position. Leave a
+channel to stop receiving it on this identity. The worker supports seven
+named channels in addition to Public.
 
-```
-maarse-host --meshcore COM5
-maarse-host --meshcore /dev/ttyACM0 --meshcore-bridge public=public --meshcore-bridge #aarhus=#aarhus
-```
+Open **Repeater administration** and enter the full public key of a repeater
+whose advert the worker has heard. Enter its password and fetch the login
+response. Once the repeater grants administrator access, enter a MeshCore CLI
+command such as `get name` and use **Fetch response** to read its reply. The
+worker expires the administrator session after ten minutes. Passwords pass
+through the HTTPS backbone and its local worker queue, where the request is
+removed when picked up. Keep that data directory private. Repeater login and
+settings changes have not been verified on a physical repeater.
 
-- `--meshcore <port>`: the port with the MeshCore node.
-- `--meshcore-baud <speed>`: default 115200.
-- `--meshcore-bridge <maarse-channel>=<meshcore-channel>`: links two channels (can be repeated). `public` is MeshCore's public channel, `#name` a hashtag channel. Without `=` the same name is used on both sides. If the option is not given, `public=public` is linked.
+The planned client entry is a separate MeshCore area, shown only when the
+backbone confirms access for the signed-in person. This area has its own unread
+count, chats and channels, with discovery and radio status under Nodes. Repeater
+settings open from a repeater's details after MeshCore confirms admin access.
+An offline gateway should be visible in MeshCore while cached conversations
+remain readable.
 
-How the bridge works:
+The backbone will own one MeshCore identity per person address and use the
+Må:rse linked-device relationship to authorize access. Both clients will read
+the same history and use the same public key. Permission changes must be
+enforced by the service, including on existing sessions. The radio connection
+uses a separate gateway credential and carries KISS frames.
 
-- Messages get the sender in front: `[MC Alice] hi` on Må:rse and `[Må 1a2b3c4d] hi` in MeshCore (the Må:rse sender is shown with the first 8 hex characters of the address). In MeshCore the gateway node's name is also in front, because MeshCore always puts the sender's name on channel messages.
-- If a hashtag channel is missing on the MeshCore node, it is created in a free channel slot with the key SHA-256("#name")[0..16], which MeshCore apps use. Occupied slots are not touched.
-- Loops are avoided: text that has already been bridged (`[MC …`/`[Må …`) is not passed on, and the same text in the same channel is bridged at most once in 5 minutes. So two gateways on the same net cannot send a message round in a circle.
-- Direct messages: send a Må:rse DM to the gateway's address with `@Name text`, and it goes to the MeshCore contact `Name`. The contact must be known to the MeshCore node, i.e. it has heard its advert. Replies go back to the latest Må:rse sender. A MeshCore user can also write `@<Må:rse address> text` to the gateway node.
+The HTTP listener permits up to 64 simultaneous connections, including
+WebSockets, with a 16 KiB request header limit. Uploads carry an explicit
+`Content-Length` and must complete before their route's deadline. The normal
+host WebSocket is `/ws` and accepts messages and frames up to 64 KiB.
 
-Limitations:
+### Connect a Heltec V4 radio
 
-- Messages written in the web client on the gateway host itself are not bridged, because the node does not send your own channel messages back to clients. Write from another Må:rse node.
-- Only public channels and hashtag channels. Private channels, files, location and MeshCore's room servers and repeater administration are not supported.
-- MeshCore text is at most 160 bytes including the gateway name, so long Må:rse messages are truncated.
-- Acknowledgements do not cross the bridge. A DM that has reached the gateway says nothing about whether it has arrived on the other side.
-- Tried on hardware 14 November 2026: Heltec V4.3 with MeshCore `companion_radio_usb` (firmware 15 Oct 2026), channel messages both ways between `public` (Må:rse) and `public` (MeshCore), also with a display name. Direct messages and hashtag channels are only tested against frames derived from MeshCore's source code.
+In the backbone data directory, provision `meshcore-gateway-cert.pem` (the
+server certificate and intermediate certificates), `meshcore-gateway-key.pem`
+(the PEM private key) and `meshcore-gateway-token.txt` (a unique random token
+of 32 to 128 URL-safe characters). Keep the key and token private. Start the
+server with `--meshcore-gateway <address:port>` to enable the listener. The
+Heltec initiates TLS to that address and authenticates with its gateway token.
+Use the certificate's server name and issuing CA in the firmware configuration.
+
+The listener pairs one authenticated gateway with one local KISS radio worker
+at a time. The worker connects to `127.0.0.1:5057` by default and can be moved
+to another loopback address with `--meshcore-worker <address:port>`. This local
+socket carries raw KISS without TLS, so it belongs on the same trusted machine.
+The MeshCore PC host's TCP mode can be used as a development radio worker. The
+worker must connect before the gateway handshake can complete. On Windows,
+run `meshcore-host --service --tcp 127.0.0.1:5057 --data <backbone-data>/meshcore-nodes`
+with a private, local node directory. The backbone and worker must share that
+directory. The worker creates or reloads MeshCore identities and the backbone
+returns only the public key to clients. The listener
+and reconnection have been exercised with a simulated gateway and worker. A Heltec V4 on Wi-Fi also
+answered GetVersion and completed a LoRa scan through a local backbone and the
+PC radio worker. One repeater replied. The physical test used temporary TLS
+credentials on a LAN.
 
 ## Tests
 
@@ -744,6 +820,9 @@ cargo run --release -p maarse-lab -- --no-browser --addr 127.0.0.1:8095
 cargo run --release -p maarse-lab -- --port COM6 --port COM7   # real boards too
 ```
 
+The test lab runs processes on the workstation. It listens on loopback only
+and accepts control WebSockets from its own local browser origin.
+
 - **Test overview:** every suite with a short description of what it tests: `cargo test` per crate (with all test names), `maarse-fuzz`, `e2e_test.py`, `dht_test.py`, `radio_test.py` (needs boards and `--port`), the simulator scenarios (Må:rse and flood) and the stamp benchmark. "Run" per suite or "Run all". Output is streamed live, and every test turns green or red with its time.
 - **Simulator live:** runs `maarse-sim --trace-json -` and animates the net on a map: nodes (coloured by role or by airtime used), radio links (stronger for better SNR), transmissions as rings in the packet type's colour, collisions, deliveries and the car on the motorway. Speed 0.25×–50×, pause and step, and Må:rse and flood side by side with the same seed.
 - **Hardware:** with `--port` the boards' RSSI/SNR, tx/rx, radio step, role and radio settings are shown live via the companion protocol. Without `--port` no ports are opened. Polling pauses while `radio_test.py` runs.
@@ -768,6 +847,13 @@ The simulator's event trace (`--trace-json <file|->`) is one JSON line per event
 
 ## Firmware updates (signed, over USB, Bluetooth and the net)
 
+State-changing radio administrator commands reserve a monotonically increasing
+counter range in flash. After a reboot the radio rejects commands inside the
+previously reserved range. If this happens immediately after maintenance, retry
+after the remaining counter interval has passed (up to 60 counter values after
+the last reservation). A flash write error prevents the change. Local USB and
+Bluetooth administration use the existing companion session.
+
 So solar repeaters in the field can be updated without being brought in. **Not tried on hardware yet** (see the checklist below).
 
 **Signing.** A release is an image and a 112-byte manifest: board ID, version, size, SHA-256 and an Ed25519 signature (the format is in `maarse-crypto/src/ota.rs`). The node only installs when the signature matches the release key in the firmware, the board ID matches, and the version is newer than the running one (anti-rollback). Only locally (USB/Bluetooth) can an older version be allowed with a flag; via the net the flag is ignored.
@@ -778,8 +864,9 @@ export MAARSE_RELEASE_PUBKEY=<hex>  MAARSE_FW_VERSION=0.2.0           # built in
 MAARSE_SIGN_KEY=release.key ./scripts/build-firmware.sh xiao-nrf52840  # -> dist/maarse-xiao-nrf52840-ota.bin + .manifest
 ```
 
-- Without `MAARSE_RELEASE_PUBKEY` the firmware trusts a **public development key** (`maarse-sign --dev-key`, `MAARSE_SIGN_KEY=dev`). The build warns, and the node writes a warning on `OtaBegin`. Never build releases like that.
-- `maarse-sign sign` takes an ELF, `.uf2` or `.bin`. On the nRF52840 the image is the app from its start address (0x27000 XIAO / 0x26000 WisMesh; a wrong board is rejected); on the ESP32-S3 an ESP-IDF app image from `espflash save-image` (the build script makes `dist/maarse-<board>-app.bin`).
+- OTA is disabled without a valid `MAARSE_RELEASE_PUBKEY`. The firmware rejects the public development key. For OTA testing, generate a separate test signing key and configure its public key in the test firmware.
+- CI checks the configured Ed25519 public key before building and checks that an online signing key, if provided, matches it. A release with no configured public key has OTA disabled.
+- maarse-sign sign takes an ELF, `.uf2` or `.bin`. On the nRF52840 the image is the app from its start address (0x27000 XIAO / 0x26000 WisMesh; a wrong board is rejected); on the ESP32-S3 an ESP-IDF app image from `espflash save-image` (the build script makes `dist/maarse-<board>-app.bin`).
 - The version is `major.minor.patch` (u32: major << 16 | minor << 8 | patch). Without `MAARSE_FW_VERSION` the crate version is used.
 
 **Companion commands** (0x14–0x17 kept free for parallel work):
@@ -851,3 +938,42 @@ A release contains firmware for all four boards built with the release key (`MAA
 ## License
 
 The code is released under either MIT or Apache-2.0, at your option. The specification is released under CC-BY 4.0.
+
+
+### Public web access with Caddy and Let's Encrypt
+
+Run the MAARSE web listener on loopback and require the access key even on
+that interface. Add these options to the host's existing command or service.
+
+```sh
+--http 127.0.0.1:8080 --require-key
+```
+
+Point your public DNS name at the Caddy host and allow inbound TCP 80 and 443
+for the standard ACME challenges and HTTPS. Replace the example hostname
+with your own in the Caddyfile.
+
+```caddyfile
+mesh.example.org {
+    tls {
+        issuer acme https://acme-v02.api.letsencrypt.org/directory
+    }
+    reverse_proxy 127.0.0.1:8080 {
+        header_down Set-Cookie "(.*)" "$1; Secure"
+    }
+}
+```
+
+Caddy terminates HTTPS and upgrades WebSocket requests automatically. Enter
+`https://mesh.example.org` in the browser or Android host settings. Update the
+host before distributing clients that send access credentials in headers.
+Query-string keys are disabled by default. For a temporary migration on a
+trusted network, `--allow-legacy-web-token` enables old clients that send
+`?token=`. Avoid exposing those credentials to access logs and remove the
+option after the clients are updated. Treat `Sec-WebSocket-Protocol` as a credential
+header for the browser client.
+
+Keep the backbone TCP port behind a VPN or restrict it to known peers when
+running a private backbone. The Caddy route above covers the web listener.
+See the [Caddy HTTPS documentation](https://caddyserver.com/docs/automatic-https)
+and [reverse proxy documentation](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).

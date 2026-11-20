@@ -48,12 +48,13 @@ class Client:
         return {f[i]: struct.unpack("<i", f[i+1:i+5])[0] for i in range(1, len(f) - 4, 5)}
 
 try:
-    start("b1", 8190, ["--listen", "127.0.0.1:4390", "--public-addr", "127.0.0.1:4390"])
-    start("b2", 8191, ["--listen", "127.0.0.1:4391", "--public-addr", "127.0.0.1:4391", "--dht", "127.0.0.1:4390"])
-    start("b3", 8192, ["--listen", "127.0.0.1:4392", "--public-addr", "127.0.0.1:4392", "--dht", "127.0.0.1:4390"])
+    private = ["--dht-allow-private", "127.0.0.1:4391", "--dht-allow-private", "127.0.0.1:4392"]
+    start("b1", 8190, ["--listen", "127.0.0.1:4390", "--public-addr", "127.0.0.1:4390"] + private)
+    start("b2", 8191, ["--listen", "127.0.0.1:4391", "--public-addr", "127.0.0.1:4391", "--dht", "127.0.0.1:4390"] + private)
+    start("b3", 8192, ["--listen", "127.0.0.1:4392", "--public-addr", "127.0.0.1:4392", "--dht", "127.0.0.1:4390"] + private)
     time.sleep(2)
-    start("a", 8193, ["--listen", "off", "--peer", "127.0.0.1:4391"])
-    start("c", 8194, ["--listen", "off", "--peer", "127.0.0.1:4392"])
+    start("a", 8193, ["--listen", "off", "--peer", "127.0.0.1:4391", "--dht-allow-private", "127.0.0.1:4390"] + private)
+    start("c", 8194, ["--listen", "off", "--peer", "127.0.0.1:4392", "--dht-allow-private", "127.0.0.1:4390"] + private)
     a, c = Client(8193), Client(8194)
     addr_a, addr_c = a.info(), c.info()
     time.sleep(8)  # B3 publishes C's address, B2 publishes A's

@@ -7,17 +7,36 @@
 // * Surface (dhm_overflade): ground plus trees and buildings.
 // * GeoDanmark map layers name what stands on the ground (building,
 //   forest, hedge, tree group).
-// The key is kept in this browser only (localStorage), never in the page.
+// The key stays in memory unless the user explicitly chooses to remember it.
 (function () {
   const WCS = "https://api.dataforsyningen.dk/dhm_wcs_DAF";
   const WMS = "https://api.dataforsyningen.dk/GeoDanmark_60_NOHIST_DAF";
   const STORE = "maarse.dataforsyningen.key";
 
   let key = "";
-  try { key = localStorage.getItem(STORE) || ""; } catch { /* storage blocked */ }
-  function setKey(k) {
-    key = (k || "").trim();
-    try { if (key) localStorage.setItem(STORE, key); else localStorage.removeItem(STORE); } catch { /* storage blocked */ }
+  const OPT_IN = STORE + ".remember";
+  let remembered = false;
+  try {
+    if (localStorage.getItem(OPT_IN) === "yes") {
+      key = localStorage.getItem(STORE) || "";
+      remembered = Boolean(key);
+    } else {
+      localStorage.removeItem(STORE);
+    }
+  } catch { /* storage blocked */ }
+  function setKey(value, remember = false) {
+    key = (value || "").trim();
+    remembered = false;
+    try {
+      if (key && remember) {
+        localStorage.setItem(STORE, key);
+        localStorage.setItem(OPT_IN, "yes");
+        remembered = true;
+      } else {
+        localStorage.removeItem(STORE);
+        localStorage.removeItem(OPT_IN);
+      }
+    } catch { /* storage blocked */ }
   }
 
   // WGS84 -> UTM zone 32 (ETRS89, EPSG:25832), the grid DHM is served in.
@@ -133,5 +152,5 @@
     return Math.max(...g.z);
   }
 
-  window.DKDhm = { get key() { return key; }, setKey, profile, whatIsAt, test };
+  window.DKDhm = { get key() { return key; }, get remembered() { return remembered; }, setKey, profile, whatIsAt, test };
 })();

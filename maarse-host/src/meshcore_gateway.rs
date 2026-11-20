@@ -271,7 +271,7 @@ fn read_trimmed(path: &Path) -> String {
 }
 
 /// Saves the gateway settings and makes sure the certificates match the name.
-/// A new token is created when asked for or when none exists. The caller
+/// A token is created when none exists. Use `create_token` to replace it. The caller
 /// restarts the server afterwards so the listener uses the new port.
 pub fn save_config(data: &Path, update: &serde_json::Value) -> Result<(), String> {
     let listen: SocketAddr = update["listen"]
@@ -287,9 +287,8 @@ pub fn save_config(data: &Path, update: &serde_json::Value) -> Result<(), String
     if !valid_host(&host) {
         return Err("Enter the DNS name the gateway connects to, for example backbone.example.org.".into());
     }
-    let token_path = data.join(TOKEN_FILE);
-    if update["newToken"].as_bool().unwrap_or(false) || !valid_token(read_trimmed(&token_path).as_bytes()) {
-        write_file(&token_path, &new_token(), true)?;
+    if !valid_token(read_trimmed(&data.join(TOKEN_FILE)).as_bytes()) {
+        create_token(data)?;
     }
     ensure_certificates(data, &host)?;
     let mut lines: Vec<String> = crate::settings::load(data)
@@ -301,10 +300,14 @@ pub fn save_config(data: &Path, update: &serde_json::Value) -> Result<(), String
     crate::settings::save(data, &lines.join("\n"))
 }
 
-fn new_token() -> String {
+/// Creates a new gateway token and returns it. The gateway must be given the
+/// new token before it can connect again.
+pub fn create_token(data: &Path) -> Result<String, String> {
     let mut bytes = [0u8; 32];
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut bytes);
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    write_file(&data.join(TOKEN_FILE), &token, true)?;
+    Ok(token)
 }
 
 /// Creates the gateway authority on first use. Creates a server certificate
@@ -458,6 +461,17 @@ mod tests {
     }
 
     #[test]
+    fn create_token_writes_a_valid_token() {
+        let dir = std::env::temp_dir().join(format!("maarse-token-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let token = create_token(&dir).unwrap();
+        assert!(valid_token(token.as_bytes()));
+        assert_eq!(read_trimmed(&dir.join(TOKEN_FILE)), token);
+        assert_ne!(create_token(&dir).unwrap(), token);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn tls_config_rejects_garbage() {
         assert!(tls_config(b"not pem", b"not pem").is_err());
     }
@@ -482,7 +496,7 @@ mod tests {
 
     fn gateway_credentials_with(dir: &Path, host: &str) -> (Arc<ServerConfig>, Vec<u8>) {
         fs::write(dir.join(HOST_FILE), host).unwrap();
-        fs::write(dir.join(TOKEN_FILE), new_token()).unwrap();
+        create_token(dir).unwrap();
         gateway_credentials(dir).unwrap()
     }
 

@@ -488,6 +488,16 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
             let body = crate::meshcore_gateway::config_json(data_dir);
             reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body.to_string())
         }
+        ("POST", "/api/meshcore/gateway/token") => {
+            let host = header(&head, "host").unwrap_or("");
+            if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
+                return reply(&mut stream, "403 Forbidden", "application/json; charset=utf-8", "{\"error\":\"Wrong origin.\"}");
+            }
+            match crate::meshcore_gateway::create_token(data_dir) {
+                Ok(token) => reply(&mut stream, "200 OK", "application/json; charset=utf-8", &serde_json::json!({"token": token}).to_string()),
+                Err(error) => reply(&mut stream, "500 Internal Server Error", "application/json; charset=utf-8", &serde_json::json!({"error": error}).to_string()),
+            }
+        }
         ("POST", "/api/meshcore/gateway") => {
             let host = header(&head, "host").unwrap_or("");
             if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {

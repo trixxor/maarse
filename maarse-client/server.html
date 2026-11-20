@@ -273,7 +273,7 @@
         <label>Gateway port<small>listen address on this server; the gateway connects here</small></label><input id="mc-listen" placeholder="0.0.0.0:4343" spellcheck="false">
         <label>Server DNS name<small>the name the gateway connects to, e.g. backbone.example.org; it must point at this server</small></label><input id="mc-host" placeholder="backbone.example.org" spellcheck="false">
         <label>Gateway token<small>copy this into the gateway</small></label><div class="row" style="margin:0"><input id="mc-token" readonly spellcheck="false"></div>
-        <label>New token<small>the gateway must be updated with it</small></label><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="mc-newtoken"> create a new token on save</label>
+        <label>New token<small>the gateway stops connecting until it has the new token</small></label><div class="row" style="margin:0"><button class="b" id="mc-newtoken-btn">Create new token</button></div>
         <label>Certificate<small>the server's own certificate for the name</small></label><div class="help" id="mc-cert-state"></div>
       </div>
       <div class="row" style="margin-top:12px"><button class="b on" id="mc-save">Save and restart</button></div>
@@ -819,11 +819,8 @@ document.addEventListener("click", e => {
 
 // Gateway setup: the port is kept in settings.txt; the name, token and certificates sit next to the data.
 let GW = null;
-async function loadGateway() {
-  try { GW = await get("/api/meshcore/gateway"); } catch { return; }
-  if (!$("mc-listen").value) $("mc-listen").value = GW.listen || "0.0.0.0:4343";
-  if (!$("mc-host").value) $("mc-host").value = GW.host || "";
-  $("mc-token").value = GW.token || "(no token yet: save to create one)";
+function renderGateway() {
+  $("mc-token").value = GW.token || "(no token yet)";
   $("mc-cert-state").textContent = GW.certificateExpires
     ? "Valid until " + new Date(GW.certificateExpires * 1000).toLocaleDateString() + ". Renewed automatically 30 days before."
     : "Not created yet. Save to create it.";
@@ -838,19 +835,39 @@ async function loadGateway() {
   ].join("\n");
   $("mc-copybox").dataset.authority = GW.authorityPem || "";
 }
+async function loadGateway() {
+  try { GW = await get("/api/meshcore/gateway"); } catch { return; }
+  if (!$("mc-listen").value) $("mc-listen").value = GW.listen || "0.0.0.0:4343";
+  if (!$("mc-host").value) $("mc-host").value = GW.host || "";
+  // The first visit creates the token, so there is one to copy at once.
+  if (!GW.token) await createToken(false);
+  renderGateway();
+}
+async function createToken(ask = true) {
+  const msg = $("mc-cfg-msg");
+  if (ask && !confirm("Create a new token? The gateway stops connecting until it has the new token.")) return;
+  try {
+    const r = await fetch("/api/meshcore/gateway/token", { method: "POST", credentials: "same-origin" });
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.className = "msg bad"; msg.textContent = b.error || "Could not create a token."; return; }
+    GW = GW || {}; GW.token = b.token;
+    renderGateway();
+    if (ask) { msg.className = "msg good"; msg.textContent = "New token created. Copy it into the gateway."; }
+  } catch { msg.className = "msg bad"; msg.textContent = "Could not reach the server."; }
+}
 async function saveGateway() {
   const msg = $("mc-cfg-msg");
   if (!confirm("Save and restart the server? Backbone links reconnect after a few seconds.")) return;
   msg.className = "msg"; msg.textContent = "Saving…";
-  const body = { listen: $("mc-listen").value.trim(), host: $("mc-host").value.trim(), newToken: $("mc-newtoken").checked };
+  const body = { listen: $("mc-listen").value.trim(), host: $("mc-host").value.trim() };
   try {
     const r = await fetch("/api/meshcore/gateway", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) { const b = await r.json().catch(() => ({})); msg.className = "msg bad"; msg.textContent = b.error || "Could not save."; return; }
     msg.className = "msg good"; msg.textContent = "Saved. The server restarts now; reload this page in a few seconds.";
-    $("mc-newtoken").checked = false;
   } catch { msg.className = "msg good"; msg.textContent = "The server is restarting. Reload this page in a few seconds."; }
 }
 $("mc-save").onclick = saveGateway;
+$("mc-newtoken-btn").onclick = () => createToken(true);
 $("mc-select").onclick = () => { const box = $("mc-copybox"); box.focus(); box.select(); };
 $("mc-copy-ca").onclick = async () => {
   const pem = $("mc-copybox").dataset.authority;

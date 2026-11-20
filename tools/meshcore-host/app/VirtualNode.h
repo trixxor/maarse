@@ -56,6 +56,9 @@ class VirtualNode : public BaseChatMesh, ContactVisitor {
     uint32_t count;
   };
   std::vector<Heard> _heard;
+  bool _heardChanged = false;
+  unsigned long _nodesPublishedAt = 0;
+  void publishNodes();
   struct ScanResult { uint8_t pub_key[PUB_KEY_SIZE]; uint8_t type; float snr_out, snr_in, rssi; };
   std::vector<ScanResult> _scan;
   uint32_t _scan_tag = 0;

@@ -459,6 +459,7 @@ void VirtualNode::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, u
     h->rssi = _vradio.getLastRSSI();
     h->last_seen = getRTCClock()->getCurrentTime();
     h->count++;
+    _heardChanged = true;
   }
   BaseChatMesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len);  // keep normal contact handling
 }
@@ -544,8 +545,54 @@ void VirtualNode::printHeard() {
   }
 }
 
+// Publishes the nodes this node has heard and the names it knows, for the backbone server:
+//   heard.txt: <pubkey hex> <type> <hops> <snr> <rssi> <last seen unix time> <times heard> <name hex>
+//   names.txt: <pubkey hex> <name hex>      (heard nodes and contacts)
+// The names are hex so that any character is safe. Written at most every 10 seconds, only after a change.
+static void hexOf(char* out, const char* text) {
+  static const char digits[] = "0123456789abcdef";
+  size_t n = 0;
+  for (const unsigned char* p = (const unsigned char*)text; *p; ++p) { out[n++] = digits[*p >> 4]; out[n++] = digits[*p & 15]; }
+  out[n] = 0;
+}
+
+void VirtualNode::publishNodes() {
+  const auto write = [&](const char* name, const std::string& body) {
+    const std::string target = path(name), temporary = target + ".new";
+    if (FILE* file = fopen(temporary.c_str(), "wb")) {
+      const bool ok = fwrite(body.data(), 1, body.size(), file) == body.size();
+      if (fclose(file) == 0 && ok) portable::replaceFile(temporary.c_str(), target.c_str());
+    }
+  };
+  std::string heard, names;
+  char key[2 * PUB_KEY_SIZE + 1], name[2 * 32 + 1], line[256];
+  for (const auto& h : _heard) {
+    mesh::Utils::toHex(key, h.pub_key, PUB_KEY_SIZE);
+    hexOf(name, h.name);
+    snprintf(line, sizeof(line), "%s %u %u %.1f %.0f %u %u %s\n", key, h.type, h.hops, h.snr, h.rssi, h.last_seen, h.count, name);
+    heard += line;
+    snprintf(line, sizeof(line), "%s %s\n", key, name);
+    if (h.name[0]) names += line;
+  }
+  ContactInfo contact;
+  for (int i = 0; i < getNumContacts(); ++i) {
+    if (!getContactByIdx(i, contact) || !contact.name[0]) continue;
+    mesh::Utils::toHex(key, contact.id.pub_key, PUB_KEY_SIZE);
+    hexOf(name, contact.name);
+    snprintf(line, sizeof(line), "%s %s\n", key, name);
+    names += line;
+  }
+  write("heard.txt", heard);
+  write("names.txt", names);
+}
+
 void VirtualNode::loop() {
   BaseChatMesh::loop();
+  if (_service && _heardChanged && (_nodesPublishedAt == 0 || millis() - _nodesPublishedAt >= 10000)) {
+    _heardChanged = false;
+    _nodesPublishedAt = millis();
+    publishNodes();
+  }
   if ((_repeaterPending || _repeaterAdmin) && static_cast<long>(millis() - _repeaterDeadline) >= 0) {
     publishRepeater(_repeaterKey, _repeaterPending ? "Repeater login timed out." : "Administrator session expired.");
     _repeaterPending = false;

@@ -193,9 +193,17 @@ fn serve(
         return Ok(());
     };
     if !valid_token(token) || !bool::from(Sha256::digest(token).as_slice().ct_eq(token_hash)) {
+        report_often(&LAST_TOKEN_REFUSED, "MeshCore gateway refused: it sent a token this server does not know. Pair it again.");
+        refuse(&mut radio, "token");
         return Ok(());
     }
-    let mut worker = accept_worker(worker)?;
+    let mut worker = match accept_worker(worker) {
+        Ok(worker) => worker,
+        Err(error) => {
+            refuse(&mut radio, "worker");
+            return Err(error);
+        }
+    };
     WORKER_UP.store(true, Ordering::Relaxed);
     worker.set_nonblocking(false)?;
     worker.set_nodelay(true)?;
@@ -212,6 +220,28 @@ fn serve(
         && relay(&mut radio, &mut worker, &mut buffer)?
     {}
     Ok(())
+}
+
+static LAST_TOKEN_REFUSED: AtomicU64 = AtomicU64::new(0);
+static LAST_NO_WORKER: AtomicU64 = AtomicU64::new(0);
+
+/// Logs a problem at most once a minute per kind: a gateway that cannot connect
+/// tries again every few seconds.
+fn report_often(last: &AtomicU64, text: &str) {
+    let now = unix_now();
+    if now.saturating_sub(last.load(Ordering::Relaxed)) >= 60 {
+        last.store(now, Ordering::Relaxed);
+        crate::settings::report(text, true);
+    }
+}
+
+/// Tells the gateway why it is not let in: `ERR token` (unknown token) or
+/// `ERR worker` (no radio worker is connected). It then shows the reason.
+fn refuse(radio: &mut StreamOwned<ServerConnection, GatewaySocket>, reason: &str) {
+    let _ = radio.write_all(format!("ERR {reason}\n").as_bytes());
+    let _ = radio.flush();
+    radio.conn.send_close_notify();
+    let _ = radio.flush();
 }
 
 /// Answers a pairing request: a valid, unused, unexpired secret gets a new
@@ -326,9 +356,9 @@ fn accept_worker(listener: &TcpListener) -> io::Result<TcpStream> {
             Ok((socket, _)) => return Ok(socket),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    crate::settings::report(
-                        "MeshCore gateway authenticated, but no radio worker is connected",
-                        true,
+                    report_often(
+                        &LAST_NO_WORKER,
+                        "MeshCore gateway authenticated, but no radio worker is connected to this server",
                     );
                     return Err(io::Error::new(
                         io::ErrorKind::NotConnected,
@@ -706,9 +736,30 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    /// Connects as a gateway that trusts only `authority`, sends a pairing request
-    /// and returns the server's reply line.
+    /// A gateway that trusts only `authority` sends a pairing request.
     fn pair_over_tls(dir: &Path, authority: &str, secret: &str) -> String {
+        hello_over_tls(dir, authority, &format!("MAARSE-PAIR/1 {secret}"))
+    }
+
+    #[test]
+    fn gateway_is_told_why_it_is_refused() {
+        let dir = std::env::temp_dir().join(format!("maarse-refuse-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(HOST_FILE), "backbone.example.org").unwrap();
+        let token = create_token(&dir).unwrap();
+        ensure_certificates(&dir, "backbone.example.org").unwrap();
+        let authority = fs::read_to_string(dir.join(AUTHORITY_CERT_FILE)).unwrap();
+        // A token the server does not know.
+        let unknown = "MAARSE-KISS/1 not-a-token-the-server-knows-at-all-1234";
+        assert_eq!(hello_over_tls(&dir, &authority, unknown), "ERR token");
+        // The right token, but no radio worker has connected to the server.
+        assert_eq!(hello_over_tls(&dir, &authority, &format!("MAARSE-KISS/1 {token}")), "ERR worker");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Connects as a gateway that trusts only `authority`, sends `hello` as its
+    /// first line and returns what the server answers.
+    fn hello_over_tls(dir: &Path, authority: &str, hello: &str) -> String {
         let (config, token_hash) = gateway_credentials(dir).unwrap();
         let mut roots = RootCertStore::empty();
         for certificate in CertificateDer::pem_slice_iter(authority.as_bytes()) {
@@ -733,7 +784,7 @@ mod tests {
             let name = ServerName::try_from("backbone.example.org").unwrap();
             let connection = ClientConnection::new(Arc::new(client), name).unwrap();
             let mut stream = StreamOwned::new(connection, socket);
-            stream.write_all(format!("MAARSE-PAIR/1 {secret}\n").as_bytes()).unwrap();
+            stream.write_all(format!("{hello}\n").as_bytes()).unwrap();
             let mut reply = String::new();
             let _ = stream.read_to_string(&mut reply);
             reply

@@ -282,6 +282,11 @@ void VirtualNode::trackSent(const Sent& sent) {
 // A repeater passing on our own channel message sends it again with its id on the path:
 // every different repeater heard counts once.
 void VirtualNode::logRx(mesh::Packet* packet, int, float) {
+  if (_service && _repeaterPending) {
+    printf("%s [%s] RX while logging in: type %d, %s, path %d, snr %.1f
+", ts().c_str(), tag(), packet->getPayloadType(),
+           packet->isRouteDirect() ? "direct" : "flood", (int)packet->getPathHashCount(), packet->getSNR());
+  }
   if (!_service || _sent.empty()) return;
   uint8_t hash[MAX_HASH_SIZE];
   packet->calculatePacketHash(hash);
@@ -367,6 +372,9 @@ void VirtualNode::repeaterRequest(bool login, const std::string& key, const char
     _repeaterKey = key;
     _repeaterAdmin = false;
     _repeaterPending = sendLogin(*contact, value, timeout) != MSG_SEND_FAILED;
+    printf("%s [%s] login sent to %s (%s, %zu characters), waiting %lu ms
+", ts().c_str(), tag(), contact->name,
+           contact->out_path_len == OUT_PATH_UNKNOWN ? "flood" : "direct", strlen(value), (unsigned long)timeout);
     _repeaterDeadline = millis() + timeout;
     publishRepeater(key, _repeaterPending ? "Waiting for repeater login..." : "Could not send login.");
   } else if (!_repeaterAdmin || _repeaterKey != key || static_cast<long>(millis() - _repeaterDeadline) >= 0) {

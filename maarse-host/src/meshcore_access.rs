@@ -91,32 +91,10 @@ fn authorize_device(
     fs::rename(pending, path)
 }
 
-pub fn page(dir: &Path) -> io::Result<String> {
+/// Person addresses that may use MeshCore access, sorted.
+pub fn grants(dir: &Path) -> io::Result<Vec<String>> {
     let _guard = GRANTS.lock().unwrap_or_else(|err| err.into_inner());
-    let grants = read_grants(dir)?;
-    let mut page = String::from(
-        r#"<!doctype html><html lang="en"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MeshCore access</title><style>
-:root{color-scheme:light dark}body{max-width:44rem;margin:2rem auto;padding:0 1rem;font:1rem system-ui}
-form{display:flex;gap:.5rem;flex-wrap:wrap;margin:1rem 0}input,button{font:inherit;padding:.45rem}li{margin:.5rem 0;overflow-wrap:anywhere}
-</style><a href="/">Backbone dashboard</a><h1>MeshCore access</h1>
-<p>Grant or revoke access by Må:rse person address.</p>
-<form method="post" action="/meshcore-access"><label>Person address<br>
-<input name="person" required pattern="[0-9a-fA-F]{32}" maxlength="32" spellcheck="false"></label>
-<button name="action" value="grant">Grant</button><button name="action" value="revoke">Revoke</button></form>
-<h2>Allowed people</h2>"#,
-    );
-    if grants.is_empty() {
-        page.push_str("<p>No permissions granted.</p>");
-    } else {
-        page.push_str("<ul>");
-        for person in grants {
-            page.push_str(&format!("<li><code>{person}</code></li>"));
-        }
-        page.push_str("</ul>");
-    }
-    Ok(page)
+    Ok(read_grants(dir)?.into_iter().collect())
 }
 
 #[derive(serde::Deserialize)]

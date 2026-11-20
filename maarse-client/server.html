@@ -107,7 +107,6 @@
   <span class="row" style="margin:0">Range:
     <button class="b" data-range="60">1 h</button><button class="b" data-range="360">6 h</button><button class="b on" data-range="1440">24 h</button>
   </span>
-  <a href="/meshcore-access">MeshCore access</a>
   <a href="/logout">Log out</a>
 </header>
 <nav id="nav"></nav>
@@ -258,6 +257,15 @@
   <div class="page" data-page="conns">
     <div class="tiles" id="conn-tiles"></div>
     <section>
+      <h2>MeshCore gateway</h2>
+      <p class="help">The Heltec V4 radio gateway connects here over TLS, and the local radio worker drives the MeshCore radio. Only people on the list below can use MeshCore from the apps. Grants are kept in <span class="mono">meshcore-access.txt</span> in the data folder.</p>
+      <div class="tiles" id="mc-tiles"></div>
+      <p class="help" style="margin-top:12px"><b>Allowed people</b> by Må:rse person address (32 hex characters).</p>
+      <div class="row"><input type="search" id="mc-person" placeholder="Person address" spellcheck="false"><button class="b on" id="mc-grant">Grant</button></div>
+      <div class="tablewrap" id="mc-grants"></div>
+      <div class="msg" id="mc-msg"></div>
+    </section>
+    <section>
       <h2>Connections now</h2>
       <p class="help">Every link: backbone peers (in and out), modems and other links. Incoming links are limited per address and rate limited; a peer sending junk or flooding is banned for a while. "Close" drops a link (it may come back); "Block" closes it and keeps its address out.</p>
       <div class="tablewrap" id="conn-table"></div>
@@ -363,7 +371,7 @@ function show(p) {
   page = PAGES[p] ? p : "overview"; history.replaceState(null, "", "#" + page);
   if ((page === "settings" || page === "pages") && !settingsState) loadSettings();
   if (page === "pages") loadFiles();
-  if (page === "conns") get("/api/guard").then(x => { G = x; renderConns(); }).catch(() => {});
+  if (page === "conns") { get("/api/guard").then(x => { G = x; renderConns(); }).catch(() => {}); loadMeshcore(); }
   for (const b of $("nav").children) b.classList.toggle("on", b.dataset.p === page);
   for (const d of document.querySelectorAll(".page")) d.classList.toggle("on", d.dataset.page === page);
   render();
@@ -723,7 +731,7 @@ function backbone() {
 // ---------- connections ----------
 let G = null;
 async function pollGuard() {
-  if (page === "conns") try { G = await get("/api/guard"); renderConns(); } catch {}
+  if (page === "conns") { try { G = await get("/api/guard"); renderConns(); } catch {} loadMeshcore(); }
   setTimeout(pollGuard, 3000);
 }
 async function guardOp(body) {
@@ -756,6 +764,40 @@ document.addEventListener("click", e => {
   else if (t.dataset?.unblock) guardOp({ op: "unblock", target: t.dataset.unblock });
 });
 $("block-add").onclick = () => { const v = $("block-input").value.trim(); if (v) guardOp({ op: "block", target: v }).then(() => $("block-input").value = ""); };
+
+// ---------- MeshCore gateway ----------
+// The gateway is the Heltec V4 radio that connects over TLS (--meshcore-gateway).
+// Grants decide which Må:rse people may use MeshCore from the apps.
+let M = null;
+async function loadMeshcore() { try { M = await get("/api/meshcore"); renderMeshcore(); } catch {} }
+function renderMeshcore() {
+  if (!M) return;
+  const gw = M.gateway;
+  const state = !gw.enabled ? "off" : gw.gatewayConnected ? "connected" : "waiting";
+  tiles("mc-tiles", [
+    [state, "gateway (Heltec V4 over TLS)"],
+    [gw.workerConnected ? "yes" : "no", "radio worker connected"],
+    [gw.enabled ? gw.address : "-", "gateway listens on"],
+    [gw.connectedSince ? new Date(gw.connectedSince * 1000).toLocaleString() : "-", "gateway connected since"],
+    [n(M.grants.length), "people allowed"],
+  ]);
+  table("mc-grants", ["Person address", ""], M.grants.map(p => [{ h: `<span class="mono">${esc(p)}</span>` }, { h: `<button class="b" data-revoke="${esc(p)}">Revoke</button>` }]), { empty: "No one is allowed yet." });
+}
+async function meshcoreGrant(person, allowed) {
+  const msg = $("mc-msg");
+  try {
+    const r = await fetch("/api/meshcore/grant", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ person, allowed }) });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.className = "msg bad"; msg.textContent = body.error || "Could not save."; return false; }
+    msg.className = "msg good"; msg.textContent = allowed ? "Access granted." : "Access revoked.";
+    await loadMeshcore(); return true;
+  } catch { msg.className = "msg bad"; msg.textContent = "Could not reach the server."; return false; }
+}
+$("mc-grant").onclick = async () => { const v = $("mc-person").value.trim(); if (v && await meshcoreGrant(v, true)) $("mc-person").value = ""; };
+document.addEventListener("click", e => {
+  const person = e.target.dataset?.revoke;
+  if (person && confirm("Revoke this person's MeshCore access?")) meshcoreGrant(person, false);
+});
 
 // ---------- settings ----------
 // Each field is one option in settings.txt; unknown lines are kept as they are.

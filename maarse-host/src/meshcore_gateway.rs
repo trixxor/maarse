@@ -7,7 +7,10 @@ use std::{
     io::{self, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::Path,
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use subtle::ConstantTimeEq;
@@ -16,6 +19,10 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_INTERVAL: Duration = Duration::from_millis(20);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const HELLO: &[u8] = b"MAARSE-KISS/1 ";
+// The gateway firmware waits two seconds for "OK". The worker has to be
+// connected inside that window, so a worker that starts a moment late is
+// given a short grace period instead of an immediate refusal.
+const WORKER_WAIT: Duration = Duration::from_secs(1);
 
 pub fn spawn(address: SocketAddr, worker_address: SocketAddr, data: &Path) -> io::Result<()> {
     if !worker_address.ip().is_loopback() {
@@ -48,15 +55,39 @@ pub fn spawn(address: SocketAddr, worker_address: SocketAddr, data: &Path) -> io
     let gateway = TcpListener::bind(address)?;
     let worker = TcpListener::bind(worker_address)?;
     worker.set_nonblocking(true)?;
+    if let Ok(mut shown) = ADDRESS.lock() {
+        *shown = address.to_string();
+    }
+    ENABLED.store(true, Ordering::Relaxed);
     std::thread::Builder::new()
         .name("meshcore-gateway".into())
         .spawn(move || {
             for socket in gateway.incoming() {
                 let Ok(socket) = socket else { break };
                 let _ = serve(socket, &worker, config.clone(), token_hash.as_slice());
+                GATEWAY_UP.store(false, Ordering::Relaxed);
+                WORKER_UP.store(false, Ordering::Relaxed);
             }
         })?;
     Ok(())
+}
+
+static ENABLED: AtomicBool = AtomicBool::new(false);
+static GATEWAY_UP: AtomicBool = AtomicBool::new(false);
+static WORKER_UP: AtomicBool = AtomicBool::new(false);
+static CONNECTED_SINCE: AtomicU64 = AtomicU64::new(0);
+static ADDRESS: Mutex<String> = Mutex::new(String::new());
+
+/// Gateway state for the backbone dashboard.
+pub fn status() -> serde_json::Value {
+    let gateway_up = GATEWAY_UP.load(Ordering::Relaxed);
+    serde_json::json!({
+        "enabled": ENABLED.load(Ordering::Relaxed),
+        "address": ADDRESS.lock().map(|shown| shown.clone()).unwrap_or_default(),
+        "gatewayConnected": gateway_up,
+        "workerConnected": WORKER_UP.load(Ordering::Relaxed),
+        "connectedSince": if gateway_up { CONNECTED_SINCE.load(Ordering::Relaxed) } else { 0 },
+    })
 }
 
 fn valid_token(token: &[u8]) -> bool {
@@ -119,7 +150,8 @@ fn serve(
     if !valid_token(token) || !bool::from(Sha256::digest(token).as_slice().ct_eq(token_hash)) {
         return Ok(());
     }
-    let (mut worker, _) = worker.accept()?;
+    let mut worker = accept_worker(worker)?;
+    WORKER_UP.store(true, Ordering::Relaxed);
     worker.set_nonblocking(false)?;
     worker.set_nodelay(true)?;
     radio.sock.deadline = None;
@@ -128,11 +160,42 @@ fn serve(
         socket.set_write_timeout(Some(WRITE_TIMEOUT))?;
     }
     radio.write_all(b"OK\n")?;
+    CONNECTED_SINCE.store(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0),
+        Ordering::Relaxed,
+    );
+    GATEWAY_UP.store(true, Ordering::Relaxed);
     let mut buffer = [0; 4096];
     while relay(&mut worker, &mut radio, &mut buffer)?
         && relay(&mut radio, &mut worker, &mut buffer)?
     {}
     Ok(())
+}
+
+fn accept_worker(listener: &TcpListener) -> io::Result<TcpStream> {
+    let deadline = Instant::now() + WORKER_WAIT;
+    loop {
+        match listener.accept() {
+            Ok((socket, _)) => return Ok(socket),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    crate::settings::report(
+                        "MeshCore gateway authenticated, but no radio worker is connected",
+                        true,
+                    );
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        "MeshCore radio worker is not connected",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn time_left(deadline: Instant) -> io::Result<Duration> {

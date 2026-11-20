@@ -286,34 +286,40 @@ fn server_http(mut stream: TcpStream, mut req: Vec<u8>, head_end: usize, data_di
             send(&mut stream, "200 OK", jsn, "", crate::service::log_json(since).as_bytes())
         }
         ("GET", "/api/service/status") => send(&mut stream, "200 OK", jsn, "", crate::service::status_json(data_dir).as_bytes()),
-        ("GET", "/meshcore-access") => match crate::meshcore_access::page(data_dir) {
-            Ok(page) => send(&mut stream, "200 OK", html, "", page.as_bytes()),
-            Err(_) => send(&mut stream, "500 Internal Server Error", "text/plain; charset=utf-8", "", b"Could not read MeshCore grants."),
-        },
-        ("POST", "/meshcore-access") => {
-            let text_type = "text/plain; charset=utf-8";
+        // Replaced by the Connections page of the dashboard.
+        ("GET", "/meshcore-access") => send(&mut stream, "303 See Other", html, "Location: /\r\n", b""),
+        ("GET", "/api/meshcore") => {
+            let grants = match crate::meshcore_access::grants(data_dir) {
+                Ok(grants) => grants,
+                Err(_) => return reply(&mut stream, "500 Internal Server Error", jsn, "{\"error\":\"Could not read MeshCore grants.\"}"),
+            };
+            let body = serde_json::json!({"gateway": crate::meshcore_gateway::status(), "grants": grants});
+            reply(&mut stream, "200 OK", jsn, &body.to_string())
+        }
+        ("POST", "/api/meshcore/grant") => {
             let host = header(&head, "host").unwrap_or("");
             if header(&head, "origin").is_some_and(|origin| origin != format!("http://{host}") && origin != format!("https://{host}")) {
-                return send(&mut stream, "403 Forbidden", text_type, "", b"Wrong origin.");
+                return reply(&mut stream, "403 Forbidden", jsn, "{\"error\":\"Wrong origin.\"}");
             }
-            let body = match request_body(&mut stream, &mut req, head_end, 256, HTTP_TIMEOUT) {
+            let body = match request_body(&mut stream, &mut req, head_end, 512, HTTP_TIMEOUT) {
                 Ok(body) => body,
-                Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+                Err(error) => return reply(&mut stream, "400 Bad Request", jsn, &serde_json::json!({"error": error}).to_string()),
             };
-            let form = String::from_utf8_lossy(body);
-            let field = |key: &str| form.split('&').find_map(|item| item.split_once('=').filter(|(name, _)| *name == key).map(|(_, value)| url_decode(value)));
-            let (Some(person), Some(action)) = (field("person"), field("action")) else {
-                return send(&mut stream, "400 Bad Request", text_type, "", b"Person and action are required.");
+            let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
+                return reply(&mut stream, "400 Bad Request", jsn, "{\"error\":\"Send JSON with person and allowed.\"}");
             };
-            let allowed = match action.as_str() {
-                "grant" => true,
-                "revoke" => false,
-                _ => return send(&mut stream, "400 Bad Request", text_type, "", b"Unknown grant action."),
+            let (Some(person), Some(allowed)) = (request["person"].as_str(), request["allowed"].as_bool()) else {
+                return reply(&mut stream, "400 Bad Request", jsn, "{\"error\":\"Send JSON with person and allowed.\"}");
             };
-            match crate::meshcore_access::set_grant(data_dir, &person, allowed) {
-                Ok(()) => send(&mut stream, "303 See Other", html, "Location: /meshcore-access\r\n", b""),
-                Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => send(&mut stream, "400 Bad Request", text_type, "", err.to_string().as_bytes()),
-                Err(_) => send(&mut stream, "500 Internal Server Error", text_type, "", b"Could not save MeshCore grants."),
+            match crate::meshcore_access::set_grant(data_dir, person, allowed) {
+                Ok(()) => {
+                    let grants = crate::meshcore_access::grants(data_dir).unwrap_or_default();
+                    reply(&mut stream, "200 OK", jsn, &serde_json::json!({"grants": grants}).to_string())
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+                    reply(&mut stream, "400 Bad Request", jsn, &serde_json::json!({"error": err.to_string()}).to_string())
+                }
+                Err(_) => reply(&mut stream, "500 Internal Server Error", jsn, "{\"error\":\"Could not save MeshCore grants.\"}"),
             }
         }
         ("GET", "/api/settings") => send(&mut stream, "200 OK", jsn, "", crate::settings::status_json(data_dir).as_bytes()),

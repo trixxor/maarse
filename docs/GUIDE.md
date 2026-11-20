@@ -653,11 +653,14 @@ The working copy removes the previous MeshCore USB bridge and its `/mc` socket.
 Remove `--meshcore`, `--meshcore-baud` and `--meshcore-bridge` from service
 arguments and saved settings before upgrading a host that used the bridge.
 
-On `maarse-server`, sign in to the dashboard and open **MeshCore access** to
-grant or revoke access by Må:rse person address. The grants are persisted in
-`meshcore-access.txt` in the server data directory. When using the dashboard
+On `maarse-server`, sign in to the dashboard and open **Connections**. The
+**MeshCore gateway** section shows whether the radio gateway is connected, whether
+the radio worker is connected, and since when. It also grants or revokes access
+by Må:rse person address. The grants are persisted in `meshcore-access.txt` in
+the server data directory. The old `/meshcore-access` address redirects to the
+dashboard. When using the dashboard
 remotely, use the same HTTPS reverse proxy or SSH tunnel as for other admin actions.
-On Android or web, open **Account ? MeshCore**, enter the HTTPS address of the
+On Android or web, open **Account → MeshCore**, enter the HTTPS address of the
 backbone and choose **Check access**. Once granted, choose **Create MeshCore
 identity**. A master device and its linked devices use the same public key.
 Serve the dashboard and `/meshcore/session` behind an HTTPS reverse proxy that
@@ -712,6 +715,9 @@ host WebSocket is `/ws` and accepts messages and frames up to 64 KiB.
 
 ### Connect a Heltec V4 radio
 
+The Heltec V4 gateway firmware is built from [the MeshCore gateway project](../firmware/meshcore-gateway/README.md).
+On first boot, join `maarse-gate` and open `http://192.168.4.1/` to configure Wi-Fi and the backbone.
+
 In the backbone data directory, provision `meshcore-gateway-cert.pem` (the
 server certificate and intermediate certificates), `meshcore-gateway-key.pem`
 (the PEM private key) and `meshcore-gateway-token.txt` (a unique random token
@@ -725,7 +731,10 @@ at a time. The worker connects to `127.0.0.1:5057` by default and can be moved
 to another loopback address with `--meshcore-worker <address:port>`. This local
 socket carries raw KISS without TLS, so it belongs on the same trusted machine.
 The MeshCore PC host's TCP mode can be used as a development radio worker. The
-worker must connect before the gateway handshake can complete. On Windows,
+worker should be running when the gateway connects. After the TLS handshake and
+gateway token, the listener waits up to one second for the worker. The gateway
+firmware waits two seconds for `OK`, so a worker that is still missing then
+makes the gateway disconnect and retry, and the server log reports it. On Windows,
 run `meshcore-host --service --tcp 127.0.0.1:5057 --data <backbone-data>/meshcore-nodes`
 with a private, local node directory. The backbone and worker must share that
 directory. The worker creates or reloads MeshCore identities and the backbone

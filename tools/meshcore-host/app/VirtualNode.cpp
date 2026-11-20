@@ -470,6 +470,7 @@ void VirtualNode::repeaterData(const std::string& key, const std::string& kind) 
   else if (kind == "telemetry") { request[0] = 0x03; length = 5; }   // the next bytes: all permissions
   else { request[0] = 0x05; length = 3; }
   uint32_t timeout = 0;
+  remove(path(("repeater-" + key + "-" + kind + ".txt").c_str()).c_str());   // an empty answer means: not yet
   if (sendRequest(*contact, request, length, _requestTag, timeout) == MSG_SEND_FAILED) {
     publishRequestResult(kind, "ERROR Could not send the request.\n");
     return;

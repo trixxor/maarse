@@ -85,6 +85,8 @@ pub const RESTART_EXIT_CODE: i32 = 75;
 
 /// Starts a new process with the same command line and exits this one.
 pub fn restart() -> ! {
+    // The MeshCore radio worker is our child: stop it, so the new process starts its own.
+    crate::meshcore_gateway::stop_worker();
     if SERVICE.load(std::sync::atomic::Ordering::Relaxed) {
         // A detached child would be killed with our cgroup (systemd) or be
         // invisible to the supervisor, so let the supervisor restart us.

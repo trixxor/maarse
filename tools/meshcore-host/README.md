@@ -12,14 +12,12 @@ server's data folder with `maarse-server`: the server drops small request files
 answers with files such as `public-key.txt` and `scan-results.txt`. It must run on
 the same machine as the server.
 
-## Install on a server (Debian or Ubuntu)
+## On a server (Debian or Ubuntu)
 
-```sh
-sudo bash /opt/maarse/src/scripts/install-meshcore-worker.sh
-```
-
-Builds it, installs `/usr/local/bin/meshcore-host` and starts the service
-`maarse-meshcore-worker`. See the "Connect a Heltec V4 radio" part of docs/GUIDE.md.
+Nothing to do: `scripts/install-server.sh` (also with `--update`) builds it and installs
+`/usr/local/bin/meshcore-host`, and `maarse-server` starts it when the MeshCore
+gateway is on and keeps it running. `scripts/install-meshcore-worker.sh` builds
+only the worker. See the "Connect a Heltec V4 radio" part of docs/GUIDE.md.
 
 ## Build
 

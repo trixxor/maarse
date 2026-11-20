@@ -74,6 +74,74 @@ struct Pairing {
 
 static PAIRING: Mutex<Option<Pairing>> = Mutex::new(None);
 
+static WORKER_INSTALLED: AtomicBool = AtomicBool::new(false);
+static WORKER_STOPPING: AtomicBool = AtomicBool::new(false);
+static WORKER: Mutex<Option<std::process::Child>> = Mutex::new(None);
+static LAST_WORKER_START_ERROR: AtomicU64 = AtomicU64::new(0);
+
+/// Where the radio worker (meshcore-host) is: the environment variable
+/// MAARSE_MESHCORE_WORKER, next to this program, or /usr/local/bin.
+fn worker_binary() -> Option<std::path::PathBuf> {
+    let name = if cfg!(windows) { "meshcore-host.exe" } else { "meshcore-host" };
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("MAARSE_MESHCORE_WORKER") {
+        candidates.push(std::path::PathBuf::from(path));
+    }
+    if let Some(directory) = std::env::current_exe().ok().as_deref().and_then(Path::parent) {
+        candidates.push(directory.join(name));
+    }
+    candidates.push(std::path::PathBuf::from("/usr/local/bin/meshcore-host"));
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+/// Keeps the radio worker running for as long as the server does. It connects to
+/// the worker socket and exits when it cannot, so it is started again every few
+/// seconds. Its output goes to the server's log.
+fn supervise_worker(binary: std::path::PathBuf, worker_address: SocketAddr, nodes: std::path::PathBuf) {
+    let _ = std::thread::Builder::new().name("meshcore-worker".into()).spawn(move || {
+        while !WORKER_STOPPING.load(Ordering::Relaxed) {
+            let started = std::process::Command::new(&binary)
+                .arg("--service")
+                .arg("--tcp")
+                .arg(worker_address.to_string())
+                .arg("--data")
+                .arg(&nodes)
+                .stdin(std::process::Stdio::null())
+                .spawn();
+            match started {
+                Ok(child) => {
+                    *WORKER.lock().unwrap_or_else(|error| error.into_inner()) = Some(child);
+                    loop {
+                        std::thread::sleep(Duration::from_millis(500));
+                        let mut slot = WORKER.lock().unwrap_or_else(|error| error.into_inner());
+                        match slot.as_mut().map(|child| child.try_wait()) {
+                            Some(Ok(None)) => continue,
+                            _ => {
+                                *slot = None;
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(error) => report_often(
+                    &LAST_WORKER_START_ERROR,
+                    &format!("MeshCore radio worker could not start: {error}"),
+                ),
+            }
+            std::thread::sleep(Duration::from_secs(3));
+        }
+    });
+}
+
+/// Stops the radio worker. Called before the server restarts itself.
+pub fn stop_worker() {
+    WORKER_STOPPING.store(true, Ordering::Relaxed);
+    if let Some(mut child) = WORKER.lock().unwrap_or_else(|error| error.into_inner()).take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 pub fn spawn(address: SocketAddr, worker_address: SocketAddr, data: &Path) -> io::Result<()> {
     if !worker_address.ip().is_loopback() {
         return Err(io::Error::new(
@@ -90,6 +158,19 @@ pub fn spawn(address: SocketAddr, worker_address: SocketAddr, data: &Path) -> io
     ENABLED.store(true, Ordering::Relaxed);
     if let Err(error) = gateway_credentials(data) {
         crate::settings::report(format!("MeshCore gateway not ready: {error}"), false);
+    }
+    match worker_binary() {
+        Some(binary) => {
+            WORKER_INSTALLED.store(true, Ordering::Relaxed);
+            let nodes = data.join("meshcore-nodes");
+            fs::create_dir_all(&nodes)?;
+            crate::settings::report(format!("  MeshCore radio worker: {}", binary.display()), false);
+            supervise_worker(binary, worker_address, nodes);
+        }
+        None => crate::settings::report(
+            "MeshCore radio worker (meshcore-host) not found: gateways are turned away until it is installed (scripts/install-meshcore-worker.sh)",
+            true,
+        ),
     }
     let data = data.to_path_buf();
     std::thread::Builder::new()
@@ -123,6 +204,7 @@ pub fn status() -> serde_json::Value {
     serde_json::json!({
         "pairingExpires": pairing_expires,
         "pairedAt": PAIRED_AT.load(Ordering::Relaxed),
+        "workerInstalled": WORKER_INSTALLED.load(Ordering::Relaxed),
         "enabled": ENABLED.load(Ordering::Relaxed),
         "address": ADDRESS.lock().map(|shown| shown.clone()).unwrap_or_default(),
         "gatewayConnected": gateway_up,

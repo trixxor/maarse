@@ -802,7 +802,7 @@ function renderMeshcore() {
   const state = !gw.enabled ? "off" : gw.gatewayConnected ? "connected" : "waiting";
   tiles("mc-tiles", [
     [state, "gateway (Heltec V4 over TLS)"],
-    [gw.workerConnected ? "yes" : "no", "radio worker connected"],
+    [gw.workerConnected ? "yes" : gw.workerInstalled ? "no" : "not installed", "radio worker connected"],
     [gw.enabled ? gw.address : "-", "gateway listens on"],
     [gw.connectedSince ? new Date(gw.connectedSince * 1000).toLocaleString() : "-", "gateway connected since"],
     [n(M.grants.length), "people allowed"],

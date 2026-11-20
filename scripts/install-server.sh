@@ -119,6 +119,12 @@ bold "4/6  Building maarse-server (the first time takes 5-15 minutes)"
 install -m 0755 "$SRC/target/release/maarse-server" "$BIN"
 info "installed $BIN"
 
+# The MeshCore radio worker: the server starts it when the MeshCore gateway is on.
+# A failure here must not stop the server update, so it only warns.
+if [ -d "$SRC/tools/meshcore-host" ]; then
+  MAARSE_NO_RESTART=1 bash "$SRC/scripts/install-meshcore-worker.sh" || warn "the MeshCore radio worker was not built; run $SRC/scripts/install-meshcore-worker.sh to see why"
+fi
+
 # ---------------------------------------------------------------- user
 if ! id "$SVC_USER" >/dev/null 2>&1; then
   useradd --system --home-dir "$DATA" --no-create-home --shell /usr/sbin/nologin "$SVC_USER"

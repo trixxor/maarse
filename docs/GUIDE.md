@@ -759,27 +759,24 @@ at a time. The worker connects to `127.0.0.1:5057` by default and can be moved
 to another loopback address with `--meshcore-worker <address:port>`. This local
 socket carries raw KISS without TLS, so it belongs on the same trusted machine.
 
-**The radio worker is required.** The gateway is only a radio. `meshcore-host`
-(in `tools/meshcore-host`) runs the MeshCore identities of your users and talks
-to the radio through the server. Without it a gateway can pair and connect, but
-the server turns it away: the dashboard shows "radio worker connected: no", the
-server log says "authenticated, but no radio worker is connected to this
-server", and the gateway display says **No radio worker**. On a Debian or Ubuntu
-server install it with one command, after `install-server.sh`:
-
-```sh
-sudo bash /opt/maarse/src/scripts/install-meshcore-worker.sh
-```
-
-The script installs git, cmake and a C++ compiler, builds `meshcore-host` from
-the official MeshCore code at the revision in
-`firmware/meshcore-gateway/MESHCORE_REVISION`, installs it as
-`/usr/local/bin/meshcore-host` and starts the service `maarse-meshcore-worker`
-as the same user as the server. Run it again after `install-server.sh --update`
-to update the worker. The worker connects to `127.0.0.1:5057` and exits when the
-server is not listening yet, and systemd starts it again every three seconds.
-The backbone and worker share the folder `meshcore-nodes` in the server's data
-folder. On Windows, run `meshcore-host --service --tcp 127.0.0.1:5057 --data
+**The radio worker.** The gateway is only a radio. `meshcore-host` (in
+`tools/meshcore-host`) runs the MeshCore identities of your users and talks to
+the radio through the server. `install-server.sh` builds and installs it as
+`/usr/local/bin/meshcore-host` every time you install or update the server (it
+takes a minute or two and installs git, cmake and a C++ compiler for it; the
+official MeshCore code at the revision in
+`firmware/meshcore-gateway/MESHCORE_REVISION` is compiled unmodified).
+`maarse-server` itself starts the worker when the MeshCore gateway is on, as the
+same user, and starts it again if it stops, so there is no separate service and
+nothing else to run. The worker connects to `127.0.0.1:5057` and shares the
+folder `meshcore-nodes` in the server's data folder. The server looks for the
+worker in `$MAARSE_MESHCORE_WORKER`, next to its own program, and in
+`/usr/local/bin`. Without the worker a gateway can pair and connect, but the
+server turns it away: the dashboard shows "radio worker connected: not
+installed" (or "no"), the server log says so, and the gateway display says **No
+radio worker**. `scripts/install-meshcore-worker.sh` builds only the worker, for
+the rare case that the build in `install-server.sh` failed and only warned. On
+Windows, run `meshcore-host --service --tcp 127.0.0.1:5057 --data
 <backbone-data>/meshcore-nodes` with a private, local node directory. The worker
 should be running when the gateway connects. After the TLS handshake and gateway
 token, the listener waits up to one second for the worker. The gateway firmware

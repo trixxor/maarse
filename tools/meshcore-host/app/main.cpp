@@ -92,6 +92,28 @@ static void printProvisioned(const std::string& person, const VirtualNode& node)
   puts("");
 }
 
+// meshcore-host --selftest: the crypto a repeater login relies on, checked on this very build.
+static int selfTest() {
+  SystemRNG rng;
+  mesh::LocalIdentity us(&rng), repeater(&rng);
+  uint8_t ours[PUB_KEY_SIZE], theirs[PUB_KEY_SIZE];
+  us.calcSharedSecret(ours, repeater.pub_key);
+  repeater.calcSharedSecret(theirs, us.pub_key);
+  const bool secret = memcmp(ours, theirs, PUB_KEY_SIZE) == 0;
+  uint8_t plain[24] = {1, 2, 3, 4};
+  memcpy(&plain[4], "sample-password", 15);   // a login: 4-byte time and up to 15 characters
+  uint8_t sealed[128], opened[128] = {};
+  const int sealedLength = mesh::Utils::encryptThenMAC(ours, sealed, plain, 19);
+  const int openedLength = mesh::Utils::MACThenDecrypt(theirs, opened, sealed, sealedLength);
+  const bool seal = openedLength >= 19 && memcmp(opened, plain, 19) == 0;
+  uint8_t signature[SIGNATURE_SIZE];
+  us.sign(signature, plain, 19);
+  const bool signature_ok = mesh::Identity(us.pub_key).verify(signature, plain, 19);
+  printf("shared secret agrees: %s\nsealed %d bytes, opened %d: %s\nsignature verifies: %s\n", secret ? "yes" : "NO", sealedLength,
+         openedLength, seal ? "yes" : "NO", signature_ok ? "yes" : "NO");
+  return secret && seal && signature_ok ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
 #ifdef _WIN32
   SetConsoleOutputCP(CP_UTF8);
@@ -115,6 +137,7 @@ int main(int argc, char** argv) {
     else if (a == "--cr") lp.cr = (uint8_t)std::stoi(next());
     else if (a == "--power") lp.tx_power = (int8_t)std::stoi(next());
     else if (a == "--verbose") verbose = true;
+    else if (a == "--selftest") return selfTest();
     else if (a == "--service") service = true;
     else { printf("unknown arg %s\n", a.c_str()); return 1; }
   }

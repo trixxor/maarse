@@ -731,25 +731,61 @@ automatically 30 days before it expires. Files in the data folder:
 `meshcore-gateway-token.txt` (a random token of 32 to 128 URL-safe characters,
 created the first time or on request). Private files are readable by the owner
 only on Unix. The gateway trusts only this authority, so no public certificate
-or file copying is needed. **Settings for the gateway** shows the name, port,
-token and authority certificate to enter in the Heltec's setup page. The
-authority only has to be entered once, because it stays the same when the server
-certificate is renewed. Keep the token private. The Heltec connects over TLS to
-that address and authenticates with its token. Forward the gateway port in the
-router to the server. The gateway itself needs no port forwarding.
+or file copying is needed.
+
+To connect a gateway, choose **Pair a gateway → Create pairing code**. It is a
+single short line (at most 120 characters, usually about 90), valid for ten
+minutes and usable once. Paste it into the gateway's setup page (**Backbone
+connection → Pairing code**) with its Wi-Fi. The code holds the server's name and
+port, a one-time secret and a pin of the server's certificate. The gateway
+restarts, contacts the server and checks that the certificate matches the pin
+before it sends the secret. It then receives its own token and the authority
+certificate over that checked connection, restarts again, and connects normally
+with the authority from then on. The pairing replaces the previous gateway's
+token, so the server accepts one gateway at a time, and the dashboard reports
+when the gateway has paired. The server cancels a code after five wrong
+attempts. The server's private keys never leave the server. A gateway name so long
+that the code would pass 120 characters is refused with a message.
+
+**Manual setup** shows the name, port, token and authority certificate to enter
+by hand in the Heltec's setup page. The authority only has to be entered once,
+because it stays the same when the server certificate is renewed. Keep the token
+private. The Heltec connects over TLS to that address and authenticates with its
+token. Forward the gateway port in the router to the server. The gateway itself
+needs no port forwarding.
 
 The listener pairs one authenticated gateway with one local KISS radio worker
 at a time. The worker connects to `127.0.0.1:5057` by default and can be moved
 to another loopback address with `--meshcore-worker <address:port>`. This local
 socket carries raw KISS without TLS, so it belongs on the same trusted machine.
-The MeshCore PC host's TCP mode can be used as a development radio worker. The
-worker should be running when the gateway connects. After the TLS handshake and
-gateway token, the listener waits up to one second for the worker. The gateway
-firmware waits two seconds for `OK`, so a worker that is still missing then
-makes the gateway disconnect and retry, and the server log reports it. On Windows,
-run `meshcore-host --service --tcp 127.0.0.1:5057 --data <backbone-data>/meshcore-nodes`
-with a private, local node directory. The backbone and worker must share that
-directory. The worker creates or reloads MeshCore identities and the backbone
+
+**The radio worker is required.** The gateway is only a radio. `meshcore-host`
+(in `tools/meshcore-host`) runs the MeshCore identities of your users and talks
+to the radio through the server. Without it a gateway can pair and connect, but
+the server turns it away: the dashboard shows "radio worker connected: no", the
+server log says "authenticated, but no radio worker is connected to this
+server", and the gateway display says **No radio worker**. On a Debian or Ubuntu
+server install it with one command, after `install-server.sh`:
+
+```sh
+sudo bash /opt/maarse/src/scripts/install-meshcore-worker.sh
+```
+
+The script installs git, cmake and a C++ compiler, builds `meshcore-host` from
+the official MeshCore code at the revision in
+`firmware/meshcore-gateway/MESHCORE_REVISION`, installs it as
+`/usr/local/bin/meshcore-host` and starts the service `maarse-meshcore-worker`
+as the same user as the server. Run it again after `install-server.sh --update`
+to update the worker. The worker connects to `127.0.0.1:5057` and exits when the
+server is not listening yet, and systemd starts it again every three seconds.
+The backbone and worker share the folder `meshcore-nodes` in the server's data
+folder. On Windows, run `meshcore-host --service --tcp 127.0.0.1:5057 --data
+<backbone-data>/meshcore-nodes` with a private, local node directory. The worker
+should be running when the gateway connects. After the TLS handshake and gateway
+token, the listener waits up to one second for the worker. The gateway firmware
+waits three seconds for its answer, which is `OK`, or `ERR token` or `ERR
+worker` with the reason; a gateway that is refused tries again every five
+seconds. The worker creates or reloads MeshCore identities and the backbone
 returns only the public key to clients. The listener
 and reconnection have been exercised with a simulated gateway and worker. A Heltec V4 on Wi-Fi also
 answered GetVersion and completed a LoRa scan through a local backbone and the

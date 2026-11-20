@@ -294,30 +294,30 @@ fn server_http(mut stream: TcpStream, mut req: Vec<u8>, head_end: usize, data_di
                 Err(_) => return reply(&mut stream, "500 Internal Server Error", jsn, "{\"error\":\"Could not read MeshCore grants.\"}"),
             };
             let body = serde_json::json!({"gateway": crate::meshcore_gateway::status(), "grants": grants});
-            reply(&mut stream, "200 OK", jsn, &body.to_string())
+            reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body.to_string())
         }
         ("POST", "/api/meshcore/grant") => {
             let host = header(&head, "host").unwrap_or("");
             if header(&head, "origin").is_some_and(|origin| origin != format!("http://{host}") && origin != format!("https://{host}")) {
-                return reply(&mut stream, "403 Forbidden", jsn, "{\"error\":\"Wrong origin.\"}");
+                return reply(&mut stream, "403 Forbidden", "application/json; charset=utf-8", "{\"error\":\"Wrong origin.\"}");
             }
             let body = match request_body(&mut stream, &mut req, head_end, 512, HTTP_TIMEOUT) {
                 Ok(body) => body,
-                Err(error) => return reply(&mut stream, "400 Bad Request", jsn, &serde_json::json!({"error": error}).to_string()),
+                Err(error) => return reply(&mut stream, "400 Bad Request", "application/json; charset=utf-8", &serde_json::json!({"error": error}).to_string()),
             };
             let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
-                return reply(&mut stream, "400 Bad Request", jsn, "{\"error\":\"Send JSON with person and allowed.\"}");
+                return reply(&mut stream, "400 Bad Request", "application/json; charset=utf-8", "{\"error\":\"Send JSON with person and allowed.\"}");
             };
             let (Some(person), Some(allowed)) = (request["person"].as_str(), request["allowed"].as_bool()) else {
-                return reply(&mut stream, "400 Bad Request", jsn, "{\"error\":\"Send JSON with person and allowed.\"}");
+                return reply(&mut stream, "400 Bad Request", "application/json; charset=utf-8", "{\"error\":\"Send JSON with person and allowed.\"}");
             };
             match crate::meshcore_access::set_grant(data_dir, person, allowed) {
                 Ok(()) => {
                     let grants = crate::meshcore_access::grants(data_dir).unwrap_or_default();
-                    reply(&mut stream, "200 OK", jsn, &serde_json::json!({"grants": grants}).to_string())
+                    reply(&mut stream, "200 OK", "application/json; charset=utf-8", &serde_json::json!({"grants": grants}).to_string())
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
-                    reply(&mut stream, "400 Bad Request", jsn, &serde_json::json!({"error": err.to_string()}).to_string())
+                    reply(&mut stream, "400 Bad Request", "application/json; charset=utf-8", &serde_json::json!({"error": err.to_string()}).to_string())
                 }
                 Err(_) => reply(&mut stream, "500 Internal Server Error", jsn, "{\"error\":\"Could not save MeshCore grants.\"}"),
             }
@@ -482,6 +482,27 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
             match crate::settings::save(data_dir, &text) {
                 Ok(()) => restart_soon(stream),
                 Err(e) => reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", &e),
+            }
+        }
+        ("GET", "/api/meshcore/gateway") => {
+            let body = crate::meshcore_gateway::config_json(data_dir);
+            reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body.to_string())
+        }
+        ("POST", "/api/meshcore/gateway") => {
+            let host = header(&head, "host").unwrap_or("");
+            if header(&head, "origin").is_some_and(|o| o != format!("http://{host}") && o != format!("https://{host}")) {
+                return reply(&mut stream, "403 Forbidden", "application/json; charset=utf-8", "{\"error\":\"Wrong origin.\"}");
+            }
+            let body = match request_body(&mut stream, &mut req, head_end, 64 * 1024, HTTP_TIMEOUT) {
+                Ok(body) => body,
+                Err(error) => return reply(&mut stream, "400 Bad Request", "application/json; charset=utf-8", &serde_json::json!({"error": error}).to_string()),
+            };
+            let Ok(update) = serde_json::from_slice::<serde_json::Value>(body) else {
+                return reply(&mut stream, "400 Bad Request", "application/json; charset=utf-8", "{\"error\":\"Send the gateway settings as JSON.\"}");
+            };
+            match crate::meshcore_gateway::save_config(data_dir, &update) {
+                Ok(()) => restart_soon(stream),
+                Err(error) => reply(&mut stream, "400 Bad Request", "application/json; charset=utf-8", &serde_json::json!({"error": error}).to_string()),
             }
         }
         ("POST", "/api/restart") => restart_soon(stream),

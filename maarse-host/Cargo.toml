@@ -46,6 +46,8 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # Lossy WebP for page pictures (the image crate only writes lossless WebP).
 webp = { version = "0.3", default-features = false }
 argon2 = "0.5.3"
+rcgen = "0.14"
+time = "0.3"
 
 [features]
 default = ["tun"]

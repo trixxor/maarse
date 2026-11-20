@@ -718,13 +718,24 @@ host WebSocket is `/ws` and accepts messages and frames up to 64 KiB.
 The Heltec V4 gateway firmware is built from [the MeshCore gateway project](../firmware/meshcore-gateway/README.md).
 On first boot, join `maarse-gate` and open `http://192.168.4.1/` to configure Wi-Fi and the backbone.
 
-In the backbone data directory, provision `meshcore-gateway-cert.pem` (the
-server certificate and intermediate certificates), `meshcore-gateway-key.pem`
-(the PEM private key) and `meshcore-gateway-token.txt` (a unique random token
-of 32 to 128 URL-safe characters). Keep the key and token private. Start the
-server with `--meshcore-gateway <address:port>` to enable the listener. The
-Heltec initiates TLS to that address and authenticates with its gateway token.
-Use the certificate's server name and issuing CA in the firmware configuration.
+On the dashboard, open **Connections → Gateway setup**. Enter the gateway port
+(the listen address, saved as `--meshcore-gateway` in `settings.txt`) and the
+server DNS name, which must point at the server. Choose **Save and restart**.
+The server runs its own small certificate authority for the gateway. It creates
+the authority once, and a server certificate for the DNS name that it renews
+automatically 30 days before it expires. Files in the data folder:
+`meshcore-gateway-ca.pem` (the authority, public), `meshcore-gateway-ca-key.pem`
+(its private key), `meshcore-gateway-cert.pem` and `meshcore-gateway-key.pem`
+(the server certificate), `meshcore-gateway-host.txt`, and
+`meshcore-gateway-token.txt` (a random token of 32 to 128 URL-safe characters,
+created the first time or on request). Private files are readable by the owner
+only on Unix. The gateway trusts only this authority, so no public certificate
+or file copying is needed. **Settings for the gateway** shows the name, port,
+token and authority certificate to enter in the Heltec's setup page. The
+authority only has to be entered once, because it stays the same when the server
+certificate is renewed. Keep the token private. The Heltec connects over TLS to
+that address and authenticates with its token. Forward the gateway port in the
+router to the server. The gateway itself needs no port forwarding.
 
 The listener pairs one authenticated gateway with one local KISS radio worker
 at a time. The worker connects to `127.0.0.1:5057` by default and can be moved

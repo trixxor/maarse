@@ -266,6 +266,24 @@
       <div class="msg" id="mc-msg"></div>
     </section>
     <section>
+      <h2>Gateway setup <small>port, name and token; the server makes its own certificates</small></h2>
+      <p class="help">The server runs its own small certificate authority for the gateway. The gateway trusts that authority and nothing else, so no certificate files need to be copied. Forward the gateway port in the router to this server. Saving creates the certificate and restarts the server.</p>
+      <div class="msg bad" id="mc-cfg-warn"></div>
+      <div class="form">
+        <label>Gateway port<small>listen address on this server; the gateway connects here</small></label><input id="mc-listen" placeholder="0.0.0.0:4343" spellcheck="false">
+        <label>Server DNS name<small>the name the gateway connects to, e.g. backbone.example.org; it must point at this server</small></label><input id="mc-host" placeholder="backbone.example.org" spellcheck="false">
+        <label>Gateway token<small>copy this into the gateway</small></label><div class="row" style="margin:0"><input id="mc-token" readonly spellcheck="false"></div>
+        <label>New token<small>the gateway must be updated with it</small></label><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="mc-newtoken"> create a new token on save</label>
+        <label>Certificate<small>the server's own certificate for the name</small></label><div class="help" id="mc-cert-state"></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="b on" id="mc-save">Save and restart</button></div>
+      <div class="msg" id="mc-cfg-msg"></div>
+      <h2 style="margin-top:18px">Settings for the gateway</h2>
+      <p class="help">Enter these in the gateway's setup page (Backbone connection): the name, the port, the token and the authority certificate below. The authority only has to be entered once; it stays the same when the server certificate is renewed.</p>
+      <textarea id="mc-copybox" readonly rows="10" style="width:100%;font:inherit;font-family:var(--mono,monospace)"></textarea>
+      <div class="row" style="margin-top:8px"><button class="b" id="mc-select">Select all</button><button class="b" id="mc-copy-ca">Copy authority certificate</button></div>
+    </section>
+    <section>
       <h2>Connections now</h2>
       <p class="help">Every link: backbone peers (in and out), modems and other links. Incoming links are limited per address and rate limited; a peer sending junk or flooding is banned for a while. "Close" drops a link (it may come back); "Block" closes it and keeps its address out.</p>
       <div class="tablewrap" id="conn-table"></div>
@@ -371,7 +389,7 @@ function show(p) {
   page = PAGES[p] ? p : "overview"; history.replaceState(null, "", "#" + page);
   if ((page === "settings" || page === "pages") && !settingsState) loadSettings();
   if (page === "pages") loadFiles();
-  if (page === "conns") { get("/api/guard").then(x => { G = x; renderConns(); }).catch(() => {}); loadMeshcore(); }
+  if (page === "conns") { get("/api/guard").then(x => { G = x; renderConns(); }).catch(() => {}); loadMeshcore(); loadGateway(); }
   for (const b of $("nav").children) b.classList.toggle("on", b.dataset.p === page);
   for (const d of document.querySelectorAll(".page")) d.classList.toggle("on", d.dataset.page === page);
   render();
@@ -798,6 +816,48 @@ document.addEventListener("click", e => {
   const person = e.target.dataset?.revoke;
   if (person && confirm("Revoke this person's MeshCore access?")) meshcoreGrant(person, false);
 });
+
+// Gateway setup: the port is kept in settings.txt; the name, token and certificates sit next to the data.
+let GW = null;
+async function loadGateway() {
+  try { GW = await get("/api/meshcore/gateway"); } catch { return; }
+  if (!$("mc-listen").value) $("mc-listen").value = GW.listen || "0.0.0.0:4343";
+  if (!$("mc-host").value) $("mc-host").value = GW.host || "";
+  $("mc-token").value = GW.token || "(no token yet: save to create one)";
+  $("mc-cert-state").textContent = GW.certificateExpires
+    ? "Valid until " + new Date(GW.certificateExpires * 1000).toLocaleDateString() + ". Renewed automatically 30 days before."
+    : "Not created yet. Save to create it.";
+  $("mc-cfg-warn").textContent = GW.overriddenByCommandLine ? "The start command also sets --meshcore-gateway, which overrides this port. Remove it from the service's arguments." : "";
+  const port = GW.listen ? GW.listen.split(":").pop() : "";
+  $("mc-copybox").value = [
+    "Server DNS name: " + (GW.host || "(not set)"),
+    "Port: " + (port || "(not set)"),
+    "Gateway token: " + (GW.token || "(not set)"),
+    "Issuing CA certificate (PEM):",
+    GW.authorityPem || "(created on save)",
+  ].join("\n");
+  $("mc-copybox").dataset.authority = GW.authorityPem || "";
+}
+async function saveGateway() {
+  const msg = $("mc-cfg-msg");
+  if (!confirm("Save and restart the server? Backbone links reconnect after a few seconds.")) return;
+  msg.className = "msg"; msg.textContent = "Saving…";
+  const body = { listen: $("mc-listen").value.trim(), host: $("mc-host").value.trim(), newToken: $("mc-newtoken").checked };
+  try {
+    const r = await fetch("/api/meshcore/gateway", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) { const b = await r.json().catch(() => ({})); msg.className = "msg bad"; msg.textContent = b.error || "Could not save."; return; }
+    msg.className = "msg good"; msg.textContent = "Saved. The server restarts now; reload this page in a few seconds.";
+    $("mc-newtoken").checked = false;
+  } catch { msg.className = "msg good"; msg.textContent = "The server is restarting. Reload this page in a few seconds."; }
+}
+$("mc-save").onclick = saveGateway;
+$("mc-select").onclick = () => { const box = $("mc-copybox"); box.focus(); box.select(); };
+$("mc-copy-ca").onclick = async () => {
+  const pem = $("mc-copybox").dataset.authority;
+  if (!pem) { $("mc-cfg-msg").className = "msg bad"; $("mc-cfg-msg").textContent = "The authority certificate is created on save."; return; }
+  try { await navigator.clipboard.writeText(pem); $("mc-cfg-msg").className = "msg good"; $("mc-cfg-msg").textContent = "Authority certificate copied."; }
+  catch { const box = $("mc-copybox"); box.value = pem; box.focus(); box.select(); $("mc-cfg-msg").className = "msg"; $("mc-cfg-msg").textContent = "Copy failed; the certificate is shown in the box, press Ctrl+C."; }
+};
 
 // ---------- settings ----------
 // Each field is one option in settings.txt; unknown lines are kept as they are.

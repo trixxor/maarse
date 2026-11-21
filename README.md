@@ -18,6 +18,8 @@ The working copy adds map traffic inspection and the **Great Belt traffic demo**
 
 In the working copy, **Real world** can also show receive and send activity from participating hosts. Dedicated server operators can enable **Share live traffic** in the dashboard. [Real-world setup and privacy](docs/denmark/README.md#live-real-world-traffic)
 
+The working-copy **Packets** and **Public channels** views show grouped observations sent over existing backbone TCP links and new messages from explicitly shared open channels. [Collector setup](docs/denmark/README.md#packet-observers-and-public-channels)
+
 ## Må:rse in 30 seconds
 
 - **A radio in your pocket.** A €20–40 LoRa board talks to your phone over Bluetooth and to other boards over several kilometres. No SIM card and no subscription.

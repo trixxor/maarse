@@ -109,6 +109,24 @@ tr.click { cursor:pointer; } tr.click:hover { background:rgba(127,127,127,.12); 
 #rw-traffic-hosts small { display:block; color:var(--mute); }
 #rw-observations { max-height:min(31vh, 245px); overflow:auto; overscroll-behavior:contain; border:1px solid var(--ovline); border-radius:8px; }
 #rw-observations > p { margin:8px; }
+.rw-view { display:grid; grid-template-columns:minmax(0, 1fr); gap:7px; }
+#rw-views { display:flex; gap:5px; flex-wrap:wrap; padding-bottom:6px; border-bottom:1px solid var(--ovline); }
+#rw-views button { padding:3px 8px; }
+#rw-views button[aria-pressed="true"] { color:var(--acc); border-color:var(--acc); }
+#rw-packets, #rw-messages { max-height:min(35vh, 285px); overflow:auto; overscroll-behavior:contain; border:1px solid var(--ovline); border-radius:8px; }
+#rw-packets > p, #rw-messages > p { margin:8px; }
+.rw-packet { display:grid; grid-template-columns:auto minmax(0, 1fr) auto; align-items:center; gap:8px;
+  width:100%; padding:4px 8px; border:0; border-bottom:1px solid var(--ovline); border-radius:0;
+  background:transparent; font-size:11px; text-align:left; }
+.rw-packet[aria-pressed="true"], .rw-packet:hover { background:var(--soft2); }
+.rw-packet b { overflow:hidden; text-overflow:ellipsis; }
+#rw-packet-sources { max-height:95px; overflow:auto; margin:5px 0 0; padding-left:20px; }
+#rw-view-channels label { margin:0; gap:6px; }
+#rw-channel { max-width:80%; }
+#rw-messages article { padding:7px 8px; border-bottom:1px solid var(--ovline); }
+#rw-messages article header { display:flex; align-items:baseline; flex-wrap:wrap; gap:3px 8px; font-size:11px; color:var(--mute); }
+#rw-messages article time { margin-left:auto; font-variant-numeric:tabular-nums; }
+#rw-messages article p { margin:3px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; }
 .rw-observation { width:100%; display:grid; grid-template-columns:auto 72px minmax(0, 1fr) auto; gap:8px;
   padding:4px 8px; align-items:center; border:0; border-radius:0; border-bottom:1px solid var(--ovline); background:transparent; text-align:left; font-size:11px; }
 .rw-observation:hover, .rw-observation[aria-pressed="true"] { background:var(--soft2); }

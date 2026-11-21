@@ -943,6 +943,26 @@ completed seconds in `[second - 10, second)`). A bucket has its own
 `trunk` and `backbone`. A changed session marker resets the client's cursor.
 The disabled endpoint returns 404. The admin event feed still requires login.
 
+For grouped observations, a reporting host can reuse an existing outgoing
+TCP peer with `--observe-to <host:port@collector-public-identity>`. A collector
+accepts only the public identities listed with `--observe-allow`. When it
+shares its public map, the collector also exposes a read-only
+`/api/public/network` feed. The dashboard's **Channels shown on the website**
+list (`--public-channel`) publishes new text from the selected open channel
+and wire region. Settings are opt-in, existing settings require no migration,
+and the feed uses in-memory retention. See
+[Packet observers and public channels](denmark/README.md#packet-observers-and-public-channels)
+for setup, availability and the publication boundary.
+
+`GET /api/public/network` returns version 1 JSON with `packets`, `channels`,
+`messages` and `radio_today`. Packet groups have an opaque ID, a type, total
+observation and observer counts, and recent observations with an observer
+address, Unix milliseconds, transport, direction, hop count and optional
+measured SNR. Messages have a channel, claimed sender prefix, Unix
+milliseconds and UTF-8 text. `radio_today` reports UTC-day counts since the
+current process started. The endpoint returns 404 when the public network
+feed is disabled.
+
 ## Firmware: status and what is missing
 
 - **Nothing has been tried on hardware yet.**

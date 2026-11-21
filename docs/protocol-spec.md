@@ -1036,6 +1036,28 @@ content is:
 count it as invalid. After a hello, floods with a region are only sent to peers
 that serve that region; peers without a hello get everything.
 
+**Packet observations (working copy).** An observation collector sets bit 5
+of the capability flags appended to its region hello (section 8.4). An opted-in
+host sends reports only on the configured outgoing TCP peer link after it sees
+this capability. Each report is a normal length-prefixed TCP frame, with content
+`0xFF 'O' 'B' | encrypted report`. TCP consumes it at the link layer. The mesh
+router and LoRa transports are outside this exchange. Old peers do not advertise
+the capability and are sent ordinary traffic.
+
+The encrypted report uses the existing direct-message sealing envelope addressed
+to the configured collector's public identity (section 6). The collector's key
+lookup is limited to its configured observer identities. Plaintext is
+`"OBS1" | session (u64 LE) | batch sequence (u32 LE) | Unix ms (u64 LE) | rows`.
+A row is `packet ID (u64 LE) | age in ms (u16 LE) | packet type (u8) | hops (u8)
+| flags (u8) | SNR (i8)`. Flags use bits 0–1 for radio (0), trunk (1) or
+backbone (2), bit 2 for a queued send and bit 3 if SNR is present. SNR is absent
+for TCP and queued sends. There are one to eleven rows per frame. The receiver
+checks the timestamp within 30 seconds of its clock and increasing sequence per
+observer/session while the recent replay cache is present. TCP timing and frame
+sizes remain observable. Authentication binds each report to an allowed host,
+which still controls the accuracy of its telemetry. Relaying reports between
+collectors is outside this version.
+
 **Modem framing.**
 
 ```text
@@ -1070,7 +1092,8 @@ event frame without length` (`Stats` twice, then `Radio`). With its host set to
 out (the host uses `--modem-ip`); the stream is the same after `MM`.
 
 **Capabilities** (`dht::Caps`): `version (str) | flags (bit 0 server, 1 radio,
-2 post office, 3 relay) | mail free MB (u32 LE, 0xFFFFFFFF = no limit) | n |
+2 post office, 3 relay, 4 call test, 5 observation collector) |
+mail free MB (u32 LE, 0xFFFFFFFF = no limit) | n |
 n × region (u16 BE)`. Asked with DHT request type 8 (`Caps`, no body),
 answered with response type 0x86. The same bytes follow the regions in the
 backbone link's region hello (older peers ignore them). Replica post

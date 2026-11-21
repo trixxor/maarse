@@ -134,6 +134,66 @@ to report its own measurements. Real radio reception requires a connected
 radio or modem. Local TCP validation exercises the host software and network
 transport.
 
+### Packet observers and public channels
+
+In the working copy, **Packets** in **Real world** shows observations collected
+from multiple hosts. **Public channels** shows new text from explicitly shared
+channels. Both read the collector's `/api/public/network` endpoint.
+
+1. Build or install the updated `maarse-server` on the collector and
+   `maarse-host` or `maarse-server` on each reporting host. Under **Settings**
+   on the collector, enable **Share the public map** and enter each reporting
+   host's 128-hex public identity under **Allowed observers**. This is the public
+   key printed at startup, also labelled **Bulletin key**. Save and restart.
+2. Set **Observation collector** to `host:port@collector-public-identity` in
+   the reporting server's Settings, or use
+   `--observe-to 'host:port@128-hex-collector-identity'` at startup. Use exactly
+   the endpoint of an existing outgoing TCP peer. The host reports to that
+   one collector when it advertises support. The direct peer link works from
+   behind NAT. Reports are encrypted and authenticated with the existing
+   Må:rse identities. Telemetry uses a bounded, low-priority queue.
+3. Under **Channels shown on the website**, list the open channels you want
+   to publish, one per line. Use `public` or a hashtag such as `#maarse`.
+   Add `@region` to match a particular wire region. An unqualified name
+   matches only untagged traffic. The special signed `#bulletin` channel is
+   handled by the bulletin and alert features. The command-line equivalents are repeatable
+   `--observe-allow <key>` and `--public-channel '#maarse@dk'`.
+4. On the site, open **Real world**, enter the same collector's HTTP(S) URL
+   and choose **Show**. Select **Packets** or **Public channels**. A packet
+   row groups multiple reception or transmission observations under one
+   packet identity. Select it to see its reporting hosts and their measured
+   SNR where available. The map uses the public position of each reporting
+   host and shows pulses only for those with a shared position.
+
+The Denmark simulator URL also accepts `?view=channels` and `?view=packets`
+as direct links into these views. When no hosts are saved in the visitor's
+browser, the site uses `https://nj01.dk.eu.maarse.dk` as the collector.
+
+The collector observes the traffic that passes through its own links as well
+as authorized reports. TCP reports never contain message text or raw packets.
+The packet view has up to 100 recent groups from the last two minutes and up
+to 32 displayed observations per group. **UTC today** counts LoRa and trunk
+receptions, reporting identities, and distinct radio packet IDs. The unique
+counter displays a lower bound after 500,000 IDs in a day. Counts and history
+are in memory and reset on restart. Plan a continuous pilot day for volume
+comparisons.
+
+The public channel feed stores up to 200 new messages for up to 24 hours
+in memory. It reads eligible channel traffic received by the site server or
+queued for transmission there. The channel's name and region select a
+deterministic open key. Private invitation keys and direct messages cannot
+match this selection. Global and regional variants are configured separately.
+The channel key authenticates membership in the open channel, while the sender
+shown on the website is only a claim by the writer. Anyone with access to the
+HTTP endpoint can read the shared text, observer addresses and packet timing.
+Public packet IDs are opaque and change when the server restarts. An
+authorized reporting host can still send false observations. The TCP observer
+link requires current clocks and represents host-side observations, including
+queued sends. Physical radio coverage and multi-backbone report relaying are
+separate from this direct-to-collector pilot.
+The loopback regression test is `python tools/observer_test.py` after building
+the host binaries. It exercises two modem byte streams and one TCP collector.
+
 ## Design
 
 ### Layers

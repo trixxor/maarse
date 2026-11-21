@@ -16,6 +16,7 @@
   const $ = (id) => document.getElementById(id);
   const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const STORE = "maarse.realworld.servers";
+  const DEFAULT_COLLECTOR = "https://nj01.dk.eu.maarse.dk";
   const ROLE_H = { Repeater: 15, Anchor: 15, Relay: 2, Client: 1.5 };   // when a node has no site
   let servers = [];
   try { servers = JSON.parse(localStorage.getItem(STORE) || "[]"); } catch { /* storage blocked */ }
@@ -28,6 +29,8 @@
   const HISTORY_MS = 60000;
   let data = { nodes: new Map(), links: [], hosts: new Map() }, timer = 0, calib = null;
   let mapRequest = 0, live = null;
+  const requestedView = new URLSearchParams(location.search).get("view");
+  let initialView = ["packets", "channels"].includes(requestedView) ? requestedView : null;
 
   const card = document.createElement("div");
   card.id = "rw-card"; card.className = "ov hidden";
@@ -36,7 +39,7 @@
     <h4 style="margin:0 0 6px;display:flex;justify-content:space-between;align-items:center">Real world <button id="rw-x" style="border:0;background:transparent" title="Close (the map stays until you hide it)">✕</button></h4>
     <p class="hint" style="margin:0 0 6px">The real network, from backbone hosts that share their map (<code>--public-map</code>). Fixed nodes show the site their owner set: antenna height, gain, power, owner.</p>
     <label>Hosts (one per line, e.g. https://host.example.dk:8080)</label>
-    <textarea id="rw-servers" rows="3" style="width:100%;box-sizing:border-box;font-size:12px">${esc(servers.join("\n"))}</textarea>
+    <textarea id="rw-servers" rows="3" style="width:100%;box-sizing:border-box;font-size:12px">${esc((servers.length ? servers : [DEFAULT_COLLECTOR]).join("\n"))}</textarea>
     <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">
       <button id="rw-load" class="primary">Show</button>
       <button id="rw-cov" title="Coverage of the real fixed nodes, with the simulator's radio model">Coverage</button>
@@ -59,16 +62,28 @@
     <div class="rw-traffic-head"><div><b>Real-world activity</b><small id="rw-status"></small></div>
       <button id="rw-settings">Hosts</button><button id="rw-exit">Simulation</button>
     </div>
+    <nav id="rw-views" aria-label="Real-world view"><button data-rw-view="activity" aria-pressed="true">Activity</button><button data-rw-view="packets" aria-pressed="false">Packets</button><button data-rw-view="channels" aria-pressed="false">Public channels</button></nav>
     <div id="rw-transports" aria-label="Filter transport">${transport.map(kind =>
       `<button data-transport="${kind}" aria-pressed="true" style="--transport:${colors[kind]}">${kind}</button>`).join("")}</div>
-    <details id="rw-host-totals"><summary>Host totals · last 10 s</summary><ul id="rw-traffic-hosts"></ul></details>
-    <div class="hint">Solid RX · dashed TX</div>
-    <div id="rw-observations" aria-label="Recent observations"></div>
-    <div id="rw-selection" class="hidden"><span id="rw-selected-label"></span><button id="rw-replay">Replay pulse</button><button id="rw-unpin" aria-label="Clear selection">✕</button></div>
-    <div id="rw-activity" aria-hidden="true"></div>
-    <div class="rw-time"><button id="rw-now" aria-pressed="true">Live</button>
-      <input id="rw-time" type="range" step="1000" aria-label="Observed traffic history">
-      <output id="rw-clock" for="rw-time"></output></div>`;
+    <div id="rw-view-activity" class="rw-view">
+      <details id="rw-host-totals"><summary>Host totals · last 10 s</summary><ul id="rw-traffic-hosts"></ul></details>
+      <div class="hint">Solid RX · dashed TX</div>
+      <div id="rw-observations" aria-label="Recent observations"></div>
+      <div id="rw-selection" class="hidden"><span id="rw-selected-label"></span><button id="rw-replay">Replay pulse</button><button id="rw-unpin" aria-label="Clear selection">✕</button></div>
+      <div id="rw-activity" aria-hidden="true"></div>
+      <div class="rw-time"><button id="rw-now" aria-pressed="true">Live</button>
+        <input id="rw-time" type="range" step="1000" aria-label="Observed traffic history">
+        <output id="rw-clock" for="rw-time"></output></div>
+    </div>
+    <div id="rw-view-packets" class="rw-view hidden">
+      <div id="rw-radio-today" class="hint"></div>
+      <div id="rw-packets" aria-label="Recent packets"></div>
+      <div id="rw-packet-details" class="hidden"><button id="rw-packet-clear">Clear selection</button><ul id="rw-packet-sources"></ul></div>
+    </div>
+    <div id="rw-view-channels" class="rw-view hidden">
+      <label>Channel <select id="rw-channel"><option value="">All shared channels</option></select></label>
+      <div id="rw-messages" aria-label="New public channel messages"></div>
+    </div>`;
   $("mapwrap").appendChild(trafficPanel);
   L.DomEvent.disableClickPropagation(trafficPanel); L.DomEvent.disableScrollPropagation(trafficPanel);
   $("rw-settings").onclick = () => card.classList.toggle("hidden");
@@ -145,7 +160,8 @@
   function startLive() {
     if (live) return;
     live = { hosts: new Map(), pulses: new Map(), entries: [], kinds: new Set(transport),
-      cursor: null, selected: null, sequence: 0, timer: 0, frame: 0 };
+      cursor: null, selected: null, sequence: 0, timer: 0, frame: 0,
+      view: "activity", network: new Map(), networkTimer: 0, packet: null };
     if (window.DKShell) window.DKShell.closePanel();
     dk.observedView(true);
     liveLayer.addTo(map);
@@ -153,13 +169,17 @@
     $("rw-status").textContent = "Connecting to hosts…";
     card.classList.add("hidden");
     for (const button of $("rw-transports").querySelectorAll("button")) button.setAttribute("aria-pressed", "true");
+    showView(live, initialView || "activity");
+    initialView = null;
     renderObservations(live);
     pollLive(live);
+    pollNetwork(live);
   }
 
   function stopLive() {
     if (live) {
       clearTimeout(live.timer);
+      clearTimeout(live.networkTimer);
       cancelAnimationFrame(live.frame);
       live = null;
     }
@@ -214,7 +234,7 @@
               const entry = { id: ++run.sequence, url, name: host.name || url, kind, point, rx: received, tx: sent,
                 time: Math.floor(now / 1000) * 1000 - (packet.second - b.second) * 1000 };
               run.entries.push(entry);
-              if (run.cursor === null && !run.selected && b.second >= packet.second - 3 && run.kinds.has(kind)) showObservation(run, entry);
+              if (run.view === "activity" && run.cursor === null && !run.selected && b.second >= packet.second - 3 && run.kinds.has(kind)) showObservation(run, entry);
             }
           }
           if (rx || tx) byTransport.push(`${kind} ${rx} RX / ${tx} TX`);
@@ -234,7 +254,8 @@
     }));
     if (live !== run) return;
     const reporting = [...data.hosts.keys()].filter(url => run.hosts.get(url)?.active).length;
-    $("rw-status").textContent = reporting ? `${reporting} ${reporting === 1 ? "host" : "hosts"} reporting` : "Waiting for a live traffic feed";
+    run.reporting = reporting;
+    renderNetworkStatus(run);
     const list = $("rw-traffic-hosts");
     const rows = [...data.hosts].map(([url, host]) => {
       const state = run.hosts.get(url);
@@ -257,6 +278,174 @@
   }
 
   const wallTime = (time) => new Date(time).toLocaleTimeString();
+  function renderNetworkStatus(run) {
+    const reporting = run.view === "activity" ? run.reporting || 0
+      : [...run.network.values()].filter(state => state.feed).length;
+    $("rw-status").textContent = reporting ? `${reporting} ${reporting === 1 ? "host" : "hosts"} reporting` : "Waiting for a live traffic feed";
+  }
+
+  function showView(run, view) {
+    run.view = view;
+    run.packet = null;
+    clearPulses(run);
+    for (const button of $("rw-views").querySelectorAll("button")) {
+      const name = button.dataset.rwView;
+      button.setAttribute("aria-pressed", String(name === view));
+      $("rw-view-" + name).classList.toggle("hidden", name !== view);
+    }
+    $("rw-transports").classList.toggle("hidden", view === "channels");
+    renderNetworkStatus(run);
+    renderNetwork(run);
+  }
+
+  $("rw-views").onclick = (event) => {
+    const button = event.target.closest("[data-rw-view]");
+    if (button && live) showView(live, button.dataset.rwView);
+  };
+
+  async function pollNetwork(run) {
+    const now = Date.now();
+    for (const url of run.network.keys()) {
+      if (!data.hosts.has(url)) run.network.delete(url);
+    }
+    await Promise.all([...data.hosts.keys()].map(async (url) => {
+      const state = run.network.get(url) || { retry: 0, seen: new Set(), feed: null };
+      run.network.set(url, state);
+      if (state.retry > now) return;
+      try {
+        const reply = await fetch(url + "/api/public/network", {
+          cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(3500)
+        });
+        if (reply.status === 404) {
+          state.retry = now + 60000;
+          state.feed = null;
+          return;
+        }
+        if (!reply.ok) throw new Error("Network feed unavailable");
+        const feed = await reply.json();
+        if (live !== run) return;
+        if (feed.version !== 1 || ![feed.packets, feed.channels, feed.messages].every(Array.isArray)) {
+          throw new Error("Unsupported network feed");
+        }
+        state.feed = feed;
+        state.retry = 0;
+        const newIds = new Set();
+        for (const packet of feed.packets) {
+          if (!packet || !Array.isArray(packet.observations)) continue;
+          for (const observation of packet.observations) {
+            if (!observation || !transport.includes(observation.transport)) continue;
+            const id = packet.id + "/" + observation.id;
+            newIds.add(id);
+            if (run.view === "packets" && !run.packet && !state.seen.has(id)
+                && Math.abs(now - observation.time) < 5000 && run.kinds.has(observation.transport)) {
+              showPacketObservation(run, observation);
+            }
+          }
+        }
+        state.seen = newIds;
+      } catch {
+        state.retry = now + 5000;
+        state.feed = null;
+      }
+    }));
+    if (live !== run) return;
+    renderNetworkStatus(run);
+    renderNetwork(run);
+    run.networkTimer = setTimeout(() => pollNetwork(run), 2000);
+  }
+
+  function packetRows(run) {
+    const rows = [];
+    for (const [url, state] of run.network) {
+      for (const packet of state.feed?.packets || []) {
+        if (!packet || typeof packet.id !== "string" || !Array.isArray(packet.observations)) continue;
+        const observations = packet.observations.filter(o => o && run.kinds.has(o.transport));
+        if (!observations.length) continue;
+        rows.push({ key: url + "/" + packet.id, packet, observations, time: Math.max(...observations.map(o => Number(o.time) || 0)) });
+      }
+    }
+    return rows.sort((a, b) => b.time - a.time);
+  }
+
+  function showPacketObservation(run, observation) {
+    const node = data.nodes.get(observation.observer);
+    const point = node && locationOf(node);
+    if (!point) return;
+    showObservation(run, { url: observation.observer, point, kind: observation.transport,
+      rx: observation.direction === "rx", tx: observation.direction === "tx" });
+  }
+
+  function renderNetwork(run) {
+    if (run.view === "packets") {
+      const stats = [...run.network.entries()].filter(([, state]) => state.feed?.radio_today);
+      updateHtml("rw-radio-today", stats.map(([url, state]) => {
+        const day = state.feed.radio_today;
+        const host = stats.length > 1 ? `${esc(data.hosts.get(url)?.name || url)} · ` : "";
+        return `<div>${host}UTC today · ${esc(day.unique_packets)}${day.capped ? "+" : ""} unique LoRa packets · ${esc(day.observations)} receptions · ${esc(day.sites)} sites</div>`;
+      }).join(""));
+      const rows = packetRows(run);
+      const selected = rows.find(row => row.key === run.packet);
+      if (!selected) run.packet = null;
+      const html = rows.slice(0, 32).map(({ key, packet, time }) => `
+        <button class="rw-packet" data-packet="${esc(key)}" aria-pressed="${selected?.key === key}">
+          <time>${esc(wallTime(time))}</time><b>${esc(packet.kind)}</b>
+          <span>${esc(packet.observer_count)} observers · ${esc(packet.count)} obs.</span>
+        </button>`).join("");
+      updateHtml("rw-packets", html || '<p class="hint">No recent packets from a configured collector.</p>');
+      $("rw-packet-details").classList.toggle("hidden", !selected);
+      if (selected) {
+        updateHtml("rw-packet-sources", selected.observations.map(o => {
+          const observer = data.nodes.get(o.observer)?.name || String(o.observer).slice(0, 8);
+          return `<li>${esc(observer)} · ${esc(o.transport)} ${o.direction === "tx" ? "TX" : "RX"} · hop ${esc(o.hops)}${Number.isInteger(o.snr) ? ` · ${o.snr} dB SNR` : ""}</li>`;
+        }).join(""));
+      }
+    }
+    if (run.view === "channels") renderPublicChannels(run);
+  }
+
+  function updateHtml(id, html) {
+    const el = $(id);
+    if (el.dataset.content !== html) {
+      el.innerHTML = html;
+      el.dataset.content = html;
+    }
+  }
+
+  function renderPublicChannels(run) {
+    const feeds = [...run.network.values()].map(state => state.feed).filter(Boolean);
+    const channels = [...new Set(feeds.flatMap(feed => feed.channels).filter(channel => typeof channel === "string"))].sort();
+    const filter = $("rw-channel");
+    const channel = channels.includes(filter.value) ? filter.value : "";
+    updateHtml("rw-channel", '<option value="">All shared channels</option>' + channels.map(name =>
+      `<option value="${esc(name)}">${esc(name)}</option>`).join(""));
+    filter.value = channel;
+    const messages = feeds.flatMap(feed => feed.messages).filter(m => m && channels.includes(m.channel)
+      && typeof m.text === "string" && Number.isFinite(m.time) && (!channel || m.channel === channel));
+    messages.sort((a, b) => b.time - a.time);
+    updateHtml("rw-messages", messages.slice(0, 100).map(m => `<article>
+      <header><b>${esc(m.channel)}</b><span title="Unverified sender">${esc(m.sender)}</span><time>${esc(wallTime(m.time))}</time></header>
+      <p>${esc(m.text)}</p>
+    </article>`).join("") || `<p class="hint">${channels.length ? "No new messages in this view." : "This server does not share channel messages."}</p>`);
+  }
+
+  $("rw-channel").onchange = () => { if (live) renderPublicChannels(live); };
+  $("rw-packets").onclick = (event) => {
+    const button = event.target.closest("[data-packet]");
+    if (!live || !button) return;
+    const row = packetRows(live).find(packet => packet.key === button.dataset.packet);
+    if (!row) return;
+    live.packet = row.key;
+    clearPulses(live);
+    for (const observation of row.observations) showPacketObservation(live, observation);
+    renderNetwork(live);
+  };
+  $("rw-packet-clear").onclick = () => {
+    if (!live) return;
+    live.packet = null;
+    clearPulses(live);
+    renderNetwork(live);
+  };
+
   const historyStart = (run) => run.entries.at(-1)?.time ?? Math.floor(Date.now() / 1000) * 1000;
   function renderObservations(run) {
     const end = Math.floor(Date.now() / 1000) * 1000;
@@ -330,6 +519,7 @@
     if (!live.kinds.has(live.selected?.kind)) live.selected = null;
     clearPulses(live);
     renderObservations(live);
+    renderNetwork(live);
   };
   $("rw-observations").onclick = (e) => {
     const row = e.target.closest("[data-observation]");
@@ -453,4 +643,8 @@
   }
 
   window.DKRealWorld = { show: () => { card.classList.remove("hidden"); if (servers.length && !timer) $("rw-load").click(); } };
+  if (initialView) {
+    card.classList.remove("hidden");
+    $("rw-load").click();
+  }
 })();

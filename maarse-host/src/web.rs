@@ -124,6 +124,14 @@ fn handle(mut stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
     let mut request_line = head.lines().next().unwrap_or("").split_whitespace();
     let (Some(method), Some(target)) = (request_line.next(), request_line.next()) else { return };
     let path = target.split('?').next().unwrap_or("");
+    if method == "GET" && path == "/api/public/network" {
+        let (status, body) = if crate::observe::public_enabled() {
+            ("200 OK", crate::observe::public_feed())
+        } else {
+            ("404 Not Found", "{\"error\":\"this host does not share a network feed\"}".to_string())
+        };
+        return send(&mut stream, status, "application/json", "Access-Control-Allow-Origin: *\r\n", body.as_bytes());
+    }
     if method == "GET" && path == "/api/public/traffic" {
         let (status, body) = if PUBLIC_MAP.load(Ordering::Relaxed) && PUBLIC_TRAFFIC.load(Ordering::Relaxed) {
             ("200 OK", crate::debug::public_traffic())

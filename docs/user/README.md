@@ -19,6 +19,10 @@ shared position. Filter by transport, or select an observation and choose
 with **Share the public map** and **Share live traffic**.
 [Live real-world traffic](../denmark/README.md#live-real-world-traffic)
 
+Connect **Real world** to the collector to see **Packets** grouped by
+observation and **Public channels** for new text from the open channels its
+operator chose to share. [Packet observers and public channels](../denmark/README.md#packet-observers-and-public-channels)
+
 | Page | Status |
 |---|---|
 | [Sending a message](messages.md) | done (sample page) |

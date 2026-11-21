@@ -87,14 +87,16 @@ pub struct Caps {
     pub relay: bool,
     /// Answers test calls (music, echo, speed; see node/calltest.rs).
     pub call_test: bool,
+    /// Accepts encrypted packet observations on backbone TCP links.
+    pub observe: bool,
 }
 
 impl Caps {
-    /// `version | flags (bit 0 server, 1 radio, 2 post office, 3 relay, 4 call test) |
+    /// `version | flags (bit 0 server, 1 radio, 2 post office, 3 relay, 4 call test, 5 observe) |
     /// mail free MB (u32 LE) | n | regions (u16 BE)`.
     pub fn encode(&self, out: &mut Vec<u8>) {
         put_str(out, &self.version);
-        out.push(self.server as u8 | (self.radio as u8) << 1 | (self.post_office as u8) << 2 | (self.relay as u8) << 3 | (self.call_test as u8) << 4);
+        out.push(self.server as u8 | (self.radio as u8) << 1 | (self.post_office as u8) << 2 | (self.relay as u8) << 3 | (self.call_test as u8) << 4 | (self.observe as u8) << 5);
         out.extend_from_slice(&self.mail_free_mb.to_le_bytes());
         let n = self.regions.len().min(8);
         out.push(n as u8);
@@ -118,7 +120,7 @@ impl Caps {
             let b = rd.take(2)?;
             regions.push(u16::from_be_bytes([b[0], b[1]]));
         }
-        Some(Caps { version, server: f & 1 != 0, radio: f & 2 != 0, post_office: f & 4 != 0, relay: f & 8 != 0, call_test: f & 16 != 0, mail_free_mb, regions })
+        Some(Caps { version, server: f & 1 != 0, radio: f & 2 != 0, post_office: f & 4 != 0, relay: f & 8 != 0, call_test: f & 16 != 0, observe: f & 32 != 0, mail_free_mb, regions })
     }
 }
 
@@ -945,7 +947,7 @@ mod tests {
 
     #[test]
     fn caps_roundtrip() {
-        let c = Caps { version: "0.1.0".into(), server: true, radio: false, regions: vec![0x1234, 7], post_office: false, call_test: true, mail_free_mb: 512, relay: true };
+        let c = Caps { version: "0.1.0".into(), server: true, radio: false, regions: vec![0x1234, 7], post_office: false, call_test: true, observe: true, mail_free_mb: 512, relay: true };
         let me = Address([1; 16]);
         let b = encode_resp(&me, &Resp::Caps(c.clone()));
         assert_eq!(decode_resp(&b), Some((me, Resp::Caps(c.clone()))));

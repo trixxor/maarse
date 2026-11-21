@@ -358,8 +358,22 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
         return;
     }
     let (wtx, wrx) = sync_channel::<Vec<u8>>(256);
+    let (report_tx, report_rx) = sync_channel::<Vec<u8>>(2);
     thread::spawn(move || {
-        for pkt in wrx {
+        use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
+        loop {
+            let pkt = match wrx.try_recv() {
+                Ok(pkt) => pkt,
+                Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) => match report_rx.try_recv() {
+                    Ok(report) => report,
+                    Err(_) => match wrx.recv_timeout(Duration::from_millis(100)) {
+                        Ok(pkt) => pkt,
+                        Err(RecvTimeoutError::Timeout) => continue,
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    },
+                },
+            };
             let mut buf = Vec::with_capacity(pkt.len() + 2);
             buf.extend_from_slice(&(pkt.len() as u16).to_le_bytes());
             buf.extend_from_slice(&pkt);
@@ -371,7 +385,7 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
         let _ = writer.shutdown(std::net::Shutdown::Both);
     });
     register_tcp(id, &name, "backbone", &stream);
-    if tx.send(In::LinkUp { id, name, tx: LinkSender::Bounded(wtx) }).is_err() {
+    if tx.send(In::LinkUp { id, name, tx: LinkSender::Backbone { packets: wtx, reports: report_tx } }).is_err() {
         unregister(id);
         return;
     }
@@ -380,6 +394,8 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
     let mut first = first_len;
     // Incoming links are rate limited; outgoing ones (we chose the peer) not.
     let mut rate = ip.map(|_| crate::guard::Rate::default());
+    let mut report_window = Instant::now();
+    let mut reports = 0;
     loop {
         let length_already_read = first.is_some();
         if let Some(f) = first.take() {
@@ -417,6 +433,17 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
             }
             if tx.send(In::LinkRegions { id, strict, regions }).is_err() {
                 break;
+            }
+            continue;
+        }
+        if data.starts_with(crate::observe::PREFIX) {
+            if report_window.elapsed() >= Duration::from_secs(1) {
+                report_window = Instant::now();
+                reports = 0;
+            }
+            if reports < 8 {
+                reports += 1;
+                if tx.send(In::ObservationReport(data)).is_err() { break; }
             }
             continue;
         }

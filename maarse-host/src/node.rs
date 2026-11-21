@@ -145,6 +145,7 @@ enum Timer {
     Announce,
     Housekeeping,
     Dht,
+    Observe,
     CallTest,
     /// A chunk of this file may be due for resending (LoRa timeout).
     FileCheck(u64),
@@ -370,6 +371,8 @@ pub struct Node {
     rx_snr: Option<i8>,
     /// maarse-server's telemetry (None on an ordinary host).
     tele: Option<Box<crate::telemetry::Telemetry>>,
+    observers: crate::observe::Observers,
+    public_channels: Vec<crate::observe::PublicChannel>,
     next_tele: Instant,
     next_tele_save: Instant,
     last_forwarded: u32,
@@ -631,6 +634,8 @@ impl Node {
             rx_link: None,
             rx_snr: None,
             tele: (cfg.backbone || cfg.public_map).then(|| Box::new(crate::telemetry::Telemetry::load(&cfg.data_dir.join("telemetry.json")))),
+            observers: crate::observe::Observers::new(cfg.observe_to.clone(), &cfg.observe_allow),
+            public_channels: cfg.public_channels.clone(),
             next_tele: Instant::now() + Duration::from_secs(5),
             next_tele_save: Instant::now() + Duration::from_secs(300),
             last_forwarded: 0,
@@ -812,6 +817,9 @@ impl Node {
         self.schedule(Duration::from_secs(1), Timer::Announce);
         self.schedule(Duration::from_millis(500), Timer::Dht);
         self.schedule(HOUSEKEEPING_EVERY, Timer::Housekeeping);
+        if self.observers.target.is_some() {
+            self.schedule(crate::observe::FLUSH, Timer::Observe);
+        }
         loop {
             let wait = self
                 .timers
@@ -862,6 +870,10 @@ impl Node {
                     self.dht_maintain();
                     self.schedule(DHT_EVERY, Timer::Dht);
                 }
+                Some(Timer::Observe) => {
+                    self.flush_observations();
+                    self.schedule(crate::observe::FLUSH, Timer::Observe);
+                }
                 None => {}
             }
         }
@@ -901,6 +913,7 @@ impl Node {
                     self.broadcast_log(format!("Link down ({} left)", self.links.len()));
                 }
             }
+            In::ObservationReport(report) => self.observers.receive(&self.identity, &report),
             In::Packet { data, snr, link } => {
                 // Blocked nodes (guard.rs): nothing to, from or about them.
                 if let Ok((h, _)) = Header::decode(&data)
@@ -910,6 +923,18 @@ impl Node {
                 }
                 self.counters.packets_in += 1;
                 self.counters.bytes_in += data.len() as u64;
+                if (self.observers.enabled() || !self.public_channels.is_empty())
+                    && let Ok(packet) = Packet::decode(&data)
+                {
+                    if let Some((name, _)) = self.links.get(&link)
+                        && self.observers.enabled()
+                    {
+                        let measured = ["serial ", "wifi-modem", "modem ", "trunk "].iter().any(|prefix| name.starts_with(prefix)).then_some(snr);
+                        let sample = crate::observe::Sample::new(&packet, link_kind(name), false, measured);
+                        self.observers.record(self.addr, sample);
+                    }
+                    for channel in &self.public_channels { channel.record(&packet); }
+                }
                 self.learn_pid_link(&data, link);
                 {
                     let c = self.link_stats.entry(link).or_default();
@@ -1240,6 +1265,8 @@ impl Node {
             .as_ref()
             .is_some_and(|h| h.ptype == PacketType::Fragment && self.path_kind(&h.dest) == PathKind::Tcp);
         let mut sent_to: Vec<(LinkId, String)> = Vec::new();
+        let decoded = if self.observers.enabled() || !self.public_channels.is_empty() { Packet::decode(packet).ok() } else { None };
+        let mut queued_any = false;
         for (id, (name, tx)) in &self.links {
             if trunk_skip.contains(id) {
                 continue;
@@ -1267,12 +1294,21 @@ impl Node {
                 continue;
             }
             let queued = tx.send(packet.to_vec()).is_ok();
+            queued_any |= queued;
+            if queued && self.observers.enabled()
+                && let Some(decoded) = &decoded
+            {
+                self.observers.record(self.addr, crate::observe::Sample::new(decoded, link_kind(name), true, None));
+            }
             if queued && header.is_some() && crate::web::PUBLIC_TRAFFIC.load(std::sync::atomic::Ordering::Relaxed) {
                 crate::debug::count_public_packet(true, link_kind(name));
             }
             self.counters.packets_out += 1;
             self.counters.bytes_out += packet.len() as u64;
             sent_to.push((*id, name.clone()));
+        }
+        if queued_any && let Some(decoded) = &decoded {
+            for channel in &self.public_channels { channel.record(decoded); }
         }
         let mut f = crate::debug::packet_fields(packet);
         f["links"] = sent_to.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>().into();
@@ -3336,6 +3372,16 @@ impl Node {
         crate::links::region_hello_with_caps(self.router.strict_region, &self.router.regions, &self.my_caps())
     }
 
+    fn flush_observations(&mut self) {
+        let Some(target) = self.observers.target.as_ref() else { return };
+        let Some((_, (_, tx))) = self.links.iter().find(|(id, (name, _))| {
+            *name == target.link && self.link_caps.get(id).is_some_and(|caps| caps.observe)
+        }) else { return };
+        if let Some(report) = self.observers.report(&self.identity) {
+            tx.send_observations(report);
+        }
+    }
+
     /// Bytes of mail kept for others.
     fn mail_bytes(&self) -> u64 {
         self.mailbox.values().flat_map(|m| m.values()).map(|mail| MAIL_RECORD_OVERHEAD + mail.sealed.len() as u64).sum()
@@ -3353,6 +3399,7 @@ impl Node {
             mail_free_mb: free,
             relay: !self.no_relay && self.dht.public_ep.is_some(),
             call_test: self.call_test.enabled(),
+            observe: self.observers.collecting(),
         }
     }
 
@@ -4219,6 +4266,9 @@ pub(super) mod file_interop_tests {
             allow_legacy_web_token: false,
             public_map: false,
             public_traffic: false,
+            observe_to: None,
+            observe_allow: Vec::new(),
+            public_channels: Vec::new(),
             max_file: 1024 * 1024,
             filebox_per_recipient: 20 << 20,
             filebox_total: 200 << 20,

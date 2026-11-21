@@ -27,6 +27,7 @@ mod history;
 mod fuzz_tests;
 mod links;
 mod mqtt;
+mod observe;
 mod node;
 mod pagefiles;
 mod sessions;
@@ -47,6 +48,7 @@ pub type LinkId = u32;
 pub enum LinkSender {
     Unbounded(Sender<Vec<u8>>),
     Bounded(SyncSender<Vec<u8>>),
+    Backbone { packets: SyncSender<Vec<u8>>, reports: SyncSender<Vec<u8>> },
 }
 
 impl From<Sender<Vec<u8>>> for LinkSender {
@@ -60,6 +62,13 @@ impl LinkSender {
         match self {
             Self::Unbounded(sender) => sender.send(packet).map_err(|err| std::sync::mpsc::TrySendError::Disconnected(err.0)),
             Self::Bounded(sender) => sender.try_send(packet),
+            Self::Backbone { packets, .. } => packets.try_send(packet),
+        }
+    }
+
+    pub fn send_observations(&self, report: Vec<u8>) {
+        if let Self::Backbone { reports, .. } = self {
+            let _ = reports.try_send(report);
         }
     }
 }
@@ -110,6 +119,7 @@ pub enum In {
         id: LinkId,
         caps: crate::dht::Caps,
     },
+    ObservationReport(Vec<u8>),
     /// A DHT node's capabilities (answer to `Req::Caps`).
     DhtCaps {
         id: maarse_core::Address,
@@ -168,6 +178,9 @@ pub struct Config {
     pub public_map: bool,
     /// Publish short-lived aggregate packet counters on the public map.
     pub public_traffic: bool,
+    pub observe_to: Option<observe::Target>,
+    pub observe_allow: Vec<maarse_crypto::PublicIdentity>,
+    pub public_channels: Vec<observe::PublicChannel>,
     /// `--require-key`: the access key also from 127.0.0.1.
     pub require_key: bool,
     pub allow_legacy_web_token: bool,
@@ -316,7 +329,7 @@ fn alert_tools(argv: &[String]) -> Option<i32> {
 pub const PUBLIC_PEERS: &[&str] = &["nj01.dk.eu.maarse.dk:4242"];
 
 /// Parses a public identity given as 128 hex digits (signing key, then DH key).
-fn parse_identity(s: &str) -> Result<maarse_crypto::PublicIdentity, String> {
+pub(crate) fn parse_identity(s: &str) -> Result<maarse_crypto::PublicIdentity, String> {
     let s = s.trim();
     let bytes: Option<Vec<u8>> = (0..s.len())
         .step_by(2)
@@ -456,6 +469,14 @@ Usage: maarse-host [options]
                         everyone at /api/public/map (for map pages)
   --public-traffic      with --public-map, publish recent packet counts by
                         transport and direction at /api/public/traffic
+  --observe-to <peer@key>
+                        report packet observations over an existing TCP peer
+                        link (host:port@128-hex collector identity)
+  --observe-allow <key> accept observations from this public identity
+                        (128 hex digits, repeatable)
+  --public-channel <name>
+                        publish new text from this open channel (public or
+                        #name, optionally @region; repeatable, needs --public-map)
   --allow-legacy-web-token
                         allow deprecated URL query keys during upgrades
   --require-key         ask for the access key from this machine too (for
@@ -513,6 +534,9 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         allow_legacy_web_token: false,
         public_map: false,
         public_traffic: false,
+        observe_to: None,
+        observe_allow: Vec::new(),
+        public_channels: Vec::new(),
         max_file: maarse_hostrules::filebox::MAX_FILE_DEFAULT,
         filebox_per_recipient: 20 << 20,
         filebox_total: 200 << 20,
@@ -598,6 +622,20 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--allow-legacy-web-token" => c.allow_legacy_web_token = true,
             "--public-map" => c.public_map = true,
             "--public-traffic" => c.public_traffic = true,
+            "--observe-to" => c.observe_to = Some(observe::Target::parse(&val("--observe-to")?)?),
+            "--observe-allow" => {
+                let key = parse_identity(&val("--observe-allow")?)
+                    .map_err(|_| "--observe-allow: expected a 128-hex public identity")?;
+                if !c.observe_allow.contains(&key) {
+                    c.observe_allow.push(key);
+                }
+            }
+            "--public-channel" => {
+                let channel = observe::PublicChannel::parse(&val("--public-channel")?)?;
+                if !c.public_channels.contains(&channel) {
+                    c.public_channels.push(channel);
+                }
+            }
             "--service" => {
                 c.service = true;
                 c.open_browser = false;
@@ -753,6 +791,12 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
     }
     if c.public_traffic && !c.public_map {
         return Err("--public-traffic requires --public-map".to_string());
+    }
+    if !c.public_channels.is_empty() && !c.public_map {
+        return Err("--public-channel requires --public-map".into());
+    }
+    if c.public_channels.len() > 8 || c.observe_allow.len() > 128 {
+        return Err("At most 8 public channels and 128 observer identities can be configured".into());
     }
     Ok(c)
 }
@@ -990,6 +1034,7 @@ pub fn run(cli: Vec<String>) {
     web::ALLOW_LEGACY_WEB_TOKEN.store(cfg.allow_legacy_web_token, std::sync::atomic::Ordering::Relaxed);
     web::PUBLIC_MAP.store(cfg.public_map, std::sync::atomic::Ordering::Relaxed);
     web::PUBLIC_TRAFFIC.store(cfg.public_traffic, std::sync::atomic::Ordering::Relaxed);
+    observe::enable_public_feed(cfg.public_map && (!cfg.observe_allow.is_empty() || !cfg.public_channels.is_empty()), &cfg.public_channels);
     if let Some(addr) = cfg.http {
         let token = web::access_token(&cfg.data_dir);
         match web::spawn(addr, token.clone(), cfg.data_dir.clone(), tx.clone()) {

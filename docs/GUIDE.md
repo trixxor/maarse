@@ -937,7 +937,7 @@ buckets. Keep it disabled if the site's activity timing is sensitive.
 On upgrade, installations with **Share live traffic** already on also publish verified
 announce observations in `/api/public/network`. The aggregate endpoint keeps
 its existing response format.
-See the [browser setup and trust boundary](denmark/README.md#live-real-world-traffic).
+See the [browser setup and trust boundary](denmark/README.md#real-network-setup-and-privacy).
 
 The version 1 response contains `session` (an opaque process marker),
 `second` (the current process-relative second), and `buckets` (nonempty
@@ -967,6 +967,19 @@ text. The operator can still use `--public-channel` to supply a name on a
 legacy or radio path. Feed history is in memory. See
 [Packet observers and public channels](denmark/README.md#packet-observers-and-public-channels)
 for setup, availability and the publication boundary.
+
+**Public history.** With **Share the public map** and **Share live traffic** on,
+**Public history (hours)** under **Settings** (default 24, 0 keeps nothing)
+makes the server keep that many hours of what the two feeds show live: per
+minute the packets received and sent per transport and per packet type, the
+announces (which node was heard when) and the open-channel messages. It is
+written to `public-history.json` in the data folder about once a minute, so a
+restart loses at most that. `GET /api/public/history?since=<unix ms>` returns
+`buckets` (one per minute: `t`, `rx` and `tx` with `radio`, `trunk`, `backbone`,
+and `types`), `announces` (`t`, `addr`) and `messages` (`time`, `channel`,
+`sender`, `text`). Like the other public feeds it allows cross-origin reads and
+returns 404 when the server does not share it. The Denmark simulator's real
+network view uses it to step back 24 hours.
 
 `GET /api/public/network` returns version 1 JSON with `packets`, `channels`,
 `messages` and `radio_today`. Packet groups have an opaque ID, a type, total

@@ -12,12 +12,12 @@ recorded hops. Use the slider or **Scenario events** menu to review an outage,
 and **Live** to return to the current run. Try **Great Belt traffic demo** with
 terrain disabled. [Traffic controls and limits](../denmark/README.md#traffic-on-the-map)
 
-For an opted-in real host, open **Real world**, enter its URL, and select
-**Show**. Solid and dashed rings show receive and send activity at the host's
-shared position. Filter by transport, or select an observation and choose
-**Replay pulse**. Dedicated server operators can opt in under **Settings**
-with **Share the public map** and **Share live traffic**.
-[Live real-world traffic](../denmark/README.md#live-real-world-traffic)
+To see the real network, choose **Real network** at the top of the page. It
+shows the nodes, live packets and open channels of the servers you list under
+**Servers**, and you can step back up to 24 hours with the bar at the bottom.
+Server operators opt in under **Settings** with **Share the public map**,
+**Share live traffic** and **Public history**.
+[Real network: setup and privacy](../denmark/README.md#real-network-setup-and-privacy)
 
 With the updated site and collector, **Packets** shows verified announces even
 from an Android **Phone node** connected only over TCP. In **Name and position**,

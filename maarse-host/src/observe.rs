@@ -196,6 +196,7 @@ impl PublicChannel {
             sender: crate::debug::hex(&sender.0[..4]),
             text: text.to_string(),
         });
+        crate::public_history::message(time, &self.name, &crate::debug::hex(&sender.0[..4]), text);
         true
     }
 }
@@ -285,6 +286,9 @@ impl Observers {
 
     pub fn publish_announce(&self, observer: Address, mut sample: Sample, subject: Option<Address>) {
         sample.subject = subject;
+        if let Some(addr) = subject {
+            crate::public_history::announce(&crate::debug::hex(&addr.0));
+        }
         publish(observer, sample);
     }
 

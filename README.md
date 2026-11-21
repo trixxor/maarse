@@ -16,7 +16,7 @@
 
 The working copy adds map traffic inspection and the **Great Belt traffic demo** to the browser simulator. Use **Traffic** to pin a packet or scrub recent activity around an outage. [Traffic controls and limits](docs/denmark/README.md#traffic-on-the-map)
 
-In the working copy, **Real world** can also show receive and send activity from participating hosts. Dedicated server operators can enable **Share live traffic** in the dashboard. [Real-world setup and privacy](docs/denmark/README.md#live-real-world-traffic)
+In the working copy, **Real network** shows the real network next to the simulation: nodes, packets, open channels and 24 hours of history from participating hosts. Dedicated server operators can enable **Share live traffic** in the dashboard. [Real network: setup and privacy](docs/denmark/README.md#real-network-setup-and-privacy)
 
 The working-copy Denmark map can show a TCP-only node's shared position and verified announces. Enable **Share open channels** on the collector to show new messages and activity from `public` and automatically identified open channels. [Collector setup](docs/denmark/README.md#packet-observers-and-public-channels)
 

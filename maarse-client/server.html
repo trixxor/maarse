@@ -1065,6 +1065,7 @@ const FIELDS = [
   { f: "--public", label: "Join the public backbone", help: "also connect to the public backbone servers (more are found from there)", kind: "flag" },
   { f: "--public-map", label: "Share the public map", help: "share this server's map data (its site, nodes with a shared position, the radio links it hears) with everyone at /api/public/map", kind: "flag" },
   { f: "--public-traffic", label: "Share live traffic", help: "Requires Share the public map. Publishes recent packet counts and observations of verified announces", kind: "flag" },
+  { f: "--public-history-hours", label: "Public history (hours)", help: "Requires Share live traffic. Keeps this many hours of public traffic (packets per minute and type, announces and open channel messages) so the website can step back in time. Default 24, 0 keeps nothing", kind: "number" },
   { f: "--observe-to", label: "Observation collector", help: "send encrypted packet metadata over an existing outgoing TCP peer connection (host:port@128-hex collector identity)", kind: "text" },
   { f: "--observe-allow", label: "Allowed observers", help: "128-hex public identities, one per line. With Share the public map, the website can read recent packet observations, including this server's", kind: "list" },
   { f: "--share-open-channels", label: "Share open channels", help: "Requires Share the public map. Automatically publishes activity and new text from public and named open channels this server can identify. Anyone who can reach it can read the text", kind: "flag" },

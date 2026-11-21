@@ -95,33 +95,21 @@ the missed hop. **Follow message** shows its later delivery after the radio
 recovers. The third message crosses over LoRa while TCP stays down. These
 are simulation results from the preset and its fixed seed.
 
-### Live real-world traffic
+### Real network: setup and privacy
 
-The working copy adds observed traffic to **Real world** in the browser
-simulator. Build or install matching `maarse-host` or `maarse-server` binaries
-with this feature. In the dedicated server dashboard, open **Settings**,
-enable **Share the public map** and **Share live traffic**, then choose **Save
-and restart**. The host needs
-an HTTP listener reachable by the browser. Use HTTPS for hosts accessed from
-the HTTPS simulator page, typically through the existing reverse proxy.
-Enable position sharing for the host if you want a marker on the map.
+The working copy adds the real network to the browser simulator: switch to
+**Real network** at the top of the page (or press G). Build or install
+matching `maarse-host` or `maarse-server` binaries with this feature. In the
+dedicated server dashboard, open **Settings**, enable **Share the public map**
+and **Share live traffic**, then choose **Save and restart**. The host needs an
+HTTP listener reachable by the browser. Use HTTPS for hosts accessed from the
+HTTPS simulator page, typically through the existing reverse proxy. Enable
+position sharing for the host if you want a marker on the map.
 
-Open **Real world** (G), enter the host's HTTP(S) URL and press **Show**.
-**Live observed traffic** is selected by default. It opens a dark map view
-with the reporting hosts and a compact activity list. Orange denotes radio,
-green denotes a dedicated trunk and blue denotes backbone. Solid rings show
-receives and dashed rings show sends at the reporting host's shared position.
-Use the transport buttons to filter live rings and history. Select a row and
-choose **Replay pulse** to view that one-second observation again. The local
-slider and activity strip cover up to 60 seconds collected in the current view. **Live**
-returns to the latest observations. **Simulation** restores the simulator
-layers and controls. The simulation can continue in the background.
-
-**Host totals** shows ten seconds of counts per host and transport, including
-hosts without a shared position. The browser polls about once a second using
-complete one-second buckets. The pulses show local observations and an outgoing
-count means the host queued a frame on a link. The view has no peer coordinates
-or confirmed end-to-end route.
+The view polls about once a second, using complete one-second buckets. The
+counts are local observations at the reporting host, and an outgoing count
+means the host queued a frame on a link. The view has no peer coordinates or
+confirmed end-to-end route. **Host totals** are the figures along the top.
 
 **Share the public map** alone serves the static map. The separate opt-in
 **Share live traffic** makes `/api/public/traffic` readable by anyone who can
@@ -133,40 +121,67 @@ radio requires a connected radio or modem.
 
 ### Network overview and the view switch
 
-The switch at the top right of the map chooses what is shown:
-**Simulation** (the simulated network only, the default), **Real network**
-(the simulation is hidden and the real nodes of the public servers are drawn
-in its place) or **Both**. **Real network** opens the network overview, which
-can also be opened with `?view=network`. It shows the real network at a
-glance from the same public feeds, in the style of a mesh telemetry site:
+The switch in the second row of the top bar chooses the view:
+**Simulation** (the default) or **Real network** (also the globe tool and the G
+key). **Real network** hides the simulation and everything that belongs to it
+(scenario, File, Build / Run / Results, the tool bar and the play bar), and
+shows the real nodes of the public servers instead. Both views use the same
+top bar, panels and colours. The view can also be opened with
+`?view=network`. It reads the same public feeds as the rest of this section
+and is laid out in docked panels, so nothing covers the map:
 
-- Figures along the top: nodes on the map, nodes heard in the last hour,
-  packets per minute, received and sent packets in the last 10 seconds per
-  transport (radio, trunk, backbone), servers reporting, observers heard and
-  open-channel messages.
-- A searchable **node list** with role filters. Select a node to see its
-  card (role, last heard, position, antenna height, gain, power, owner and
-  its latest announces) and a halo on the map.
-- **Live packets** (every packet group of the last two minutes with type,
-  transport, hops, SNR and how many observers saw it), **Channels** (open
-  channel messages with the sender's name) and **Types** (a 2-minute
-  activity graph and the packet types since the overview opened).
+- **Top bar:** key figures for the chosen time: nodes, nodes active in the last
+  hour, packets per minute, received and sent packets per transport (radio,
+  trunk, backbone), servers reporting, observers and open-channel messages.
+- **Left:** the node list with search and role filters.
+- **Right:** the selected node (role, last heard, position, antenna height,
+  gain, power, owner and its latest announces), then the **live packets**: a
+  compact list with the packet type (colour), hops, how many observers heard
+  it, the observer's address and the announced node's address. Addresses only,
+  no names. Below it packets per minute, packet types and a legend.
+- **Packets** (button in the top bar): a table with time, hash, hops, type,
+  transport, observer, observer count and details. Rows are grouped by hash;
+  select a row to see every observation. Filter on text, type and transport.
+- **Channels** (button in the top bar): the channel list with the latest
+  message of each, and the conversation of the chosen channel as a chat.
+  Switch channel with one click.
+- **Servers** and **Coverage** (buttons in the top bar): **Servers** edits
+  the list of servers the view reads and shows the model against the
+  measured radio links, which are also drawn on the map, coloured by SNR.
+  **Coverage** draws the coverage of the real fixed nodes with the
+  simulator's radio model.
 - **Sound** gives a short tone for a new public message, another open
   channel, a direct message seen passing and a new node. The choices are
   saved in the browser only. The browser plays sound after the first click
   on the page.
+- **History bar** (Real network only, where the simulation's play bar has no
+  use): step back and forward ten minutes, play the history at 1× to 1800×,
+  **LIVE** to return, 1 h / 6 h / 12 h / 24 h for the width of the time line,
+  and click or drag on the time line to go to a time. The left arrow and right
+  arrow keys step ten minutes. Everything follows the chosen time: the figures,
+  the node list ("last heard" at that time), the map, the live list, the
+  Packets window and the Channels window.
 
-The overview reads the hosts saved under **Real world**, or
+The history comes from the server. A server that has **Share the public map**,
+**Share live traffic** and **Public history (hours)** (default 24) set in its
+Settings keeps, on disk, the packets per minute and type, the announces and the
+open-channel messages of that period and serves them at
+`/api/public/history`. Until a server has been updated, or if it keeps no
+history, the overview keeps what it has seen since the page was opened. A
+history holds counts per minute and type, not every packet, so the Packets
+window shows minutes and announces when you are in the past.
+
+The view reads the servers saved under **Servers**, or
 `https://nj01.dk.eu.maarse.dk` when none are saved. It only shows what a
 server has chosen to share: nodes with a shared position, packet metadata and
 open channels. Direct messages are encrypted and never shown.
 
 ### Packet observers and public channels
 
-With the updated server and website, **Packets** in **Real world** shows
-verified announces heard by the collector, open-channel activity, and any
-approved observer reports. **Public channels** shows new messages. Both
-read `/api/public/network`.
+With the updated server and website, the **Packets** and **Channels**
+windows of **Real network** show verified announces heard by the collector,
+open-channel activity, and any approved observer reports, and the new
+messages of open channels. Both read `/api/public/network`.
 
 1. Build or install the updated `maarse-server`. In **Settings**, turn
    on **Share the public map**, **Share live traffic** and **Share open
@@ -181,12 +196,12 @@ read `/api/public/network`.
    receives an announce without a position. Phones acting as remote
    companions use the remote node's identity. Firmware nodes marked mobile
    remain excluded from the public map.
-3. On the website, select **Real world**, enter the collector's HTTP(S) URL,
-   and choose **Show**. Select **Packets** or **Public channels**. A packet
-   row groups observations. Select the row to see which hosts reported it
-   and measured SNR where available. When an announce's node is on the map,
-   its pulse uses that node's shared position. Other packet pulses use the
-   reporting host's shared position.
+3. On the website, select **Real network**. Under **Servers**, enter the
+   collector's HTTP(S) URL and choose **Apply**. Open **Packets** or
+   **Channels**. A packet row groups observations. Select the row to see which
+   hosts reported it and measured SNR where available. A ring on the map
+   marks the announced node, or else the reporting host, when a packet
+   arrives.
 
 Observer registration is optional for directly received traffic. To collect
 observations from additional hosts with radios or other links, install the
@@ -201,8 +216,7 @@ updated host on those machines too:
    behind NAT. Reports are authenticated and encrypted with existing
    Må:rse identities and use a bounded, low-priority queue.
 
-The Denmark simulator URL also accepts `?view=channels` and `?view=packets`
-as direct links into these views. When no hosts are saved in the visitor's
+The Denmark simulator URL also accepts `?view=network` as a direct link to the Real network view. When no hosts are saved in the visitor's
 browser, the site uses `https://nj01.dk.eu.maarse.dk` as the collector.
 
 The collector observes the traffic that passes through its own links as well

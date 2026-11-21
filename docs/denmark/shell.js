@@ -209,7 +209,7 @@
   const iw = document.createElement("section");
   iw.id = "insp-wrap"; iw.className = "ov";
   iw.innerHTML = `<div class="dock-head"><span>Selected node</span><button class="icon" id="insp-close" aria-label="Close" title="Close">${svg("x")}</button></div>`;
-  for (const id of ["card", "inspector", "follow", "watch", "hm-float", "cv-card", "rw-card"]) {
+  for (const id of ["card", "inspector", "follow", "watch", "hm-float", "cv-card"]) {
     const el = $(id);
     if (!el) continue;
     if (id === "inspector") { iw.appendChild(el); dock.appendChild(iw); el.classList.remove("ov"); } else dock.appendChild(el);

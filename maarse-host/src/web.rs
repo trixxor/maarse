@@ -132,6 +132,15 @@ fn handle(mut stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
         };
         return send(&mut stream, status, "application/json", "Access-Control-Allow-Origin: *\r\n", body.as_bytes());
     }
+    if method == "GET" && path == "/api/public/history" {
+        let since = target.split_once('?').map_or("", |(_, q)| q).split('&').find_map(|kv| kv.strip_prefix("since=")).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let (status, body) = if PUBLIC_MAP.load(Ordering::Relaxed) && PUBLIC_TRAFFIC.load(Ordering::Relaxed) && crate::public_history::enabled() {
+            ("200 OK", crate::public_history::json(since))
+        } else {
+            ("404 Not Found", "{\"error\":\"this host does not keep a public history\"}".to_string())
+        };
+        return send(&mut stream, status, "application/json", "Access-Control-Allow-Origin: *\r\n", body.as_bytes());
+    }
     if method == "GET" && path == "/api/public/traffic" {
         let (status, body) = if PUBLIC_MAP.load(Ordering::Relaxed) && PUBLIC_TRAFFIC.load(Ordering::Relaxed) {
             ("200 OK", crate::debug::public_traffic())

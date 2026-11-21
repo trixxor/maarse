@@ -59,7 +59,7 @@
     { id: "alert", ic: "alert", key: "A", tx: "Alert area", run: () => side("alerts", "btn-al-poly") },
     { id: "phone", ic: "phone", key: "P", tx: "Add a phone", run: () => { const b = $("ph-add") || $("ph-toggle"); if (b) b.click(); } },
     "-",
-    { id: "realworld", ic: "globe", key: "G", tx: "Real world", run: () => window.DKRealWorld && DKRealWorld.show() },
+    { id: "realworld", ic: "globe", key: "G", tx: "Real network", run: () => window.DKOverview && DKOverview.toggle() },
     { id: "layers", ic: "layers", key: "L", tx: "Layers", run: () => window.DKShell && DKShell.toggleLayers() },
     // Key only (also in Layers): the height map.
     { id: "heights", ic: "heights", key: "H", tx: "Height map", hidden: true, run: () => { T.showHeights(!T.heightsShown); paint(); } },

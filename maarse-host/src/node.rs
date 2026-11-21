@@ -964,6 +964,7 @@ impl Node {
                         && let Some((_, kind)) = &named
                     {
                         crate::debug::count_public_packet(false, kind);
+                        crate::public_history::count(false, kind, f.get("ptype").and_then(|v| v.as_str()).unwrap_or("?"));
                     }
                     crate::debug::push("rx", f);
                     if let (Some(t), Some(n)) = (self.tele.as_mut(), named) {
@@ -1352,6 +1353,9 @@ impl Node {
             }
             if queued && header.is_some() && crate::web::PUBLIC_TRAFFIC.load(std::sync::atomic::Ordering::Relaxed) {
                 crate::debug::count_public_packet(true, link_kind(name));
+                if let Some(h) = &header {
+                    crate::public_history::count(true, link_kind(name), &format!("{:?}", h.ptype));
+                }
             }
             self.counters.packets_out += 1;
             self.counters.bytes_out += packet.len() as u64;
@@ -4319,6 +4323,7 @@ pub(super) mod file_interop_tests {
             allow_legacy_web_token: false,
             public_map: false,
             public_traffic: false,
+            public_history_hours: 24,
             observe_to: None,
             observe_allow: Vec::new(),
             public_channels: Vec::new(),

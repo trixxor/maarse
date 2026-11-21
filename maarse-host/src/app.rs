@@ -28,6 +28,7 @@ mod fuzz_tests;
 mod links;
 mod mqtt;
 mod observe;
+mod public_history;
 mod node;
 mod pagefiles;
 mod sessions;
@@ -189,6 +190,8 @@ pub struct Config {
     pub public_map: bool,
     /// Publish short-lived aggregate counts and verified announce observations.
     pub public_traffic: bool,
+    /// Hours of public traffic history kept for the website (0 = none).
+    pub public_history_hours: u64,
     pub share_open_channels: bool,
     pub observe_to: Option<observe::Target>,
     pub observe_allow: Vec<maarse_crypto::PublicIdentity>,
@@ -481,6 +484,9 @@ Usage: maarse-host [options]
                         everyone at /api/public/map (for map pages)
   --public-traffic      with --public-map, publish packet counts and recent
                         observations of verified announces
+  --public-history-hours <n>
+                        with --public-traffic, keep this many hours of public
+                        traffic history so the website can step back (default 24, 0 = none)
   --observe-to <peer@key>
                         report packet observations over an existing TCP peer
                         link (host:port@128-hex collector identity)
@@ -548,6 +554,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         allow_legacy_web_token: false,
         public_map: false,
         public_traffic: false,
+        public_history_hours: 24,
         observe_to: None,
         observe_allow: Vec::new(),
         public_channels: Vec::new(),
@@ -637,6 +644,9 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--allow-legacy-web-token" => c.allow_legacy_web_token = true,
             "--public-map" => c.public_map = true,
             "--public-traffic" => c.public_traffic = true,
+            "--public-history-hours" => {
+                c.public_history_hours = val("--public-history-hours")?.parse().map_err(|_| "--public-history-hours: expected a number of hours (0 = none)")?;
+            }
             "--share-open-channels" => c.share_open_channels = true,
             "--observe-to" => c.observe_to = Some(observe::Target::parse(&val("--observe-to")?)?),
             "--observe-allow" => {
@@ -1058,6 +1068,7 @@ pub fn run(cli: Vec<String>) {
         cfg.share_open_channels,
         &cfg.public_channels,
     );
+    public_history::init(&cfg.data_dir, if cfg.public_map && cfg.public_traffic { cfg.public_history_hours } else { 0 });
     if let Some(addr) = cfg.http {
         let token = web::access_token(&cfg.data_dir);
         match web::spawn(addr, token.clone(), cfg.data_dir.clone(), tx.clone()) {

@@ -832,7 +832,7 @@
           <button id="btn-myqr" data-view="myqr" disabled><svg class="i"><use href="#i-qr"/></svg><span>Contact card and QR code<small>Let others add you</small></span></button>
           <button id="btn-diag2" data-view="diag" disabled><svg class="i"><use href="#i-pin"/></svg><span>Name, position and telemetry<small>What your announces share</small></span></button>
           <button id="btn-meshcore" data-view="meshcore-setup" disabled><svg class="i"><use href="#i-globe"/></svg><span>MeshCore setup<small>Access and identity. Messages are in Chats</small></span></button>
-          <button id="btn-account" data-view="account" disabled title="One account for your phone, PC and more (maarse-host)"><svg class="i"><use href="#i-key"/></svg><span>Account and linked devices<small>One address for all your devices</small></span><span class="badge" id="account-meshcore-unread" aria-label="Unread MeshCore messages" hidden></span></button>
+          <button id="btn-account" data-view="account" disabled title="One account for your phone, PC and more (maarse-host)"><svg class="i"><use href="#i-key"/></svg><span>Account and devices<small>One address for all your devices</small></span><span class="badge" id="account-meshcore-unread" aria-label="Unread MeshCore messages" hidden></span></button>
           <button id="btn-backup" data-view="backup"><svg class="i"><use href="#i-key"/></svg><span>Backup and recovery<small id="bk-sub">Recovery phrase and encrypted backup</small></span></button>
         </nav>
         <h3 class="grp">Radio</h3>
@@ -4924,6 +4924,10 @@ const HS_FIELDS = [
     ["--tun-lora", "bool", "Tunnel over LoRa too", "Otherwise only over the TCP backbone. Slow — use for text, not web."],
     ["--wintun", "text", "Path to wintun.dll", "Empty = next to the program."],
   ]],
+  ["Routing role", [
+    ["--role", "select", "Role", "Anchor is the default for a host on a computer. A client forwards nothing, a repeater passes messages on for others, and an anchor also splits long routes (12 hops on each side of the backbone). Relay and Auto are roles for a radio, set under Radio.",
+      [["", "Default (anchor)"], ["client", "Client (forwards nothing)"], ["repeater", "Repeater"], ["anchor", "Anchor"]]],
+  ]],
   ["Backbone (TCP)", [
     ["--listen", "text", "Listen on", "Default 127.0.0.1:4242. Choose a reachable interface for remote peers."],
     ["--peer", "list", "Connect to", "host:port, one per line."],
@@ -5003,15 +5007,18 @@ function renderDevices(wrap) {
 function hsParse(text) {
   const vals = new Map(), other = [];
   const known = new Set(HS_FIELDS.flatMap(([, fs]) => fs.map(f => f[0])));
+  let legacyRepeater = false;
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
     const i = line.search(/\s/);
     const flag = i < 0 ? line : line.slice(0, i), v = i < 0 ? "" : line.slice(i + 1).trim();
+    if (flag === "--repeater-role") { legacyRepeater = true; continue; }   // the older form of --role repeater
     if (!known.has(flag)) { other.push(line); continue; }
     if (!vals.has(flag)) vals.set(flag, []);
     vals.get(flag).push(v);
   }
+  if (legacyRepeater && !vals.has("--role")) vals.set("--role", ["repeater"]);
   return { vals, other };
 }
 async function hsPost(path, body) {
@@ -6122,8 +6129,18 @@ function appendMeshcoreAccess(container, setup = true) {
   container.append(section);
 }
 
+// A button that copies a text to the clipboard and says so.
+function copyButton(label, text) {
+  const b = el("button", { textContent: label });
+  b.onclick = async () => {
+    try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; }
+    catch { b.textContent = "Copy failed"; }
+    setTimeout(() => { b.textContent = label; }, 1500);
+  };
+  return b;
+}
 function renderAccount(box) {
-  $("chat-title").textContent = "Account and linked devices";
+  $("chat-title").textContent = "Account and devices";
   $("chat-sub").textContent = "One address for your phone, PC and more";
   const w = el("div", { className: "secure" });
   box.append(w);
@@ -6170,11 +6187,11 @@ function renderAccount(box) {
   }
   if (!p) { w.append(el("p", { className: "hint", textContent: "Fetching …" })); return; }
   if (p.state === 0) {
-    w.append(el("h3", { textContent: "Is this your first device with Må:rse?" }),
-      el("p", { textContent: "With an account, friends write to one address and the message reaches all your devices. Messages you send show on all of them too. MeshCore also needs an account." }));
-    const mk = el("button", { className: "primary", textContent: "Yes, create my account (this device becomes the master)" });
+    w.append(el("h3", { textContent: "Your account" }),
+      el("p", { textContent: "With an account, friends write to one address and the message reaches all your devices. Messages you send show on all of them too. MeshCore also needs an account. The device you create it on becomes the master." }));
+    const mk = el("button", { className: "primary", textContent: "Create my account" });
     mk.onclick = () => send(Cmd.personSetup(r(), 1));
-    const wait = el("button", { textContent: "No, I already have an account on another device (link this one)" });
+    const wait = el("button", { textContent: "Link this device to my account" });
     wait.onclick = () => send(Cmd.personSetup(r(), 3));
     const ta = el("textarea", { placeholder: "The 24 words, separated by spaces", rows: 3 });
     ta.style.width = "100%";
@@ -6199,13 +6216,14 @@ function renderAccount(box) {
       el("p", { className: "hint", textContent: "From a backup file and its 6-word code:" }), file, code, rb,
       el("p", { className: "hint", textContent: "Or from the 24 words:" }), ta, rs);
     w.append(el("div", { className: "row" }, mk, wait),
-      el("p", { className: "hint", textContent: "Already have an account on your phone or another computer? Choose \"No\": two accounts would mean two addresses." }),
+      el("p", { className: "hint", textContent: "Already have an account on your phone or another computer? Choose \"Link this device to my account\": two accounts would mean two addresses." }),
       restore);
   } else if (p.state === 1) {
     const cancel = el("button", { textContent: "Cancel" });
     cancel.onclick = () => send(Cmd.personSetup(r(), 5));
-    w.append(el("p", { textContent: "This device is waiting to be linked (10 minutes). On your master device, open Account → Add device and enter this address:" }),
+    w.append(el("p", { textContent: "This device is waiting to be linked (10 minutes). On your master device, open Account and devices → Link a device, and enter this address or scan the code:" }),
       el("p", { className: "me", textContent: state.me || "" }),
+      el("div", { className: "row" }, copyButton("Copy address", state.me || ""), copyButton("Copy link", `maarse:link?addr=${state.me}`)),
       el("p", { className: "hint", textContent: "Or scan this code with the app on the master device:" }),
       qrBox(`maarse:link?addr=${state.me}`),
       el("p", { textContent: "Check words: " + p.words }), cancel);
@@ -6225,10 +6243,11 @@ function renderAccount(box) {
     if (p.master) {
       const inp = el("input", { placeholder: "The new device's address (32 characters)" });
       inp.style.width = "100%";
-      const add = el("button", { className: "primary", textContent: "Add device" });
+      const add = el("button", { className: "primary", textContent: "Link" });
       add.onclick = () => { const v = linkAddr(inp.value); if (/^[0-9a-f]{32}$/.test(v)) { acct.err = ""; send(Cmd.linkDevice(r(), v)); } else { acct.err = "Enter 32 hex characters"; renderChat(); } };
-      w.append(el("h3", { textContent: "Add device" }),
-        el("p", { className: "hint", textContent: "On the new device: Account → \"Link this device to my account\". Enter the address it shows:" }), inp, add);
+      w.append(el("h3", { textContent: "Link a device" }),
+        el("p", { className: "hint", textContent: "On the new device: Account and devices → \"Link this device to my account\". Paste the address it shows (or its link), then press Enter:" }), inp, add);
+      inp.onkeydown = e => { if (e.key === "Enter") add.click(); };
     }
     const sync = el("button", { textContent: "Sync now" });
     sync.onclick = () => send(Cmd.personSetup(r(), 9));
@@ -6248,7 +6267,7 @@ function renderAccount(box) {
 // Which part of the settings each section of settings.txt belongs to. Every
 // setting has one home: Regions are set on the Radio page (SetRegions) and are
 // not shown here; the serial port of the LoRa radio sits with the radios.
-const HS_PART = { "VPN / IP tunnel": "connections", "Backbone (TCP)": "connections",
+const HS_PART = { "VPN / IP tunnel": "connections", "Routing role": "connections", "Backbone (TCP)": "connections",
   "MQTT / Home Assistant": "connections", "LoRa radio (serial)": "radio", "Storage and mailbox": "computer", "Web client": "computer" };
 function renderSettings(box, part = "connections") {
   const titles = { connections: ["Connections", "Everything that is not the radio. Stored in settings.txt; the host restarts on save"],
@@ -6271,11 +6290,15 @@ function renderSettings(box, part = "connections") {
     if ((HS_PART[title] || "hidden") !== part) continue;
     wrap.append(el("h3", { textContent: title }));
     const f = el("div", { className: "form" });
-    for (const [flag, kind, label, hint] of fields) {
+    for (const [flag, kind, label, hint, choices] of fields) {
       const cur = vals.get(flag) || [];
       let inp;
       if (kind === "bool") { inp = el("input", { type: "checkbox", checked: cur.length > 0 }); inp.style.width = "auto"; inp.style.justifySelf = "start"; }
       else if (kind === "list") { inp = el("textarea", { rows: 2, value: cur.join("\n"), spellcheck: false }); inp.style.width = "100%"; }
+      else if (kind === "select") {
+        inp = el("select");
+        for (const [v, t] of choices) inp.append(el("option", { value: v, textContent: t, selected: v === (cur[0] || "") }));
+      }
       else if (kind === "port") {
         inp = el("select");
         const opts = ["", ...d.ports];

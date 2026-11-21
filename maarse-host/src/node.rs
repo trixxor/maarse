@@ -33,7 +33,7 @@ use maarse_core::content::{self, Content, FileOffer, Small};
 use maarse_core::packet::{Header, Packet, encode};
 use maarse_core::stamp;
 use maarse_core::router::MAX_DIRECT_PAYLOAD;
-use maarse_core::{Action, Address, PacketType, Role, Router};
+use maarse_core::{Action, Address, PacketType, Router};
 use maarse_crypto::bulletin;
 use maarse_crypto::ratchet::{self, Format, MAX_FS_TEXT};
 use maarse_crypto::seal::{self, CHUNK_DATA, CryptoError};
@@ -590,9 +590,9 @@ impl Node {
             }
         };
         let addr = identity.address();
-        // An anchor by default: it splits long routes at the host, so a path
-        // can be 12 hops on each side of the backbone.
-        let mut router = Router::new(addr, if cfg.repeater_role { Role::Repeater } else { Role::Anchor });
+        // The role chosen under Settings; by default an anchor (it splits long routes at the host, so a
+        // path can be 12 hops on each side of the backbone), and for a phone node a client.
+        let mut router = Router::new(addr, cfg.host_role().router_role());
         // Hellos tell the radio nodes nearby that a repeater/anchor is here,
         // and that we are a large post office.
         router.hello = true;
@@ -4354,6 +4354,7 @@ pub(super) mod file_interop_tests {
             block: Vec::new(),
             regions: Vec::new(),
             strict_region: false,
+            role: None,
             repeater_role: false,
             trunks: Vec::new(),
             no_bordercast: false,
@@ -4370,6 +4371,35 @@ pub(super) mod file_interop_tests {
             issuer_key: None,
             issuer_cert: None,
         }
+    }
+
+    #[test]
+    fn host_role_follows_the_setting_and_the_kind_of_host() {
+        use crate::HostRole;
+        use maarse_core::Role;
+        let unique = OsRng.next_u64();
+        let role_of = |role: Option<HostRole>, repeater_role: bool| {
+            let mut c = cfg(std::env::temp_dir().join(format!("maarse-role-{unique}-{role:?}-{repeater_role}")));
+            c.role = role;
+            c.repeater_role = repeater_role;
+            let node = Node::new(&c).unwrap();
+            let _ = std::fs::remove_dir_all(&c.data_dir);
+            node.router.role
+        };
+        // An ordinary host is an anchor, as before; the choice and the older flag decide otherwise.
+        assert_eq!(role_of(None, false), Role::Anchor);
+        assert_eq!(role_of(Some(HostRole::Client), false), Role::Client);
+        assert_eq!(role_of(Some(HostRole::Repeater), false), Role::Repeater);
+        assert_eq!(role_of(None, true), Role::Repeater);
+        assert_eq!(role_of(Some(HostRole::Anchor), true), Role::Anchor);
+        // A phone node is a client until the owner chooses another role.
+        crate::set_phone_mode(true);
+        assert_eq!(role_of(None, false), Role::Client);
+        assert_eq!(role_of(Some(HostRole::Anchor), false), Role::Anchor);
+        assert_eq!(role_of(Some(HostRole::Repeater), false), Role::Repeater);
+        crate::set_phone_mode(false);
+        assert_eq!(HostRole::parse(" Client "), Some(HostRole::Client));
+        assert_eq!(HostRole::parse("relay"), None);
     }
 
     #[test]

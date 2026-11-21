@@ -67,13 +67,13 @@ fun AccountSection() {
     val p by Node.person.collectAsState()
     val me by Node.me.collectAsState()
     val err by Node.lastError.collectAsState()
-    SectionTitle("Account (linked devices)")
+    SectionTitle("Account and devices")
     val state = p?.state
     when (state) {
         null -> Hint("Fetching…")
         PersonState.NONE -> NoAccount()
         PersonState.AWAITING -> {
-            Hint("This device is waiting to be linked (10 minutes). On your master device, open Account → Add device and enter this address:")
+            Hint("This device is waiting to be linked (10 minutes). On your master device, open Settings → Account and devices → Link a device, and scan this code or enter this address:")
             Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     SelectionContainer { Text(me?.addr ?: "", fontFamily = FontFamily.Monospace) }
@@ -103,13 +103,13 @@ fun AccountSection() {
 private fun NoAccount() {
     var restoring by remember { mutableStateOf(false) }
     var words by remember { mutableStateOf("") }
-    Text("Is this your first device with Må:rse?", Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+    Text("Your account", Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-    Hint("With an account, friends write to one address and the message reaches all your devices (phone, PC …). Your sent messages show on all of them too. MeshCore needs an account as well.")
+    Hint("With an account, friends write to one address and the message reaches all your devices (phone, PC …). Your sent messages show on all of them too. MeshCore needs an account as well. The device you create it on becomes the master.")
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Button(onClick = { Node.personSetup(PersonOp.CREATE) }) { Text("Yes, create my account (this device becomes the master)") }
-        OutlinedButton(onClick = { Node.personSetup(PersonOp.AWAIT_LINK) }) { Text("No, I already have an account on another device (link this one)") }
-        Text("Already have an account on your computer or another phone? Choose \"No\": two accounts would mean two addresses.",
+        Button(onClick = { Node.personSetup(PersonOp.CREATE) }) { Text("Create my account") }
+        OutlinedButton(onClick = { Node.personSetup(PersonOp.AWAIT_LINK) }) { Text("Link this device to my account") }
+        Text("Already have an account on your computer or another phone? Choose \"Link this device to my account\": two accounts would mean two addresses.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         TextButton(onClick = { restoring = !restoring }) { Text("Restore an account (backup file or 24 words)") }
         if (restoring) {
@@ -183,11 +183,15 @@ private fun Member() {
         )
     }
     if (pp.master) {
-        if (!adding) OutlinedButton(onClick = { adding = true }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) { Text("Add device") }
+        if (!adding) OutlinedButton(onClick = { adding = true }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) { Text("Link a device") }
         else Column(Modifier.padding(horizontal = 16.dp)) {
-            Hint("On the new device: Settings → Account → \"Link this device to my account\". Scan its QR code, or enter the address it shows:")
+            Hint("On the new device: Settings → Account and devices → \"Link this device to my account\". Scan the code it shows, or enter its address:")
             val scan = rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { r ->
-                r.contents?.let { addr = linkAddr(it) }
+                // A scanned code from the new device is linked at once; the check words then show on both devices.
+                r.contents?.let {
+                    val scanned = linkAddr(it)
+                    if (scanned.length == 32 && scanned.all { c -> c in "0123456789abcdef" }) { Node.linkDevice(scanned); adding = false; addr = "" } else addr = scanned
+                }
             }
             OutlinedButton(onClick = {
                 scan.launch(com.journeyapps.barcodescanner.ScanOptions().setPrompt("Scan the new device's QR code").setBeepEnabled(false).setOrientationLocked(false))

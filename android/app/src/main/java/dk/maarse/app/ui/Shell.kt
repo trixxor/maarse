@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Public
@@ -80,7 +81,7 @@ enum class Tab(val title: String) { CHATS("Chats"), PAGES("Pages"), CONTACTS("No
 /** Pages behind "You". */
 enum class MePage(val title: String) {
     ACCOUNT("Account and devices"), MESHCORE("MeshCore setup"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and background"),
-    CONNECTION("All connection options"), HOST("Internet link and post office"),
+    HOST("Internet link and post office"),
 }
 
 sealed interface Screen {
@@ -161,7 +162,7 @@ fun AppShell(nav: Nav) {
         }
     }
     CallOverlay()
-    if (nav.sheet) ConnectionSheet(onDismiss = { nav.sheet = false }, onMore = { nav.sheet = false; nav.go(Screen.Page(MePage.CONNECTION)) })
+    if (nav.sheet) ConnectionSheet(onDismiss = { nav.sheet = false })
 }
 
 /** The five places, on every screen. */
@@ -238,6 +239,9 @@ private val CHOICES = listOf(
     ModeChoice(Mode.REMOTE, Icons.Outlined.Computer, "My home computer", "Follow the maarse-host on your PC (on Wi-Fi or over VPN) with its access key."),
 )
 
+private val SERVER_CHOICE = ModeChoice(Mode.SERVER, Icons.Outlined.Dns, "Server on this phone",
+    "An old phone on Wi-Fi and a charger as a backbone node and post office. Stops when Wi-Fi or power goes.")
+
 @Composable
 private fun ModeCard(c: ModeChoice, on: Boolean, onClick: () -> Unit) {
     Row(
@@ -258,20 +262,21 @@ private fun ModeCard(c: ModeChoice, on: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** The connection choices, used by the sheet and the first-start guide. */
+/** The connection choices, used by the sheet and the first-start guide. `advanced` adds the server mode. */
 @Composable
-private fun ModeChooser(onConnected: () -> Unit) {
+private fun ModeChooser(advanced: Boolean = false, onConnected: () -> Unit) {
     val ctx = LocalContext.current
     val conn by Node.conn.collectAsState()
     // First start: the recommended choice; later: what is in use.
-    var mode by remember { mutableStateOf(if (!Node.prefs.onboarded || conn.mode == Mode.SERVER) Mode.PHONE else conn.mode) }
+    var mode by remember { mutableStateOf(if (!Node.prefs.onboarded || (conn.mode == Mode.SERVER && !advanced)) Mode.PHONE else conn.mode) }
+    var refusal by remember { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf(false) }
     var radio by remember { mutableStateOf(Node.prefs.bleName) }
     var remote by remember { mutableStateOf(Node.prefs.remoteAddr) }
     var key by remember { mutableStateOf(Node.prefs.remoteKey) }
     var modem by remember { mutableStateOf(ModemBridge.enabled(ctx)) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        CHOICES.forEach { c -> ModeCard(c, mode == c.mode) { mode = c.mode } }
+        (if (advanced) CHOICES + SERVER_CHOICE else CHOICES).forEach { c -> ModeCard(c, mode == c.mode) { mode = c.mode } }
         when (mode) {
             Mode.PHONE -> Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -289,11 +294,14 @@ private fun ModeChooser(onConnected: () -> Unit) {
                 OutlinedTextField(remote, { remote = it; Node.prefs.remoteAddr = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Address, e.g. 192.168.1.20:8080") })
                 OutlinedTextField(key, { key = it; Node.prefs.remoteKey = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Access key (shown by the host)") })
             }
-            Mode.SERVER -> {}
+            Mode.SERVER -> Text("Needs Wi-Fi and a charger, a port opened in the router and a public address (under Internet link and post office). Admin dashboard on port 8080.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         val ready = when (mode) { Mode.BLE -> radio != null; Mode.REMOTE -> remote.isNotBlank(); else -> true }
         Button(
             onClick = {
+                refusal = null
+                if (mode == Mode.SERVER && !HostFiles.serverConditionsMet(ctx)) { refusal = "Server mode needs Wi-Fi and a charger."; return@Button }
                 // The host reads the modem setting at start: set it first.
                 val changed = mode == Mode.PHONE && radio != null && ModemBridge.enabled(ctx) != modem
                 if (changed) ModemBridge.configure(ctx, modem)
@@ -303,6 +311,7 @@ private fun ModeChooser(onConnected: () -> Unit) {
             },
             enabled = ready, modifier = Modifier.fillMaxWidth().height(48.dp),
         ) { Text(if (conn.state != Conn.State.OFF && conn.mode == mode) "Reconnect" else "Connect") }
+        refusal?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (conn.state != Conn.State.OFF) TextButton(onClick = { Node.stop(); onConnected() }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Disconnect") }
     }
     if (picking) BlePicker { addr, name ->
@@ -313,14 +322,13 @@ private fun ModeChooser(onConnected: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ConnectionSheet(onDismiss: () -> Unit, onMore: () -> Unit) {
+private fun ConnectionSheet(onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("How this phone connects", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text("You can change this any time. Your chats and your account stay.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(6.dp))
-            ModeChooser(onConnected = onDismiss)
-            TextButton(onClick = onMore, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("More options (server mode, host settings)") }
+            ModeChooser(advanced = true, onConnected = onDismiss)
         }
     }
 }
@@ -368,17 +376,15 @@ private fun MeScreen(nav: Nav) {
             }
             GroupRow("Name and position", "What your announces share", last = true) { nav.go(Screen.Page(MePage.NODE)) }
         }
-        GroupTitle("Radio")
+        GroupTitle("Connection")
         Group {
-            GroupRow("How this phone connects", connectionSummary()) { nav.sheet = true }
-            GroupRow("Role and regions", "How this node helps others") { nav.go(Screen.Page(MePage.RADIO)) }
-            GroupRow("All connection options", "Server mode, the phone node's radio", last = true) { nav.go(Screen.Page(MePage.CONNECTION)) }
+            val hostPage = conn.mode == Mode.PHONE || conn.mode == Mode.SERVER
+            GroupRow("How this phone connects", connectionSummary(), last = !hostPage) { nav.sheet = true }
+            if (hostPage) GroupRow("Internet link and post office", "Backbone, peers, mail for others, keys", last = true) { nav.go(Screen.Page(MePage.HOST)) }
         }
-        if (conn.mode == Mode.PHONE || conn.mode == Mode.SERVER) {
-            GroupTitle("Connections")
-            Group {
-                GroupRow("Internet link and post office", "Backbone, peers, mail for others, keys", last = true) { nav.go(Screen.Page(MePage.HOST)) }
-            }
+        GroupTitle("This node")
+        Group {
+            GroupRow("Role and regions", roleSummary(), last = true) { nav.go(Screen.Page(MePage.RADIO)) }
         }
         GroupTitle("This phone")
         Group {
@@ -406,7 +412,6 @@ private fun MePageContent(p: MePage) {
             MePage.NODE -> if (me != null) NodeSection() else Hint("Connect first.")
             MePage.RADIO -> if (me != null) NodeSection(radioPart = true) else Hint("Connect first.")
             MePage.APP -> AppSection()
-            MePage.CONNECTION -> ConnectionSection()
             MePage.HOST -> when (conn.mode) {
                 Mode.PHONE -> HostSection(server = false)
                 Mode.SERVER -> HostSection(server = true)

@@ -1072,7 +1072,8 @@ const FIELDS = [
   { f: "--public-channel", label: "Additional known open channels", help: "Optional for older hosts or radio paths that cannot send channel names. Enter public or #name, optionally @region, one per line", kind: "list" },
   { f: "--dht", label: "Directory seeds", help: "extra backbone directory (DHT) seeds, host:port, one per line. Peers and the public backbone are used as seeds too", kind: "list" },
   { f: "--dht-allow-private", label: "Private directory endpoints", help: "private endpoints the directory may use without making them seeds, host:port, one per line", kind: "list" },
-  { f: "--repeater-role", label: "Route as a repeater", help: "route as a repeater, not an anchor (anchors split long routes at the server)", kind: "flag" },
+  { f: "--role", label: "Routing role", help: "a client forwards nothing, a repeater passes messages on for others, an anchor also splits long routes at the server (12 hops on each side of the backbone). Default: anchor", kind: "select",
+    options: [["", "Default (anchor)"], ["client", "Client"], ["repeater", "Repeater"], ["anchor", "Anchor"]] },
   { f: "--no-bordercast", label: "No bordercast", help: "put every path request from the backbone on the radio (default: only for nodes heard over our own radio, or on a retry)", kind: "flag" },
   { f: "--max-file", label: "Largest file (KB)", help: "largest file sent and received (default 1024)", kind: "number" },
   { f: "--file-mailbox-mb", label: "File mailbox (MB)", help: "space for files to recipients who are offline (default 200, 0 disables it). Files expire after 7 days", kind: "number" },
@@ -1086,16 +1087,19 @@ const FIELDS = [
 let settingsState = null;
 function parseSettings(text) {
   const vals = {}, other = [];
+  let legacyRepeater = false;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim(); if (!line) continue;
     if (line.startsWith("#")) { other.push(line); continue; }
     const sp = line.search(/\s/), flag = sp < 0 ? line : line.slice(0, sp), val = sp < 0 ? "" : line.slice(sp + 1).trim();
+    if (flag === "--repeater-role") { legacyRepeater = true; continue; }   // the older form of --role repeater
     const fd = FIELDS.find(x => x.f === flag);
     if (!fd) { other.push(line); continue; }
     if (fd.kind === "flag") vals[flag] = true;
     else if (fd.kind === "list" || fd.kind === "regions") (vals[flag] ||= []).push(val);
     else vals[flag] = val;
   }
+  if (legacyRepeater && vals["--role"] === undefined) vals["--role"] = "repeater";
   return { vals, other };
 }
 async function loadSettings() {
@@ -1116,6 +1120,7 @@ async function loadSettings() {
       let input;
       if (fd.kind === "flag") input = `<span><input type="checkbox" id="${id}" ${v ? "checked" : ""}> ${note}</span>`;
       else if (fd.kind === "list") input = `<div><textarea id="${id}"${ph}>${esc((v || []).join("\n"))}</textarea>${note}</div>`;
+      else if (fd.kind === "select") input = `<div><select id="${id}">${fd.options.map(([val, text]) => `<option value="${esc(val)}" ${val === (v ?? "") ? "selected" : ""}>${esc(text)}</option>`).join("")}</select>${note}</div>`;
       else if (fd.kind === "regions") input = `<div><input type="text" id="${id}" value="${esc((v || []).join(", "))}"${ph}>${note}</div>`;
       else if (fd.kind === "port") input = `<select id="${id}"><option value="">(none)</option>${[...new Set([...(st.ports || []), ...(v ? [v] : [])])].map(p => `<option ${p === v ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>`;
       else input = `<div><input type="${fd.kind === "number" ? "number" : "text"}" id="${id}" value="${esc(v ?? "")}"${ph}>${note}</div>`;

@@ -249,7 +249,10 @@ pub struct Config {
     /// Regions from the command line (`--region`); empty = use the saved ones.
     pub regions: Vec<String>,
     pub strict_region: bool,
-    /// Run as a plain repeater instead of an anchor (`--repeater-role`).
+    /// The routing role chosen under Settings (`--role`). `None` = the default for this kind of host:
+    /// a phone node is a client, everything else an anchor (see [`Config::host_role`]).
+    pub role: Option<HostRole>,
+    /// Older form of `--role repeater` (`--repeater-role`).
     pub repeater_role: bool,
     /// Long-distance LoRa trunks: LoRa modems with directional antennas
     /// (`--trunk <port>[:baud]`). Used only as a backup when TCP cannot reach
@@ -453,8 +456,11 @@ Usage: maarse-host [options]
   --trunk <port>[:baud] long-distance LoRa trunk: a LoRa node in modem mode with
                         a directional antenna; used only when TCP cannot reach
                         the other end, and only for what has to cross
-  --repeater-role       route as a repeater, not an anchor (anchors split long
-                        routes at the host, so a route may be 12 hops per side)
+  --role <client|repeater|anchor>
+                        routing role of this host. A client forwards nothing, a
+                        repeater forwards, an anchor also splits long routes at the
+                        host (12 hops per side). Default: anchor; a phone node: client
+  --repeater-role       older form of --role repeater
   --no-bordercast       put every path request from TCP on the radio (default:
                         only for nodes heard over our own radio, or on a retry)
   --meshcore-gateway <addr:port>  accept outbound MeshCore gateways over TLS
@@ -512,6 +518,51 @@ Example with two computers:
   computer B:  maarse-host --peer <A's IP>:4242
 ";
 
+/// The routing role of a host: what it does with packets that are not its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostRole {
+    /// Sends and receives its own messages and forwards nothing: nobody can depend on it.
+    Client,
+    /// Forwards for others.
+    Repeater,
+    /// Forwards, and splits long routes at the host, so a route may be 12 hops on each side of the backbone.
+    Anchor,
+}
+
+impl HostRole {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "client" => Some(Self::Client),
+            "repeater" => Some(Self::Repeater),
+            "anchor" => Some(Self::Anchor),
+            _ => None,
+        }
+    }
+
+    pub fn router_role(self) -> maarse_core::Role {
+        match self {
+            Self::Client => maarse_core::Role::Client,
+            Self::Repeater => maarse_core::Role::Repeater,
+            Self::Anchor => maarse_core::Role::Anchor,
+        }
+    }
+}
+
+impl Config {
+    /// The role this host routes with: the one chosen under Settings, else the default for its kind. A phone
+    /// node is a client, because a phone comes and goes and nobody should depend on it; being a repeater or
+    /// an anchor is an active choice. Every other host is an anchor, as before.
+    pub fn host_role(&self) -> HostRole {
+        self.role.unwrap_or(if self.repeater_role {
+            HostRole::Repeater
+        } else if phone_mode() {
+            HostRole::Client
+        } else {
+            HostRole::Anchor
+        })
+    }
+}
+
 /// Are we maarse-server? Decided by the program's name, so one code base
 /// gives two programs with their own defaults.
 pub fn server_mode() -> bool {
@@ -521,6 +572,18 @@ pub fn server_mode() -> bool {
 /// Server mode chosen at run time, for the library build (the Android app),
 /// where there is no program name to go by.
 static SERVER_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Is this the host inside the phone app? Set by the Android library; there is no program name to go by.
+static PHONE_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn phone_mode() -> bool {
+    PHONE_MODE.load(Ordering::Relaxed)
+}
+
+/// Marks the host as the phone app's own node (library use).
+pub fn set_phone_mode(on: bool) {
+    PHONE_MODE.store(on, Ordering::Relaxed);
+}
 
 /// Runs the program as maarse-server instead of maarse-host (library use).
 pub fn set_server_mode(on: bool) {
@@ -585,6 +648,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         block: Vec::new(),
         regions: Vec::new(),
         strict_region: false,
+        role: None,
         repeater_role: false,
         trunks: Vec::new(),
         no_bordercast: false,
@@ -730,6 +794,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--region" => c.regions.push(val("--region")?.trim().to_lowercase()),
             "--strict-region" => c.strict_region = true,
             "--repeater-role" => c.repeater_role = true,
+            "--role" => c.role = Some(HostRole::parse(&val("--role")?).ok_or("--role: expected client, repeater or anchor")?),
             "--trunk" => {
                 let v = val("--trunk")?;
                 let (port, baud) = match v.rsplit_once(':') {

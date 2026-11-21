@@ -30,6 +30,8 @@ pub extern "system" fn Java_dk_maarse_app_HostService_runHost(
     }
     log::to_logcat();
     maarse_host::set_server_mode(server != 0);
+    // The phone app's own node (not the server mode) is a client unless its owner chooses another role.
+    maarse_host::set_phone_mode(server == 0);
     maarse_host::run(argv);
 }
 

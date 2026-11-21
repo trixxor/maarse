@@ -57,84 +57,6 @@ import dk.maarse.app.Node
 import dk.maarse.app.Nus
 import dk.maarse.app.PRECISION
 
-@Composable
-fun SettingsScreen() {
-    val conn by Node.conn.collectAsState()
-    val me by Node.me.collectAsState()
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
-        ConnectionSection()
-        // Linked devices live in maarse-host: the phone node or a host elsewhere.
-        if (me != null && (conn.mode == Mode.PHONE || conn.mode == Mode.REMOTE)) AccountSection()
-        if (me != null && conn.mode != Mode.SERVER) NodeSection()
-        if (conn.mode == Mode.PHONE) HostSection(server = false)
-        if (conn.mode == Mode.SERVER) HostSection(server = true)
-        AppSection()
-    }
-}
-
-// ---------- connection ----------
-
-@Composable
-internal fun ConnectionSection() {
-    val ctx = LocalContext.current
-    val conn by Node.conn.collectAsState()
-    var mode by remember { mutableStateOf(Node.prefs.mode) }
-    var picking by remember { mutableStateOf(false) }
-    var bleName by remember { mutableStateOf(Node.prefs.bleName) }
-    var remote by remember { mutableStateOf(Node.prefs.remoteAddr) }
-    var key by remember { mutableStateOf(Node.prefs.remoteKey) }
-    var refusal by remember { mutableStateOf<String?>(null) }
-    SectionTitle("Connection")
-    Mode.entries.forEach { m ->
-        Row(Modifier.fillMaxWidth().clickable { mode = m }.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            RadioButton(mode == m, { mode = m })
-            Column { Text(m.title); Text(m.help, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-    }
-    when (mode) {
-        Mode.BLE -> Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Radio: " + (bleName ?: "none chosen"), Modifier.weight(1f))
-            OutlinedButton(onClick = { picking = true }) { Text("Choose radio") }
-        }
-        Mode.REMOTE -> Column(Modifier.padding(horizontal = 16.dp)) {
-            OutlinedTextField(remote, { remote = it; Node.prefs.remoteAddr = it }, Modifier.fillMaxWidth(), label = { Text("Address, e.g. 10.0.0.2:8080") }, singleLine = true)
-            OutlinedTextField(key, { key = it; Node.prefs.remoteKey = it }, Modifier.fillMaxWidth(), label = { Text("Access key (access-key.txt on the host)") }, singleLine = true)
-        }
-        Mode.PHONE -> {
-            Hint("No radio needed: the phone reaches others over the internet. Messages for people who are offline are kept by post offices on the backbone.")
-            var modem by remember { mutableStateOf(dk.maarse.app.ModemBridge.enabled(ctx)) }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Also use my radio as LoRa modem")
-                    Text("The phone node sends and receives over LoRa through the radio (" + (bleName ?: "choose one under Radio over Bluetooth") + "). The radio only carries packets; the phone does the routing and the account.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(modem, { v -> modem = v; Node.setModemRadio(v) }, enabled = Node.prefs.bleAddress != null)
-            }
-            if (Node.prefs.bleAddress == null) OutlinedButton(onClick = { picking = true }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("Choose radio") }
-        }
-        Mode.SERVER -> Hint("Needs Wi-Fi and a charger, a port opened in the router and a public address (below). Admin dashboard on port 8080.")
-    }
-    refusal?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
-    Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        val running = conn.state != Conn.State.OFF
-        Button(onClick = {
-            refusal = null
-            if (mode == Mode.SERVER && !HostFiles.serverConditionsMet(ctx)) { refusal = "Server mode needs Wi-Fi and a charger."; return@Button }
-            Node.start(mode)
-        }) { Text(if (running && mode == conn.mode) "Reconnect" else "Connect") }
-        if (running) OutlinedButton(onClick = { Node.stop() }) { Text("Disconnect") }
-    }
-    if (picking) BlePicker(onDone = { addr, name ->
-        picking = false
-        if (addr != null) {
-            Node.prefs.bleAddress = addr; Node.prefs.bleName = name; bleName = name
-            // Chosen as the phone node's modem: stay a phone node.
-            if (mode != Mode.PHONE) { mode = Mode.BLE; Node.start(Mode.BLE) }
-        }
-    })
-}
-
 private fun blePerms() = if (Build.VERSION.SDK_INT >= 31)
     arrayOf(android.Manifest.permission.BLUETOOTH_SCAN, android.Manifest.permission.BLUETOOTH_CONNECT)
 else arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION)
@@ -234,20 +156,35 @@ internal fun NodeSection(radioPart: Boolean = false) {
                     style = MaterialTheme.typography.bodySmall)
             }
             Mode.PHONE, Mode.SERVER -> {
-                val repeater = HostFiles.readSettings(ctx, conn.mode == Mode.SERVER).lines().any { it.trim() == "--repeater-role" }
-                Text("The phone node routes like a fixed node. Choose how:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                listOf(false to ("Anchor (default)" to "Passes on messages, splits long paths and answers path requests on behalf of others. Best for a node on the internet."),
-                    true to ("Repeater" to "Passes on messages, but does not split paths. Use it if your node is often offline."))
-                    .forEach { (rep, t) ->
-                        Row(Modifier.fillMaxWidth().clickable { setRepeater(ctx, conn.mode == Mode.SERVER, rep) }.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
-                            RadioButton(repeater == rep, { setRepeater(ctx, conn.mode == Mode.SERVER, rep) })
+                val server = conn.mode == Mode.SERVER
+                val current = hostRole(ctx, server)
+                var asked by remember { mutableStateOf<String?>(null) }
+                Text(if (server) "This node is a server. Choose how it routes:" else "The phone comes and goes, so it is a client until you choose otherwise:",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                listOf(
+                    "client" to ("Client" + (if (server) "" else " (default)") to "Sends and receives your own messages and forwards nothing for others. Nobody can depend on it, so it suits a phone."),
+                    "repeater" to ("Repeater" to "Passes on messages for others, but does not split paths. Choose it for a node that is on most of the time."),
+                    "anchor" to ("Anchor" + (if (server) " (default)" else "") to "Passes on messages, splits long paths and answers path requests on behalf of others. Choose it for a node that is always on the internet."))
+                    .forEach { (role, t) ->
+                        Row(Modifier.fillMaxWidth().clickable { if (role != current) asked = role }.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
+                            RadioButton(current == role, { if (role != current) asked = role })
                             Column(Modifier.padding(top = 10.dp)) {
                                 Text(t.first, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
                                 Text(t.second, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
-                Text("Client, Relay and Auto are roles for a Må:rse radio. To set your radio's role, choose \"Through my radio only\" under Connection, set it, and switch back. When the radio is the phone's LoRa modem, the phone does the routing.",
+                asked?.let { role ->
+                    val name = role.replaceFirstChar { it.uppercase() }
+                    AlertDialog(
+                        onDismissRequest = { asked = null },
+                        title = { Text("Switch to $name?") },
+                        text = { Text("The node restarts to apply the new role. Messages may be delayed for a moment.") },
+                        confirmButton = { TextButton(onClick = { setHostRole(ctx, server, role); asked = null }) { Text("Switch") } },
+                        dismissButton = { TextButton(onClick = { asked = null }) { Text("Cancel") } },
+                    )
+                }
+                Text("Relay and Auto are roles for a Må:rse radio. To set your radio's role, choose \"Through my radio only\" under How this phone connects, set it, and switch back. When the radio is the phone's LoRa modem, the phone does the routing.",
                     style = MaterialTheme.typography.bodySmall)
             }
             Mode.REMOTE -> Text("You follow a host on another computer. Its role is set on that computer (Host settings there); a radio's role is set when you connect to the radio over Bluetooth.",
@@ -257,7 +194,13 @@ internal fun NodeSection(radioPart: Boolean = false) {
 
     }
 
-    if (radioPart) {
+    // Site is for a fixed node on a roof or mast: a repeater or an anchor. A client (a phone) has none.
+    val fixedNode = when (conn.mode) {
+        Mode.PHONE, Mode.SERVER -> hostRole(ctx, conn.mode == Mode.SERVER) != "client"
+        Mode.BLE -> stats[7] == 1 || stats[7] == 3
+        Mode.REMOTE -> true
+    }
+    if (radioPart && fixedNode) {
     GroupTitle("Site — for a fixed node")
     Card2 { SiteCard() }
     }
@@ -325,10 +268,38 @@ internal fun NodeSection(radioPart: Boolean = false) {
     }
 }
 
-/** The phone node's routing role: --repeater-role in its settings, then a restart. */
-private fun setRepeater(ctx: Context, server: Boolean, on: Boolean) {
-    val lines = HostFiles.readSettings(ctx, server).lines().filter { it.trim().isNotEmpty() && it.trim() != "--repeater-role" }
-    HostFiles.writeSettings(ctx, server, (lines + if (on) listOf("--repeater-role") else emptyList()).joinToString("\n"))
+/** The node's routing role in a few words, for the Settings list. */
+@Composable
+internal fun roleSummary(): String {
+    val ctx = LocalContext.current
+    val conn by Node.conn.collectAsState()
+    val stats by Node.stats.collectAsState()
+    return when (conn.mode) {
+        Mode.PHONE, Mode.SERVER -> when (hostRole(ctx, conn.mode == Mode.SERVER)) {
+            "client" -> "Client · forwards nothing for others"
+            "repeater" -> "Repeater · passes messages on for others"
+            else -> "Anchor · passes messages on and splits long paths"
+        }
+        Mode.BLE -> stats[7]?.let { Names.ROLES.getOrNull(it) }?.let { "$it · your radio's role" } ?: "How your radio helps others"
+        Mode.REMOTE -> "Set on the computer you follow"
+    }
+}
+
+/** The routing role of the phone's own node: what its settings say, else the default for its kind
+ *  (a phone node is a client, a server an anchor). Settings: `--role client|repeater|anchor`. */
+internal fun hostRole(ctx: Context, server: Boolean): String {
+    val lines = HostFiles.readSettings(ctx, server).lines().map { it.trim() }
+    lines.firstOrNull { it.startsWith("--role ") }?.substringAfter(' ')?.trim()?.lowercase()
+        ?.takeIf { it in listOf("client", "repeater", "anchor") }?.let { return it }
+    if (lines.any { it == "--repeater-role" }) return "repeater"
+    return if (server) "anchor" else "client"
+}
+
+/** Saves the role in the node's settings, then restarts the node. */
+private fun setHostRole(ctx: Context, server: Boolean, role: String) {
+    val lines = HostFiles.readSettings(ctx, server).lines()
+        .filter { it.trim().isNotEmpty() && it.trim() != "--repeater-role" && !it.trim().startsWith("--role ") }
+    HostFiles.writeSettings(ctx, server, (lines + "--role $role").joinToString("\n"))
     Node.restartHost()
 }
 

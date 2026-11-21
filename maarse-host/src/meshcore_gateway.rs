@@ -18,7 +18,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -142,6 +142,49 @@ pub fn stop_worker() {
     }
 }
 
+/// Tells the dashboard's live traffic when a MeshCore conversation grows: the
+/// kind (direct or channel) and the channel name, never the text. The radio
+/// worker appends every message to a history file, so a file that grows is a
+/// new message.
+fn watch_messages(nodes: PathBuf) {
+    fn sizes(nodes: &Path) -> Vec<(PathBuf, String, String, u64)> {
+        let mut found = Vec::new();
+        let Ok(people) = fs::read_dir(nodes) else { return found };
+        for person in people.flatten() {
+            let who: String = person.file_name().to_string_lossy().chars().take(8).collect();
+            let Ok(files) = fs::read_dir(person.path()) else { continue };
+            for file in files.flatten() {
+                let name = file.file_name().to_string_lossy().into_owned();
+                if let Some(stem) = name.strip_suffix("-history.txt")
+                    && let Ok(meta) = file.metadata()
+                {
+                    found.push((file.path(), who.clone(), stem.to_string(), meta.len()));
+                }
+            }
+        }
+        found
+    }
+    let spawned = std::thread::Builder::new().name("meshcore-watch".into()).spawn(move || {
+        let mut known: std::collections::HashMap<PathBuf, u64> = sizes(&nodes).into_iter().map(|(path, _, _, size)| (path, size)).collect();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            for (path, who, stem, size) in sizes(&nodes) {
+                let before = known.insert(path, size);
+                if before.is_some_and(|before| size > before) || (before.is_none() && size > 0) {
+                    let (conversation, channel) = match stem.strip_prefix("direct-") {
+                        Some(_) => ("direct", None),
+                        None => ("channel", Some(stem.strip_prefix("channel-").unwrap_or(&stem).to_string())),
+                    };
+                    crate::debug::push("meshcore", serde_json::json!({ "op": "message", "conversation": conversation, "channel": channel, "person": who }));
+                }
+            }
+        }
+    });
+    if let Err(error) = spawned {
+        crate::settings::report(format!("MeshCore message watch not started: {error}"), false);
+    }
+}
+
 pub fn spawn(address: SocketAddr, worker_address: SocketAddr, data: &Path) -> io::Result<()> {
     if !worker_address.ip().is_loopback() {
         return Err(io::Error::new(
@@ -165,6 +208,7 @@ pub fn spawn(address: SocketAddr, worker_address: SocketAddr, data: &Path) -> io
             let nodes = data.join("meshcore-nodes");
             fs::create_dir_all(&nodes)?;
             crate::settings::report(format!("  MeshCore radio worker: {}", binary.display()), false);
+            watch_messages(nodes.clone());
             supervise_worker(binary, worker_address, nodes);
         }
         None => crate::settings::report(

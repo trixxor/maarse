@@ -163,6 +163,8 @@ What it collects (from everything passing through; message contents stay encrypt
 - **Overview:** packets in and out per minute, unique packets, packet types, nodes heard, delivery (messages seen and receipts), routes found, radio vs backbone with average SNR, work done (forwarded, delivered, DHT, mail), for the last hour, 6 hours or 24 hours.
 - **Live traffic:** every packet in and out (link, type, plain-language meaning, destination with name, hops, size, route, SNR), every router decision, DHT request and lookup, post office action, modem poll, admin login and log line.
 - **Nodes & map:** a census of every node ever heard from announces: name, role, last and first heard, announces, minimum and last hops, the link it came in on, SNR, distance in km from the server, battery, external power, energy, temperature, uptime, whether it hears a repeater, mobile flag, post office class, capabilities; on a map (Leaflet with OpenStreetMap) when nodes share a position.
+- **Node card:** select a node's name in **Nodes & map** to open its card above the table: role, last and first heard, announces, hops, the link it came in on, SNR, distance, position, battery and uptime, a count of the packets about it per type since the page was opened, and its latest events. **Show in live traffic** filters the live view to that node.
+- **Sound:** the **Sound** button in the top bar plays a short tone for a public channel message, another channel, a direct message passing, a new node, every announce, a page request, a MeshCore direct or channel message, and a link going up or down. Switch each type on or off and set the volume; the choices are saved in this browser only, and the page title counts missed alerts while the tab is in the background. Sounds are rate limited, so a flood of announces does not become a buzz. The browser plays sound after the first click on the page.
 - **Destinations:** where traffic goes: per address the messages, file pieces and post office packets towards it, route searches and key requests for it, receipts, last route.
 - **Routes & repeaters:** route-length and hop histograms; every repeater path ID seen on routes with how often, how often as the first repeater after the sender, average position, and the node behind it.
 - **Delivery & latency:** for direct messages passing through, the time until their receipt passes back (median, 90 %, slowest, against hops), the share with a receipt, and route search times against route length.
@@ -927,13 +929,12 @@ display limits and the Great Belt simulation.
 
 For actual host activity, the working-copy dedicated server dashboard has
 **Share the public map** and **Share live traffic** under **Settings**. Enable
-both and choose **Save and restart**. The host and dedicated server also accept
-`--public-map --public-traffic` on the command line. Both flags are required.
+both and choose **Save and restart**. Both settings are required.
 The HTTP(S) endpoint
 `GET /api/public/traffic` is intentionally public, allows cross-origin reads,
 and exposes local counts by direction and transport in completed one-second
 buckets. Keep it disabled if the site's activity timing is sensitive.
-On upgrade, existing `--public-traffic` installations also publish verified
+On upgrade, installations with **Share live traffic** already on also publish verified
 announce observations in `/api/public/network`. The aggregate endpoint keeps
 its existing response format.
 See the [browser setup and trust boundary](denmark/README.md#live-real-world-traffic).
@@ -946,17 +947,18 @@ completed seconds in `[second - 10, second)`). A bucket has its own
 The disabled endpoint returns 404. The admin event feed still requires login.
 
 For grouped observations, a reporting host can reuse an existing outgoing
-TCP peer with `--observe-to <host:port@collector-public-identity>`. A collector
-accepts reports from the public identities listed with `--observe-allow`.
-`--public-map --public-traffic` enables local verified announce observations
+TCP peer: set **Observation collector** under **Settings** to
+`host:port@collector-public-identity`. A collector accepts reports from the
+public identities listed under **Allowed observers**. **Share the public map**
+and **Share live traffic** enable local verified announce observations
 without observer registration. A dedicated server also publishes markers
 at the precision reported by position-sharing nodes, including TCP hosts.
 When it receives an accepted announce without a position, the server
 clears its previous marker for that node. Nodes flagged mobile by firmware
 are excluded from the public map.
 
-The dashboard's **Share open channels** setting (`--share-open-channels`)
-requires `--public-map` and publishes new text and traffic from open channels
+The dashboard's **Share open channels** setting 
+requires **Share the public map** and publishes new text and traffic from open channels
 the collector can identify. The built-in `public` key is known to the
 collector. Compatible TCP hosts forward open names with their packets,
 including for open channels created on the Android Phone node. The channel

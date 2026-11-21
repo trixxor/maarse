@@ -101,8 +101,7 @@ The working copy adds observed traffic to **Real world** in the browser
 simulator. Build or install matching `maarse-host` or `maarse-server` binaries
 with this feature. In the dedicated server dashboard, open **Settings**,
 enable **Share the public map** and **Share live traffic**, then choose **Save
-and restart**. The same options are available as
-`--public-map --public-traffic` when starting either binary. The host needs
+and restart**. The host needs
 an HTTP listener reachable by the browser. Use HTTPS for hosts accessed from
 the HTTPS simulator page, typically through the existing reverse proxy.
 Enable position sharing for the host if you want a marker on the map.
@@ -124,13 +123,43 @@ complete one-second buckets. The pulses show local observations and an outgoing
 count means the host queued a frame on a link. The view has no peer coordinates
 or confirmed end-to-end route.
 
-`--public-map` alone serves the static map. The separate opt-in
-`--public-traffic` makes `/api/public/traffic` readable by anyone who can
+**Share the public map** alone serves the static map. The separate opt-in
+**Share live traffic** makes `/api/public/traffic` readable by anyone who can
 reach the endpoint. This aggregate feed contains counts, link categories and
 activity timing. On the updated host, the setting also enables recent
 verified announce observations in the network feed below. The browser
 trusts the configured server to report its measurements. Reception on a real
 radio requires a connected radio or modem.
+
+### Network overview and the view switch
+
+The switch at the top right of the map chooses what is shown:
+**Simulation** (the simulated network only, the default), **Real network**
+(the simulation is hidden and the real nodes of the public servers are drawn
+in its place) or **Both**. **Real network** opens the network overview, which
+can also be opened with `?view=network`. It shows the real network at a
+glance from the same public feeds, in the style of a mesh telemetry site:
+
+- Figures along the top: nodes on the map, nodes heard in the last hour,
+  packets per minute, received and sent packets in the last 10 seconds per
+  transport (radio, trunk, backbone), servers reporting, observers heard and
+  open-channel messages.
+- A searchable **node list** with role filters. Select a node to see its
+  card (role, last heard, position, antenna height, gain, power, owner and
+  its latest announces) and a halo on the map.
+- **Live packets** (every packet group of the last two minutes with type,
+  transport, hops, SNR and how many observers saw it), **Channels** (open
+  channel messages with the sender's name) and **Types** (a 2-minute
+  activity graph and the packet types since the overview opened).
+- **Sound** gives a short tone for a new public message, another open
+  channel, a direct message seen passing and a new node. The choices are
+  saved in the browser only. The browser plays sound after the first click
+  on the page.
+
+The overview reads the hosts saved under **Real world**, or
+`https://nj01.dk.eu.maarse.dk` when none are saved. It only shows what a
+server has chosen to share: nodes with a shared position, packet metadata and
+open channels. Direct messages are encrypted and never shown.
 
 ### Packet observers and public channels
 
@@ -141,8 +170,7 @@ read `/api/public/network`.
 
 1. Build or install the updated `maarse-server`. In **Settings**, turn
    on **Share the public map**, **Share live traffic** and **Share open
-   channels**, then choose **Save and restart**. The CLI equivalents are
-   `--public-map --public-traffic --share-open-channels`. Channel publication
+   channels**, then choose **Save and restart**. Channel publication
    requires this one server-wide opt-in and uses the channel's existing
    public or private setting. Earlier `--public-channel` entries still work.
 2. For a TCP-only Android node, use **Phone node** mode for the phone's
@@ -164,12 +192,10 @@ Observer registration is optional for directly received traffic. To collect
 observations from additional hosts with radios or other links, install the
 updated host on those machines too:
 
-- Add each reporter's 128-hex public identity under **Allowed observers**
-  (`--observe-allow <key>`). This is the public key printed at startup,
+- Add each reporter's 128-hex public identity under **Allowed observers**. This is the public key printed at startup,
   also labelled **Bulletin key**.
 - On each reporter, set **Observation collector** to
-  `host:port@collector-public-identity`, or use
-   `--observe-to 'host:port@128-hex-collector-identity'` at startup. Use exactly
+  `host:port@collector-public-identity`. Use exactly
    the endpoint of an existing outgoing TCP peer. The host reports to that
    one collector when it advertises support. The direct peer link works from
    behind NAT. Reports are authenticated and encrypted with existing

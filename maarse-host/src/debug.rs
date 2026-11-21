@@ -160,6 +160,10 @@ pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// The address of the built-in public channel.
+static PUBLIC_CHANNEL: std::sync::LazyLock<maarse_core::Address> =
+    std::sync::LazyLock::new(|| maarse_crypto::channel_address(&maarse_crypto::public_channel_key()));
+
 /// A packet's header and size as JSON fields (type, hops, destination,
 /// path, region, size, packet ID).
 pub fn packet_fields(data: &[u8]) -> Value {
@@ -167,7 +171,7 @@ pub fn packet_fields(data: &[u8]) -> Value {
         Ok((h, used)) => {
             let payload = &data[used.min(data.len())..];
             let pid = maarse_core::dedup::packet_id(h.ptype, &h.dest, payload);
-            json!({
+            let mut fields = json!({
                 "ptype": format!("{:?}", h.ptype),
                 "hops": h.hops,
                 "dest": hex(&h.dest.0),
@@ -176,7 +180,12 @@ pub fn packet_fields(data: &[u8]) -> Value {
                 "size": data.len(),
                 "pid": format!("{pid:016x}"),
                 "flood": h.path.is_none() && !matches!(h.ptype, PacketType::Hello | PacketType::Summary),
-            })
+            });
+            // The built-in public channel is named so that the dashboard can tell it from other channels.
+            if h.ptype == PacketType::Channel && h.dest == *PUBLIC_CHANNEL {
+                fields["channel"] = json!("public");
+            }
+            fields
         }
         Err(e) => json!({ "ptype": "invalid", "size": data.len(), "error": format!("{e:?}") }),
     }

@@ -96,6 +96,21 @@
   .pg-editor textarea { width: 100%; min-height: 380px; font: 13px/1.5 ui-monospace, Consolas, monospace; tab-size: 2; }
   .pg-editor .bar { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
   .pg-editor img { max-width: 100%; max-height: 380px; background: #fff; border-radius: 6px; }
+  .bibwrap { position: relative; }
+  .bibpanel { position: absolute; right: 0; top: 36px; width: 270px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; z-index: 1100; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+  .bibpanel[hidden] { display: none; }
+  .bibpanel label { display: flex; gap: 8px; align-items: center; margin: 4px 0; font-size: 13px; }
+  .bibpanel hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
+  .bibpanel small { color: var(--muted); display: block; margin-top: 6px; }
+  #node-detail { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 12px 14px; margin: 0 0 14px; }
+  #node-detail[hidden] { display: none; }
+  #node-detail h2 { margin: 0 0 4px; }
+  #node-detail .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 16px; margin: 8px 0; }
+  #node-detail .facts div span { display: block; color: var(--muted); font-size: 12px; }
+  #node-detail .acts { max-height: 260px; overflow: auto; border-top: 1px solid var(--line); margin-top: 8px; }
+  #node-detail .acts div { display: flex; gap: 10px; padding: 3px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  #node-detail .acts .t { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 64px; }
+  a[data-node] { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -107,6 +122,14 @@
   <span class="row" style="margin:0">Range:
     <button class="b" data-range="60">1 h</button><button class="b" data-range="360">6 h</button><button class="b on" data-range="1440">24 h</button>
   </span>
+  <span class="bibwrap"><button class="b" id="bib" title="Sound alerts for messages, announces, pages and MeshCore">Sound: off</button>
+    <div class="bibpanel" id="bibpanel" hidden>
+      <label><input type="checkbox" id="bib-on"> <b>Sound alerts on</b></label>
+      <label>Volume <input type="range" id="bib-vol" min="0" max="1" step="0.05" style="flex:1"></label>
+      <hr><div id="bib-types"></div><hr>
+      <button class="b" id="bib-test">Play a test sound</button>
+      <small>Saved in this browser only. The browser needs one click on the page before it plays sound.</small>
+    </div></span>
   <a href="/logout">Log out</a>
 </header>
 <nav id="nav"></nav>
@@ -139,6 +162,7 @@
   <div class="page" data-page="nodes">
     <div class="tiles" id="node-tiles"></div>
     <section><h2>Map</h2><p class="help">Nodes that share their position (announces). Colour by role; the server is the square if it shares its own position. Positions are as precise as each node chose to share.</p><div id="map"></div></section>
+    <div id="node-detail" hidden></div>
     <section>
       <h2>Every node heard</h2>
       <p class="help">The census from announces since the server started (kept across restarts). Distance is from this server when it shares its position. Click a column to sort.</p>
@@ -405,13 +429,88 @@ document.querySelectorAll("[data-range]").forEach(b => b.onclick = () => {
 });
 function setConn(ok) { if (ok === connected) return; connected = ok; $("dot").classList.toggle("on", ok); $("conn").textContent = ok ? "live" : "no answer"; }
 
+// ---------- sound alerts (bib) ----------
+const BIB_TYPES = {
+  message: { label: "Direct message passing", def: true, tone: [660, 880] },
+  public: { label: "Public channel message", def: true, tone: [523, 659, 784] },
+  channel: { label: "Other channel message", def: false, tone: [440, 554] },
+  newnode: { label: "New node heard", def: true, tone: [988] },
+  announce: { label: "Every announce", def: false, tone: [1175] },
+  page: { label: "Page request", def: true, tone: [392, 392] },
+  mcdirect: { label: "MeshCore direct message", def: true, tone: [740, 988, 740] },
+  mcchannel: { label: "MeshCore channel message", def: true, tone: [587, 740] },
+  link: { label: "Link up or down", def: false, tone: [330, 262] },
+};
+let bib = { on: false, vol: 0.5, types: {} };
+try { Object.assign(bib, JSON.parse(localStorage.getItem("maarse.bib") || "{}")); } catch {}
+bib.types ||= {};
+for (const [k, v] of Object.entries(BIB_TYPES)) if (bib.types[k] === undefined) bib.types[k] = v.def;
+const saveBib = () => { try { localStorage.setItem("maarse.bib", JSON.stringify(bib)); } catch {} };
+let actx = null, lastBeep = {}, recentBeeps = [], unseen = 0;
+const baseTitle = document.title;
+function beep(type, force = false) {
+  if (!force && (!bib.on || !bib.types[type])) return;
+  const now = Date.now();
+  if (!force) {
+    if (now - (lastBeep[type] || 0) < 600) return;
+    recentBeeps = recentBeeps.filter(t => now - t < 5000);
+    if (recentBeeps.length >= 12) return;
+    recentBeeps.push(now); lastBeep[type] = now;
+  }
+  try {
+    actx ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === "suspended") actx.resume();
+    let t0 = actx.currentTime + 0.01;
+    for (const f of BIB_TYPES[type].tone) {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, bib.vol * 0.4), t0 + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
+      o.connect(g).connect(actx.destination); o.start(t0); o.stop(t0 + 0.16); t0 += 0.12;
+    }
+  } catch {}
+  if (document.hidden) { unseen++; document.title = `(${unseen}) ${baseTitle}`; }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { unseen = 0; document.title = baseTitle; } });
+document.addEventListener("click", () => { if (actx && actx.state === "suspended") actx.resume(); });
+const seenPid = new Set(), knownAddrs = new Set();
+let knownReady = false;
+function bibEvent(e) {
+  if (e.kind === "rx" && e.ptype === "Announce" && e.dest) {
+    const fresh = !knownAddrs.has(e.dest); knownAddrs.add(e.dest);
+    if (knownReady && Date.now() - e.wall < 15000) beep(fresh ? "newnode" : "announce");
+    return;
+  }
+  if (Date.now() - e.wall > 15000) return;
+  if (e.kind === "rx" && (e.ptype === "Data" || e.ptype === "Channel")) {
+    if (e.pid) { if (seenPid.has(e.pid)) return; seenPid.add(e.pid); if (seenPid.size > 2000) seenPid.clear(); }
+    beep(e.ptype === "Data" ? "message" : e.channel === "public" ? "public" : "channel");
+  } else if (e.kind === "log" && typeof e.text === "string") {
+    if (e.text.startsWith("page '")) beep("page");
+    else if (/^link (up|down)/i.test(e.text)) beep("link");
+  } else if (e.kind === "meshcore") beep(e.conversation === "direct" ? "mcdirect" : "mcchannel");
+}
+function bibUi() {
+  $("bib").textContent = bib.on ? "Sound: on" : "Sound: off";
+  $("bib").classList.toggle("on", bib.on);
+  $("bib-on").checked = bib.on; $("bib-vol").value = bib.vol;
+  $("bib-types").innerHTML = Object.entries(BIB_TYPES).map(([k, v]) => `<label><input type="checkbox" data-bib="${k}" ${bib.types[k] ? "checked" : ""}> ${esc(v.label)}</label>`).join("");
+}
+$("bib").onclick = () => { $("bibpanel").hidden = !$("bibpanel").hidden; };
+$("bib-on").onchange = e => { bib.on = e.target.checked; saveBib(); bibUi(); if (bib.on) beep("public", true); };
+$("bib-vol").oninput = e => { bib.vol = +e.target.value; saveBib(); };
+$("bib-test").onclick = () => beep("public", true);
+$("bib-types").addEventListener("change", e => { const k = e.target.dataset.bib; if (k) { bib.types[k] = e.target.checked; saveBib(); beep(k, true); } });
+bibUi();
+
 // ---------- polling ----------
-async function pollTelemetry() { try { const t = await get("/api/telemetry"); if (t.types) { T = t; NAMES = names(); render(); } setConn(true); } catch { setConn(false); } setTimeout(pollTelemetry, 10000); }
+async function pollTelemetry() { try { const t = await get("/api/telemetry"); if (t.types) { T = t; NAMES = names(); for (const x of t.nodes || []) knownAddrs.add(x.addr); knownReady = true; render(); } setConn(true); } catch { setConn(false); } setTimeout(pollTelemetry, 10000); }
 async function pollSnapshot() { try { const s = await get("/api/debug/snapshot"); if (s.me) { S = s; if (["overview", "routes", "radio", "backbone", "post", "counters"].includes(page)) render(); header(); } setConn(true); } catch { setConn(false); } setTimeout(pollSnapshot, 3000); }
 async function pollEvents() {
   if (!paused) try {
     const r = await get("/api/debug/events?since=" + since); since = r.next;
-    for (const e of r.events) { events.push(e); if (events.length > 4000) events.shift(); }
+    for (const e of r.events) { events.push(e); if (events.length > 4000) events.shift(); bibEvent(e); }
     if (r.events.length && page === "live") renderLive();
   } catch {}
   setTimeout(pollEvents, 1000);
@@ -594,7 +693,7 @@ function nodes() {
   ]);
   const q = $("node-search").value.toLowerCase();
   const rows = ns.filter(x => !q || `${x.name} ${x.addr} ${x.role} ${x.via}`.toLowerCase().includes(q)).map(x => [
-    { h: `${esc(x.name || "(no name)")}`, s: (x.name || "").toLowerCase() }, { h: `<span class="mono">${short(x.addr)}</span>`, s: x.addr }, x.role || "?",
+    { h: `<a data-node="${esc(x.addr)}">${esc(x.name || "(no name)")}</a>`, s: (x.name || "").toLowerCase() }, { h: `<span class="mono">${short(x.addr)}</span>`, s: x.addr }, x.role || "?",
     { h: ago(x.last_seen), s: x.last_seen }, { h: ago(x.first_seen), s: x.first_seen }, x.announces, x.min_hops === 255 ? "" : x.min_hops, x.last_hops,
     { h: esc(x.via) + (x.via_backbone ? " (backbone)" : ""), s: x.via }, x.snr ?? "", x.km ?? "",
     x.battery_mv ? (x.battery_mv / 1000).toFixed(2) + " V" : "", x.ext_power == null ? "" : x.ext_power ? "yes" : "no", x.energy ?? "",
@@ -624,6 +723,29 @@ function nodes() {
   }
 }
 $("node-search").addEventListener("input", () => nodes());
+let nodeSel = null;
+function nodeDetail(addr) {
+  const el = $("node-detail"), x = T && T.nodes.find(v => v.addr === addr);
+  if (!x) { el.hidden = true; nodeSel = null; return; }
+  nodeSel = addr;
+  const evs = events.filter(e => e.dest === addr || e.from === addr || e.recipient === addr || e.target === addr);
+  const by = {};
+  for (const e of evs) { const k = e.kind === "rx" || e.kind === "tx" ? `${e.ptype || "?"} ${e.kind === "rx" ? "in" : "out"}` : e.kind; by[k] = (by[k] || 0) + 1; }
+  const fact = (k, v) => v === "" || v == null ? "" : `<div><span>${esc(k)}</span>${v}</div>`;
+  const rows = evs.slice(-40).reverse().map(e => `<div><span class="t">${new Date(e.wall).toLocaleTimeString([], { hour12: false })}</span><span>${esc(e.kind === "rx" || e.kind === "tx" ? (e.kind === "rx" ? "IN " : "OUT ") + (e.ptype || "") : e.kind)}</span><span style="color:var(--muted)">${esc(e.link || (e.links ? e.links.join(", ") : ""))}</span><span>${esc(meaning(e)).slice(0, 140)}</span></div>`).join("");
+  el.hidden = false;
+  el.innerHTML = `<div class="row" style="margin:0"><h2 style="flex:1">${esc(x.name || "(no name)")} <small class="mono" style="font-weight:400">${esc(x.addr)}</small></h2><button class="b" id="nd-live">Show in live traffic</button><button class="b" id="nd-close">Close</button></div>
+    <div class="facts">${fact("Role", esc(x.role || "?"))}${fact("Last heard", ago(x.last_seen))}${fact("First heard", ago(x.first_seen))}${fact("Announces", n(x.announces))}
+    ${fact("Hops (min / last)", `${x.min_hops === 255 ? "?" : x.min_hops} / ${x.last_hops}`)}${fact("Heard via", esc(x.via || "") + (x.via_backbone ? " (backbone)" : ""))}${fact("SNR", x.snr != null ? x.snr + " dB" : "")}
+    ${fact("Distance", x.km != null ? x.km + " km" : "")}${fact("Position", x.lat != null ? `${x.lat.toFixed(3)}, ${x.lon.toFixed(3)}` : "")}${fact("Battery", x.battery_mv ? (x.battery_mv / 1000).toFixed(2) + " V" : "")}
+    ${fact("Uptime", x.uptime_s != null ? dur(x.uptime_s) : "")}${fact("Mobile", x.mobile ? "yes" : "")}${fact("Post office", x.mail_class ? "yes" : "")}</div>
+    <div class="row" style="margin:4px 0">${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([k, c]) => `<span class="chip on">${esc(k)} · ${c}</span>`).join("") || '<span class="help">No packets about this node since the page was opened.</span>'}</div>
+    <div class="acts">${rows}</div>`;
+  $("nd-close").onclick = () => nodeDetail(null);
+  $("nd-live").onclick = () => { $("search").value = x.addr.slice(0, 8); show("live"); renderLive(); };
+}
+$("node-table").addEventListener("click", e => { const a = e.target.closest("a[data-node]"); if (!a) return; e.preventDefault(); nodeDetail(a.dataset.node); $("node-detail").scrollIntoView({ block: "nearest" }); });
+
 
 // ---------- destinations, routes ----------
 function dests() {

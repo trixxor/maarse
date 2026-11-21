@@ -1,5 +1,5 @@
 // Real-world mode: the real network on the map, from backbone hosts that
-// share their map (maarse-host --public-map, GET /api/public/map).
+// share their map (Settings: Share the public map; GET /api/public/map).
 //
 // Each host reports itself (position, site), the nodes it knows that share
 // a position (with their site: antenna height, gain, power, owner) and the
@@ -37,7 +37,7 @@
   card.style.cssText = "left:54px;top:84px;width:320px;max-height:calc(100% - 160px);overflow:auto;padding:8px 10px;font-size:12px";
   card.innerHTML = `
     <h4 style="margin:0 0 6px;display:flex;justify-content:space-between;align-items:center">Real world <button id="rw-x" style="border:0;background:transparent" title="Close (the map stays until you hide it)">✕</button></h4>
-    <p class="hint" style="margin:0 0 6px">The real network, from backbone hosts that share their map (<code>--public-map</code>). Fixed nodes show the site their owner set: antenna height, gain, power, owner.</p>
+    <p class="hint" style="margin:0 0 6px">The real network, from backbone hosts that share their map (Settings: <b>Share the public map</b>). Fixed nodes show the site their owner set: antenna height, gain, power, owner.</p>
     <label>Hosts (one per line, e.g. https://host.example.dk:8080)</label>
     <textarea id="rw-servers" rows="3" style="width:100%;box-sizing:border-box;font-size:12px">${esc((servers.length ? servers : [DEFAULT_COLLECTOR]).join("\n"))}</textarea>
     <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">
@@ -45,7 +45,7 @@
       <button id="rw-cov" title="Coverage of the real fixed nodes, with the simulator's radio model">Coverage</button>
       <button id="rw-hide">Hide</button>
     </div>
-    <label title="Hosts must opt in with --public-traffic"><input type="checkbox" id="rw-live" checked> Live observed traffic</label>
+    <label title="Hosts must turn on Share live traffic in their Settings"><input type="checkbox" id="rw-live" checked> Live observed traffic</label>
     <p id="rw-note" class="hint" style="margin:6px 0 2px"></p>
     <div id="rw-cal"></div>
     <div style="margin-top:4px;display:flex;gap:8px;flex-wrap:wrap" class="hint">
@@ -121,7 +121,7 @@
     await Promise.all(servers.map(async (url) => {
       try {
         const r = await fetch(url + "/api/public/map", { cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(4500) });
-        if (!r.ok) throw new Error(r.status === 404 ? "does not share its map (start it with --public-map)" : "answered " + r.status);
+        if (!r.ok) throw new Error(r.status === 404 ? "does not share its map (turn on Share the public map in its Settings)" : "answered " + r.status);
         const j = await r.json();
         const h = j.host || {};
         hosts.set(url, h);

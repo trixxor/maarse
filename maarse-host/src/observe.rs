@@ -14,6 +14,7 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const PREFIX: &[u8] = b"\xffOB";
+pub const CHANNEL_PREFIX: &[u8] = b"\xffOC";
 pub const FLUSH: Duration = Duration::from_millis(250);
 const CONTEXT: &[u8] = b"OBS1";
 const HEADER: usize = CONTEXT.len() + 8 + 4 + 8;
@@ -41,12 +42,15 @@ static FEED: Mutex<Feed> = Mutex::new(Feed {
     radio_day: None,
 });
 
-pub fn enable_public_feed(enabled: bool, channels: &[PublicChannel]) {
+pub fn enable_public_feed(enabled: bool, auto_channels: bool, channels: &[PublicChannel]) {
     let mut feed = FEED.lock().unwrap_or_else(|err| err.into_inner());
     feed.channels = channels
         .iter()
         .map(|channel| channel.name.clone())
         .collect();
+    if auto_channels && !feed.channels.iter().any(|name| name == "public") {
+        feed.channels.insert(0, "public".into());
+    }
     ENABLED.store(enabled, Ordering::Relaxed);
 }
 
@@ -92,18 +96,14 @@ pub struct PublicChannel {
 impl PublicChannel {
     pub fn parse(value: &str) -> Result<Self, String> {
         fn valid(name: &str) -> bool {
-            !name.is_empty()
-                && name.len() <= 32
-                && name
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            !name.is_empty() && !name.contains('@') && !name.chars().any(char::is_control)
         }
         let invalid = || {
             "--public-channel expects public or #name, optionally followed by @region".to_string()
         };
         let value = value.trim().to_lowercase();
         let (name, region) = maarse_core::region::split_channel(&value);
-        if value.contains('@') && !valid(region) {
+        if value.len() > maarse_core::companion::MAX_TEXT || (value.contains('@') && !valid(region)) {
             return Err(invalid());
         }
         let (name, key) = match name {
@@ -125,24 +125,55 @@ impl PublicChannel {
         })
     }
 
-    /// Only the configured deterministic open key may decrypt a web message.
-    pub fn record(&self, packet: &Packet<'_>) {
-        if packet.header.ptype != PacketType::Channel
-            || packet.header.dest != self.address
-            || packet.header.region != self.region
-            || packet.header.path.is_some()
-        {
-            return;
+    pub fn from_frame(frame: &[u8]) -> Option<Self> {
+        let name = std::str::from_utf8(frame.strip_prefix(CHANNEL_PREFIX)?).ok()?;
+        Self::parse(name).ok()
+    }
+
+    pub fn frame(&self) -> Vec<u8> {
+        [CHANNEL_PREFIX, self.name.as_bytes()].concat()
+    }
+
+    pub fn route(&self) -> (Address, u16) {
+        (self.address, self.region)
+    }
+
+    pub fn is_for(&self, header: &maarse_core::Header) -> bool {
+        header.ptype == PacketType::Channel
+            && header.path.is_none()
+            && self.route() == (header.dest, header.region)
+    }
+
+    pub fn from_local(name: &str, key: &[u8; 32], header: &maarse_core::Header) -> Option<Self> {
+        let channel = Self::parse(name).ok()?;
+        (channel.key == *key && channel.is_for(header)).then_some(channel)
+    }
+
+    pub fn builtin(header: &maarse_core::Header) -> Option<Self> {
+        let key = public_channel_key();
+        let address = channel_address(&key);
+        if header.ptype != PacketType::Channel || header.path.is_some() || header.dest != address {
+            return None;
+        }
+        let region = header.region;
+        let name = if region == 0 { "public".into() } else { format!("public@0x{region:04x}") };
+        Some(Self { name, address, region, key })
+    }
+
+    /// Only a matching deterministic open key may decrypt a web message.
+    pub fn record(&self, packet: &Packet<'_>) -> bool {
+        if !self.is_for(&packet.header) {
+            return false;
         }
         let mut text = [0; MAX_PACKET];
         let Ok((sender, len)) = seal::open_channel(&self.key, packet.payload, &mut text) else {
-            return;
+            return false;
         };
         let Ok(text) = std::str::from_utf8(&text[..len]) else {
-            return;
+            return false;
         };
         if text.trim().is_empty() {
-            return;
+            return false;
         }
         let pid = packet_id(packet);
         let time = now_ms();
@@ -150,20 +181,22 @@ impl PublicChannel {
         if feed
             .messages
             .iter()
-            .any(|m| m.pid == pid && m.channel == self.name)
+            .any(|m| m.pid == pid && m.region == self.region)
         {
-            return;
+            return true;
         }
         if feed.messages.len() >= KEEP_MESSAGES {
             feed.messages.pop_front();
         }
         feed.messages.push_back(ChannelMessage {
             pid,
+            region: self.region,
             time,
             channel: self.name.clone(),
             sender: crate::debug::hex(&sender.0[..4]),
             text: text.to_string(),
         });
+        true
     }
 }
 
@@ -176,6 +209,7 @@ pub struct Sample {
     transport: u8,
     tx: bool,
     snr: Option<i8>,
+    subject: Option<Address>,
 }
 
 fn packet_id(packet: &Packet<'_>) -> u64 {
@@ -204,6 +238,7 @@ impl Sample {
             transport,
             tx,
             snr: snr.filter(|_| transport != 2 && !tx),
+            subject: None,
         }
     }
 }
@@ -236,8 +271,8 @@ impl Observers {
         self.target.is_some() || self.collecting()
     }
 
-    pub fn record(&mut self, observer: Address, sample: Sample) {
-        if self.collecting() {
+    pub fn record(&mut self, observer: Address, sample: Sample, publish_locally: bool) {
+        if publish_locally {
             publish(observer, sample);
         }
         if self.target.is_some() {
@@ -246,6 +281,11 @@ impl Observers {
             }
             self.pending.push_back(sample);
         }
+    }
+
+    pub fn publish_announce(&self, observer: Address, mut sample: Sample, subject: Option<Address>) {
+        sample.subject = subject;
+        publish(observer, sample);
     }
 
     pub fn report(&mut self, me: &Identity) -> Option<Vec<u8>> {
@@ -355,6 +395,7 @@ fn decode(plain: &[u8]) -> Option<(u64, u32, u64, Vec<Sample>)> {
             transport,
             tx,
             snr,
+            subject: None,
         });
     }
     Some((session, seq, time, samples))
@@ -404,6 +445,8 @@ struct Observation {
     pid: u64,
     id: u64,
     observer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<String>,
     time: u64,
     kind: String,
     transport: &'static str,
@@ -416,6 +459,8 @@ struct Observation {
 struct ChannelMessage {
     #[serde(skip)]
     pid: u64,
+    #[serde(skip)]
+    region: u16,
     time: u64,
     channel: String,
     sender: String,
@@ -448,6 +493,7 @@ fn publish(observer: Address, sample: Sample) {
         pid: sample.pid,
         id,
         observer: crate::debug::hex(&observer.0),
+        subject: sample.subject.map(|address| crate::debug::hex(&address.0)),
         time: sample.time,
         kind: format!("{:?}", sample.kind),
         hops: sample.hops,
@@ -496,7 +542,13 @@ pub fn public_feed() -> String {
             "sites": stats.map_or(0, |s| s.sites.len()),
             "capped": stats.is_some_and(|s| s.capped),
         });
-        (observations, messages, feed.channels.clone(), radio_today)
+        let mut channels = feed.channels.clone();
+        for msg in &messages {
+            if !channels.contains(&msg.channel) {
+                channels.push(msg.channel.clone());
+            }
+        }
+        (observations, messages, channels, radio_today)
     };
     let mut groups: Vec<Group<'_>> = Vec::new();
     let mut indices = HashMap::new();
@@ -560,9 +612,10 @@ mod tests {
             transport: 0,
             tx: false,
             snr: Some(7),
+            subject: None,
         };
-        source.record(approved.address(), sample);
-        unauthorised.record(other.address(), sample);
+        source.record(approved.address(), sample, false);
+        unauthorised.record(other.address(), sample, false);
         sink.receive(&collector, &unauthorised.report(&other).unwrap());
         let report = source.report(&approved).unwrap();
         let mut tampered = report.clone();

@@ -269,12 +269,12 @@ internal fun NodeSection(radioPart: Boolean = false) {
         val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
             if (r.values.any { it }) Node.updatePosition(ctx)
         }
-        Text("Put your position in your announces, so others see you on their map. Rounded unless you choose Precise. Uses the phone's location.",
+        Text("Shares the phone's location in announces. A server that shares its map can show your node on the public Denmark map, including over TCP. Choose a sharing precision to enable it.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (sh == null) Text("Fetching…") else {
             PRECISION.forEachIndexed { i, p ->
                 Row(Modifier.fillMaxWidth().clickable {
-                    Node.setPrecision(ctx, i)
+                    Node.setPrecision(i)
                     if (i > 0 && !Node.hasLocation(ctx)) ask.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION))
                 }, verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(sh.prec == i, null)
@@ -359,6 +359,9 @@ private val SERVER_FIELDS = listOf(
     Field("--no-post-office", Kind.BOOL_OFF, "Post office"),
     Field("--mail-quota-mb", Kind.TEXT, "Post office size (MB)", "0 = no limit."),
     Field("--min-peers", Kind.TEXT, "Minimum backbone links", "Default 6."),
+    Field("--public-map", Kind.BOOL, "Share the public map"),
+    Field("--public-traffic", Kind.BOOL, "Share live traffic", "Requires Share the public map. Publishes recent packet counts and observations of verified announces."),
+    Field("--share-open-channels", Kind.BOOL, "Share open channels", "Requires Share the public map. Automatically publishes activity and new text from open channels this server can identify."),
     Field("--alert-root", Kind.LIST, "Alert root keys"),
 )
 

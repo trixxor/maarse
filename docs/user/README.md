@@ -19,9 +19,13 @@ shared position. Filter by transport, or select an observation and choose
 with **Share the public map** and **Share live traffic**.
 [Live real-world traffic](../denmark/README.md#live-real-world-traffic)
 
-Connect **Real world** to the collector to see **Packets** grouped by
-observation and **Public channels** for new text from the open channels its
-operator chose to share. [Packet observers and public channels](../denmark/README.md#packet-observers-and-public-channels)
+With the updated site and collector, **Packets** shows verified announces even
+from an Android **Phone node** connected only over TCP. In **Name and position**,
+choose a sharing precision and grant location permission to place that node on
+the public map. The PC web client's **Sharing in announces** setting serves the
+same purpose. **Public channels** shows new messages from `public` and
+automatically identified open channels when the collector enables sharing.
+[Packet observers and public channels](../denmark/README.md#packet-observers-and-public-channels)
 
 | Page | Status |
 |---|---|

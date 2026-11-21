@@ -366,8 +366,11 @@ impl Sharing {
             telemetry: b[9] != 0,
         })
     }
-    /// The position as it is sent (rounded), or `None` (off).
+    /// The position as it is sent (rounded), or `None` when off or awaiting a fix.
     pub fn position(&self) -> Option<crate::appdata::Position> {
+        if self.lat_e7 == 0 && self.lon_e7 == 0 {
+            return None;
+        }
         crate::appdata::Position {
             precision: crate::appdata::Precision::from_u8(self.precision),
             lat_e7: self.lat_e7,

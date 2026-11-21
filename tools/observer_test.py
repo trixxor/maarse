@@ -1,7 +1,8 @@
 """Loopback test of observer reports and the public channel feed.
 
 Run cargo build -p maarse-host --bins first. Requires websocket-client.
-Two modem byte streams stand in for LoRa receivers, so no hardware is needed.
+Two modem byte streams stand in for LoRa receivers. A separate scenario
+exercises a TCP-only position-sharing node and automatic channel names.
 """
 import json
 import os
@@ -53,18 +54,87 @@ def frame(body):
 
 
 def join(ws, command, arguments):
+    name = arguments[32:] if command == 0x13 else arguments
     ws.send_binary(frame(bytes([command]) + arguments))
     while True:
         data = ws.recv()
         while len(data) >= 2:
             size = struct.unpack_from("<H", data)[0]
             event, data = data[2:2 + size], data[2 + size:]
-            if event and event[0] == 0x88:
+            if event and event[0] == 0x88 and event[17:] == name:
                 return event[1:17]
 
 
 def send_channel(ws, channel, message):
     ws.send_binary(frame(b"\x03\x01\x00" + channel + message.encode()))
+
+
+def public_api(http, resource):
+    try:
+        with urlopen(f"http://{http}/api/public/{resource}", timeout=1) as reply:
+            return json.load(reply)
+    except OSError:
+        return {}
+
+
+def test_tcp_node(start):
+    backbone = reserve_endpoint()
+    collector_http = reserve_endpoint()
+    relay = reserve_endpoint()
+    web = reserve_endpoint()
+    start("collector-auto", "--listen", backbone, "--public-addr", backbone,
+          "--min-peers", "0", "--http", collector_http, "--public-map",
+          "--public-traffic", "--share-open-channels")
+    wait_for(lambda: public_api(collector_http, "network"))
+    start("relay", "--listen", relay, "--http", "off", "--peer", backbone)
+    start("phone", "--listen", "off", "--http", web, "--peer", relay)
+    wait_for(lambda: public_api(collector_http, "network").get("packets"))
+    ws = websocket.create_connection(f"ws://{web}/ws", origin=f"http://{web}", timeout=5)
+    try:
+        name = "TCP-only test node"
+        ws.send_binary(frame(b"\x24" + name.encode()))
+        # Choosing a precision before the phone has a GPS fix leaves no marker.
+        ws.send_binary(frame(struct.pack("<BBiiB", 0x22, 2, 0, 0, 0)))
+        assert all(n["name"] != name for n in public_api(collector_http, "map").get("nodes", []))
+        ws.send_binary(frame(struct.pack("<BBiiB", 0x22, 2, 568500123, 99210023, 0)))
+        ws.send_binary(frame(b"\x05"))
+
+        def map_node():
+            return next((n for n in public_api(collector_http, "map").get("nodes", [])
+                         if n["name"] == name), None)
+
+        marker = wait_for(map_node, timeout=30)
+        assert (marker["lat"], marker["lon"], marker["precision"]) == (56.855, 9.925, 2), marker
+        view = public_api(collector_http, "network")
+        assert any(o.get("subject") == marker["addr"] and o["transport"] == "backbone"
+                   for p in view["packets"] if p["kind"] == "Announce"
+                   for o in p["observations"]), view
+        print("PASS TCP-only node position and verified announce without observer registration")
+
+        private = join(ws, 0x13, os.urandom(32) + b"#new channel@dk")
+        send_channel(ws, private, "Private invite marker")
+        public = join(ws, 0x04, b"public")
+        send_channel(ws, public, "Built-in public marker")
+        newly_open = join(ws, 0x04, b"#new channel@dk")
+        send_channel(ws, newly_open, "New open marker")
+
+        def both_messages():
+            view = public_api(collector_http, "network")
+            return view if len(view.get("messages", [])) >= 2 else None
+
+        view = wait_for(both_messages)
+        assert set(view["channels"]) == {"public", "#new channel@dk"}, view
+        assert {m["text"] for m in view["messages"]} == {"Built-in public marker", "New open marker"}, view
+        assert any(p["kind"] == "Channel" for p in view["packets"]), view
+        print("PASS built-in and new regional open channels across two TCP links, private text excluded")
+
+        ws.send_binary(frame(struct.pack("<BBiiB", 0x22, 0, 568500123, 99210023, 0)))
+        wait_for(lambda: not map_node(), timeout=30)
+        assert all(m["text"] != "Private invite marker"
+                   for m in public_api(collector_http, "network")["messages"])
+        print("PASS switching off position sharing removes the node from the public map")
+    finally:
+        ws.close()
 
 
 def main():
@@ -73,7 +143,7 @@ def main():
         children = []
 
         def start(name, *args):
-            exe = "maarse-server" if name == "collector" else "maarse-host"
+            exe = "maarse-server" if name.startswith("collector") else "maarse-host"
             data = root / name
             data.mkdir(exist_ok=True)
             with (root / f"{name}.log").open("wb") as log:
@@ -102,11 +172,7 @@ def main():
                   "--public-channel", "#open@dk")
 
             def feed():
-                try:
-                    with urlopen(f"http://{http}/api/public/network", timeout=1) as reply:
-                        return json.load(reply)
-                except OSError:
-                    return {}
+                return public_api(http, "network")
 
             wait_for(feed)
             with listen() as west_modem, listen() as east_modem:
@@ -155,6 +221,7 @@ def main():
                         print("PASS only the explicitly shared open channel and wire region are published")
                     finally:
                         ws.close()
+            test_tcp_node(start)
         finally:
             for child in reversed(children):
                 if child.poll() is None:

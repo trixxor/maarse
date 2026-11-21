@@ -125,7 +125,7 @@ fn incoming(id: u32, data: Vec<u8>) -> In {
         Some((strict, regions)) => In::LinkRegions { id, strict, regions },
         None => {
             note_rx(id, None);
-            In::Packet { link: id, data, snr: TCP_SNR }
+            In::Packet { link: id, data, snr: TCP_SNR, open_channel: None }
         }
     }
 }

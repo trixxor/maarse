@@ -549,6 +549,10 @@ impl Telemetry {
             n.lat = Some(p.lat_e7 as f64 / 1e7);
             n.lon = Some(p.lon_e7 as f64 / 1e7);
             n.precision = p.precision as u8;
+        } else {
+            n.lat = None;
+            n.lon = None;
+            n.precision = 0;
         }
         if let Some(t) = &app.telemetry {
             n.battery_mv = (t.battery_mv > 0).then_some(t.battery_mv);

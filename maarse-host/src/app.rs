@@ -48,7 +48,7 @@ pub type LinkId = u32;
 pub enum LinkSender {
     Unbounded(Sender<Vec<u8>>),
     Bounded(SyncSender<Vec<u8>>),
-    Backbone { packets: SyncSender<Vec<u8>>, reports: SyncSender<Vec<u8>> },
+    Backbone { packets: SyncSender<(Vec<u8>, Option<Vec<u8>>)>, reports: SyncSender<Vec<u8>> },
 }
 
 impl From<Sender<Vec<u8>>> for LinkSender {
@@ -62,7 +62,17 @@ impl LinkSender {
         match self {
             Self::Unbounded(sender) => sender.send(packet).map_err(|err| std::sync::mpsc::TrySendError::Disconnected(err.0)),
             Self::Bounded(sender) => sender.try_send(packet),
-            Self::Backbone { packets, .. } => packets.try_send(packet),
+            Self::Backbone { packets, .. } => packets.try_send((packet, None)).map_err(|err| match err {
+                std::sync::mpsc::TrySendError::Full((packet, _)) => std::sync::mpsc::TrySendError::Full(packet),
+                std::sync::mpsc::TrySendError::Disconnected((packet, _)) => std::sync::mpsc::TrySendError::Disconnected(packet),
+            }),
+        }
+    }
+
+    pub fn send_named_channel(&self, packet: Vec<u8>, descriptor: Vec<u8>) -> bool {
+        match self {
+            Self::Backbone { packets, .. } => packets.try_send((packet, Some(descriptor))).is_ok(),
+            _ => self.send(packet).is_ok(),
         }
     }
 
@@ -101,6 +111,7 @@ pub enum In {
         link: LinkId,
         data: Vec<u8>,
         snr: i8,
+        open_channel: Option<observe::PublicChannel>,
     },
     /// A web client has connected. `tx` takes complete companion frames.
     ClientUp {
@@ -176,8 +187,9 @@ pub struct Config {
     /// knows with a shared position, and the radio links it hears) at
     /// `/api/public/map` to everyone.
     pub public_map: bool,
-    /// Publish short-lived aggregate packet counters on the public map.
+    /// Publish short-lived aggregate counts and verified announce observations.
     pub public_traffic: bool,
+    pub share_open_channels: bool,
     pub observe_to: Option<observe::Target>,
     pub observe_allow: Vec<maarse_crypto::PublicIdentity>,
     pub public_channels: Vec<observe::PublicChannel>,
@@ -467,15 +479,17 @@ Usage: maarse-host [options]
   --public-map          share this host's map data (its site, nodes with a
                         shared position, the radio links it hears) with
                         everyone at /api/public/map (for map pages)
-  --public-traffic      with --public-map, publish recent packet counts by
-                        transport and direction at /api/public/traffic
+  --public-traffic      with --public-map, publish packet counts and recent
+                        observations of verified announces
   --observe-to <peer@key>
                         report packet observations over an existing TCP peer
                         link (host:port@128-hex collector identity)
   --observe-allow <key> accept observations from this public identity
                         (128 hex digits, repeatable)
+  --share-open-channels publish new text and activity from automatically
+                        identified open channels (requires --public-map)
   --public-channel <name>
-                        publish new text from this open channel (public or
+                        publish new text from this explicitly named channel (public or
                         #name, optionally @region; repeatable, needs --public-map)
   --allow-legacy-web-token
                         allow deprecated URL query keys during upgrades
@@ -537,6 +551,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         observe_to: None,
         observe_allow: Vec::new(),
         public_channels: Vec::new(),
+        share_open_channels: false,
         max_file: maarse_hostrules::filebox::MAX_FILE_DEFAULT,
         filebox_per_recipient: 20 << 20,
         filebox_total: 200 << 20,
@@ -622,6 +637,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--allow-legacy-web-token" => c.allow_legacy_web_token = true,
             "--public-map" => c.public_map = true,
             "--public-traffic" => c.public_traffic = true,
+            "--share-open-channels" => c.share_open_channels = true,
             "--observe-to" => c.observe_to = Some(observe::Target::parse(&val("--observe-to")?)?),
             "--observe-allow" => {
                 let key = parse_identity(&val("--observe-allow")?)
@@ -794,6 +810,9 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
     }
     if !c.public_channels.is_empty() && !c.public_map {
         return Err("--public-channel requires --public-map".into());
+    }
+    if c.share_open_channels && !c.public_map {
+        return Err("--share-open-channels requires --public-map".into());
     }
     if c.public_channels.len() > 8 || c.observe_allow.len() > 128 {
         return Err("At most 8 public channels and 128 observer identities can be configured".into());
@@ -1034,7 +1053,11 @@ pub fn run(cli: Vec<String>) {
     web::ALLOW_LEGACY_WEB_TOKEN.store(cfg.allow_legacy_web_token, std::sync::atomic::Ordering::Relaxed);
     web::PUBLIC_MAP.store(cfg.public_map, std::sync::atomic::Ordering::Relaxed);
     web::PUBLIC_TRAFFIC.store(cfg.public_traffic, std::sync::atomic::Ordering::Relaxed);
-    observe::enable_public_feed(cfg.public_map && (!cfg.observe_allow.is_empty() || !cfg.public_channels.is_empty()), &cfg.public_channels);
+    observe::enable_public_feed(
+        cfg.public_map && (cfg.public_traffic || cfg.share_open_channels || !cfg.observe_allow.is_empty() || !cfg.public_channels.is_empty()),
+        cfg.share_open_channels,
+        &cfg.public_channels,
+    );
     if let Some(addr) = cfg.http {
         let token = web::access_token(&cfg.data_dir);
         match web::spawn(addr, token.clone(), cfg.data_dir.clone(), tx.clone()) {

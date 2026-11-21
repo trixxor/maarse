@@ -105,7 +105,7 @@
       $("rw-note").textContent = "Add at least one host.";
       return;
     }
-    timer = setInterval(refresh, 60000);
+    timer = setInterval(refresh, 10000);
     refresh(true);
   };
   $("rw-live").onchange = () => {
@@ -368,11 +368,13 @@
   }
 
   function showPacketObservation(run, observation) {
-    const node = data.nodes.get(observation.observer);
+    const subject = data.nodes.get(observation.subject);
+    const node = subject || data.nodes.get(observation.observer);
     const point = node && locationOf(node);
     if (!point) return;
-    showObservation(run, { url: observation.observer, point, kind: observation.transport,
+    showObservation(run, { url: node.addr, point, kind: observation.transport,
       rx: observation.direction === "rx", tx: observation.direction === "tx" });
+    return subject ? point : undefined;
   }
 
   function renderNetwork(run) {
@@ -396,7 +398,9 @@
       if (selected) {
         updateHtml("rw-packet-sources", selected.observations.map(o => {
           const observer = data.nodes.get(o.observer)?.name || String(o.observer).slice(0, 8);
-          return `<li>${esc(observer)} · ${esc(o.transport)} ${o.direction === "tx" ? "TX" : "RX"} · hop ${esc(o.hops)}${Number.isInteger(o.snr) ? ` · ${o.snr} dB SNR` : ""}</li>`;
+          const subject = data.nodes.get(o.subject);
+          const announced = subject ? ` · Announced ${esc(subject.name || subject.addr.slice(0, 8))}` : "";
+          return `<li>${esc(observer)} · ${esc(o.transport)} ${o.direction === "tx" ? "TX" : "RX"} · hop ${esc(o.hops)}${Number.isInteger(o.snr) ? ` · ${o.snr} dB SNR` : ""}${announced}</li>`;
         }).join(""));
       }
     }
@@ -436,7 +440,12 @@
     if (!row) return;
     live.packet = row.key;
     clearPulses(live);
-    for (const observation of row.observations) showPacketObservation(live, observation);
+    let point;
+    for (const observation of row.observations) {
+      const subject = showPacketObservation(live, observation);
+      point ||= subject;
+    }
+    if (point) focusObservation({ point });
     renderNetwork(live);
   };
   $("rw-packet-clear").onclick = () => {

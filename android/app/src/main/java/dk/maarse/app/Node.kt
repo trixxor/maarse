@@ -338,12 +338,13 @@ object Node : LinkListener {
             ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     private var lastPosition = 0L
+    private var positionRequest = 0L
 
-    fun setPrecision(ctx: Context, prec: Int) {
+    fun setPrecision(prec: Int) {
+        positionRequest++
         val sh = sharing.value
         send(Cmd.setSharing(prec, ((sh?.lat ?: 0.0) * 1e7).toInt(), ((sh?.lon ?: 0.0) * 1e7).toInt(), sh?.telemetry ?: false))
         send(Cmd.getSharing())
-        if (prec > 0) updatePosition(ctx)
     }
 
     /** The phone's location to the node (only while sharing is on). */
@@ -354,11 +355,16 @@ object Node : LinkListener {
         // A fixed node keeps the position its owner set for the site.
         if ((site.value?.heightDm ?: 0) > 0) return
         lastPosition = System.currentTimeMillis()
+        val request = ++positionRequest
         val lm = ctx.getSystemService(android.location.LocationManager::class.java)
         val use = { l: android.location.Location? ->
             if (l != null) main.post {
                 val cur = sharing.value ?: return@post
-                send(Cmd.setSharing(cur.prec, (l.latitude * 1e7).toInt(), (l.longitude * 1e7).toInt(), cur.telemetry))
+                if (request != positionRequest || cur.prec == 0) return@post
+                val lat = (l.latitude * 1e7).toInt()
+                val lon = (l.longitude * 1e7).toInt()
+                if (lat == (cur.lat * 1e7).toInt() && lon == (cur.lon * 1e7).toInt()) return@post
+                send(Cmd.setSharing(cur.prec, lat, lon, cur.telemetry))
                 send(Cmd.getSharing())
             }
         }
@@ -1033,7 +1039,11 @@ object Node : LinkListener {
             }.also { updateOffline() }
             is Ev.Radio -> radio.value = ev.cfg
             is Ev.Regions -> regions.value = ev
-            is Ev.Sharing -> sharing.value = ev
+            is Ev.Sharing -> {
+                val previous = sharing.value
+                sharing.value = ev
+                if (ev.prec > 0 && previous?.prec != ev.prec) updatePosition()
+            }
             is Ev.Site -> site.value = ev
             is Ev.Neighbors -> neighbors.update { if (ev.part == 0) ev.items else it + ev.items }
             is Ev.Trace -> {

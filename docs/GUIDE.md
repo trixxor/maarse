@@ -933,7 +933,9 @@ The HTTP(S) endpoint
 `GET /api/public/traffic` is intentionally public, allows cross-origin reads,
 and exposes local counts by direction and transport in completed one-second
 buckets. Keep it disabled if the site's activity timing is sensitive.
-Existing deployments keep their current visibility until they opt in.
+On upgrade, existing `--public-traffic` installations also publish verified
+announce observations in `/api/public/network`. The aggregate endpoint keeps
+its existing response format.
 See the [browser setup and trust boundary](denmark/README.md#live-real-world-traffic).
 
 The version 1 response contains `session` (an opaque process marker),
@@ -945,20 +947,32 @@ The disabled endpoint returns 404. The admin event feed still requires login.
 
 For grouped observations, a reporting host can reuse an existing outgoing
 TCP peer with `--observe-to <host:port@collector-public-identity>`. A collector
-accepts only the public identities listed with `--observe-allow`. When it
-shares its public map, the collector also exposes a read-only
-`/api/public/network` feed. The dashboard's **Channels shown on the website**
-list (`--public-channel`) publishes new text from the selected open channel
-and wire region. Settings are opt-in, existing settings require no migration,
-and the feed uses in-memory retention. See
+accepts reports from the public identities listed with `--observe-allow`.
+`--public-map --public-traffic` enables local verified announce observations
+without observer registration. A dedicated server also publishes markers
+at the precision reported by position-sharing nodes, including TCP hosts.
+When it receives an accepted announce without a position, the server
+clears its previous marker for that node. Nodes flagged mobile by firmware
+are excluded from the public map.
+
+The dashboard's **Share open channels** setting (`--share-open-channels`)
+requires `--public-map` and publishes new text and traffic from open channels
+the collector can identify. The built-in `public` key is known to the
+collector. Compatible TCP hosts forward open names with their packets,
+including for open channels created on the Android Phone node. The channel
+feed verifies deterministic open keys and ignores invitation-key and direct
+text. The operator can still use `--public-channel` to supply a name on a
+legacy or radio path. Feed history is in memory. See
 [Packet observers and public channels](denmark/README.md#packet-observers-and-public-channels)
 for setup, availability and the publication boundary.
 
 `GET /api/public/network` returns version 1 JSON with `packets`, `channels`,
 `messages` and `radio_today`. Packet groups have an opaque ID, a type, total
 observation and observer counts, and recent observations with an observer
-address, Unix milliseconds, transport, direction, hop count and optional
-measured SNR. Messages have a channel, claimed sender prefix, Unix
+address, Unix milliseconds, transport, direction, hop count, optional
+measured SNR and optional `subject`. A local verified announce can include
+`subject`, the address of the eligible position-sharing node it announces.
+Messages have a channel, claimed sender prefix, Unix
 milliseconds and UTF-8 text. `radio_today` reports UTC-day counts since the
 current process started. The endpoint returns 404 when the public network
 feed is disabled.

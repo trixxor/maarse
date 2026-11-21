@@ -1058,6 +1058,22 @@ sizes remain observable. Authentication binds each report to an allowed host,
 which still controls the accuracy of its telemetry. Relaying reports between
 collectors is outside this version.
 
+**Open channel names (working copy).** Capability bit 6 in the TCP region
+hello signals support for an optional length-prefixed descriptor
+`0xFF 'O' 'C' | name (UTF-8, up to 240 bytes)` immediately before an
+ordinary `Channel` flood. Names use `public` or `#name` and may include
+`@region`. The receiver checks that the name's deterministic open key
+derives the next frame's destination address, that the region ID matches,
+and that the packet is a channel flood. Hosts can remember up to 256 such
+names and attach them when forwarding matching channel traffic to compatible
+TCP peers. The original channel packet format and routing are unchanged,
+and old peers and LoRa links receive the ordinary packet alone.
+Locally joined channels supply a descriptor only if the configured key is the
+deterministic open key. Descriptors disclose open names to the TCP peer.
+They are hints and do not authenticate the sender. A public collector
+authenticates ciphertext with the derived key before publishing text and
+treats the sender field of open-channel text as a claim.
+
 **Modem framing.**
 
 ```text
@@ -1092,7 +1108,7 @@ event frame without length` (`Stats` twice, then `Radio`). With its host set to
 out (the host uses `--modem-ip`); the stream is the same after `MM`.
 
 **Capabilities** (`dht::Caps`): `version (str) | flags (bit 0 server, 1 radio,
-2 post office, 3 relay, 4 call test, 5 observation collector) |
+2 post office, 3 relay, 4 call test, 5 observation collector, 6 open channel names) |
 mail free MB (u32 LE, 0xFFFFFFFF = no limit) | n |
 n × region (u16 BE)`. Asked with DHT request type 8 (`Caps`, no body),
 answered with response type 0x86. The same bytes follow the regions in the

@@ -124,46 +124,56 @@ complete one-second buckets. The pulses show local observations and an outgoing
 count means the host queued a frame on a link. The view has no peer coordinates
 or confirmed end-to-end route.
 
-`--public-map` alone continues to serve the static map. Older hosts and hosts
-that decline traffic sharing show an unavailable status. Public traffic
-requires a separate opt-in and is readable by anyone who can reach the
-endpoint. It exposes counts, link categories, and activity timing. It
-contains no packet IDs, payloads, source or destination addresses, peer
-endpoints, or admin debug events. The browser trusts the host you configure
-to report its own measurements. Real radio reception requires a connected
-radio or modem. Local TCP validation exercises the host software and network
-transport.
+`--public-map` alone serves the static map. The separate opt-in
+`--public-traffic` makes `/api/public/traffic` readable by anyone who can
+reach the endpoint. This aggregate feed contains counts, link categories and
+activity timing. On the updated host, the setting also enables recent
+verified announce observations in the network feed below. The browser
+trusts the configured server to report its measurements. Reception on a real
+radio requires a connected radio or modem.
 
 ### Packet observers and public channels
 
-In the working copy, **Packets** in **Real world** shows observations collected
-from multiple hosts. **Public channels** shows new text from explicitly shared
-channels. Both read the collector's `/api/public/network` endpoint.
+With the updated server and website, **Packets** in **Real world** shows
+verified announces heard by the collector, open-channel activity, and any
+approved observer reports. **Public channels** shows new messages. Both
+read `/api/public/network`.
 
-1. Build or install the updated `maarse-server` on the collector and
-   `maarse-host` or `maarse-server` on each reporting host. Under **Settings**
-   on the collector, enable **Share the public map** and enter each reporting
-   host's 128-hex public identity under **Allowed observers**. This is the public
-   key printed at startup, also labelled **Bulletin key**. Save and restart.
-2. Set **Observation collector** to `host:port@collector-public-identity` in
-   the reporting server's Settings, or use
+1. Build or install the updated `maarse-server`. In **Settings**, turn
+   on **Share the public map**, **Share live traffic** and **Share open
+   channels**, then choose **Save and restart**. The CLI equivalents are
+   `--public-map --public-traffic --share-open-channels`. Channel publication
+   requires this one server-wide opt-in and uses the channel's existing
+   public or private setting. Earlier `--public-channel` entries still work.
+2. For a TCP-only Android node, use **Phone node** mode for the phone's
+   own identity. In **Name and position**, turn on **Share my position**,
+   allow location, and choose the precision. A PC host can set a position in
+   **Sharing in announces**. The collector shows the position from the
+   signed announce at the chosen precision and clears the pin when it
+   receives an announce without a position. Phones acting as remote
+   companions use the remote node's identity. Firmware nodes marked mobile
+   remain excluded from the public map.
+3. On the website, select **Real world**, enter the collector's HTTP(S) URL,
+   and choose **Show**. Select **Packets** or **Public channels**. A packet
+   row groups observations. Select the row to see which hosts reported it
+   and measured SNR where available. When an announce's node is on the map,
+   its pulse uses that node's shared position. Other packet pulses use the
+   reporting host's shared position.
+
+Observer registration is optional for directly received traffic. To collect
+observations from additional hosts with radios or other links, install the
+updated host on those machines too:
+
+- Add each reporter's 128-hex public identity under **Allowed observers**
+  (`--observe-allow <key>`). This is the public key printed at startup,
+  also labelled **Bulletin key**.
+- On each reporter, set **Observation collector** to
+  `host:port@collector-public-identity`, or use
    `--observe-to 'host:port@128-hex-collector-identity'` at startup. Use exactly
    the endpoint of an existing outgoing TCP peer. The host reports to that
    one collector when it advertises support. The direct peer link works from
-   behind NAT. Reports are encrypted and authenticated with the existing
-   Må:rse identities. Telemetry uses a bounded, low-priority queue.
-3. Under **Channels shown on the website**, list the open channels you want
-   to publish, one per line. Use `public` or a hashtag such as `#maarse`.
-   Add `@region` to match a particular wire region. An unqualified name
-   matches only untagged traffic. The special signed `#bulletin` channel is
-   handled by the bulletin and alert features. The command-line equivalents are repeatable
-   `--observe-allow <key>` and `--public-channel '#maarse@dk'`.
-4. On the site, open **Real world**, enter the same collector's HTTP(S) URL
-   and choose **Show**. Select **Packets** or **Public channels**. A packet
-   row groups multiple reception or transmission observations under one
-   packet identity. Select it to see its reporting hosts and their measured
-   SNR where available. The map uses the public position of each reporting
-   host and shows pulses only for those with a shared position.
+   behind NAT. Reports are authenticated and encrypted with existing
+   Må:rse identities and use a bounded, low-priority queue.
 
 The Denmark simulator URL also accepts `?view=channels` and `?view=packets`
 as direct links into these views. When no hosts are saved in the visitor's
@@ -178,21 +188,36 @@ counter displays a lower bound after 500,000 IDs in a day. Counts and history
 are in memory and reset on restart. Plan a continuous pilot day for volume
 comparisons.
 
-The public channel feed stores up to 200 new messages for up to 24 hours
-in memory. It reads eligible channel traffic received by the site server or
-queued for transmission there. The channel's name and region select a
-deterministic open key. Private invitation keys and direct messages cannot
-match this selection. Global and regional variants are configured separately.
-The channel key authenticates membership in the open channel, while the sender
-shown on the website is only a claim by the writer. Anyone with access to the
-HTTP endpoint can read the shared text, observer addresses and packet timing.
+The public channel feed stores up to 200 new messages for up to 24 hours in
+memory. It reads eligible traffic received by the collector or queued for
+transmission there. The built-in `public` key is always known. The host
+inside the updated Android **Phone node** app and updated PC hosts send
+other open names alongside messages over compatible TCP links. These
+names follow the messages through compatible intermediate hosts. A legacy
+host or a radio-only path can carry the packet without the name. If the
+collector has not learned or joined that channel, add its name and region
+under **Additional known open channels** (`--public-channel '#maarse@dk'`)
+or update the hosts between the sender and collector. Unnamed regions of
+`public` use their numeric wire ID.
+
+The collector checks the packet's address and region and decrypts using only
+the matching deterministic open key. Invitation-key channels, direct text,
+and signed `#bulletin` content are excluded from channel publication.
+Anyone who can reach the endpoint can read its open text, observations and
+timing. The open key can be derived from the channel name, and the displayed
+sender is the writer's claim. Observed traffic covers the packets the
+collector receives and the metadata reported by configured observers.
 Public packet IDs are opaque and change when the server restarts. An
 authorized reporting host can still send false observations. The TCP observer
 link requires current clocks and represents host-side observations, including
 queued sends. Physical radio coverage and multi-backbone report relaying are
 separate from this direct-to-collector pilot.
 The loopback regression test is `python tools/observer_test.py` after building
-the host binaries. It exercises two modem byte streams and one TCP collector.
+the host binaries. It exercises emulated modem streams, open and private
+channel traffic over two TCP links, and a TCP node's shared position and
+announce. It uses the same companion protocol as Android, with test
+coordinates supplied over WebSocket. Physical GPS, radio and the deployed
+collector require separate verification.
 
 ## Design
 

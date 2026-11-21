@@ -373,6 +373,10 @@ pub struct Node {
     tele: Option<Box<crate::telemetry::Telemetry>>,
     observers: crate::observe::Observers,
     public_channels: Vec<crate::observe::PublicChannel>,
+    share_open_channels: bool,
+    public_traffic: bool,
+    open_channels: std::collections::VecDeque<crate::observe::PublicChannel>,
+    public_rx_announce: Option<crate::observe::Sample>,
     next_tele: Instant,
     next_tele_save: Instant,
     last_forwarded: u32,
@@ -636,6 +640,10 @@ impl Node {
             tele: (cfg.backbone || cfg.public_map).then(|| Box::new(crate::telemetry::Telemetry::load(&cfg.data_dir.join("telemetry.json")))),
             observers: crate::observe::Observers::new(cfg.observe_to.clone(), &cfg.observe_allow),
             public_channels: cfg.public_channels.clone(),
+            share_open_channels: cfg.share_open_channels,
+            public_traffic: cfg.public_traffic,
+            open_channels: std::collections::VecDeque::new(),
+            public_rx_announce: None,
             next_tele: Instant::now() + Duration::from_secs(5),
             next_tele_save: Instant::now() + Duration::from_secs(300),
             last_forwarded: 0,
@@ -914,7 +922,7 @@ impl Node {
                 }
             }
             In::ObservationReport(report) => self.observers.receive(&self.identity, &report),
-            In::Packet { data, snr, link } => {
+            In::Packet { data, snr, link, open_channel } => {
                 // Blocked nodes (guard.rs): nothing to, from or about them.
                 if let Ok((h, _)) = Header::decode(&data)
                     && crate::guard::node_blocked(&h.dest)
@@ -923,17 +931,24 @@ impl Node {
                 }
                 self.counters.packets_in += 1;
                 self.counters.bytes_in += data.len() as u64;
-                if (self.observers.enabled() || !self.public_channels.is_empty())
-                    && let Ok(packet) = Packet::decode(&data)
-                {
-                    if let Some((name, _)) = self.links.get(&link)
-                        && self.observers.enabled()
+                if let Ok(packet) = Packet::decode(&data) {
+                    if let Some(channel) = open_channel.filter(|channel| channel.is_for(&packet.header)) {
+                        self.open_channels.retain(|known| known.route() != channel.route());
+                        self.open_channels.truncate(255);
+                        self.open_channels.push_front(channel);
+                    }
+                    let announce = self.public_traffic && packet.header.ptype == PacketType::Announce;
+                    let open = self.record_open_channel(&packet);
+                    if (announce || open || self.observers.enabled())
+                        && let Some((name, _)) = self.links.get(&link)
                     {
                         let measured = ["serial ", "wifi-modem", "modem ", "trunk "].iter().any(|prefix| name.starts_with(prefix)).then_some(snr);
                         let sample = crate::observe::Sample::new(&packet, link_kind(name), false, measured);
-                        self.observers.record(self.addr, sample);
+                        if announce {
+                            self.public_rx_announce = Some(sample);
+                        }
+                        self.observers.record(self.addr, sample, !announce && (open || self.observers.collecting()));
                     }
-                    for channel in &self.public_channels { channel.record(&packet); }
                 }
                 self.learn_pid_link(&data, link);
                 {
@@ -991,6 +1006,7 @@ impl Node {
                 self.rx_snr = Some(snr);
                 self.apply(actions.into_iter().collect());
                 self.rx_link = None;
+                self.public_rx_announce = None;
             }
             In::ClientUp { id, tx } => {
                 self.clients.insert(id, tx);
@@ -1235,6 +1251,28 @@ impl Node {
         }
     }
 
+    fn open_channel_name(&self, header: &Header) -> Option<crate::observe::PublicChannel> {
+        if header.ptype != PacketType::Channel || header.path.is_some() {
+            return None;
+        }
+        self.channels.get(&header.dest)
+            .and_then(|(name, key)| crate::observe::PublicChannel::from_local(name, key, header))
+            .or_else(|| self.open_channels.iter().find(|channel| channel.is_for(header)).cloned())
+    }
+
+    fn record_open_channel(&self, packet: &Packet<'_>) -> bool {
+        if packet.header.ptype != PacketType::Channel {
+            return false;
+        }
+        if let Some(channel) = self.public_channels.iter().find(|channel| channel.is_for(&packet.header)) {
+            return channel.record(packet);
+        }
+        self.share_open_channels
+            && self.open_channel_name(&packet.header)
+                .or_else(|| crate::observe::PublicChannel::builtin(&packet.header))
+                .is_some_and(|channel| channel.record(packet))
+    }
+
     fn send_links_only(&mut self, packet: &[u8], only: Only) {
         // Decide for the trunks first (needs &mut self).
         let trunk_ids: Vec<LinkId> = self.links.iter().filter(|(_, (n, _))| n.starts_with("trunk ")).map(|(id, _)| *id).collect();
@@ -1265,8 +1303,13 @@ impl Node {
             .as_ref()
             .is_some_and(|h| h.ptype == PacketType::Fragment && self.path_kind(&h.dest) == PathKind::Tcp);
         let mut sent_to: Vec<(LinkId, String)> = Vec::new();
-        let decoded = if self.observers.enabled() || !self.public_channels.is_empty() { Packet::decode(packet).ok() } else { None };
-        let mut queued_any = false;
+        let descriptor = header.as_ref().and_then(|header| self.open_channel_name(header)).map(|channel| channel.frame());
+        let decoded = if self.observers.enabled() || self.share_open_channels || !self.public_channels.is_empty() {
+            Packet::decode(packet).ok()
+        } else {
+            None
+        };
+        let mut open = None;
         for (id, (name, tx)) in &self.links {
             if trunk_skip.contains(id) {
                 continue;
@@ -1293,12 +1336,19 @@ impl Node {
             {
                 continue;
             }
-            let queued = tx.send(packet.to_vec()).is_ok();
-            queued_any |= queued;
-            if queued && self.observers.enabled()
-                && let Some(decoded) = &decoded
+            let queued = if let Some(name) = &descriptor
+                && self.link_caps.get(id).is_some_and(|caps| caps.open_channel_names)
             {
-                self.observers.record(self.addr, crate::observe::Sample::new(decoded, link_kind(name), true, None));
+                tx.send_named_channel(packet.to_vec(), name.clone())
+            } else {
+                tx.send(packet.to_vec()).is_ok()
+            };
+            if queued && let Some(decoded) = &decoded {
+                let open = *open.get_or_insert_with(|| self.record_open_channel(decoded));
+                if open || self.observers.enabled() {
+                    let sample = crate::observe::Sample::new(decoded, link_kind(name), true, None);
+                    self.observers.record(self.addr, sample, open || self.observers.collecting());
+                }
             }
             if queued && header.is_some() && crate::web::PUBLIC_TRAFFIC.load(std::sync::atomic::Ordering::Relaxed) {
                 crate::debug::count_public_packet(true, link_kind(name));
@@ -1306,9 +1356,6 @@ impl Node {
             self.counters.packets_out += 1;
             self.counters.bytes_out += packet.len() as u64;
             sent_to.push((*id, name.clone()));
-        }
-        if queued_any && let Some(decoded) = &decoded {
-            for channel in &self.public_channels { channel.record(decoded); }
         }
         let mut f = crate::debug::packet_fields(packet);
         f["links"] = sent_to.iter().map(|(_, n)| n.clone()).collect::<Vec<_>>().into();
@@ -1688,13 +1735,18 @@ impl Node {
                     self.fs_peers.insert(dest);
                 }
                 self.announce_cache.insert(dest, payload.to_vec());
+                let app = maarse_core::appdata::parse(a.app_data);
+                if let Some(sample) = self.public_rx_announce.take() {
+                    let mobile = app.role_flags.is_some_and(|flags| flags & maarse_core::appdata::ROLE_MOBILE != 0);
+                    let subject = (app.position.is_some() && !mobile).then_some(dest);
+                    self.observers.publish_announce(self.addr, sample, subject);
+                }
                 if self.tele.is_some() {
                     let (via, backbone) = self
                         .rx_link
                         .and_then(|l| self.links.get(&l))
                         .map(|(n, _)| (n.clone(), crate::extra_links::is_backbone(n)))
                         .unwrap_or_else(|| ("(local)".into(), false));
-                    let app = maarse_core::appdata::parse(a.app_data);
                     let snr = self.rx_snr;
                     if let Some(t) = self.tele.as_mut() {
                         t.announce(&dest, &app, hops, &via, backbone, snr);
@@ -3400,6 +3452,7 @@ impl Node {
             relay: !self.no_relay && self.dht.public_ep.is_some(),
             call_test: self.call_test.enabled(),
             observe: self.observers.collecting(),
+            open_channel_names: true,
         }
     }
 
@@ -3457,9 +3510,9 @@ impl Node {
             let lines: Vec<String> = self
                 .channels
                 .values()
-                .filter(|(_, k)| *k != public_channel_key())
+                .filter(|(n, k)| n != "public" || *k != public_channel_key())
                 .map(|(n, k)| {
-                    if normalize_channel(n).1 == *k {
+                    if normalize_channel(maarse_core::region::split_channel(n).0).1 == *k {
                         n.clone()
                     } else {
                         let hex: String = k.iter().map(|b| format!("{b:02x}")).collect();
@@ -4147,7 +4200,7 @@ impl Node {
         }
     }
 
-    /// The public map: this host and fixed nodes that share a position.
+    /// The public map: this host and position-sharing nodes, except flagged mobiles.
     /// See `--public-map`.
     fn public_map(&self) -> serde_json::Value {
         let pos = self.ext.sharing.position().map(|p| (p.lat_e7 as f64 / 1e7, p.lon_e7 as f64 / 1e7));
@@ -4269,6 +4322,7 @@ pub(super) mod file_interop_tests {
             observe_to: None,
             observe_allow: Vec::new(),
             public_channels: Vec::new(),
+            share_open_channels: false,
             max_file: 1024 * 1024,
             filebox_per_recipient: 20 << 20,
             filebox_total: 200 << 20,
@@ -4945,7 +4999,7 @@ mod radio_file_e2e_tests {
                         continue;
                     }
                     let dst = if to == 0 { &mut a.n } else { &mut b.n };
-                    dst.handle(In::Packet { data: p, snr: 8, link: 1 });
+                    dst.handle(In::Packet { data: p, snr: 8, link: 1, open_channel: None });
                 }
             }
             a.n.fire_timers();
@@ -5131,7 +5185,7 @@ mod radio_file_e2e_tests {
                     if show { println!("RADIO lost A->B {} ({} B){}", kind(&p), p.len(), if rb.deaf(s, e) { " B was sending" } else { "" }); }
                 } else {
                     if std::env::var("RADIO_TRACE").is_ok() { println!("TRACE {:7.2} A->B {:?} {} B air {:.2}", t0.elapsed().as_secs_f64(), Header::decode(&p).map(|(h, _)| h.ptype).ok(), p.len(), e.duration_since(s).as_secs_f64()); }
-                    b.n.handle(In::Packet { data: p, snr: 8, link: 1 })
+                    b.n.handle(In::Packet { data: p, snr: 8, link: 1, open_channel: None })
                 }
             }
             if let Some((p, s, e)) = rb.step(now, b_busy) {
@@ -5140,7 +5194,7 @@ mod radio_file_e2e_tests {
                     if show { println!("RADIO lost B->A {} ({} B){}", kind(&p), p.len(), if ra.deaf(s, e) { " A was sending" } else { "" }); }
                 } else {
                     if std::env::var("RADIO_TRACE").is_ok() { println!("TRACE {:7.2} B->A {:?} {} B air {:.2}", t0.elapsed().as_secs_f64(), Header::decode(&p).map(|(h, _)| h.ptype).ok(), p.len(), e.duration_since(s).as_secs_f64()); }
-                    a.n.handle(In::Packet { data: p, snr: 8, link: 1 })
+                    a.n.handle(In::Packet { data: p, snr: 8, link: 1, open_channel: None })
                 }
             }
             a.n.fire_timers();

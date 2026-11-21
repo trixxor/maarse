@@ -199,7 +199,7 @@ private fun NewChatDialog(onDone: (String?) -> Unit) {
                     label = { Text("Their address or account (32 characters)") }, singleLine = true)
                 Text("or join a channel", style = MaterialTheme.typography.labelMedium)
                 OutlinedTextField(channel, { channel = it }, label = { Text("Channel name, e.g. public") }, singleLine = true)
-                Text("Anyone can read or post in public and hashtag channels. Sender names are not verified.")
+                Text("Anyone can read or post in public and hashtag channels. Messages can also appear on the public Denmark map. Sender names are not verified.")
             }
         },
         confirmButton = {

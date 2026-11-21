@@ -357,16 +357,16 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
     if writer.set_write_timeout(Some(crate::dht::RPC_TIMEOUT)).is_err() {
         return;
     }
-    let (wtx, wrx) = sync_channel::<Vec<u8>>(256);
+    let (wtx, wrx) = sync_channel::<(Vec<u8>, Option<Vec<u8>>)>(256);
     let (report_tx, report_rx) = sync_channel::<Vec<u8>>(2);
     thread::spawn(move || {
         use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
         loop {
-            let pkt = match wrx.try_recv() {
+            let (pkt, descriptor) = match wrx.try_recv() {
                 Ok(pkt) => pkt,
                 Err(TryRecvError::Disconnected) => break,
                 Err(TryRecvError::Empty) => match report_rx.try_recv() {
-                    Ok(report) => report,
+                    Ok(report) => (report, None),
                     Err(_) => match wrx.recv_timeout(Duration::from_millis(100)) {
                         Ok(pkt) => pkt,
                         Err(RecvTimeoutError::Timeout) => continue,
@@ -374,7 +374,11 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
                     },
                 },
             };
-            let mut buf = Vec::with_capacity(pkt.len() + 2);
+            let mut buf = Vec::with_capacity(pkt.len() + 2 + descriptor.as_ref().map_or(0, |name| name.len() + 2));
+            if let Some(name) = descriptor {
+                buf.extend_from_slice(&(name.len() as u16).to_le_bytes());
+                buf.extend_from_slice(&name);
+            }
             buf.extend_from_slice(&(pkt.len() as u16).to_le_bytes());
             buf.extend_from_slice(&pkt);
             if writer.write_all(&buf).is_err() {
@@ -396,6 +400,7 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
     let mut rate = ip.map(|_| crate::guard::Rate::default());
     let mut report_window = Instant::now();
     let mut reports = 0;
+    let mut pending_channel = None;
     loop {
         let length_already_read = first.is_some();
         if let Some(f) = first.take() {
@@ -417,6 +422,7 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
         if crate::dht::read_by(&mut reader, &mut data, deadline).is_none() {
             break;
         }
+        let open_channel = pending_channel.take();
         if let (Some(r), Some(ip)) = (rate.as_mut(), ip) {
             match r.on_packet(data.len()) {
                 Ok(true) => {}
@@ -447,6 +453,10 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
             }
             continue;
         }
+        if data.starts_with(crate::observe::CHANNEL_PREFIX) {
+            pending_channel = crate::observe::PublicChannel::from_frame(&data);
+            continue;
+        }
         if let (Some(r), Some(ip)) = (rate.as_mut(), ip) {
             if maarse_core::Packet::decode(&data).is_err() {
                 if let Some(b) = r.on_invalid() {
@@ -462,6 +472,7 @@ fn run_tcp(stream: TcpStream, name: String, tx: Sender<In>, first_len: Option<u1
                 link: id,
                 data,
                 snr: TCP_SNR,
+                open_channel,
             })
             .is_err()
         {
@@ -574,7 +585,7 @@ fn run_tcp_modem(mut stream: TcpStream, name: String, tx: Sender<In>) {
         }
         let snr = data[0] as i8;
         note_rx(id, Some(snr));
-        if tx.send(In::Packet { link: id, data: data[1..].to_vec(), snr }).is_err() {
+        if tx.send(In::Packet { link: id, data: data[1..].to_vec(), snr, open_channel: None }).is_err() {
             break;
         }
     }
@@ -711,6 +722,7 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
                             link: id,
                             data: f[2..].to_vec(),
                             snr,
+                            open_channel: None,
                         });
                     } else if matches!(f.first(), Some(0x91 | 0x92)) {
                         let _ = tx.send(In::ModemFrame { link: id, frame: f.to_vec() });

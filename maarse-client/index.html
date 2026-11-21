@@ -776,6 +776,7 @@
           <summary><svg class="i s"><use href="#i-plus"/></svg>Join a channel</summary>
           <div class="adders">
             <div class="row"><input id="join-name" placeholder="#channel or #channel@region" title="E.g. #hike@nordjylland: messages you send are kept within the region"><button id="btn-join" disabled>Join</button></div>
+            <p class="hint">Messages in open channels can appear on the public Denmark map.</p>
             <div class="row"><button id="btn-private-new" disabled>New private channel</button><button id="btn-private-join" disabled>Use invitation</button></div>
           </div>
         </details>
@@ -2380,8 +2381,8 @@ function renderDiag(box) {
   nw2.append(nr);
 
   // Sharing
-  const sw = sec("Sharing in announces", "The position is off by default. If you choose a precision, the node rounds it to a grid " +
-    "(about 10 km or 1 km) before it is sent – only \"precise\" sends the exact position. Telemetry: battery, uptime and energy status.");
+  const sw = sec("Sharing in announces", "Position sharing is off by default. Choose a precision and enter coordinates or select Use my position. " +
+    "A server that shares its map can show the announced position on the public Denmark map, including over TCP.");
   const sh = state.sharing || { prec: 0, lat: 0, lon: 0, telemetry: false };
   const ps = el("select"); PRECISION.forEach((n, i) => ps.append(new Option(n, i))); ps.value = sh.prec;
   const lat = el("input", { placeholder: "Latitude, e.g. 56.1567", value: sh.lat ? sh.lat.toFixed(5) : "" });

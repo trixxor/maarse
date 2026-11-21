@@ -925,8 +925,11 @@ the engine keeps its current state. See
 [Traffic on the map](denmark/README.md#traffic-on-the-map) for retention,
 display limits and the Great Belt simulation.
 
-For actual host activity, the working-copy host or dedicated server accepts
-`--public-map --public-traffic`. Both flags are required. The HTTP(S) endpoint
+For actual host activity, the working-copy dedicated server dashboard has
+**Share the public map** and **Share live traffic** under **Settings**. Enable
+both and choose **Save and restart**. The host and dedicated server also accept
+`--public-map --public-traffic` on the command line. Both flags are required.
+The HTTP(S) endpoint
 `GET /api/public/traffic` is intentionally public, allows cross-origin reads,
 and exposes local counts by direction and transport in completed one-second
 buckets. Keep it disabled if the site's activity timing is sensitive.

@@ -99,7 +99,10 @@ are simulation results from the preset and its fixed seed.
 
 The working copy adds observed traffic to **Real world** in the browser
 simulator. Build or install matching `maarse-host` or `maarse-server` binaries
-with this feature. Start the host with `--public-map --public-traffic` and
+with this feature. In the dedicated server dashboard, open **Settings**,
+enable **Share the public map** and **Share live traffic**, then choose **Save
+and restart**. The same options are available as
+`--public-map --public-traffic` when starting either binary. The host needs
 an HTTP listener reachable by the browser. Use HTTPS for hosts accessed from
 the HTTPS simulator page, typically through the existing reverse proxy.
 Enable position sharing for the host if you want a marker on the map.

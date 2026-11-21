@@ -16,7 +16,7 @@
 
 The working copy adds map traffic inspection and the **Great Belt traffic demo** to the browser simulator. Use **Traffic** to pin a packet or scrub recent activity around an outage. [Traffic controls and limits](docs/denmark/README.md#traffic-on-the-map)
 
-In the working copy, **Real world** can also show receive and send activity reported by hosts that opt in with `--public-map --public-traffic`. [Real-world setup and privacy](docs/denmark/README.md#live-real-world-traffic)
+In the working copy, **Real world** can also show receive and send activity from participating hosts. Dedicated server operators can enable **Share live traffic** in the dashboard. [Real-world setup and privacy](docs/denmark/README.md#live-real-world-traffic)
 
 ## Må:rse in 30 seconds
 

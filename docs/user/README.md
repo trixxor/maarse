@@ -15,7 +15,9 @@ terrain disabled. [Traffic controls and limits](../denmark/README.md#traffic-on-
 For an opted-in real host, open **Real world**, enter its URL, and select
 **Show**. Solid and dashed rings show receive and send activity at the host's
 shared position. Filter by transport, or select an observation and choose
-**Replay pulse**. [Live real-world traffic](../denmark/README.md#live-real-world-traffic)
+**Replay pulse**. Dedicated server operators can opt in under **Settings**
+with **Share the public map** and **Share live traffic**.
+[Live real-world traffic](../denmark/README.md#live-real-world-traffic)
 
 | Page | Status |
 |---|---|

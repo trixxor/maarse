@@ -12,12 +12,16 @@
 
   const KIND_COLOR = { handheld: "#60a5fa", relay: "#a78bfa", repeater: "#fb923c", anchor: "#f87171", host: "#2dd4bf", wifi: "#facc15", mobile: "#f472b6", server: "#94a3b8", app: "#e8930c" };
   const KIND_R = { handheld: 3, relay: 3.5, repeater: 5, anchor: 7, host: 6, wifi: 5, mobile: 5, server: 6, app: 3 };
-  const PTYPES = ["PathRequest", "PathResponse", "Data", "Ack", "Datagram", "Channel", "Bulletin", "Announce", "Carry", "Fragment", "Backbone"];
-  const PCOLOR = { Announce: "#a3a3a3", PathRequest: "#f59e0b", PathResponse: "#10b981", Data: "#3b82f6", Ack: "#22c55e", Channel: "#8b5cf6", Bulletin: "#ef4444", Carry: "#ec4899", Fragment: "#0ea5e9", Datagram: "#eab308", Lookup: "#eab308", Backbone: "#14b8a6", Drop: "#dc2626", Event: "#64748b", DHT: "#14b8a6" };
+  const PTYPES = ["PathRequest", "PathResponse", "Data", "Ack", "Datagram", "Channel", "Bulletin", "Announce", "Carry",
+    "Fragment", "Hello", "KeyRequest", "MailSync", "Summary", "Deposit", "Control", "Probe", "Backbone", "Trunk"];
+  const PCOLOR = { Announce: "#a3a3a3", PathRequest: "#f59e0b", PathResponse: "#10b981", Data: "#3b82f6",
+    Ack: "#22c55e", Channel: "#8b5cf6", Bulletin: "#ef4444", Carry: "#ec4899", Fragment: "#0ea5e9", Datagram: "#eab308",
+    Hello: "#a3a3a3", KeyRequest: "#a78bfa", MailSync: "#f472b6", Summary: "#94a3b8", Deposit: "#db2777",
+    Control: "#f97316", Probe: "#d946ef", Lookup: "#eab308", Backbone: "#14b8a6", Trunk: "#38bdf8", Drop: "#dc2626", Event: "#64748b", DHT: "#14b8a6" };
   const PEXPLAIN = {
     PathRequest: "flood to find a route (carries the first message)", PathResponse: "the route back to the sender (carries the ack)", Data: "a message along a known route",
     Ack: "end-to-end acknowledgement", Channel: "channel message (flood)", Bulletin: "signed alert (flood, high priority)", Announce: "a node says it exists (flood)",
-    Carry: "store-carry-forward handoff", Datagram: "home routing lookup (question or answer)", Fragment: "piece of a file", Backbone: "copy over TCP / Wi-Fi between hosts",
+    Carry: "store-carry-forward handoff", Datagram: "home routing lookup (question or answer)", Fragment: "piece of a file", Backbone: "copy over TCP / Wi-Fi between hosts", Trunk: "copy over a dedicated LoRa link",
   };
   const FLOODS = new Set(["PathRequest", "Announce", "Channel", "Bulletin"]);
   const FEATURES = [["carry", "Carry (store-carry-forward)"], ["local_repair", "Local repair"], ["backbone", "Backbone links"], ["dht_backbone", "DHT backbone: path requests only to the host that can reach the destination (experimental)"], ["home_routing", "Home routing: fixed infrastructure, home repeaters and a location lookup (model)"], ["persist_known", "Contacts survive a reboot (stored in flash)"], ["hold_unknown", "Keep messages from unknown senders until their announce"], ["auto_relay", "Automatic forest mode: handhelds without a repeater in range become relays"], ["regions", "Regions"], ["sf_slot", "SF-sized flood slot"], ["scale_timeouts", "Scaled timeouts"], ["load_control", "Load control"], ["area_scope", "Area scope for alerts (sim layer)"], ["guard", "Guard on internet links: rate limits and bans (as every host)"], ["duty_bands", "EU sub-band duty limits (1 % or 0.1 % outside 869.4-869.65 MHz)"], ["hold_direct", "A node whose phone is away does not acknowledge direct messages; they go to the post office (firmware)"]];
@@ -55,7 +59,9 @@
   const nodeLayer = L.layerGroup().addTo(map);
   const hiLayer = L.layerGroup().addTo(map);
   const animLayer = L.layerGroup().addTo(map);
+  const trafficLayer = L.layerGroup().addTo(map);
   const drawLayer = L.layerGroup().addTo(map);
+  const suspendedLayers = [];
   let markers = [];
 
   function isDark() {
@@ -201,17 +207,38 @@
     try { sim = new Engine.Sim(scenario); }
     catch (e) { showNote("Scenario error: " + e.message); return; }
     lastSeq = 0; jsPending = []; overlay = null; followMsg = -1; journeyKey = "";
-    feed.items = []; feed.byId.clear(); feed.sel = null; hist.clear(); txTimes.length = 0;
-    hiLayer.clearLayers(); animLayer.clearLayers(); $("card").classList.add("hidden");
+    feed.items = []; feed.byId.clear(); feed.byPid.clear(); feed.cursor = null; feed.paused = false; feed.frozen = null;
+    feed.dirty = true; feed.more = false; feed.through = 0; feed.trimmed = false;
+    txTimes.length = 0;
+    clearPacket(); clearAnims(); updateFeedPause();
     state = sim.state();
+    movingNodes = scenario.nodes.flatMap((n, i) => n.kind === "mobile" || n.route?.length > 1 || n.wander_m > 0 ? [i] : []);
     computeTowns(); drawNodes(); drawClutter(); drawDisasters();
+    clearJourney();
     if (window.DKTerrain) DKTerrain.syncHeights();
-    updateClock(); renderStats(); renderTimeline(); fillSenders(); renderAlerts(); renderHud(); renderFeed(true); drawHist();
+    updateClock(); renderStats(); renderTimeline(); fillSenders(); renderAlerts(); renderHud(); refreshTraffic(true);
     $("sc-info").textContent = `${scenario.name || "scenario"}: ${scenario.nodes.length} nodes, ${scenario.links.length} backbone links, ${scenario.events.length} timeline events.${scenario.nodes.length > perf.maxNodes ? ` Over this browser's limit of ${perf.maxNodes} nodes (Build > Performance): it may run slowly.` : ""}`;
   }
   function edited() { rebuild(); fillFlood(); }
   // Phones (phone.js) read the engine and scenario through this.
   window.DKSim = { get sim() { return sim; }, get scenario() { return scenario; }, name: (i) => name(i), map, get modes() { return MODES; }, layers: { nodes: nodeLayer, links: linkLayer, clutter: clutterLayer, disaster: disasterLayer, land }, showMenu: (e, t, items) => showMenu(e, t, items), openTab: (t) => openTab(t),
+    observedView(on) {
+      const wasOpen = $("mapwrap").classList.contains("observed-view");
+      if (wasOpen === on) return;
+      $("mapwrap").classList.toggle("observed-view", on);
+      if (on) {
+        for (const layer of [nodeLayer, linkLayer, clutterLayer, disasterLayer, hiLayer, trafficLayer, drawLayer, animLayer, trackLayer]) {
+          if (!map.hasLayer(layer)) continue;
+          suspendedLayers.push(layer);
+          map.removeLayer(layer);
+        }
+        clearAnims();
+      } else {
+        for (const layer of suspendedLayers.splice(0)) layer.addTo(map);
+      }
+      map.invalidateSize({ animate: false });
+    },
+    trafficVisibilityChanged(on) { if (on) refreshTraffic(true); else returnToLive(); },
     // A phone added in the Phones panel becomes a node: appended to the scenario, engine rebuilt.
     edited: () => edited(), addNode(spec, links) { scenario.nodes.push(spec); for (const l of links || []) scenario.links.push(l); edited(); return scenario.nodes.length - 1; } };
   function showNote(text) { $("sc-info").textContent = text; }
@@ -317,10 +344,10 @@
       lastT = r.t;
       $("behind").classList.toggle("hidden", !(r.behind || performance.now() - t0 > 40));
       injectDue();
-      pullEvents();
     }
     if (ts - lastState > 400) { lastState = ts; state = sim.state(); restyle(); $("clock").textContent = fmtTime(lastT / 1000); }
-    if (ts - lastFeed > 300) { lastFeed = ts; renderFeed(); drawHist(); }
+    if (playing || feed.more) pullEvents();
+    if (ts - lastFeed > 300) { lastFeed = ts; refreshTraffic(); }
     if (ts - lastStats > 1000) {
       lastStats = ts;
       renderHud(); drawDisasters();
@@ -340,151 +367,402 @@
     state = sim.state(); restyle(); drawLinks();
   }
 
-  // ---------- events: animation, feed, histogram ----------
-  const anims = [];
-  const feed = { items: [], byId: new Map(), paused: false, sel: null, dirty: false, seq: 0 };
-  const hist = new Map();        // 10 s bucket -> { type: count }
-  const txTimes = [];            // tx times of the last minute (HUD)
-  const txType = new Map();
+  // ---------- traffic: recent events, animation and inspection ----------
+  const HISTORY_ROWS = 12000;
+  const HISTORY_WINDOW = 10000;
+  const MAP_MARKS = 240;
+  const LIVE_HOPS = 14;
+  const LIVE_PULSES = 16;
+  const LIVE_TRAVEL_MS = 320;
+  const liveHops = [], livePulses = [];
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  const feed = { items: [], byId: new Map(), byPid: new Map(), cursor: null, paused: false, frozen: null,
+    sel: null, dirty: false, more: false, through: 0, trimmed: false, seq: 0, renderedCutoff: 0 };
+  const txTimes = [];
+  let movingNodes = [];
   function feedPush(it) {
     it.k = ++feed.seq;
     feed.items.push(it);
     if (it.id !== undefined) feed.byId.set(it.id, it);
-    if (feed.items.length > 600) {
-      const old = feed.items.splice(0, feed.items.length - 600);
-      for (const o of old) if (o.id !== undefined) feed.byId.delete(o.id);
+    if (it.pid) {
+      if (!feed.byPid.has(it.pid)) feed.byPid.set(it.pid, new Set());
+      feed.byPid.get(it.pid).add(it);
     }
     feed.dirty = true;
+    return it;
   }
+  function trimFeed() {
+    if (feed.items.length <= HISTORY_ROWS) return;
+    feed.trimmed = true;
+    const removed = feed.items.splice(0, feed.items.length - HISTORY_ROWS);
+    for (const it of removed) {
+      if (it.id !== undefined) feed.byId.delete(it.id);
+      if (it.pid) {
+        const copies = feed.byPid.get(it.pid);
+        copies.delete(it);
+        if (!copies.size) feed.byPid.delete(it.pid);
+      }
+    }
+    if (feed.frozen !== null && feed.frozen < historyStart()) {
+      feed.paused = false;
+      feed.frozen = null;
+      updateFeedPause();
+    }
+    if (removed.includes(feed.sel)) clearPacket();
+  }
+
+  function trafficPos(i, positions) {
+    const point = positions?.get(i);
+    if (point) return point;
+    const lat = state?.lat?.[i] ?? scenario.nodes[i]?.lat;
+    const lon = state?.lon?.[i] ?? scenario.nodes[i]?.lon;
+    return Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
+  }
+  function trunkSender(e) {
+    const link = scenario.links[e.link];
+    return link ? (link.a === e.to ? link.b : link.a) : null;
+  }
+  function drawRing(layer, point, color, radius, opacity = 1) {
+    return L.circleMarker(point, { renderer: canvas, radius, color, weight: 2, opacity, fill: false, interactive: false }).addTo(layer);
+  }
+  function drawHop(layer, from, to, color, dashArray, weight, opacity) {
+    return L.polyline([from, to], { renderer: canvas, color, dashArray, weight, opacity, interactive: false }).addTo(layer);
+  }
+  function trafficMarks(it, cutoff, detail) {
+    const marks = [];
+    const color = PCOLOR[it.p] || "#94a3b8";
+    if (it.kind === "tx") {
+      if (it.t <= cutoff) marks.push({ at: it.t, node: it.n, color, pulse: true, positions: it.positions });
+      if (!it.ok || it.rxAt > cutoff) return marks;
+      const flood = FLOODS.has(it.p) || it.nx < 0;
+      if (detail && flood) {
+        for (const to of it.ok.slice(0, 200)) marks.push({ at: it.rxAt, node: to, from: it.n, color, branch: true, positions: it.rxPositions });
+        for (const node of it.coll.slice(0, 60)) marks.push({ at: it.rxAt, node, color: "#ef4444", failed: true, positions: it.rxPositions });
+      } else if (!flood && it.ok.includes(it.nx)) {
+        marks.push({ at: it.rxAt, node: it.nx, from: it.n, color, positions: it.rxPositions });
+      } else if (!flood && !viaLink(it, cutoff)) {
+        marks.push({ at: it.rxAt, node: it.nx, color: "#ef4444", failed: true, positions: it.rxPositions });
+      }
+    } else if ((it.kind === "bb" || it.kind === "trunk") && it.t <= cutoff) {
+      marks.push({ at: it.t, node: it.to, from: it.n, color, dash: it.kind === "bb" ? "8 6" : null, positions: it.positions });
+    } else if (detail && it.n >= 0 && it.kind === "drop" && it.t <= cutoff) {
+      marks.push({ at: it.t, node: it.n, color: "#ef4444", failed: true, positions: it.positions });
+    }
+    return marks;
+  }
+
+  function addTrafficMark(layer, mark, opacity = 1) {
+    const point = trafficPos(mark.node, mark.positions);
+    if (!point) return null;
+    if (mark.from !== undefined) {
+      const from = trafficPos(mark.from, mark.positions);
+      if (!from) return null;
+      return drawHop(layer, from, point, mark.color, mark.dash, mark.branch ? 1.5 : 3, opacity * (mark.branch ? 0.55 : 1));
+    }
+    return drawRing(layer, point, mark.color, mark.pulse ? 7 : 10, opacity);
+  }
+  function liveRadioMark(it) {
+    let target = it.nx;
+    if (target < 0 && it.dst !== it.n && it.ok.includes(it.dst)) target = it.dst;
+    if (target < 0 && (it.p === "Ack" || it.p === "PathResponse") && it.ok.length === 1) target = it.ok[0];
+    const positions = it.rxPositions;
+    if (target >= 0 && it.ok.includes(target)) {
+      return { at: it.rxAt, from: it.n, node: target, color: PCOLOR[it.p] || "#94a3b8", positions };
+    }
+    if (it.nx >= 0 && it.coll.includes(it.nx) && !viaLink(it, lastT)) {
+      return { at: it.rxAt, node: it.nx, color: "#ef4444", failed: true, positions };
+    }
+    return null;
+  }
+
+  // The request trail names its previous repeater. Show the incoming radio
+  // leg only when a matching reception is present in the trace.
+  function liveForwardMark(it) {
+    if (it.p !== "PathRequest" || !it.trail?.length) return null;
+    const previous = it.trail.length > 1 ? it.trail.at(-2) : undefined;
+    for (const copy of feed.byPid.get(it.pid) || []) {
+      if (copy === it) break;
+      if (copy.kind !== "tx" || copy.hops !== it.hops - 1 || copy.rxAt > it.t || !copy.ok?.includes(it.n)) continue;
+      if (previous !== undefined && copy.n !== previous) continue;
+      return { at: it.t, from: copy.n, node: it.n, color: PCOLOR.PathRequest, positions: copy.rxPositions };
+    }
+    return null;
+  }
+
+  function removeLiveMark(queue) {
+    animLayer.removeLayer(queue.shift().layers);
+  }
+  function animateMark(mark, bounds, now) {
+    if (mark.at < lastT - HISTORY_WINDOW) return;
+    const point = trafficPos(mark.node, mark.positions);
+    if (!point) return;
+    const from = mark.from === undefined ? null : trafficPos(mark.from, mark.positions);
+    if (mark.from !== undefined && !from) return;
+    if (!bounds.contains(point) && !(from && bounds.intersects(L.latLngBounds([from, point])))) return;
+
+    const queue = from ? liveHops : livePulses;
+    const limit = from ? LIVE_HOPS : LIVE_PULSES;
+    const key = from ? [mark.from, mark.node, mark.color, mark.dash].join("/") : mark.node;
+    if (queue.some(entry => entry.key === key && now - entry.start < 450)) return;
+    if (queue.length >= limit) removeLiveMark(queue);
+    const layers = L.layerGroup().addTo(animLayer);
+    const moving = !reducedMotion.matches;
+    const duration = from ? 2300 : mark.failed ? 1150 : 980;
+    const entry = { key, layers, start: now, duration };
+    if (from) {
+      entry.trail = drawHop(layers, from, moving ? from : point, mark.color, mark.dash, 2.5, 0.9);
+      entry.dot = L.circleMarker(moving ? from : point, {
+        renderer: canvas, radius: 3.5, color: "#f8fafc", weight: 1,
+        fillColor: mark.color, fillOpacity: 1, interactive: false
+      }).addTo(layers);
+      entry.from = from;
+      entry.to = point;
+    }
+    entry.rings = Array.from({ length: from && moving ? 3 : 1 }, (_, i) =>
+      drawRing(layers, point, mark.color, from ? 9 + i * 5 : 6, from && moving ? 0 : from ? 0.9 : 0.55));
+    queue.push(entry);
+  }
+  function clearAnims() {
+    animLayer.clearLayers();
+    liveHops.length = 0;
+    livePulses.length = 0;
+  }
+  function fadeAnim() {
+    const now = performance.now();
+    for (const queue of [liveHops, livePulses]) {
+      for (let i = queue.length - 1; i >= 0; i--) {
+        const entry = queue[i];
+        const age = now - entry.start;
+        if (age >= entry.duration) {
+          animLayer.removeLayer(entry.layers);
+          queue.splice(i, 1);
+          continue;
+        }
+        if (reducedMotion.matches) continue;
+        if (entry.trail) {
+          const progress = Math.min(1, age / LIVE_TRAVEL_MS);
+          if (progress < 1 || !entry.arrived) {
+            const point = [
+              entry.from[0] + (entry.to[0] - entry.from[0]) * progress,
+              entry.from[1] + (entry.to[1] - entry.from[1]) * progress
+            ];
+            entry.trail.setLatLngs([entry.from, point]);
+            entry.dot.setLatLng(point);
+            entry.arrived = progress === 1;
+          }
+          const opacity = 1 - Math.max(0, (age - LIVE_TRAVEL_MS) / (entry.duration - LIVE_TRAVEL_MS));
+          entry.trail.setStyle({ opacity: 0.9 * opacity });
+          entry.dot.setStyle({ opacity, fillOpacity: opacity });
+        }
+        for (const [index, ring] of entry.rings.entries()) {
+          const delay = entry.trail ? LIVE_TRAVEL_MS + index * 140 : 0;
+          const progress = (age - delay) / (entry.duration - delay);
+          ring.setStyle({ opacity: progress < 0 ? 0 : (entry.trail ? 0.85 : 0.55) * (1 - progress) ** 2 });
+          ring.setRadius((entry.trail ? 9 : 6) + Math.max(0, progress) * (entry.trail ? 22 : 13));
+        }
+      }
+    }
+  }
+
   function pullEvents() {
     const r = sim.events(lastSeq, 20000);
+    if (!r.lines.length) { feed.more = false; return; }
+    if (r.next - lastSeq > r.lines.length) {
+      // The engine discarded unread rows. Start a contiguous history window.
+      feed.items = []; feed.byId.clear(); feed.byPid.clear(); txTimes.length = 0;
+      feed.trimmed = true; feed.paused = false; feed.frozen = null;
+      clearPacket(); clearAnims();
+      updateFeedPause();
+    }
     lastSeq = r.next;
-    const anim = playing && speed <= 200;
-    let drawn = 0;
-    const bounds = map.getBounds().pad(0.2);
+    feed.more = r.lines.length === 20000;
+    feed.through = r.lines[r.lines.length - 1].t;
+    const animate = map.hasLayer(animLayer) && feed.cursor === null && !feed.sel && speed <= 200;
+    const bounds = animate ? map.getBounds().pad(0.2) : null;
+    const now = performance.now();
+    // Save a position sample shared by the batch for nodes that can move.
+    const positions = new Map();
+    for (const i of movingNodes) {
+      const point = pos(i);
+      if (point[0] !== undefined && point[1] !== undefined) positions.set(i, point);
+    }
+    const pending = [], visibleHops = [], visiblePulses = [];
     for (const e of r.lines) {
+      let it;
       switch (e.ev) {
-        case "tx": {
-          txType.set(e.id, e.p);
-          if (txType.size > 30000) txType.clear();
-          feedPush({ kind: "tx", t: e.t, id: e.id, p: e.p, n: e.n, hops: e.hops, nx: e.nx, dst: e.dst, path: e.path, trail: e.trail, prio: e.prio, qd: e.qd, air: e.air, end: e.end, pid: e.pid, msg: e.msg, alert: e.alert });
+        case "tx":
+          it = feedPush({ ...e, kind: "tx", positions });
           txTimes.push(e.t);
-          const b = Math.floor(e.t / 10000), h = hist.get(b) || {};
-          h[e.p] = (h[e.p] || 0) + 1; hist.set(b, h);
           break;
-        }
         case "rx": {
-          const it = feed.byId.get(e.id);
-          if (it) { it.ok = e.ok; it.snr = e.snr; it.coll = e.coll; it.cw = e.cw; feed.dirty = true; }
-          const p = txType.get(e.id) || "Data";
-          if (!anim || !animOn[p] || drawn > 350) break;
-          const sp = pos(e.n);
-          if (!bounds.contains(sp)) break;
-          drawn++;
-          const col = PCOLOR[p] || "#888";
-          const routed = !FLOODS.has(p);
-          if (!routed && e.ok.length > 25) {
-            anims.push({ l: L.circleMarker(sp, { renderer: canvas, radius: 16, color: col, weight: 2, fill: false, interactive: false }).addTo(animLayer), t: performance.now() });
-          } else {
-            for (const r2 of e.ok) {
-              const isNext = r2 === e.nx;
-              if (routed && e.nx >= 0 && !isNext) continue; // bystanders of routed packets: skip
-              anims.push({ l: L.polyline([sp, pos(r2)], { renderer: canvas, color: col, weight: routed ? 3 : 1.5, opacity: routed ? 0.95 : 0.6, interactive: false }).addTo(animLayer), t: performance.now() });
-            }
-          }
-          for (let k = 0; k < Math.min(e.coll.length, 10); k++) {
-            const r2 = e.coll[k];
-            if (routed && r2 !== e.nx) continue;
-            anims.push({ l: L.circleMarker(pos(r2), { renderer: canvas, radius: routed ? 9 : 5, color: "#ef4444", weight: 2, fill: false, interactive: false }).addTo(animLayer), t: performance.now() });
-          }
+          const tx = feed.byId.get(e.id);
+          if (!tx) break;
+          Object.assign(tx, { rxAt: e.t, rxPositions: positions, ok: e.ok, snr: e.snr, coll: e.coll, cw: e.cw });
+          feed.dirty = true;
+          if (animate && animOn[tx.p] !== false && pending.length < 4 * LIVE_HOPS) pending.push(tx);
           break;
         }
         case "bb":
-          feedPush({ kind: "bb", t: e.t, p: "Backbone", n: e.from, to: e.to, msg: e.msg, alert: e.alert, pid: e.pid });
-          if (anim && animOn.Backbone && drawn < 350) { drawn++; anims.push({ l: L.polyline([pos(e.from), pos(e.to)], { renderer: canvas, color: PCOLOR.Backbone, weight: 2, dashArray: "6 6", interactive: false }).addTo(animLayer), t: performance.now() }); }
+          it = feedPush({ ...e, kind: "bb", p: "Backbone", n: e.from, positions });
           break;
-        case "dht": feedPush({ kind: "dht", t: e.t, p: "DHT", n: e.n, to: e.to, dst: e.dst, msg: e.msg }); break;
-        case "lookup": feedPush({ kind: "ev", t: e.t, p: "Lookup", n: e.n, text: `asks ${e.local ? "its home" : "the gateway"} ${e.to} where #${e.msg}'s destination is`, msg: e.msg }); break;
-        case "lookup_answer": feedPush({ kind: "ev", t: e.t, p: "Lookup", n: e.n, text: e.ok ? `answers: route ${e.path.join(" → ")}` : `answers: ${e.why || "no route"}`, msg: e.msg }); break;
-        case "lookup_fallback": feedPush({ kind: "drop", t: e.t, p: "Drop", n: e.n, why: "lookup " + e.why + ", path request instead", msg: e.msg }); break;
-        case "drop": feedPush({ kind: "drop", t: e.t, p: "Drop", n: e.n, why: e.why, msg: e.msg, alert: e.alert, pid: e.pid }); break;
-        case "dead": feedPush({ kind: "ev", t: e.t, p: "Event", n: e.n, text: `node down (${e.why})` }); break;
-        case "revive": feedPush({ kind: "ev", t: e.t, p: "Event", n: e.n, text: "node revived" }); break;
-        case "event": feedPush({ kind: "ev", t: e.t, p: "Event", n: -1, text: e.what.replace(/_/g, " ") + (e.region ? " " + e.region : "") }); break;
-        case "deliver": feedPush({ kind: "ev", t: e.t, p: "Event", n: e.n, text: `message ${e.msg} delivered (${e.hops} hops)`, msg: e.msg }); break;
-        case "alert_rx": break;
+        case "trunk": {
+          const sender = trunkSender(e);
+          if (sender !== null) it = feedPush({ ...e, kind: "trunk", p: "Trunk", n: sender, positions });
+          break;
+        }
+        case "dht": feedPush({ ...e, kind: "dht", p: "DHT" }); break;
+        case "lookup": feedPush({ ...e, kind: "ev", p: "Lookup", text: `asks ${e.local ? "its home" : "the gateway"} ${e.to} where #${e.msg}'s destination is` }); break;
+        case "lookup_answer": feedPush({ ...e, kind: "ev", p: "Lookup", text: e.ok ? `answers: route ${e.path.join(" \u2192 ")}` : `answers: ${e.why || "no route"}` }); break;
+        case "lookup_fallback": feedPush({ ...e, kind: "drop", p: "Drop", why: "lookup " + e.why + ", path request instead", positions }); break;
+        case "drop": feedPush({ ...e, kind: "drop", p: "Drop", positions }); break;
+        case "dead": feedPush({ ...e, kind: "ev", p: "Event", text: `node down (${e.why})` }); break;
+        case "revive": feedPush({ ...e, kind: "ev", p: "Event", text: "node revived" }); break;
+        case "event": feedPush({ ...e, kind: "ev", p: "Event", n: -1, text: e.what.replace(/_/g, " ") + (e.region ? " " + e.region : "") }); break;
+        case "deliver": feedPush({ ...e, kind: "ev", p: "Event", text: `message ${e.msg} delivered (${e.hops} hops)` }); break;
         default: break;
       }
+      if (!it || !animate || animOn[it.p] === false) continue;
+      if (it.kind === "tx") {
+        const forward = liveForwardMark(it);
+        if (forward) visibleHops.push(forward);
+        else if (it.p !== "Announce" && it.p !== "Hello") {
+          visiblePulses.push({ at: it.t, node: it.n, color: PCOLOR[it.p] || "#94a3b8", positions });
+        }
+      } else {
+        visibleHops.push(...trafficMarks(it, lastT, false));
+      }
     }
+    // Link events in the same batch can confirm an alternate transport.
+    for (const it of pending) {
+      const mark = liveRadioMark(it);
+      if (mark?.failed) visiblePulses.push(mark);
+      else if (mark) visibleHops.push(mark);
+    }
+    if (animate) {
+      visibleHops.sort((a, b) => a.at - b.at);
+      for (const mark of visibleHops.slice(-LIVE_HOPS)) animateMark(mark, bounds, now);
+      for (const mark of visiblePulses.slice(-LIVE_PULSES)) animateMark(mark, bounds, now);
+    }
+    trimFeed();
+    if (feed.cursor !== null && feed.cursor < historyStart()) feed.cursor = historyStart();
     const cut = lastT - 60000;
-    while (txTimes.length && txTimes[0] < cut) txTimes.shift();
-  }
-  function fadeAnim() {
-    const t = performance.now();
-    while (anims.length && t - anims[0].t > 900) animLayer.removeLayer(anims.shift().l);
-    if (anims.length > 3000) anims.splice(0, anims.length - 3000).forEach(a => animLayer.removeLayer(a.l));
+    let old = 0;
+    while (old < txTimes.length && txTimes[old] < cut) old++;
+    if (old) txTimes.splice(0, old);
   }
 
   function feedVisible(it) {
-    if (!animOn[it.p] && PTYPES.includes(it.p)) return false;
-    if ($("fd-routed").checked && (FLOODS.has(it.p) || (it.p === "Backbone" && it.msg === undefined && it.alert === undefined))) return false;
+    if (animOn[it.p] === false) return false;
+    if ($("fd-type").value && $("fd-type").value !== it.p) return false;
+    if ($("fd-routed").checked && (FLOODS.has(it.p) || (it.kind === "tx" && it.nx < 0))) return false;
     if ($("fd-msg").checked && it.msg !== followMsg) return false;
     return true;
   }
-  function rowResult(it) {
-    if (it.kind === "tx") {
-      if (!it.ok) return `<span class="mute">on air</span>`;
-      if (!FLOODS.has(it.p) && it.nx >= 0) {
-        const got = it.ok.includes(it.nx), lost = it.coll.includes(it.nx);
-        if (got) return `<span class="ok">→ ${it.nx} ✓</span>`;
-        if (viaBackbone(it)) return `<span class="ok">⇢ ${it.nx} backbone</span>`;
-        return lost ? `<span class="bad">→ ${it.nx} ✗ collision</span>` : `<span class="bad">→ ${it.nx} not heard</span>`;
-      }
-      return `✓${it.ok.length}${it.coll.length ? ` <span class="bad">✗${it.coll.length}</span>` : ""}`;
+  function viaLink(it, cutoff) {
+    const copies = feed.byPid.get(it.pid);
+    if (!copies) return null;
+    // Match the same packet and endpoints in the transmission window.
+    for (const copy of copies) {
+      if (copy.t > cutoff) break;
+      if ((copy.kind === "bb" || copy.kind === "trunk") && copy.n === it.n && copy.to === it.nx
+          && copy.t >= it.t && copy.t <= it.end) return copy;
     }
-    if (it.kind === "bb") return `⇢ ${it.to}`;
+    return null;
+  }
+  function rowResult(it, cutoff) {
+    if (it.kind === "tx") {
+      if (!it.ok || it.rxAt > cutoff) return `<span class="mute">${it.end > cutoff ? "on air" : "outcome unavailable"}</span>`;
+      if (!FLOODS.has(it.p) && it.nx >= 0) {
+        if (it.ok.includes(it.nx)) return `<span class="ok">#${it.nx} received</span>`;
+        const wire = viaLink(it, cutoff);
+        if (wire) return `<span class="ok">#${it.nx} via ${wire.p.toLowerCase()}</span>`;
+        return `<span class="bad">#${it.nx} ${it.coll.includes(it.nx) ? "collision" : "not heard"}</span>`;
+      }
+      return `${it.ok.length} heard${it.coll.length ? ` <span class="bad"> / ${it.coll.length} lost</span>` : ""}`;
+    }
+    if (it.kind === "bb" || it.kind === "trunk") return `to #${it.to}`;
     if (it.kind === "dht") return it.to >= 0 ? `gateway ${it.to}` : `<span class="bad">no gateway</span>`;
     if (it.kind === "drop") return `<span class="bad">${esc(it.why)}</span>`;
     return "";
   }
-  // A routed packet whose next hop is a backbone peer travels over TCP/Wi-Fi,
-  // not the radio: look for the matching backbone copy.
-  function viaBackbone(it) {
-    for (let k = feed.items.length - 1; k >= 0; k--) {
-      const b = feed.items[k];
-      if (b.t < it.t - 2000) break;
-      if (b.kind === "bb" && b.n === it.n && b.to === it.nx && b.t <= it.t + 2000) return true;
-    }
-    return false;
-  }
   function renderFeed(force) {
-    if (feed.paused && !force) return;
+    if ($("feed").classList.contains("hidden")) return;
     if (!feed.dirty && !force) return;
-    feed.dirty = false;
+    const cutoff = feed.cursor ?? feed.frozen ?? lastT;
     const rows = [];
     for (let k = feed.items.length - 1; k >= 0 && rows.length < 120; k--) {
       const it = feed.items[k];
-      if (!feedVisible(it)) continue;
-      const who = it.kind === "ev" ? esc(it.text) : `${esc(name(it.n))}${it.hops ? ` <span class="mute">h${it.hops}</span>` : ""}${it.msg !== undefined ? ` <span class="mute">#${it.msg}</span>` : ""}${it.alert !== undefined ? ` <span class="mute">alert ${it.alert}</span>` : ""}`;
-      rows.push(`<div class="fr${feed.sel === it ? " sel" : ""}" data-k="${it.k}"><span class="mute">${fmtT(it.t)}</span><span class="chip" style="background:${PCOLOR[it.p] || "#666"}">${esc(it.p)}</span><span class="who">${who}</span><span class="res">${rowResult(it)}</span></div>`);
+      if (it.t > cutoff || !feedVisible(it)) continue;
+      const who = it.kind === "ev" ? it.text : `${name(it.n)}${it.hops ? ` h${it.hops}` : ""}${it.msg !== undefined ? ` #${it.msg}` : ""}${it.alert !== undefined ? ` alert ${it.alert}` : ""}`;
+      rows.push(`<button class="fr${feed.sel === it ? " sel" : ""}" type="button" data-k="${it.k}" aria-pressed="${feed.sel === it}" title="${esc(who)}"><span class="mute">${fmtT(it.t)}</span><span class="chip" style="background:${PCOLOR[it.p] || "#666"}">${esc(it.p)}</span><span class="who">${esc(who)}</span><span class="res">${rowResult(it, cutoff)}</span></button>`);
     }
-    $("feed-rows").innerHTML = rows.join("") || `<div class="fr"><span></span><span></span><span class="mute">Press ▶ to start. Packets appear here.</span><span></span></div>`;
+    const list = $("feed-rows");
+    const html = rows.join("") || `<p class="hint">${scenario?.trace === false ? "Packet tracing is off in this scenario." : feed.items.length ? "No matching packets at this time." : "Run the simulation to see packets."}</p>`;
+    if (list.dataset.rows === html) return;
+    const focused = list.contains(document.activeElement) ? document.activeElement.dataset.k : null;
+    list.innerHTML = html;
+    list.dataset.rows = html;
+    if (focused) list.querySelector(`[data-k="${focused}"]`)?.focus({ preventScroll: true });
   }
   $("feed-rows").addEventListener("click", (e) => {
-    const r = e.target.closest(".fr[data-k]"); if (!r) return;
-    const it = feed.items.find(x => x.k === +r.dataset.k);
-    if (it) { feed.sel = it; showCard(it); renderFeed(true); }
+    const row = e.target.closest(".fr[data-k]");
+    if (!row) return;
+    const it = feed.items.find(x => x.k === +row.dataset.k);
+    if (!it) return;
+    if (feed.sel === it) clearPacket();
+    else {
+      if (followMsg >= 0) clearJourney();
+      hiLayer.clearLayers();
+      feed.sel = it;
+      feed.playback = null;
+      clearAnims();
+    }
+    refreshTraffic(true);
   });
-  $("fd-title").onclick = () => { const m = $("feed").classList.toggle("min"); $("fd-title").textContent = m ? "Live packets ▸" : "Live packets ▾"; };
-  $("fd-pause").onclick = () => { feed.paused = !feed.paused; $("fd-pause").textContent = feed.paused ? "▶" : "❚❚"; renderFeed(true); };
-  ["fd-routed", "fd-msg"].forEach(id => $(id).onchange = () => renderFeed(true));
+  $("fd-title").onclick = () => {
+    const folded = $("feed").classList.toggle("min");
+    $("fd-title").textContent = folded ? "Packets \u25b8" : "Packets \u25be";
+    $("fd-title").setAttribute("aria-expanded", String(!folded));
+  };
+  function updateFeedPause() {
+    const btn = $("fd-pause");
+    btn.textContent = feed.paused ? "\u25b6" : "\u275a\u275a";
+    btn.setAttribute("aria-pressed", String(feed.paused));
+    btn.disabled = feed.cursor !== null;
+  }
+  $("fd-pause").onclick = () => {
+    feed.paused = !feed.paused;
+    feed.frozen = feed.paused ? lastT : null;
+    updateFeedPause();
+    refreshTraffic(true);
+  };
+  ["fd-routed", "fd-msg", "fd-type"].forEach(id => $(id).onchange = () => refreshTraffic(true));
+  [...PTYPES, "Drop", "DHT", "Lookup", "Event"].forEach(p => $("fd-type").add(new Option(p, p)));
+
+  function clearPacket() {
+    feed.sel = null;
+    feed.playback = null;
+    feed.cardKey = "";
+    $("card").classList.add("hidden");
+    trafficLayer.clearLayers();
+  }
 
   // Detail card for one feed item.
-  function showCard(it) {
+  function showCard(it, cutoff, counts) {
     const c = $("card");
     c.classList.remove("hidden");
-    hiLayer.clearLayers();
-    let h = `<h4><span><span class="chip" style="background:${PCOLOR[it.p] || "#666"}">${esc(it.p)}</span> at ${fmtT(it.t)}</span><button class="x" id="card-x">✕</button></h4>`;
+    const rx = it.ok && it.rxAt <= cutoff;
+    const wire = rx && viaLink(it, cutoff);
+    const key = [it.k, rx, wire?.k, it.end > cutoff, feed.cursor === null, !!feed.playback, ...counts].join("/");
+    if (key === feed.cardKey) return;
+    feed.cardKey = key;
+    let h = `<h4><span><span class="chip" style="background:${PCOLOR[it.p] || "#666"}">${esc(it.p)}</span> at ${fmtT(it.t)}</span><button class="x" id="card-x" aria-label="Unpin packet">✕</button></h4>`;
+    if (it.pid) {
+      h += `<p class="hint">Pinned packet <code>${esc(it.pid)}</code> · ${counts[0]} recorded hops · ${counts[1]} repeated attempts. Numbers show hop order in the retained trace.</p>`;
+      h += '<p class="hint">Faint lines show radio receptions without a specified next hop. Red rings mark missed hops or drops. Purple rings mark repeat senders.</p>';
+      if (counts[2]) h += '<p class="hint">Map detail is limited on busy traces.</p>';
+      h += `<div class="btns"><button data-a="replay">${feed.playback ? "Stop replay" : "Replay packet"}</button></div>`;
+    }
     if (it.kind === "tx") {
       const flood = FLOODS.has(it.p);
       h += `<p class="hint">${esc(PEXPLAIN[it.p] || "")}</p>
@@ -494,28 +772,19 @@
         ${it.trail ? `<tr><td>trail so far</td><td>${it.trail.length} repeaters${it.trail.length >= 12 ? ' <b class="bad">(full: 12 is the most a source path holds)</b>' : ""}</td></tr>` : ""}
         <tr><td>priority</td><td>${it.prio} · waited ${it.qd} ms in the queue · airtime ${(it.air / 1000).toFixed(0)} ms</td></tr>
         ${it.msg !== undefined ? `<tr><td>message</td><td>#${it.msg}</td></tr>` : ""}</table>`;
-      if (it.ok) {
+      if (rx) {
         if (!flood && it.nx >= 0) {
-          const got = it.ok.includes(it.nx), k = it.coll.indexOf(it.nx), bbOk = !got && viaBackbone(it);
-          h += `<div class="diag ${got || bbOk ? "good" : ""}">Next hop ${nameH(it.nx)}: ${got ? `received it (SNR ${it.snr[it.ok.indexOf(it.nx)]} dB).` : bbOk ? "got it over the backbone (TCP / Wi-Fi), not by radio." : k >= 0 ? `<b>lost it to a collision</b>: ${causeText(it.cw[k], it)}. The sender retransmits when it does not hear the next hop forward.` : "<b>did not hear it</b> (out of range, asleep or dead)."}</div>`;
+          const got = it.ok.includes(it.nx), k = it.coll.indexOf(it.nx);
+          h += `<div class="diag ${got || wire ? "good" : ""}">Next hop ${nameH(it.nx)}: ${got ? `received it (SNR ${it.snr[it.ok.indexOf(it.nx)]} dB).` : wire ? `a matching copy arrived via ${wire.p.toLowerCase()}.` : k >= 0 ? `<b>lost it to a collision</b>: ${causeText(it.cw[k], it)}.` : "<b>did not decode this radio transmission.</b>"}</div>`;
         }
         h += `<h3>Decoded by ${it.ok.length}</h3><div class="scroll" style="max-height:130px"><table>${it.ok.slice(0, 60).map((r, k) => `<tr><td>${nameH(r)}</td><td class="n">${it.snr[k]} dB</td></tr>`).join("") || "<tr><td>nobody</td></tr>"}</table></div>`;
         if (it.coll.length) {
           h += `<h3>Lost to collisions at ${it.coll.length}</h3><p class="hint">${flood ? "Copies of a flood: harmless while other copies reach the next nodes." : "Bystanders do not matter for a routed packet; only the next hop does."}</p><div class="scroll" style="max-height:130px"><table>${it.coll.slice(0, 40).map((r, k) => `<tr><td>${nameH(r)}</td><td>${causeText(it.cw[k], it)}</td></tr>`).join("")}</table></div>`;
         }
-        // Draw it: sender, receivers, collisions.
-        const sp = pos(it.n);
-        L.circleMarker(sp, { radius: 10, color: "#fff", weight: 2, fill: false }).addTo(hiLayer);
-        it.ok.slice(0, 200).forEach(r => L.polyline([sp, pos(r)], { color: PCOLOR[it.p], weight: r === it.nx ? 4 : 1.5, opacity: 0.8 }).addTo(hiLayer));
-        it.coll.slice(0, 100).forEach((r, k) => {
-          L.circleMarker(pos(r), { radius: 6, color: "#ef4444", weight: 2, fill: false }).addTo(hiLayer);
-          if (it.cw[k] >= 0) L.polyline([pos(it.cw[k]), pos(r)], { color: "#ef4444", weight: 1, dashArray: "2 4", opacity: 0.7 }).addTo(hiLayer);
-        });
-      } else h += `<p class="hint">Still on the air.</p>`;
-      h += `<div class="btns">${it.msg !== undefined ? `<button data-a="follow">Follow message #${it.msg}</button>` : ""}${flood ? `<button data-a="reach">How far did it reach?</button>` : ""}<button data-a="sender">Inspect sender</button></div>`;
-    } else if (it.kind === "bb") {
-      h += `<p>${nameH(it.n)} ⇢ ${nameH(it.to)} over the backbone (TCP or Wi-Fi). The receiving host hands it to its router as if heard with SNR 10 dB.</p>`;
-      L.polyline([pos(it.n), pos(it.to)], { color: PCOLOR.Backbone, weight: 4, dashArray: "8 6" }).addTo(hiLayer);
+      } else h += `<p class="hint">${it.end > cutoff ? "On air at this time." : "Reception outcome unavailable."}</p>`;
+      h += `<div class="btns">${it.msg !== undefined ? `<button data-a="follow">Follow message #${it.msg}</button>` : ""}${flood && feed.cursor === null ? `<button data-a="reach">How far did it reach?</button>` : ""}<button data-a="sender">Inspect sender</button></div>`;
+    } else if (it.kind === "bb" || it.kind === "trunk") {
+      h += `<p>${nameH(it.n)} ⇢ ${nameH(it.to)} over ${it.kind === "bb" ? "the TCP / Wi-Fi backbone" : "a dedicated LoRa trunk"}.</p>`;
       if (it.msg !== undefined) h += `<div class="btns"><button data-a="follow">Follow message #${it.msg}</button></div>`;
     } else if (it.kind === "dht") {
       h += `<p>${nameH(it.n)} looked up ${it.dst >= 0 ? nameH(it.dst) : "the destination"} in the DHT: ${it.to >= 0 ? `gateway ${nameH(it.to)}; the path request goes there directly.` : "<b>no host with internet can reach it</b>."}</p>`;
@@ -527,12 +796,17 @@
       h += `<p>${it.n >= 0 ? nameH(it.n) + ": " : ""}${esc(it.text)}</p>`;
     }
     c.innerHTML = h;
-    $("card-x").onclick = () => { c.classList.add("hidden"); hiLayer.clearLayers(); feed.sel = null; renderFeed(true); };
+    $("card-x").onclick = () => { clearPacket(); refreshTraffic(true); };
     c.querySelectorAll("button[data-a]").forEach(b => b.onclick = () => {
       const a = b.dataset.a;
       if (a === "follow") { openTab("journey"); followMessage(it.msg); }
-      if (a === "reach") { openTab("journey"); showReach(it.pid, `${it.p} from ${name(it.n)}`); }
+      if (a === "reach") { clearPacket(); refreshTraffic(true); openTab("journey"); showReach(it.pid, `${it.p} from ${name(it.n)}`); }
       if (a === "sender") selectNode(it.n, true);
+      if (a === "replay") {
+        if (feed.playback) feed.playback = null;
+        else startPacketReplay(it);
+        refreshTraffic(true);
+      }
     });
   }
   function causeText(by, it) {
@@ -543,50 +817,210 @@
     return `${nameH(by)} sent ${o ? `<span class="chip" style="background:${PCOLOR[o.p]}">${o.p}</span>` : "a packet"} at the same time`;
   }
 
-  // Timeline: activity histogram (10 s buckets, colour by packet type), event marks.
+  function historyStart() {
+    return feed.trimmed ? feed.items[0]?.t ?? lastT : 0;
+  }
+  function historyEnd() {
+    return feed.more ? feed.through : lastT;
+  }
+  function seekTraffic(t) {
+    if (!feed.items.length) return;
+    feed.playback = null;
+    if (followMsg >= 0) clearJourney();
+    hiLayer.clearLayers();
+    feed.cursor = Math.max(historyStart(), Math.min(historyEnd(), t));
+    if (feed.sel && feed.sel.t > feed.cursor) clearPacket();
+    clearAnims();
+    updateFeedPause();
+    refreshTraffic(true);
+  }
+  function returnToLive() {
+    feed.cursor = null;
+    feed.paused = false;
+    feed.frozen = null;
+    clearPacket();
+    updateFeedPause();
+    refreshTraffic(true);
+  }
+  $("traffic-live").onclick = returnToLive;
+  $("traffic-time").oninput = (e) => seekTraffic(+e.target.value);
+  $("traffic-time").onkeydown = (e) => {
+    const direction = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+    if (!direction) return;
+    e.preventDefault();
+    seekTraffic(+e.target.value + direction * 1000);
+  };
+  $("traffic-events").onchange = (e) => {
+    if (e.target.value !== "") seekTraffic(+e.target.value);
+    e.target.value = "";
+  };
+  $("tl-canvas").onclick = (e) => {
+    if (!$("ly-feed").checked) $("tl-feed").click();
+    const bounds = e.currentTarget.getBoundingClientRect();
+    seekTraffic(Math.round(historyStart() + (e.clientX - bounds.left) / bounds.width * (historyEnd() - historyStart())));
+  };
+
+  function drawPinnedPacket(cutoff) {
+    const it = feed.sel;
+    const copies = it.pid ? feed.byPid.get(it.pid) || [it] : [it];
+    const important = [], background = [];
+    const attempts = new Set();
+    let repeats = 0, hops = 0, limited = false;
+    function retain(mark) {
+      const group = mark.branch || mark.pulse ? background : important;
+      if (mark.from !== undefined && !mark.branch) hops++;
+      if (group.length < MAP_MARKS) group.push(mark);
+      else limited = true;
+    }
+    for (const copy of copies) {
+      if (copy.t > cutoff) break;
+      for (const mark of trafficMarks(copy, cutoff, true)) retain(mark);
+      if ((copy.ok?.length > 200 || copy.coll?.length > 60) && copy.rxAt <= cutoff
+          && (FLOODS.has(copy.p) || copy.nx < 0)) limited = true;
+      if (copy.kind !== "tx" || FLOODS.has(copy.p) || copy.nx < 0) continue;
+      const pair = copy.n + "/" + copy.nx;
+      if (attempts.has(pair)) {
+        repeats++;
+        retain({ at: copy.t, node: copy.n, color: "#c084fc", positions: copy.positions });
+      }
+      attempts.add(pair);
+    }
+    // Reserve space for routed hops and retries before broad reception trees.
+    important.sort((a, b) => a.at - b.at);
+    const drawn = background.slice(0, MAP_MARKS - important.length).concat(important);
+    let hop = 0;
+    const selectedPoint = trafficPos(it.n, it.positions);
+    if (selectedPoint && !drawn.some(m => m.node === it.n)) drawRing(trafficLayer, selectedPoint, "#e2e8f0", 7);
+    for (const mark of drawn) {
+      if (!addTrafficMark(trafficLayer, mark) || mark.from === undefined || mark.branch) continue;
+      L.marker(trafficPos(mark.node, mark.positions), {
+        icon: L.divIcon({ className: "traffic-hop", html: String(++hop), iconSize: [17, 17], iconAnchor: [-5, 20] }),
+        interactive: false, keyboard: false
+      }).addTo(trafficLayer);
+    }
+    showCard(it, cutoff, [hops, repeats, limited || drawn.length < important.length + background.length]);
+  }
+
+  function drawHistoricalTraffic(cutoff) {
+    let count = 0;
+    const start = cutoff - HISTORY_WINDOW;
+    for (let i = feed.items.length - 1; i >= 0 && count < MAP_MARKS; i--) {
+      const it = feed.items[i];
+      if (it.t > cutoff || !feedVisible(it)) continue;
+      for (const mark of trafficMarks(it, cutoff, false)) {
+        if (mark.at < start || count >= MAP_MARKS) continue;
+        addTrafficMark(trafficLayer, mark, 1 - 0.7 * (cutoff - mark.at) / HISTORY_WINDOW);
+        count++;
+      }
+    }
+  }
+  function startPacketReplay(it) {
+    const limit = feed.cursor ?? feed.frozen ?? historyEnd();
+    let from = it.t, to = it.t;
+    for (const copy of feed.byPid.get(it.pid) || [it]) {
+      if (copy.t > limit) break;
+      from = Math.min(from, copy.t);
+      to = Math.max(to, copy.t);
+      if (copy.rxAt <= limit) to = Math.max(to, copy.rxAt);
+    }
+    feed.playback = { from, to, started: performance.now(), duration: Math.min(5500, Math.max(1600, to - from)) };
+  }
+  function refreshTraffic(force = false) {
+    const cutoff = feed.cursor ?? feed.frozen ?? lastT;
+    const crossedAirtime = feed.sel?.kind === "tx" && feed.renderedCutoff < feed.sel.end && cutoff >= feed.sel.end;
+    const playback = feed.playback;
+    let drawTime = cutoff;
+    if (playback) {
+      const progress = (performance.now() - playback.started) / playback.duration;
+      if (progress >= 1) feed.playback = null;
+      else drawTime = playback.from + (playback.to - playback.from) * progress;
+    }
+    renderFeed(force || cutoff !== feed.renderedCutoff);
+    feed.renderedCutoff = cutoff;
+    if (force || feed.dirty || crossedAirtime || playback) {
+      trafficLayer.clearLayers();
+      if (feed.sel) drawPinnedPacket(drawTime);
+      else if (feed.cursor !== null) drawHistoricalTraffic(feed.cursor);
+    }
+    feed.dirty = false;
+    drawHist();
+  }
+
+  // Timeline: group retained traffic into pixel-width bars and mark scenario events.
   function drawHist() {
     const cv = $("tl-canvas");
-    const w = cv.clientWidth, hgt = 34;
+    const range = $("traffic-time");
+    const start = historyStart(), end = Math.max(start, historyEnd());
+    const cursor = feed.cursor ?? end;
+    const available = feed.items.length > 0;
+    range.min = start;
+    range.max = end;
+    range.value = cursor;
+    range.disabled = !available || start === end;
+    range.setAttribute("aria-valuetext", fmtT(cursor));
+    $("traffic-live").setAttribute("aria-pressed", String(feed.cursor === null));
+    $("traffic-start").textContent = available ? fmtT(start) : "";
+    $("traffic-time-label").textContent = available ? (feed.cursor === null ? fmtT(end) : `${fmtT(cursor)} / ${fmtT(end)}`) : "No history";
+    $("traffic-time-label").title = available ? `Retained from ${fmtT(start)} to ${fmtT(end)}` : "";
+    $("traffic-history").dataset.mode = feed.cursor === null ? "live" : "history";
+
+    const events = (scenario?.events || []).filter(e => available && e.t_s * 1000 >= start && e.t_s * 1000 <= end);
+    const choices = $("traffic-events");
+    const options = '<option value="">Scenario events</option>' + events.map(e => `<option value="${Math.round(e.t_s * 1000)}">${fmtT(e.t_s * 1000)} · ${esc(describe(e))}</option>`).join("");
+    if (choices.dataset.options !== options) {
+      choices.innerHTML = options;
+      choices.dataset.options = options;
+    }
+    choices.disabled = !events.length;
+
+    const w = cv.clientWidth, h = cv.height;
     if (cv.width !== w) cv.width = w;
     const ctx = cv.getContext("2d");
-    ctx.clearRect(0, 0, w, hgt);
-    const bw = 3, n = Math.floor(w / bw);
-    const curB = Math.floor(lastT / 10000);
-    const first = Math.max(0, curB - n + 1);
-    let max = 1;
-    for (let b = first; b <= curB; b++) { const h = hist.get(b); if (h) max = Math.max(max, Object.values(h).reduce((a, c) => a + c, 0)); }
-    for (let b = first; b <= curB; b++) {
-      const h = hist.get(b); if (!h) continue;
-      let y = hgt;
-      for (const p of PTYPES) {
-        const c = h[p]; if (!c) continue;
-        const bh = c / max * (hgt - 4);
-        ctx.fillStyle = PCOLOR[p];
-        ctx.fillRect((b - first) * bw, y - bh, bw - 1, bh);
-        y -= bh;
+    ctx.clearRect(0, 0, w, h);
+    const span = Math.max(1, end - start);
+    const x = (t) => (t - start) / span * Math.max(0, w - 1);
+    const buckets = new Map();
+    if (available) {
+      for (const it of feed.items) {
+      if (it.kind !== "tx" && it.kind !== "bb" && it.kind !== "trunk") continue;
+        const bucket = Math.floor(x(it.t) / 3) * 3;
+        if (!buckets.has(bucket)) buckets.set(bucket, { total: 0, types: new Map() });
+        const bar = buckets.get(bucket);
+        bar.total++;
+        bar.types.set(it.p, (bar.types.get(it.p) || 0) + 1);
       }
     }
-    for (const ev of scenario ? scenario.events : []) {
-      const b = Math.floor(ev.t_s / 10);
-      if (b < first || b > curB + 60) continue;
+    const max = Math.max(1, ...Array.from(buckets.values(), bar => bar.total));
+    for (const [left, bar] of buckets) {
+      let y = h;
+      for (const [type, count] of bar.types) {
+        const height = (h - 4) * count / max;
+        ctx.fillStyle = PCOLOR[type] || "#94a3b8";
+        ctx.fillRect(left, y - height, 2, height);
+        y -= height;
+      }
+    }
+    for (const ev of events) {
       const fix = ev.up === true || ["revive", "power_restore", "internet_up", "degrade_clear"].includes(ev.type);
-      const col = fix ? "#22c55e" : "#ef4444";
-      ctx.fillStyle = ev.t_s * 1000 <= lastT ? col : col + "66";
-      ctx.fillRect((b - first) * bw, 0, 2, hgt);
+      const outage = ev.up === false || ["kill", "kill_random", "kill_area", "power_cut", "internet_down", "degrade", "reboot"].includes(ev.type);
+      ctx.fillStyle = fix ? "#22c55e" : outage ? "#ef4444" : "#94a3b8";
+      ctx.fillRect(x(ev.t_s * 1000), 0, 2, h);
     }
-    // The followed message: sent (blue) and delivered (green), as dots on top.
-    if (followMsg >= 0 && replay.f && replay.f.info) {
+    if (followMsg >= 0 && replay.f?.info) {
       const info = replay.f.info;
-      for (const [t, col] of [[info.sent_ms, "#60a5fa"], [info.delivered_ms, "#22c55e"]]) {
-        if (t === null || t === undefined) continue;
-        const b = Math.floor(t / 10000);
-        if (b < first || b > curB) continue;
-        ctx.fillStyle = col; ctx.beginPath(); ctx.arc((b - first) * bw + 1, 5, 4, 0, 7); ctx.fill();
+      for (const [t, color] of [[info.sent_ms, "#60a5fa"], [info.delivered_ms, "#22c55e"]]) {
+        if (t === null || t < start || t > end) continue;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x(t), 5, 4, 0, 2 * Math.PI);
+        ctx.fill();
       }
     }
-    ctx.fillStyle = isDark() ? "#e5e7eb" : "#111827";
-    ctx.fillRect((curB - first) * bw + bw, 0, 1, hgt);
-    cv.title = `Transmissions per 10 s (max ${max}); red = damage, green = repair; blue/green dots = the followed message sent/delivered. ${PTYPES.map(p => p).join(", ")}`;
+    if (available) {
+      ctx.fillStyle = isDark() ? "#e5e7eb" : "#111827";
+      ctx.fillRect(x(cursor), 0, 2, h);
+    }
+    cv.title = available ? `Traffic from ${fmtT(start)} to ${fmtT(end)}. Click to scrub. Red marks outages, green marks recovery.` : "Packet traffic";
   }
 
   function renderHud() {
@@ -610,7 +1044,7 @@
       <div class="sub">Nodes</div>${Object.entries(KIND_COLOR).map(([k, c]) => `<div><i style="background:${c}"></i>${k}</div>`).join("")}
       <div class="sub">Marks</div><div><i style="background:transparent;border:2px solid #ef4444"></i>collision</div><div><i style="background:transparent;border:2px solid #f97316"></i>on battery</div><div><i style="background:#4b5563"></i>dead</div>
       <div class="hint" style="margin:4px 0 0">With "Colour by island" on, nodes take the colour of their radio island.</div>`;
-    $("legend-body").querySelectorAll(".lp").forEach(d => d.onclick = () => { animOn[d.dataset.p] = !animOn[d.dataset.p]; renderLegend(); renderFeed(true); });
+    $("legend-body").querySelectorAll(".lp").forEach(d => d.onclick = () => { animOn[d.dataset.p] = !animOn[d.dataset.p]; clearAnims(); renderLegend(); refreshTraffic(true); });
   }
   $("lg-toggle").onclick = () => { $("legend-body").classList.toggle("closed"); $("lg-toggle").textContent = $("legend-body").classList.contains("closed") ? "Legend ▸" : "Legend ▾"; };
 
@@ -632,6 +1066,7 @@
   });
 
   map.on("click", (e) => {
+    if (suspendedLayers.length) return;
     const ll = [+e.latlng.lat.toFixed(5), +e.latlng.lng.toFixed(5)];
     if (pendingArea) return areaClick(ll);
     if (walkerPlace) return placeWalkers(ll);
@@ -650,6 +1085,7 @@
     }
   });
   map.on("dblclick", (e) => {
+    if (suspendedLayers.length) return;
     if (pendingArea && pendingArea.kind === "polygon") { L.DomEvent.stop(e); return finishArea(); }
     if (tool === "person" && routeDraft && routeDraft.length >= 2) {
       L.DomEvent.stop(e);
@@ -923,7 +1359,7 @@
       else jsPending.push(e);
     }
     if (sim && t === 0 && list.some(e => e.t_s > 0)) rebuild();
-    else if (sim) { state = sim.state(); restyle(); drawLinks(); renderAlerts(); }
+    else if (sim) { state = sim.state(); restyle(); drawLinks(); renderAlerts(); pullEvents(); refreshTraffic(true); }
     renderTimeline(); drawDisasters();
   }
   document.querySelectorAll("#tab-disaster button[data-ev]").forEach(b => b.addEventListener("click", () => {
@@ -970,6 +1406,7 @@
       case "unblock": return `Block list: ${(ev.nodes || []).map(name).join(", ")} removed`;
       case "flood": return `${name(ev.node)} floods its internet links: ${ev.per_s || 1000}/s for ${ev.duration_s || 60} s`;
       case "announce": return `Announce from ${name(ev.node)}`;
+      case "message": return `Message from ${name(ev.from)} to ${name(ev.node)}`;
       case "set_traffic": return "Change traffic" + (ev.traffic && ev.traffic.spam_per_min ? ` (spam ${ev.traffic.spam_per_min}/min from ${ev.traffic.spammers.length} nodes)` : "");
       default: return ev.type;
     }
@@ -1139,6 +1576,7 @@
   }
   setInterval(() => { if (followMsg >= 0 && replay.f && !$("follow").classList.contains("hidden")) renderFollowHead(replay.f); }, 1000);
   function followMessage(m) {
+    if (feed.sel || feed.cursor !== null) returnToLive();
     followMsg = m; journeyKey = "";
     replay.t = null;
     renderJourney();
@@ -1172,7 +1610,7 @@
       <ol class="story">${story.steps.map(s => `<li class="${s.cls || ""}">${s.html}</li>`).join("")}</ol>
       ${story.diag.map(d => `<div class="diag ${d.good ? "good" : ""}">${d.html}</div>`).join("")}
       <div class="replay"><button id="rp-play">${replay.playing ? "❚❚" : "▶ Replay"}</button><input type="range" id="rp-t" min="0" max="1000" value="${replay.t === null ? 1000 : Math.round((replay.t - replay.t0) / (replay.t1 - replay.t0) * 1000)}"><span id="rp-label" class="mono"></span></div>
-      <p class="hint">Map: faint orange = path request copies, dashed teal = backbone, green = path response, thick blue = message hops, dashed green = ack, white = the route that won (numbered). ${done ? "" : "Updates while it travels."}</p>
+      <p class="hint">Map: faint orange = path request copies, dashed teal = backbone, solid cyan = LoRa trunk, green = path response, thick blue = message hops, dashed green = ack, red rings = missed radio hops or drops, white = the route that won (numbered). ${done ? "" : "Updates while it travels."}</p>
       <div class="row">${story.prPid ? `<button id="jr-reach">How far did the path request reach?</button>` : ""}<button id="jr-clear">Clear</button></div>
       <p class="hint">Node colours: blue = sender, green = destination, yellow = the route, brown = heard the path request, dim = not involved.</p>`;
     if (story.prPid) $("jr-reach").onclick = () => showReach(story.prPid, `Path request of message #${followMsg}`);
@@ -1248,7 +1686,9 @@
     const trouble = [];
     const retries = ev.filter(e => e.ev === "retry"), repairs = ev.filter(e => e.ev === "repair"), drops = ev.filter(e => e.ev === "drop"), carry = ev.filter(e => e.ev === "carry");
     const nhLost = ev.filter(e => e.ev === "rx" && e.nx >= 0 && e.coll.includes(e.nx));
+    const nhMissed = ev.filter(e => e.ev === "rx" && e.nx >= 0 && !e.ok.includes(e.nx) && !e.coll.includes(e.nx));
     if (nhLost.length) trouble.push(`${nhLost.length}× the next hop lost the packet to a collision (${nhLost.slice(0, 3).map(e => `${nameH(e.nx)} ← interfered by ${e.cw[e.coll.indexOf(e.nx)] >= 0 ? nameH(e.cw[e.coll.indexOf(e.nx)]) : "half-duplex"}`).join("; ")})`);
+    if (nhMissed.length) trouble.push(`${nhMissed.length} missed next-hop radio reception${nhMissed.length > 1 ? "s" : ""} (at ${[...new Set(nhMissed.map(e => e.nx))].slice(0, 4).map(nameH).join(", ")})`);
     if (retries.length) trouble.push(`${retries.length} hop retransmission${retries.length > 1 ? "s" : ""} (at ${[...new Set(retries.map(e => e.n))].slice(0, 4).map(nameH).join(", ")})`);
     if (repairs.length) trouble.push(`${repairs.length} local repair${repairs.length > 1 ? "s" : ""}: a dead next hop was skipped`);
     if (drops.length) trouble.push(`${drops.length} drop${drops.length > 1 ? "s" : ""}: ${Object.entries(drops.reduce((m, d) => (m[d.why] = (m[d.why] || 0) + 1, m), {})).map(([w, c]) => `${c}× ${w}`).join(", ")}`);
@@ -1337,10 +1777,17 @@
           const style = { Data: { w: 5 }, Carry: { w: 5 }, PathResponse: { w: 3.5 }, Ack: { w: 2.5, d: "3 5" } }[p] || { w: 2 };
           const targets = e.nx >= 0 ? e.ok.filter(r => r === e.nx) : e.ok;
           for (const r of targets) L.polyline([sp, pos(r)], { color: PCOLOR[p] || "#888", weight: style.w, opacity: 0.9, dashArray: style.d, interactive: false }).addTo(hiLayer);
-          if (e.nx >= 0 && e.coll.includes(e.nx)) L.circleMarker(pos(e.nx), { radius: 10, color: "#ef4444", weight: 3, fill: false }).bindTooltip("next hop lost it (collision)").addTo(hiLayer);
+          if (e.nx >= 0 && !e.ok.includes(e.nx)) {
+            const reason = e.coll.includes(e.nx) ? "collision" : "not decoded";
+            L.circleMarker(pos(e.nx), { radius: 10, color: "#ef4444", weight: 3, fill: false }).bindTooltip(`Radio hop: ${reason}`).addTo(hiLayer);
+          }
         }
       }
       if (e.ev === "bb") L.polyline([pos(e.from), pos(e.to)], { color: PCOLOR.Backbone, weight: 3, dashArray: "8 6", interactive: false }).addTo(hiLayer);
+      if (e.ev === "trunk") {
+        const sender = trunkSender(e);
+        if (sender !== null) drawHop(hiLayer, pos(sender), pos(e.to), PCOLOR.Trunk, null, 3, 0.9);
+      }
       if (e.ev === "drop") L.circleMarker(pos(e.n), { radius: 8, color: "#dc2626", weight: 2, fillColor: "#dc2626", fillOpacity: 0.4 }).bindTooltip("dropped: " + esc(e.why)).addTo(hiLayer);
     }
     const route = journeyRoute(f);
@@ -1560,18 +2007,23 @@
   }
 
   // ---------- log ----------
-  ["tx", "rx", "send", "deliver", "ack", "cancel", "drop", "defer", "route", "bb", "dht", "repair", "carry", "retry", "alert", "alert_rx", "announce", "event", "dead", "revive"].forEach(e => $("lg-ev").insertAdjacentHTML("beforeend", `<option>${e}</option>`));
+  ["tx", "rx", "send", "deliver", "ack", "cancel", "drop", "defer", "route", "bb", "trunk", "dht", "repair", "carry", "retry", "alert", "alert_rx", "announce", "event", "dead", "revive"].forEach(e => $("lg-ev").insertAdjacentHTML("beforeend", `<option>${e}</option>`));
   PTYPES.forEach(p => $("lg-type").insertAdjacentHTML("beforeend", `<option>${p}</option>`));
   function logFilter() {
     const f = {};
     if ($("lg-node").value !== "") f.node = +$("lg-node").value;
-    if ($("lg-type").value) f.ptype = $("lg-type").value;
+    const type = $("lg-type").value;
+    const linkEvent = { Backbone: "bb", Trunk: "trunk" }[type];
+    if (type && !linkEvent) f.ptype = type;
     if ($("lg-msg").value !== "") f.msg = +$("lg-msg").value;
     if ($("lg-ev").value) f.ev = $("lg-ev").value;
+    if (linkEvent && f.ev && f.ev !== linkEvent) return null;
+    if (linkEvent) f.ev = linkEvent;
     return f;
   }
   function fetchLog(max) {
     const f = logFilter();
+    if (!f) return [];
     const out = []; let since = 0;
     for (let guard = 0; guard < 400; guard++) {
       const r = sim.events(since, 20000, f);
@@ -1719,7 +2171,7 @@
   $("btn-play").onclick = togglePlay;
   document.addEventListener("keydown", (e) => { if (e.code === "Space" && !/INPUT|SELECT|TEXTAREA|BUTTON/.test(document.activeElement.tagName)) { e.preventDefault(); togglePlay(); } });
   $("speeds").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; speed = +b.dataset.s; document.querySelectorAll("#speeds button").forEach(x => x.classList.toggle("on", x === b)); });
-  $("btn-step").onclick = () => { if (!sim) return; const r = sim.step(1000); lastT = r.t; injectDue(); pullEvents(); state = sim.state(); restyle(); $("clock").textContent = fmtTime(lastT / 1000); renderFeed(true); drawHist(); renderHud(); };
+  $("btn-step").onclick = () => { if (!sim) return; const r = sim.step(1000); lastT = r.t; injectDue(); state = sim.state(); restyle(); pullEvents(); $("clock").textContent = fmtTime(lastT / 1000); renderHud(); refreshTraffic(true); };
   $("btn-reset").onclick = () => rebuild();
   const pre = $("preset");
   pre.innerHTML = `<option value="">— preset —</option>` + Object.entries(DK.PRESETS).map(([k2, p]) => `<option value="${k2}">${p.title}</option>`).join("");
@@ -1765,7 +2217,8 @@
     // Advance the live simulation by `ms` at once (for "follow a message").
     advance(ms) {
       if (!sim) return;
-      const r = sim.step(ms, 5e7); lastT = r.t; injectDue(); pullEvents(); state = sim.state(); restyle(); renderHud(); renderFeed(true); drawHist();
+      const r = sim.step(ms, 5e7); lastT = r.t; injectDue(); state = sim.state(); restyle(); pullEvents(); renderHud(); refreshTraffic(true);
+      $("clock").textContent = fmtTime(lastT / 1000);
     },
     addEvent,
     follow(m) { followMessage(m); },

@@ -275,7 +275,14 @@
   $("ly-heights").onchange = (e) => { T && T.showHeights(e.target.checked); window.DKMapTools && DKMapTools.paint(); };
   $("ly-coverage").onchange = (e) => C && C.setVisible(e.target.checked);
   $("ly-paths").onchange = (e) => T && T.setPathsVisible(e.target.checked);
-  $("ly-feed").onchange = (e) => { $("feed").classList.toggle("hidden", !e.target.checked); $("feed").classList.remove("min"); feedBtn.setAttribute("aria-pressed", String(e.target.checked)); };
+  $("ly-feed").onchange = (e) => {
+    const on = e.target.checked;
+    $("feed").classList.toggle("hidden", !on);
+    $("traffic-history").classList.toggle("hidden", !on);
+    wrap.classList.toggle("traffic-open", on);
+    feedBtn.setAttribute("aria-pressed", String(on));
+    dk.trafficVisibilityChanged(on);
+  };
   $("ly-legend").onchange = (e) => $("legend-body").classList.toggle("hidden", !e.target.checked);
   map.on("layeradd layerremove", () => { if (T) $("ly-heights").checked = T.heightsShown; });
 
@@ -295,10 +302,10 @@
   // ---------- play bar ----------
   const tl = $("tl");
   const feedBtn = document.createElement("button");
-  feedBtn.id = "tl-feed"; feedBtn.className = "icon"; feedBtn.title = "Live packets"; feedBtn.setAttribute("aria-label", "Live packets"); feedBtn.setAttribute("aria-pressed", "false");
+  feedBtn.id = "tl-feed"; feedBtn.className = "icon"; feedBtn.title = "Traffic"; feedBtn.setAttribute("aria-label", "Traffic"); feedBtn.setAttribute("aria-pressed", "false");
   feedBtn.innerHTML = svg("list");
   feedBtn.onclick = () => { $("ly-feed").checked = !$("ly-feed").checked; $("ly-feed").onchange({ target: $("ly-feed") }); };
-  tl.appendChild(feedBtn);
+  tl.insertBefore(feedBtn, $("traffic-history"));
   $("btn-play").innerHTML = svg("play", 16);
   new MutationObserver(() => {
     const t = $("btn-play").textContent.trim();
@@ -368,7 +375,7 @@
     out.push({ t: "Restart the run", s: "from t = 0", ic: "refresh", run: () => $("btn-reset").click() });
     out.push({ t: "Light or dark", s: "theme", ic: "sun", run: () => $("btn-theme").click() });
     out.push({ t: "About and keys", s: "help", ic: "help", run: () => helpP.open() });
-    out.push({ t: "Live packets", s: "show or hide", ic: "list", run: () => feedBtn.click() });
+    out.push({ t: "Traffic", s: "packet list and history", ic: "list", run: () => feedBtn.click() });
     return out;
   }
   function render() {

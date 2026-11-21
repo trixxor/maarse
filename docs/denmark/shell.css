@@ -97,7 +97,7 @@ body.dock-on .ph-tray, body.dock-on .ph-chips { right:384px; }
 body.panel-open #hud { left:464px !important; }
 #hud span { background:transparent; padding:2px 8px; color:var(--mute); }
 #hud span b { color:var(--ink); }
-#tl { left:50% !important; right:auto !important; transform:translateX(-50%); bottom:12px !important; width:min(820px, calc(100% - 24px)); padding:6px !important; gap:6px !important; border-radius:16px; }
+#tl { left:50% !important; right:auto !important; transform:translateX(-50%); bottom:12px !important; width:min(820px, calc(100% - 24px)); padding:6px !important; gap:6px !important; border-radius:16px; flex-wrap:wrap; }
 #tl > button { height:34px; border:0; background:transparent; color:var(--ink); }
 #tl > button:hover { background:var(--soft2); }
 #btn-play { width:36px; height:36px !important; padding:0; display:grid; place-items:center; border-radius:10px; background:var(--acc) !important; color:#fff !important; }
@@ -106,7 +106,8 @@ body.panel-open #hud { left:464px !important; }
 #tl .speeds button.on { background:var(--panel); color:var(--ink); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.15); }
 #clock { color:var(--ink); }
 #feed { left:72px !important; bottom:76px !important; width:min(460px, calc(100% - 96px)) !important; border-radius:var(--r); }
-body.panel-open #feed { left:464px !important; }
+body.panel-open #feed { left:464px !important; width:min(460px, calc(100% - 484px)) !important; }
+#mapwrap.traffic-open :is(#feed, #toast) { bottom:105px !important; }
 #feed-rows { max-height:min(260px, 32vh) !important; }
 #toast { position:absolute; left:50%; bottom:76px; transform:translate(-50%, 8px); z-index:900; max-width:min(640px, calc(100% - 24px)); padding:8px 14px; border-radius:12px; background:#111827; color:#f3f4f6; font-size:12.5px; box-shadow:var(--shadow); opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; }
 #toast.show { opacity:1; transform:translate(-50%, 0); }
@@ -158,6 +159,14 @@ body.panel-open #feed { left:464px !important; }
   #dock { left:8px; right:8px; top:auto; bottom:70px; width:auto; max-height:50%; }
   #hud, body.panel-open #hud { left:64px !important; max-width:calc(100% - 76px); }
   #feed, body.panel-open #feed { left:8px !important; right:8px; width:auto !important; }
+  #tl canvas { min-width:36px; }
+  #tl .speeds button { padding-inline:4px; }
+  #clock { min-width:36px; }
+  #traffic-events { max-width:102px; }
+  #card { width:min(330px, calc(100% - 20px)); z-index:501; }
+  #mapwrap.traffic-open #tl { gap:4px !important; }
+  #traffic-history { gap:4px; }
+  #traffic-history :is(button, select) { padding-inline:5px; }
   body.dock-on .ph-tray, body.dock-on .ph-chips { right:12px; }
 }
 

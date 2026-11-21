@@ -37,6 +37,57 @@ pub fn enabled() -> bool {
 }
 
 static PUBLIC_MAP: Mutex<String> = Mutex::new(String::new());
+const TRAFFIC_SECONDS: u64 = 10;
+static PUBLIC_TRAFFIC: Mutex<VecDeque<TrafficBucket>> = Mutex::new(VecDeque::new());
+static TRAFFIC_SESSION: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+});
+
+#[derive(Default, serde::Serialize)]
+struct TransportCounts {
+    radio: u32,
+    trunk: u32,
+    backbone: u32,
+}
+
+#[derive(Default, serde::Serialize)]
+struct TrafficBucket {
+    second: u64,
+    rx: TransportCounts,
+    tx: TransportCounts,
+}
+
+/// Count locally observed frames. Public traffic never uses the debug ring.
+pub fn count_public_packet(out: bool, transport: &str) {
+    let mut buckets = PUBLIC_TRAFFIC.lock().unwrap_or_else(|e| e.into_inner());
+    let second = since_start_ms() / 1000;
+    if buckets.back().is_none_or(|b| b.second != second) {
+        buckets.push_back(TrafficBucket { second, ..Default::default() });
+    }
+    while buckets.len() > TRAFFIC_SECONDS as usize + 1 {
+        buckets.pop_front();
+    }
+    if let Some(b) = buckets.back_mut() {
+        let counts = if out { &mut b.tx } else { &mut b.rx };
+        let count = match transport {
+            "radio" => &mut counts.radio,
+            "trunk" => &mut counts.trunk,
+            "backbone" => &mut counts.backbone,
+            _ => return,
+        };
+        *count = count.saturating_add(1);
+    }
+}
+
+/// Serve complete one-second buckets. A partial bucket is still changing.
+pub fn public_traffic() -> String {
+    let buckets = PUBLIC_TRAFFIC.lock().unwrap_or_else(|e| e.into_inner());
+    let now = since_start_ms() / 1000;
+    let recent: Vec<&TrafficBucket> = buckets.iter()
+        .filter(|b| b.second >= now.saturating_sub(TRAFFIC_SECONDS) && b.second < now)
+        .collect();
+    json!({ "version": 1, "session": *TRAFFIC_SESSION, "second": now, "buckets": recent }).to_string()
+}
 
 /// The public map JSON (see `Node::public_map`), refreshed every 10 s.
 pub fn set_public_map(s: String) {

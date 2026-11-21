@@ -918,8 +918,14 @@ impl Node {
                     let mut f = crate::debug::packet_fields(&data);
                     f["link"] = self.links.get(&link).map(|(n, _)| n.clone()).unwrap_or_default().into();
                     f["snr"] = snr.into();
-                    crate::debug::push("rx", f);
                     let named = self.links.get(&link).map(|(n, _)| (n.clone(), link_kind(n)));
+                    if crate::web::PUBLIC_TRAFFIC.load(std::sync::atomic::Ordering::Relaxed)
+                        && f.get("pid").is_some()
+                        && let Some((_, kind)) = &named
+                    {
+                        crate::debug::count_public_packet(false, kind);
+                    }
+                    crate::debug::push("rx", f);
                     if let (Some(t), Some(n)) = (self.tele.as_mut(), named) {
                         t.packet(false, &[n], &data, Some(snr));
                     }
@@ -1260,7 +1266,10 @@ impl Node {
             {
                 continue;
             }
-            let _ = tx.send(packet.to_vec());
+            let queued = tx.send(packet.to_vec()).is_ok();
+            if queued && header.is_some() && crate::web::PUBLIC_TRAFFIC.load(std::sync::atomic::Ordering::Relaxed) {
+                crate::debug::count_public_packet(true, link_kind(name));
+            }
             self.counters.packets_out += 1;
             self.counters.bytes_out += packet.len() as u64;
             sent_to.push((*id, name.clone()));
@@ -4209,6 +4218,7 @@ pub(super) mod file_interop_tests {
             require_key: false,
             allow_legacy_web_token: false,
             public_map: false,
+            public_traffic: false,
             max_file: 1024 * 1024,
             filebox_per_recipient: 20 << 20,
             filebox_total: 200 << 20,

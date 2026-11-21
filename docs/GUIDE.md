@@ -916,6 +916,30 @@ and accepts control WebSockets from its own local browser origin.
 
 The simulator's event trace (`--trace-json <file|->`) is one JSON line per event: `setup` (positions and roles), `links` (audible pairs with SNR), `tx`, `rx` (receivers and collisions), `defer` (duty cycle or busy channel), `send`, `deliver`, `ack`, `move` and `end`. The format is described in `maarse-sim/src/trace.rs`.
 
+In the working copy of the **Denmark browser simulator**, **Traffic** pairs
+WebAssembly `tx` and `rx` events by transmission ID, groups copies by packet
+ID when pinned, and draws TCP/Wi-Fi and dedicated LoRa arrivals from `bb` and
+`trunk` events. Live hop motion follows those trace records. Its on-screen
+pacing uses wall-clock time to keep the trails readable. The simulated-time cursor reads the recent feed buffer while
+the engine keeps its current state. See
+[Traffic on the map](denmark/README.md#traffic-on-the-map) for retention,
+display limits and the Great Belt simulation.
+
+For actual host activity, the working-copy host or dedicated server accepts
+`--public-map --public-traffic`. Both flags are required. The HTTP(S) endpoint
+`GET /api/public/traffic` is intentionally public, allows cross-origin reads,
+and exposes local counts by direction and transport in completed one-second
+buckets. Keep it disabled if the site's activity timing is sensitive.
+Existing deployments keep their current visibility until they opt in.
+See the [browser setup and trust boundary](denmark/README.md#live-real-world-traffic).
+
+The version 1 response contains `session` (an opaque process marker),
+`second` (the current process-relative second), and `buckets` (nonempty
+completed seconds in `[second - 10, second)`). A bucket has its own
+`second` plus `rx` and `tx` objects with integer counts for `radio`,
+`trunk` and `backbone`. A changed session marker resets the client's cursor.
+The disabled endpoint returns 404. The admin event feed still requires login.
+
 ## Firmware: status and what is missing
 
 - **Nothing has been tried on hardware yet.**

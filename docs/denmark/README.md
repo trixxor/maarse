@@ -52,6 +52,85 @@ embedded (`dk-land.js`), so land/sea, islands and node generation work offline.
 * **Presets with expected results** (Great Belt cut, Bornholm on its own,
   power cut in Nordjylland) are checked by `node tools/denmark_sim_test.mjs`.
 
+### Traffic on the map
+
+The working copy adds **Traffic** to the play bar and **Layers** menu of the
+browser simulator. Run a scenario with packet tracing enabled (the default).
+In live view, a colored point traces a recorded hop from sender to receiver.
+Three rings expand at the receiver while the trail fades. Solid trails show
+LoRa, including dedicated trunks, and dashed teal trails show TCP or Wi-Fi.
+Live path requests show selected radio legs where the trace records reception
+and subsequent forwarding. Pin a broadcast to inspect its individual
+receptions. Routine announces and hellos stay in the feed. The live map limits
+the number of concurrent trails and pulses, uses static marks if the browser
+requests reduced motion, and skips animations above 200×. Traffic collection
+continues at all speeds.
+
+* Filter the packet list by type, routed traffic or the message you are
+  following. Select a row to pin its packet ID and quiet the other traffic on
+  the map. Numbered hops show the order of recorded directed receptions.
+  Faint lines show radio receptions without a specified next hop, red rings mark missed hops or drops,
+  and purple rings mark repeated attempts by the same sender to the same
+  next hop. The card shows the selected transmission and its recorded reception
+  details. **Replay packet** redraws its retained observations in time order
+  without changing the simulation clock. **Follow message** opens the existing message journey, including
+  routing, delivery, and acknowledgement where recorded.
+* Click the traffic histogram, drag the history slider, or use **Scenario
+  events** to jump to a simulated time. The map shows up to the previous ten
+  simulated seconds of traffic at the cursor. A pinned packet shows its
+  retained trace through the cursor. The simulator clock and network state
+  continue independently. **Live** returns to the latest traffic.
+* Traffic history holds up to 12,000 recent feed entries in memory. The
+  bounds are shown beside the slider, and the oldest time advances as entries
+  expire. Resetting or loading a scenario starts a new history. Opening a
+  saved snapshot reconstructs history as its scenario replays. The map caps
+  visible marks in busy runs and uses sampled positions for moving nodes.
+
+For a repeatable example, choose **Great Belt traffic demo**
+(`#great_belt_traffic`) with terrain disabled. The first Nyborg → Korsoer
+message crosses by TCP. TCP goes down at 19 s. A 100 dB radio-loss event
+starts at 20.2 s, while the second message is on air. Jump to that event,
+move the cursor past 20.6 s, and select the second message's Data row to see
+the missed hop. **Follow message** shows its later delivery after the radio
+recovers. The third message crosses over LoRa while TCP stays down. These
+are simulation results from the preset and its fixed seed.
+
+### Live real-world traffic
+
+The working copy adds observed traffic to **Real world** in the browser
+simulator. Build or install matching `maarse-host` or `maarse-server` binaries
+with this feature. Start the host with `--public-map --public-traffic` and
+an HTTP listener reachable by the browser. Use HTTPS for hosts accessed from
+the HTTPS simulator page, typically through the existing reverse proxy.
+Enable position sharing for the host if you want a marker on the map.
+
+Open **Real world** (G), enter the host's HTTP(S) URL and press **Show**.
+**Live observed traffic** is selected by default. It opens a dark map view
+with the reporting hosts and a compact activity list. Orange denotes radio,
+green denotes a dedicated trunk and blue denotes backbone. Solid rings show
+receives and dashed rings show sends at the reporting host's shared position.
+Use the transport buttons to filter live rings and history. Select a row and
+choose **Replay pulse** to view that one-second observation again. The local
+slider and activity strip cover up to 60 seconds collected in the current view. **Live**
+returns to the latest observations. **Simulation** restores the simulator
+layers and controls. The simulation can continue in the background.
+
+**Host totals** shows ten seconds of counts per host and transport, including
+hosts without a shared position. The browser polls about once a second using
+complete one-second buckets. The pulses show local observations and an outgoing
+count means the host queued a frame on a link. The view has no peer coordinates
+or confirmed end-to-end route.
+
+`--public-map` alone continues to serve the static map. Older hosts and hosts
+that decline traffic sharing show an unavailable status. Public traffic
+requires a separate opt-in and is readable by anyone who can reach the
+endpoint. It exposes counts, link categories, and activity timing. It
+contains no packet IDs, payloads, source or destination addresses, peer
+endpoints, or admin debug events. The browser trusts the host you configure
+to report its own measurements. Real radio reception requires a connected
+radio or modem. Local TCP validation exercises the host software and network
+transport.
+
 ## Design
 
 ### Layers
@@ -848,10 +927,11 @@ The engine writes the CLI's `--trace-json` events (`tx`, `rx`, `defer`, `send`,
 and, through *causal tagging*, the message (`msg`) or alert (`alert`) that
 caused it (a packet sent while a router handles a tagged packet inherits the
 tag), plus `cancel` (flood suppression), `drop` (duty, busy, quota, area),
-`route`, `bb` (backbone), `repair`, `carry`, `retry`, `alert_rx`, `announce`,
+`route`, `bb` (backbone), `trunk` (dedicated LoRa link), `repair`, `carry`, `retry`, `alert_rx`, `announce`,
 `event`, `dead`, `revive`, `dht`. Follow, reach, animation, the live feed and
-the log are all views of this one stream. It keeps the last 400,000 lines
-(older ones are dropped).
+the log are all views of this one stream. The engine drops its oldest 200,000
+lines at a time when it reaches 400,000. The browser traffic history has the
+smaller limit described above.
 
 Fields for transparency: a `tx` has `nx` (the intended next hop of a routed
 packet, -1 for floods), `dst` (destination node, if it is a node), `path`
@@ -879,21 +959,15 @@ busy, quota, area scope) / not forwarded (duplicate or not needed).
 
 ## What the UI does
 
-* **Live view** (on the map): a dark map (OSM tiles under a CSS filter; the
-  half-moon button switches), a status bar (time, transmissions per minute,
-  nodes up, delivered and acked, lost at next hop, flood copies collided,
-  internet), a live packet feed (type, sender, hop, next hop received or not,
-  or how many decoded it; "routed only" hides flood copies; "this message"
-  follows one), a detail card per packet (path, priority, queue wait, airtime,
-  every decoder with SNR, every collision with its cause drawn on the map), a
-  timeline with a histogram of transmissions per 10 s by type and red marks for
-  timeline events, and a legend whose packet types switch the feed and the
-  animation.
+* **Map status and traffic**: a light or dark OpenStreetMap basemap, a status
+  bar with simulated time and network counters, and a legend that can hide
+  individual packet types from the feed and animations. See
+  [Traffic on the map](#traffic-on-the-map) for pinning and history.
 * **Journey**: type two towns (the nearest handheld there) or pick nodes, send,
   and read the message's story: the path request (how many transmissions, which
   regions, backbone copies, how many nodes heard it, the longest trail), the
   delivery, the route that won with its TCP legs, the path response and the
-  ack, trouble on the way (collisions at the next hop with the interferer,
+  ack, trouble on the way (missed next-hop radio receptions, collisions with the interferer,
   retries, repairs, drops, carry), and, if it does not arrive, a diagnosis:
   destination down, another island without a backbone (and which host lacks
   internet), or the path request never reaching it (closest node, 12-repeater

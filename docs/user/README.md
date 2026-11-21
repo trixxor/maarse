@@ -6,6 +6,17 @@ shows an example, and links to the
 [Denmark simulator](https://trixxor.github.io/maarse/denmark/) so you can
 watch it happen.
 
+In the working copy of the browser simulator, open **Traffic** in the play bar
+to inspect recent packets. Filter by type and select a row to pin the packet's
+recorded hops. Use the slider or **Scenario events** menu to review an outage,
+and **Live** to return to the current run. Try **Great Belt traffic demo** with
+terrain disabled. [Traffic controls and limits](../denmark/README.md#traffic-on-the-map)
+
+For an opted-in real host, open **Real world**, enter its URL, and select
+**Show**. Solid and dashed rings show receive and send activity at the host's
+shared position. Filter by transport, or select an observation and choose
+**Replay pulse**. [Live real-world traffic](../denmark/README.md#live-real-world-traffic)
+
 | Page | Status |
 |---|---|
 | [Sending a message](messages.md) | done (sample page) |

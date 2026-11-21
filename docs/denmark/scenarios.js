@@ -305,6 +305,42 @@
       },
       run_s: 1500,
     },
+    great_belt_traffic: {
+      title: "Great Belt traffic demo",
+      text: "Watch three messages cross from Nyborg to Korsoer. TCP goes down at 19 s. At 20.2 s the radio fades during the second message. Open Traffic to jump to the outage and inspect the missed hop and later delivery.",
+      build: () => {
+        const s = base("Great Belt traffic demo", 3);
+        quiet(s);
+        s.duration_s = 60;
+        s.nodes = [
+          { kind: "host", lat: 55.311, lon: 10.795, label: "Nyborg host", internet: true },
+          { kind: "host", lat: 55.339, lon: 11.126, label: "Korsoer host", internet: true },
+        ];
+        s.links = [{ a: 0, b: 1, kind: "tcp", up: true, label: "Great Belt TCP" }];
+        s.events = [
+          { t_s: 5, type: "message", from: 0, node: 1 },
+          { t_s: 19, type: "link", index: 0, up: false },
+          { t_s: 20, type: "message", from: 0, node: 1 },
+          { t_s: 20.2, type: "degrade", db: 100, area: { circle: [55.339, 11.126, 1000] } },
+          { t_s: 25, type: "degrade_clear" },
+          { t_s: 35, type: "message", from: 0, node: 1 },
+        ];
+        return s;
+      },
+      expect: (sim) => {
+        const first = sim.follow(0);
+        const second = sim.follow(1);
+        const third = sim.follow(2);
+        const missed = second.events.find(e => e.ev === "rx" && e.nx === 1 && !e.ok.includes(1));
+        const tx = missed && second.events.find(e => e.ev === "tx" && e.id === missed.id);
+        return [
+          [first.info?.delivered_ms != null && first.info.delivered_ms < 19000 && first.events.some(e => e.ev === "bb"), "the first message crosses on TCP"],
+          [tx && tx.t < 20200 && missed.t > 20200 && second.info?.delivered_ms > 25000, "the fade interrupts the second message on air and it arrives after recovery"],
+          [third.info?.delivered_ms != null && third.info.delivered_ms < 40000 && third.events.some(e => e.ev === "rx" && e.nx === 1 && e.ok.includes(1)), "the third message crosses on LoRa with TCP still down"],
+        ];
+      },
+      run_s: 60,
+    },
     bornholm_alone: {
       title: "Bornholm on its own (trunk and internet down)",
       text: "At 1 min the LoRa trunk and every internet link to Bornholm fail; at 2 min Copenhagen writes to a handheld in Roenne; at 15 min Bornholm is connected again. Expected: local traffic on Bornholm still works, the message waits and arrives after 15 min.",

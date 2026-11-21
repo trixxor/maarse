@@ -14,6 +14,10 @@
 
 </div>
 
+The working copy adds map traffic inspection and the **Great Belt traffic demo** to the browser simulator. Use **Traffic** to pin a packet or scrub recent activity around an outage. [Traffic controls and limits](docs/denmark/README.md#traffic-on-the-map)
+
+In the working copy, **Real world** can also show receive and send activity reported by hosts that opt in with `--public-map --public-traffic`. [Real-world setup and privacy](docs/denmark/README.md#live-real-world-traffic)
+
 ## Må:rse in 30 seconds
 
 - **A radio in your pocket.** A €20–40 LoRa board talks to your phone over Bluetooth and to other boards over several kilometres. No SIM card and no subscription.

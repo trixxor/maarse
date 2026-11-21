@@ -8,9 +8,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet-lite.css?v=12">
-<link rel="stylesheet" href="style.css?v=58">
+<link rel="stylesheet" href="style.css?v=62">
 <link rel="stylesheet" href="phone.css?v=58">
-<link rel="stylesheet" href="shell.css?v=6">
+<link rel="stylesheet" href="shell.css?v=7">
 </head>
 <body>
 <header id="top">
@@ -87,7 +87,7 @@
       <label><input type="checkbox" id="ly-coverage" checked> Coverage</label>
       <label><input type="checkbox" id="ly-paths" checked> Radio paths</label>
       <label><input type="checkbox" id="ly-clutter" checked> Areas</label>
-      <label><input type="checkbox" id="ly-feed"> Live packets</label>
+      <label><input type="checkbox" id="ly-feed"> Traffic</label>
       <label><input type="checkbox" id="ly-legend" checked> Legend</label>
       <p class="hint" id="sc-info"></p>
     </section>
@@ -300,15 +300,16 @@
     <section id="bench" class="ov hidden" aria-label="Benchmark"></section>
     <aside id="watch" class="ov hidden" aria-label="Watch list"></aside>
     <div id="maphint" class="ov">Click a node or link to inspect · right-click for actions · drag to move</div>
-    <div id="feed" class="ov">
+    <section id="feed" class="ov hidden" aria-label="Packet traffic">
       <div class="feed-head">
-        <b id="fd-title" title="Click to fold / unfold">Live packets ▾</b>
-        <label title="Hide copies of floods (path requests, announces, channel messages)"><input type="checkbox" id="fd-routed"> routed only</label>
-        <label title="Only packets of the message you follow"><input type="checkbox" id="fd-msg"> this message</label>
-        <button id="fd-pause" title="Freeze the list">❚❚</button>
+        <button id="fd-title" aria-expanded="true" aria-controls="feed-rows">Packets ▾</button>
+        <select id="fd-type" aria-label="Packet type"><option value="">All types</option></select>
+        <label title="Hide flood and broadcast rows"><input type="checkbox" id="fd-routed"> Routed</label>
+        <label title="Only packets of the message you follow"><input type="checkbox" id="fd-msg"> This message</label>
+        <button id="fd-pause" title="Freeze the live packet list" aria-label="Freeze the live packet list" aria-pressed="false">❚❚</button>
       </div>
       <div id="feed-rows"></div>
-    </div>
+    </section>
     <div id="tl" class="ov">
       <button id="btn-play" class="primary" title="Play / pause (space)">▶</button>
       <button id="btn-step" title="Advance 1 simulated second">+1 s</button>
@@ -316,6 +317,13 @@
       <canvas id="tl-canvas" height="34"></canvas>
       <span id="clock">0:00</span>
       <span id="behind" class="warn hidden" title="The browser cannot keep up with this speed">CPU-bound</span>
+      <div id="traffic-history" class="hidden">
+        <button id="traffic-live" title="Return to live traffic" aria-pressed="true">Live</button>
+        <span id="traffic-start" title="Earliest retained time"></span>
+        <input type="range" id="traffic-time" min="0" max="0" step="1" value="0" aria-label="Traffic history time" aria-describedby="traffic-time-label" disabled>
+        <output id="traffic-time-label" for="traffic-time">0:00.0</output>
+        <select id="traffic-events" aria-label="Jump to a scenario event"><option value="">Scenario events</option></select>
+      </div>
     </div>
   </div>
 </div>
@@ -324,9 +332,9 @@
 <script src="dk-land.js"></script>
 <script src="dk-towns.js"></script>
 <script src="demo-sites.js?v=58"></script>
-<script src="scenarios.js?v=58"></script>
+<script src="scenarios.js?v=59"></script>
 <script src="maarse-sim.js?v=58"></script>
-<script src="app.js?v=59"></script>
+<script src="app.js?v=63"></script>
 <script src="store.js?v=58"></script>
 <script src="phone.js?v=58"></script>
 <script src="profiles.js?v=58"></script>
@@ -334,8 +342,8 @@
 <script src="dhm.js?v=1"></script>
 <script src="terrain.js?v=8"></script>
 <script src="coverage.js?v=5"></script>
-<script src="realworld.js?v=1"></script>
+<script src="realworld.js?v=3"></script>
 <script src="maptools.js?v=9"></script>
-<script src="shell.js?v=7"></script>
+<script src="shell.js?v=8"></script>
 </body>
 </html>

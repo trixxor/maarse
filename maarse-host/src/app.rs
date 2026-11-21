@@ -166,6 +166,8 @@ pub struct Config {
     /// knows with a shared position, and the radio links it hears) at
     /// `/api/public/map` to everyone.
     pub public_map: bool,
+    /// Publish short-lived aggregate packet counters on the public map.
+    pub public_traffic: bool,
     /// `--require-key`: the access key also from 127.0.0.1.
     pub require_key: bool,
     pub allow_legacy_web_token: bool,
@@ -452,6 +454,8 @@ Usage: maarse-host [options]
   --public-map          share this host's map data (its site, nodes with a
                         shared position, the radio links it hears) with
                         everyone at /api/public/map (for map pages)
+  --public-traffic      with --public-map, publish recent packet counts by
+                        transport and direction at /api/public/traffic
   --allow-legacy-web-token
                         allow deprecated URL query keys during upgrades
   --require-key         ask for the access key from this machine too (for
@@ -508,6 +512,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         require_key: backbone,
         allow_legacy_web_token: false,
         public_map: false,
+        public_traffic: false,
         max_file: maarse_hostrules::filebox::MAX_FILE_DEFAULT,
         filebox_per_recipient: 20 << 20,
         filebox_total: 200 << 20,
@@ -592,6 +597,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--require-key" => c.require_key = true,
             "--allow-legacy-web-token" => c.allow_legacy_web_token = true,
             "--public-map" => c.public_map = true,
+            "--public-traffic" => c.public_traffic = true,
             "--service" => {
                 c.service = true;
                 c.open_browser = false;
@@ -744,6 +750,9 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         m.pass = mqtt_pass;
     } else if mqtt_user.is_some() || mqtt_pass.is_some() {
         return Err("--mqtt-user/--mqtt-pass requires --mqtt".into());
+    }
+    if c.public_traffic && !c.public_map {
+        return Err("--public-traffic requires --public-map".to_string());
     }
     Ok(c)
 }
@@ -980,6 +989,7 @@ pub fn run(cli: Vec<String>) {
     web::REQUIRE_KEY.store(cfg.require_key, std::sync::atomic::Ordering::Relaxed);
     web::ALLOW_LEGACY_WEB_TOKEN.store(cfg.allow_legacy_web_token, std::sync::atomic::Ordering::Relaxed);
     web::PUBLIC_MAP.store(cfg.public_map, std::sync::atomic::Ordering::Relaxed);
+    web::PUBLIC_TRAFFIC.store(cfg.public_traffic, std::sync::atomic::Ordering::Relaxed);
     if let Some(addr) = cfg.http {
         let token = web::access_token(&cfg.data_dir);
         match web::spawn(addr, token.clone(), cfg.data_dir.clone(), tx.clone()) {

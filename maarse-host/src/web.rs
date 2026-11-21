@@ -124,6 +124,14 @@ fn handle(mut stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
     let mut request_line = head.lines().next().unwrap_or("").split_whitespace();
     let (Some(method), Some(target)) = (request_line.next(), request_line.next()) else { return };
     let path = target.split('?').next().unwrap_or("");
+    if method == "GET" && path == "/api/public/traffic" {
+        let (status, body) = if PUBLIC_MAP.load(Ordering::Relaxed) && PUBLIC_TRAFFIC.load(Ordering::Relaxed) {
+            ("200 OK", crate::debug::public_traffic())
+        } else {
+            ("404 Not Found", "{\"error\":\"this host does not share public traffic\"}".to_string())
+        };
+        return send(&mut stream, status, "application/json", "Access-Control-Allow-Origin: *\r\n", body.as_bytes());
+    }
     if method == "GET" && path == "/api/public/map" {
         return if PUBLIC_MAP.load(Ordering::Relaxed) {
             reply(&mut stream, "200 OK", "application/json", &crate::debug::public_map())
@@ -612,6 +620,8 @@ pub static REQUIRE_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 pub static ALLOW_LEGACY_WEB_TOKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// `--public-map`: serve `/api/public/map` to everyone.
 pub static PUBLIC_MAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// `--public-traffic`: collect and publish aggregate traffic counts.
+pub static PUBLIC_TRAFFIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn bearer(header: Option<&str>) -> Option<&str> {
     header?.strip_prefix("Bearer ")

@@ -111,6 +111,16 @@ body.panel-open #feed { left:464px !important; width:min(460px, calc(100% - 484p
 #feed-rows { max-height:min(260px, 32vh) !important; }
 #toast { position:absolute; left:50%; bottom:76px; transform:translate(-50%, 8px); z-index:900; max-width:min(640px, calc(100% - 24px)); padding:8px 14px; border-radius:12px; background:#111827; color:#f3f4f6; font-size:12.5px; box-shadow:var(--shadow); opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; }
 #toast.show { opacity:1; transform:translate(-50%, 0); }
+/* Messages appear at the top left of the map, under the status line, right of the tool bar and the side panel and
+   left of the dock (the status line can wrap to two or three rows in a narrow window). The map's zoom buttons and
+   source line sit bottom right, above the play bar; phones keep to the left of them. */
+#mapwrap:not(.ov-docked) #toast { left:72px; top:80px; bottom:auto !important; transform:translate(0, -8px); max-width:max(200px, min(640px, calc(100% - 376px))); }
+#mapwrap:not(.ov-docked) #toast.show { transform:translate(0, 0); }
+body.panel-open #mapwrap:not(.ov-docked) #toast { left:464px; max-width:max(200px, min(640px, calc(100% - 768px))); }
+body.dock-on #mapwrap:not(.ov-docked) #toast { max-width:max(200px, min(640px, calc(100% - 748px))); }
+body.panel-open.dock-on #mapwrap:not(.ov-docked) #toast { max-width:max(200px, min(640px, calc(100% - 1140px))); }
+#mapwrap:not(.ov-docked) #map .leaflet-bottom.leaflet-right { bottom:64px; }
+.leaflet-control-attribution { max-width:min(360px, 40vw); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 #toast .hint { color:inherit; margin:0; font-size:inherit; }
 
 /* ---- pop-ups ---- */

@@ -3,10 +3,10 @@
 #ph-layer > * { pointer-events:auto; }
 .ph-addbtn { position:absolute; top:12px; right:12px; z-index:1250; box-shadow:0 4px 14px rgba(0,0,0,.25); }
 .ph-addbtn:disabled { opacity:.6; }
-.ph-tray { position:absolute; top:52px; right:12px; bottom:12px; display:flex; gap:10px; align-items:flex-start; flex-direction:row-reverse; flex-wrap:wrap-reverse; overflow:auto; max-width:calc(100% - 24px); pointer-events:none; }
+.ph-tray { position:absolute; top:52px; right:56px; bottom:72px; display:flex; gap:10px; align-items:flex-start; flex-direction:row-reverse; flex-wrap:wrap-reverse; overflow:auto; max-width:calc(100% - 24px); pointer-events:none; }
 .ph-tray > * { pointer-events:auto; }
 /* Minimised phones: a column at the right edge, half way down, easy to reach. */
-.ph-chips { position:absolute; right:12px; top:50%; transform:translateY(-50%); display:flex; flex-direction:column; align-items:flex-end; gap:6px; max-height:calc(100% - 120px); overflow:auto; z-index:5; }
+.ph-chips { position:absolute; right:56px; top:50%; transform:translateY(-50%); display:flex; flex-direction:column; align-items:flex-end; gap:6px; max-height:calc(100% - 120px); overflow:auto; z-index:5; }
 .ph-chip { display:flex; gap:6px; align-items:center; border-radius:999px; padding:5px 12px; background:var(--ov); border:1px solid var(--ovline); box-shadow:0 2px 8px rgba(0,0,0,.2); font-size:12px; }
 .ph-win { position:absolute; background:var(--ov); border:1px solid var(--ovline); border-radius:16px; padding:6px 8px 8px; box-shadow:0 8px 28px rgba(0,0,0,.3); display:flex; flex-direction:column; gap:6px; width:calc(432px * var(--ph-k, 0.7) + 16px); }
 .ph-win.docked { position:relative; left:auto !important; top:auto !important; box-shadow:0 2px 10px rgba(0,0,0,.18); }

@@ -265,7 +265,7 @@
   lp.appendChild(legend);
   // The legend stays folded in the pop-up until asked for (its own ▸ button).
   const layerBtn = document.querySelector('#mt-bar [data-t="layers"]') || document.createElement("button");
-  const layersP = popup(layerBtn, lp, (r, p) => { p.style.left = r.right + 10 + "px"; p.style.top = Math.max(60, Math.min(r.top - 120, innerHeight - p.offsetHeight - 12)) + "px"; });
+  const layersP = popup(layerBtn, lp, (r, p) => { p.style.left = r.right + 10 + "px"; p.style.top = Math.max(60, Math.min(r.top - 120, innerHeight - p.offsetHeight - 76)) + "px"; });
   window.DKShell = { toggleLayers: () => layersP.toggle(), openPanel, closePanel, palette: () => openPalette() };
 
   const L2 = dk.layers || {};

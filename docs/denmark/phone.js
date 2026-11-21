@@ -104,11 +104,17 @@
   // A real Android screen (412 x 892 dp, like a Pixel 7) in a 10 px bezel,
   // scaled as a whole to fit the map's height.
   const DEV_H = 892 + 2 * 10;
+  // Room for the status line above (56 px), the play bar and the zoom buttons below (130 px), the phone's own bar (30 px)
+  // and the stagger of several phones (56 px).
+  const phoneScale = () => Math.max(0.3, Math.min(0.9, ($("mapwrap").clientHeight - 300) / DEV_H));
+  const startX = (n) => {
+    const right = document.body.classList.contains("dock-on") ? 384 : 56;
+    return Math.max(70, $("mapwrap").clientWidth - Math.round((412 + 20) * phoneScale()) - 16 - right - (n % 5) * 40);
+  };
   function fit() {
     const wrap = $("mapwrap"), layer = $("ph-layer");
     if (!wrap || !layer) return;
-    const k = Math.max(0.4, Math.min(0.9, (wrap.clientHeight - 90) / DEV_H));
-    layer.style.setProperty("--ph-k", k.toFixed(3));
+    layer.style.setProperty("--ph-k", phoneScale().toFixed(3));
   }
   window.addEventListener("resize", fit);
 
@@ -123,7 +129,7 @@
     const id = [...LETTERS].find((l) => !phones.some((p) => p.id === l));
     const n = phones.length;
     const p = { id, node: -1, client: "app", frame: null, win: null, ready: false, alive: true, sent: 0, got: 0, state: "setup", docked: false, min: false,
-      x: 70 + (n % 5) * 40, y: 12 + (n % 5) * 30, setup: { where: "map", ll: null, town: 0, existing: -1, inet: true, lora: false } };
+      x: startX(n), y: 56 + (n % 5) * 14, setup: { where: "map", ll: null, town: 0, existing: -1, inet: true, lora: false } };
     phones.push(p);
     makeWindow(p);
     updateAdd();

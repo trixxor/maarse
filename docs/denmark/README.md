@@ -95,6 +95,25 @@ the missed hop. **Follow message** shows its later delivery after the radio
 recovers. The third message crosses over LoRa while TCP stays down. These
 are simulation results from the preset and its fixed seed.
 
+### Layout test
+
+`node tools/denmark_layout_test.mjs` opens the page in a real browser (headless
+Edge or Chrome) at four window sizes, opens every panel, window, menu and card
+in both views, and fails when two panels overlap, when a panel is partly covered
+by another element, when it reaches outside the window, or when something that
+was opened is not on the screen. `--quick` uses one window size and `--shots`
+saves a screenshot per state. Run it after any change to the page's layout. The
+Real network view is fed with made-up nodes, so the result does not depend on a
+server; the page needs the Leaflet library from the internet.
+
+Rules the layout follows, so that a new overlay does not break it: in the
+Real network view everything in the map area that belongs to the simulation is
+hidden by a rule that names what stays (`overview.js`), so a new simulation
+overlay cannot appear there; one pop-up (Servers, Coverage, Sound) is open at a
+time; messages appear at the top left under the status line; the map's zoom
+buttons and source line sit bottom right above the play bar; new phones open
+at the right, between the status line and the play bar.
+
 ### Real network: setup and privacy
 
 The working copy adds the real network to the browser simulator: switch to

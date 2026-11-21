@@ -109,10 +109,8 @@
     #mapwrap.ov-docked { --ovl:270px; --ovr:310px; --ovb:0px; }
     #mapwrap.real-only { --ovb:74px; }
     #mapwrap.ov-docked #map { left:var(--ovl); right:var(--ovr); bottom:var(--ovb); }
-    #mapwrap.ov-docked #tl { left:calc(var(--ovl) + 10px); right:calc(var(--ovr) + 10px); }
-    #mapwrap.ov-docked #hud { left:calc(var(--ovl) + 12px) !important; max-width:calc(100% - var(--ovl) - var(--ovr) - 24px); }
-    #mapwrap.ov-docked :is(#mt-bar, #mt-search, #legend, #maphint, #card, #follow, #watch, #bench, #feed, #ctx) { display:none !important; }
-    #mapwrap.real-only :is(#hud, #tl) { display:none !important; }
+    body.real-view #mapwrap > :not(#map):not(#ov-nodes):not(#ov-side):not(#ov-pkt):not(#ov-chan):not(#ov-tl):not(#rw-card):not(#cv-card) { display:none !important; }
+    body.real-view #cv-card { position:absolute !important; left:auto !important; right:calc(var(--ovr) + 12px) !important; top:10px !important; bottom:auto !important; height:auto !important; width:330px !important; z-index:1200 !important; max-height:calc(100% - var(--ovb, 0px) - 110px) !important; overflow:auto; }
     #ov-row { grid-column:1 / -1; display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; padding-top:6px; margin-top:2px; border-top:1px solid var(--line); min-height:34px; font-size:12px; }
     #ov-mode { display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
     #ov-mode button { border:0; border-radius:0; background:transparent; padding:4px 12px; cursor:pointer; }
@@ -176,8 +174,9 @@
     #ov-tl .when { min-width:132px; text-align:right; line-height:1.2; }
     #ov-sound { position:absolute; right:0; top:34px; width:250px; padding:8px 10px; z-index:1100; border:1px solid var(--ovline); border-radius:10px; box-shadow:0 8px 28px rgba(0,0,0,.25); }
     #ov-sound label { display:flex; gap:8px; align-items:center; margin:3px 0; }
+    body.real-view #top { z-index:2000; }
     body.real-view :is(#preset, #btn-file, #modes, #btn-reset, #side) { display:none !important; }
-    #rw-card { left:auto !important; right:calc(var(--ovr) + 12px) !important; top:10px !important; width:330px !important; z-index:1200 !important; max-height:calc(100% - 90px) !important; }
+    #rw-card { left:auto !important; right:calc(var(--ovr) + 12px) !important; top:10px !important; bottom:auto !important; height:auto !important; width:330px !important; z-index:1200 !important; max-height:calc(100% - var(--ovb, 0px) - 110px) !important; }
     #ov-wins .sep { width:1px; background:var(--line); margin:0 4px; }
     .lp { display:flex; gap:6px; align-items:center; padding:4px 8px; border-left:3px solid var(--edge, transparent); border-bottom:1px solid var(--ovline); cursor:pointer; }
     .lp:hover { background:color-mix(in srgb, var(--acc) 10%, transparent); }
@@ -614,6 +613,14 @@
     for (const id of ["ov-figs", "ov-wins", "ov-acts"]) $(id).classList.add("hidden");
     select(null);
   }
+  let cvHome = null;
+  function coverageCardTo(real) {
+    const cv = $("cv-card");
+    if (!cv) return;
+    if (real) { if (cv.parentElement !== wrap) { cvHome = cv.parentElement; wrap.appendChild(cv); } }
+    else if (cvHome && cv.parentElement === wrap) { cvHome.appendChild(cv); cvHome = null; }
+    if (!real) cv.classList.add("hidden");
+  }
   function setMode(next) {
     S.mode = next === "real" ? "real" : "sim";
     const real = S.mode === "real";
@@ -621,6 +628,7 @@
     wrap.classList.toggle("ov-docked", real);
     wrap.classList.toggle("real-only", real);
     document.body.classList.toggle("real-view", real);
+    coverageCardTo(real);
     tl.classList.toggle("hidden", !real);
     if (real) { startPanels(); window.DKRealWorld && DKRealWorld.start(); }
     else { stopPanels(); window.DKRealWorld && DKRealWorld.stop(); }
@@ -635,11 +643,12 @@
     const w = e.target.closest("[data-win]"); if (w) { showWin(w.dataset.win); return; }
     const a = e.target.closest("[data-act]");
     if (a && window.DKRealWorld) {
-      if (a.dataset.act === "servers") DKRealWorld.toggleCard();
-      else { DKRealWorld.start(); DKRealWorld.coverage(); }
+      $("ov-sound").classList.add("hidden");
+      if (a.dataset.act === "servers") { $("cv-card")?.classList.add("hidden"); DKRealWorld.toggleCard(); }
+      else { DKRealWorld.hideCard(); coverageCardTo(true); DKRealWorld.start(); DKRealWorld.coverage(); }
       return;
     }
-    if (e.target.id === "ov-snd") $("ov-sound").classList.toggle("hidden");
+    if (e.target.id === "ov-snd") { $("ov-sound").classList.toggle("hidden"); if (!$("ov-sound").classList.contains("hidden") && window.DKRealWorld) { DKRealWorld.hideCard(); $("cv-card")?.classList.add("hidden"); } }
     if (e.target.id === "ov-snd-test") beep("public", true);
   });
   row.addEventListener("change", (e) => {
@@ -683,6 +692,20 @@
     else if (e.key === "ArrowRight" && S.view != null) setView(S.view + 10 * MIN);
   });
 
+  // One pop-up at a time: when the Servers card, the Coverage card or the Sound menu opens, the others close.
+  // One observer sees every change in order, so when two open at once the one opened last stays.
+  const popovers = () => [$("rw-card"), $("cv-card"), $("ov-sound")].filter(Boolean);
+  const oneAtATime = new MutationObserver((records) => {
+    if (S.mode !== "real") return;
+    let winner = null;
+    for (const rec of records) if (!rec.target.classList.contains("hidden")) winner = rec.target;
+    if (winner) for (const other of popovers()) if (other !== winner) other.classList.add("hidden");
+  });
+  for (const el of popovers()) oneAtATime.observe(el, { attributes: true, attributeFilter: ["class"] });
+
   window.DKOverview = { open, close, setMode, toggle: () => (S.mode === "sim" ? open() : close()), useHistory: (j) => { useHistory(j); render(); }, setView, state: S, history: H };
-  if (location.hash === "#network" || new URLSearchParams(location.search).get("view") === "network") setMode("real");
+  // Opened with ?view=network: wait until every script has run, so the simulation shell has finished moving its cards.
+  if (location.hash === "#network" || new URLSearchParams(location.search).get("view") === "network") {
+    if (document.readyState === "complete") setMode("real"); else window.addEventListener("load", () => setMode("real"));
+  }
 })();

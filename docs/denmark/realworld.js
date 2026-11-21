@@ -115,10 +115,11 @@
   const siteOf = (n) => ({ lat: n.lat, lon: n.lon, h: n.height_m ?? ROLE_H[n.role] ?? 2, gain: n.gain_dbi ?? (n.height_m != null || n.role === "Host" ? 6 : 0), tx: n.tx_dbm ?? undefined, name: n.name || n.addr.slice(0, 8) });
 
   function coverage() {
-    if (!C) return;
+    if (!C) return false;
     const fixed = [...data.nodes.values()].filter((n) => !n.mobile && (n.height_m != null || ["Host", "Repeater", "Anchor"].includes(n.role)));
-    if (!fixed.length) { $("rw-note").textContent = "No fixed nodes with a position yet: press Show first."; return; }
+    if (!fixed.length) { $("rw-note").textContent = "No fixed nodes with a position yet: add a server that shares its map."; return false; }
     C.setSites(fixed.map(siteOf));
+    return true;
   }
 
   // Model versus measurement: predicted SNR for every measured link whose
@@ -148,7 +149,9 @@
   window.DKRealWorld = {
     start: () => { if (!timer) $("rw-load").click(); },
     stop: () => { $("rw-hide").click(); card.classList.add("hidden"); },
-    coverage: () => coverage(),
+    // True when the coverage card opened; otherwise the Servers card opens and says why.
+    coverage: () => { const ok = coverage(); if (!ok) card.classList.remove("hidden"); return ok; },
+    hideCard: () => card.classList.add("hidden"),
     toggleCard: () => card.classList.toggle("hidden"),
     get card() { return card; },
     get nodes() { return data.nodes; },

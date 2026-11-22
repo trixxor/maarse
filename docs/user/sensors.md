@@ -10,10 +10,29 @@ battery because it sleeps between readings.
 
 - A Må:rse board: **Seeed XIAO nRF52840 with the Wio-SX1262 radio** or
   **Heltec WiFi LoRa 32 V4**.
-- A sensor such as a **BME280** (temperature, humidity, pressure), four wires
-  to the board. The designer shows which pins to use.
+- A sensor. **Add a sensor or pin** lists what works on your board: chips such
+  as the BME280, SHT31, AHT20, SCD41 (CO2) and BH1750 (light), and many Seeed
+  **Grove** modules (motion, door contact, soil moisture, relay and more). Four
+  wires to the board; the designer shows which pins to use. A chip that is not in
+  the list can be added with **Build your own**, from its data sheet.
 - A computer with Chrome or Edge and a USB cable, for the first setup.
 - An account (Settings > Account and devices): a sensor belongs to a person.
+
+## What works on which board
+
+Both boards can run the same sensors; the difference is how many you can plug in.
+
+- **Seeed XIAO nRF52840 with Wio-SX1262:** three free pins. Sensors that use the
+  sensor port (temperature, humidity, CO2, light, movement) can all share one
+  cable, but then only one extra switch or motion sensor fits. Soil, light and
+  sound sensors with an analogue output need a small adapter module (a Grove
+  ADC); the designer tells you.
+- **Heltec WiFi LoRa 32 V4:** seven free pins and one direct analogue input, so
+  more switches and one analogue sensor can be plugged straight in.
+
+Not working yet on either board: DHT11/DHT22, ultrasonic distance, waterproof
+DS18B20, GPS and particle sensors, and 5 V gas sensors. No sensor has been
+tried on real hardware yet: check the first reading against a thermometer.
 
 ## Set up a sensor
 
@@ -57,5 +76,13 @@ after its next wake-up, so it can take up to one reading interval.
 Pick **Mailbox**. When post arrives and the flap moves the magnet, the switch wakes
 the sleeping sensor, which tells you "Post in the mailbox". The alarm stays
 until you press **Mark as read** on the sensor page.
+
+**How long does the battery last?** With one 18650 cell (2500 mAh), the board sleeping,
+post arriving once a day and a temperature and battery report twice a day, expect
+about **two years**, in a good case five, in a bad case one. Most of the energy
+goes to sleeping and to the cell slowly losing charge by itself, not to sending.
+That is for the XIAO nRF52840 kit. The Heltec V4 uses more power while it sleeps and
+sending, and nobody knows how much yet: for a mailbox on a battery use the XIAO kit.
+This is an estimate: nobody has measured it on the real board yet.
 
 More technical details: [Sensor nodes](../sensors.md).

@@ -58,3 +58,6 @@ tun = ["dep:tun-rs"]
 
 [dev-dependencies]
 maarse-fuzz = { version = "0.1.0", path = "../maarse-fuzz" }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

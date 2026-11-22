@@ -25,6 +25,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName=Maarse
 UninstallDisplayIcon={app}\maarse.exe
+SetupIconFile=maarse.ico
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a shortcut on the desktop"

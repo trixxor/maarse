@@ -290,26 +290,56 @@ fn state_colour(st: &Result<Status, String>) -> u32 {
     }
 }
 
+/// The Maarse icon as 64x64 RGBA (made by `tools/make_windows_icon.py`).
+const ICON_64: &[u8] = include_bytes!("../assets/icon-64.rgba");
+
+/// The Maarse icon at the size of the notification area, with a coloured dot in the lower right corner
+/// for the state of the service and host, and a blue dot in the upper right when an update is ready.
 fn make_icon(rgb: u32, badge: bool) -> HICON {
-    const N: i32 = 16;
-    let mut px = vec![0u32; (N * N) as usize];
-    let c = (N as f32 - 1.0) / 2.0;
-    for y in 0..N {
-        for x in 0..N {
-            let d = ((x as f32 - c).powi(2) + (y as f32 - c).powi(2)).sqrt();
-            if d <= 7.2 {
-                px[(y * N + x) as usize] = 0xff00_0000 | if d > 6.0 { 0x202020 } else { rgb };
+    let n = (unsafe { GetSystemMetrics(SM_CXSMICON) }).clamp(16, 64) as usize;
+    let mut px = vec![0u32; n * n];
+    // Shrink 64 -> n by averaging, weighted by alpha so the rounded corners stay clean.
+    for y in 0..n {
+        for x in 0..n {
+            let (x0, y0) = (x * 64 / n, y * 64 / n);
+            let (x1, y1) = (((x + 1) * 64 / n).max(x0 + 1), ((y + 1) * 64 / n).max(y0 + 1));
+            let (mut r, mut g, mut b, mut a, mut count) = (0u32, 0u32, 0u32, 0u32, 0u32);
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let o = (sy * 64 + sx) * 4;
+                    let alpha = ICON_64[o + 3] as u32;
+                    r += ICON_64[o] as u32 * alpha;
+                    g += ICON_64[o + 1] as u32 * alpha;
+                    b += ICON_64[o + 2] as u32 * alpha;
+                    a += alpha;
+                    count += 1;
+                }
             }
-            // A blue dot in the corner: an update is ready.
-            if badge && x >= 10 && y <= 5 && ((x as f32 - 12.5).powi(2) + (y as f32 - 2.5).powi(2)).sqrt() <= 3.0 {
-                px[(y * N + x) as usize] = 0xff00_0000 | 0x2060e0;
+            if a > 0 {
+                px[y * n + x] = (a / count) << 24 | (r / a) << 16 | (g / a) << 8 | (b / a);
             }
         }
     }
-    let mask = vec![0u8; (N * N / 8) as usize];
+    let dot = |px: &mut Vec<u32>, cx: f32, cy: f32, radius: f32, colour: u32| {
+        for y in 0..n {
+            for x in 0..n {
+                let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
+                if d <= radius + 1.0 {
+                    px[y * n + x] = 0xff00_0000 | if d > radius { 0x202020 } else { colour };
+                }
+            }
+        }
+    };
+    let nf = n as f32;
+    dot(&mut px, nf * 0.74, nf * 0.74, nf * 0.2, rgb);
+    if badge {
+        dot(&mut px, nf * 0.76, nf * 0.2, nf * 0.17, 0x2060e0);
+    }
+    // The 1-bit mask has rows padded to 16 bits; all zero because the colour bitmap carries the alpha.
+    let mask = vec![0u8; n.div_ceil(16) * 2 * n];
     unsafe {
-        let color = CreateBitmap(N, N, 1, 32, px.as_ptr().cast());
-        let maskbm = CreateBitmap(N, N, 1, 1, mask.as_ptr().cast());
+        let color = CreateBitmap(n as i32, n as i32, 1, 32, px.as_ptr().cast());
+        let maskbm = CreateBitmap(n as i32, n as i32, 1, 1, mask.as_ptr().cast());
         let info = ICONINFO { fIcon: 1, xHotspot: 0, yHotspot: 0, hbmMask: maskbm, hbmColor: color };
         let icon = CreateIconIndirect(&info);
         DeleteObject(color);
@@ -542,6 +572,8 @@ pub fn run() -> Result<(), String> {
             let wc = WNDCLASSW {
                 lpfnWndProc: proc,
                 hInstance: inst,
+                // The icon of the exe file (resource 1, see build.rs), for the window's title bar.
+                hIcon: LoadIconW(inst, 1 as *const u16),
                 lpszClassName: class.as_ptr(),
                 hbrBackground: (COLOR_BTNFACE + 1) as _,
                 hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),

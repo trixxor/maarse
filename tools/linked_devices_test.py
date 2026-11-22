@@ -150,6 +150,21 @@ try:
     assert "copy from our device" in log and "message to" in log, "B got no sent copy"
     print("   B got the sent copy")
 
+    # 3a. A channel: the phone writes; C sees one person (not device B) and
+    #     A shows it as its own message instead of a message from "B".
+    for cl in (a, b, c):
+        cl.send(frame(0x04, b"#linked"))
+    ch = a.wait(lambda f: f[0] == 0x88 and f[17:] == b"#linked")[1:17]
+    b.wait(lambda f: f[0] == 0x88 and f[17:] == b"#linked")
+    c.wait(lambda f: f[0] == 0x88 and f[17:] == b"#linked")
+    time.sleep(1)
+    b.send(frame(0x03, struct.pack("<H", 12), ch, b"From the phone"))
+    fc = c.wait(lambda f: f[0] == 0x84 and f[34:] == b"From the phone", what="C got the channel message")
+    assert fc[17:33] == M, f"C sees the channel message from {fc[17:33].hex()[:8]}, not the person"
+    a.wait(lambda f: f[0] == 0xb0 and f[57:].decode(errors="replace") == "From the phone", what="A shows it as its own")
+    assert not any(f[0] == 0x84 and f[34:] == b"From the phone" for f in a.events), "A shows the phone's message as from another"
+    print("3a. channel: C sees the person; A shows the phone's message as its own")
+
     # 3b. A new device E (with history) is linked and syncs: it gets the
     #     earlier messages from A's history, without notifications.
     start("E", 8195, ["--listen", "off", "--peer", "127.0.0.1:4391"], history=True)
@@ -197,7 +212,7 @@ try:
     # C picks E (the redirect made it the newest): no answer -> deposit under M.
     c.send(frame(0x02, struct.pack("<H", 11), M, "While the phone is off".encode()))
     c.wait(lambda f: f[0] == 0x90, secs=30, what="C Deposited")
-    assert "keeping the message in our post office for " + M.hex()[:8] in log_of("C"), "not kept under the person"
+    assert "post office: stored message for " + M.hex()[:8] in log_of("C"), "not kept under the person"
     print("4. phone off: C keeps the message under the person", M.hex()[:8])
     a.send(frame(0x05))
     fa = a.wait(lambda f: direct(f, "While the phone is off"), secs=40, what="A got the kept mail")

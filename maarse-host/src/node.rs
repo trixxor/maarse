@@ -1708,10 +1708,18 @@ impl Node {
                         self.on_bulletin(from, hops, &out[..n]);
                     }
                     Ok((from, n)) if from != self.addr => {
+                        // A device of a person is shown as the person. One of
+                        // our own devices wrote it: it is our own message,
+                        // shown on this screen as sent by us.
+                        let peer = self.person_peer(&from);
+                        if self.is_own_person(&peer) {
+                            self.hist_sent(0, crate::history::KIND_CHANNEL, dest, 0, &out[..n]);
+                            return;
+                        }
                         self.mqtt_channel(&dest, &from, hops, &out[..n]);
                         self.broadcast(&Event::ChannelReceived {
                             channel: dest,
-                            from,
+                            from: peer,
                             hops,
                             text: text(&out[..n]),
                         });

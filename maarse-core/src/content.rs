@@ -64,6 +64,9 @@ pub const FILE_REQUEST: u8 = 0x0C;
 /// text (UTF-8, at most [`MAX_NOTE`] bytes). The host keeps it if the page
 /// has a board and the sender may read the page.
 pub const BOARD_POST: u8 = 0x0D;
+/// Sensor data from a sensor node to its owners: readings and alarms, see
+/// [`crate::sensor`]. The content after this byte is a `sensor::Message`.
+pub const SENSOR: u8 = 0x0E;
 /// The longest note: it has to fit in one sealed message with the path.
 pub const MAX_NOTE: usize = 100;
 /// Chunks a request can describe after its base.
@@ -160,6 +163,8 @@ pub enum Content<'a> {
     FileRequest(u64, u16, u8, u32),
     /// A note for a page's notice board: (page path, text).
     BoardPost(Small, &'a [u8]),
+    /// Readings or an alarm from a sensor node (`sensor::decode`).
+    Sensor(&'a [u8]),
     Unknown(u8),
 }
 
@@ -217,6 +222,7 @@ pub fn parse(plain: &[u8]) -> Option<Content<'_>> {
         IP => Some(Content::Ip(&plain[1..])),
         PERSON if plain.len() >= 2 => Some(Content::Person(plain[1], &plain[2..])),
         SEQ if plain.len() >= 6 => Some(Content::Seq(u32::from_le_bytes(plain[1..5].try_into().ok()?), &plain[5..])),
+        SENSOR if plain.len() >= 2 => Some(Content::Sensor(&plain[1..])),
         FILE_REQUEST if plain.len() >= 16 => Some(Content::FileRequest(
             u64::from_le_bytes(plain[1..9].try_into().ok()?),
             u16::from_le_bytes(plain[9..11].try_into().ok()?),

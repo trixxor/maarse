@@ -29,6 +29,7 @@ pub mod rangetest;
 pub mod region;
 pub mod router;
 pub mod routes;
+pub mod sensor;
 pub mod stamp;
 pub mod textz;
 pub mod modemauth;

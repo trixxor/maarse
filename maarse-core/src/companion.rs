@@ -219,6 +219,11 @@ pub enum Command {
     PersonSetup { req: u16, op: u8, text: Text },
     /// 0x38: stop sending a file (the reply is `FileDone` with ok = false).
     CancelFile { file_id: u64 },
+    /// 0x39: sensor nodes, see [`crate::sensor`]. `dest` is the node the
+    /// command is for: all zeros = the connected node (USB, Bluetooth) or the
+    /// host itself. A remote node gets it as a control command (the sender must
+    /// be one of its owners). The answers are `Event::Sensor`.
+    Sensor { req: u16, dest: Address, op: u8, data: Text },
 }
 
 /// Operations of `Command::PersonSetup` (linked devices,
@@ -635,6 +640,9 @@ pub enum Event {
     /// 0xb7: the 24 words of a new person, sent once after
     /// `PersonSetup CREATE`. Written on paper; the node does not keep them.
     PersonPhrase { phrase: Text },
+    /// 0xbd: an answer or a push about a sensor node (`node` = its address, all
+    /// zeros for the connected node): see `sensor::op::EV_*`.
+    Sensor { node: Address, op: u8, data: Text },
     /// 0xb8: a backup was written (`account-backup.maarse`); its 6-word code,
     /// sent once. The node does not keep the code.
     PersonBackup { code: Text },
@@ -1187,6 +1195,7 @@ impl Command {
             Command::GetPerson => W::new(0x36).done(),
             Command::PersonSetup { req, op, text } => W::new(0x37).b(&req.to_le_bytes()).b(&[*op]).b(text).done(),
             Command::CancelFile { file_id } => W::new(0x38).b(&file_id.to_le_bytes()).done(),
+            Command::Sensor { req, dest, op, data } => W::new(0x39).b(&req.to_le_bytes()).b(&dest.0).b(&[*op]).b(data).done(),
         }
     }
 
@@ -1286,6 +1295,7 @@ impl Command {
             0x36 => Command::GetPerson,
             0x37 => Command::PersonSetup { req: r.u16()?, op: r.u8()?, text: r.text()? },
             0x38 => Command::CancelFile { file_id: r.u64()? },
+            0x39 => Command::Sensor { req: r.u16()?, dest: r.addr()?, op: r.u8()?, data: r.text()? },
             t => return Err(FrameError::UnknownType(t)),
         })
     }
@@ -1536,6 +1546,7 @@ impl Event {
                 w.b(&p.words).done()
             }
             Event::PersonPhrase { phrase } => W::new(0xb7).b(phrase).done(),
+            Event::Sensor { node, op, data } => W::new(0xbd).b(&node.0).b(&[*op]).b(data).done(),
             Event::PersonBackup { code } => W::new(0xb8).b(code).done(),
             Event::MeshCoreProof { req, offset, total, data } => W::new(0xbc)
                 .b(&req.to_le_bytes()).b(&offset.to_le_bytes()).b(&total.to_le_bytes()).b(data).done(),
@@ -1744,6 +1755,7 @@ impl Event {
                 Event::Person(PersonInfo { state, master, person, index, version, devices, words })
             }
             0xb7 => Event::PersonPhrase { phrase: r.text()? },
+            0xbd => Event::Sensor { node: r.addr()?, op: r.u8()?, data: r.text()? },
             0xb8 => Event::PersonBackup { code: r.text()? },
             0xbc => Event::MeshCoreProof { req: r.u16()?, offset: r.u16()?, total: r.u16()?, data: r.text()? },
             0xb4 => {
@@ -1956,6 +1968,8 @@ mod tests {
         }));
         roundtrip_ev(Event::Person(PersonInfo::default()));
         roundtrip_ev(Event::PersonPhrase { phrase: text(b"abandon ability able") });
+        roundtrip_ev(Event::Sensor { node: Address([4; 16]), op: 2, data: text(&[1, 2, 3]) });
+        roundtrip_cmd(Command::Sensor { req: 3, dest: Address([0; 16]), op: 2, data: text(&[9; 100]) });
         roundtrip_ev(Event::PersonBackup { code: text(b"one two three four five six") });
         roundtrip_ev(Event::MeshCoreProof { req: 2, offset: 240, total: 359, data: text(&[0xaa; 119]) });
         assert_eq!(Command::SetIdentity { confirm: true, secret: [1; 64] }.encode()[2], 0x34);

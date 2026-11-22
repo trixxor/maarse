@@ -19,10 +19,18 @@
 //! POST /api/sensors/compile                 setup -> recipe (hex), size, checks
 //! POST /api/sensors/decompile               {"hex"} -> setup
 //! POST /api/sensors/simulate                {"setup", "scenario"} -> what it would do
+//! GET  /api/sensors/catalog                 the boards and sensors the designer offers
+//! GET  /api/sensors/catalog/update          which list is in use and when it was checked
+//! POST /api/sensors/catalog/update          {"check": true} look on GitHub now, {"auto": bool}, or
+//!                                           {"catalog", "sums", "sig"} a signed list (the app downloads it)
 //! ```
 
+mod catalog;
+mod catalog_update;
+
 use maarse_core::Address;
-use maarse_core::sensor::{self, Action, Cmp, Cond, Edge, Input, Message, Pull, Recipe, Rule, Sample, Source, Value, kind};
+use maarse_core::sensor::catalog::{Field, I2cDesc};
+use maarse_core::sensor::{self, Action, Cmp, Cond, Edge, Input, Map, Message, Pull, Recipe, Rule, Sample, Source, Value, kind};
 use serde_json::{Value as J, json};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -95,7 +103,7 @@ fn parse_addr(s: &str) -> Option<Address> {
 }
 
 fn scaled(kind: u8, value: i32) -> f64 {
-    value as f64 / kind::scale(kind) as f64
+    value as f64 / catalog::kind_scale(kind) as f64
 }
 
 impl Store {
@@ -250,7 +258,7 @@ impl Store {
                 .iter()
                 .map(|(c, ch)| {
                     let last = ch.points.back();
-                    json!({"chan": c, "kind": ch.kind, "name": kind::name(ch.kind), "unit": kind::unit(ch.kind),
+                    json!({"chan": c, "kind": ch.kind, "name": catalog::kind_name(ch.kind), "unit": catalog::kind_unit(ch.kind),
                            "value": last.map(|(_, v)| scaled(ch.kind, *v)), "t": last.map(|(t, _)| *t)})
                 })
                 .collect();
@@ -286,33 +294,18 @@ impl Store {
         {
             out.push(json!([t, scaled(ch.kind, *v)]));
         }
-        Some(json!({"kind": ch.kind, "name": kind::name(ch.kind), "unit": kind::unit(ch.kind), "points": out}))
+        Some(json!({"kind": ch.kind, "name": catalog::kind_name(ch.kind), "unit": catalog::kind_unit(ch.kind), "points": out}))
     }
 }
 
 // ------------------------------------------------------------- setup <-> recipe
 
-const KINDS: [(&str, u8); 8] = [
-    ("temperature", kind::TEMPERATURE),
-    ("humidity", kind::HUMIDITY),
-    ("pressure", kind::PRESSURE),
-    ("voltage", kind::VOLTAGE),
-    ("digital", kind::DIGITAL),
-    ("counter", kind::COUNTER),
-    ("percent", kind::PERCENT),
-    ("distance", kind::DISTANCE),
-];
-
 fn kind_from(v: &J) -> Result<u8, String> {
-    if let Some(n) = v.as_u64() {
-        return u8::try_from(n).ok().filter(|k| kind::is_known(*k)).ok_or_else(|| format!("Unknown kind {n}"));
-    }
-    let s = v.as_str().ok_or("A source needs a kind")?;
-    KINDS.iter().find(|(n, _)| *n == s).map(|(_, k)| *k).ok_or_else(|| format!("Unknown kind \"{s}\""))
+    catalog::current().kind_id(v)
 }
 
 fn kind_name(k: u8) -> J {
-    KINDS.iter().find(|(_, c)| *c == k).map_or(json!(k), |(n, _)| json!(n))
+    catalog::kind_key(k)
 }
 
 fn pull_from(v: &J) -> Pull {
@@ -363,10 +356,83 @@ fn input_from(v: &J) -> Result<Input, String> {
             };
             Input::Bme280 { addr: v["addr"].as_u64().unwrap_or(0x76) as u8, what }
         }
+        "i2c" => {
+            let device = v["device"].as_str().ok_or("An I2C sensor needs a device")?;
+            let addr = v["addr"].as_u64().map(|a| u8::try_from(a).map_err(|_| "The I2C address is a number from 1 to 119")).transpose()?;
+            catalog::current().i2c_input(device, addr, &v["what"])?
+        }
+        "i2c_custom" => Input::I2c(custom_from(v)?),
         "counter" => Input::Counter { pin: u8_of(&v["pin"], "pin")?, falling: v["falling"].as_bool().unwrap_or(false), pull: pull_from(&v["pull"]) },
         "gpio_out" => Input::GpioOut { pin: u8_of(&v["pin"], "pin")?, active_low: v["active_low"].as_bool().unwrap_or(false) },
         other => return Err(format!("Unknown input type \"{other}\"")),
     })
+}
+
+fn hex_of(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// A sensor described by hand: addresses and register numbers are numbers,
+/// the bytes to send are hex strings.
+fn custom_from(v: &J) -> Result<I2cDesc, String> {
+    let bytes = |key: &str, max: usize| -> Result<Vec<u8>, String> {
+        let t = v[key].as_str().unwrap_or("").replace([' ', '_'], "");
+        let b = parse_hex(&t).ok_or_else(|| format!("\"{key}\" must be hex bytes, like 24 00"))?;
+        if b.len() > max { Err(format!("\"{key}\" is at most {max} bytes")) } else { Ok(b) }
+    };
+    let num = |x: &J, what: &str, d: i64| -> Result<i64, String> {
+        match x {
+            J::Null => Ok(d),
+            J::Number(n) => n.as_f64().map(|f| f.round() as i64).ok_or_else(|| format!("{what} is not a number")),
+            _ => Err(format!("{what} must be a number")),
+        }
+    };
+    let addr = num(&v["addr"], "The address", -1)?;
+    if !(1..=0x77).contains(&addr) {
+        return Err("The I2C address must be between 1 and 119 (0x01 to 0x77)".into());
+    }
+    let mut d = I2cDesc::new(addr as u8);
+    let mut left = 0;
+    for cmd in v["init"].as_array().into_iter().flatten() {
+        let b = parse_hex(&cmd.as_str().unwrap_or("").replace(' ', "")).filter(|b| (1..=4).contains(&b.len())).ok_or("Each set-up command is 1 to 4 hex bytes")?;
+        if left + 1 + b.len() > sensor::catalog::MAX_INIT {
+            return Err(format!("The set-up commands are too long (at most {} bytes with their lengths)", sensor::catalog::MAX_INIT));
+        }
+        d.init[left] = b.len() as u8;
+        d.init[left + 1..left + 1 + b.len()].copy_from_slice(&b);
+        left += 1 + b.len();
+    }
+    d.init_len = left as u8;
+    let t = bytes("trigger", sensor::catalog::MAX_TRIGGER)?;
+    d.trigger[..t.len()].copy_from_slice(&t);
+    d.trigger_len = t.len() as u8;
+    let p = bytes("ptr", sensor::catalog::MAX_PTR)?;
+    d.ptr[..p.len()].copy_from_slice(&p);
+    d.ptr_len = p.len() as u8;
+    d.wait_ms = num(&v["wait_ms"], "The wait", 0)?.clamp(0, u16::MAX as i64) as u16;
+    d.read_len = num(&v["read_len"], "The number of bytes to read", 2)?.clamp(0, 255) as u8;
+    d.crc = v["crc"].as_bool().unwrap_or(false);
+    let f = &v["field"];
+    d.field = Field {
+        bit_off: num(&f["bit_off"], "bit_off", 0)?.clamp(0, 255) as u8,
+        bits: num(&f["bits"], "bits", 16)?.clamp(0, 255) as u8,
+        signed: f["signed"].as_bool().unwrap_or(false),
+        little: f["little"].as_bool().unwrap_or(false),
+        mul: num(&f["mul"], "mul", 1)?.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        div: num(&f["div"], "div", 1)?.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        add: num(&f["add"], "add", 0)?.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+    };
+    if !d.validate() {
+        return Err("The sensor description does not fit together: check that the bits are inside the bytes read (with check bytes, 2 of every 3 bytes count), that the divisor is not 0, and that little endian fields start on a byte".into());
+    }
+    Ok(d)
+}
+
+fn custom_json(d: &I2cDesc) -> J {
+    let init: Vec<String> = d.init_commands().map(hex_of).collect();
+    json!({"type": "i2c_custom", "addr": d.addr, "init": init, "trigger": hex_of(d.trigger_bytes()), "wait_ms": d.wait_ms, "ptr": hex_of(d.ptr_bytes()),
+           "read_len": d.read_len, "crc": d.crc,
+           "field": {"bit_off": d.field.bit_off, "bits": d.field.bits, "signed": d.field.signed, "little": d.field.little, "mul": d.field.mul, "div": d.field.div, "add": d.field.add}})
 }
 
 fn input_json(i: &Input) -> J {
@@ -379,6 +445,11 @@ fn input_json(i: &Input) -> J {
             let what = ["temperature", "humidity", "pressure"][what.min(2) as usize];
             json!({"type": "bme280", "addr": addr, "what": what})
         }
+        // A catalogue chip is shown by its name; anything else as the description it is.
+        Input::I2c(d) => match catalog::current().recognise(&d) {
+            Some((device, addr, what)) => json!({"type": "i2c", "device": device, "addr": addr, "what": what}),
+            None => custom_json(&d),
+        },
         Input::Counter { pin, falling, pull } => json!({"type": "counter", "pin": pin, "falling": falling, "pull": pull_name(pull)}),
         Input::GpioOut { pin, active_low } => json!({"type": "gpio_out", "pin": pin, "active_low": active_low}),
     }
@@ -412,7 +483,7 @@ fn src_index(sources: &[Source], chan: &J) -> Result<u8, String> {
 }
 
 fn to_units(sources: &[Source], src: u8, x: f64) -> i32 {
-    (x * kind::scale(sources[src as usize].kind) as f64).round() as i32
+    (x * catalog::kind_scale(sources[src as usize].kind) as f64).round() as i32
 }
 
 /// Builds a recipe from the designer's setup.
@@ -436,9 +507,30 @@ pub fn compile(setup: &J) -> Result<Recipe, String> {
         let src = Source { chan: u8_of(&s["chan"], "chan")?, kind: kind_from(&s["kind"])?, input: input_from(&s["input"])? };
         r.sources.push(src).map_err(|_| format!("At most {} sources", sensor::MAX_SOURCES))?;
     }
-    // Only some pins can wake a sleeping ESP32 (the RTC pins).
-    if setup["board"].as_str() == Some("heltec_v4") && r.wake_pins().iter().any(|(p, _)| ![3, 4, 6].contains(p)) {
-        return Err("On the Heltec V4 only GPIO 3, 4 and 6 can wake the sensor".into());
+    // A map turns a reading into another range (millivolts into a percentage).
+    for (i, s) in setup["sources"].as_array().into_iter().flatten().enumerate() {
+        let m = &s["map"];
+        if m.is_null() {
+            continue;
+        }
+        let pair = |key: &str| -> Result<(f64, f64), String> {
+            match (m[key][0].as_f64(), m[key][1].as_f64()) {
+                (Some(a), Some(b)) => Ok((a, b)),
+                _ => Err(format!("A map needs \"{key}\": [from, to]")),
+            }
+        };
+        let ((i0, i1), (o0, o1)) = (pair("in")?, pair("out")?);
+        let scale = catalog::kind_scale(r.sources[i].kind) as f64;
+        let fit = |x: f64, what: &str| -> Result<i16, String> {
+            let v = x.round();
+            if (i16::MIN as f64..=i16::MAX as f64).contains(&v) { Ok(v as i16) } else { Err(format!("The {what} of a map is out of range")) }
+        };
+        r.maps
+            .push(Map { src: i as u8, in_lo: fit(i0, "input")?, in_hi: fit(i1, "input")?, out_lo: fit(o0 * scale, "output")?, out_hi: fit(o1 * scale, "output")? })
+            .map_err(|_| format!("At most {} maps", sensor::MAX_MAPS))?;
+    }
+    if let Some(b) = setup["board"].as_str() {
+        catalog::check_board(b, &r)?;
     }
     let sources: Vec<Source> = r.sources.to_vec();
     for (i, rule) in setup["rules"].as_array().ok_or("The setup has no rules")?.iter().enumerate() {
@@ -533,7 +625,15 @@ pub fn decompile(r: &Recipe) -> J {
     let sources: Vec<J> = r
         .sources
         .iter()
-        .map(|s| json!({"chan": s.chan, "kind": kind_name(s.kind), "name": format!("{} {}", kind::name(s.kind), s.chan), "input": input_json(&s.input)}))
+        .enumerate()
+        .map(|(i, s)| {
+            let mut j = json!({"chan": s.chan, "kind": kind_name(s.kind), "name": format!("{} {}", catalog::kind_name(s.kind), s.chan), "input": input_json(&s.input)});
+            if let Some(m) = r.maps.iter().find(|m| m.src as usize == i) {
+                let sc = catalog::kind_scale(s.kind) as f64;
+                j["map"] = json!({"in": [m.in_lo, m.in_hi], "out": [m.out_lo as f64 / sc, m.out_hi as f64 / sc]});
+            }
+            j
+        })
         .collect();
     let chan_of = |i: u8| r.sources.get(i as usize).map_or(0, |s| s.chan);
     let units = |i: u8, v: i32| r.sources.get(i as usize).map_or(v as f64, |s| scaled(s.kind, v));
@@ -600,6 +700,21 @@ fn scenario_value(scenario: &str, s: &Source, t: u32) -> Option<i32> {
         }
         Input::Counter { .. } => Some((hours * 12.0) as i32),
         Input::GpioOut { .. } => None,
+        // A chip the host cannot read: a believable value for what it measures.
+        Input::I2c(_) => Some(match s.kind {
+            kind::TEMPERATURE => (match scenario {
+                "cold_night" => 11.5 + 3.5 * ((day(hours) - 4.0 - 6.0) * std::f64::consts::PI / 12.0).sin(),
+                _ => 11.0,
+            } * 100.0)
+                .round() as i32,
+            kind::HUMIDITY => 6200 + ((hours * 7.0).sin() * 300.0) as i32,
+            kind::PRESSURE => 101_325 - 20 * hours as i32,
+            kind::CO2 => 600 + ((hours * 3.0).sin() * 150.0) as i32,
+            kind::LIGHT => (400.0 * ((day(hours) - 6.0) * std::f64::consts::PI / 12.0).sin().max(0.0)) as i32,
+            kind::VOLTAGE => 1200,
+            kind::ACCEL => 1000,
+            _ => 0,
+        }),
     }
 }
 
@@ -632,6 +747,7 @@ pub fn simulate(r: &Recipe, scenario: &str) -> J {
             .enumerate()
             .map(|(i, s)| if matches!(s.input, Input::GpioOut { .. }) { Some((outputs >> i & 1) as i32) } else if silent { None } else { scenario_value(scenario, s, t) })
             .collect();
+        r.apply_maps(&mut values);
         if values.is_empty() {
             values.push(None);
         }
@@ -711,7 +827,7 @@ pub fn simulate(r: &Recipe, scenario: &str) -> J {
 }
 
 /// The compiled recipe and what the designer wants to know about it.
-fn compile_json(setup: &J) -> J {
+pub(crate) fn compile_json(setup: &J) -> J {
     match compile(setup).and_then(|r| r.to_bytes().map(|b| (r, b)).map_err(|e| format!("{e:?}"))) {
         Ok((r, bytes)) => {
             let sim = simulate(&r, "cold_night");
@@ -723,6 +839,10 @@ fn compile_json(setup: &J) -> J {
             let pin_rule = r.rules.iter().any(|ru| matches!(ru.cond, Cond::Edge { .. }));
             if pin_rule && r.interval_s > 120 && r.wake_pins().is_empty() {
                 warnings.push("A pin is read once per cycle: an opening shorter than the interval is missed. Switch on \"Wake the sensor\" for the pin, or use a shorter interval");
+            }
+            let slow = r.sources.iter().any(|s| matches!(s.input, Input::I2c(d) if d.wait_ms >= 1000));
+            if slow && r.flags & sensor::FLAG_SLEEP != 0 && r.interval_s < 300 {
+                warnings.push("A CO2 sensor is awake for 5 seconds at every reading: on a battery use an interval of 5 minutes or more");
             }
             if r.report_to == 0 && r.alarm_to == 0 {
                 warnings.push("Nobody receives anything: choose who gets the readings and alarms");
@@ -743,6 +863,11 @@ fn param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
     query.split('&').find_map(|kv| kv.strip_prefix(key)?.strip_prefix('='))
 }
 
+/// Reads the saved sensor list (checked again) and starts the daily look at GitHub.
+pub fn open_catalog(data_dir: &Path) {
+    catalog_update::open(data_dir);
+}
+
 pub fn unix_now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
@@ -754,6 +879,32 @@ pub fn api(method: &str, path: &str, query: &str, body: &[u8]) -> Option<(&'stat
     let bad = |m: &str| Some(("400 Bad Request", json!({"error": m}).to_string()));
     let ok = |v: J| Some(("200 OK", v.to_string()));
     let parsed = || serde_json::from_slice::<J>(body);
+    // The sensor list is not the store: looking on GitHub takes a while and must not hold it.
+    match (method, path) {
+        ("GET", "/catalog") => return ok(catalog::catalog_json()),
+        ("GET", "/catalog/update") => return ok(catalog_update::status_json()),
+        ("POST", "/catalog/update") => {
+            let Ok(v) = parsed() else { return bad("not JSON") };
+            if let Some(on) = v["auto"].as_bool() {
+                catalog_update::set_auto(on);
+            }
+            let result = if let (Some(c), Some(s), Some(g)) = (v["catalog"].as_str(), v["sums"].as_str(), v["sig"].as_str()) {
+                Some(catalog_update::install_signed(c.as_bytes(), s, g))
+            } else if v["check"].as_bool() == Some(true) {
+                Some(catalog_update::check_now())
+            } else {
+                None
+            };
+            let mut out = catalog_update::status_json();
+            match result {
+                Some(Ok(m)) => out["message"] = json!(m),
+                Some(Err(e)) => out["error"] = json!(e),
+                None => {}
+            }
+            return ok(out);
+        }
+        _ => {}
+    }
     let mut store = STORE.lock().unwrap_or_else(|e| e.into_inner());
     match (method, path) {
         ("GET", "") => ok(store.list_json(unix_now())),
@@ -774,7 +925,7 @@ pub fn api(method: &str, path: &str, query: &str, body: &[u8]) -> Option<(&'stat
             let list: Vec<J> = store
                 .nodes
                 .get(&node)
-                .map(|n| n.alarms.iter().rev().map(|a| json!({"t": a.t, "rule": a.rule, "raised": a.raised, "text": a.text, "chan": a.chan, "value": scaled(a.kind, a.value), "unit": kind::unit(a.kind)})).collect())
+                .map(|n| n.alarms.iter().rev().map(|a| json!({"t": a.t, "rule": a.rule, "raised": a.raised, "text": a.text, "chan": a.chan, "value": scaled(a.kind, a.value), "unit": catalog::kind_unit(a.kind)})).collect())
                 .unwrap_or_default();
             ok(J::Array(list))
         }
@@ -1018,5 +1169,97 @@ mod tests {
         let (status, _) = api("GET", "/api/sensors/series", "node=zz", b"").unwrap();
         assert_eq!(status, "400 Bad Request");
         assert!(api("GET", "/api/other", "", b"").is_none());
+    }
+
+    fn setup_of(board: &str, sources: J) -> J {
+        json!({"v": 1, "board": board, "interval_s": 900, "sleep": true, "report_to": {"owners": [0]}, "alarm_to": {"owners": [0]},
+               "sources": sources, "rules": [{"id": 1, "when": {"type": "every", "secs": 900}, "then": [{"type": "report"}]}]})
+    }
+
+    #[test]
+    fn catalogue_custom_and_mapped_sensors_compile_round_trip_and_simulate() {
+        let sources = json!([
+            {"chan": 1, "kind": "temperature", "input": {"type": "i2c", "device": "sht3x", "what": 0}},
+            {"chan": 2, "kind": "humidity", "input": {"type": "i2c", "device": "sht3x", "what": "Humidity"}},
+            {"chan": 3, "kind": "percent", "input": {"type": "i2c", "device": "ads1115", "addr": 72, "what": 0}, "map": {"in": [2600, 1200], "out": [0, 100]}},
+            {"chan": 4, "kind": "custom", "input": {"type": "i2c_custom", "addr": 64, "ptr": "05", "read_len": 2,
+                "field": {"bits": 16, "signed": true, "mul": 1, "div": 10}}}]);
+        let setup = setup_of("heltec_v4", sources);
+        let r = compile(&setup).unwrap();
+        assert_eq!(r.maps.len(), 1);
+        let b = r.to_bytes().unwrap();
+        let back = Recipe::from_bytes(&b).unwrap();
+        assert_eq!(back, r);
+        // Round trip through the designer's JSON keeps the map in display units and the custom sensor.
+        let again = decompile(&back);
+        assert_eq!(again["sources"][2]["map"], json!({"in": [2600, 1200], "out": [0.0, 100.0]}));
+        assert_eq!(again["sources"][1]["input"]["device"], json!("sht3x"));
+        assert_eq!(again["sources"][3]["input"]["ptr"], json!("05"));
+        let mut again_setup = again.clone();
+        again_setup["board"] = json!("heltec_v4");
+        assert_eq!(compile(&again_setup).unwrap(), r);
+        // The simulator turns 1200 mV into a percentage, as the node would.
+        let sim = simulate(&r, "cold_night");
+        assert_eq!(sim["series"]["3"][0], json!(100.0));
+    }
+
+    #[test]
+    fn a_custom_sensor_says_what_is_wrong() {
+        let src = |input: J| setup_of("xiao_nrf52840", json!([{"chan": 1, "kind": "custom", "input": input}]));
+        let ok = json!({"type": "i2c_custom", "addr": 64, "ptr": "05", "read_len": 2, "field": {"bits": 16}});
+        assert!(compile(&src(ok.clone())).is_ok());
+        let mut bad = ok.clone();
+        bad["addr"] = json!(200);
+        assert!(compile(&src(bad)).unwrap_err().contains("address"));
+        let mut bad = ok.clone();
+        bad["field"]["bits"] = json!(24);
+        assert!(compile(&src(bad)).unwrap_err().contains("bits are inside"));
+        let mut bad = ok.clone();
+        bad["trigger"] = json!("zz");
+        assert!(compile(&src(bad)).unwrap_err().contains("hex"));
+        let mut bad = ok.clone();
+        bad["ptr"] = json!("010203");
+        assert!(compile(&src(bad)).unwrap_err().contains("at most 2"));
+        let mut bad = ok.clone();
+        bad["init"] = json!(["0102", "0304", "0506"]);
+        assert!(compile(&src(bad)).unwrap_err().contains("too long"));
+        let unknown = src(json!({"type": "i2c", "device": "nope"}));
+        assert!(compile(&unknown).unwrap_err().contains("Unknown sensor"));
+        let wrong = src(json!({"type": "i2c", "device": "sht3x", "addr": 80}));
+        assert!(compile(&wrong).unwrap_err().contains("cannot have the address"));
+    }
+
+    #[test]
+    fn the_board_decides_which_sensors_fit() {
+        let pin = |p: u32| json!([{"chan": 1, "kind": "digital", "input": {"type": "gpio_in", "pin": p, "pull": "up"}}]);
+        let i2c = json!([{"chan": 1, "kind": "temperature", "input": {"type": "i2c", "device": "sht3x"}}]);
+        assert!(compile(&setup_of("xiao_nrf52840", pin(0))).is_ok());
+        assert!(compile(&setup_of("xiao_nrf52840", pin(3))).unwrap_err().contains("not free"));
+        assert!(compile(&setup_of("xiao_nrf52840", i2c.clone())).is_ok());
+        // The I2C bus takes D6 and D7.
+        let both = json!([{"chan": 1, "kind": "temperature", "input": {"type": "i2c", "device": "sht3x"}},
+                          {"chan": 2, "kind": "digital", "input": {"type": "gpio_in", "pin": 6, "pull": "up"}}]);
+        assert!(compile(&setup_of("xiao_nrf52840", both)).unwrap_err().contains("I2C bus"));
+        // An analogue pin only where the board has one.
+        let adc = json!([{"chan": 1, "kind": "voltage", "input": {"type": "adc", "pin": 4}}]);
+        assert!(compile(&setup_of("heltec_v4", adc.clone())).is_ok());
+        assert!(compile(&setup_of("xiao_nrf52840", adc)).unwrap_err().contains("ADS1115"));
+        // A board without firmware for sensors is listed but cannot be chosen.
+        assert!(compile(&setup_of("xiao_esp32s3", i2c)).unwrap_err().contains("cannot read sensors yet"));
+        assert!(compile(&setup_of("nope", pin(0))).unwrap_err().contains("Unknown board"));
+    }
+
+    #[test]
+    fn the_catalogue_is_served_and_a_co2_sensor_on_a_short_interval_is_warned_about() {
+        let (status, body) = api("GET", "/api/sensors/catalog", "", b"").unwrap();
+        assert_eq!(status, "200 OK");
+        let c: J = serde_json::from_str(&body).unwrap();
+        assert!(c["sensors"].as_array().unwrap().iter().any(|s| s["id"] == "scd41" && s["channels"].as_array().unwrap().len() == 3));
+        assert!(c["boards"].as_array().unwrap().iter().any(|b| b["id"] == "xiao_esp32s3" && b["available"] == false));
+        let mut setup = setup_of("heltec_v4", json!([{"chan": 1, "kind": "co2", "input": {"type": "i2c", "device": "scd41"}}]));
+        setup["interval_s"] = json!(60);
+        let out = compile_json(&setup);
+        assert_eq!(out["ok"], json!(true), "{out}");
+        assert!(out["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("5 seconds")));
     }
 }

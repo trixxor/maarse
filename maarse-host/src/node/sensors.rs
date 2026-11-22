@@ -17,6 +17,7 @@ static LAST_SAVE: AtomicI64 = AtomicI64::new(0);
 impl Node {
     pub(super) fn sensors_open(&mut self) {
         crate::sensors::STORE.lock().unwrap_or_else(|e| e.into_inner()).open(&self.data_dir);
+        crate::sensors::open_catalog(&self.data_dir);
     }
 
     /// Writes the history now and then (and when asked to).

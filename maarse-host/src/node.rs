@@ -363,6 +363,9 @@ pub struct Node {
     /// Mail for a person delivered to one of its devices: the delivery's
     /// message ID -> the stored mail's ID (see node/person.rs).
     mail_alias: HashMap<u64, u64>,
+    /// Receipt IDs of mail a post office delivered to us (a `BUNDLE`) that we
+    /// have not yet opened: when it opens, its sender gets a delivery receipt.
+    receipt_wanted: std::collections::HashSet<u64>,
     max_file: u32,
     // ---------- file limits and file mailbox (see filebox.rs) ----------
     /// The link the packet we are processing came in on.
@@ -634,6 +637,7 @@ impl Node {
             in_files: HashMap::new(),
             mailbox: HashMap::new(),
             mail_alias: HashMap::new(),
+            receipt_wanted: std::collections::HashSet::new(),
             max_file: cfg.max_file,
             rx_link: None,
             rx_snr: None,
@@ -1826,6 +1830,11 @@ impl Node {
                     // It supports forward secrecy, even if we have not heard so.
                     self.fs_peers.insert(o.from);
                 }
+                // Mail from a post office: tell the sender it arrived.
+                let rid = maarse_core::mail::receipt_id(&self.addr, &payload);
+                if self.receipt_wanted.remove(&rid) {
+                    self.send_receipt(o.from, rid);
+                }
                 self.on_content(o.from, &out[..o.len], hops, o.format)
             }
             Err(CryptoError::UnknownSender(a)) => {
@@ -2816,10 +2825,42 @@ impl Node {
             mail::OP_BUNDLE if d.recipient == self.addr => {
                 let items: Vec<Vec<u8>> = d.bundle().map(|m| m.to_vec()).collect();
                 for m in items {
+                    if self.receipt_wanted.len() >= 256 {
+                        self.receipt_wanted.clear();
+                    }
+                    self.receipt_wanted.insert(mail::receipt_id(&self.addr, &m));
                     self.open_direct(m, hops, true);
                 }
             }
+            // A recipient says it got mail we deposited: the same as an ack.
+            mail::OP_RECEIPT if d.recipient == self.addr => {
+                let ids: Vec<u64> = d.receipts().collect();
+                for id in ids {
+                    let found = self
+                        .outbox
+                        .iter()
+                        .find(|(_, m)| mail::receipt_id(&m.dest, &m.mail_sealed) == id)
+                        .map(|(msg_id, _)| *msg_id);
+                    if let Some(msg_id) = found {
+                        self.log(format!("delivery receipt for message {msg_id:016x}"));
+                        self.on_acked(msg_id);
+                    }
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Tells `sender` that its mail, delivered by a post office, reached us.
+    fn send_receipt(&mut self, sender: Address, id: u64) {
+        let mut p: maarse_core::router::Buf = maarse_core::router::Buf::new();
+        if !maarse_core::mail::build(&mut p, &sender, maarse_core::mail::OP_RECEIPT, &id.to_le_bytes()) {
+            return;
+        }
+        let now = self.now_ms();
+        if let Ok((msg_id, actions)) = self.router.send_typed(PacketType::Deposit, sender, &p, token(), now) {
+            self.awaiting.insert(msg_id, Pending::Control);
+            self.apply(actions.into_iter().collect());
         }
     }
 
@@ -3046,7 +3087,11 @@ impl Node {
             return;
         }
         // A recipient that reads bundles gets several messages per packet.
-        if self.caps.get(&recipient).is_some_and(|c| c & maarse_core::appdata::CAP_BUNDLE != 0) && mails.len() >= 2 {
+        // Also for a single message (up to 255 bytes): a bundle is how the
+        // recipient learns the mail came from a post office and sends the
+        // sender a delivery receipt.
+        let bundle_ok = mails.len() >= 2 || mails.values().all(|m| m.sealed.len() <= 255);
+        if self.caps.get(&recipient).is_some_and(|c| c & maarse_core::appdata::CAP_BUNDLE != 0) && bundle_ok {
             let all: Vec<(u64, Vec<u8>)> = mails.iter().map(|(id, m)| (*id, m.sealed.clone())).collect();
             let max = MAX_DIRECT_PAYLOAD - stamp::STAMP_LEN;
             let mut i = 0;
@@ -4590,6 +4635,44 @@ mod filebox_node_tests {
         });
         assert_eq!(dht::decode_resp(&n.dht_serve(&request)), Some((n.addr, dht::Resp::Stored(false))));
         assert_eq!(n.mailbox.get(&r).map(|m| m.len()), Some(1));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn delivery_receipt_from_recipient_marks_deposited_message_delivered() {
+        use maarse_core::mail;
+        let (mut n, rx, dir) = node("receipt");
+        let recipient = Address([8; 16]);
+        let sealed = b"sealed for the post office".to_vec();
+        let msg_id = 0x1234_5678_9abc_def0u64;
+        n.outbox.insert(msg_id, OutMsg { dest: recipient, mail_sealed: sealed.clone(), sent: Instant::now(), deposited: true, next_deposit: None });
+        n.awaiting.insert(msg_id, Pending::Message);
+        events(&rx);
+
+        // A receipt for something we never sent changes nothing.
+        let mut p: Vec<u8> = n.addr.0.to_vec();
+        p.push(mail::OP_RECEIPT);
+        p.extend_from_slice(&mail::receipt_id(&recipient, b"other").to_le_bytes());
+        n.on_deposit(&p, 1);
+        assert!(n.outbox.contains_key(&msg_id));
+        assert!(events(&rx).is_empty());
+
+        // The receipt for our copy: the app is told "acked" and the message is done.
+        let mut p: Vec<u8> = n.addr.0.to_vec();
+        p.push(mail::OP_RECEIPT);
+        p.extend_from_slice(&mail::receipt_id(&recipient, &sealed).to_le_bytes());
+        n.on_deposit(&p, 1);
+        assert!(n.outbox.is_empty());
+        assert!(!n.awaiting.contains_key(&msg_id));
+        assert!(events(&rx).iter().any(|e| matches!(e, Event::Acked { msg_id: m } if *m == msg_id)));
+
+        // A receipt addressed to someone else is not ours to act on.
+        n.outbox.insert(msg_id, OutMsg { dest: recipient, mail_sealed: sealed.clone(), sent: Instant::now(), deposited: true, next_deposit: None });
+        let mut p: Vec<u8> = Address([1; 16]).0.to_vec();
+        p.push(mail::OP_RECEIPT);
+        p.extend_from_slice(&mail::receipt_id(&recipient, &sealed).to_le_bytes());
+        n.on_deposit(&p, 1);
+        assert!(n.outbox.contains_key(&msg_id));
         let _ = fs::remove_dir_all(dir);
     }
 

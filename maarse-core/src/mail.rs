@@ -30,6 +30,8 @@
 //! | `SYNC` (1) | IDs the recipient already has (u32 BE each): deliver the rest to it |
 //! | `FETCH` (2) | the asker's address (16), then IDs it already has: send the rest to the asker as `STORE` |
 //! | `DELIVERED` (3) | Legacy IDs that have been delivered. Updated hosts ignore it. |
+//! | `BUNDLE` (4) | Sealed messages for the recipient itself (n × length (1) \| sealed) |
+//! | `RECEIPT` (5) | Recipient to original sender: IDs (u64 LE, [`receipt_id`]) of mail it got from a post office |
 //!
 //! A mail ID is the first 4 bytes of the message's packet ID
 //! (`packet_id(Data, recipient, sealed)`), so every copy has the same ID.
@@ -46,6 +48,10 @@ pub const OP_DELIVERED: u8 = 3;
 /// recipient itself: body = n × (length (1) | sealed). One end-to-end ack
 /// covers the bundle. Only to nodes that announce `appdata::CAP_BUNDLE`.
 pub const OP_BUNDLE: u8 = 4;
+/// Delivery receipt, sent by a recipient to the original sender after it read
+/// mail that a post office delivered (a `BUNDLE`): body = n × [`receipt_id`]
+/// (u64 LE). The `recipient` field of the `Deposit` is the sender.
+pub const OP_RECEIPT: u8 = 5;
 
 /// Copies a host keeps of every recipient's mail.
 pub const REPLICAS: usize = 3;
@@ -65,6 +71,13 @@ pub fn mail_id(recipient: &Address, sealed: &[u8]) -> u32 {
     (packet_id(PacketType::Data, recipient, sealed) >> 32) as u32
 }
 
+/// The ID a receipt names: the packet ID of the sealed message as sent to
+/// `recipient`. The sender can work it out from the copy it deposited, the
+/// recipient from the message it received, so no ID travels inside the mail.
+pub fn receipt_id(recipient: &Address, sealed: &[u8]) -> u64 {
+    packet_id(PacketType::Data, recipient, sealed)
+}
+
 /// A decoded `Deposit` payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Deposit<'a> {
@@ -77,7 +90,13 @@ impl<'a> Deposit<'a> {
     pub fn parse(p: &'a [u8]) -> Option<Deposit<'a>> {
         let recipient = Address::from_slice(p.get(..16)?)?;
         let op = *p.get(16)?;
-        (op <= OP_BUNDLE).then_some(Deposit { recipient, op, body: &p[17..] })
+        (op <= OP_RECEIPT).then_some(Deposit { recipient, op, body: &p[17..] })
+    }
+
+    /// The receipt IDs of a `RECEIPT` (see [`receipt_id`]).
+    pub fn receipts(&self) -> impl Iterator<Item = u64> + '_ {
+        let body = if self.op == OP_RECEIPT { self.body } else { &[] };
+        body.chunks_exact(8).map(|c| u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
     }
 
     /// The IDs in a `SYNC` or `DELIVERED` body (after the asker's address
@@ -181,6 +200,20 @@ mod tests {
         assert_eq!((d.recipient, d.op), (r, OP_SYNC));
         assert_eq!(d.ids().collect::<Vec<_>>(), vec![1, 2, 3]);
         assert!(Deposit::parse(&[0u8; 16]).is_none(), "no op");
+    }
+
+    #[test]
+    fn receipt_roundtrip() {
+        let sender = Address([3; 16]);
+        let me = Address([9; 16]);
+        let id = receipt_id(&me, b"sealed message");
+        let mut v: heapless::Vec<u8, 64> = heapless::Vec::new();
+        assert!(build(&mut v, &sender, OP_RECEIPT, &id.to_le_bytes()));
+        let d = Deposit::parse(&v).unwrap();
+        assert_eq!((d.recipient, d.op), (sender, OP_RECEIPT));
+        assert_eq!(d.receipts().collect::<Vec<_>>(), vec![id]);
+        assert_eq!((id >> 32) as u32, mail_id(&me, b"sealed message"));
+        assert_eq!(Deposit { recipient: sender, op: OP_STORE, body: &[0; 8] }.receipts().count(), 0);
     }
 
     #[test]

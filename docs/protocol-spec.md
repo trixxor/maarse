@@ -957,12 +957,25 @@ Deposit payload = recipient (16) | op (1) | body
 | 1 `SYNC` | have IDs (u32 BE each) | deliver the recipient's mail to it, wherever it is |
 | 2 `FETCH` | asker (16) \| have IDs | send the rest to the asker as `STORE` |
 | 3 `DELIVERED` | IDs | delete them |
-| 4 `BUNDLE` | n × (length (1) \| sealed message) | several stored messages, sent to the recipient itself |
+| 4 `BUNDLE` | n × (length (1) \| sealed message) | one or more stored messages, sent to the recipient itself |
+| 5 `RECEIPT` | n × receipt ID (u64 LE) | recipient to the original sender: the mail arrived |
 
-`BUNDLE` goes only to a recipient announcing `CAP_BUNDLE`: a host with two
-or more messages waiting packs as many as fit in one packet, and one
-end-to-end ack covers them all (then `DELIVERED` goes to the replicas). The
-recipient opens each sealed message as if it had arrived as `Data`.
+`BUNDLE` goes only to a recipient announcing `CAP_BUNDLE`: a host packs as
+many waiting messages as fit in one packet (a single message of up to 255
+bytes too), and one end-to-end ack covers them all (then `DELIVERED` goes to
+the replicas). The recipient opens each sealed message as if it had arrived
+as `Data`.
+
+**Delivery receipt.** The post office does not know who sent a message, and
+the recipient's ack goes to the post office. So a recipient that opens a
+message from a `BUNDLE` sends the sender (now known from the decrypted
+message) a `Deposit` with op `RECEIPT` addressed to the sender. The receipt ID
+is `packet_id(Data, recipient, sealed)` of the copy the sender deposited; the
+sender recomputes it for the copies in its outbox and reports the matching
+message as acknowledged ("delivered") to its app. A node that does not know
+op 5 ignores it (hosts) or treats it as the old format (older firmware keeps
+a few useless bytes in its small mailbox until they expire). Messages
+delivered straight to the recipient are acked as before and need no receipt.
 Deposits carry a stamp (section 4.3).
 
 A mail ID is the top 32 bits of `packet_id(Data, recipient, sealed)`. A

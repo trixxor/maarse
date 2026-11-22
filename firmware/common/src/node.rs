@@ -210,6 +210,8 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     /// Sent messages not acknowledged yet: (msg ID, recipient, the message
     /// sealed for a post office (static seal), sent, deposited).
     outbox: heapless::Vec<(u64, Address, heapless::Vec<u8, 255>, Instant, bool), OUTBOX>,
+    /// Receipt IDs of mail a post office delivered to us, until it is opened.
+    receipt_wanted: heapless::Vec<u64, 4>,
     /// What other nodes can read (`appdata::CAP_*`), from their announces.
     caps: heapless::FnvIndexMap<Address, u8, 64>,
     /// Mail IDs of messages we received lately (sent along in a MailSync).
@@ -357,6 +359,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             handovers: heapless::Vec::new(),
             next_mobile_check: Instant::now() + Duration::from_secs(15),
             outbox: heapless::Vec::new(),
+            receipt_wanted: heapless::Vec::new(),
             got_mail: heapless::Vec::new(),
             caps: heapless::FnvIndexMap::new(),
             home_po: None,
@@ -948,7 +951,27 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         let items: heapless::Vec<heapless::Vec<u8, 255>, 4> =
                             d.bundle().filter_map(|m| heapless::Vec::from_slice(m).ok()).take(4).collect();
                         for m in items {
+                            // Mail from a post office: the sender gets a receipt once it opens.
+                            if self.receipt_wanted.is_full() {
+                                self.receipt_wanted.remove(0);
+                            }
+                            let _ = self.receipt_wanted.push(mail::receipt_id(&self.addr, &m));
                             self.on_data(&m, hops);
+                        }
+                    }
+                    // A recipient says it got mail we deposited: the same as an ack.
+                    Some(d) if d.op == mail::OP_RECEIPT && d.recipient == self.addr => {
+                        let ids: heapless::Vec<u64, 4> = d.receipts().take(4).collect();
+                        for id in ids {
+                            let found = self
+                                .outbox
+                                .iter()
+                                .find(|e| mail::receipt_id(&e.1, &e.2) == id)
+                                .map(|e| e.0);
+                            if let Some(msg_id) = found {
+                                self.outbox.retain(|e| e.0 != msg_id);
+                                emit(&Event::Acked { msg_id });
+                            }
                         }
                     }
                     Some(_) => {}
@@ -1560,6 +1583,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     && o.format != Format::Static
                 {
                     self.mark_fs(o.from);
+                }
+                if let Ok(o) = &res {
+                    let rid = maarse_core::mail::receipt_id(&self.addr, payload);
+                    if let Some(i) = self.receipt_wanted.iter().position(|r| *r == rid) {
+                        self.receipt_wanted.swap_remove(i);
+                        self.send_deposit(o.from, o.from, maarse_core::mail::OP_RECEIPT, &rid.to_le_bytes());
+                    }
                 }
                 if res.is_ok() {
                     let id = maarse_core::mail::mail_id(&self.addr, payload);

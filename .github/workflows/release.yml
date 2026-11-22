@@ -139,9 +139,6 @@ jobs:
     if: ${{ !inputs.windows_only }}
     needs: firmware
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.pages.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -179,6 +176,19 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
+
+  # The flasher site. A separate job, so a hiccup at GitHub Pages never blocks the Windows files.
+  pages:
+    if: ${{ !inputs.windows_only }}
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
       - id: pages
         uses: actions/deploy-pages@v4
 

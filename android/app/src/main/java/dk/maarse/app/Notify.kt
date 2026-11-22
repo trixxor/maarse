@@ -17,17 +17,17 @@ object Notify {
 
     fun channels(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CH_SERVICE, "Connection", NotificationManager.IMPORTANCE_MIN).apply {
-            description = "Shown while Må:rse keeps the connection to the node"
+        nm.createNotificationChannel(NotificationChannel(CH_SERVICE, tr("Connection"), NotificationManager.IMPORTANCE_MIN).apply {
+            description = tr("Shown while Må:rse keeps the connection to the node")
         })
-        nm.createNotificationChannel(NotificationChannel(CH_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH))
-        nm.createNotificationChannel(NotificationChannel(CH_ALERTS, "Alerts (actual, severe)", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "Signed alerts from trusted issuers: severe or extreme, not a test"
+        nm.createNotificationChannel(NotificationChannel(CH_MESSAGES, tr("Messages"), NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel(CH_ALERTS, tr("Alerts (actual, severe)"), NotificationManager.IMPORTANCE_HIGH).apply {
+            description = tr("Signed alerts from trusted issuers: severe or extreme, not a test")
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
         })
-        nm.createNotificationChannel(NotificationChannel(CH_ALERTS_QUIET, "Alerts (other)", NotificationManager.IMPORTANCE_DEFAULT).apply {
-            description = "Minor alerts, exercises, tests and cancellations"
+        nm.createNotificationChannel(NotificationChannel(CH_ALERTS_QUIET, tr("Alerts (other)"), NotificationManager.IMPORTANCE_DEFAULT).apply {
+            description = tr("Minor alerts, exercises, tests and cancellations")
         })
     }
 
@@ -55,10 +55,10 @@ object Notify {
 
     fun alert(ctx: Context, a: Ev.Alert, what: String, loud: Boolean) {
         if (!allowed(ctx)) return
-        val from = if (a.name.isNotEmpty()) a.name else "trusted key " + shortAddr(a.issuer)
+        val from = if (a.name.isNotEmpty()) a.name else tr("trusted key") + " " + shortAddr(a.issuer)
         val n = Notification.Builder(ctx, if (loud) CH_ALERTS else CH_ALERTS_QUIET)
-            .setSmallIcon(R.drawable.ic_stat).setContentTitle(what)
-            .setContentText(a.text).setStyle(Notification.BigTextStyle().bigText("${a.text}\n\nFrom $from"))
+            .setSmallIcon(R.drawable.ic_stat).setContentTitle(tr(what))
+            .setContentText(a.text).setStyle(Notification.BigTextStyle().bigText("${a.text}\n\n" + tr("From {0}", from)))
             .setContentIntent(open(ctx, "alerts")).setAutoCancel(true).setCategory(Notification.CATEGORY_ALARM).build()
         ctx.getSystemService(NotificationManager::class.java).notify("alert", a.key.hashCode(), n)
     }

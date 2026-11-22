@@ -182,6 +182,9 @@ fn http(mut stream: TcpStream, req: Vec<u8>, head_end: usize, token: &str, data_
     if path.starts_with("/api/") {
         return api(stream, &method, path, query, &line, req, token, data_dir);
     }
+    if let Some((ctype, body)) = crate::i18n::route(path, data_dir) {
+        return send(&mut stream, "200 OK", ctype, "", &body);
+    }
     let sw;
     let (status, ctype, body): (&str, &str, &[u8]) = match path {
         "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX_HTML.as_bytes()),
@@ -286,6 +289,11 @@ fn server_http(mut stream: TcpStream, mut req: Vec<u8>, head_end: usize, data_di
     }
     if path == "/login" {
         return send(&mut stream, "200 OK", html, "", crate::admin::LOGIN_HTML.as_bytes());
+    }
+    if method == "GET" {
+        if let Some((ctype, body)) = crate::i18n::route(path, data_dir) {
+            return send(&mut stream, "200 OK", ctype, "", &body);
+        }
     }
     let Some(session) = crate::admin::session(&head) else {
         if path.starts_with("/api/") {
@@ -636,7 +644,7 @@ const ICON_512: &[u8] = include_bytes!("../../maarse-client/icon-512.png");
 /// That way the browser discovers a new client by itself when maarse-host is updated.
 fn service_worker() -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a
-    for part in [INDEX_HTML.as_bytes(), MANIFEST.as_bytes(), SW_JS.as_bytes(), ICON_SVG.as_bytes(), ICON_192, ICON_512] {
+    for part in [INDEX_HTML.as_bytes(), crate::i18n::SCRIPT.as_bytes(), MANIFEST.as_bytes(), SW_JS.as_bytes(), ICON_SVG.as_bytes(), ICON_192, ICON_512] {
         for &b in part {
             h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
         }

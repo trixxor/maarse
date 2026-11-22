@@ -18,6 +18,7 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+use crate::i18n::{tr, tr_args};
 use maarse_service::ipc::{self, Status, UpdateInfo};
 
 const ERROR_ALREADY_EXISTS: u32 = 183;
@@ -141,7 +142,7 @@ fn centred(w: i32, h: i32) -> (i32, i32) {
 fn create_splash() {
     let (w, h) = (420, 150);
     let (x, y) = centred(w, h);
-    let text = wide(&format!("Må:rse\r\n\r\nChecking for updates …\r\nversion {VERSION}"));
+    let text = wide(&format!("Må:rse\r\n\r\n{}\r\n{}", tr("Checking for updates …"), tr_args("version {0}", &[VERSION])));
     unsafe {
         let s = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
@@ -186,7 +187,7 @@ fn show_changes(owner: HWND) {
     let (x, y) = centred(w, h);
     unsafe {
         let inst = GetModuleHandleW(std::ptr::null());
-        let title = wide(&format!("Må:rse {} is available (you have {VERSION})", r.version));
+        let title = wide(&tr_args("Må:rse {0} is available (you have {1})", &[&r.version, VERSION]));
         let win = CreateWindowExW(
             0,
             wide("MaarseChanges").as_ptr(),
@@ -204,7 +205,7 @@ fn show_changes(owner: HWND) {
         if win.is_null() {
             return;
         }
-        let notes = if r.notes.is_empty() { "No release notes were written for this version.".to_string() } else { r.notes.clone() };
+        let notes = if r.notes.is_empty() { tr("No release notes were written for this version.") } else { r.notes.clone() };
         let notes = wide(&notes.replace("\r\n", "\n").replace('\n', "\r\n"));
         let child = |class: &str, text: &[u16], style: u32, x: i32, y: i32, w: i32, h: i32, id: usize| {
             let c = CreateWindowExW(
@@ -225,9 +226,9 @@ fn show_changes(owner: HWND) {
         };
         // ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL
         child("EDIT", &notes, WS_VSCROLL | 0x4 | 0x800 | 0x40, 10, 10, w - 36, h - 100, 0);
-        child("BUTTON", &wide("Update and restart"), WS_TABSTOP, 10, h - 78, 160, 30, ID_BTN_UPDATE);
-        child("BUTTON", &wide("View on GitHub"), WS_TABSTOP, 180, h - 78, 140, 30, ID_BTN_GITHUB);
-        child("BUTTON", &wide("Close"), WS_TABSTOP, w - 130, h - 78, 100, 30, ID_BTN_CLOSE);
+        child("BUTTON", &wide(&tr("Update and restart")), WS_TABSTOP, 10, h - 78, 160, 30, ID_BTN_UPDATE);
+        child("BUTTON", &wide(&tr("View on GitHub")), WS_TABSTOP, 180, h - 78, 140, 30, ID_BTN_GITHUB);
+        child("BUTTON", &wide(&tr("Close")), WS_TABSTOP, w - 130, h - 78, 100, 30, ID_BTN_CLOSE);
         HWND_CHANGES.store(win as isize, Ordering::SeqCst);
         SetForegroundWindow(win);
     }
@@ -364,9 +365,9 @@ fn notify(win: HWND, msg: u32, balloon: Option<(&str, &str)>) {
     nid.uCallbackMessage = WM_TRAY;
     let icon = if msg == NIM_DELETE { std::ptr::null_mut() } else { make_icon(state_colour(&st), update.is_some()) };
     nid.hIcon = icon;
-    let mut tip = format!("Må:rse {VERSION}: {}", state_label(&st));
+    let mut tip = format!("Må:rse {VERSION}: {}", tr(state_label(&st)));
     if let Some(r) = &update {
-        tip.push_str(&format!(" - update {} ready", r.version));
+        tip.push_str(&tr_args(" - update {0} ready", &[&r.version]));
     }
     put_text(&mut nid.szTip, &tip);
     if let Some((title, text)) = balloon {
@@ -391,18 +392,18 @@ fn show_menu(win: HWND) {
             let w = wide(text);
             AppendMenuW(m, flags, id, w.as_ptr());
         };
-        add(MF_STRING | MF_GRAYED, ID_STATUS, &format!("Må:rse {VERSION}: {}", state_label(&st)));
+        add(MF_STRING | MF_GRAYED, ID_STATUS, &format!("Må:rse {VERSION}: {}", tr(state_label(&st))));
         if let Some(r) = update_info() {
-            add(MF_STRING, ID_UPDATE, &format!("Update {} is ready - see what changed ...", r.version));
+            add(MF_STRING, ID_UPDATE, &tr_args("Update {0} is ready - see what changed ...", &[&r.version]));
         }
         if matches!(&st, Ok(s) if s.state == "stopped") {
-            add(MF_STRING, ID_START, "Start the host");
+            add(MF_STRING, ID_START, &tr("Start the host"));
         }
         AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
-        add(if st.is_ok() { MF_STRING } else { MF_STRING | MF_GRAYED }, ID_WEB, "Open the PC client");
-        add(MF_STRING, ID_LOGS, "Open log folder");
+        add(if st.is_ok() { MF_STRING } else { MF_STRING | MF_GRAYED }, ID_WEB, &tr("Open the PC client"));
+        add(MF_STRING, ID_LOGS, &tr("Open log folder"));
         AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
-        add(MF_STRING, ID_QUIT, "Close this icon (Må:rse keeps running)");
+        add(MF_STRING, ID_QUIT, &tr("Close this icon (Må:rse keeps running)"));
         let mut pt = POINT { x: 0, y: 0 };
         GetCursorPos(&mut pt);
         SetForegroundWindow(win);
@@ -438,8 +439,9 @@ fn announce_update(win: HWND) {
     let first = *seen != r.version;
     *seen = r.version.clone();
     drop(seen);
-    let text = format!("Version {} is ready. Click to see what changed.", r.version);
-    notify(win, NIM_MODIFY, if first { Some(("Må:rse update", text.as_str())) } else { None });
+    let text = tr_args("Version {0} is ready. Click to see what changed.", &[&r.version]);
+    let caption = tr("Må:rse update");
+    notify(win, NIM_MODIFY, if first { Some((caption.as_str(), text.as_str())) } else { None });
 }
 
 /// The startup check is done: ask whether to update, or just go on.
@@ -447,16 +449,17 @@ fn startup_decision(win: HWND) {
     match (current(), update_info()) {
         (Err(e), _) => {
             close_splash();
-            error_box(&format!(
-                "The Må:rse service is not running, so the PC client cannot start.\n\n{e}\n\nStart \"Må:rse\" in Windows Services, or reinstall Må:rse."
+            error_box(&tr_args(
+                "The Må:rse service is not running, so the PC client cannot start.\n\n{0}\n\nStart \"Må:rse\" in Windows Services, or reinstall Må:rse.",
+                &[&e],
             ));
         }
         (Ok(_), Some(r)) => {
-            let text = wide(&format!(
-                "Version {} is available (you have {VERSION}).\n\nUpdate now? The app restarts when it is done.",
-                r.version
+            let text = wide(&tr_args(
+                "Version {0} is available (you have {1}).\n\nUpdate now? The app restarts when it is done.",
+                &[&r.version, VERSION],
             ));
-            let caption = wide("Må:rse update");
+            let caption = wide(&tr("Må:rse update"));
             let answer = unsafe {
                 MessageBoxW(hwnd(&HWND_SPLASH), text.as_ptr(), caption.as_ptr(), MB_YESNO | MB_ICONQUESTION | MB_TOPMOST)
             };
@@ -486,7 +489,7 @@ fn show_update_error() {
     *shown = s.error.clone();
     drop(shown);
     close_splash();
-    error_box(&format!("The update failed and nothing was changed.\n\n{}", s.error));
+    error_box(&tr_args("The update failed and nothing was changed.\n\n{0}", &[&s.error]));
 }
 
 unsafe extern "system" fn wnd_proc(win: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -580,7 +583,7 @@ pub fn run() -> Result<(), String> {
                 ..std::mem::zeroed()
             };
             if RegisterClassW(&wc) == 0 {
-                return Err("Could not register the window class.".into());
+                return Err(tr("Could not register the window class."));
             }
         }
         let _ = TASKBAR_CREATED.set(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()));
@@ -599,7 +602,7 @@ pub fn run() -> Result<(), String> {
             std::ptr::null(),
         );
         if win.is_null() {
-            return Err("Could not create the window.".into());
+            return Err(tr("Could not create the window."));
         }
         HWND_MAIN.store(win as isize, Ordering::SeqCst);
         notify(win, NIM_ADD, None);

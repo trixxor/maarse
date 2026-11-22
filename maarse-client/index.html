@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Må:rse</title>
 <!-- <pwa-head> app installation; the manifest is only added over http(s), see <pwa> at the bottom -->
+<script src="i18n.js"></script>
+<script>if (!window.I18N) { /* i18n.js missing (copied page): everything stays English */ window.t = x => x; window.I18N = { t: x => x, ready: Promise.resolve(), setLanguage() {}, choice: () => "auto", current: () => "en", languages: () => [], onChange() {}, untranslated: () => [] }; }</script>
 <meta name="theme-color" content="#2f7d5b">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -941,6 +943,7 @@
       </div>
     </aside>
 
+          <button id="btn-lang"><svg class="i"><use href="#i-globe"/></svg><span>Language<small id="lang-sub" translate="no">Automatic</small></span></button>
     <section class="chat">
       <div class="chat-head"><div id="chat-title">No conversation selected</div><div class="sub" id="chat-sub"></div><div id="chat-tools"></div></div>
       <div class="messages" id="messages">
@@ -7025,6 +7028,24 @@ document.querySelectorAll("#chat-filters button").forEach(b => b.onclick = () =>
   document.querySelectorAll("#chat-filters button").forEach(x => x.classList.toggle("on", x === b));
   renderSide();
 });
+// ---------- language (see i18n.js) ----------
+// Automatic follows the device; the choice is kept in this browser. English is the fallback.
+function langOptions() {
+  return [["auto", I18N.t("Automatic (device language)")], ["en", "English"], ...I18N.languages().map(l => [l.code, l.name])];
+}
+function showLanguage() {
+  const cur = langOptions().find(o => o[0] === I18N.choice()) || langOptions()[0];
+  $("lang-sub").textContent = cur[1];
+}
+$("btn-lang").onclick = () => {
+  const opts = langOptions();
+  const i = opts.findIndex(o => o[0] === I18N.choice());
+  I18N.setLanguage(opts[(i + 1) % opts.length][0]);
+};
+I18N.onChange(showLanguage);
+I18N.ready.then(showLanguage);
+showLanguage();
+
 function chatVisible(key) {
   const f = state.chatFilter;
   if (f === "dm") return key.startsWith("dm:");

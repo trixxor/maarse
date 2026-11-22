@@ -12,6 +12,10 @@ recorded hops. Use the slider or **Scenario events** menu to review an outage,
 and **Live** to return to the current run. Try **Great Belt traffic demo** with
 terrain disabled. [Traffic controls and limits](../denmark/README.md#traffic-on-the-map)
 
+**Language.** The app and the web client follow the language of your device
+and can be switched in **Settings** (Automatic, English, Dansk). A Danish copy
+of these pages is in [da/](da/README.md). More: [Languages](../i18n.md).
+
 To see the real network, choose **Real network** at the top of the page. It
 shows the nodes, live packets and open channels of the servers you list under
 **Servers**, and you can step back up to 24 hours with the bar at the bottom.

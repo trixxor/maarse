@@ -161,6 +161,13 @@ jobs:
           cp -r docs/simulator site/simulator   # the network simulator, in the browser (no server needed)
           cp -r docs/denmark site/denmark       # the Denmark simulator (the real routing code as WebAssembly)
           cp maarse-client/index.html site/denmark/client.html   # its phones run the current web client
+          # Languages: the flasher and the Denmark simulator's phones translate with the same files.
+          for d in site site/denmark; do
+            mkdir -p $d/i18n
+            cp maarse-client/i18n.js $d/
+            cp i18n/*.json $d/i18n/
+            python3 -c "import json,glob,os;print(json.dumps([{'code':os.path.basename(f)[:-5],'name':json.load(open(f,encoding='utf-8'))['meta']['name']} for f in sorted(glob.glob('i18n/*.json'))],ensure_ascii=False))" > $d/i18n/index.json
+          done
           cp fw/* site/firmware/
           cat > site/firmware/index.json <<EOF
           {"version":"$V","commit":"$GITHUB_SHA","built":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}

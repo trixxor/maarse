@@ -20,12 +20,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Text as RawText
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -550,7 +550,7 @@ private fun Inline(text: String, base: Pages.Url, style: androidx.compose.ui.tex
     val ink = MaterialTheme.colorScheme.onSurface
     val dark = pageDark()
     val s: AnnotatedString = buildAnnotatedString { inline(text, base, accent, ink, dark) }
-    Text(s, modifier, style = style, fontWeight = if (bold) FontWeight.SemiBold else null, textAlign = align)
+    RawText(s, modifier, style = style, fontWeight = if (bold) FontWeight.SemiBold else null, textAlign = align)
 }
 
 /** The copies of a picture a reader can choose (the host makes them all). */

@@ -242,6 +242,7 @@ pub fn cookie(token: &str) -> String {
 pub const LOGIN_HTML: &str = r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Server login</title>
+<script src="/i18n.js"></script>
 <style>
 :root{--bg:#eef2f0;--panel:#fbfcfb;--ink:#14201b;--muted:#5d6d66;--line:#d8e0dc;--accent:#1f6f5c;--bad:#b4472a}
 @media (prefers-color-scheme:dark){:root{--bg:#0f1513;--panel:#151d1a;--ink:#e3ebe7;--muted:#8fa199;--line:#26332e;--accent:#5cc0a0;--bad:#ec8e70}}

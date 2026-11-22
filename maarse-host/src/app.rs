@@ -24,6 +24,7 @@ mod extra_links;
 mod filebox;
 mod framing;
 mod history;
+mod i18n;
 #[cfg(test)]
 mod fuzz_tests;
 mod links;

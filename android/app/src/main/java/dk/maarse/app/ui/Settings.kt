@@ -31,10 +31,15 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Text as RawText
+import dk.maarse.app.I18n
+import dk.maarse.app.tr
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -403,6 +408,7 @@ internal fun AppSection() {
     var msgs by remember { mutableStateOf(Node.prefs.notifyMessages) }
     var chans by remember { mutableStateOf(Node.prefs.notifyChannels) }
     SectionTitle("App")
+    LanguagePicker()
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("Notify about direct messages", Modifier.weight(1f)); Switch(msgs, { msgs = it; Node.prefs.notifyMessages = it })
     }
@@ -419,6 +425,24 @@ internal fun AppSection() {
     }
     HorizontalDivider(Modifier.padding(top = 16.dp))
     Hint("Må:rse " + ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName)
+}
+
+/** Language: Automatic (the device's language), English, or one of the language files. */
+@Composable
+internal fun LanguagePicker() {
+    val ctx = LocalContext.current
+    var open by remember { mutableStateOf(false) }
+    val options = listOf(I18n.AUTO to tr("Automatic (device language)"), "en" to "English") + I18n.languages.map { it.code to it.name }
+    val current = options.firstOrNull { it.first == I18n.choice }?.second ?: options[0].second
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Language", Modifier.weight(1f))
+        Box {
+            OutlinedButton(onClick = { open = true }) { RawText(current) }
+            DropdownMenu(open, { open = false }) {
+                for ((code, name) in options) DropdownMenuItem(text = { RawText(name) }, onClick = { open = false; I18n.setChoice(ctx, code) })
+            }
+        }
+    }
 }
 
 @Composable

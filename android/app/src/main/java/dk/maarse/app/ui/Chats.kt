@@ -36,7 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
+import androidx.compose.material3.Text as RawText
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -455,7 +455,7 @@ private fun Attachment(m: Msg) {
                 IconButton(onClick = {
                     if (playing) { VoicePlayer.stop(); playing = false } else { playing = true; VoicePlayer.play(path) { playing = false } }
                 }) { Icon(if (playing) Icons.Default.Stop else Icons.Default.PlayArrow, if (playing) "Stop" else "Play") }
-                Text(m.text, color = MaterialTheme.colorScheme.onSurface)
+                RawText(m.text, color = MaterialTheme.colorScheme.onSurface)
             }
         }
         else -> Row(Modifier.clip(RoundedCornerShape(10.dp)).clickable { openFile(ctx, path, mime) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -528,7 +528,7 @@ private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onSender: (String) -> U
                 )
             }
             // A picture or a voice message speaks for itself.
-            if (m.file == null || !(m.mime == Voice.MIME || m.mime?.startsWith("image/") == true)) Text(m.text, color = if (mine) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
+            if (m.file == null || !(m.mime == Voice.MIME || m.mime?.startsWith("image/") == true)) RawText(m.text, color = if (mine) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
             Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(m.ts)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (mine) DeliveryIcon(m.status, !isDm)

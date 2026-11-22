@@ -51,6 +51,14 @@ val cargoNdk by tasks.registering(Exec::class) {
 }
 tasks.named("preBuild") { dependsOn(cargoNdk) }
 
+// The language files (shared with the web client) go into the app as assets/i18n.
+val copyLanguages by tasks.registering(Copy::class) {
+    from(File(rootProject.projectDir.parentFile, "i18n")) { include("*.json") }
+    into(layout.buildDirectory.dir("generated/i18n/i18n"))
+}
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/i18n"))
+tasks.named("preBuild") { dependsOn(copyLanguages) }
+
 dependencies {
     val bom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(bom)
@@ -65,4 +73,5 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    testImplementation("junit:junit:4.13.2")
 }

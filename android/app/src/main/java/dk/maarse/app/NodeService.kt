@@ -15,6 +15,7 @@ class MaarseApp : Application() {
         super.onCreate()
         // The host process (":host") only runs maarse-host; no UI state there.
         if (getProcessName().endsWith(":host")) return
+        I18n.init(this)
         Node.init(this)
         if (Node.prefs.running) Node.start(Node.prefs.mode)
     }

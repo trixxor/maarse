@@ -278,6 +278,12 @@ Offline cache, installation and notifications need the page to be loaded over ht
 
 **Hosting the client yourself:** put the files in `maarse-client/` (`index.html`, `manifest.webmanifest`, `sw.js`, `icon.svg`, `icon-192.png`, `icon-512.png`) on any static https host, e.g. GitHub Pages. Bump `VERSION` in `sw.js` when the files change, so users are told about the new version (maarse-host does it by itself from the content). The icons are made with `python tools/make_icons.py`.
 
+## Languages
+
+The Android app, the PC web client, the server pages (login and dashboard), the web flasher, the Windows tray app and the Windows installer can be shown in English or Dansk. The language follows the device (Android language, browser language, Windows display language). Under **Settings > Language** (web client) or **Settings > App > Language** (Android app) you can choose Automatic, English or Dansk by hand; that choice wins over the device. A text without a translation is shown in English. Host logs, command-line help and the Heltec display stay English; text that people write is never translated.
+
+A language is one file, `i18n/<code>.json`. To add one without rebuilding, put the file in `<data>/i18n/` (the host and the web client); no restart is needed, reload the page. How the files work, how to add a language and how to check them: [i18n.md](i18n.md). Verification: the web client, server pages, host routes and tray build were tried on Windows; the Android language switch is compiled and unit-tested but not tried on a device; the installer script is not compiled.
+
 ## One inbox on several screens (history on maarse-host)
 
 A maarse-host at home can work as one shared inbox that the phone, the laptop and the desktop follow at the same time. The host stores the message history, and every screen that connects fetches it:

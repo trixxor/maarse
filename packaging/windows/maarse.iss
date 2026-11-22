@@ -24,12 +24,31 @@ SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName=Må:rse
+ShowLanguageDialog=auto
 UninstallDisplayIcon={app}\maarse.exe
 SetupIconFile=maarse.ico
 
+; The installer follows the Windows language; English is the fallback. A language is added with one more
+; [Languages] line and its lines in [CustomMessages].
+[Languages]
+Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "da"; MessagesFile: "compiler:Languages\Danish.isl"
+
+[CustomMessages]
+en.CreateDesktopIcon=Create a shortcut on the desktop
+da.CreateDesktopIcon=Opret en genvej på skrivebordet
+en.ShowTrayAtSignIn=Show the Må:rse icon when I sign in to Windows
+da.ShowTrayAtSignIn=Vis Må:rse-ikonet, når jeg logger ind på Windows
+en.RegisteringService=Registering the Må:rse service ...
+da.RegisteringService=Registrerer Må:rse-tjenesten ...
+en.OpenNow=Open Må:rse now
+da.OpenNow=Åbn Må:rse nu
+en.DeleteDataQuestion=Also delete your Må:rse data (identity, messages, contacts, settings)?%nThis cannot be undone. Choose No to keep it for a later reinstall.
+da.DeleteDataQuestion=Slet også dine Må:rse-data (identitet, beskeder, kontakter, indstillinger)?%nDet kan ikke fortrydes. Vælg Nej for at beholde dem til en senere geninstallation.
+
 [Tasks]
-Name: "desktopicon"; Description: "Create a shortcut on the desktop"
-Name: "autostart"; Description: "Show the Må:rse icon when I sign in to Windows"
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"
+Name: "autostart"; Description: "{cm:ShowTrayAtSignIn}"
 
 [Files]
 Source: "{#SourceDir}\maarse.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -44,8 +63,8 @@ Name: "{commonstartup}\Maarse"; Filename: "{app}\maarse.exe"; Parameters: "--no-
 
 [Run]
 ; Registers the service (starts at boot) and starts it. Re-running it on an upgrade is harmless.
-Filename: "{app}\maarse-service.exe"; Parameters: "install"; Flags: runhidden waituntilterminated; StatusMsg: "Registering the Må:rse service ..."
-Filename: "{app}\maarse.exe"; Description: "Open Må:rse now"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\maarse-service.exe"; Parameters: "install"; Flags: runhidden waituntilterminated; StatusMsg: "{cm:RegisteringService}"
+Filename: "{app}\maarse.exe"; Description: "{cm:OpenNow}"; Flags: nowait postinstall skipifsilent
 
 ; Files the service's self-update leaves behind are not in [Files], so remove them explicitly.
 [UninstallDelete]
@@ -86,8 +105,6 @@ begin
   // The user's data (identity, messages, contacts, settings) lives in %ProgramData%\Maarse and is only
   // removed if the user asks for it.
   if CurUninstallStep = usPostUninstall then
-    if MsgBox('Also delete your Må:rse data (identity, messages, contacts, settings)?' + #13#10 +
-              'This cannot be undone. Choose No to keep it for a later reinstall.',
-              mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+    if MsgBox(CustomMessage('DeleteDataQuestion'), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
       DelTree(ExpandConstant('{commonappdata}\Maarse'), True, True, True);
 end;

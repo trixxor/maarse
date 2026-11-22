@@ -48,7 +48,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
+import androidx.compose.material3.Text as RawText
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -348,7 +348,7 @@ private fun McConversationScreen(c: Node.McConversation, mc: Node.MeshCoreAccess
                         Box(
                             Modifier.widthIn(max = 300.dp).clip(RoundedCornerShape(16.dp)).background(if (m.mine) McAmberDark else McPerson)
                                 .padding(horizontal = 14.dp, vertical = 10.dp),
-                        ) { Text(m.text, color = if (m.mine) McAmberBubbleText else McLight, fontSize = 15.sp) }
+                        ) { RawText(m.text, color = if (m.mine) McAmberBubbleText else McLight, fontSize = 15.sp) }
                         Text(deliveryLine(c, m), fontSize = 11.sp, color = if (m.mine && (m.repeats > 0 || m.delivered)) McAmber else muted,
                             modifier = Modifier.padding(horizontal = 6.dp))
                     }

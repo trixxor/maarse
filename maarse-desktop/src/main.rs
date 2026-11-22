@@ -14,6 +14,9 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 #[cfg(windows)]
+mod i18n;
+
+#[cfg(windows)]
 mod win;
 
 #[cfg(not(windows))]

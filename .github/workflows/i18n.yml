@@ -1,0 +1,21 @@
+name: Languages
+
+# Checks the language files in i18n/ (valid JSON, meta, placeholders, duplicates) and the host's
+# language routes. See docs/i18n.md.
+on:
+  push:
+    paths: ["i18n/**", "maarse-client/**", "maarse-host/src/i18n.rs", "tools/i18n_check.py"]
+  pull_request:
+    paths: ["i18n/**", "maarse-client/**", "maarse-host/src/i18n.rs", "tools/i18n_check.py"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tools/i18n_check.py
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p maarse-host --bin maarse-host i18n

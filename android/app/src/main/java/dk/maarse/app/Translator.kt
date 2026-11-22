@@ -96,9 +96,9 @@ class Translator(texts: Map<String, String>) {
     }
 
     companion object {
-        private val WILD = Regex("""\{\d+}|%(?:\.\d+)?[dsf]|%\d*d""")
+        private val WILD = Regex("""\{\d+\}|%(?:\.\d+)?[dsf]|%\d*d""")
         private val FORMAT = Regex("""%(?:\.\d+)?[dsf]|%\d*d""")
-        private val INDEX = Regex("""\{(\d+)}""")
+        private val INDEX = Regex("""\{(\d+)\}""")
         private val SPACES = Regex("\\s+")
         private val SENTENCE = Regex("""[.!?] \S""")
         private val SENTENCE_SPLIT = Regex("""(?<=[.!?]) (?=\S)""")

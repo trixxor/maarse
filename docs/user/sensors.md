@@ -42,7 +42,11 @@ tried on real hardware yet: check the first reading against a thermometer.
    readings, send an alarm." The test on the right shows a simulated day and
    how much of the sensor's memory and radio time it uses.
 4. Press **Send to the sensor**, choose **By USB**, and plug the board in.
-   The sensor takes you as its owner and gets the setup.
+   The window lists **What changes** (new, changed, removed and unchanged
+   rules) compared with the setup saved on this computer. **Save a copy
+   first** writes the setup to a file; **Open file** and **Save file** at the
+   top of the designer do the same at any time. The sensor takes you as its
+   owner and gets the setup.
 5. Unplug the cable. The sensor now sleeps between readings.
 
 Your values and alarms show up under **Nodes > Sensors** on the computer and
@@ -51,8 +55,9 @@ on the phone. Press the star to keep a sensor at the top.
 ## Change it later
 
 Open the sensor and press **Edit setup**. On the computer or on the phone,
-press **Send to the sensor over the radio**. The sensor fetches the change
-after its next wake-up, so it can take up to one reading interval.
+press **Send to** and the sensor's name. The phone shows how many packets
+have been sent. The sensor fetches the change after its next wake-up, so it
+can take up to one reading interval.
 
 ## Good to know
 

@@ -44,6 +44,8 @@ object Sensors {
     val rev = MutableStateFlow(0)
     var design: SensorDesign? = null
     val status = MutableStateFlow<String?>(null)
+    /** Radio upload: packets sent so far and in all (null: nothing is being sent). */
+    val progress = MutableStateFlow<Pair<Int, Int>?>(null)
     private var debounce: Runnable? = null
     private var busy = 0
 
@@ -248,6 +250,7 @@ object Sensors {
         val d = SensorDesign(node, newSetup(if (node == null) tpl else "blank"))
         design = d
         status.value = null
+        progress.value = null
         if (node != null) {
             call("GET", "/api/sensors/setup?node=$node") { r ->
                 r.onSuccess { t ->
@@ -288,6 +291,8 @@ object Sensors {
         val node = d.node ?: return "A new sensor needs its first setup over USB from a computer (the sensor takes you as its owner). After that you can change it from here."
         val hex = d.compiled?.takeIf { it.optBoolean("ok") }?.optString("hex") ?: return "Fix the setup first"
         val bytes = ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        val total = (bytes.size + 99) / 100
+        progress.value = 0 to total
         Thread {
             var off = 0
             while (off < bytes.size) {
@@ -295,6 +300,7 @@ object Sensors {
                 val head = byteArrayOf((off and 255).toByte(), (off shr 8).toByte(), (bytes.size and 255).toByte(), (bytes.size shr 8).toByte())
                 Node.send(Cmd.sensor(Node.req(), node, 2, head + piece))
                 off += 100
+                main.post { progress.value = minOf(total, off / 100 + (if (off % 100 != 0) 1 else 0)) to total }
                 Thread.sleep(400)
             }
             call("PUT", "/api/sensors/setup?node=$node", d.setup.toString()) {}

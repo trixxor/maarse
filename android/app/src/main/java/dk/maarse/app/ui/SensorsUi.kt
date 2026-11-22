@@ -1,9 +1,18 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 
 package dk.maarse.app.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -86,10 +95,12 @@ private fun STitle(t: String) = Text(t, style = MaterialTheme.typography.labelLa
 @Composable
 private fun Chip(text: String, kind: Int, onClick: () -> Unit) {
     val c = MaterialTheme.colorScheme
+    val dark = c.background.luminance() < 0.5f
     val (bg, fg) = when (kind) {
-        0 -> c.secondaryContainer to c.onSecondaryContainer
-        1 -> c.tertiaryContainer to c.onTertiaryContainer
-        2 -> c.primaryContainer to c.onPrimaryContainer
+        0 -> if (dark) Color(0xFF1B2B4A) to Color(0xFF8AB4FF) else Color(0xFFDBE6FB) to Color(0xFF173F86)
+        1 -> if (dark) Color(0xFF352A15) to Color(0xFFF0B252) else Color(0xFFFBEFD9) to Color(0xFF6E4300)
+        2 -> if (dark) Color(0xFF1D3A31) to Color(0xFF5CC0A0) else Color(0xFFDCECE6) to Color(0xFF16503F)
+        4 -> if (dark) Color(0xFF34234A) to Color(0xFFCDA2FF) else Color(0xFFEBDCF7) to Color(0xFF5D2C8A)
         else -> c.surfaceContainerHigh to c.onSurface
     }
     Box(Modifier.defaultMinSize(minHeight = 44.dp).clip(RoundedCornerShape(24.dp)).background(bg).clickable(onClick = onClick).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
@@ -175,6 +186,7 @@ fun SensorsPanel(onOpen: (String) -> Unit, onNew: () -> Unit) {
     val shown = (list ?: emptyList()).filter {
         when (SensorsNav.filter) { "fav" -> it.favourite; "alarm" -> it.alarm != null || it.ageS > 7200; else -> true }
     }
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((k, l) in listOf("all" to "Mine", "fav" to "Favourites", "alarm" to "Alarms"))
@@ -183,29 +195,67 @@ fun SensorsPanel(onOpen: (String) -> Unit, onNew: () -> Unit) {
         if (err.isNotBlank()) Text(err, Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         else if (list != null && shown.isEmpty()) Text(if (list!!.isEmpty()) "No sensors yet. Set one up, or wait for one to send." else "Nothing here.",
             Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp)) {
             items(shown, key = { it.node }) { s -> SensorCard(s) { onOpen(s.node) } }
         }
-        Button(onClick = onNew, Modifier.fillMaxWidth().padding(16.dp)) { Text("Set up a sensor") }
+    }
+    ExtendedFloatingActionButton(onClick = onNew, Modifier.align(Alignment.BottomEnd).padding(20.dp),
+        containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("+ Add sensor", fontWeight = FontWeight.SemiBold) }
+    }
+}
+
+/** The last 24 hours of one value as a thin line. */
+@Composable
+private fun Spark(points: List<Pair<Double, Double?>>, color: Color) {
+    Canvas(Modifier.fillMaxWidth().height(44.dp)) {
+        val ys = points.mapNotNull { it.second }
+        if (points.size < 2 || ys.size < 2) return@Canvas
+        val t0 = points.first().first; val t1 = points.last().first
+        var lo = ys.min(); var hi = ys.max(); if (hi - lo < 1) { lo -= .5; hi += .5 }
+        val pad = 4.dp.toPx()
+        val p = Path(); var first = true
+        for ((t, v) in points) {
+            if (v == null) continue
+            val x = pad + ((t - t0) / maxOf(1.0, t1 - t0) * (size.width - 2 * pad)).toFloat()
+            val y = pad + ((1 - (v - lo) / (hi - lo)) * (size.height - 2 * pad)).toFloat()
+            if (first) { p.moveTo(x, y); first = false } else p.lineTo(x, y)
+        }
+        drawPath(p, color, style = Stroke(width = 5f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
     }
 }
 
 @Composable
 private fun SensorCard(s: SensorInfo, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
     val quiet = s.ageS > 7200
-    val bg = if (s.alarm != null) MaterialTheme.colorScheme.errorContainer else if (quiet) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainer
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(bg).clickable(onClick = onClick).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val alarm = s.alarm != null
+    var pts by remember(s.node) { mutableStateOf<List<Pair<Double, Double?>>>(emptyList()) }
+    val lead = s.channels.firstOrNull { it.unit.isNotBlank() } ?: s.channels.firstOrNull()
+    LaunchedEffect(s.node, lead?.chan, s.ageS / 300) { if (lead != null && !quiet) Sensors.series(s.node, lead.chan, 86400) { pts = it } }
+    val bg = if (quiet && !alarm) cs.tertiaryContainer else cs.surfaceContainer
+    val shape = RoundedCornerShape(18.dp)
+    Column(Modifier.fillMaxWidth().clip(shape).background(bg).then(if (alarm) Modifier.border(2.dp, cs.error, shape) else Modifier)
+        .clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text((if (s.favourite) "★ " else "") + s.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Text(if (s.alarm != null) "Alarm" else if (quiet) "Quiet ${s.ageS / 3600} h" else ago(s.ageS), style = MaterialTheme.typography.labelMedium)
-        }
-        if (s.alarm != null) Text("⚠ " + s.alarm, fontWeight = FontWeight.SemiBold)
-        else if (quiet) Text("No reading for ${s.ageS / 3600} hours. The battery may be flat.")
-        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            for (c in s.channels.take(3)) Column {
-                Text(c.name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(fmt(c.value) + " " + c.unit, style = MaterialTheme.typography.titleLarge)
+            if (alarm || quiet) Box(Modifier.clip(RoundedCornerShape(99.dp)).background(if (alarm) cs.errorContainer else cs.surface).padding(horizontal = 10.dp, vertical = 4.dp)) {
+                Text(if (alarm) "Alarm" else "Quiet ${s.ageS / 3600} h", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+                    color = if (alarm) cs.onErrorContainer else cs.onTertiaryContainer)
             }
+        }
+        if (alarm) Text(s.alarm!!, fontWeight = FontWeight.SemiBold, color = cs.error)
+        if (quiet && !alarm) {
+            val bat = s.channels.firstOrNull { it.name.contains("battery", true) && it.value != null }
+            Text("No reading for ${s.ageS / 3600} hours." + (if (bat != null) " Last battery reading was ${fmt(bat.value)} ${bat.unit}." else "") + " It may be flat.", color = cs.onTertiaryContainer)
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                for (c in s.channels.take(3)) Column {
+                    Text(c.name, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                    Text(fmt(c.value) + if (c.unit.isNotBlank()) " " + c.unit else "", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = if (alarm && c === lead) cs.error else cs.onSurface)
+                }
+            }
+            if (pts.size >= 2) Spark(pts, if (alarm) cs.error else cs.primary)
+            Text("Heard " + ago(s.ageS), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
         }
     }
 }
@@ -709,6 +759,37 @@ private fun CustomSensorDialog(setup: JSONObject, src: JSONObject?, onDismiss: (
     if (kindPick) PickDialog("Measures", kinds.map { it to it }, kind, { kind = it }, { kindPick = false })
 }
 
+/** Change one number with big buttons, quick values and (for a threshold) the level where it clears again. */
+@Composable
+private fun ThresholdSheet(title: String, value: Double, unit: String, clear: Double, clearAbove: Boolean, onOk: (Double, Double) -> Unit, onDismiss: () -> Unit) {
+    val step = if (unit == "°C") 0.5 else 1.0
+    var v by remember { mutableStateOf(value) }
+    val gap = kotlin.math.abs(clear - value).takeIf { it > 0 } ?: 2.0
+    var auto by remember { mutableStateOf(clear != value) }
+    fun snap(x: Double) = Math.round(x / step) * step
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = { v = snap(v - step) }, Modifier.width(64.dp).height(56.dp)) { Text("−", fontSize = 24.sp) }
+                Text(fmt(v) + if (unit.isNotBlank()) " $unit" else "", Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 34.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                OutlinedButton(onClick = { v = snap(v + step) }, Modifier.width(64.dp).height(56.dp)) { Text("+", fontSize = 24.sp) }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (d in listOf(-5.0, -2.0, 0.0, 2.0, 5.0)) { val q = Math.round(value) + d; FilterChip(selected = v == q, onClick = { v = q }, label = { Text(fmt(q)) }) }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Clear ${fmt(gap)} ${unit} ${if (clearAbove) "above" else "below"}".replace("  ", " "), fontWeight = FontWeight.SemiBold)
+                    Text("So it does not send again and again", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(auto, { auto = it })
+            }
+            Button(onClick = { onOk(v, if (auto) v + (if (clearAbove) gap else -gap) else v); onDismiss() }, Modifier.fillMaxWidth().height(52.dp)) { Text("Set threshold") }
+        }
+    }
+}
+
 @Composable
 fun SensorRuleScreen(index: Int, onBack: () -> Unit) {
     Sensors.rev.collectAsState().value
@@ -723,13 +804,18 @@ fun SensorRuleScreen(index: Int, onBack: () -> Unit) {
     val readableSrc = readable(setup).map { it.getInt("chan").toString() to it.optString("name") }
     fun set(f: () -> Unit) { f(); Sensors.changed() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text((setup.optString("name").ifBlank { "Sensor" }) + " · rule ${index + 1} of ${rules.length()} · " + (if (d.compiled?.optBoolean("ok") == true) "fits on the sensor" else "being checked"),
+                Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(onClick = onBack) { Text("Done", fontWeight = FontWeight.Bold) }
+        }
         OutlinedTextField(r.optString("name"), { r.put("name", it.take(30)); Sensors.changed() }, Modifier.fillMaxWidth(), label = { Text("Rule name") }, singleLine = true)
         SCard {
             Kw("When")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip(when (w.getString("type")) { "every" -> "every …"; "compare" -> "a value …"; "change" -> "a value changes by …"; else -> "a pin …" }, 3) { dialog = "trigger" }
+                Chip(when (w.getString("type")) { "every" -> "every …"; "compare" -> "a value …"; "change" -> "a value changes by …"; else -> "a pin …" }, 4) { dialog = "trigger" }
                 when (w.getString("type")) {
-                    "every" -> Chip("${w.getInt("secs") / 60} minutes", 3) { dialog = "secs" }
+                    "every" -> Chip("${w.getInt("secs") / 60} minutes", 4) { dialog = "secs" }
                     "compare" -> {
                         Chip(srcName(setup, w.getInt("chan")), 0) { dialog = "src" }
                         Chip(OPS.first { it.first == w.getString("op") }.second, 1) { dialog = "op" }
@@ -780,7 +866,8 @@ fun SensorRuleScreen(index: Int, onBack: () -> Unit) {
         "secs" -> NumberDialog("Every", (w.getInt("secs") / 60).toDouble(), "minutes", { set { w.put("secs", maxOf(1, it.toInt()) * 60) } }, { dialog = null })
         "src" -> PickDialog("Which value", readableSrc, w.getInt("chan").toString(), { set { w.put("chan", it.toInt()) } }, { dialog = null })
         "op" -> PickDialog("Compare", OPS, w.getString("op"), { set { w.put("op", it) } }, { dialog = null })
-        "value" -> NumberDialog("Threshold", w.getDouble("value"), unitOf(setup, w.getInt("chan")), { v -> set { val same = w.getDouble("clear") == w.getDouble("value"); w.put("value", v); if (same) w.put("clear", v) } }, { dialog = null })
+        "value" -> ThresholdSheet("Threshold", w.getDouble("value"), unitOf(setup, w.getInt("chan")), w.getDouble("clear"), w.getString("op").startsWith("<"),
+            { nv, nc -> set { w.put("value", nv); w.put("clear", nc) } }, { dialog = null })
         "clear" -> NumberDialog("Back to normal at", w.getDouble("clear"), unitOf(setup, w.getInt("chan")), { set { w.put("clear", it) } }, { dialog = null })
         "count" -> NumberDialog("For how many readings", w.optInt("count", 1).toDouble(), "readings", { set { w.put("count", maxOf(1, it.toInt())) } }, { dialog = null })
         "delta" -> NumberDialog("Change by more than", w.getDouble("delta"), unitOf(setup, w.getInt("chan")), { set { w.put("delta", kotlin.math.abs(it)) } }, { dialog = null })
@@ -798,6 +885,15 @@ fun SensorRuleScreen(index: Int, onBack: () -> Unit) {
                 "alarm" -> JSONObject("""{"type":"alarm","text":"Alarm"}""")
                 "set_out" -> JSONObject("""{"type":"set_out","chan":${outputs(setup)[0].getInt("chan")},"on":true}""")
                 else -> JSONObject("""{"type":"interval","secs":60}""") }) } }, { dialog = null })
+    }
+}
+
+@Composable
+private fun Meter(label: String, text: String, frac: Float) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row { Text(label, Modifier.weight(1f)); Text(text, fontFamily = FontFamily.Monospace) }
+        LinearProgressIndicator(progress = { frac.coerceIn(0f, 1f) }, Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)),
+            color = if (frac > .9f) Amber else MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceContainerHigh)
     }
 }
 
@@ -836,17 +932,28 @@ fun SensorSendScreen() {
         SCard {
             if (k != null && k.optBoolean("ok")) {
                 Text("Fits on the sensor", fontWeight = FontWeight.SemiBold)
-                Text("Rules ${k.getInt("rules")} of ${k.getInt("rule_limit")} · inputs ${k.getInt("sources")} of ${k.getInt("source_limit")}")
-                Text("Setup size ${k.getInt("size")} of ${k.getInt("limit")} bytes")
-                Text("Radio time ≈ ${k.getDouble("airtime_s_per_day")} s per day (${k.getDouble("airtime_percent")} %)")
+                Meter("Rules", "${k.getInt("rules")} of ${k.getInt("rule_limit")}", k.getInt("rules").toFloat() / maxOf(1, k.getInt("rule_limit")))
+                Meter("Inputs and outputs", "${k.getInt("sources")} of ${k.getInt("source_limit")}", k.getInt("sources").toFloat() / maxOf(1, k.getInt("source_limit")))
+                Meter("Setup size", "${k.getInt("size")} of ${k.getInt("limit")} bytes", k.getInt("size").toFloat() / maxOf(1, k.getInt("limit")))
+                Row { Text("Radio time", Modifier.weight(1f)); Text("≈ ${k.getDouble("airtime_s_per_day")} s per day", fontFamily = FontFamily.Monospace) }
                 val w = k.optJSONArray("warnings")
                 if (w != null) for (i in 0 until w.length()) Text("! " + w.getString(i), color = Amber, style = MaterialTheme.typography.bodySmall)
             } else Text(k?.optString("error") ?: "Checking …", color = MaterialTheme.colorScheme.error)
         }
-        if (sent != null || result.isNotBlank()) SCard { Text(sent ?: result) }
-        Button(onClick = { result = Sensors.sendRadio() }, Modifier.fillMaxWidth(), enabled = k?.optBoolean("ok") == true) { Text("Send to the sensor over the radio") }
+        val prog by Sensors.progress.collectAsState()
+        val who = d.setup.optString("name").ifBlank { "the sensor" }
+        if (prog != null || sent != null || result.isNotBlank()) Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.primaryContainer).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Sending over radio", fontWeight = FontWeight.SemiBold)
+            Text(sent ?: "Waiting at a post office. $who fetches it after its next reading, within ${d.setup.optInt("interval_s", 900) / 60} minutes.")
+            prog?.let { (n, tot) ->
+                LinearProgressIndicator(progress = { if (tot == 0) 0f else n.toFloat() / tot }, Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)))
+                Text("$n of $tot packets sent", style = MaterialTheme.typography.bodySmall)
+            }
+            if (prog == null && result.isNotBlank()) Text(result, style = MaterialTheme.typography.bodySmall)
+        }
+        Button(onClick = { result = Sensors.sendRadio() }, Modifier.fillMaxWidth().height(52.dp), enabled = k?.optBoolean("ok") == true) { Text("Send to $who") }
         OutlinedButton(onClick = { Sensors.saveSetup(); result = "Saved on this host" }, Modifier.fillMaxWidth(), enabled = d.node != null) { Text("Save on this host") }
-        Text("Over the radio the sensor fetches it after its next wake-up (up to one interval). First setup of a new board needs a computer over USB.",
+        Text("First setup of a new board needs the PC. Changes can be sent from here.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
     }

@@ -44,7 +44,11 @@ rigtigt udstyr endnu: sammenlign den første måling med et termometer.
    send en alarm." Testen til højre viser en simuleret dag og hvor meget af
    sensorens hukommelse og radiotid den bruger.
 4. Tryk på **Send til sensoren**, vælg **Via USB**, og sæt printkortet i.
-   Sensoren tager dig som ejer og får opsætningen.
+   Vinduet viser **Hvad ændres** (nye, ændrede, fjernede og uændrede regler)
+   i forhold til den opsætning, der er gemt på computeren. **Gem en kopi
+   først** skriver opsætningen til en fil. **Åbn fil** og **Gem fil** øverst i
+   designeren gør det samme når som helst. Sensoren tager dig som ejer og får
+   opsætningen.
 5. Tag kablet ud. Sensoren sover nu mellem målingerne.
 
 Dine værdier og alarmer vises under **Noder > Sensorer** på computeren og på
@@ -53,7 +57,8 @@ telefonen. Tryk på stjernen for at have en sensor øverst.
 ## Ret den senere
 
 Åbn sensoren og tryk på **Rediger opsætning**. På computeren eller telefonen
-trykker du på **Send til sensoren over radioen**. Sensoren henter ændringen
+trykker du på **Send til** og sensorens navn. Telefonen viser, hvor mange
+pakker der er sendt. Sensoren henter ændringen
 efter sin næste opvågning, så der kan gå op til ét måleinterval.
 
 ## Godt at vide

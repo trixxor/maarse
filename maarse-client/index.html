@@ -691,6 +691,73 @@
   .alert-card .row { margin-top: 6px; }
   .alert-form { display: grid; grid-template-columns: max-content 1fr; gap: 8px 10px; align-items: center; max-width: 640px; margin-top: 10px; }
   @media (max-width: 560px) { .alert-form { grid-template-columns: 1fr; } }
+
+  /* ---------- Sensors (Nodes > Sensors) ---------- */
+  #pane-nodes.sn-mode > :not(.pane-head):not(#node-kind):not(#sensors-side) { display: none !important; }
+  #node-kind { padding-top: 0; }
+  #sensors-list { display: flex; flex-direction: column; gap: 2px; padding: 0 2px; }
+  .sn-item { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; text-align: left; padding: 9px 10px; border: 0; border-radius: var(--r); background: none; color: var(--ink); }
+  .sn-item:hover { background: var(--bg); }
+  .sn-item.on { background: var(--accent-soft); }
+  .sn-item b { font-weight: 650; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sn-item small { color: var(--muted); font-size: 12px; grid-column: 1 / 3; }
+  .sn-item .sn-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); align-self: center; }
+  .sn-item .sn-dot.alarm { background: var(--warn); } .sn-item .sn-dot.quiet { background: var(--signal); }
+  .sn-wrap { max-width: 1180px; margin: 0 auto; padding: 18px 20px 40px; display: flex; flex-direction: column; gap: 16px; }
+  .sn-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); }
+  .sn-card h3 { margin: 0 0 10px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .sn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .sn-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .sn-head h2 { margin: 0; font-size: 22px; flex: 1 1 auto; }
+  .sn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .sn-big { font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .sn-big small { font-size: 14px; color: var(--muted); font-weight: 500; }
+  .sn-banner { padding: 12px 14px; border-radius: var(--r); background: var(--warn-soft); color: var(--warn); font-weight: 600; }
+  .sn-quiet { padding: 12px 14px; border-radius: var(--r); background: var(--signal-soft); color: var(--ink); }
+  .sn-chart { width: 100%; height: auto; display: block; background: var(--raised); border-radius: 8px; }
+  .sn-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .sn-chips button { padding: 3px 10px; border-radius: 999px; font-size: 12.5px; color: var(--muted); }
+  .sn-chips button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .sn-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .sn-step { display: flex; flex-direction: column; gap: 8px; }
+  .sn-num { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; margin-right: 8px; }
+  .sn-tpls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .sn-tpl { text-align: left; padding: 12px; border-radius: 12px; display: flex; flex-direction: column; gap: 4px; background: var(--raised); min-height: 82px; }
+  .sn-tpl small { color: var(--muted); }
+  .sn-design { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .sn-col-a { flex: 1 1 260px; max-width: 320px; display: flex; flex-direction: column; gap: 12px; min-width: 240px; }
+  .sn-col-b { flex: 999 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+  .sn-col-c { flex: 1 1 300px; max-width: 380px; display: flex; flex-direction: column; gap: 12px; min-width: 260px; }
+  .sn-rule { background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .sn-rule.sel { border: 2px solid var(--accent); }
+  .sn-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .sn-kw { font-size: 11px; font-weight: 800; letter-spacing: .07em; color: var(--muted); text-transform: uppercase; min-width: 44px; }
+  .sn-line select, .sn-line input { padding: 6px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); font: inherit; font-size: 13.5px; min-height: 34px; }
+  .sn-line input[type=number] { width: 84px; }
+  .sn-line input.sn-text { width: 220px; max-width: 100%; }
+  .sn-src { color: #173f86; background: #dbe6fb; } .sn-op { color: #6e4300; background: #fbefd9; } .sn-act { color: #16503f; background: #dcece6; } .sn-trig { color: #5d2c8a; background: #ebdcf7; }
+  :root[data-theme=dark] .sn-src { background: #1b2b4a; color: #8ab4ff; } :root[data-theme=dark] .sn-op { background: #352a15; color: #f0b252; } :root[data-theme=dark] .sn-act { background: #1d3a31; color: #5cc0a0; } :root[data-theme=dark] .sn-trig { background: #34234a; color: #cda2ff; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme=light]) .sn-src { background: #1b2b4a; color: #8ab4ff; } :root:not([data-theme=light]) .sn-op { background: #352a15; color: #f0b252; } :root:not([data-theme=light]) .sn-act { background: #1d3a31; color: #5cc0a0; } :root:not([data-theme=light]) .sn-trig { background: #34234a; color: #cda2ff; } }
+  .sn-meter { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; margin-top: 4px; }
+  .sn-meter > div { height: 100%; background: var(--accent); }
+  .sn-meter.full > div { background: var(--warn); }
+  .sn-mrow { display: flex; justify-content: space-between; font-size: 13px; margin-top: 10px; }
+  .sn-warn { color: var(--signal); font-size: 13px; }
+  .sn-bad { color: var(--warn); font-size: 13px; }
+  .sn-ok { color: var(--ok); font-size: 13px; }
+  .sn-src-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+  .sn-src-row:first-of-type { border-top: 0; }
+  .sn-card select { max-width: 100%; }
+  .sn-src-row { flex-wrap: wrap; }
+  .sn-src-row input { flex: 1 1 110px; min-width: 90px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); font: inherit; }
+  .sn-ghost { border-style: dashed; color: var(--accent); background: transparent; }
+  .sn-overlay { position: fixed; inset: 0; background: rgba(20, 32, 27, .45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+  .sn-dialog { background: var(--panel); border-radius: 16px; box-shadow: 0 16px 60px rgba(20, 32, 27, .35); padding: 22px; max-width: 640px; width: 100%; max-height: 90vh; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+  .sn-opts { display: flex; flex-wrap: wrap; gap: 10px; }
+  .sn-opt { flex: 1 1 220px; border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 4px; text-align: left; background: var(--raised); }
+  .sn-opt.on { border: 2px solid var(--accent); background: var(--accent-soft); }
+  .sn-opt small { color: var(--muted); }
+  .sn-log { font-size: 13px; color: var(--muted); white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -802,6 +869,12 @@
       <!-- Nodes -->
       <div class="pane" id="pane-nodes" hidden>
         <div class="pane-head"><h2>Nodes</h2></div>
+        <div class="filters" id="node-kind"><button data-nk="nodes" class="on">Nodes</button><button data-nk="sensors">Sensors</button></div>
+        <div id="sensors-side" hidden>
+          <div class="filters" id="sensor-filters"><button data-f="all" class="on">Mine</button><button data-f="fav">Favourites</button><button data-f="alarm">Alarms</button></div>
+          <div id="sensors-list"></div>
+          <div style="padding:8px 6px"><button id="btn-sensor-new" class="primary" style="width:100%">Set up a sensor</button></div>
+        </div>
         <div class="filters" id="node-net"><button data-nn="marse" class="on">Må:rse</button><button data-nn="meshcore" id="btn-mc-nodes" hidden>MeshCore</button></div>
         <div id="mc-linknote2" class="mc-linknote" hidden></div>
         <div class="filters" id="node-view"><button data-nv="list" class="on">List</button><button data-nv="map">Map</button></div>
@@ -971,6 +1044,8 @@ const Cmd = {
   // Linked devices (maarse-host): see maarse-core/src/companion.rs.
   linkDevice: (req, devHex) => frame(0x35, u16(req), unhex(devHex)),
   getPerson: () => frame(0x36),
+  // Sensors (0x39): dest "0"*32 = the connected node / the host itself; see maarse-core/src/sensor.rs.
+  sensor: (req, destHex, op, data = new Uint8Array(0)) => frame(0x39, u16(req), unhex(destHex), [op], data),
   personSetup: (req, op, text = "") => frame(0x37, u16(req), [op], enc.encode(text)),
   meshcoreProof: (req, operation, challenge, payload) => frame(0x37, u16(req), [10, operation], challenge, enc.encode(payload)),
   requestPage: (req, destHex, path) => frame(0x26, u16(req), unhex(destHex), enc.encode(path)),
@@ -1072,6 +1147,7 @@ function decodeEvent(f) {
       return { type: "person", state: f[1], master: !!(f[2] & 1), person: a(3), index: f[19], devices, words: txt(25 + 17 * n) };
     }
     case 0xb7: return { type: "personPhrase", phrase: txt(1) };
+    case 0xbd: return { type: "sensor", node: a(1), op: f[17], data: f.slice(18) };
     case 0xb8: return { type: "personBackup", code: txt(1) };
     case 0xbc: return { type: "meshcoreProof", req: f[1] | f[2] << 8, offset: f[3] | f[4] << 8, total: f[5] | f[6] << 8, data: f.slice(7) };
     default: return histDecode(f, t) ?? { type: "unknown", kind: t };
@@ -1373,6 +1449,7 @@ function renderChat() {
   box.replaceChildren();
   $("composer").hidden = state.view !== "chat";
   box.classList.remove("mapmode");
+  if (state.view === "sensors") return renderSensors(box);
   if (renderShellView(box)) return;
   if (state.view === "status") return renderStatus(box);
   if (state.view === "alerts") return renderAlerts(box);
@@ -1529,6 +1606,7 @@ const now = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "
 
 function onEvent(ev) {
   if (histOnEvent(ev)) return;
+  if (snEventHook(ev)) return;
   switch (ev.type) {
     case "info":
       state.infoAt = Date.now();
@@ -6836,7 +6914,7 @@ function pwaTitle() {
 // so the navigation always shows where you are. See docs/mockups/README.md.
 
 Object.assign(state, { tab: "chats", activity: [], airHist: [], nodeSel: null, chatFilter: "all", nodeFilter: "all", stripTimer: null });
-var VIEW_TAB = { chat: "chats", remote: "chats", alerts: "chats", node: "nodes", map: "nodes", pages: "pages", announces: "nodes",
+var VIEW_TAB = { sensors: "nodes", chat: "chats", remote: "chats", alerts: "chats", node: "nodes", map: "nodes", pages: "pages", announces: "nodes",
   network: "network", activity: "network", status: "network", range: "settings", radio: "settings", firmware: "settings",
   settings: "settings", connections: "settings", computer: "settings", service: "settings", backup: "settings", myqr: "settings", account: "settings", "meshcore-setup": "settings", meshcore: "chats", mcnodes: "nodes" };
 
@@ -6868,7 +6946,10 @@ function tabOfView(v) {
 function setTab(t) {
   markTab(t);
   if (t === "chats") { setView("chat"); mobileSide(true); }
-  else if (t === "nodes") { renderNodes(); setView("node"); mobileSide(!state.nodeSel); }
+  else if (t === "nodes") {
+    if ($("pane-nodes").classList.contains("sn-mode")) { setView("sensors"); mobileSide(!SN.sel && !SN.design); }
+    else { renderNodes(); setView("node"); mobileSide(!state.nodeSel); }
+  }
   else if (t === "network") setView("network");
   // A tap on Pages while in Pages: the browser's start page.
   else if (t === "pages") { if (state.view === "pages" && pages.url) pageHome(); else setView("pages"); mobileSide(false); }
@@ -7624,6 +7705,538 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http") && !IN_
   });
 }
 // ---------- </pwa> ----------
+
+// ---------- sensors: Nodes > Sensors ----------
+// A sensor is a node that reads things and sends them to its owners (a person;
+// up to four). This page lists them (for you), shows their values and alarms,
+// and has the designer: rules as sentences, compiled by the host (the same
+// engine the sensors run), tested on a simulated day, then sent to the node by
+// USB (first time: the node takes you as its owner) or over the radio.
+// The host does the work (HTTP /api/sensors...), see maarse-host/src/sensors.rs.
+const SN = { list: null, sel: null, filter: "all", range: 86400, series: {}, err: "", timer: null, design: null,
+  status: new Map(), owners: new Map(), ownerInfo: null, recipe: new Map(), waiters: [], dialog: null, refresh: 0 };
+const SN_ZERO = "0".repeat(32);
+const SN_KINDS = { temperature: ["Temperature", "°C"], humidity: ["Humidity", "%"], pressure: ["Pressure", "hPa"], voltage: ["Voltage", "V"],
+  digital: ["Pin", ""], counter: ["Counter", ""], percent: ["Level", "%"], distance: ["Distance", "mm"] };
+const SN_BOARDS = {
+  xiao_nrf52840: { name: "Seeed XIAO nRF52840 + Wio-SX1262", pins: [[0, "D0"], [6, "D6"], [7, "D7"]], i2c: [6, 7], i2cText: "D6 = SDA, D7 = SCL", adc: null,
+    note: "The radio uses the other pins. A BME280 takes D6 and D7.", holds: true },
+  heltec_v4: { name: "Heltec WiFi LoRa 32 V4", pins: [3, 4, 6, 38, 39, 40, 41].map(p => [p, "GPIO" + p]), i2c: [47, 48], i2cText: "GPIO47 = SDA, GPIO48 = SCL",
+    adc: [4, "GPIO4"], note: "Power a sensor from Ve (off while asleep) or 3V3.", holds: false },
+  wismesh: { name: "RAK WisMesh Tag", pins: [], i2c: null, adc: null, note: "No free pins: battery and chip temperature only.", holds: true },
+};
+const snBoard = d => SN_BOARDS[d.setup.board] || SN_BOARDS.xiao_nrf52840;
+const snMin = s => Math.round(s / 60);
+const snFmt = (v, d = 1) => v == null ? "–" : (Math.abs(v) >= 1000 ? Math.round(v) : Number(v.toFixed(d))).toString();
+const snAgo = s => s < 90 ? "just now" : s < 5400 ? Math.round(s / 60) + " min ago" : s < 129600 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " days ago";
+const snName = n => n.name || ("Sensor " + n.node.slice(0, 4));
+
+async function snApi(method, path, body) {
+  const remote = remoteHost.get(), base = remote?.addr ? remoteOrigin(remote.addr) : location.origin, tok = hostToken();
+  const headers = {}; if (tok) headers.Authorization = "Bearer " + tok; if (body !== undefined) headers["Content-Type"] = "application/json";
+  const r = await fetch(base + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText || "Error " + r.status);
+  return j;
+}
+const snHasHost = () => transport instanceof WsTransport;
+
+// ----- the list -----
+async function snLoad() {
+  if (!snHasHost()) { SN.list = null; SN.err = "Sensors need maarse-host: connect to it (this PC's host, or your phone)."; return; }
+  try { SN.list = await snApi("GET", "/api/sensors"); SN.err = ""; } catch (e) { SN.err = e.message; }
+}
+function snKind(on) {
+  $("pane-nodes").classList.toggle("sn-mode", on);
+  $("sensors-side").hidden = !on;
+  for (const b of $("node-kind").querySelectorAll("button")) b.classList.toggle("on", (b.dataset.nk === "sensors") === on);
+  clearInterval(SN.timer);
+  if (on) {
+    setView("sensors");
+    snLoad().then(() => { snRenderSide(); if (state.view === "sensors") renderChat(); });
+    SN.timer = setInterval(() => { if ($("pane-nodes").classList.contains("sn-mode")) snLoad().then(() => { snRenderSide(); if (state.view === "sensors") renderChat(); }); }, 30000);
+  } else if (state.view === "sensors" || state.view === "sensor-design") { setView("node"); renderNodes(); }
+}
+for (const b of $("node-kind").querySelectorAll("button")) b.onclick = () => { markTab("nodes"); snKind(b.dataset.nk === "sensors"); };
+for (const b of $("sensor-filters").querySelectorAll("button")) b.onclick = () => {
+  SN.filter = b.dataset.f; for (const x of $("sensor-filters").querySelectorAll("button")) x.classList.toggle("on", x === b); snRenderSide();
+};
+$("btn-sensor-new").onclick = () => { SN.sel = null; SN.design = null; setView("sensors"); renderChat(); };
+function snVisible(n) {
+  if (SN.filter === "fav") return n.favourite;
+  if (SN.filter === "alarm") return !!n.alarm || (n.age_s > 7200);
+  return true;
+}
+function snRenderSide() {
+  const box = $("sensors-list"); box.replaceChildren();
+  if (!SN.list) { box.append(el("p", { className: "hint", textContent: SN.err || "Loading ..." })); return; }
+  const shown = SN.list.filter(snVisible);
+  if (!shown.length) box.append(el("p", { className: "hint", textContent: SN.list.length ? "Nothing here." : "No sensors yet. Set one up, or wait for one to send." }));
+  for (const n of shown) {
+    const quiet = n.age_s > 7200;
+    const first = n.channels.find(c => c.value != null);
+    const b = el("button", { className: "sn-item" + (SN.sel === n.node ? " on" : "") },
+      el("b", { textContent: (n.favourite ? "★ " : "") + snName(n) }),
+      el("span", { className: "sn-dot" + (n.alarm ? " alarm" : quiet ? " quiet" : ""), title: n.alarm ? "Alarm" : quiet ? "Quiet" : "Heard recently" }),
+      el("small", { textContent: n.alarm ? "⚠ " + n.alarm.text : (first ? first.name + " " + snFmt(first.value) + " " + first.unit + " · " : "") + snAgo(n.age_s) }));
+    b.onclick = () => { SN.sel = n.node; SN.design = null; setView("sensors"); snRenderSide(); renderChat(); };
+    box.append(b);
+  }
+}
+
+// ----- chart -----
+function snChart(points, o = {}) {
+  const W = 300, H = o.h || 120, pl = 6, pr = 6, pt = 8, pb = 16;
+  const svg = (inner) => { const d = el("div"); d.innerHTML = `<svg class="sn-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${o.label || "Chart"}">${inner}</svg>`; return d.firstChild; };
+  if (!points || points.length < 1) return svg(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="11" fill="currentColor" opacity=".6">No readings yet</text>`);
+  const t0 = o.from ?? points[0][0], t1 = o.to ?? points[points.length - 1][0] + 1;
+  const ys = points.map(p => p[1]).filter(v => v != null);
+  let lo = Math.min(...ys, ...(o.lines || []).map(l => l.y)), hi = Math.max(...ys, ...(o.lines || []).map(l => l.y));
+  if (hi - lo < 1) { lo -= .5; hi += .5; }
+  const x = t => pl + (t - t0) / Math.max(1, t1 - t0) * (W - pl - pr), y = v => pt + (1 - (v - lo) / (hi - lo)) * (H - pt - pb);
+  let s = "";
+  for (const m of (o.bands || [])) s += `<rect x="${x(m[0])}" y="${pt}" width="${Math.max(1, x(m[1]) - x(m[0]))}" height="${H - pt - pb}" fill="var(--signal-soft)"/>`;
+  for (const l of (o.lines || [])) s += `<line x1="${pl}" x2="${W - pr}" y1="${y(l.y)}" y2="${y(l.y)}" stroke="var(--signal)" stroke-dasharray="${l.dash || "5 4"}" stroke-width="1.3"/><text x="${pl + 2}" y="${y(l.y) - 3}" font-size="9" fill="var(--signal)">${l.label || ""}</text>`;
+  const pts = points.filter(p => p[1] != null).map(p => `${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join(" ");
+  s += `<polyline fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linejoin="round" points="${pts}"/>`;
+  for (const m of (o.marks || [])) s += `<line x1="${x(m.t)}" x2="${x(m.t)}" y1="${pt}" y2="${H - pb}" stroke="${m.bad ? "var(--warn)" : "var(--ok)"}" stroke-width="1.2"/><circle cx="${x(m.t)}" cy="${m.y != null ? y(m.y) : pt}" r="3.5" fill="${m.bad ? "var(--warn)" : "var(--ok)"}"/>`;
+  const label = t => o.hours ? String(Math.floor(t / 3600) % 24).padStart(2, "0") + ":00" : new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  s += `<text x="${pl}" y="${H - 3}" font-size="9" fill="currentColor" opacity=".65">${label(t0)}</text><text x="${W - pr}" y="${H - 3}" text-anchor="end" font-size="9" fill="currentColor" opacity=".65">${label(t1)}</text>`;
+  s += `<text x="${W - pr}" y="${pt + 3}" text-anchor="end" font-size="9" fill="currentColor" opacity=".65">${snFmt(hi)}</text><text x="${W - pr}" y="${H - pb - 2}" text-anchor="end" font-size="9" fill="currentColor" opacity=".65">${snFmt(lo)}</text>`;
+  return svg(s);
+}
+
+// ----- the Sensors page -----
+function renderSensors(box) {
+  $("chat-title").textContent = "Sensors"; $("chat-sub").textContent = "For you: favourites and your own";
+  $("composer").hidden = true;
+  if (SN.design) return renderSensorDesigner(box);
+  const wrap = el("div", { className: "sn-wrap" }); box.append(wrap);
+  const n = SN.list?.find(x => x.node === SN.sel);
+  if (!snHasHost()) { wrap.append(el("div", { className: "sn-card" }, el("p", { textContent: SN.err || "Sensors need maarse-host." }))); return; }
+  if (!n) return snStart(wrap);
+  $("chat-title").textContent = snName(n); $("chat-sub").textContent = n.node + " · heard " + snAgo(n.age_s);
+  const head = el("div", { className: "sn-head" }, el("h2", { textContent: snName(n) }));
+  const fav = el("button", { textContent: n.favourite ? "★ Favourite" : "☆ Favourite" });
+  fav.onclick = async () => { await snApi("POST", "/api/sensors/meta", { node: n.node, favourite: !n.favourite }); await snLoad(); snRenderSide(); renderChat(); };
+  const ren = el("button", { textContent: "Rename" });
+  ren.onclick = async () => { const v = prompt("Name of this sensor", n.name || ""); if (v != null) { await snApi("POST", "/api/sensors/meta", { node: n.node, name: v }); await snLoad(); snRenderSide(); renderChat(); } };
+  const edit = el("button", { className: "primary", textContent: "Edit setup" });
+  edit.onclick = () => snOpenDesigner(n.node);
+  const now = el("button", { textContent: "Read now", title: "Ask the sensor for a reading (it answers after its next wake-up)" });
+  now.onclick = () => { transport.send(Cmd.sensor(state.nextReq++ & 0xffff, n.node, 3)); log("Asked the sensor for a reading"); };
+  const del = el("button", { textContent: "Forget" });
+  del.onclick = async () => { if (confirm("Forget " + snName(n) + " and its history on this host? The sensor itself is not changed.")) { await snApi("POST", "/api/sensors/forget", { node: n.node }); SN.sel = null; await snLoad(); snRenderSide(); renderChat(); } };
+  head.append(fav, ren, now, edit, del); wrap.append(head);
+  if (n.alarm) wrap.append(el("div", { className: "sn-banner", textContent: "⚠ " + n.alarm.text + " · " + snAgo(Math.floor(Date.now() / 1000) - n.alarm.t) }));
+  else if (n.age_s > 7200) wrap.append(el("div", { className: "sn-quiet", textContent: "No reading for " + snAgo(n.age_s).replace(" ago", "") + ". The battery may be flat, or the sensor is out of range." }));
+  const chips = el("div", { className: "sn-chips" });
+  for (const [label, s] of [["24 hours", 86400], ["7 days", 604800]]) {
+    const b = el("button", { textContent: label, className: SN.range === s ? "on" : "" }); b.onclick = () => { SN.range = s; SN.series = {}; renderChat(); }; chips.append(b);
+  }
+  wrap.append(chips);
+  const grid = el("div", { className: "sn-grid" }); wrap.append(grid);
+  for (const c of n.channels) {
+    const card = el("div", { className: "sn-card" }, el("h3", { textContent: (c.name || "Value") + " · channel " + c.chan }),
+      el("div", { className: "sn-big" }, snFmt(c.value), el("small", { textContent: " " + c.unit })));
+    const slot = el("div"); card.append(slot); grid.append(card);
+    const key = n.node + ":" + c.chan + ":" + SN.range;
+    const draw = pts => { slot.replaceChildren(snChart(pts, { label: c.name + " history", from: Date.now() / 1000 - SN.range, to: Date.now() / 1000 })); };
+    if (SN.series[key]) draw(SN.series[key]);
+    else snApi("GET", `/api/sensors/series?node=${n.node}&chan=${c.chan}&from=${Math.floor(Date.now() / 1000 - SN.range)}&max=200`).then(j => { SN.series[key] = j.points; draw(j.points); }).catch(e => { slot.textContent = e.message; });
+  }
+  const alarms = el("div", { className: "sn-card" }, el("h3", { textContent: "Alarms" })); wrap.append(alarms);
+  snApi("GET", "/api/sensors/alarms?node=" + n.node).then(list => {
+    if (!list.length) alarms.append(el("p", { className: "hint", textContent: "None so far." }));
+    for (const a of list.slice(0, 12)) alarms.append(el("div", { className: "sn-src-row" }, el("span", { textContent: a.raised ? "⚠" : "✓" }), el("span", { textContent: (a.raised ? "" : "Cleared: ") + a.text, style: "flex:1" }), el("span", { className: "hint", textContent: new Date(a.t * 1000).toLocaleString() })));
+  }).catch(() => {});
+}
+
+function snStart(wrap) {
+  wrap.append(el("div", { className: "sn-head" }, el("h2", { textContent: "Set up a sensor" })));
+  wrap.append(el("p", { className: "hint", textContent: "Pick what it should do, test it here, then send it to the node. You can change it later, also over the radio." }));
+  const steps = el("div", { className: "sn-steps" }); wrap.append(steps);
+  const s1 = el("div", { className: "sn-card sn-step" }, el("h3", {}, el("span", { className: "sn-num", textContent: "1" }), "Plug in your board"),
+    el("p", { className: "hint", textContent: "Use a USB cable. Needs Chrome or Edge on a computer. The designer finds the board when you send the setup." }));
+  const s2 = el("div", { className: "sn-card sn-step" }, el("h3", {}, el("span", { className: "sn-num", textContent: "2" }), "Pick a starting point"));
+  const tp = el("div", { className: "sn-tpls" }); s2.append(tp);
+  for (const [key, t] of Object.entries(SN_TEMPLATES)) {
+    const b = el("button", { className: "sn-tpl" }, el("b", { textContent: t.title }), el("small", { textContent: t.text }));
+    b.onclick = () => snOpenDesigner(null, key); tp.append(b);
+  }
+  steps.append(s1, s2);
+  if (SN.list?.length) {
+    const have = el("div", { className: "sn-card" }, el("h3", { textContent: "Your sensors" }));
+    for (const n of SN.list) { const b = el("button", { textContent: snName(n) + (n.alarm ? " ⚠" : "") }); b.onclick = () => { SN.sel = n.node; snRenderSide(); renderChat(); }; have.append(b, " "); }
+    wrap.append(have);
+  }
+}
+
+// ----- templates -----
+const snSrc = (chan, kind, input, name) => ({ chan, kind, name: name || SN_KINDS[kind]?.[0] || "Value", input });
+const snBme = (what, chan) => snSrc(chan, what, { type: "bme280", addr: 118, what }, SN_KINDS[what][0]);
+const SN_TEMPLATES = {
+  frost: { title: "Frost alarm", text: "Warn me below a temperature.", make: () => ({ name: "Frost alarm", sources: [snBme("temperature", 1)],
+    rules: [{ id: 1, name: "Report", when: { type: "every", secs: 900 }, then: [{ type: "report" }] },
+      { id: 2, name: "Frost alarm", when: { type: "compare", chan: 1, op: "<", value: 10, clear: 12, count: 2 }, limit_min: 30, then: [{ type: "alarm", text: "Frost: below 10 °C" }] }] }) },
+  door: { title: "Door or post box", text: "Tell me when it opens.", make: () => ({ name: "Door", sources: [snSrc(1, "digital", { type: "gpio_in", pin: 0, pull: "up", invert: false }, "Door contact")],
+    interval_s: 60, rules: [{ id: 1, name: "Door opened", when: { type: "edge", chan: 1, to: "high" }, limit_min: 5, then: [{ type: "alarm", text: "Door opened" }] },
+      { id: 2, name: "Report", when: { type: "every", secs: 3600 }, then: [{ type: "report" }] }] }) },
+  weather: { title: "Weather station", text: "Temperature, humidity, pressure.", make: () => ({ name: "Weather", sources: [snBme("temperature", 1), snBme("humidity", 2), snBme("pressure", 3)],
+    rules: [{ id: 1, name: "Report", when: { type: "every", secs: 900 }, then: [{ type: "report" }] }] }) },
+  battery: { title: "Battery watch", text: "Warn when the battery is low.", make: () => ({ name: "Battery", sources: [snSrc(1, "voltage", { type: "battery" }, "Battery")],
+    interval_s: 3600, rules: [{ id: 1, name: "Report", when: { type: "every", secs: 3600 }, then: [{ type: "report" }] },
+      { id: 2, name: "Low battery", when: { type: "compare", chan: 1, op: "<", value: 3.5, clear: 3.7, count: 2 }, limit_min: 720, then: [{ type: "alarm", text: "Battery is low" }] }] }) },
+  blank: { title: "Start empty", text: "Build every rule yourself.", make: () => ({ name: "", sources: [snSrc(1, "voltage", { type: "battery" }, "Battery")], rules: [] }) },
+};
+function snNewSetup(tpl) {
+  const t = SN_TEMPLATES[tpl || "blank"].make();
+  return { v: 1, board: "xiao_nrf52840", interval_s: 900, sleep: true, report_to: { owners: [0], channel: false }, alarm_to: { owners: [0], channel: false }, channel: "", ...t };
+}
+
+// ----- the designer -----
+async function snOpenDesigner(node, tpl) {
+  const d = SN.design = { node: node || null, setup: node ? null : snNewSetup(tpl), compiled: null, sim: null, scenario: "cold_night", err: "", busy: 0 };
+  setView("sensors");
+  if (node) {
+    try { const s = await snApi("GET", "/api/sensors/setup?node=" + node); d.setup = s && s.sources ? s : null; } catch {}
+    if (!d.setup) { d.setup = snNewSetup("blank"); d.err = "This sensor has no saved setup on this host yet. Start from a template on the Sensors page, or build the rules here."; }
+  }
+  if (SN.design !== d) return;
+  renderChat(); snRecompile();
+}
+let snTimer = null;
+function snRecompile() {
+  const d = SN.design; if (!d) return;
+  clearTimeout(snTimer);
+  snTimer = setTimeout(async () => {
+    const my = ++d.busy;
+    try {
+      const c = await snApi("POST", "/api/sensors/compile", d.setup);
+      if (my !== d.busy) return; d.compiled = c;
+      if (c.ok) d.sim = await snApi("POST", "/api/sensors/simulate", { setup: d.setup, scenario: d.scenario }); else d.sim = null;
+    } catch (e) { d.compiled = { ok: false, error: e.message }; }
+    if (SN.design === d && state.view === "sensors") snRenderDesignerParts();
+  }, 250);
+}
+const snOutputs = d => d.setup.sources.filter(s => s.input.type === "gpio_out");
+const snReadable = d => d.setup.sources.filter(s => s.input.type !== "gpio_out");
+function snUnit(setup, chan) { const s = setup.sources.find(x => x.chan === chan); return s ? SN_KINDS[s.kind]?.[1] || "" : ""; }
+function snNextChan(setup) { let c = 1; while (setup.sources.some(s => s.chan === c)) c++; return c; }
+function snFreePins(d, forOut) {
+  const b = snBoard(d), used = new Set(d.setup.sources.map(s => s.input.pin).filter(p => p != null));
+  const i2c = d.setup.sources.some(s => s.input.type === "bme280") ? new Set(b.i2c || []) : new Set();
+  return b.pins.filter(([p]) => !used.has(p) && !i2c.has(p));
+}
+
+function renderSensorDesigner(box) {
+  const d = SN.design; $("chat-title").textContent = "Sensor designer"; $("chat-sub").textContent = d.node ? d.node : "A new sensor";
+  const wrap = el("div", { className: "sn-wrap" }, el("div", { id: "sn-top" }), el("div", { className: "sn-design" },
+    el("div", { className: "sn-col-a", id: "sn-a" }), el("div", { className: "sn-col-b", id: "sn-b" }), el("div", { className: "sn-col-c", id: "sn-c" })));
+  box.append(wrap); snRenderDesignerParts(true);
+}
+function snRenderDesignerParts(all) {
+  const d = SN.design; if (!d || !$("sn-top")) return;
+  if (all) { snRenderTop(); snRenderA(); snRenderB(); }
+  snRenderC();
+}
+const snSel = (opts, val, on, cls = "") => { const s = el("select", { className: cls }); for (const [v, l] of opts) { const o = el("option", { value: String(v), textContent: l }); if (String(v) === String(val)) o.selected = true; s.append(o); } s.onchange = () => on(s.value); return s; };
+const snNum = (val, on, step = "any", w) => { const i = el("input", { type: "number", value: val ?? "", step }); if (w) i.style.width = w; i.oninput = () => { if (i.value !== "") on(parseFloat(i.value)); }; return i; };
+
+function snRenderTop() {
+  const d = SN.design, top = $("sn-top"); top.replaceChildren();
+  const name = el("input", { value: d.setup.name || "", placeholder: "Name, e.g. Cellar", style: "font-size:18px;font-weight:650;padding:6px 10px;border-radius:10px;border:1px solid var(--line);background:var(--raised);color:var(--ink);min-width:220px" });
+  name.oninput = () => { d.setup.name = name.value; };
+  const save = el("button", { textContent: "Save on this host" });
+  save.onclick = async () => { if (!d.node) { alert("A new sensor is saved when you send the setup to it."); return; } await snApi("PUT", "/api/sensors/setup?node=" + d.node, d.setup); if (d.setup.name) await snApi("POST", "/api/sensors/meta", { node: d.node, name: d.setup.name }); log("Setup saved"); };
+  const up = el("button", { className: "primary", textContent: "Send to the sensor …" }); up.onclick = () => snUploadDialog();
+  const back = el("button", { textContent: "Close" }); back.onclick = () => { SN.design = null; renderChat(); };
+  top.append(el("div", { className: "sn-head" }, name, el("span", { className: "spacer", style: "flex:1" }), back, save, up));
+  if (d.err) top.append(el("p", { className: "hint", textContent: d.err }));
+}
+function snRenderA() {
+  const d = SN.design, a = $("sn-a"); a.replaceChildren();
+  const b = snBoard(d);
+  const board = el("div", { className: "sn-card" }, el("h3", { textContent: "This sensor" }));
+  board.append(snSel(Object.entries(SN_BOARDS).map(([k, v]) => [k, v.name]), d.setup.board || "xiao_nrf52840", v => { d.setup.board = v; snRenderA(); snRecompile(); }, ""), el("p", { className: "hint", textContent: b.note }));
+  const iv = el("div", { className: "sn-line" }, el("span", { textContent: "Wake and read every" }), snNum(snMin(d.setup.interval_s), v => { d.setup.interval_s = Math.max(1, Math.round(v * 60)); snRecompile(); }, "1", "70px"), el("span", { textContent: "minutes" }));
+  const sl = el("label", { className: "sn-line", style: "flex-wrap:nowrap;align-items:flex-start" }, el("input", { type: "checkbox", checked: d.setup.sleep !== false, onchange: e => { d.setup.sleep = e.target.checked; snRecompile(); } }), el("span", { textContent: "Sleep between (saves battery; plug in USB to talk to it)" }));
+  board.append(iv, sl);
+  a.append(board);
+  const inp = el("div", { className: "sn-card" }, el("h3", { textContent: "Inputs and outputs" }));
+  for (const s of d.setup.sources) {
+    const nm = el("input", { value: s.name || "", "aria-label": "Name of channel " + s.chan }); nm.oninput = () => { s.name = nm.value; };
+    const rm = el("button", { textContent: "✕", title: "Remove", "aria-label": "Remove" });
+    rm.onclick = () => { d.setup.sources = d.setup.sources.filter(x => x !== s); d.setup.rules = d.setup.rules.filter(r => r.when.chan !== s.chan); for (const r of d.setup.rules) r.then = r.then.filter(x => x.chan !== s.chan); snRenderA(); snRenderB(); snRecompile(); };
+    inp.append(el("div", { className: "sn-src-row" }, el("span", { className: "sn-kw", textContent: "#" + s.chan, style: "min-width:26px" }), nm, rm, el("small", { className: "hint", textContent: snInputText(s.input, b), style: "flex-basis:100%;padding-left:34px" })));
+  }
+  const add = el("select", { className: "sn-ghost" }); add.append(el("option", { value: "", textContent: "+ Add sensor or pin" }));
+  const opts = [];
+  if (b.i2c && !d.setup.sources.some(s => s.input.type === "bme280")) opts.push(["bme", "Temperature, humidity, pressure (BME280)"]);
+  if (snFreePins(d).length) { opts.push(["pin_in", "Pin input (door, button)"], ["pin_out", "Pin output (relay, LED)"]); }
+  if (b.adc && !d.setup.sources.some(s => s.input.type === "adc")) opts.push(["adc", "Analogue input (" + b.adc[1] + ")"]);
+  if (!d.setup.sources.some(s => s.input.type === "battery")) opts.push(["battery", "Battery voltage"]);
+  if (!d.setup.sources.some(s => s.input.type === "chip_temp")) opts.push(["chip", "Chip temperature"]);
+  for (const [v, l] of opts) add.append(el("option", { value: v, textContent: l }));
+  add.onchange = () => {
+    const v = add.value, c = snNextChan(d.setup), pins = snFreePins(d);
+    if (v === "bme") { for (const w of ["temperature", "humidity", "pressure"]) d.setup.sources.push(snBme(w, snNextChan(d.setup))); }
+    else if (v === "pin_in") d.setup.sources.push(snSrc(c, "digital", { type: "gpio_in", pin: pins[0][0], pull: "up", invert: false }, "Pin " + pins[0][1]));
+    else if (v === "pin_out") d.setup.sources.push(snSrc(c, "digital", { type: "gpio_out", pin: pins[0][0], active_low: false }, "Output " + pins[0][1]));
+    else if (v === "adc") d.setup.sources.push(snSrc(c, "voltage", { type: "adc", pin: b.adc[0], mul: 1 }, "Analogue input"));
+    else if (v === "battery") d.setup.sources.push(snSrc(c, "voltage", { type: "battery" }, "Battery"));
+    else if (v === "chip") d.setup.sources.push(snSrc(c, "temperature", { type: "chip_temp" }, "Chip temperature"));
+    snRenderA(); snRenderB(); snRecompile();
+  };
+  inp.append(add);
+  a.append(inp);
+  a.append(snRecipients(d));
+}
+function snInputText(i, b) {
+  const pin = p => (b.pins.find(x => x[0] === p) || [p, "pin " + p])[1];
+  switch (i.type) {
+    case "bme280": return "BME280 · I²C (" + (b.i2cText || "") + ")";
+    case "gpio_in": return "Input " + pin(i.pin) + (i.pull !== "none" ? " · " + i.pull : "");
+    case "gpio_out": return "Output " + pin(i.pin);
+    case "adc": return "Analogue " + (b.adc ? b.adc[1] : "");
+    case "battery": return "Built in"; case "chip_temp": return "Built in";
+    default: return i.type;
+  }
+}
+function snRecipients(d) {
+  const card = el("div", { className: "sn-card" }, el("h3", { textContent: "Who gets it" }));
+  const owners = SN.owners.get(d.node) || [{ slot: 0, name: "Me" }];
+  const mk = (key, label) => {
+    const r = d.setup[key] || (d.setup[key] = { owners: [0], channel: false });
+    const line = el("div", { className: "sn-line" }, el("span", { className: "sn-kw", textContent: label, style: "min-width:60px" }));
+    for (const o of owners) {
+      const cb = el("input", { type: "checkbox", checked: r.owners.includes(o.slot) });
+      cb.onchange = () => { r.owners = cb.checked ? [...new Set([...r.owners, o.slot])] : r.owners.filter(x => x !== o.slot); snRecompile(); };
+      line.append(el("label", { className: "sn-line" }, cb, el("span", { textContent: o.name })));
+    }
+    const chs = [...state.channels].filter(([a, n]) => !/^#?public$/i.test(n));
+    if (chs.length) {
+      const cb = el("input", { type: "checkbox", checked: !!r.channel });
+      cb.onchange = () => { r.channel = cb.checked; if (cb.checked && !d.setup.channel) d.setup.channel = chs[0][0]; snRenderA(); snRecompile(); };
+      line.append(el("label", { className: "sn-line" }, cb, el("span", { textContent: "A private channel" })));
+    }
+    return line;
+  };
+  card.append(mk("report_to", "Readings"), mk("alarm_to", "Alarms"));
+  const chs = [...state.channels].filter(([a, n]) => !/^#?public$/i.test(n));
+  if ((d.setup.report_to?.channel || d.setup.alarm_to?.channel) && chs.length) {
+    card.append(el("div", { className: "sn-line" }, el("span", { className: "sn-kw", textContent: "Channel", style: "min-width:60px" }), snSel(chs.map(([a, n]) => [a, n]), d.setup.channel || chs[0][0], v => { d.setup.channel = v; snRecompile(); }),
+      el("small", { className: "hint", textContent: "Never the public channel. The sensor must have joined it (over USB)." })));
+  }
+  card.append(el("p", { className: "hint", textContent: "Owners are people (accounts). Up to four can look after one sensor." }));
+  return card;
+}
+
+// ----- rules -----
+const SN_OPS = [["<", "is below"], [">", "is above"], ["<=", "is at most"], [">=", "is at least"], ["==", "is exactly"], ["!=", "is not"]];
+function snRenderB() {
+  const d = SN.design, b = $("sn-b"); b.replaceChildren();
+  const head = el("div", { className: "sn-head" }, el("h2", { textContent: "Rules", style: "font-size:20px" }));
+  const addr = el("button", { className: "primary", textContent: "+ Add rule" });
+  addr.onclick = () => { const id = Math.max(0, ...d.setup.rules.map(r => r.id)) + 1; const src = snReadable(d)[0]; d.setup.rules.push({ id, name: "Rule " + id, when: src ? { type: "compare", chan: src.chan, op: "<", value: 10, clear: 10, count: 1 } : { type: "every", secs: 900 }, then: [{ type: "alarm", text: "Alarm" }] }); snRenderB(); snRecompile(); };
+  head.append(addr); b.append(head);
+  d.setup.rules.forEach((r, i) => b.append(snRule(d, r, i)));
+  if (!d.setup.rules.length) b.append(el("p", { className: "hint", textContent: "No rules yet. Add one, or start from a template on the Sensors page." }));
+  b.append(el("p", { className: "hint", textContent: "Rules run on the sensor itself, so alarms work even when your phone or PC is off." }));
+}
+function snRule(d, r, idx) {
+  const card = el("div", { className: "sn-rule" });
+  const nm = el("input", { value: r.name || "", "aria-label": "Rule name", style: "font-weight:650;font-size:15px;border:0;background:transparent;color:var(--ink);flex:1" }); nm.oninput = () => { r.name = nm.value; };
+  const rm = el("button", { textContent: "✕", title: "Remove rule", "aria-label": "Remove rule" }); rm.onclick = () => { d.setup.rules.splice(idx, 1); snRenderB(); snRecompile(); };
+  card.append(el("div", { className: "sn-line" }, nm, rm));
+  const readable = snReadable(d).map(s => [s.chan, s.name || SN_KINDS[s.kind]?.[0] || "Value"]);
+  const w = r.when, when = el("div", { className: "sn-line" }, el("span", { className: "sn-kw", textContent: "When" }));
+  when.append(snSel([["every", "every …"], ["compare", "a value …"], ["change", "a value changes by …"], ["edge", "a pin …"]], w.type, v => {
+    const src = (v === "edge" ? snReadable(d).find(s => s.kind === "digital") : readable.length ? snReadable(d)[0] : null);
+    r.when = v === "every" ? { type: "every", secs: 900 } : v === "compare" ? { type: "compare", chan: src?.chan, op: "<", value: 10, clear: 10, count: 1 } : v === "change" ? { type: "change", chan: src?.chan, delta: 1 } : { type: "edge", chan: src?.chan, to: "high" };
+    snRenderB(); snRecompile();
+  }, "sn-trig"));
+  const unit = w.chan != null ? snUnit(d.setup, w.chan) : "";
+  if (w.type === "every") when.append(snNum(snMin(w.secs), v => { w.secs = Math.max(1, Math.round(v * 60)); snRecompile(); }, "1", "70px"), el("span", { textContent: "minutes" }));
+  else if (w.type === "compare") {
+    when.append(snSel(readable, w.chan, v => { w.chan = +v; snRenderB(); snRecompile(); }, "sn-src"), snSel(SN_OPS, w.op, v => { w.op = v; snRecompile(); }, "sn-op"),
+      snNum(w.value, v => { const same = w.clear === w.value; w.value = v; if (same) w.clear = v; snRecompile(); }), el("span", { textContent: unit }),
+      el("span", { textContent: "for" }), snNum(w.count, v => { w.count = Math.max(1, Math.round(v)); snRecompile(); }, "1", "56px"), el("span", { textContent: "readings" }));
+  } else if (w.type === "change") when.append(snSel(readable, w.chan, v => { w.chan = +v; snRenderB(); snRecompile(); }, "sn-src"), el("span", { textContent: "by more than" }), snNum(w.delta, v => { w.delta = Math.abs(v); snRecompile(); }), el("span", { textContent: unit }));
+  else when.append(snSel(readable, w.chan, v => { w.chan = +v; snRecompile(); }, "sn-src"), snSel([["high", "reads 1 (door open)"], ["low", "reads 0"], ["any", "changes"]], w.to, v => { w.to = v; snRecompile(); }, "sn-op"));
+  card.append(when);
+  if (w.type === "compare") {
+    card.append(el("div", { className: "sn-line" }, el("span", { className: "sn-kw", textContent: "Clear" }), el("span", { textContent: "back to normal at" }), snNum(w.clear, v => { w.clear = v; snRecompile(); }), el("span", { textContent: unit }), el("small", { className: "hint", textContent: "so it does not flap" })));
+  }
+  for (const [ai, a] of r.then.entries()) card.append(snAction(d, r, a, ai));
+  const addA = el("select", { className: "sn-ghost" });
+  addA.append(el("option", { value: "", textContent: "+ Add a step" }));
+  for (const [v, l] of [["report", "Send readings"], ["alarm", "Send an alarm"], ["set_out", "Set an output"], ["interval", "Change the interval"]]) {
+    if (v === "set_out" && !snOutputs(d).length) continue; addA.append(el("option", { value: v, textContent: l }));
+  }
+  addA.onchange = () => {
+    const v = addA.value; if (!v) return;
+    r.then.push(v === "report" ? { type: "report" } : v === "alarm" ? { type: "alarm", text: "Alarm" } : v === "set_out" ? { type: "set_out", chan: snOutputs(d)[0].chan, on: true } : { type: "interval", secs: 60 });
+    snRenderB(); snRecompile();
+  };
+  const lim = el("div", { className: "sn-line" }, el("span", { className: "sn-kw", textContent: "Limit" }), el("span", { textContent: "at most one alarm every" }), snNum(r.limit_min || 0, v => { r.limit_min = Math.max(0, Math.round(v)); snRecompile(); }, "5", "70px"), el("span", { textContent: "minutes (0 = no limit)" }));
+  card.append(addA);
+  if (r.then.some(a => a.type === "alarm")) card.append(lim);
+  return card;
+}
+function snAction(d, r, a, ai) {
+  const line = el("div", { className: "sn-line" }, el("span", { className: "sn-kw", textContent: ai ? "and" : "Then" }));
+  const rm = el("button", { textContent: "✕", title: "Remove step", "aria-label": "Remove step" }); rm.onclick = () => { r.then.splice(ai, 1); snRenderB(); snRecompile(); };
+  if (a.type === "report") line.append(el("span", { className: "sn-act", textContent: "send readings", style: "padding:6px 10px;border-radius:999px;font-size:13.5px" }));
+  else if (a.type === "alarm") {
+    const t = el("input", { className: "sn-text", value: a.text || "", placeholder: "Message, e.g. Cellar is below 10 °C", maxLength: 40 }); t.oninput = () => { a.text = t.value; snRecompile(); };
+    line.append(el("span", { className: "sn-act", textContent: "send alarm", style: "padding:6px 10px;border-radius:999px;font-size:13.5px" }), t);
+  } else if (a.type === "set_out") line.append(el("span", { textContent: "set" }), snSel(snOutputs(d).map(s => [s.chan, s.name]), a.chan, v => { a.chan = +v; snRecompile(); }, "sn-act"), snSel([["true", "on"], ["false", "off"]], String(a.on), v => { a.on = v === "true"; snRecompile(); }, "sn-act"), el("small", { className: "hint", textContent: "back when it clears" }));
+  else line.append(el("span", { textContent: "wake every" }), snNum(a.secs, v => { a.secs = Math.max(30, Math.round(v)); snRecompile(); }, "1", "70px"), el("span", { textContent: "seconds while it lasts" }));
+  line.append(rm); return line;
+}
+
+// ----- test and checks -----
+function snRenderC() {
+  const d = SN.design, c = $("sn-c"); if (!c) return; c.replaceChildren();
+  const test = el("div", { className: "sn-card" }, el("h3", { textContent: "Test" }));
+  test.append(el("label", { className: "hint", textContent: "Pretend the sensor sees" }), snSel([["cold_night", "A cold night"], ["door", "The door opens twice"], ["silent", "The sensor stops answering"]], d.scenario, v => { d.scenario = v; snRecompile(); }));
+  if (d.sim) {
+    const shown = snReadable(d);
+    const auto = d.setup.rules.find(r => r.when.type === "compare")?.when.chan ?? (shown.find(s => s.kind !== "digital") || shown[0])?.chan;
+    const chan = d.testChan != null && shown.some(s => s.chan === d.testChan) ? d.testChan : auto;
+    if (shown.length > 1) test.append(el("div", { className: "sn-line" }, el("span", { className: "hint", textContent: "Show" }),
+      snSel(shown.map(s => [s.chan, s.name || SN_KINDS[s.kind]?.[0]]), chan, v => { d.testChan = +v; snRenderC(); })));
+    const series = d.sim.series[chan] || [];
+    const pts = d.sim.times.map((t, i) => [t, series[i]]);
+    const lines = d.setup.rules.filter(r => r.when.type === "compare" && r.when.chan === chan).map(r => ({ y: r.when.value, label: snFmt(r.when.value) + " " + snUnit(d.setup, chan) }));
+    const bands = []; let on = null;
+    for (const e of d.sim.events) if (e.type === "output") { if (e.on) on = e.t; else if (on != null) { bands.push([on, e.t]); on = null; } }
+    if (on != null) bands.push([on, 86400]);
+    const marks = d.sim.events.filter(e => e.type === "alarm").map(e => ({ t: e.t, bad: e.raised, y: e.value }));
+    test.append(snChart(pts, { hours: true, from: 0, to: 86400, lines, marks, bands, label: "Simulated day" }));
+    const s = d.sim.summary;
+    test.append(el("p", { className: "hint", textContent: `${s.alarms} alarm${s.alarms === 1 ? "" : "s"} sent · ${s.reports} reports` + (s.output_on_s ? " · output on " + Math.floor(s.output_on_s / 3600) + " h " + Math.round(s.output_on_s % 3600 / 60) + " min" : "") + ". Runs the same code as the sensor." }));
+  } else test.append(el("p", { className: "hint", textContent: d.compiled && !d.compiled.ok ? "" : "Working …" }));
+  c.append(test);
+  const fit = el("div", { className: "sn-card" }, el("h3", { textContent: "Fits on the sensor" }));
+  const k = d.compiled;
+  if (k?.ok) {
+    const m = (label, v, max, text) => { fit.append(el("div", { className: "sn-mrow" }, el("span", { textContent: label }), el("span", { textContent: text || `${v} of ${max}` })), el("div", { className: "sn-meter" + (v / max > .9 ? " full" : "") }, el("div", { style: `width:${Math.min(100, v / max * 100)}%` }))); };
+    m("Rules", k.rules, k.rule_limit); m("Inputs and outputs", k.sources, k.source_limit); m("Setup size", k.size, k.limit, `${k.size} of ${k.limit} bytes`);
+    fit.append(el("div", { className: "sn-mrow" }, el("span", { textContent: "Radio time" }), el("span", { textContent: `≈ ${k.airtime_s_per_day} s per day · ${k.airtime_percent} %` })));
+    for (const w of k.warnings || []) fit.append(el("p", { className: "sn-warn", textContent: "! " + w }));
+  } else fit.append(el("p", { className: "sn-bad", textContent: k ? k.error : "Checking …" }));
+  c.append(fit);
+}
+
+// ----- sending to the sensor -----
+const snHex = b => Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+function snStatusWords(s) {
+  const e = { 0: "", 1: "You are not an owner of this sensor.", 2: "The setup was damaged on the way.", 3: "This firmware does not know that setup version.", 4: "The setup is too large.", 5: "The sensor refused the setup (a pin or value it cannot use).", 6: "The pieces came in the wrong order; try again.", 7: "The sensor could not store it.", 8: "No sensors in the setup." };
+  return e[s.error] ?? "Error " + s.error;
+}
+function snParseStatus(b) { return { error: b[0], flags: b[1], len: b[2] | b[3] << 8, crc: b[4] | b[5] << 8, interval: b[6] | b[7] << 8, mv: b[8] | b[9] << 8, owners: b[10], cycles: b[11] | b[12] << 8 }; }
+function snOnEvent(ev) {
+  if (ev.op === 2) { SN.status.set(ev.node, snParseStatus(ev.data)); }
+  else if (ev.op === 4) { const l = []; for (let i = 0; i + 22 <= ev.data.length; i += 22) l.push({ slot: ev.data[i], person: hex(ev.data.slice(i + 1, i + 17)), version: rd32(ev.data, i + 17), devices: ev.data[i + 21] }); SN.owners.set(ev.node, l.map(o => ({ ...o, name: acct.p && o.person === acct.p.person ? "Me" : "Owner " + (o.slot + 1) }))); }
+  else if (ev.op === 3) { if (SN.list && Date.now() - SN.refresh > 4000) { SN.refresh = Date.now(); snLoad().then(() => { snRenderSide(); if (state.view === "sensors" && !SN.design) renderChat(); }); } }
+  else if (ev.op === 1) { const off = ev.data[0] | ev.data[1] << 8, tot = ev.data[2] | ev.data[3] << 8; const r = SN.recipe.get(ev.node) || new Uint8Array(tot); r.set(ev.data.slice(4), off); SN.recipe.set(ev.node, r); }
+  else if (ev.op === 0x87) SN.ownerInfo = ev.data;
+  for (const w of [...SN.waiters]) if (w.match(ev)) { SN.waiters.splice(SN.waiters.indexOf(w), 1); w.ok(ev); }
+  if (SN.dialog) SN.dialog.update?.();
+}
+const snWait = (match, ms = 8000) => new Promise((ok, fail) => { const w = { match, ok }; SN.waiters.push(w); setTimeout(() => { const i = SN.waiters.indexOf(w); if (i >= 0) { SN.waiters.splice(i, 1); fail(new Error("No answer")); } }, ms); });
+
+function snUploadDialog() {
+  const d = SN.design; if (!d.compiled?.ok) { alert("Fix the setup first: " + (d.compiled?.error || "it is still being checked")); return; }
+  const mode = { v: d.node ? "radio" : "usb" };
+  const log = el("div", { className: "sn-log" }), go = el("button", { className: "primary", textContent: "Send" });
+  const ov = el("div", { className: "sn-overlay" }), dlg = el("div", { className: "sn-dialog", role: "dialog", "aria-label": "Send to the sensor" }); ov.append(dlg);
+  const opts = el("div", { className: "sn-opts" });
+  const draw = () => {
+    opts.replaceChildren();
+    for (const [v, t, s] of [["usb", "By USB", "Takes effect at once. The first time, the sensor takes you as its owner."], ["radio", "Over the radio", d.node ? "Waits at a post office. The sensor fetches it after a wake-up (up to one interval)." : "Only for a sensor you already own."]]) {
+      const b = el("button", { className: "sn-opt" + (mode.v === v ? " on" : ""), disabled: v === "radio" && !d.node }, el("b", { textContent: t }), el("small", { textContent: s })); b.onclick = () => { mode.v = v; draw(); }; opts.append(b);
+    }
+  };
+  draw();
+  const close = el("button", { textContent: "Close" }); close.onclick = () => { ov.remove(); SN.dialog = null; };
+  const k = d.compiled;
+  dlg.append(el("h2", { textContent: "Send to " + (d.setup.name || "the sensor"), style: "margin:0" }), opts,
+    el("div", { className: "sn-card" }, el("p", { textContent: `${k.rules} rules, ${k.sources} inputs and outputs, ${k.size} of ${k.limit} bytes.` }), ...(k.warnings || []).map(w => el("p", { className: "sn-warn", textContent: "! " + w }))),
+    log, el("div", { className: "sn-row", style: "justify-content:flex-end" }, close, go));
+  const say = t => { log.textContent = t; };
+  go.onclick = async () => {
+    go.disabled = true;
+    try { if (mode.v === "usb") await snSendUsb(d, say); else await snSendRadio(d, say); }
+    catch (e) { say("Not done: " + e.message); }
+    go.disabled = false;
+  };
+  SN.dialog = { ov }; document.body.append(ov);
+}
+async function snSendRadio(d, say) {
+  const bytes = Uint8Array.from(d.compiled.hex.match(/../g).map(h => parseInt(h, 16)));
+  const CH = 100;
+  for (let off = 0; off < bytes.length; off += CH) {
+    const piece = bytes.slice(off, off + CH);
+    await transport.send(Cmd.sensor(state.nextReq++ & 0xffff, d.node, 2, new Uint8Array([off & 255, off >> 8, bytes.length & 255, bytes.length >> 8, ...piece])));
+    say(`Sending ... ${Math.min(bytes.length, off + CH)} of ${bytes.length} bytes`);
+    await new Promise(r => setTimeout(r, 400));
+  }
+  await snApi("PUT", "/api/sensors/setup?node=" + d.node, d.setup);
+  say("Sent. The pieces wait at a post office; the sensor applies the setup after its next wake-up and tells you here.");
+  try { const ev = await snWait(e => e.type === "sensor" && e.op === 2 && e.node === d.node, 20 * 60 * 1000); const s = snParseStatus(ev.data); say(s.error ? "The sensor refused it: " + snStatusWords(s) : "The sensor has the new setup."); } catch {}
+}
+async function snSendUsb(d, say) {
+  if (!navigator.serial) throw new Error("This browser has no Web Serial. Use Chrome or Edge on a computer.");
+  if (!snHasHost()) throw new Error("Connect to maarse-host first: the sensor takes your account as its owner.");
+  if (!acct.p || acct.p.state !== 2) throw new Error("Make an account first (Settings > Account and devices): a sensor belongs to a person.");
+  say("Asking your host who you are ...");
+  const infoP = snWait(e => e.type === "sensor" && e.op === 0x87);
+  transport.send(Cmd.sensor(state.nextReq++ & 0xffff, SN_ZERO, 0x87));
+  const owner = (await infoP).data;
+  say("Choose the sensor's USB port ...");
+  const t = new SerialTransport(), dec = new FrameDecoder(), waiters = [];
+  let info = null;
+  await t.open(bytes => { for (const f of dec.push(bytes)) { const ev = decodeEvent(f); if (ev.type === "info") info = ev; for (const w of [...waiters]) if (w.match(ev)) { waiters.splice(waiters.indexOf(w), 1); w.ok(ev); } } }, () => {});
+  const call = (frame, match, ms = 6000) => new Promise((ok, fail) => { const w = { match, ok }; waiters.push(w); t.send(frame); setTimeout(() => { const i = waiters.indexOf(w); if (i >= 0) { waiters.splice(i, 1); fail(new Error("The sensor did not answer")); } }, ms); });
+  try {
+    const me = await call(Cmd.getInfo(), e => e.type === "info");
+    say("Found node " + me.addr.slice(0, 8) + " ...");
+    const og = await call(Cmd.sensor(1, SN_ZERO, 8), e => e.type === "sensor" && e.op === 4);
+    let slot = -1, free = -1;
+    const used = new Set();
+    for (let i = 0; i + 22 <= og.data.length; i += 22) { used.add(og.data[i]); if (hex(og.data.slice(i + 1, i + 17)) === acct.p.person) slot = og.data[i]; }
+    for (let s = 0; s < 4 && free < 0; s++) if (!used.has(s)) free = s;
+    if (slot < 0) {
+      if (free < 0) throw new Error("This sensor already has four owners. Remove one first.");
+      say("The sensor takes you as its owner ...");
+      const data = new Uint8Array([free, ...owner]);
+      const r = await call(Cmd.sensor(2, SN_ZERO, 6, data), e => e.type === "sensor" && e.op === 4);
+      slot = free;
+      if (r.data.length < 22) throw new Error("The sensor did not accept you as owner");
+    }
+    const bytes = Uint8Array.from(d.compiled.hex.match(/../g).map(h => parseInt(h, 16)));
+    say("Writing the setup ...");
+    let status = null;
+    for (let off = 0; off < bytes.length; off += 180) {
+      const piece = bytes.slice(off, off + 180), last = off + 180 >= bytes.length;
+      const frame = Cmd.sensor(3, SN_ZERO, 2, new Uint8Array([off & 255, off >> 8, bytes.length & 255, bytes.length >> 8, ...piece]));
+      if (last) status = snParseStatus((await call(frame, e => e.type === "sensor" && e.op === 2)).data); else await t.send(frame);
+    }
+    if (status.error) throw new Error(snStatusWords(status));
+    if (status.crc !== d.compiled.crc) throw new Error("The sensor has a different setup than sent (checksum). Try again.");
+    d.node = me.addr; SN.sel = me.addr;
+    if (d.setup.name) await snApi("POST", "/api/sensors/meta", { node: me.addr, name: d.setup.name });
+    await snApi("PUT", "/api/sensors/setup?node=" + me.addr, d.setup);
+    say("Done. " + (d.setup.name || "The sensor") + " is set up and you are its owner." + (d.setup.sleep !== false ? " Unplug USB to let it sleep between readings." : ""));
+    await snLoad(); snRenderSide();
+  } finally { await t.close(); }
+}
+
+// Events from sensors (live readings and answers).
+function snEventHook(ev) { if (ev.type === "sensor") { snOnEvent(ev); return true; } return false; }
 </script>
 <!-- maarse-voice (Codec2) as WebAssembly, raw deflate + base64. Build with: python tools/build_voice.py -->
 <script type="application/octet-stream" id="voice-wasm">

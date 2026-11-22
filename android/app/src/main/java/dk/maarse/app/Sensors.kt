@@ -47,47 +47,119 @@ object Sensors {
     private var debounce: Runnable? = null
     private var busy = 0
 
-    val BOARDS = listOf(
+    /** The boards and sensors the host offers (GET /api/sensors/catalog): the same list the web client draws its pickers from. */
+    val catalog = MutableStateFlow<JSONObject?>(null)
+
+    fun loadCatalog(force: Boolean = false) {
+        if (catalog.value != null && !force) return
+        call("GET", "/api/sensors/catalog") { r ->
+            r.onSuccess { t ->
+                runCatching { JSONObject(t) }.getOrNull()?.let {
+                    catalog.value = it; rev.value = rev.value + 1
+                    // The host looks on GitHub by itself where it can (a PC); a phone has no curl, so the app helps once a day.
+                    val u = it.optJSONObject("update")
+                    if (u != null && u.optBoolean("auto", true) && u.optBoolean("can_update") && System.currentTimeMillis() / 1000 - u.optLong("checked_at") > 24 * 3600) updateCatalog { }
+                }
+            }
+        }
+    }
+
+    /** Fetches the signed sensor list from GitHub and gives it to the host, which checks the signature and the content. */
+    fun updateCatalog(done: (String) -> Unit) {
+        Thread {
+            val base = "https://github.com/trixxor/maarse/releases/download/sensors/"
+            val files = runCatching {
+                fun get(n: String): String = http.newCall(Request.Builder().url(base + n).header("User-Agent", "maarse-app").build()).execute().use { r ->
+                    if (!r.isSuccessful) throw Exception("$n: HTTP ${r.code}")
+                    r.body?.string() ?: ""
+                }
+                Triple(get("catalog.json"), get("SHA256SUMS-sensors"), get("SHA256SUMS-sensors.sig"))
+            }
+            main.post {
+                files.onFailure { done("Not done: " + (it.message ?: "no connection")) }
+                files.onSuccess { (c, sums, sig) ->
+                    val body = JSONObject().put("catalog", c).put("sums", sums).put("sig", sig).toString()
+                    call("POST", "/api/sensors/catalog/update", body) { r ->
+                        val j = r.getOrNull()?.let { runCatching { JSONObject(it) }.getOrNull() }
+                        done(j?.optString("error")?.takeIf { it.isNotBlank() } ?: j?.optString("message") ?: (r.exceptionOrNull()?.message ?: "Done"))
+                        loadCatalog(force = true)
+                    }
+                }
+            }
+        }.start()
+    }
+
+    fun setCatalogAuto(on: Boolean) {
+        call("POST", "/api/sensors/catalog/update", JSONObject().put("auto", on).toString()) { loadCatalog(force = true) }
+    }
+
+    // Used until the host has answered (or when it is an older host without a catalog).
+    private val FALLBACK = listOf(
         "xiao_nrf52840" to "Seeed XIAO nRF52840 + Wio-SX1262",
         "heltec_v4" to "Heltec WiFi LoRa 32 V4",
-        "wismesh" to "RAK WisMesh Tag",
     )
+
+    private fun boardJson(id: String): JSONObject? {
+        val a = catalog.value?.optJSONArray("boards") ?: return null
+        return (0 until a.length()).map { a.getJSONObject(it) }.firstOrNull { it.getString("id") == id }
+    }
+
+    /** Board id to name; a board whose firmware cannot read sensors yet says so. */
+    fun boards(): List<Pair<String, String>> {
+        val a = catalog.value?.optJSONArray("boards") ?: return FALLBACK
+        return (0 until a.length()).map { a.getJSONObject(it) }.map { it.getString("id") to it.getString("name") + if (it.optBoolean("available", true)) "" else " (sensor firmware coming)" }
+    }
+    fun boardName(id: String) = boards().firstOrNull { it.first == id }?.second ?: id
+    fun boardAvailable(id: String) = boardJson(id)?.optBoolean("available", true) ?: true
+    fun boardNote(id: String) = boardJson(id)?.optString("note") ?: ""
+    fun boardGrove(id: String) = boardJson(id)?.optString("grove") ?: ""
+    fun i2cText(id: String) = boardJson(id)?.optJSONObject("i2c")?.optString("text") ?: if (id == "heltec_v4") "GPIO47 = SDA, GPIO48 = SCL" else "D6 = SDA, D7 = SCL"
 
     /** Pins that are free, by board: pin id to its name on the board. */
-    fun pins(board: String): List<Pair<Int, String>> = when (board) {
-        "heltec_v4" -> listOf(3, 4, 6, 38, 39, 40, 41).map { it to "GPIO$it" }
-        "wismesh" -> emptyList()
-        else -> listOf(0 to "D0", 6 to "D6", 7 to "D7")
+    fun pins(board: String): List<Pair<Int, String>> {
+        val b = boardJson(board) ?: return if (board == "heltec_v4") listOf(3, 4, 6, 38, 39, 40, 41).map { it to "GPIO$it" } else listOf(0 to "D0", 6 to "D6", 7 to "D7")
+        val a = b.getJSONArray("pins")
+        return (0 until a.length()).map { a.getJSONObject(it) }.map { it.getInt("id") to it.getString("label") }
     }
-    fun i2cPins(board: String): List<Int>? = when (board) { "heltec_v4" -> listOf(47, 48); "wismesh" -> null; else -> listOf(6, 7) }
-    fun adcPin(board: String): Pair<Int, String>? = if (board == "heltec_v4") 4 to "GPIO4" else null
+    fun i2cPins(board: String): List<Int>? {
+        val b = boardJson(board) ?: return if (board == "heltec_v4") listOf(47, 48) else listOf(6, 7)
+        return b.optJSONObject("i2c")?.let { listOf(it.getInt("sda"), it.getInt("scl")) }
+    }
+    /** Pins with an analogue input. */
+    fun adcPins(board: String): List<Pair<Int, String>> {
+        val b = boardJson(board) ?: return if (board == "heltec_v4") listOf(4 to "GPIO4") else emptyList()
+        val a = b.getJSONArray("analog")
+        return (0 until a.length()).map { a.getJSONObject(it) }.map { it.getInt("id") to it.getString("label") }
+    }
+    fun catalogSensors(): List<JSONObject> {
+        val a = catalog.value?.optJSONArray("sensors") ?: return emptyList()
+        return (0 until a.length()).map { a.getJSONObject(it) }
+    }
+    fun sensorById(id: String) = catalogSensors().firstOrNull { it.optString("id") == id }
+    fun sensorByDevice(device: String) = catalogSensors().firstOrNull { it.optString("device") == device }
 
-    val TEMPLATES = listOf(
-        SensorTemplate("frost", "Frost alarm", "Warn me below a temperature.", """{"name":"Frost alarm","sources":[{"chan":1,"kind":"temperature","name":"Temperature","input":{"type":"bme280","addr":118,"what":"temperature"}}],
-          "rules":[{"id":1,"name":"Report","when":{"type":"every","secs":900},"then":[{"type":"report"}]},
-          {"id":2,"name":"Frost alarm","when":{"type":"compare","chan":1,"op":"<","value":10,"clear":12,"count":2},"limit_min":30,"then":[{"type":"alarm","text":"Frost: below 10 C"}]}]}"""),
-        SensorTemplate("door", "Door or post box", "Tell me when it opens.", """{"name":"Door","interval_s":60,"sources":[{"chan":1,"kind":"digital","name":"Door contact","input":{"type":"gpio_in","pin":0,"pull":"up","invert":false}}],
-          "rules":[{"id":1,"name":"Door opened","when":{"type":"edge","chan":1,"to":"high"},"limit_min":5,"then":[{"type":"alarm","text":"Door opened"}]},
-          {"id":2,"name":"Report","when":{"type":"every","secs":3600},"then":[{"type":"report"}]}]}"""),
-        SensorTemplate("weather", "Weather station", "Temperature, humidity, pressure.", """{"name":"Weather","sources":[
-          {"chan":1,"kind":"temperature","name":"Temperature","input":{"type":"bme280","addr":118,"what":"temperature"}},
-          {"chan":2,"kind":"humidity","name":"Humidity","input":{"type":"bme280","addr":118,"what":"humidity"}},
-          {"chan":3,"kind":"pressure","name":"Pressure","input":{"type":"bme280","addr":118,"what":"pressure"}}],
-          "rules":[{"id":1,"name":"Report","when":{"type":"every","secs":900},"then":[{"type":"report"}]}]}"""),
-        SensorTemplate("battery", "Battery watch", "Warn when the battery is low.", """{"name":"Battery","interval_s":3600,"sources":[{"chan":1,"kind":"voltage","name":"Battery","input":{"type":"battery"}}],
-          "rules":[{"id":1,"name":"Report","when":{"type":"every","secs":3600},"then":[{"type":"report"}]},
-          {"id":2,"name":"Low battery","when":{"type":"compare","chan":1,"op":"<","value":3.5,"clear":3.7,"count":2},"limit_min":720,"then":[{"type":"alarm","text":"Battery is low"}]}]}"""),
-        SensorTemplate("mailbox", "Mailbox", "A switch wakes it when post arrives.", """{"name":"Mailbox","interval_s":3600,"sources":[
-          {"chan":1,"kind":"digital","name":"Mailbox flap","input":{"type":"gpio_in","pin":0,"pull":"up","invert":true,"wake":true}},
-          {"chan":2,"kind":"voltage","name":"Battery","input":{"type":"battery"}}],
-          "rules":[{"id":1,"name":"Post arrived","when":{"type":"edge","chan":1,"to":"high"},"then":[{"type":"alarm","text":"Post in the mailbox"}]},
-          {"id":2,"name":"Report","when":{"type":"every","secs":3600},"then":[{"type":"report"}]},
-          {"id":3,"name":"Low battery","when":{"type":"compare","chan":2,"op":"<","value":3.5,"clear":3.7,"count":2},"limit_min":720,"then":[{"type":"alarm","text":"Battery is low"}]}]}"""),
-        SensorTemplate("blank", "Start empty", "Build every rule yourself.", """{"name":"","sources":[{"chan":1,"kind":"voltage","name":"Battery","input":{"type":"battery"}}],"rules":[]}"""),
-    )
+    /** The starting points come with the catalogue: a new one needs no new app. */
+    fun templates(): List<SensorTemplate> {
+        val a = catalog.value?.optJSONArray("templates") ?: return emptyList()
+        return (0 until a.length()).map { a.getJSONObject(it) }.map { SensorTemplate(it.getString("id"), it.getString("title"), it.getString("text"), it.getJSONObject("setup").toString()) }
+    }
+
+    private val BASIC_UNITS = mapOf("temperature" to "°C", "humidity" to "%", "pressure" to "hPa", "voltage" to "V", "percent" to "%", "distance" to "mm", "light" to "lx", "co2" to "ppm", "accel" to "mg")
+
+    private fun kindObjects(): List<JSONObject> {
+        val a = catalog.value?.optJSONArray("kinds") ?: return emptyList()
+        return (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+    }
+
+    /** The unit of a kind of measurement ("°C"), from the catalogue. */
+    fun unitOf(kind: String): String = kindObjects().firstOrNull { it.optString("key") == kind }?.optString("unit") ?: BASIC_UNITS[kind] ?: ""
+
+    /** The kinds a person can pick for a sensor of their own. */
+    fun kindKeys(): List<String> = kindObjects().map { it.optString("key") }.filter { it != "digital" && it != "counter" }.ifEmpty { listOf("custom", "temperature", "humidity", "pressure", "voltage", "percent", "distance", "light", "co2", "accel") }
 
     fun newSetup(tpl: String): JSONObject {
-        val t = TEMPLATES.firstOrNull { it.key == tpl } ?: TEMPLATES.last()
+        val t = templates().firstOrNull { it.key == tpl }
+            ?: SensorTemplate("blank", "", "", """{"name":"","sources":[{"chan":1,"kind":"voltage","name":"Battery","input":{"type":"battery"}}],"rules":[]}""")
         val s = JSONObject("""{"v":1,"board":"xiao_nrf52840","interval_s":900,"sleep":true,
             "report_to":{"owners":[0],"channel":false},"alarm_to":{"owners":[0],"channel":false},"channel":""}""")
         val body = JSONObject(t.json)
@@ -172,6 +244,7 @@ object Sensors {
     // ----- the designer -----
 
     fun openDesign(node: String?, tpl: String) {
+        loadCatalog()
         val d = SensorDesign(node, newSetup(if (node == null) tpl else "blank"))
         design = d
         status.value = null

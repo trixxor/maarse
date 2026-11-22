@@ -733,6 +733,12 @@
   .sn-rule { background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
   .sn-rule.sel { border: 2px solid var(--accent); }
   .sn-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .sn-line.nw { flex-wrap: nowrap; }
+  .sn-line input[type=checkbox] { width: 16px; height: 16px; min-height: 0; padding: 0; border-radius: 4px; flex: 0 0 auto; accent-color: var(--accent); }
+  .sn-line input[type=number] { flex: 0 0 auto; }
+  .sn-line.nw > span { white-space: nowrap; }
+  .sn-details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 2px 0; }
+  .sn-details p { margin: 6px 0 0; }
   .sn-kw { font-size: 11px; font-weight: 800; letter-spacing: .07em; color: var(--muted); text-transform: uppercase; min-width: 44px; }
   .sn-line select, .sn-line input { padding: 6px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); font: inherit; font-size: 13.5px; min-height: 34px; }
   .sn-line input[type=number] { width: 84px; }
@@ -7734,11 +7740,12 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http") && !IN_
 // engine the sensors run), tested on a simulated day, then sent to the node by
 // USB (first time: the node takes you as its owner) or over the radio.
 // The host does the work (HTTP /api/sensors...), see maarse-host/src/sensors.rs.
-const SN = { list: null, sel: null, filter: "all", range: 86400, series: {}, err: "", timer: null, design: null,
+const SN = { open: new Set(), list: null, sel: null, filter: "all", range: 86400, series: {}, err: "", timer: null, design: null,
   status: new Map(), owners: new Map(), ownerInfo: null, recipe: new Map(), waiters: [], dialog: null, refresh: 0 };
 const SN_ZERO = "0".repeat(32);
 const SN_KINDS = { temperature: ["Temperature", "°C"], humidity: ["Humidity", "%"], pressure: ["Pressure", "hPa"], voltage: ["Voltage", "V"],
-  digital: ["Pin", ""], counter: ["Counter", ""], percent: ["Level", "%"], distance: ["Distance", "mm"] };
+  digital: ["Pin", ""], counter: ["Counter", ""], percent: ["Level", "%"], distance: ["Distance", "mm"],
+  light: ["Light", "lx"], co2: ["CO2", "ppm"], accel: ["Acceleration", "mg"], custom: ["Value", ""] };
 const SN_BOARDS = {
   xiao_nrf52840: { name: "Seeed XIAO nRF52840 + Wio-SX1262", pins: [[0, "D0"], [6, "D6"], [7, "D7"]], i2c: [6, 7], i2cText: "D6 = SDA, D7 = SCL", adc: null,
     note: "The radio uses the other pins. A BME280 takes D6 and D7.", holds: true },
@@ -7746,7 +7753,22 @@ const SN_BOARDS = {
     adc: [4, "GPIO4"], note: "Power a sensor from Ve (off while asleep) or 3V3.", holds: false },
   wismesh: { name: "RAK WisMesh Tag", pins: [], i2c: null, adc: null, note: "No free pins: battery and chip temperature only.", holds: true },
 };
-const snBoard = d => SN_BOARDS[d.setup.board] || SN_BOARDS.xiao_nrf52840;
+// The boards and sensors come from the host (GET /api/sensors/catalog), so the Android app and this client always offer the same.
+function snBoards() {
+  if (!SN.catalog) return SN_BOARDS;
+  const o = {};
+  for (const b of SN.catalog.boards) o[b.id] = { name: b.name, pins: b.pins.map(p => [p.id, p.label]), i2c: b.i2c ? [b.i2c.sda, b.i2c.scl] : null, i2cText: b.i2c?.text || "",
+    adcs: b.analog.map(a => [a.id, a.label]), adc: b.analog.length ? [b.analog[0].id, b.analog[0].label] : null, note: b.note, grove: b.grove, available: b.available, wake: b.wake };
+  return o;
+}
+const snBoard = d => { const all = snBoards(); return all[d.setup.board] || all.xiao_nrf52840; };
+async function snLoadCatalog() {
+  if (SN.catalog) return SN.catalog;
+  try { SN.catalog = await snApi("GET", "/api/sensors/catalog"); } catch {}
+  // The kinds of measurement (name, unit) come with the catalog too: a new one needs no new client.
+  for (const k of SN.catalog?.kinds || []) if (k && k.key) SN_KINDS[k.key] = [k.name, k.unit];
+  return SN.catalog;
+}
 const snMin = s => Math.round(s / 60);
 const snFmt = (v, d = 1) => v == null ? "–" : (Math.abs(v) >= 1000 ? Math.round(v) : Number(v.toFixed(d))).toString();
 const snAgo = s => s < 90 ? "just now" : s < 5400 ? Math.round(s / 60) + " min ago" : s < 129600 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " days ago";
@@ -7885,10 +7907,13 @@ function snStart(wrap) {
     el("p", { className: "hint", textContent: "Use a USB cable. Needs Chrome or Edge on a computer. The designer finds the board when you send the setup." }));
   const s2 = el("div", { className: "sn-card sn-step" }, el("h3", {}, el("span", { className: "sn-num", textContent: "2" }), "Pick a starting point"));
   const tp = el("div", { className: "sn-tpls" }); s2.append(tp);
-  for (const [key, t] of Object.entries(SN_TEMPLATES)) {
-    const b = el("button", { className: "sn-tpl" }, el("b", { textContent: t.title }), el("small", { textContent: t.text }));
-    b.onclick = () => snOpenDesigner(null, key); tp.append(b);
-  }
+  snLoadCatalog().then(cat => {
+    if (!cat?.templates) { tp.append(el("p", { className: "hint", textContent: "This host is too old to offer starting points. Update maarse-host." })); return; }
+    for (const t of cat.templates) {
+      const b = el("button", { className: "sn-tpl" }, el("b", { textContent: t.title }), el("small", { textContent: t.text }));
+      b.onclick = () => snOpenDesigner(null, t.id); tp.append(b);
+    }
+  });
   steps.append(s1, s2);
   if (SN.list?.length) {
     const have = el("div", { className: "sn-card" }, el("h3", { textContent: "Your sensors" }));
@@ -7899,35 +7924,17 @@ function snStart(wrap) {
 
 // ----- templates -----
 const snSrc = (chan, kind, input, name) => ({ chan, kind, name: name || SN_KINDS[kind]?.[0] || "Value", input });
-const snBme = (what, chan) => snSrc(chan, what, { type: "bme280", addr: 118, what }, SN_KINDS[what][0]);
-const SN_TEMPLATES = {
-  frost: { title: "Frost alarm", text: "Warn me below a temperature.", make: () => ({ name: "Frost alarm", sources: [snBme("temperature", 1)],
-    rules: [{ id: 1, name: "Report", when: { type: "every", secs: 900 }, then: [{ type: "report" }] },
-      { id: 2, name: "Frost alarm", when: { type: "compare", chan: 1, op: "<", value: 10, clear: 12, count: 2 }, limit_min: 30, then: [{ type: "alarm", text: "Frost: below 10 °C" }] }] }) },
-  door: { title: "Door or post box", text: "Tell me when it opens.", make: () => ({ name: "Door", sources: [snSrc(1, "digital", { type: "gpio_in", pin: 0, pull: "up", invert: false }, "Door contact")],
-    interval_s: 60, rules: [{ id: 1, name: "Door opened", when: { type: "edge", chan: 1, to: "high" }, limit_min: 5, then: [{ type: "alarm", text: "Door opened" }] },
-      { id: 2, name: "Report", when: { type: "every", secs: 3600 }, then: [{ type: "report" }] }] }) },
-  weather: { title: "Weather station", text: "Temperature, humidity, pressure.", make: () => ({ name: "Weather", sources: [snBme("temperature", 1), snBme("humidity", 2), snBme("pressure", 3)],
-    rules: [{ id: 1, name: "Report", when: { type: "every", secs: 900 }, then: [{ type: "report" }] }] }) },
-  battery: { title: "Battery watch", text: "Warn when the battery is low.", make: () => ({ name: "Battery", sources: [snSrc(1, "voltage", { type: "battery" }, "Battery")],
-    interval_s: 3600, rules: [{ id: 1, name: "Report", when: { type: "every", secs: 3600 }, then: [{ type: "report" }] },
-      { id: 2, name: "Low battery", when: { type: "compare", chan: 1, op: "<", value: 3.5, clear: 3.7, count: 2 }, limit_min: 720, then: [{ type: "alarm", text: "Battery is low" }] }] }) },
-  mailbox: { title: "Mailbox", text: "A switch wakes it when post arrives.", make: () => ({ name: "Mailbox", interval_s: 3600,
-    sources: [snSrc(1, "digital", { type: "gpio_in", pin: 0, pull: "up", invert: true, wake: true }, "Mailbox flap"), snSrc(2, "voltage", { type: "battery" }, "Battery")],
-    rules: [{ id: 1, name: "Post arrived", when: { type: "edge", chan: 1, to: "high" }, then: [{ type: "alarm", text: "Post in the mailbox" }] },
-      { id: 2, name: "Report", when: { type: "every", secs: 3600 }, then: [{ type: "report" }] },
-      { id: 3, name: "Low battery", when: { type: "compare", chan: 2, op: "<", value: 3.5, clear: 3.7, count: 2 }, limit_min: 720, then: [{ type: "alarm", text: "Battery is low" }] }] }) },
-  blank: { title: "Start empty", text: "Build every rule yourself.", make: () => ({ name: "", sources: [snSrc(1, "voltage", { type: "battery" }, "Battery")], rules: [] }) },
-};
 function snNewSetup(tpl) {
-  const t = SN_TEMPLATES[tpl || "blank"].make();
+  const t = JSON.parse(JSON.stringify(SN.catalog?.templates?.find(x => x.id === (tpl || "blank"))?.setup || { name: "", sources: [{ chan: 1, kind: "voltage", name: "Battery", input: { type: "battery" } }], rules: [] }));
   return { v: 1, board: "xiao_nrf52840", interval_s: 900, sleep: true, report_to: { owners: [0], channel: false }, alarm_to: { owners: [0], channel: false }, channel: "", ...t };
 }
 
 // ----- the designer -----
 async function snOpenDesigner(node, tpl) {
+  await snLoadCatalog();
   const d = SN.design = { node: node || null, setup: node ? null : snNewSetup(tpl), compiled: null, sim: null, scenario: "cold_night", err: "", busy: 0 };
   setView("sensors");
+  await snLoadCatalog();
   if (node) {
     try { const s = await snApi("GET", "/api/sensors/setup?node=" + node); d.setup = s && s.sources ? s : null; } catch {}
     if (!d.setup) { d.setup = snNewSetup("blank"); d.err = "This sensor has no saved setup on this host yet. Start from a template on the Sensors page, or build the rules here."; }
@@ -7949,13 +7956,14 @@ function snRecompile() {
     if (SN.design === d && state.view === "sensors") snRenderDesignerParts();
   }, 250);
 }
+const SN_I2C = ["bme280", "i2c", "i2c_custom"];
 const snOutputs = d => d.setup.sources.filter(s => s.input.type === "gpio_out");
 const snReadable = d => d.setup.sources.filter(s => s.input.type !== "gpio_out");
 function snUnit(setup, chan) { const s = setup.sources.find(x => x.chan === chan); return s ? SN_KINDS[s.kind]?.[1] || "" : ""; }
 function snNextChan(setup) { let c = 1; while (setup.sources.some(s => s.chan === c)) c++; return c; }
 function snFreePins(d, forOut) {
   const b = snBoard(d), used = new Set(d.setup.sources.map(s => s.input.pin).filter(p => p != null));
-  const i2c = d.setup.sources.some(s => s.input.type === "bme280") ? new Set(b.i2c || []) : new Set();
+  const i2c = d.setup.sources.some(s => SN_I2C.includes(s.input.type)) ? new Set(b.i2c || []) : new Set();
   return b.pins.filter(([p]) => !used.has(p) && !i2c.has(p));
 }
 
@@ -7988,17 +7996,35 @@ function snRenderA() {
   const d = SN.design, a = $("sn-a"); a.replaceChildren();
   const b = snBoard(d);
   const board = el("div", { className: "sn-card" }, el("h3", { textContent: "This sensor" }));
-  board.append(snSel(Object.entries(SN_BOARDS).map(([k, v]) => [k, v.name]), d.setup.board || "xiao_nrf52840", v => { d.setup.board = v; snRenderA(); snRecompile(); }, ""), el("p", { className: "hint", textContent: b.note }));
-  const iv = el("div", { className: "sn-line" }, el("span", { textContent: "Wake and read every" }), snNum(snMin(d.setup.interval_s), v => { d.setup.interval_s = Math.max(1, Math.round(v * 60)); snRecompile(); }, "1", "70px"), el("span", { textContent: "minutes" }));
+  const bsel = snSel(Object.entries(snBoards()).map(([k, v]) => [k, v.name + (v.available === false ? " (sensor firmware coming)" : "")]), d.setup.board || "xiao_nrf52840", v => { d.setup.board = v; snRenderA(); snRecompile(); }, "");
+  for (const o of bsel.options) if (snBoards()[o.value]?.available === false && o.value !== d.setup.board) o.disabled = true;
+  board.append(bsel, el("p", { className: "hint", textContent: b.note }));
+  if (b.grove) board.append(el("details", { className: "sn-details" }, el("summary", { textContent: "Plugging in Grove sensors" }), el("p", { className: "hint", textContent: b.grove })));
+  const iv = el("div", { className: "sn-line nw" }, el("span", { textContent: "Wake and read every" }), snNum(snMin(d.setup.interval_s), v => { d.setup.interval_s = Math.max(1, Math.round(v * 60)); snRecompile(); }, "1", "64px"), el("span", { textContent: "min" }));
   const sl = el("label", { className: "sn-line", style: "flex-wrap:nowrap;align-items:flex-start" }, el("input", { type: "checkbox", checked: d.setup.sleep !== false, onchange: e => { d.setup.sleep = e.target.checked; snRecompile(); } }), el("span", { textContent: "Sleep between (saves battery; plug in USB to talk to it)" }));
   board.append(iv, sl);
   a.append(board);
   const inp = el("div", { className: "sn-card" }, el("h3", { textContent: "Inputs and outputs" }));
+  const chips = new Map();
   for (const s of d.setup.sources) {
+    const chipKey = ["i2c", "bme280"].includes(s.input.type) ? s.input.type + ":" + s.input.device + ":" + s.input.addr : null;
+    const first = !chipKey || !chips.has(chipKey);
+    if (chipKey && first) chips.set(chipKey, s.chan);
     const nm = el("input", { value: s.name || "", "aria-label": "Name of channel " + s.chan }); nm.oninput = () => { s.name = nm.value; };
     const rm = el("button", { textContent: "✕", title: "Remove", "aria-label": "Remove" });
     rm.onclick = () => { d.setup.sources = d.setup.sources.filter(x => x !== s); d.setup.rules = d.setup.rules.filter(r => r.when.chan !== s.chan); for (const r of d.setup.rules) r.then = r.then.filter(x => x.chan !== s.chan); snRenderA(); snRenderB(); snRecompile(); };
-    inp.append(el("div", { className: "sn-src-row" }, el("span", { className: "sn-kw", textContent: "#" + s.chan, style: "min-width:26px" }), nm, rm, el("small", { className: "hint", textContent: snInputText(s.input, b), style: "flex-basis:100%;padding-left:34px" })));
+    inp.append(el("div", { className: "sn-src-row" }, el("span", { className: "sn-kw", textContent: "#" + s.chan, style: "min-width:26px" }), nm, rm, el("small", { className: "hint", textContent: first ? snInputText(s.input, b) : "Same chip as #" + chips.get(chipKey), style: "flex-basis:100%;padding-left:34px" })));
+    const box = el("div", { style: "display:none" });
+    snSourceExtras(d, s, box, b, first);
+    const notice = snNotice(s);
+    if (notice) inp.append(el("p", { className: "sn-warn", style: "margin:0 0 6px 34px;font-size:12.5px", textContent: notice }));
+    if (box.children.length) {
+      const open = SN.open.has(s.chan);
+      box.style.display = open ? "" : "none";
+      const tg = el("button", { className: "sn-ghost", textContent: (open ? "▾ " : "▸ ") + "Details", style: "margin:0 0 6px 34px;font-size:12.5px;padding:2px 8px" });
+      tg.onclick = () => { if (open) SN.open.delete(s.chan); else SN.open.add(s.chan); snRenderA(); };
+      inp.append(tg, box);
+    }
     if (s.input.type === "gpio_in") {
       const wk = el("label", { className: "sn-line", style: "flex-wrap:nowrap;align-items:flex-start;padding:0 0 8px 34px" },
         el("input", { type: "checkbox", checked: !!s.input.wake, onchange: e => {
@@ -8011,38 +8037,227 @@ function snRenderA() {
       inp.append(wk);
     }
   }
-  const add = el("select", { className: "sn-ghost" }); add.append(el("option", { value: "", textContent: "+ Add sensor or pin" }));
-  const opts = [];
-  if (b.i2c && !d.setup.sources.some(s => s.input.type === "bme280")) opts.push(["bme", "Temperature, humidity, pressure (BME280)"]);
-  if (snFreePins(d).length) { opts.push(["pin_in", "Pin input (door, button)"], ["pin_out", "Pin output (relay, LED)"]); }
-  if (b.adc && !d.setup.sources.some(s => s.input.type === "adc")) opts.push(["adc", "Analogue input (" + b.adc[1] + ")"]);
-  if (!d.setup.sources.some(s => s.input.type === "battery")) opts.push(["battery", "Battery voltage"]);
-  if (!d.setup.sources.some(s => s.input.type === "chip_temp")) opts.push(["chip", "Chip temperature"]);
-  for (const [v, l] of opts) add.append(el("option", { value: v, textContent: l }));
-  add.onchange = () => {
-    const v = add.value, c = snNextChan(d.setup), pins = snFreePins(d);
-    if (v === "bme") { for (const w of ["temperature", "humidity", "pressure"]) d.setup.sources.push(snBme(w, snNextChan(d.setup))); }
-    else if (v === "pin_in") d.setup.sources.push(snSrc(c, "digital", { type: "gpio_in", pin: pins[0][0], pull: "up", invert: false }, "Pin " + pins[0][1]));
-    else if (v === "pin_out") d.setup.sources.push(snSrc(c, "digital", { type: "gpio_out", pin: pins[0][0], active_low: false }, "Output " + pins[0][1]));
-    else if (v === "adc") d.setup.sources.push(snSrc(c, "voltage", { type: "adc", pin: b.adc[0], mul: 1 }, "Analogue input"));
-    else if (v === "battery") d.setup.sources.push(snSrc(c, "voltage", { type: "battery" }, "Battery"));
-    else if (v === "chip") d.setup.sources.push(snSrc(c, "temperature", { type: "chip_temp" }, "Chip temperature"));
-    snRenderA(); snRenderB(); snRecompile();
-  };
+  const add = el("button", { className: "sn-ghost", textContent: "+ Add sensor or pin" });
+  add.onclick = () => snAddDialog();
   inp.append(add);
   a.append(inp);
   a.append(snRecipients(d));
 }
+// What a person needs to know in plain words, shown without opening the details.
+function snNotice(s) {
+  if (s.input.type === "i2c" && s.input.device === "ads1115" && s.preset && s.preset !== "ads1115")
+    return "This board has no analogue input. Plug this sensor into a Grove ADC module (ADS1115), and the module into the sensor port.";
+  return "";
+}
 function snInputText(i, b) {
   const pin = p => (b.pins.find(x => x[0] === p) || [p, "pin " + p])[1];
   switch (i.type) {
-    case "bme280": return "BME280 · I²C (" + (b.i2cText || "") + ")";
+    case "bme280": return "Temperature, humidity and air pressure · sensor port";
+    case "i2c": { const dev = SN.catalog?.sensors.find(x => x.device === i.device); return (dev ? snSensorLabel(dev) : i.device) + " · sensor port"; }
+    case "i2c_custom": return "Your own sensor · sensor port";
     case "gpio_in": return "Input " + pin(i.pin) + (i.pull !== "none" ? " · " + i.pull : "");
     case "gpio_out": return "Output " + pin(i.pin);
-    case "adc": return "Analogue " + (b.adc ? b.adc[1] : "");
+    case "adc": return "Analogue pin " + ((b.adcs || []).find(x => x[0] === i.pin) || [0, i.pin])[1];
     case "battery": return "Built in"; case "chip_temp": return "Built in";
     default: return i.type;
   }
+}
+// ----- adding sensors (the choices come from the host's catalog) -----
+function snAddDialog() {
+  const d = SN.design, b = snBoard(d), cat = SN.catalog;
+  if (!cat) { alert("The host did not send its list of sensors. Update maarse-host and try again."); return; }
+  const ov = el("div", { className: "sn-overlay" }), dlg = el("div", { className: "sn-dialog", role: "dialog", "aria-label": "Add a sensor or pin" }); ov.append(dlg);
+  const close = () => { ov.remove(); SN.dialog = null; };
+  const q = el("input", { type: "search", placeholder: "Search: SHT31, soil, door, CO2 …", "aria-label": "Search sensors", style: "width:100%;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--raised);color:var(--ink);font:inherit" });
+  const list = el("div", { style: "overflow:auto;max-height:55vh;display:flex;flex-direction:column;gap:6px" });
+  const has = t => d.setup.sources.some(s => s.input.type === t);
+  const builtin = [
+    ...(has("battery") ? [] : [{ id: "battery", name: "Battery voltage", group: "Built in", bus: "builtin", note: "" }]),
+    ...(has("chip_temp") ? [] : [{ id: "chip_temp", name: "Chip temperature", group: "Built in", bus: "builtin", note: "" }]),
+  ];
+  const custom = { id: "custom_i2c", name: "Build your own (I²C)", group: "Your own", bus: "custom", note: "A chip that is not in the list: describe how to talk to it.", grove: "" };
+  const usable = sx => sx.bus === "i2c" || sx.bus === "custom" ? !!b.i2c : sx.bus === "analog" ? !!(b.adcs?.length || b.i2c) : sx.bus === "builtin" ? true : snFreePins(d).length > 0;
+  const why = sx => sx.bus === "i2c" || sx.bus === "custom" ? "This board has no sensor port." : sx.bus === "analog" ? "This board cannot read analogue sensors." : "No free pin: remove one first.";
+  const label = sx => snSensorLabel(sx);
+  const sub = sx => [sx.grove || (sx.bus === "i2c" ? "Chip " + sx.name : ""), sx.note].filter(Boolean).join(" · ");
+  const matches = (x, term) => !term || (label(x) + " " + x.name + " " + (x.grove || "") + " " + (x.note || "")).toLowerCase().includes(term);
+  const fill = (target, items, term) => {
+    for (const g of [...new Set(items.map(x => x.group))]) {
+      const rows = items.filter(x => x.group === g && matches(x, term));
+      if (!rows.length) continue;
+      target.append(el("h3", { textContent: g, style: "margin:10px 0 2px;flex:0 0 auto" }));
+      for (const sx of rows) {
+        const ok = usable(sx);
+        const bt = el("button", { className: "sn-opt", disabled: !ok, style: "text-align:left;min-height:0;height:auto;flex:0 0 auto;padding:8px 12px;display:flex;flex-direction:column;gap:2px;align-items:flex-start" }, el("b", { textContent: label(sx) }), el("small", { textContent: ok ? sub(sx) : why(sx) }));
+        bt.onclick = () => { close(); snAddSensor(sx); };
+        target.append(bt);
+      }
+    }
+  };
+  const draw = () => {
+    list.replaceChildren();
+    const term = q.value.trim().toLowerCase();
+    fill(list, [...builtin, ...cat.sensors.filter(x => !x.advanced)], term);
+    const adv = [...cat.sensors.filter(x => x.advanced), custom];
+    const box = el("div", { style: "display:flex;flex-direction:column;gap:6px" });
+    fill(box, adv, term);
+    if (box.children.length) list.append(el("details", { className: "sn-details", open: !!term, style: "margin-top:12px" }, el("summary", { textContent: "More, for tinkerers" }), box));
+    if (!list.querySelector(".sn-opt")) list.append(el("p", { className: "hint", textContent: "Nothing matches. Try another word, like the name on the box." }));
+  };
+  q.oninput = draw; draw();
+  const x = el("button", { textContent: "Close" }); x.onclick = close;
+  dlg.append(el("h2", { textContent: "Add a sensor or pin", style: "margin:0" }), el("p", { className: "hint", textContent: "Seeed Grove modules work too: plug them in as the board note says." }), q, list, snCatalogLine(draw), el("div", { className: "sn-row", style: "justify-content:flex-end" }, x));
+  SN.dialog = { ov }; document.body.append(ov); q.focus();
+}
+function snAddSensor(sx) {
+  const d = SN.design, free = snFreePins(d);
+  const room = n => { if (d.setup.sources.length + n > 8) { alert("A sensor can have at most 8 inputs and outputs. Remove one first."); return false; } return true; };
+  const next = () => snNextChan(d.setup);
+  if (sx.bus === "builtin") { if (!room(1)) return; d.setup.sources.push(sx.id === "battery" ? snSrc(next(), "voltage", { type: "battery" }, "Battery") : snSrc(next(), "temperature", { type: "chip_temp" }, "Chip temperature")); }
+  else if (sx.bus === "custom") { snCustomDialog(null); return; }
+  else if (sx.bus === "i2c") {
+    if (!room(sx.channels.length)) return;
+    for (const c of sx.channels) d.setup.sources.push({ chan: next(), kind: c.kind, name: c.name, input: { type: "i2c", device: sx.device, addr: sx.addrs[0], what: c.what }, preset: sx.id });
+  } else if (sx.bus === "analog") {
+    if (!room(1)) return;
+    const input = snFreeAnalog(d);
+    if (!input) { alert("All analogue inputs are in use."); return; }
+    const s = { chan: next(), kind: sx.kind, name: sx.name, input, preset: sx.id };
+    if (sx.map) s.map = JSON.parse(JSON.stringify(sx.map));
+    d.setup.sources.push(s);
+  } else {
+    if (!room(1) || !free.length) return;
+    const input = sx.bus === "digital_in" ? { type: "gpio_in", pin: free[0][0], pull: sx.pull || "none", invert: !!sx.invert } : { type: "gpio_out", pin: free[0][0], active_low: !!sx.active_low };
+    d.setup.sources.push({ chan: next(), kind: "digital", name: sx.name, input, preset: sx.id });
+  }
+  snRenderA(); snRenderB(); snRecompile();
+}
+// The plain title of a sensor; when two different chips share it, the chip name tells them apart.
+function snSensorLabel(sx) {
+  const t = sx.title || sx.name;
+  const same = (SN.catalog?.sensors || []).filter(x => x.bus === "i2c" && (x.title || x.name) === t).length > 1;
+  return same && sx.bus === "i2c" ? t + " (" + sx.name + ")" : t;
+}
+// Which sensor list is in use, and a way to fetch a newer one (the host checks GitHub about once a day by itself).
+function snCatalogLine(redraw) {
+  const box = el("div", { className: "sn-line", style: "border-top:1px solid var(--line);padding-top:8px" });
+  const info = el("small", { className: "hint", style: "flex:1 1 220px" });
+  const show = u => {
+    if (!u) { info.textContent = ""; return; }
+    const day = t => new Date(t * 1000).toLocaleDateString();
+    info.textContent = "Sensor list from " + day(u.version) + (u.version === u.built_in_version ? " (came with this program)" : " (updated from GitHub)") +
+      (u.checked_at ? ", checked " + new Date(u.checked_at * 1000).toLocaleString() : "") + (u.error ? " · " + u.error : "") + (u.message ? " · " + u.message : "");
+  };
+  show(SN.catalog?.update);
+  const up = SN.catalog?.update;
+  if (up && !up.can_update) { info.textContent += ". This program cannot check for newer lists."; box.append(info); return box; }
+  const chk = el("button", { textContent: "Check for updates" });
+  chk.onclick = async () => {
+    chk.disabled = true; info.textContent = "Checking GitHub …";
+    try {
+      const r = await snApi("POST", "/api/sensors/catalog/update", { check: true });
+      SN.catalog = await snApi("GET", "/api/sensors/catalog");
+      show({ ...SN.catalog.update, message: r.message, error: r.error || SN.catalog.update.error });
+      redraw();
+    } catch (e) { info.textContent = "Not done: " + e.message; }
+    chk.disabled = false;
+  };
+  const auto = el("label", { className: "sn-line" }, el("input", { type: "checkbox", checked: up?.auto !== false, onchange: e => snApi("POST", "/api/sensors/catalog/update", { auto: e.target.checked }) }), el("small", { textContent: "automatically" }));
+  box.append(info, chk, auto);
+  return box;
+}
+// A free analogue connection: a pin of the board, else a channel of an ADS1115.
+function snFreeAnalog(d) {
+  const b = snBoard(d), srcs = d.setup.sources;
+  for (const [p] of b.adcs || []) if (!srcs.some(s => s.input.type === "adc" && s.input.pin === p)) return { type: "adc", pin: p, mul: 1 };
+  if (b.i2c) for (let k = 0; k < 4; k++) if (!srcs.some(s => s.input.type === "i2c" && s.input.device === "ads1115" && s.input.what === k)) return { type: "i2c", device: "ads1115", addr: 72, what: k };
+  return null;
+}
+// Extra settings under a source: pin, analogue connection, calibration, I²C address.
+function snSourceExtras(d, s, inp, b, first = true) {
+  const row = (...kids) => inp.append(el("div", { className: "sn-line", style: "padding:0 0 8px 34px" }, ...kids));
+  const hint = t => el("span", { className: "hint", textContent: t });
+  const t = s.input.type, redo = () => { snRenderA(); snRecompile(); };
+  if (t === "i2c") {
+    const dev = SN.catalog?.sensors.find(x => x.device === s.input.device);
+    if (first && dev && dev.addrs.length > 1) row(hint("I²C address"), snSel(dev.addrs.map(a => [a, "0x" + a.toString(16)]), s.input.addr, v => {
+      const old = s.input.addr; for (const o of d.setup.sources) if (o.input.type === "i2c" && o.input.device === s.input.device && o.input.addr === old) o.input.addr = +v; redo();
+    }));
+  }
+  if (t === "gpio_in" || t === "gpio_out") {
+    const free = snFreePins(d), cur = b.pins.find(x => x[0] === s.input.pin);
+    const opts = [...(cur && !free.some(x => x[0] === cur[0]) ? [cur] : []), ...free];
+    if (opts.length > 1) row(hint("Pin"), snSel(opts, s.input.pin, v => { s.input.pin = +v; redo(); }));
+  }
+  const ads = t === "i2c" && s.input.device === "ads1115";
+  if (t === "adc" || ads) {
+    const taken = x => d.setup.sources.some(o => o !== s && ((x[0] === "adc" && o.input.type === "adc" && o.input.pin === x[1]) || (x[0] === "ads" && o.input.type === "i2c" && o.input.device === "ads1115" && o.input.what === x[1])));
+    const opts = [];
+    for (const [p, l] of b.adcs || []) opts.push([["adc", p], l + " (on the board)"]);
+    if (b.i2c) for (let k = 0; k < 4; k++) opts.push([["ads", k], "ADS1115 input A" + k + " (I²C)"]);
+    const cur = ads ? "ads," + s.input.what : "adc," + s.input.pin;
+    const sel = snSel(opts.filter(o => o[0].join() === cur || !taken(o[0])).map(o => [o[0].join(), o[1]]), cur, v => {
+      const [k, n] = v.split(","); s.input = k === "adc" ? { type: "adc", pin: +n, mul: 1 } : { type: "i2c", device: "ads1115", addr: 72, what: +n }; redo();
+    });
+    row(hint("Connected to"), sel);
+  }
+  if (s.map) {
+    const m = s.map, u = SN_KINDS[s.kind]?.[1] || "";
+    const n = (i, k) => snNum(m[i][k], v => { m[i][k] = v; snRecompile(); }, "any", "68px");
+    row(hint("Calibration: reading in mV, then what to show"));
+    for (const k of [0, 1]) inp.append(el("div", { className: "sn-line nw", style: "padding:0 0 6px 34px" }, n("in", k), hint("→"), n("out", k), hint(u)));
+    const cal = SN.catalog?.sensors.find(x => x.id === s.preset)?.calibrate;
+    if (cal) row(el("small", { className: "hint", textContent: cal }));
+  } else if (t === "adc" || ads) {
+    const bt = el("button", { className: "sn-ghost", textContent: "Show as a level (0 to 100 %)" });
+    bt.onclick = () => { s.kind = "percent"; s.map = { in: [0, 3000], out: [0, 100] }; redo(); };
+    row(bt);
+  }
+  if (t === "i2c_custom") { const bt = el("button", { textContent: "Edit how it is read …" }); bt.onclick = () => snCustomDialog(s); row(bt); }
+}
+// A chip the catalogue does not have: the steps and the bits, as a form.
+function snCustomDialog(src, prefill) {
+  const d = SN.design, old = src?.input, max = SN.catalog?.custom_i2c?.max || 2;
+  if (!src && d.setup.sources.filter(s => s.input.type === "i2c_custom").length >= max) { alert("A sensor can have at most " + max + " of your own I²C chips. The catalogue ones do not count."); return; }
+  const c = prefill || (old ? { name: src.name, kind: src.kind, addr: old.addr.toString(16), init: (old.init || []).join("\n"), trigger: old.trigger || "", wait_ms: old.wait_ms || 0, ptr: old.ptr || "", read_len: old.read_len, crc: !!old.crc, ...old.field }
+    : { name: "My sensor", kind: "custom", addr: "40", init: "", trigger: "", wait_ms: 0, ptr: "00", read_len: 2, crc: false, bit_off: 0, bits: 16, signed: false, little: false, mul: 1, div: 1, add: 0 });
+  const ov = el("div", { className: "sn-overlay" }), dlg = el("div", { className: "sn-dialog", role: "dialog", "aria-label": "Your own I2C sensor" }); ov.append(dlg);
+  const close = () => { ov.remove(); SN.dialog = null; };
+  const txt = (k, w) => { const i = el("input", { value: c[k], style: "width:" + (w || "100%") }); i.oninput = () => { c[k] = i.value; }; return i; };
+  const num = (k, w) => snNum(c[k], v => { c[k] = v; }, "any", w || "90px");
+  const chk = (k, t) => el("label", { className: "sn-line" }, el("input", { type: "checkbox", checked: !!c[k], onchange: e => { c[k] = e.target.checked; } }), el("span", { textContent: t }));
+  const field = (label, ctl, help) => el("div", { className: "sn-card", style: "padding:10px 12px" }, el("div", { className: "sn-line" }, el("b", { textContent: label, style: "min-width:150px" }), ctl), help ? el("small", { className: "hint", textContent: help }) : "");
+  const ex = el("button", { className: "sn-ghost", textContent: "Fill in an example (SHT31 temperature)" });
+  ex.onclick = () => { close(); snCustomDialog(src, { name: "Temperature", kind: "temperature", addr: "44", init: "", trigger: "24 00", wait_ms: 20, ptr: "", read_len: 6, crc: true, bit_off: 0, bits: 16, signed: false, little: false, mul: 17500, div: 65535, add: -4500 }); };
+  const kind = snSel(Object.entries(SN_KINDS).filter(([k]) => k !== "digital" && k !== "counter").map(([k, v]) => [k, v[0] + (v[1] ? " (" + v[1] + ")" : "")]), c.kind, v => { c.kind = v; });
+  const save = el("button", { className: "primary", textContent: src ? "Save" : "Add" }), cancel = el("button", { textContent: "Cancel" });
+  cancel.onclick = close;
+  save.onclick = () => {
+    const addr = parseInt(c.addr, 16);
+    if (!(addr >= 1 && addr <= 119)) { alert("The address is two hex digits, 01 to 77."); return; }
+    const input = { type: "i2c_custom", addr, init: String(c.init).split(/\n|;/).map(x => x.trim()).filter(Boolean), trigger: c.trigger, wait_ms: +c.wait_ms || 0, ptr: c.ptr, read_len: +c.read_len, crc: !!c.crc,
+      field: { bit_off: +c.bit_off, bits: +c.bits, signed: !!c.signed, little: !!c.little, mul: +c.mul, div: +c.div, add: +c.add } };
+    if (src) { src.input = input; src.name = c.name; src.kind = c.kind; }
+    else { if (d.setup.sources.length >= 8) { alert("A sensor can have at most 8 inputs and outputs."); return; } d.setup.sources.push({ chan: snNextChan(d.setup), kind: c.kind, name: c.name, input }); }
+    close(); snRenderA(); snRenderB(); snRecompile();
+  };
+  const init = el("textarea", { rows: 2, value: c.init, placeholder: "one command per line, hex, like 2D 08", style: "width:100%" }); init.oninput = () => { c.init = init.value; };
+  dlg.append(el("h2", { textContent: "Your own I²C sensor", style: "margin:0" }),
+    el("p", { className: "hint", textContent: "Most small I²C chips work the same way: send a few bytes to start a measurement, wait, ask for a register and read some bytes. The data sheet lists these. The result is in the unit of the kind: 0.01 °C for temperature (2500 is 25.00 °C), 0.01 % for humidity, whole numbers for the rest. A wrong description cannot damage the node, but it cannot try the chip for you either." }), ex,
+    field("Name", txt("name"), ""), field("What it measures", kind),
+    field("I²C address (hex)", txt("addr", "70px"), "Two hex digits from the data sheet, like 44 or 76."),
+    field("Set-up commands", init, "Sent every time before measuring (a chip that needs switching on). Up to 4 bytes each."),
+    field("Start measurement (hex)", txt("trigger", "140px"), "Bytes that make the chip measure, like 24 00. Leave empty if it measures by itself."),
+    field("Wait (ms)", num("wait_ms"), "How long the measurement takes. Up to 10 000."),
+    field("Register to read (hex)", txt("ptr", "140px"), "The register or command written before reading, like 05. Empty: read straight away."),
+    field("Bytes to read", num("read_len"), "1 to 16. A chip with check bytes sends 3 bytes for every 2 of data."),
+    chk("crc", "Every two bytes are followed by a check byte (Sensirion CRC-8: SHT, SCD, SGP)"),
+    el("div", { className: "sn-card" }, el("h3", { textContent: "Which bits are the number" }),
+      el("div", { className: "sn-line" }, el("span", { textContent: "starts at bit" }), num("bit_off", "70px"), el("span", { textContent: "length" }), num("bits", "70px"), el("span", { className: "hint", textContent: "(1 to 32 bits, counted from the first bit of the first byte)" })),
+      chk("signed", "Can be negative (two's complement)"), chk("little", "Least significant byte first (little endian, whole bytes)"),
+      el("div", { className: "sn-line" }, el("span", { textContent: "value = raw ×" }), num("mul"), el("span", { textContent: "÷" }), num("div"), el("span", { textContent: "+" }), num("add"))),
+    el("div", { className: "sn-row", style: "justify-content:flex-end;position:sticky;bottom:-22px;background:var(--panel);padding:10px 0 2px;border-top:1px solid var(--line)" }, cancel, save));
+  SN.dialog = { ov }; document.body.append(ov);
 }
 function snRecipients(d) {
   const card = el("div", { className: "sn-card" }, el("h3", { textContent: "Who gets it" }));

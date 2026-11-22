@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.FlowRow
@@ -22,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -267,13 +269,17 @@ private fun ChannelCard(node: String, c: SensorChan, range: Long) {
 
 @Composable
 fun SensorStartScreen(onPick: (String) -> Unit) {
+    Sensors.catalog.collectAsState().value
+    LaunchedEffect(Unit) { Sensors.loadCatalog() }
+    val templates = Sensors.templates()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Pick what it should do, test it here, then send it to the node. You can change it later, also over the radio.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         SCard { Text("The first setup of a new board is done on a computer over USB (the sensor takes you as its owner). Changes after that can be sent from here.",
             style = MaterialTheme.typography.bodySmall) }
         STitle("Pick a starting point")
-        SGroup {
-            Sensors.TEMPLATES.forEachIndexed { i, t -> GroupRow(t.title, t.text, last = i == Sensors.TEMPLATES.lastIndex) { onPick(t.key) } }
+        if (templates.isEmpty()) Text("Loading the starting points from your host … If this stays, the host is too old: update maarse-host.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        else SGroup {
+            templates.forEachIndexed { i, t -> GroupRow(t.title, t.text, last = i == templates.lastIndex) { onPick(t.key) } }
         }
     }
 }
@@ -283,7 +289,7 @@ private fun outputs(setup: JSONObject) = setup.getJSONArray("sources").objs().fi
 private fun srcName(setup: JSONObject, chan: Int) = setup.getJSONArray("sources").objs().firstOrNull { it.getInt("chan") == chan }?.optString("name") ?: "?"
 private fun unitOf(setup: JSONObject, chan: Int): String {
     val k = setup.getJSONArray("sources").objs().firstOrNull { it.getInt("chan") == chan }?.optString("kind") ?: return ""
-    return mapOf("temperature" to "°C", "humidity" to "%", "pressure" to "hPa", "voltage" to "V", "percent" to "%", "distance" to "mm")[k] ?: ""
+    return Sensors.unitOf(k)
 }
 private val OPS = listOf("<" to "is below", ">" to "is above", "<=" to "is at most", ">=" to "is at least", "==" to "is exactly", "!=" to "is not")
 
@@ -313,7 +319,13 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
         if (d.note.isNotBlank()) Text(d.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         STitle("This sensor")
         SCard {
-            Chip(Sensors.BOARDS.first { it.first == board }.second, 3) { dialog = "board" }
+            Chip(Sensors.boardName(board), 3) { dialog = "board" }
+            Sensors.boardNote(board).takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Sensors.boardGrove(board).takeIf { it.isNotBlank() }?.let { g ->
+                var open by remember { mutableStateOf(false) }
+                TextButton(onClick = { open = !open }, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Text((if (open) "▾ " else "▸ ") + "Plugging in Grove sensors", style = MaterialTheme.typography.bodyMedium) }
+                if (open) Text(g, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Text("Wake and read every", style = MaterialTheme.typography.bodySmall)
             Chip("${setup.optInt("interval_s", 900) / 60} minutes", 3) { dialog = "interval" }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -323,9 +335,15 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
         }
         STitle("Inputs and outputs")
         SCard {
+            val chips = mutableMapOf<String, Int>()
             for (s in setup.getJSONArray("sources").objs()) {
                 val inp = s.getJSONObject("input")
-                Text("#${s.getInt("chan")}  ${s.optString("name")} · ${inp.getString("type").replace('_', ' ')}", style = MaterialTheme.typography.bodyMedium)
+                val chipKey = if (inp.getString("type") in I2C_TYPES) inp.getString("type") + ":" + inp.optString("device") + ":" + inp.optInt("addr") else null
+                val first = chipKey == null || chipKey !in chips
+                if (s.getInt("chan") != setup.getJSONArray("sources").getJSONObject(0).getInt("chan")) androidx.compose.foundation.layout.Spacer(Modifier.height(10.dp))
+                if (chipKey != null && first) chips[chipKey] = s.getInt("chan")
+                Text("#${s.getInt("chan")}  ${s.optString("name")} · " + if (first) inputText(inp, board) else "same chip as #${chips[chipKey]}", style = MaterialTheme.typography.bodyMedium)
+                SourceExtras(setup, s, board, first)
                 if (inp.getString("type") == "gpio_in") Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Wake the sensor when this pin changes (a reed switch that closes, a button)", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                     Switch(inp.optBoolean("wake"), { on ->
@@ -367,33 +385,328 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
         androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
     }
     when (dialog) {
-        "board" -> PickDialog("Board", Sensors.BOARDS.map { it.first to it.second }, board, { setup.put("board", it); Sensors.changed() }, { dialog = null })
+        "board" -> PickDialog("Board", Sensors.boards(), board, { id ->
+            if (Sensors.boardAvailable(id)) { setup.put("board", id); d.note = ""; Sensors.changed() }
+            else { d.note = Sensors.boardName(id).substringBefore(" (") + " cannot read sensors yet: its firmware is not ready."; Sensors.changed() }
+        }, { dialog = null })
         "interval" -> NumberDialog("Wake and read every", (setup.optInt("interval_s", 900) / 60).toDouble(), "minutes", { setup.put("interval_s", maxOf(1, it.toInt()) * 60); Sensors.changed() }, { dialog = null })
-        "addsource" -> {
-            val used = setup.getJSONArray("sources").objs().mapNotNull { it.getJSONObject("input").optInt("pin", -1).takeIf { p -> p >= 0 } }.toSet()
-            val hasBme = setup.getJSONArray("sources").objs().any { it.getJSONObject("input").getString("type") == "bme280" }
-            val i2c = if (hasBme) Sensors.i2cPins(board)?.toSet() ?: emptySet() else emptySet()
-            val free = Sensors.pins(board).filter { it.first !in used && it.first !in i2c }
-            val opts = buildList {
-                if (Sensors.i2cPins(board) != null && !hasBme) add("bme" to "Temperature, humidity, pressure (BME280)")
-                if (free.isNotEmpty()) { add("pin_in" to "Pin input (door, button)"); add("pin_out" to "Pin output (relay, LED)") }
-                add("battery" to "Battery voltage"); add("chip" to "Chip temperature")
-            }
-            PickDialog("Add", opts, null, { v ->
-                val arr = setup.getJSONArray("sources")
-                fun next(): Int { var c = 1; while (arr.objs().any { it.getInt("chan") == c }) c++; return c }
-                fun add(kind: String, name: String, input: String) = arr.put(JSONObject("""{"chan":${next()},"kind":"$kind","name":"$name","input":$input}"""))
-                when (v) {
-                    "bme" -> { add("temperature", "Temperature", """{"type":"bme280","addr":118,"what":"temperature"}"""); add("humidity", "Humidity", """{"type":"bme280","addr":118,"what":"humidity"}"""); add("pressure", "Pressure", """{"type":"bme280","addr":118,"what":"pressure"}""") }
-                    "pin_in" -> add("digital", "Pin ${free[0].second}", """{"type":"gpio_in","pin":${free[0].first},"pull":"up","invert":false}""")
-                    "pin_out" -> add("digital", "Output ${free[0].second}", """{"type":"gpio_out","pin":${free[0].first},"active_low":false}""")
-                    "battery" -> add("voltage", "Battery", """{"type":"battery"}""")
-                    else -> add("temperature", "Chip temperature", """{"type":"chip_temp"}""")
+        "addsource" -> AddSensorDialog(setup, board, onCustom = { dialog = "custom" }, onDismiss = { dialog = null })
+        "custom" -> CustomSensorDialog(setup, null, onDismiss = { dialog = null })
+    }
+}
+
+// ----- adding sensors (the choices come from the host's catalog) -----
+
+private val I2C_TYPES = setOf("bme280", "i2c", "i2c_custom")
+
+private fun freePins(setup: JSONObject, board: String): List<Pair<Int, String>> {
+    val srcs = setup.getJSONArray("sources").objs()
+    val used = srcs.mapNotNull { it.getJSONObject("input").optInt("pin", -1).takeIf { p -> p >= 0 } }.toSet()
+    val i2c = if (srcs.any { it.getJSONObject("input").getString("type") in I2C_TYPES }) Sensors.i2cPins(board)?.toSet() ?: emptySet() else emptySet()
+    return Sensors.pins(board).filter { it.first !in used && it.first !in i2c }
+}
+
+private fun nextChan(setup: JSONObject): Int { var c = 1; val a = setup.getJSONArray("sources").objs(); while (a.any { it.getInt("chan") == c }) c++; return c }
+
+/** A free analogue connection: a pin of the board, else a channel of an ADS1115 on I2C. */
+private fun freeAnalog(setup: JSONObject, board: String): JSONObject? {
+    val srcs = setup.getJSONArray("sources").objs().map { it.getJSONObject("input") }
+    for ((p, _) in Sensors.adcPins(board)) if (srcs.none { it.getString("type") == "adc" && it.optInt("pin") == p }) return JSONObject("""{"type":"adc","pin":$p,"mul":1}""")
+    if (Sensors.i2cPins(board) != null) for (k in 0..3) if (srcs.none { it.getString("type") == "i2c" && it.optString("device") == "ads1115" && it.optInt("what") == k }) return JSONObject("""{"type":"i2c","device":"ads1115","addr":72,"what":$k}""")
+    return null
+}
+
+private fun hex(n: Int) = "0x" + n.toString(16)
+
+/** The plain title of a sensor; when two different chips share it, the chip name tells them apart. */
+private fun sensorLabel(x: JSONObject): String {
+    val t = x.optString("title").ifBlank { x.optString("name") }
+    val same = Sensors.catalogSensors().count { it.optString("bus") == "i2c" && it.optString("title").ifBlank { it.optString("name") } == t } > 1
+    return if (same && x.optString("bus") == "i2c") t + " (" + x.optString("name") + ")" else t
+}
+
+private fun inputText(inp: JSONObject, board: String): String = when (inp.getString("type")) {
+    "i2c" -> (Sensors.sensorByDevice(inp.optString("device"))?.let { sensorLabel(it) } ?: inp.optString("device")) + " · sensor port"
+    "i2c_custom" -> "your own sensor · sensor port"
+    "bme280" -> "Temperature, humidity and air pressure · sensor port"
+    "battery", "chip_temp" -> "built in"
+    "adc" -> "analogue pin " + (Sensors.adcPins(board).firstOrNull { it.first == inp.optInt("pin") }?.second ?: "${inp.optInt("pin")}")
+    else -> inp.getString("type").replace('_', ' ')
+}
+
+@Composable
+private fun AddSensorDialog(setup: JSONObject, board: String, onCustom: () -> Unit, onDismiss: () -> Unit) {
+    var q by remember { mutableStateOf("") }
+    val srcs = setup.getJSONArray("sources")
+    val hasI2c = Sensors.i2cPins(board) != null
+    val builtin = buildList {
+        val types = srcs.objs().map { it.getJSONObject("input").getString("type") }
+        if ("battery" !in types) add(JSONObject("""{"id":"battery","name":"Battery voltage","group":"Built in","bus":"builtin","note":""}"""))
+        if ("chip_temp" !in types) add(JSONObject("""{"id":"chip_temp","name":"Chip temperature","group":"Built in","bus":"builtin","note":""}"""))
+    }
+    val own = JSONObject("""{"id":"custom_i2c","name":"Build your own (I²C)","group":"Your own","bus":"custom","note":"A chip that is not in the list: describe how to talk to it.","grove":""}""")
+    var more by remember { mutableStateOf(false) }
+    val simple = builtin + Sensors.catalogSensors().filter { !it.optBoolean("advanced") }
+    val adv = Sensors.catalogSensors().filter { it.optBoolean("advanced") } + own
+    fun label(x: JSONObject) = sensorLabel(x)
+    fun matches(x: JSONObject) = q.isBlank() || (label(x) + " " + x.optString("name") + " " + x.optString("grove") + " " + x.optString("note")).contains(q.trim(), ignoreCase = true)
+    fun sub(x: JSONObject): String = listOf(x.optString("grove").ifBlank { if (x.getString("bus") == "i2c") "Chip " + x.optString("name") else "" }, x.optString("note")).filter { it.isNotBlank() }.joinToString(" · ")
+    fun usable(x: JSONObject) = when (x.getString("bus")) {
+        "i2c", "custom" -> hasI2c
+        "analog" -> Sensors.adcPins(board).isNotEmpty() || hasI2c
+        "builtin" -> true
+        else -> freePins(setup, board).isNotEmpty()
+    }
+    fun why(x: JSONObject) = when (x.getString("bus")) { "i2c", "custom" -> "This board has no sensor port."; "analog" -> "This board cannot read analogue sensors."; else -> "No free pin: remove one first." }
+    val update = Sensors.catalog.collectAsState().value?.optJSONObject("update")
+    var note by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Add a sensor or pin") }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        text = {
+            Column(Modifier.heightIn(max = 520.dp)) {
+                OutlinedTextField(q, { q = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Search") }, placeholder = { Text("SHT31, soil, door, CO2") })
+                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                    @Composable fun Items(items: List<JSONObject>) {
+                        for (g in items.map { it.optString("group") }.distinct()) {
+                            val rows = items.filter { it.optString("group") == g && matches(it) }
+                            if (rows.isEmpty()) continue
+                            Text(g, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
+                            for (x in rows) {
+                                val ok = usable(x)
+                                Column(Modifier.fillMaxWidth().clickable(enabled = ok) { onDismiss(); if (x.getString("bus") == "custom") onCustom() else addSensor(setup, board, x) }.padding(vertical = 6.dp)) {
+                                    Text(label(x), color = if (ok) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                                    val line = if (ok) sub(x) else why(x)
+                                    if (line.isNotBlank()) Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                    Items(simple)
+                    val advRows = adv.filter { matches(it) }
+                    if (advRows.isNotEmpty()) {
+                        val shown = more || q.isNotBlank()
+                        TextButton(onClick = { more = !more }, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Text((if (shown) "▾ " else "▸ ") + "More, for tinkerers", style = MaterialTheme.typography.bodyMedium) }
+                        if (shown) Items(advRows)
+                    }
+                    if (simple.none { matches(it) } && advRows.isEmpty()) Text("Nothing matches. Try another word, like the name on the box.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp))
                 }
-                Sensors.changed()
-            }, { dialog = null })
+                if (update != null) {
+                    val day = { t: Long -> java.text.DateFormat.getDateInstance().format(java.util.Date(t * 1000)) }
+                    val ver = update.optLong("version")
+                    Text("Sensor list from ${day(ver)} (" + (if (ver == update.optLong("built_in_version")) "came with this program" else "updated from GitHub") + ")" +
+                        update.optString("error").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty() + if (note.isNotBlank()) " · $note" else "",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                    if (update.optBoolean("can_update")) Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(enabled = !busy, onClick = { busy = true; note = "Checking GitHub …"; Sensors.updateCatalog { note = it; busy = false } }) { Text("Check for updates") }
+                        Checkbox(update.optBoolean("auto", true), { Sensors.setCatalogAuto(it) }); Text("automatically", style = MaterialTheme.typography.bodySmall)
+                    } else Text("This program cannot check for newer lists.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        })
+}
+
+private fun addSensor(setup: JSONObject, board: String, x: JSONObject) {
+    val arr = setup.getJSONArray("sources")
+    val room = { n: Int -> arr.length() + n <= 8 }
+    fun add(kind: String, name: String, input: JSONObject, preset: String? = null, map: JSONObject? = null) {
+        val o = JSONObject().put("chan", nextChan(setup)).put("kind", kind).put("name", name).put("input", input)
+        if (preset != null) o.put("preset", preset)
+        if (map != null) o.put("map", map)
+        arr.put(o)
+    }
+    when (x.getString("bus")) {
+        "builtin" -> if (room(1)) { if (x.getString("id") == "battery") add("voltage", "Battery", JSONObject("""{"type":"battery"}""")) else add("temperature", "Chip temperature", JSONObject("""{"type":"chip_temp"}""")) }
+        "i2c" -> { val ch = x.getJSONArray("channels").objs(); if (room(ch.size)) for (c in ch) add(c.getString("kind"), c.getString("name"), JSONObject().put("type", "i2c").put("device", x.getString("device")).put("addr", x.getJSONArray("addrs").getInt(0)).put("what", c.getInt("what")), x.getString("id")) }
+        "analog" -> { val inp = freeAnalog(setup, board); if (inp != null && room(1)) add(x.getString("kind"), x.getString("name"), inp, x.getString("id"), x.optJSONObject("map")?.let { JSONObject(it.toString()) }) }
+        else -> {
+            val free = freePins(setup, board)
+            if (free.isNotEmpty() && room(1)) {
+                val inp = if (x.getString("bus") == "digital_in") JSONObject().put("type", "gpio_in").put("pin", free[0].first).put("pull", x.optString("pull", "none")).put("invert", x.optBoolean("invert"))
+                          else JSONObject().put("type", "gpio_out").put("pin", free[0].first).put("active_low", x.optBoolean("active_low"))
+                add("digital", x.getString("name"), inp, x.getString("id"))
+            }
         }
     }
+    Sensors.changed()
+}
+
+/** Pin, analogue connection, calibration and I²C address of one source. */
+@Composable
+private fun SourceExtras(setup: JSONObject, s: JSONObject, board: String, first: Boolean = true) {
+    val inp = s.getJSONObject("input")
+    val type = inp.getString("type")
+    val chan = s.getInt("chan")
+    var dlg by remember(chan) { mutableStateOf<String?>(null) }
+    val ads = type == "i2c" && inp.optString("device") == "ads1115"
+    val analog = type == "adc" || ads
+    val srcs = setup.getJSONArray("sources").objs()
+    val unit = Sensors.unitOf(s.optString("kind"))
+    val addrCount = Sensors.sensorByDevice(inp.optString("device"))?.optJSONArray("addrs")?.length() ?: 0
+    val pinChoice = (type == "gpio_in" || type == "gpio_out") && freePins(setup, board).size + (if (Sensors.pins(board).any { it.first == inp.optInt("pin") }) 1 else 0) > 1
+    val hasExtras = (type == "i2c" && first && addrCount > 1) || pinChoice || analog || type == "i2c_custom"
+    var open by remember(chan) { mutableStateOf(false) }
+    // What a person needs to know in plain words, without opening the details.
+    if (ads && s.optString("preset").let { it.isNotBlank() && it != "ads1115" })
+        Text("This board has no analogue input. Plug this sensor into a Grove ADC module (ADS1115), and the module into the sensor port.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+    if (hasExtras) TextButton(onClick = { open = !open }, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Text((if (open) "▾ " else "▸ ") + "Details", style = MaterialTheme.typography.bodyMedium) }
+    if (open) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (type == "i2c") {
+            val addrs = Sensors.sensorByDevice(inp.optString("device"))?.optJSONArray("addrs")
+            if (first && addrs != null && addrs.length() > 1) Chip("I²C address ${hex(inp.optInt("addr"))}", 3) { dlg = "addr" }
+        }
+        if (type == "gpio_in" || type == "gpio_out") {
+            val free = freePins(setup, board)
+            val here = Sensors.pins(board).firstOrNull { it.first == inp.optInt("pin") }
+            if (free.size + (if (here != null) 1 else 0) > 1) Chip("Pin " + (here?.second ?: inp.optInt("pin")), 3) { dlg = "pin" }
+        }
+        if (analog) Chip("Connected to " + if (ads) "ADS1115 A${inp.optInt("what")}" else (Sensors.adcPins(board).firstOrNull { it.first == inp.optInt("pin") }?.second ?: "pin"), 3) { dlg = "conn" }
+        if (type == "i2c_custom") Chip("Edit how it is read", 3) { dlg = "custom" }
+        if (analog && !s.has("map")) Chip("Show as a level (0 to 100 %)", 3) { s.put("kind", "percent"); s.put("map", JSONObject("""{"in":[0,3000],"out":[0,100]}""")); Sensors.changed() }
+    }
+    if (s.has("map")) {
+        val m = s.getJSONObject("map")
+        Text("Calibration: reading in mV, then what to show", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (k in 0..1) Chip("${fmt(m.getJSONArray("in").getDouble(k))} mV → ${fmt(m.getJSONArray("out").getDouble(k))} $unit", 3) { dlg = "cal$k" }
+        }
+        Sensors.sensorById(s.optString("preset"))?.optString("calibrate")?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
+    }
+    when {
+        dlg == "pin" -> {
+            val here = Sensors.pins(board).firstOrNull { it.first == inp.optInt("pin") }
+            val opts = (listOfNotNull(here) + freePins(setup, board)).distinctBy { it.first }
+            PickDialog("Pin", opts.map { it.first.toString() to it.second }, inp.optInt("pin").toString(), { inp.put("pin", it.toInt()); Sensors.changed() }, { dlg = null })
+        }
+        dlg == "conn" -> {
+            val opts = mutableListOf<Pair<String, String>>()
+            for ((p, l) in Sensors.adcPins(board)) if (srcs.none { it !== s && it.getJSONObject("input").getString("type") == "adc" && it.getJSONObject("input").optInt("pin") == p }) opts.add("adc,$p" to "$l (on the board)")
+            if (Sensors.i2cPins(board) != null) for (k in 0..3) if (srcs.none { it !== s && it.getJSONObject("input").optString("device") == "ads1115" && it.getJSONObject("input").optInt("what") == k }) opts.add("ads,$k" to "ADS1115 input A$k (I²C)")
+            PickDialog("Connected to", opts, if (ads) "ads,${inp.optInt("what")}" else "adc,${inp.optInt("pin")}", { v ->
+                val (k, n) = v.split(",")
+                s.put("input", if (k == "adc") JSONObject("""{"type":"adc","pin":$n,"mul":1}""") else JSONObject("""{"type":"i2c","device":"ads1115","addr":72,"what":$n}"""))
+                Sensors.changed()
+            }, { dlg = null })
+        }
+        dlg == "addr" -> {
+            val addrs = Sensors.sensorByDevice(inp.optString("device"))!!.getJSONArray("addrs")
+            PickDialog("I²C address", (0 until addrs.length()).map { addrs.getInt(it).toString() to hex(addrs.getInt(it)) }, inp.optInt("addr").toString(), { v ->
+                val old = inp.optInt("addr")
+                for (o in srcs) { val i = o.getJSONObject("input"); if (i.getString("type") == "i2c" && i.optString("device") == inp.optString("device") && i.optInt("addr") == old) i.put("addr", v.toInt()) }
+                Sensors.changed()
+            }, { dlg = null })
+        }
+        dlg?.startsWith("cal") == true -> {
+            val k = dlg!!.removePrefix("cal").toInt()
+            val m = s.getJSONObject("map")
+            CalibrateDialog(m.getJSONArray("in").getDouble(k), m.getJSONArray("out").getDouble(k), unit, { a, b -> m.getJSONArray("in").put(k, a); m.getJSONArray("out").put(k, b); Sensors.changed() }, { dlg = null })
+        }
+        dlg == "custom" -> CustomSensorDialog(setup, s, onDismiss = { dlg = null })
+    }
+}
+
+@Composable
+private fun CalibrateDialog(inMv: Double, out: Double, unit: String, onOk: (Double, Double) -> Unit, onDismiss: () -> Unit) {
+    var a by remember { mutableStateOf(fmt(inMv)) }
+    var b by remember { mutableStateOf(fmt(out)) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Calibration point") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Measure the sensor in this state (the sensor's page shows the millivolts) and say what it should read.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(a, { a = it }, singleLine = true, label = { Text("Reading") }, suffix = { Text("mV") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                OutlinedTextField(b, { b = it }, singleLine = true, label = { Text("Shown as") }, suffix = { Text(unit) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+            }
+        },
+        confirmButton = { TextButton(onClick = { val x = a.replace(',', '.').toDoubleOrNull(); val y = b.replace(',', '.').toDoubleOrNull(); if (x != null && y != null) { onOk(x, y); onDismiss() } }) { Text("OK") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+/** A chip the catalogue does not have: the steps and the bits, as a form. */
+@Composable
+private fun CustomSensorDialog(setup: JSONObject, src: JSONObject?, onDismiss: () -> Unit) {
+    val old = src?.getJSONObject("input")
+    val f = old?.optJSONObject("field")
+    val kinds = Sensors.kindKeys()
+    var name by remember { mutableStateOf(src?.optString("name") ?: "My sensor") }
+    var kind by remember { mutableStateOf(src?.optString("kind") ?: "custom") }
+    var addr by remember { mutableStateOf(old?.optInt("addr")?.toString(16) ?: "40") }
+    var init by remember { mutableStateOf(old?.optJSONArray("init")?.let { a -> (0 until a.length()).joinToString("\n") { a.getString(it) } } ?: "") }
+    var trigger by remember { mutableStateOf(old?.optString("trigger") ?: "") }
+    var wait by remember { mutableStateOf((old?.optInt("wait_ms") ?: 0).toString()) }
+    var ptr by remember { mutableStateOf(old?.optString("ptr") ?: "00") }
+    var len by remember { mutableStateOf((old?.optInt("read_len") ?: 2).toString()) }
+    var crc by remember { mutableStateOf(old?.optBoolean("crc") ?: false) }
+    var bitOff by remember { mutableStateOf((f?.optInt("bit_off") ?: 0).toString()) }
+    var bits by remember { mutableStateOf((f?.optInt("bits") ?: 16).toString()) }
+    var signed by remember { mutableStateOf(f?.optBoolean("signed") ?: false) }
+    var little by remember { mutableStateOf(f?.optBoolean("little") ?: false) }
+    var mul by remember { mutableStateOf((f?.optInt("mul") ?: 1).toString()) }
+    var div by remember { mutableStateOf((f?.optInt("div") ?: 1).toString()) }
+    var add by remember { mutableStateOf((f?.optInt("add") ?: 0).toString()) }
+    var kindPick by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    val max = Sensors.catalog.value?.optJSONObject("custom_i2c")?.optInt("max", 2) ?: 2
+    @Composable fun field(label: String, v: String, set: (String) -> Unit, help: String? = null, number: Boolean = false) {
+        OutlinedTextField(v, set, Modifier.fillMaxWidth(), label = { Text(label) }, supportingText = help?.let { { Text(it) } }, singleLine = number,
+            keyboardOptions = if (number) KeyboardOptions(keyboardType = KeyboardType.Number) else KeyboardOptions.Default)
+    }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Your own I²C sensor") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Most small I²C chips work the same way: send a few bytes to start a measurement, wait, ask for a register and read some bytes. The data sheet lists these. The result is in the unit of the kind: 0.01 °C for temperature (2500 is 25.00 °C), 0.01 % for humidity, whole numbers for the rest.", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = {
+                    name = "Temperature"; kind = "temperature"; addr = "44"; init = ""; trigger = "24 00"; wait = "20"; ptr = ""; len = "6"; crc = true
+                    bitOff = "0"; bits = "16"; signed = false; little = false; mul = "17500"; div = "65535"; add = "-4500"
+                }) { Text("Fill in an example (SHT31 temperature)") }
+                field("Name", name, { name = it.take(30) })
+                OutlinedButton(onClick = { kindPick = true }) { Text("Measures: $kind") }
+                field("I²C address (hex)", addr, { addr = it.take(2) }, "Two hex digits from the data sheet, like 44 or 76.")
+                field("Set-up commands", init, { init = it }, "One per line, hex, like 2D 08. Sent every time before measuring. Up to 4 bytes each.")
+                field("Start measurement (hex)", trigger, { trigger = it }, "Bytes that make the chip measure, like 24 00. Empty if it measures by itself.")
+                field("Wait (ms)", wait, { wait = it }, "How long the measurement takes. Up to 10 000.", number = true)
+                field("Register to read (hex)", ptr, { ptr = it }, "Written before reading, like 05. Empty: read straight away.")
+                field("Bytes to read", len, { len = it }, "1 to 16. A chip with check bytes sends 3 bytes for every 2 of data.", number = true)
+                Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(crc, { crc = it }); Text("Check byte after every two bytes (Sensirion CRC-8)") }
+                Text("Which bits are the number", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(bitOff, { bitOff = it }, Modifier.weight(1f), label = { Text("Starts at bit") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    OutlinedTextField(bits, { bits = it }, Modifier.weight(1f), label = { Text("Length (1-32)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(signed, { signed = it }); Text("Can be negative") }
+                Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(little, { little = it }); Text("Least significant byte first (whole bytes)") }
+                Text("value = raw × a ÷ b + c", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(mul, { mul = it }, Modifier.weight(1f), label = { Text("a") }, singleLine = true)
+                    OutlinedTextField(div, { div = it }, Modifier.weight(1f), label = { Text("b") }, singleLine = true)
+                    OutlinedTextField(add, { add = it }, Modifier.weight(1f), label = { Text("c") }, singleLine = true)
+                }
+                if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val a = addr.trim().toIntOrNull(16)
+                val arr = setup.getJSONArray("sources")
+                when {
+                    a == null || a !in 1..119 -> error = "The address is two hex digits, 01 to 77."
+                    src == null && arr.objs().count { it.getJSONObject("input").getString("type") == "i2c_custom" } >= max -> error = "At most $max of your own I²C chips."
+                    src == null && arr.length() >= 8 -> error = "A sensor can have at most 8 inputs and outputs."
+                    else -> {
+                        val input = JSONObject().put("type", "i2c_custom").put("addr", a)
+                            .put("init", JSONArray(init.split('\n', ';').map { it.trim() }.filter { it.isNotEmpty() }))
+                            .put("trigger", trigger.trim()).put("wait_ms", wait.toIntOrNull() ?: 0).put("ptr", ptr.trim()).put("read_len", len.toIntOrNull() ?: 0).put("crc", crc)
+                            .put("field", JSONObject().put("bit_off", bitOff.toIntOrNull() ?: 0).put("bits", bits.toIntOrNull() ?: 0).put("signed", signed).put("little", little)
+                                .put("mul", mul.toIntOrNull() ?: 1).put("div", div.toIntOrNull() ?: 1).put("add", add.toIntOrNull() ?: 0))
+                        if (src != null) { src.put("input", input).put("name", name).put("kind", kind) }
+                        else arr.put(JSONObject().put("chan", nextChan(setup)).put("kind", kind).put("name", name).put("input", input))
+                        Sensors.changed(); onDismiss()
+                    }
+                }
+            }) { Text(if (src == null) "Add" else "Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    if (kindPick) PickDialog("Measures", kinds.map { it to it }, kind, { kind = it }, { kindPick = false })
 }
 
 @Composable

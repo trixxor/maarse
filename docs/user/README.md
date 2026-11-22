@@ -31,6 +31,7 @@ automatically identified open channels when the collector enables sharing.
 |---|---|
 | [Sending a message](messages.md) | done (sample page) |
 | [Post offices: messages that wait for you](post-office.md) | done (sample page) |
+| [Sensors: know what is going on at home](sensors.md) | done (sample page) |
 | Contacts and names | planned |
 | Channels | planned |
 | Files, pictures and voice | planned |

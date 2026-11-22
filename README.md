@@ -196,6 +196,7 @@ Someone with a radio receiver and no keys can read this from a direct message:
 | 🌲 **Forest mode and carry** | Handheld relays when there are no repeaters, and edge bridges: the person on the hill who hears a repeater relays for the group. Messages carried by people on the move. |
 | 🤝 **Neighbours and keys** | Small hello packets tell neighbours roles and coverage within seconds; a node asks the network for a key it lacks; contacts you talk to are pinned and kept in flash; cars say they move so routes to them are refreshed. |
 | 🏠 **Home Assistant** | MQTT bridge with auto-discovery for battery, position and telemetry. |
+| 🌡️ **Sensor nodes** | A board with a BME280, a door contact or a probe reads on a schedule, sleeps in between, and sends readings and alarms to its owners (up to four people). The recipe is made in a designer in the web client and the Android app out of sentences, tested on a simulated day, and sent over USB or the radio. Built and tested in the working copy; firmware not yet run on boards. See [docs/sensors.md](docs/sensors.md). |
 | 🔐 **Identity** | 24-word recovery phrase, encrypted backup, safety numbers with QR codes. |
 | 🛠️ **Operations** | Signed firmware updates over USB, Bluetooth and the network. The host runs as a service with a live log page and a Windows tray icon; the Windows app (service plus tray app) installs signed updates from GitHub releases. Repeaters can be managed remotely by administrators. |
 

@@ -879,6 +879,7 @@ The decrypted plaintext of a `Data` message starts with a content type byte:
 | 0x06 | `CALL` | call signalling or Opus audio; format belongs to the clients; TCP only |
 | 0x07 | `IP` | IP tunnel session setup (see `maarse-host/src/tunnel.rs`); TCP, or LoRa with `--tun-lora` |
 | 0x08 | `TEXT_Z` | text compressed with `maarse-core/src/textz.rs`; only to a recipient announcing `CAP_TEXTZ` |
+| 0x0E | `SENSOR` | readings or an alarm from a sensor node to an owner: `op (1)` then the body; see `docs/sensors.md` |
 
 `TEXT_Z` is a static codebook of about 230 common Danish and English
 fragments (after SMAZ): each byte is a codebook index, `ESC` (254) + one
@@ -1307,7 +1308,8 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x32 | GetReadState | – | host only |
 | 0x33 | – | reserved for history | |
 | 0x34 | SetIdentity | flags (1: bit 0 confirm) \| secret (64) | local only; reply `IdentityChanged` |
-| 0x35–0x37 | – | reserved (linked devices) | |
+| 0x35–0x37 | – | reserved (linked devices) |
+| 0x39 | Sensor | req (2) \| dest (16, all zeros = the connected node or the host) \| op (1) \| data | sensor nodes: recipe, owners, status, host operations (history, simulation); a command for another node goes to it as a control command; see `docs/sensors.md` | |
 
 ### 9.3 Events
 
@@ -1360,6 +1362,7 @@ radius (u16, 100 m)].
 | 0xb3 | HistoryInfo | host only |
 | 0xb4 | IdentityChanged | addr (16) \| public identity (64) |
 | 0xb5–0xb7 | – | reserved (linked devices) |
+| 0xbd | Sensor | node (16) \| op (1) \| data: an answer or a push about a sensor node (recipe pieces, status, owners, a reading or alarm message); see `docs/sensors.md` |
 
 Firmware answers commands it does not know (including 0x14 and 0x30–0x33)
 with `Error`.

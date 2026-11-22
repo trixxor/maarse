@@ -372,6 +372,15 @@ impl Node {
         None
     }
 
+    /// What a sensor needs to take this person as its owner: the master public
+    /// identity (64 bytes) and the signed device list.
+    pub(super) fn sensor_owner_info(&self) -> Option<Vec<u8>> {
+        let m = self.persons.me.as_ref()?;
+        let mut v = m.cert.master.to_bytes().to_vec();
+        v.extend_from_slice(&m.list.to_bytes());
+        Some(v)
+    }
+
     pub(super) fn is_own_person(&self, a: &Address) -> bool {
         self.persons.me.as_ref().is_some_and(|m| m.person() == *a)
     }
@@ -584,6 +593,8 @@ impl Node {
         for d in list.active().filter(|d| *d != me).collect::<Vec<_>>() {
             let _ = self.send_sealed(d, &l, Pending::Control);
         }
+        // The sensors we manage take the new list too (a lost phone is removed from them).
+        self.sensors_push_list(&list.to_bytes());
     }
 
 

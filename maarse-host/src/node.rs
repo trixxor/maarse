@@ -9,6 +9,7 @@ mod backbone;
 mod tun;
 mod hist;
 mod person;
+mod sensors;
 pub(crate) use person::{BACKUP_FILE, RESTORE_FILE};
 mod seq;
 mod identity;
@@ -736,6 +737,7 @@ impl Node {
             bulletin_keys: cfg.bulletin_keys.clone(),
             alerts: alerts::Alerts::load(cfg)?,
         };
+        node.sensors_open();
         // Backbone nodes seen before: a restart finds the network again even
         // when every seed is gone.
         for c in dht::load_contacts(&node.data_dir.join(DHT_CONTACTS_FILE)) {
@@ -1937,8 +1939,11 @@ impl Node {
             Some(Content::FileRequest(file_id, base, count, missing)) => self.on_file_request(Some(from), file_id, base, count, missing),
             Some(Content::Control(counter, frame)) => self.on_control(from, counter, frame),
             Some(Content::ControlReply(_, frame)) => {
-                self.broadcast(&Event::RemoteReply { from, frame: text(frame) });
+                if !self.on_sensor_reply(from, frame) {
+                    self.broadcast(&Event::RemoteReply { from, frame: text(frame) });
+                }
             }
+            Some(Content::Sensor(data)) => self.on_sensor(from, data),
             Some(Content::Unknown(t)) => self.log(format!("unknown content type {t}")),
             None => {}
         }
@@ -3275,6 +3280,7 @@ impl Node {
         self.tun_tick();
         self.hist_maintain();
         self.person_maintain();
+        self.sensors_tick();
         self.seqs.save();
         // A host has the system clock (NTP): stratum 1 in our hellos.
         let now = self.now_ms();
@@ -3584,6 +3590,7 @@ impl Node {
 
     fn command(&mut self, id: ClientId, cmd: Command) {
         let Some(cmd) = self.person_command(id, cmd) else { return };
+        let Some(cmd) = self.sensor_command(id, cmd) else { return };
         let Some(cmd) = self.ext_command(id, cmd) else { return };
         let Some(cmd) = self.page_command(id, cmd) else { return };
         match cmd {
@@ -3720,10 +3727,11 @@ impl Node {
                         | Command::OtaBegin { .. }
                         | Command::OtaChunk { .. }
                         | Command::OtaEnd { .. }
-                        | Command::OtaStatus)
+                        | Command::OtaStatus
+                        | Command::Sensor { .. })
                 );
                 if !ok {
-                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Only status, radio, role and firmware can be controlled remotely"));
+                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Only status, radio, role, firmware and sensors can be controlled remotely"));
                 }
                 // The counter follows the clock, so it also increases after a restart,
                 // but always increases (firmware chunks can come several per second).
@@ -3813,6 +3821,8 @@ impl Node {
             // Handled in node/person.rs before we get here.
             Command::LinkDevice { .. } | Command::GetPerson | Command::PersonSetup { .. } => {}
             Command::CancelFile { file_id } => self.cancel_file(file_id),
+            // Handled in node/sensors.rs before we get here.
+            Command::Sensor { .. } => {}
         }
     }
 }

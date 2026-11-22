@@ -605,6 +605,21 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
             let body = crate::links::devices_json();
             reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)
         }
+        // Sensor nodes: history, designer help (src/sensors.rs).
+        (_, p) if p.starts_with("/api/sensors") => {
+            let body: Vec<u8> = if matches!(method, "POST" | "PUT") {
+                match request_body(&mut stream, &mut req, head_end, 256 * 1024, HTTP_TIMEOUT) {
+                    Ok(body) => body.to_vec(),
+                    Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+                }
+            } else {
+                Vec::new()
+            };
+            match crate::sensors::api(method, p, query, &body) {
+                Some((status, json)) => reply(&mut stream, status, "application/json; charset=utf-8", &json),
+                None => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "Not found"),
+            }
+        }
         _ => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "Not found"),
     }
 }

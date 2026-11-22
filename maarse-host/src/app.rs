@@ -13,6 +13,7 @@ macro_rules! eprintln {
 }
 
 mod admin;
+mod sensors;
 mod meshcore_access;
 mod meshcore_gateway;
 mod debug;

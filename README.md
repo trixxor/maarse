@@ -197,7 +197,7 @@ Someone with a radio receiver and no keys can read this from a direct message:
 | 🤝 **Neighbours and keys** | Small hello packets tell neighbours roles and coverage within seconds; a node asks the network for a key it lacks; contacts you talk to are pinned and kept in flash; cars say they move so routes to them are refreshed. |
 | 🏠 **Home Assistant** | MQTT bridge with auto-discovery for battery, position and telemetry. |
 | 🔐 **Identity** | 24-word recovery phrase, encrypted backup, safety numbers with QR codes. |
-| 🛠️ **Operations** | Signed firmware updates over USB, Bluetooth and the network. The host runs as a service with a live log page and a Windows tray icon. Repeaters can be managed remotely by administrators. |
+| 🛠️ **Operations** | Signed firmware updates over USB, Bluetooth and the network. The host runs as a service with a live log page and a Windows tray icon; the Windows app (service plus tray app) installs signed updates from GitHub releases. Repeaters can be managed remotely by administrators. |
 
 **Hardware:** Heltec V4 (ESP32-S3) and Seeed XIAO nRF52840 with Wio-SX1262 are tested; Seeed XIAO ESP32-S3 and RAK WisMesh Tag are supported but not yet tried. Phones connect over Bluetooth or USB using the web client or the Android app.
 

@@ -383,6 +383,14 @@
   #pwa-update button { background: var(--accent-ink); color: var(--accent); border-color: var(--accent-ink); padding: 4px 10px; }
   #btn-side { display: none; }
   /* </pwa-css> */
+  #host-update { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 8px 12px;
+                 background: var(--accent); color: var(--accent-ink); font-size: 14px; }
+  #host-update[hidden] { display: none; }
+  #host-update button { background: var(--accent-ink); color: var(--accent); border-color: var(--accent-ink); padding: 4px 10px; }
+  #update-box { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #update-box .card { background: var(--bg, #fff); color: var(--fg, #111); border-radius: 12px; padding: 16px; max-width: 640px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; gap: 10px; }
+  #update-box pre { margin: 0; overflow: auto; white-space: pre-wrap; flex: 1; font: inherit; font-size: 14px; border: 1px solid var(--line, #8885); border-radius: 8px; padding: 10px; }
+  #update-box .btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
   #call-bar { display: flex; align-items: center; gap: 10px; padding: 10px 20px; background: var(--accent-soft);
               border-bottom: 1px solid var(--line); flex-wrap: wrap; }
@@ -722,6 +730,7 @@
   <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/></symbol>
 </svg>
 <div id="pwa-update" hidden>New version – <button id="btn-pwa-reload">reload</button></div>
+<div id="host-update" hidden></div>
 <div class="app">
 <nav class="rail" id="rail" aria-label="Main">
   <div class="brand"><h1>Må<span class="colon">:</span>rse</h1></div>
@@ -1507,6 +1516,7 @@ function setConnected(on, name) {
   $("btn-meshcore").disabled = !on;
   if (on && transport instanceof WsTransport) transport.send(Cmd.getPerson());
   $("btn-service").disabled = !(on && transport instanceof WsTransport);
+  if (on && transport instanceof WsTransport) hostUpdateCheck(); else $("host-update").hidden = true;
   if (!$("btn-service").disabled && store.get("openServiceOnConnect", false)) { store.set("openServiceOnConnect", false); $("btn-service").click(); }
   $("btn-disconnect").hidden = !on;
   for (const id of ["btn-ws", "btn-serial", "btn-ble"]) $(id).disabled = on;
@@ -6357,6 +6367,54 @@ $("btn-mc-nodes").onclick = () => setView("mcnodes");
 $("btn-account").onclick = () => { acct.err = ""; setView("account"); transport?.send(Cmd.getPerson()); };
 $("btn-settings").onclick = () => { hs.data = null; hs.msg = ""; setView("connections"); hsLoad(); };
 $("btn-computer").onclick = () => { hs.data = null; hs.msg = ""; setView("computer"); hsLoad(); };
+
+// ---------- Update of the PC app: notice, changes (release notes on GitHub) and the update button ----------
+// Only when this host runs under the Windows desktop app (maarse.exe), which can replace itself.
+const HOST_RELEASES = "https://api.github.com/repos/trixxor/maarse/releases/latest";
+const hostUpdate = { release: null };
+function hostVersionNewer(cur, next) {
+  const n = (v) => String(v).replace(/^v/, "").split(/[-+]/)[0].split(".").map((x) => parseInt(x, 10) || 0);
+  const a = n(cur), b = n(next);
+  for (let i = 0; i < 3; i++) { if ((b[i] || 0) !== (a[i] || 0)) return (b[i] || 0) > (a[i] || 0); }
+  return false;
+}
+async function hostUpdateCheck() {
+  const bar = $("host-update");
+  try {
+    const st = await svcFetch("/api/service/status");
+    if (!st.launcher) { bar.hidden = true; return; }
+    const r = await (await fetch(HOST_RELEASES, { headers: { Accept: "application/vnd.github+json" } })).json();
+    const win = (r.assets || []).find((a) => a.name === "maarse-windows-x64.zip");
+    if (!win || !hostVersionNewer(st.version, r.tag_name)) { bar.hidden = true; return; }
+    hostUpdate.release = { version: String(r.tag_name).replace(/^v/, ""), current: st.version, notes: r.body || "", page: r.html_url };
+    bar.replaceChildren(
+      el("span", { textContent: `Update ${hostUpdate.release.version} is ready (you have ${st.version}) – ` }),
+      Object.assign(el("button", { textContent: "See what changed" }), { onclick: hostUpdateShow }));
+    bar.hidden = false;
+  } catch { bar.hidden = true; }
+}
+function hostUpdateShow() {
+  const r = hostUpdate.release;
+  if (!r || $("update-box")) return;
+  const close = () => $("update-box")?.remove();
+  const msg = el("p", { className: "hint", textContent: "" });
+  const go = el("button", { textContent: "Update and restart" });
+  go.onclick = async () => {
+    go.disabled = true;
+    msg.textContent = "Closing Må:rse and installing the update. The program starts again by itself; reload this page when it is back.";
+    try { await hsPost("/api/service/update", ""); } catch (e) { msg.textContent = "Could not start the update: " + e.message; go.disabled = false; }
+  };
+  const box = el("div", { id: "update-box", role: "dialog", ariaLabel: "Update" },
+    el("div", { className: "card" },
+      el("h3", { textContent: `Må:rse ${r.version} – what changed` }),
+      el("pre", { textContent: r.notes.trim() || "No release notes were written for this version." }),
+      msg,
+      el("div", { className: "btns" }, go,
+        Object.assign(el("a", { textContent: "View on GitHub", href: r.page, target: "_blank", rel: "noopener" }), {}),
+        Object.assign(el("button", { textContent: "Close" }), { onclick: close }))));
+  box.onclick = (e) => { if (e.target === box) close(); };
+  document.body.append(box);
+}
 
 // ---------- Service page: host status, live log, restart and stop ----------
 const svc = { status: null, err: "", msg: "", lines: [], last: 0, filter: "", paused: false, timer: 0, confirm: null };

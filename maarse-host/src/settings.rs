@@ -83,6 +83,15 @@ pub static SERVICE: AtomicBool = AtomicBool::new(false);
 /// Exit code used to ask the service manager for a restart (EX_TEMPFAIL).
 pub const RESTART_EXIT_CODE: i32 = 75;
 
+/// Exit code used to ask the desktop app (`maarse.exe`) to install an update and start again.
+pub const UPDATE_EXIT_CODE: i32 = 76;
+
+/// Is this host supervised by the desktop app? It sets `MAARSE_LAUNCHER=1`, and only then can the
+/// web client ask for an update.
+pub fn launcher() -> bool {
+    std::env::var_os("MAARSE_LAUNCHER").is_some_and(|v| v == "1")
+}
+
 /// Starts a new process with the same command line and exits this one.
 pub fn restart() -> ! {
     // The MeshCore radio worker is our child: stop it, so the new process starts its own.

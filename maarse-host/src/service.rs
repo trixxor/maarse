@@ -118,7 +118,9 @@ pub fn status_json(data_dir: &Path) -> String {
         data = s.to_string();
     }
     serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": option_env!("MAARSE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+        "launcher": crate::settings::launcher(),
+        "update_exit_code": crate::settings::UPDATE_EXIT_CODE,
         "pid": std::process::id(),
         "uptime_s": uptime,
         "started": started,
@@ -135,6 +137,15 @@ pub fn status_json(data_dir: &Path) -> String {
 pub fn stop() -> ! {
     println!("\n[service] stop requested from the web client, exiting with code 0\n");
     std::process::exit(0);
+}
+
+/// Stops the host with the exit code that makes the desktop app install an update.
+pub fn update() -> ! {
+    crate::meshcore_gateway::stop_worker();
+    println!("
+[service] update requested from the web client, exiting with code {}
+", crate::settings::UPDATE_EXIT_CODE);
+    std::process::exit(crate::settings::UPDATE_EXIT_CODE);
 }
 
 #[cfg(test)]

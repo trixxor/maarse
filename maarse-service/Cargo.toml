@@ -1,0 +1,30 @@
+[package]
+name = "maarse-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows service for Må:rse: runs maarse-host, installs signed updates from GitHub, talks to the tray app over a named pipe"
+
+[lib]
+name = "maarse_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "maarse-service"
+path = "src/main.rs"
+
+[dependencies]
+maarse-crypto = { version = "0.1.0", path = "../maarse-crypto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+] }

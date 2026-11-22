@@ -579,6 +579,12 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
             thread::sleep(Duration::from_millis(300));
             crate::service::stop();
         }
+        ("POST", "/api/service/update") if crate::settings::launcher() => {
+            reply(&mut stream, "200 OK", "text/plain; charset=utf-8", "ok");
+            drop(stream);
+            thread::sleep(Duration::from_millis(300));
+            crate::service::update();
+        }
         // Linked devices: the master's encrypted backup (node/person.rs), and
         // a backup to restore from (the code goes over the WebSocket).
         ("GET", "/api/account-backup") => match std::fs::read(data_dir.join(crate::node::BACKUP_FILE)) {

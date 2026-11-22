@@ -17,6 +17,10 @@ on:
       version:
         description: "Version without v (e.g. 0.6.0)"
         required: true
+      windows_only:
+        description: "Only rebuild the Windows files for an existing release (skips firmware and Pages)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,6 +35,7 @@ env:
 
 jobs:
   firmware:
+    if: ${{ !inputs.windows_only }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -131,6 +136,7 @@ jobs:
       contents: write
       pages: write
       id-token: write
+    if: ${{ !inputs.windows_only }}
     needs: firmware
     runs-on: ubuntu-latest
     environment:
@@ -181,6 +187,7 @@ jobs:
   # the service installs an update only if the signature matches MAARSE_RELEASE_PUBKEY (built into it).
   windows:
     needs: publish
+    if: ${{ !cancelled() && (needs.publish.result == 'success' || needs.publish.result == 'skipped') }}
     runs-on: windows-latest
     permissions:
       contents: write
@@ -200,15 +207,22 @@ jobs:
           [ -n "$KEY_B64" ] && [ -n "$MAARSE_RELEASE_PUBKEY" ] || { echo "MAARSE_SIGN_KEY_B64 and MAARSE_RELEASE_PUBKEY are needed: the Windows update must be signed"; exit 1; }
       - name: Build
         run: cargo build --release --locked -p maarse-host -p maarse-desktop -p maarse-service
-      - name: Package and sign
+      - name: Package
         shell: bash
-        env:
-          KEY_B64: ${{ secrets.MAARSE_SIGN_KEY_B64 }}
         run: |
           mkdir -p out/pkg out/sign
           cp target/release/maarse.exe target/release/maarse-host.exe target/release/maarse-service.exe out/pkg/
           (cd out/pkg && 7z a -tzip ../maarse-windows-x64.zip maarse.exe maarse-host.exe maarse-service.exe)
-          iscc //DAppVersion="$MAARSE_VERSION" //DSourceDir="$PWD/out/pkg" //O"$PWD/out" packaging/windows/maarse.iss
+      - name: Installer
+        shell: pwsh
+        run: |
+          iscc "/DAppVersion=$env:MAARSE_VERSION" "/DSourceDir=$PWD\out\pkg" "/O$PWD\out" packaging\windows\maarse.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Sign
+        shell: bash
+        env:
+          KEY_B64: ${{ secrets.MAARSE_SIGN_KEY_B64 }}
+        run: |
           # sign-release signs every file in a folder: the list is named SHA256SUMS there, SHA256SUMS-windows on the release.
           cp out/maarse-windows-x64.zip out/maarse-setup-x64.exe out/sign/
           umask 077

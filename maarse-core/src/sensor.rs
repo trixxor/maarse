@@ -39,7 +39,10 @@
 //! the node's owners (the first four on its list), bit 4 is the recipe's
 //! private channel. The public channel is never allowed.
 
+pub mod catalog;
+
 use crate::Address;
+use catalog::I2cDesc;
 use heapless::Vec;
 
 pub const RECIPE_VERSION: u8 = 1;
@@ -63,6 +66,16 @@ pub const MAX_MSG: usize = 140;
 pub const FLAG_SLEEP: u8 = 0x01;
 /// Recipe flag: the header holds a channel address.
 pub const FLAG_CHANNEL: u8 = 0x02;
+/// Recipe flag: a tail follows the text (custom I2C sensors, value maps). Set
+/// by `to_bytes`; never set in a decoded recipe.
+pub const FLAG_EXT: u8 = 0x04;
+/// Different ways of making an I2C chip answer that a recipe may hold (the
+/// sources of one chip share one), and different ways of taking a number from
+/// an answer.
+pub const MAX_READS: usize = 4;
+pub const MAX_FIELDS: usize = 8;
+/// Value maps (see [`Map`]) a recipe may hold.
+pub const MAX_MAPS: usize = 4;
 
 /// What a value means.
 pub mod kind {
@@ -74,6 +87,9 @@ pub mod kind {
     pub const COUNTER: u8 = 6;
     pub const PERCENT: u8 = 7;
     pub const DISTANCE: u8 = 8;
+    pub const LIGHT: u8 = 9;
+    pub const CO2: u8 = 10;
+    pub const ACCEL: u8 = 11;
     /// Kinds from here up are the owner's own (shown as plain numbers).
     pub const CUSTOM: u8 = 128;
 
@@ -93,6 +109,9 @@ pub mod kind {
             PRESSURE => "hPa",
             VOLTAGE => "V",
             DISTANCE => "mm",
+            LIGHT => "lx",
+            CO2 => "ppm",
+            ACCEL => "mg",
             _ => "",
         }
     }
@@ -107,12 +126,15 @@ pub mod kind {
             COUNTER => "Counter",
             PERCENT => "Level",
             DISTANCE => "Distance",
+            LIGHT => "Light",
+            CO2 => "CO2",
+            ACCEL => "Acceleration",
             _ => "Value",
         }
     }
 
     pub fn is_known(kind: u8) -> bool {
-        (1..=8).contains(&kind) || kind >= CUSTOM
+        (1..=11).contains(&kind) || kind >= CUSTOM
     }
 }
 
@@ -162,6 +184,9 @@ pub enum Input {
     Counter { pin: u8, falling: bool, pull: Pull },
     /// A digital output pin (the value is the level the recipe set).
     GpioOut { pin: u8, active_low: bool },
+    /// An I2C sensor, described by [`I2cDesc`]: the host's catalogue or the
+    /// person fills it in. The description travels in the recipe.
+    I2c(I2cDesc),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,6 +276,30 @@ pub struct Rule {
     pub actions: Vec<Action, MAX_ACTIONS>,
 }
 
+/// Turns a source's reading into another range before the rules and the
+/// reports see it: a soil-moisture probe that reads 2600 mV dry and 1200 mV
+/// wet becomes 0 to 100 %. The reading is cut off at the ends of `in_lo` and
+/// `in_hi`. Input is in the unit the input gives (mV for an analogue input),
+/// output in the source's kind units (hundredths for a percentage).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Map {
+    pub src: u8,
+    pub in_lo: i16,
+    pub in_hi: i16,
+    pub out_lo: i16,
+    pub out_hi: i16,
+}
+
+impl Map {
+    pub fn apply(&self, v: i32) -> i32 {
+        let (lo, hi) = (self.in_lo.min(self.in_hi) as i64, self.in_lo.max(self.in_hi) as i64);
+        let v = (v as i64).clamp(lo, hi);
+        let (a, b) = (self.in_lo as i64, self.in_hi as i64);
+        let (c, d) = (self.out_lo as i64, self.out_hi as i64);
+        (c + (v - a) * (d - c) / (b - a)) as i32
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recipe {
     pub flags: u8,
@@ -261,6 +310,7 @@ pub struct Recipe {
     pub sources: Vec<Source, MAX_SOURCES>,
     pub rules: Vec<Rule, MAX_RULES>,
     pub text: Vec<u8, MAX_TEXT>,
+    pub maps: Vec<Map, MAX_MAPS>,
 }
 
 impl Default for Recipe {
@@ -274,6 +324,7 @@ impl Default for Recipe {
             sources: Vec::new(),
             rules: Vec::new(),
             text: Vec::new(),
+            maps: Vec::new(),
         }
     }
 }
@@ -328,6 +379,17 @@ impl Input {
             Input::Bme280 { addr, what } => (5, addr, what),
             Input::Counter { pin, falling, pull } => (6, pin, pull_to(pull) | (falling as u8) << 2),
             Input::GpioOut { pin, active_low } => (7, pin, active_low as u8),
+            // The description is in the tail; `to_bytes` fills in the numbers.
+            Input::I2c(_) => (8, 0, 0),
+        }
+    }
+
+    /// How to read an I2C source (`None` for anything else, and for the
+    /// BME280, which has its own driver).
+    pub fn i2c_desc(&self) -> Option<I2cDesc> {
+        match *self {
+            Input::I2c(d) => Some(d),
+            _ => None,
         }
     }
 
@@ -340,6 +402,8 @@ impl Input {
             5 if b <= 2 && (a == 0x76 || a == 0x77) => Input::Bme280 { addr: a, what: b },
             6 => Input::Counter { pin: a, falling: b & 4 != 0, pull: pull_from(b) },
             7 => Input::GpioOut { pin: a, active_low: b & 1 != 0 },
+            // A placeholder until the tail is read (`a` and `b` say which description).
+            8 => Input::I2c(I2cDesc::new(1)),
             _ => return Err(RecipeError::Invalid),
         })
     }
@@ -354,7 +418,7 @@ impl Recipe {
         let mut wake = 0u8;
         for s in &self.sources {
             match s.input {
-                Input::Bme280 { .. } => plan |= 1,
+                Input::Bme280 { .. } | Input::I2c(_) => plan |= 1,
                 Input::Adc { .. } => plan |= 2,
                 Input::GpioIn { pin, wake: true, .. } => wake ^= pin.wrapping_mul(7).wrapping_add(1),
                 _ => {}
@@ -374,6 +438,32 @@ impl Recipe {
             }
         }
         v
+    }
+
+    /// The distinct ways of reading and of taking a number that the I2C
+    /// sources use, in the order of the sources. The sources of one chip share a read.
+    fn i2c_parts(&self) -> (Vec<I2cDesc, MAX_SOURCES>, Vec<catalog::Field, MAX_SOURCES>) {
+        let (mut reads, mut fields): (Vec<I2cDesc, MAX_SOURCES>, Vec<catalog::Field, MAX_SOURCES>) = (Vec::new(), Vec::new());
+        for s in &self.sources {
+            if let Input::I2c(d) = s.input {
+                if !reads.iter().any(|r| r.same_read(&d)) {
+                    let _ = reads.push(d);
+                }
+                if !fields.contains(&d.field) {
+                    let _ = fields.push(d.field);
+                }
+            }
+        }
+        (reads, fields)
+    }
+
+    /// Applies the value maps to the readings of one cycle.
+    pub fn apply_maps(&self, values: &mut [Option<i32>]) {
+        for m in &self.maps {
+            if let Some(Some(v)) = values.get_mut(m.src as usize) {
+                *v = m.apply(*v);
+            }
+        }
     }
 
     /// A source of this kind of input is read, not set.
@@ -412,7 +502,18 @@ impl Recipe {
                 }
             }
         }
+        let (reads, fields) = self.i2c_parts();
+        if reads.len() > MAX_READS || fields.len() > MAX_FIELDS || self.sources.iter().any(|s| matches!(s.input, Input::I2c(d) if !d.validate())) {
+            return Err(RecipeError::Invalid);
+        }
         let n = self.sources.len() as u8;
+        let mut mapped = 0u8;
+        for m in &self.maps {
+            if m.src >= n || self.is_output(m.src) || m.in_lo == m.in_hi || mapped >> m.src & 1 != 0 {
+                return Err(RecipeError::Invalid);
+            }
+            mapped |= 1 << m.src;
+        }
         let src_ok = |i: u8| i < n && !self.is_output(i);
         for r in &self.rules {
             match r.cond {
@@ -442,14 +543,20 @@ impl Recipe {
         self.validate()?;
         let mut v: Vec<u8, MAX_RECIPE> = Vec::new();
         let put = |v: &mut Vec<u8, MAX_RECIPE>, b: &[u8]| v.extend_from_slice(b).map_err(|_| RecipeError::TooLarge);
-        put(&mut v, &[RECIPE_VERSION, self.flags])?;
+        let (reads, fields) = self.i2c_parts();
+        let ext = !reads.is_empty() || !self.maps.is_empty();
+        put(&mut v, &[RECIPE_VERSION, (self.flags & !FLAG_EXT) | if ext { FLAG_EXT } else { 0 }])?;
         put(&mut v, &self.interval_s.to_le_bytes())?;
         put(&mut v, &[self.report_to, self.alarm_to, self.sources.len() as u8, self.rules.len() as u8, self.text.len() as u8])?;
         if let Some(c) = &self.channel {
             put(&mut v, &c.0)?;
         }
         for s in &self.sources {
-            let (t, a, b) = s.input.code();
+            let (t, mut a, mut b) = s.input.code();
+            if let Input::I2c(d) = s.input {
+                a = reads.iter().position(|r| r.same_read(&d)).unwrap_or(0) as u8;
+                b = fields.iter().position(|f| *f == d.field).unwrap_or(0) as u8;
+            }
             put(&mut v, &[s.chan, s.kind, t, a, b])?;
         }
         for r in &self.rules {
@@ -486,6 +593,29 @@ impl Recipe {
             }
         }
         put(&mut v, &self.text)?;
+        if ext {
+            // Tail: count, then (tag, length, data) each: 1 = how to read an I2C chip,
+            // 3 = how to take a number from its answer, 2 = value map.
+            put(&mut v, &[(reads.len() + fields.len() + self.maps.len()) as u8])?;
+            for d in &reads {
+                let mut b: Vec<u8, 24> = Vec::new();
+                d.read_bytes(&mut b).map_err(|_| RecipeError::TooLarge)?;
+                put(&mut v, &[1, b.len() as u8])?;
+                put(&mut v, &b)?;
+            }
+            for f in &fields {
+                let mut one = I2cDesc::new(1);
+                one.field = *f;
+                put(&mut v, &[3, catalog::FIELD_LEN as u8])?;
+                put(&mut v, &one.field_bytes())?;
+            }
+            for m in &self.maps {
+                put(&mut v, &[2, 9, m.src])?;
+                for x in [m.in_lo, m.in_hi, m.out_lo, m.out_hi] {
+                    put(&mut v, &x.to_le_bytes())?;
+                }
+            }
+        }
         Ok(v)
     }
 
@@ -506,9 +636,11 @@ impl Recipe {
             return Err(RecipeError::TooLarge);
         }
         let channel = if flags & FLAG_CHANNEL != 0 { Address::from_slice(r.take(16)?) } else { None };
-        let mut rec = Recipe { flags, interval_s, report_to, alarm_to, channel, ..Recipe::default() };
-        for _ in 0..ns {
+        let mut rec = Recipe { flags: flags & !FLAG_EXT, interval_s, report_to, alarm_to, channel, ..Recipe::default() };
+        let mut sources_idx = [(0u8, 0u8); MAX_SOURCES];
+        for i in 0..ns {
             let (chan, k, t, a, bb) = (r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?);
+            sources_idx[i] = (a, bb);
             let input = Input::from_code(t, a, bb)?;
             rec.sources.push(Source { chan, kind: k, input }).map_err(|_| RecipeError::TooLarge)?;
         }
@@ -557,8 +689,39 @@ impl Recipe {
             rec.rules.push(Rule { id, cond, limit_5min, actions }).map_err(|_| RecipeError::TooLarge)?;
         }
         rec.text.extend_from_slice(r.take(nt)?).map_err(|_| RecipeError::TooLarge)?;
+        let mut reads: Vec<Vec<u8, 24>, MAX_READS> = Vec::new();
+        let mut fields: Vec<Vec<u8, { catalog::FIELD_LEN }>, MAX_FIELDS> = Vec::new();
+        if flags & FLAG_EXT != 0 {
+            for _ in 0..r.u8()? {
+                let (tag, len) = (r.u8()?, r.u8()? as usize);
+                let body = r.take(len)?;
+                match tag {
+                    1 => reads.push(Vec::from_slice(body).map_err(|_| RecipeError::TooLarge)?).map_err(|_| RecipeError::TooLarge)?,
+                    3 if len == catalog::FIELD_LEN => fields.push(Vec::from_slice(body).map_err(|_| RecipeError::TooLarge)?).map_err(|_| RecipeError::TooLarge)?,
+                    2 if len == 9 => {
+                        let i = |o: usize| i16::from_le_bytes([body[o], body[o + 1]]);
+                        rec.maps.push(Map { src: body[0], in_lo: i(1), in_hi: i(3), out_lo: i(5), out_hi: i(7) }).map_err(|_| RecipeError::TooLarge)?;
+                    }
+                    _ => return Err(RecipeError::Invalid),
+                }
+            }
+        }
         if !r.0.is_empty() {
             return Err(RecipeError::Malformed);
+        }
+        // Each I2C source names a read and a field; every read and field must be used (one way to write a recipe).
+        let (mut used_r, mut used_f) = (0u32, 0u32);
+        for (i, s) in rec.sources.iter_mut().enumerate() {
+            if let Input::I2c(d) = &mut s.input {
+                let (ri, fi) = (sources_idx[i].0 as usize, sources_idx[i].1 as usize);
+                let (rb, fb) = (reads.get(ri).ok_or(RecipeError::Invalid)?, fields.get(fi).ok_or(RecipeError::Invalid)?);
+                *d = I2cDesc::from_parts(rb, fb).ok_or(RecipeError::Invalid)?;
+                used_r |= 1 << ri;
+                used_f |= 1 << fi;
+            }
+        }
+        if used_r != (1u32 << reads.len()) - 1 || used_f != (1u32 << fields.len()) - 1 {
+            return Err(RecipeError::Invalid);
         }
         rec.validate()?;
         Ok(rec)
@@ -1620,5 +1783,79 @@ mod tests {
             let (_, _, h) = c.compensate(&data, true);
             assert!(h.unwrap() <= 10_000, "{raw_h} -> {h:?}");
         }
+    }
+
+    fn sht(addr: u8, off: u8, mul: i32) -> catalog::I2cDesc {
+        let mut d = catalog::I2cDesc::new(addr);
+        d.trigger[..2].copy_from_slice(&[0x24, 0x00]);
+        (d.trigger_len, d.wait_ms, d.read_len, d.crc) = (2, 20, 6, true);
+        d.field = catalog::Field { bit_off: off, bits: 16, signed: false, little: false, mul, div: 65535, add: 0 };
+        d
+    }
+
+    #[test]
+    fn i2c_and_mapped_sources_round_trip_and_chips_share_their_read() {
+        let mut other = catalog::I2cDesc::new(0x40);
+        other.ptr[0] = 0x05;
+        other.ptr_len = 1;
+        other.field = catalog::Field { bit_off: 0, bits: 16, signed: true, little: false, mul: 1, div: 10, add: 0 };
+        let mut r = Recipe::default();
+        for (chan, input) in [(1, Input::I2c(sht(0x44, 0, 17500))), (2, Input::I2c(sht(0x44, 16, 10000))), (3, Input::I2c(other)), (4, Input::I2c(sht(0x45, 0, 17500)))] {
+            r.sources.push(Source { chan, kind: kind::TEMPERATURE, input }).unwrap();
+        }
+        r.sources[2].kind = kind::PERCENT;
+        r.maps.push(Map { src: 2, in_lo: 2600, in_hi: 1200, out_lo: 0, out_hi: 10000 }).unwrap();
+        let b = r.to_bytes().unwrap();
+        assert_ne!(b[1] & FLAG_EXT, 0, "the tail is announced");
+        let back = Recipe::from_bytes(&b).unwrap();
+        assert_eq!(back, r);
+        assert_eq!(back.to_bytes().unwrap(), b);
+        assert_eq!(back.pin_plan() & 1, 1, "an I2C source asks for the bus");
+        // Three reads (two addresses and one other chip), three fields: the sources of the chip at 0x44 share.
+        let (rd, fd) = back.i2c_parts();
+        assert_eq!((rd.len(), fd.len()), (3, 3));
+        // The map: dry 2600 mV is 0 %, wet 1200 mV is 100 %, beyond the ends is cut off.
+        let mut v = [Some(1), Some(2), Some(1900), Some(4)];
+        back.apply_maps(&mut v);
+        assert_eq!(v, [Some(1), Some(2), Some(5000), Some(4)]);
+        let mut v = [None, None, Some(100), None];
+        back.apply_maps(&mut v);
+        assert_eq!(v[2], Some(10000));
+        // A recipe without them stays in the old format.
+        let mut plain = Recipe::default();
+        plain.sources.push(Source { chan: 1, kind: kind::TEMPERATURE, input: Input::Battery }).unwrap();
+        assert_eq!(plain.to_bytes().unwrap()[1] & FLAG_EXT, 0);
+    }
+
+    #[test]
+    fn bad_i2c_and_map_recipes_are_refused() {
+        let src = |input| Source { chan: 1, kind: kind::TEMPERATURE, input };
+        let mut r = Recipe::default();
+        r.sources.push(src(Input::I2c(sht(0x44, 0, 17500)))).unwrap();
+        assert!(r.validate().is_ok());
+        r.maps.push(Map { src: 0, in_lo: 5, in_hi: 5, out_lo: 0, out_hi: 1 }).unwrap();
+        assert_eq!(r.validate(), Err(RecipeError::Invalid), "a map needs a range");
+        r.maps[0].in_hi = 6;
+        r.maps.push(Map { src: 0, in_lo: 1, in_hi: 2, out_lo: 0, out_hi: 1 }).unwrap();
+        assert_eq!(r.validate(), Err(RecipeError::Invalid), "one map per source");
+        r.maps.truncate(1);
+        r.maps[0].src = 3;
+        assert_eq!(r.validate(), Err(RecipeError::Invalid), "a map of a source that is not there");
+        // An unused read in the tail, or a source that points at none, is refused.
+        let mut ok = Recipe::default();
+        ok.sources.push(src(Input::I2c(sht(0x44, 0, 17500)))).unwrap();
+        let b = ok.to_bytes().unwrap();
+        let mut bad = b.clone();
+        bad[b.len() - 1] ^= 0xFF;
+        assert!(Recipe::from_bytes(&bad).is_err() || Recipe::from_bytes(&bad).unwrap() != ok);
+        let mut cut = b.clone();
+        cut.truncate(b.len() - 3);
+        assert!(Recipe::from_bytes(&cut).is_err());
+        // Five different ways of reading are one too many.
+        let mut many = Recipe::default();
+        for c in 0..5u8 {
+            many.sources.push(Source { chan: c, kind: kind::CUSTOM, input: Input::I2c(sht(0x40 + c, 0, 1)) }).unwrap();
+        }
+        assert_eq!(many.validate(), Err(RecipeError::Invalid));
     }
 }

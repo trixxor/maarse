@@ -4,6 +4,13 @@
 fn main() {
     println!("cargo:rerun-if-changed=../packaging/windows/maarse.ico");
     println!("cargo:rerun-if-env-changed=MAARSE_VERSION");
+    #[cfg(windows)]
+    windows_resources();
+}
+
+/// The icon and version information of the Windows exe. `winresource` is a build dependency on Windows only.
+#[cfg(windows)]
+fn windows_resources() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }

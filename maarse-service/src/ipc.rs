@@ -49,7 +49,7 @@ pub fn request(command: &str) -> Result<Status, String> {
                 last = e.to_string();
                 std::thread::sleep(Duration::from_millis(200));
             }
-            Err(e) => return Err(format!("the Maarse service is not running ({e})")),
+            Err(e) => return Err(format!("the Må:rse service is not running ({e})")),
         }
     }
     Err(last)

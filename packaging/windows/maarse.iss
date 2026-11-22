@@ -1,5 +1,5 @@
-; Installer for Maarse on Windows. One administrator approval (UAC) at install: it puts the program in
-; Program Files and registers the Maarse service (runs as SYSTEM from boot, runs the host and installs signed
+﻿; Installer for Må:rse on Windows (saved as UTF-8 with a byte order mark, so Inno Setup reads the å). One administrator approval (UAC) at install: it puts the program in
+; Program Files and registers the Må:rse service (runs as SYSTEM from boot, runs the host and installs signed
 ; updates). The tray app (maarse.exe) runs as the signed-in user. Built by .github/workflows/release.yml:
 ;   iscc /DAppVersion=0.8.0 /DSourceDir=out\pkg packaging\windows\maarse.iss
 ; It appears in Windows Settings > Apps, from where it is uninstalled (the service is removed with it).
@@ -12,9 +12,9 @@
 
 [Setup]
 AppId={{6B3F6A0E-5C9B-4B8E-9E55-3F0C4C0C7A11}
-AppName=Maarse
+AppName=Må:rse
 AppVersion={#AppVersion}
-AppPublisher=Maarse
+AppPublisher=Må:rse
 DefaultDirName={autopf}\Maarse
 DefaultGroupName=Maarse
 PrivilegesRequired=admin
@@ -23,13 +23,13 @@ Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayName=Maarse
+UninstallDisplayName=Må:rse
 UninstallDisplayIcon={app}\maarse.exe
 SetupIconFile=maarse.ico
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a shortcut on the desktop"
-Name: "autostart"; Description: "Show the Maarse icon when I sign in to Windows"
+Name: "autostart"; Description: "Show the Må:rse icon when I sign in to Windows"
 
 [Files]
 Source: "{#SourceDir}\maarse.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -44,8 +44,8 @@ Name: "{commonstartup}\Maarse"; Filename: "{app}\maarse.exe"; Parameters: "--no-
 
 [Run]
 ; Registers the service (starts at boot) and starts it. Re-running it on an upgrade is harmless.
-Filename: "{app}\maarse-service.exe"; Parameters: "install"; Flags: runhidden waituntilterminated; StatusMsg: "Registering the Maarse service ..."
-Filename: "{app}\maarse.exe"; Description: "Open Maarse now"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\maarse-service.exe"; Parameters: "install"; Flags: runhidden waituntilterminated; StatusMsg: "Registering the Må:rse service ..."
+Filename: "{app}\maarse.exe"; Description: "Open Må:rse now"; Flags: nowait postinstall skipifsilent
 
 ; Files the service's self-update leaves behind are not in [Files], so remove them explicitly.
 [UninstallDelete]
@@ -86,7 +86,7 @@ begin
   // The user's data (identity, messages, contacts, settings) lives in %ProgramData%\Maarse and is only
   // removed if the user asks for it.
   if CurUninstallStep = usPostUninstall then
-    if MsgBox('Also delete your Maarse data (identity, messages, contacts, settings)?' + #13#10 +
+    if MsgBox('Also delete your Må:rse data (identity, messages, contacts, settings)?' + #13#10 +
               'This cannot be undone. Choose No to keep it for a later reinstall.',
               mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
       DelTree(ExpandConstant('{commonappdata}\Maarse'), True, True, True);

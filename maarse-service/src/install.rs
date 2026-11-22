@@ -20,7 +20,7 @@ pub fn install() -> Result<(), String> {
         .map_err(|e| format!("Run this from an administrator prompt ({e})"))?;
     let info = ServiceInfo {
         name: OsString::from(SERVICE_NAME),
-        display_name: OsString::from("Maarse"),
+        display_name: OsString::from("Må:rse"),
         service_type: ServiceType::OWN_PROCESS,
         start_type: ServiceStartType::AutoStart,
         error_control: ServiceErrorControl::Normal,
@@ -40,15 +40,15 @@ pub fn install() -> Result<(), String> {
             s
         }
     };
-    let _ = service.set_description("Runs the Maarse PC client in the background and keeps it up to date.");
+    let _ = service.set_description("Runs the Må:rse PC client in the background and keeps it up to date.");
     // Start again 5 s after a crash.
     let _ = Command::new("sc.exe")
         .args(["failure", SERVICE_NAME, "reset=", "86400", "actions=", "restart/5000/restart/5000/restart/30000"])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
     match service.start::<&str>(&[]) {
-        Ok(()) => println!("Maarse service installed and started."),
-        Err(e) => println!("Maarse service installed, but it did not start: {e}"),
+        Ok(()) => println!("Må:rse service installed and started."),
+        Err(e) => println!("Må:rse service installed, but it did not start: {e}"),
     }
     Ok(())
 }
@@ -58,7 +58,7 @@ pub fn uninstall() -> Result<(), String> {
         .map_err(|e| format!("Run this from an administrator prompt ({e})"))?;
     let access = ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS;
     let Ok(service) = manager.open_service(SERVICE_NAME, access) else {
-        println!("The Maarse service is not installed.");
+        println!("The Må:rse service is not installed.");
         return Ok(());
     };
     if service.query_status().map(|s| s.current_state != ServiceState::Stopped).unwrap_or(false) {
@@ -71,6 +71,6 @@ pub fn uninstall() -> Result<(), String> {
         }
     }
     service.delete().map_err(|e| e.to_string())?;
-    println!("Maarse service removed. Your data in %ProgramData%\\Maarse was kept.");
+    println!("Må:rse service removed. Your data in %ProgramData%\\Maarse was kept.");
     Ok(())
 }

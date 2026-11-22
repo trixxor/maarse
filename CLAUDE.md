@@ -18,6 +18,20 @@ converts the whole repository, including file names, CLI flags and data
 files. Do not mix languages inside a new function or file: new code next to
 Danish code is still written in English.
 
+## Product name: Må:rse
+
+The product is called **Må:rse**, with the å and the colon. Use that spelling
+everywhere a person reads the name: installer and wizard text, Apps list and
+uninstall entry, shortcut and menu labels where Windows allows it, service
+display name, version information of the exe files, window titles, dialogs,
+tray tooltips, web client, Android app, firmware display and documentation.
+
+Write **Maarse** only where å or `:` cannot be used: file and folder names
+(for example `C:\Program Files\Maarse`, shortcut file names, `maarse.exe`),
+service and registry key names, identifiers, URLs, repository and package
+names. Never shorten the visible product name to "Maarse" just because it is
+easier to type.
+
 ## Commits
 
 Do not add `Co-Authored-By: Claude` or any other Claude attribution

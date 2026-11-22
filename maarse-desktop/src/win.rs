@@ -448,7 +448,7 @@ fn startup_decision(win: HWND) {
         (Err(e), _) => {
             close_splash();
             error_box(&format!(
-                "The Må:rse service is not running, so the PC client cannot start.\n\n{e}\n\nStart \"Maarse\" in Windows Services, or reinstall Må:rse."
+                "The Må:rse service is not running, so the PC client cannot start.\n\n{e}\n\nStart \"Må:rse\" in Windows Services, or reinstall Må:rse."
             ));
         }
         (Ok(_), Some(r)) => {

@@ -13,8 +13,8 @@ fn main() {
     let numeric = major << 48 | minor << 32 | patch << 16;
     let mut res = winresource::WindowsResource::new();
     res.set_icon("../packaging/windows/maarse.ico");
-    res.set("ProductName", "Maarse");
-    res.set("FileDescription", "Maarse service");
+    res.set("ProductName", "Må:rse");
+    res.set("FileDescription", "Må:rse service");
     res.set("FileVersion", &version);
     res.set("ProductVersion", &version);
     res.set_version_info(winresource::VersionInfo::FILEVERSION, numeric);

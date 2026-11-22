@@ -121,7 +121,7 @@ fn parse_sig(hex_text: &str) -> Option<[u8; 64]> {
 pub fn verify_package(key: &[u8; 32], sums: &str, sig_hex: &str, zip: &[u8]) -> Result<(), String> {
     let sig = parse_sig(sig_hex).ok_or("The signature file is not valid.")?;
     if !ota::verify_release(key, sums.as_bytes(), &sig) {
-        return Err("The signature does not match the Maarse release key. Nothing was installed.".into());
+        return Err("The signature does not match the Må:rse release key. Nothing was installed.".into());
     }
     let hash = hex(&ota::sha256(zip));
     let listed = sums.lines().find_map(|l| {

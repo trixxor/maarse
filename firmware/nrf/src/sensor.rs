@@ -18,11 +18,11 @@
 //! chip temperature.
 
 use core::sync::atomic::Ordering::Relaxed;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either3, select3};
 use embassy_nrf::gpio::{Flex, OutputDrive, Pull};
 use embassy_nrf::twim::Twim;
 use maarse_core::sensor::{Input, Pull as RPull, Source, kind};
-use maarse_fw_common::bus::{SENSE_DONE, SENSE_REQ, SET_OUT};
+use maarse_fw_common::bus::{PIN_WAKE, SENSE_DONE, SENSE_REQ, SET_OUT};
 use maarse_fw_common::power;
 
 pub struct Pins {
@@ -61,7 +61,7 @@ impl Pins {
             Input::Battery => Some(power::BATTERY_MV.load(Relaxed) as i32).filter(|v| *v > 0),
             // 0.1 °C in `power`, 0.01 °C in a reading.
             Input::ChipTemp => power::temperature_dc().map(|t| t as i32 * 10),
-            Input::GpioIn { pin, pull: p, invert } => {
+            Input::GpioIn { pin, pull: p, invert, .. } => {
                 let f = self.pin(pin)?;
                 f.set_as_input(pull(p));
                 // Let a pull-up settle before reading.
@@ -101,12 +101,51 @@ impl Pins {
     }
 }
 
+/// Waits for the first wake pin to go to its wake level (a reed switch, a
+/// button) and says which. The pin is level-triggered by the chip's PORT
+/// event, so the CPU can sleep meanwhile (System ON). A pin that is still at
+/// its wake level is waited for after it has been away: one event, one wake.
+#[cfg(feature = "board-xiao-nrf52840")]
+async fn wait_wake(pins: &mut Pins, wake: &[(u8, bool)]) -> u8 {
+    async fn one(f: Option<&mut Flex<'static>>, high: Option<bool>, id: u8) -> u8 {
+        match (f, high) {
+            (Some(f), Some(true)) => {
+                f.wait_for_rising_edge().await;
+                id
+            }
+            (Some(f), Some(false)) => {
+                f.wait_for_falling_edge().await;
+                id
+            }
+            _ => core::future::pending().await,
+        }
+    }
+    let level = |id: u8| wake.iter().find(|w| w.0 == id).map(|w| w.1);
+    let Pins { d0, d6, d7, .. } = pins;
+    match select3(one(Some(d0), level(0), 0), one(d6.as_mut(), level(6), 6), one(d7.as_mut(), level(7), 7)).await {
+        Either3::First(p) | Either3::Second(p) | Either3::Third(p) => p,
+    }
+}
+
+#[cfg(not(feature = "board-xiao-nrf52840"))]
+async fn wait_wake(_pins: &mut Pins, _wake: &[(u8, bool)]) -> u8 {
+    core::future::pending().await
+}
+
 #[embassy_executor::task]
-pub async fn sensor_task(mut pins: Pins) {
+pub async fn sensor_task(mut pins: Pins, wake: heapless::Vec<(u8, bool), 2>) {
     let _ = kind::TEMPERATURE;
     loop {
-        match select(SENSE_REQ.wait(), SET_OUT.receive()).await {
-            Either::First(sources) => {
+        // Wake pins are inputs held at the level that does not wake the node.
+        for &(pin, high) in wake.iter() {
+            if let Some(f) = pins.pin(pin) {
+                f.set_as_input(if high { Pull::Down } else { Pull::Up });
+            }
+        }
+        let woke = wait_wake(&mut pins, &wake);
+        match select3(SENSE_REQ.wait(), SET_OUT.receive(), woke).await {
+            Either3::Third(pin) => PIN_WAKE.signal(pin),
+            Either3::First(sources) => {
                 let mut out = [None; 8];
                 let mut bme = None;
                 for (i, s) in sources.iter().enumerate().take(8) {
@@ -114,7 +153,7 @@ pub async fn sensor_task(mut pins: Pins) {
                 }
                 let _ = SENSE_DONE.try_send(out);
             }
-            Either::Second((s, on)) => pins.set_out(&s, on),
+            Either3::Second((s, on)) => pins.set_out(&s, on),
         }
     }
 }

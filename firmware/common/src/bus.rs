@@ -275,3 +275,13 @@ pub static SENSOR_GRACE_S: AtomicU32 = AtomicU32::new(0);
 pub static ADC_REQ: Signal<M, ()> = Signal::new();
 /// The analogue input in millivolts at the pin (-1 = none yet).
 pub static ADC_USER_MV: AtomicI32 = AtomicI32::new(-1);
+/// A wake pin fired while the node was running or asleep (nRF52: the board's
+/// pin watcher; the value is the pin id). The ESP32 reports the pin that woke
+/// it from deep sleep in `BOOT_WAKE_PIN` instead.
+pub static PIN_WAKE: Signal<M, u8> = Signal::new();
+/// The pins the board must arm before it sleeps: (pin id, true = wakes on a
+/// high level; the pull is against that level).
+pub static WAKE_PINS: Mutex<M, RefCell<heapless::Vec<(u8, bool), 2>>> = Mutex::new(RefCell::new(heapless::Vec::new()));
+/// ESP32: the pin that woke the chip from deep sleep (-1 = a timer, or a
+/// power-up). Set by board code before the node starts.
+pub static BOOT_WAKE_PIN: AtomicI32 = AtomicI32::new(-1);

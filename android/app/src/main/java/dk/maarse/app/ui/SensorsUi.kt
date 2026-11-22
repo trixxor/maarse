@@ -224,7 +224,10 @@ fun SensorDetailScreen(node: String, onBack: () -> Unit, onEdit: (String) -> Uni
         if (s == null) { Text("This sensor is not known to the host (any more)."); return@Column }
         Text(s.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(node + " · heard " + ago(s.ageS), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (s.alarm != null) Text("⚠ " + s.alarm, Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.errorContainer).padding(14.dp), fontWeight = FontWeight.SemiBold)
+        if (s.alarm != null) Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.errorContainer).padding(14.dp)) {
+            Text("⚠ " + s.alarm, fontWeight = FontWeight.SemiBold)
+            TextButton(onClick = { Sensors.dismiss(node) }) { Text("Mark as read") }
+        }
         else if (s.ageS > 7200) Text("No reading for ${s.ageS / 3600} hours. The battery may be flat, or the sensor is out of range.",
             Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.tertiaryContainer).padding(14.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -321,7 +324,19 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
         }
         STitle("Inputs and outputs")
         SCard {
-            for (s in setup.getJSONArray("sources").objs()) Text("#${s.getInt("chan")}  ${s.optString("name")} · ${s.getJSONObject("input").getString("type").replace('_', ' ')}", style = MaterialTheme.typography.bodyMedium)
+            for (s in setup.getJSONArray("sources").objs()) {
+                val inp = s.getJSONObject("input")
+                Text("#${s.getInt("chan")}  ${s.optString("name")} · ${inp.getString("type").replace('_', ' ')}", style = MaterialTheme.typography.bodyMedium)
+                if (inp.getString("type") == "gpio_in") Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Wake the sensor when this pin changes (a reed switch that closes, a button)", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    Switch(inp.optBoolean("wake"), { on ->
+                        inp.put("wake", on)
+                        // A switch that closes when it happens, to ground: no current flows while nothing happens.
+                        if (on) { inp.put("invert", true); inp.put("pull", "up") }
+                        Sensors.changed()
+                    })
+                }
+            }
             OutlinedButton(onClick = { dialog = "addsource" }) { Text("+ Add sensor or pin") }
         }
         STitle("Who gets it")

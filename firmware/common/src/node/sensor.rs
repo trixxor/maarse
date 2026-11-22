@@ -20,7 +20,7 @@ use heapless::Vec;
 use maarse_core::Address;
 use maarse_core::companion::{Event, Text};
 use maarse_core::content;
-use maarse_core::sensor::{self, Effect, Engine, MAX_RECIPE, Recipe, RecipeAssembler, Sample, Status, Value, op};
+use maarse_core::sensor::{self, Effect, Engine, Input, MAX_RECIPE, Recipe, RecipeAssembler, Sample, Status, Value, op};
 use maarse_crypto::PublicIdentity;
 use maarse_crypto::person::DeviceList;
 use rand_core::{CryptoRng, RngCore};
@@ -118,6 +118,12 @@ pub(super) struct Sensor {
     pub(super) sleeping: bool,
     /// No sleep before this (time to connect over USB after a start).
     grace_until: Instant,
+    /// The pin that woke the chip from deep sleep (reported at boot), until it is handled.
+    boot_wake: Option<u8>,
+    /// The source a wake pin belongs to, until the next cycle has read it: the
+    /// event may be over by then (a flap that opened for a second), so the
+    /// cycle takes the pin as 1.
+    wake_src: Option<u8>,
     /// The significant part of the state last written to flash.
     saved_sig: Vec<u8, 512>,
 }
@@ -193,6 +199,8 @@ impl Sensor {
             last_mail: None,
             sleeping: false,
             grace_until: Instant::now() + Duration::from_secs(bus::SENSOR_GRACE_S.load(Relaxed) as u64),
+            boot_wake: None,
+            wake_src: None,
             saved_sig: Vec::new(),
         }
     }
@@ -213,6 +221,9 @@ impl Sensor {
     /// When the sensor next needs the node's attention.
     pub(super) fn deadline(&self) -> Option<Instant> {
         self.engine.as_ref()?;
+        if self.force {
+            return Some(Instant::now());
+        }
         Some(match &self.phase {
             Phase::Idle => self.next_cycle,
             Phase::Sampling(t) => *t + SAMPLE_WAIT,
@@ -268,6 +279,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             self.sensor.recipe = bytes;
             self.sensor.engine = Some(Engine::new(r));
             self.sensor_restore();
+            let w = bus::BOOT_WAKE_PIN.load(Relaxed);
+            if w >= 0 {
+                self.sensor.boot_wake = Some(w as u8);
+            }
         }
     }
 
@@ -554,6 +569,28 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
+    /// A wake pin fired (a reed switch, a button): something happened that the
+    /// recipe waits for, so a cycle runs now instead of at the next timer.
+    pub(super) fn sensor_pin_wake(&mut self, pin: u8) {
+        let Some(engine) = self.sensor.engine.as_mut() else { return };
+        let Some(i) = engine
+            .recipe()
+            .sources
+            .iter()
+            .position(|s| matches!(s.input, Input::GpioIn { pin: p, wake: true, .. } if p == pin))
+        else {
+            return;
+        };
+        engine.pin_woke(i as u8, 1);
+        self.sensor.wake_src = Some(i as u8);
+        self.sensor.force = true;
+        if self.sensor.sleeping {
+            self.sensor.sleeping = false;
+            bus::RADIO_SLEEP.signal(false);
+        }
+        log("Sensor: woken by a pin");
+    }
+
     // ------------------------------------------------------------ cycles
 
     /// Called from the node's timer.
@@ -562,6 +599,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             return;
         }
         let now = Instant::now();
+        if let Some(pin) = self.sensor.boot_wake.take() {
+            self.sensor_pin_wake(pin);
+        }
         match self.sensor.phase {
             Phase::Idle => {
                 let on_usb = crate::power::EXT_POWER.load(Relaxed) == 1;
@@ -615,6 +655,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             if matches!(src.input, sensor::Input::GpioOut { .. }) {
                 values[i] = Some((self.sensor.outputs >> i & 1) as i32);
             }
+        }
+        // The pin that woke the node counts as 1 in this cycle, also if it is back to 0.
+        if let Some(i) = self.sensor.wake_src.take()
+            && (i as usize) < values.len()
+        {
+            values[i as usize] = Some(1);
         }
         let mut fx: Vec<Effect, 16> = Vec::new();
         engine.step(now_s, &values[..recipe.sources.len()], &mut fx);
@@ -878,6 +924,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let secs = self.sensor.next_cycle.saturating_duration_since(now).as_secs();
         if wants_sleep && !on_usb && !self.client_present() && secs >= MIN_SLEEP_S && now >= self.sensor.grace_until {
             self.sensor_save();
+            let pins = self.sensor.engine.as_ref().map(|e| e.recipe().wake_pins()).unwrap_or_default();
+            bus::WAKE_PINS.lock(|w| *w.borrow_mut() = pins);
             self.sensor.sleeping = true;
             bus::RADIO_SLEEP.signal(true);
             bus::SLEEP_REQ.signal(secs as u32);

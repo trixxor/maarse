@@ -13,7 +13,7 @@ use crate::bus::{
     Frame, Pkt, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_TX, RSTATS, TxReq, USB_IN, USB_OUT,
 };
 use core::sync::atomic::Ordering::Relaxed;
-use embassy_futures::select::{Either4, select4};
+use embassy_futures::select::{Either4, Either5, select4, select5};
 use embassy_futures::yield_now;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::{FnvIndexMap, FnvIndexSet};
@@ -500,13 +500,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         loop {
             if self.stamping.is_some() {
                 self.stamp_step();
-                match select4(RADIO_RX.receive(), USB_IN.receive(), select4(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive()), yield_now()).await {
+                match select4(RADIO_RX.receive(), USB_IN.receive(), select5(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive(), crate::bus::PIN_WAKE.wait()), yield_now()).await {
                     Either4::First((pkt, snr)) => self.on_radio(pkt, snr),
                     Either4::Second(frame) => self.on_frame(frame),
-                    Either4::Third(Either4::First(pkt)) => self.on_net(pkt),
-                    Either4::Third(Either4::Second(())) => self.toggle_radio(),
-                    Either4::Third(Either4::Third(c)) => self.on_display_cmd(c),
-                    Either4::Third(Either4::Fourth(values)) => self.sensor_samples(values),
+                    Either4::Third(Either5::First(pkt)) => self.on_net(pkt),
+                    Either4::Third(Either5::Second(())) => self.toggle_radio(),
+                    Either4::Third(Either5::Third(c)) => self.on_display_cmd(c),
+                    Either4::Third(Either5::Fourth(values)) => self.sensor_samples(values),
+                    Either4::Third(Either5::Fifth(pin)) => self.sensor_pin_wake(pin),
                     Either4::Fourth(()) => {
                         if Instant::now() >= self.next_deadline() {
                             self.on_timer();
@@ -516,13 +517,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 continue;
             }
             let deadline = self.next_deadline();
-            match select4(RADIO_RX.receive(), USB_IN.receive(), select4(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive()), Timer::at(deadline)).await {
+            match select4(RADIO_RX.receive(), USB_IN.receive(), select5(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive(), crate::bus::PIN_WAKE.wait()), Timer::at(deadline)).await {
                 Either4::First((pkt, snr)) => self.on_radio(pkt, snr),
                 Either4::Second(frame) => self.on_frame(frame),
-                Either4::Third(Either4::First(pkt)) => self.on_net(pkt),
-                Either4::Third(Either4::Second(())) => self.toggle_radio(),
-                Either4::Third(Either4::Third(c)) => self.on_display_cmd(c),
-                    Either4::Third(Either4::Fourth(values)) => self.sensor_samples(values),
+                Either4::Third(Either5::First(pkt)) => self.on_net(pkt),
+                Either4::Third(Either5::Second(())) => self.toggle_radio(),
+                Either4::Third(Either5::Third(c)) => self.on_display_cmd(c),
+                    Either4::Third(Either5::Fourth(values)) => self.sensor_samples(values),
+                    Either4::Third(Either5::Fifth(pin)) => self.sensor_pin_wake(pin),
                 Either4::Fourth(()) => self.on_timer(),
             }
         }

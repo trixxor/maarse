@@ -283,7 +283,8 @@ async fn main(spawner: Spawner) {
     }
 
     // ----- sensors, and restarts when a new recipe needs other pins -----
-    spawner.spawn(sensor::sensor_task(sensor_pins).unwrap());
+    let wake_pins = maarse_core::sensor::Recipe::from_bytes(&sensor_recipe).map(|r| r.wake_pins()).unwrap_or_default();
+    spawner.spawn(sensor::sensor_task(sensor_pins, wake_pins).unwrap());
     spawner.spawn(restart_task().unwrap());
 
     // ----- the node itself -----

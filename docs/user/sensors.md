@@ -40,14 +40,22 @@ after its next wake-up, so it can take up to one reading interval.
 - **Who gets the messages:** you choose, per sensor, who gets readings and
   who gets alarms. Up to four people can look after one sensor. Never the
   public channel.
-- **A door that opens for a short moment** can be missed if the sensor only
-  looks every 15 minutes. Set a shorter interval (for example 1 minute) for
-  doors; it costs hardly any battery.
+- **A door or a mailbox flap that opens for a short moment** is missed if the
+  sensor only looks now and then. Use the **Mailbox** starting point, or switch
+  on *Wake the sensor when this pin changes*: the switch then wakes the sensor
+  the moment it happens. Use a reed switch that **closes** when the flap opens,
+  between the pin and GND.
 - **No reading for hours:** a sensor that has gone quiet is shown in amber,
   because a flat battery is the most common reason.
 - **A pin or output that must stay on** (a heater relay) should not be used
   with a sleeping Heltec V4: outputs switch off while it sleeps.
 - **Plugged into USB the sensor stays awake**, so you can talk to it. After
   a power-up or reset it stays awake for ten minutes.
+
+## A mailbox
+
+Pick **Mailbox**. When post arrives and the flap moves the magnet, the switch wakes
+the sleeping sensor, which tells you "Post in the mailbox". The alarm stays
+until you press **Mark as read** on the sensor page.
 
 More technical details: [Sensor nodes](../sensors.md).

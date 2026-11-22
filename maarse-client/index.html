@@ -7828,7 +7828,11 @@ function renderSensors(box) {
   const del = el("button", { textContent: "Forget" });
   del.onclick = async () => { if (confirm("Forget " + snName(n) + " and its history on this host? The sensor itself is not changed.")) { await snApi("POST", "/api/sensors/forget", { node: n.node }); SN.sel = null; await snLoad(); snRenderSide(); renderChat(); } };
   head.append(fav, ren, now, edit, del); wrap.append(head);
-  if (n.alarm) wrap.append(el("div", { className: "sn-banner", textContent: "⚠ " + n.alarm.text + " · " + snAgo(Math.floor(Date.now() / 1000) - n.alarm.t) }));
+  if (n.alarm) {
+    const read = el("button", { textContent: "Mark as read", style: "margin-left:12px" });
+    read.onclick = async () => { await snApi("POST", "/api/sensors/dismiss", { node: n.node }); await snLoad(); snRenderSide(); renderChat(); };
+    wrap.append(el("div", { className: "sn-banner" }, "⚠ " + n.alarm.text + " · " + snAgo(Math.floor(Date.now() / 1000) - n.alarm.t), read));
+  }
   else if (n.age_s > 7200) wrap.append(el("div", { className: "sn-quiet", textContent: "No reading for " + snAgo(n.age_s).replace(" ago", "") + ". The battery may be flat, or the sensor is out of range." }));
   const chips = el("div", { className: "sn-chips" });
   for (const [label, s] of [["24 hours", 86400], ["7 days", 604800]]) {
@@ -7887,6 +7891,11 @@ const SN_TEMPLATES = {
   battery: { title: "Battery watch", text: "Warn when the battery is low.", make: () => ({ name: "Battery", sources: [snSrc(1, "voltage", { type: "battery" }, "Battery")],
     interval_s: 3600, rules: [{ id: 1, name: "Report", when: { type: "every", secs: 3600 }, then: [{ type: "report" }] },
       { id: 2, name: "Low battery", when: { type: "compare", chan: 1, op: "<", value: 3.5, clear: 3.7, count: 2 }, limit_min: 720, then: [{ type: "alarm", text: "Battery is low" }] }] }) },
+  mailbox: { title: "Mailbox", text: "A switch wakes it when post arrives.", make: () => ({ name: "Mailbox", interval_s: 3600,
+    sources: [snSrc(1, "digital", { type: "gpio_in", pin: 0, pull: "up", invert: true, wake: true }, "Mailbox flap"), snSrc(2, "voltage", { type: "battery" }, "Battery")],
+    rules: [{ id: 1, name: "Post arrived", when: { type: "edge", chan: 1, to: "high" }, then: [{ type: "alarm", text: "Post in the mailbox" }] },
+      { id: 2, name: "Report", when: { type: "every", secs: 3600 }, then: [{ type: "report" }] },
+      { id: 3, name: "Low battery", when: { type: "compare", chan: 2, op: "<", value: 3.5, clear: 3.7, count: 2 }, limit_min: 720, then: [{ type: "alarm", text: "Battery is low" }] }] }) },
   blank: { title: "Start empty", text: "Build every rule yourself.", make: () => ({ name: "", sources: [snSrc(1, "voltage", { type: "battery" }, "Battery")], rules: [] }) },
 };
 function snNewSetup(tpl) {
@@ -7969,6 +7978,17 @@ function snRenderA() {
     const rm = el("button", { textContent: "✕", title: "Remove", "aria-label": "Remove" });
     rm.onclick = () => { d.setup.sources = d.setup.sources.filter(x => x !== s); d.setup.rules = d.setup.rules.filter(r => r.when.chan !== s.chan); for (const r of d.setup.rules) r.then = r.then.filter(x => x.chan !== s.chan); snRenderA(); snRenderB(); snRecompile(); };
     inp.append(el("div", { className: "sn-src-row" }, el("span", { className: "sn-kw", textContent: "#" + s.chan, style: "min-width:26px" }), nm, rm, el("small", { className: "hint", textContent: snInputText(s.input, b), style: "flex-basis:100%;padding-left:34px" })));
+    if (s.input.type === "gpio_in") {
+      const wk = el("label", { className: "sn-line", style: "flex-wrap:nowrap;align-items:flex-start;padding:0 0 8px 34px" },
+        el("input", { type: "checkbox", checked: !!s.input.wake, onchange: e => {
+          s.input.wake = e.target.checked;
+          // A switch that closes when it happens, to ground: no current flows while nothing happens.
+          if (e.target.checked) { s.input.invert = true; s.input.pull = "up"; }
+          snRenderA(); snRecompile();
+        } }),
+        el("span", { className: "hint", textContent: "Wake the sensor when this pin changes (a reed switch that closes, a button). It catches short events, and the sensor sleeps until then." }));
+      inp.append(wk);
+    }
   }
   const add = el("select", { className: "sn-ghost" }); add.append(el("option", { value: "", textContent: "+ Add sensor or pin" }));
   const opts = [];

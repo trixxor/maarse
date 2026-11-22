@@ -147,8 +147,12 @@ pub enum Input {
     /// The chip's own temperature.
     ChipTemp,
     /// A digital input pin. `pin` is the board's pin number (see the
-    /// board's pin table); the value is 0 or 1 (after `invert`).
-    GpioIn { pin: u8, pull: Pull, invert: bool },
+    /// board's pin table); the value is 0 or 1 (after `invert`). With `wake`
+    /// the pin also wakes the node from sleep the moment its value becomes 1
+    /// (a reed switch in a mailbox, a button): a node that is woken by the
+    /// pin knows that something happened, instead of looking once per
+    /// cycle. A wake pin needs a pull against the level that wakes it.
+    GpioIn { pin: u8, pull: Pull, invert: bool, wake: bool },
     /// An analogue input: millivolts times `mul16 / 16`.
     Adc { pin: u8, mul16: u8 },
     /// A BME280 or BMP280 on I2C at `addr`; `what` 0 = temperature,
@@ -319,7 +323,7 @@ impl Input {
         match *self {
             Input::Battery => (1, 0, 0),
             Input::ChipTemp => (2, 0, 0),
-            Input::GpioIn { pin, pull, invert } => (3, pin, pull_to(pull) | (invert as u8) << 2),
+            Input::GpioIn { pin, pull, invert, wake } => (3, pin, pull_to(pull) | (invert as u8) << 2 | (wake as u8) << 3),
             Input::Adc { pin, mul16 } => (4, pin, mul16),
             Input::Bme280 { addr, what } => (5, addr, what),
             Input::Counter { pin, falling, pull } => (6, pin, pull_to(pull) | (falling as u8) << 2),
@@ -331,7 +335,7 @@ impl Input {
         Ok(match t {
             1 => Input::Battery,
             2 => Input::ChipTemp,
-            3 => Input::GpioIn { pin: a, pull: pull_from(b), invert: b & 4 != 0 },
+            3 => Input::GpioIn { pin: a, pull: pull_from(b), invert: b & 4 != 0, wake: b & 8 != 0 },
             4 if b > 0 => Input::Adc { pin: a, mul16: b },
             5 if b <= 2 && (a == 0x76 || a == 0x77) => Input::Bme280 { addr: a, what: b },
             6 => Input::Counter { pin: a, falling: b & 4 != 0, pull: pull_from(b) },
@@ -347,14 +351,29 @@ impl Recipe {
     /// restarts when a new recipe needs a different set.
     pub fn pin_plan(&self) -> u8 {
         let mut plan = 0;
+        let mut wake = 0u8;
         for s in &self.sources {
             match s.input {
                 Input::Bme280 { .. } => plan |= 1,
                 Input::Adc { .. } => plan |= 2,
+                Input::GpioIn { pin, wake: true, .. } => wake ^= pin.wrapping_mul(7).wrapping_add(1),
                 _ => {}
             }
         }
-        plan
+        // Bits 2-7: which pins wake the node (a different set restarts the board).
+        plan | (wake & 0x3f) << 2
+    }
+
+    /// The pins that wake the node: (pin, level that wakes it: true = high).
+    /// The pull is always against that level (`validate` checks it).
+    pub fn wake_pins(&self) -> Vec<(u8, bool), 2> {
+        let mut v = Vec::new();
+        for s in &self.sources {
+            if let Input::GpioIn { pin, invert, wake: true, .. } = s.input {
+                let _ = v.push((pin, !invert));
+            }
+        }
+        v
     }
 
     /// A source of this kind of input is read, not set.
@@ -381,6 +400,17 @@ impl Recipe {
                 return Err(RecipeError::Invalid);
             }
             chans |= 1 << s.chan;
+        }
+        let mut wake = 0;
+        for s in &self.sources {
+            if let Input::GpioIn { pull, invert, wake: true, .. } = s.input {
+                wake += 1;
+                // The pull must hold the pin at the level that does not wake the node.
+                let active_high = !invert;
+                if wake > 2 || (active_high && pull != Pull::Down) || (!active_high && pull != Pull::Up) {
+                    return Err(RecipeError::Invalid);
+                }
+            }
         }
         let n = self.sources.len() as u8;
         let src_ok = |i: u8| i < n && !self.is_output(i);
@@ -594,6 +624,21 @@ impl Engine {
     /// Seconds from one cycle to the next.
     pub fn interval_s(&self) -> u32 {
         self.interval_override.unwrap_or(self.recipe.interval_s) as u32
+    }
+
+    /// The node was woken by the pin of source `src`, whose value is now
+    /// `value`: a rule that waits for that pin to change fires in the next
+    /// `step`, whatever the pin looked like at the last cycle (the node may have
+    /// slept for hours, or restarted).
+    pub fn pin_woke(&mut self, src: u8, value: i32) {
+        for (i, r) in self.recipe.rules.iter().enumerate() {
+            if let Cond::Edge { src: s, .. } = r.cond
+                && s == src
+            {
+                self.st[i].seen = true;
+                self.st[i].prev = (value == 0) as i32;
+            }
+        }
     }
 
     /// Runs one cycle. `samples[i]` is the reading of source i (`None` when it
@@ -1201,7 +1246,7 @@ mod tests {
     fn frost_recipe() -> Recipe {
         let mut r = Recipe::default();
         r.sources.push(Source { chan: 1, kind: kind::TEMPERATURE, input: Input::Bme280 { addr: 0x76, what: 0 } }).unwrap();
-        r.sources.push(Source { chan: 2, kind: kind::DIGITAL, input: Input::GpioIn { pin: 3, pull: Pull::Up, invert: false } }).unwrap();
+        r.sources.push(Source { chan: 2, kind: kind::DIGITAL, input: Input::GpioIn { pin: 3, pull: Pull::Up, invert: false, wake: false } }).unwrap();
         r.sources.push(Source { chan: 3, kind: kind::DIGITAL, input: Input::GpioOut { pin: 2, active_low: false } }).unwrap();
         r.text.extend_from_slice(b"Cellar is below 10 C").unwrap();
         // Report every 15 minutes.
@@ -1361,6 +1406,48 @@ mod tests {
         assert!(fx.iter().any(|f| matches!(f, Effect::Alarm { rule: 2, raised: true, off: 0, len: 6, .. })), "{fx:?}");
         // Still high: no new alarm.
         assert!(run(&mut e, 20, Some(1500), Some(1)).is_empty());
+    }
+
+    #[test]
+    fn a_pin_wake_fires_the_edge_rule_even_after_a_long_sleep() {
+        let mut r = Recipe::default();
+        r.sources.push(Source { chan: 1, kind: kind::DIGITAL, input: Input::GpioIn { pin: 0, pull: Pull::Up, invert: true, wake: true } }).unwrap();
+        r.text.extend_from_slice(b"Post").unwrap();
+        r.rules.push(Rule { id: 1, cond: Cond::Edge { src: 0, to: Edge::High }, limit_5min: 0, actions: Vec::from_slice(&[Action::Alarm { off: 0, len: 4, to: 0 }]).unwrap() }).unwrap();
+        assert_eq!(Recipe::from_bytes(&r.to_bytes().unwrap()).unwrap(), r, "the wake flag survives");
+        assert_eq!(r.wake_pins().as_slice(), &[(0, false)], "an inverted pin wakes on a low level");
+        let mut e = Engine::new(r.clone());
+        let mut fx = Vec::new();
+        // Without the wake hint the first sight of a pin never fires (no earlier state).
+        e.step(0, &[Some(1)], &mut fx);
+        assert!(fx.is_empty());
+        // A fresh engine (a restart after a deep sleep) woken by the pin: post.
+        let mut e = Engine::new(r.clone());
+        e.pin_woke(0, 1);
+        e.step(5000, &[Some(1)], &mut fx);
+        assert!(fx.iter().any(|f| matches!(f, Effect::Alarm { raised: true, .. })), "{fx:?}");
+        // A pin left on 1 does not fire again at the next timer cycle.
+        fx.clear();
+        e.step(5900, &[Some(1)], &mut fx);
+        assert!(fx.is_empty());
+    }
+
+    #[test]
+    fn a_wake_pin_needs_a_pull_against_its_wake_level() {
+        let mut r = Recipe::default();
+        r.sources.push(Source { chan: 1, kind: kind::DIGITAL, input: Input::GpioIn { pin: 3, pull: Pull::Down, invert: false, wake: true } }).unwrap();
+        assert_eq!(r.validate(), Ok(()), "high wakes, a pull-down holds it low");
+        r.sources[0].input = Input::GpioIn { pin: 3, pull: Pull::Up, invert: false, wake: true };
+        assert_eq!(r.validate(), Err(RecipeError::Invalid), "a pull-up would wake it at once");
+        r.sources[0].input = Input::GpioIn { pin: 3, pull: Pull::None, invert: true, wake: true };
+        assert_eq!(r.validate(), Err(RecipeError::Invalid), "a floating wake pin wakes at random");
+        // The pin plan changes with the set of wake pins (the board restarts).
+        let a = {
+            r.sources[0].input = Input::GpioIn { pin: 3, pull: Pull::Up, invert: true, wake: true };
+            r.pin_plan()
+        };
+        r.sources[0].input = Input::GpioIn { pin: 4, pull: Pull::Up, invert: true, wake: true };
+        assert_ne!(a, r.pin_plan());
     }
 
     #[test]

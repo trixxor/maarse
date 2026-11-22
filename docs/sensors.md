@@ -43,8 +43,33 @@ There are no loops and no free-form code: a recipe cannot hang or damage a
 node. The designer shows how much of the 256 bytes is used and how much radio
 time a day the setup costs (typically 55 s, 0.06 %).
 
-A pin is read once per cycle. An opening that is shorter than the cycle is
-missed; the designer warns about it. Use a shorter interval for doors.
+A pin is normally read once per cycle, so an opening that is shorter than the
+cycle is missed. For doors, buttons and mailboxes switch on **Wake the sensor
+when this pin changes** for the pin: the pin then wakes the node from sleep
+the moment it changes, and a wake by the pin means that something happened.
+The designer warns if a pin rule has neither a wake pin nor a short interval.
+
+## Wake by pin (a mailbox)
+
+A **wake pin** wakes a sleeping node when its value becomes 1. An Edge rule
+("when the pin reads 1") then fires at once, whatever the pin looked like at the
+last cycle and even after hours of sleep or a restart. The wake cycle takes the
+pin as 1 even if the flap has closed again by then. The timer still wakes the
+node at its interval (for example once an hour to report the battery).
+
+- **Wiring:** use a *normally open* reed switch that **closes** when the flap
+  opens, between the pin and GND. The designer sets the pin to wake on a low
+  level, held high by a pull-up. A switch that is closed while nothing happens
+  would lose about 70 µA through the pull resistor.
+- **nRF52840:** any free pin (D0, D6, D7); the chip wakes on the pin's PORT
+  event in System ON.
+- **ESP32-S3 (Heltec V4):** only the RTC pins GPIO 3, 4 and 6. The pin is armed
+  before deep sleep and the node learns at boot which pin woke it.
+- A pin that is still at its wake level when the node goes to sleep (a flap
+  that is stuck open) is not armed, because it would wake the node at once,
+  every time; the next timer wake looks again.
+- A mailbox alarm never clears by itself. Press **Mark as read** on the sensor
+  page after you have emptied the box.
 
 ## Pins and boards
 
@@ -177,8 +202,10 @@ sends more than 400 readings an hour.
 - **ESP32 deep sleep forgets some state:** a "change by" baseline and the time
   of the last "every" report. Such rules report at every wake. Alarms, their
   "back to normal" state, outputs and unsent readings are kept.
-- **No counter input, no interrupt wake.** A pin is read per cycle. The nRF52
-  has no analogue input in this version.
+- **No counter input.** A wake pin gives one event per wake, not a count. The
+  nRF52 has no analogue input in this version.
+- **Pin wake is built and compiles for both boards, but not run on hardware.**
+  Check the wiring and the wake with a real reed switch before you rely on it.
 - **Claim by Bluetooth or from Android is not built.** The first setup needs
   a computer with USB; Android can change a sensor it already owns.
 - **The nj01 service** (up to 10 sensors per owner as a public service) is not

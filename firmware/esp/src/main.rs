@@ -476,6 +476,15 @@ async fn main(spawner: Spawner) {
             Some(Flex::new(p.GPIO40)),
             Some(Flex::new(p.GPIO41)),
         ];
+        // Woken from deep sleep by a wake pin (a reed switch): the node is told, so it
+        // knows something happened instead of looking again at the next timer.
+        for (i, f) in gpio.iter().enumerate() {
+            if let Some(f) = f
+                && f.caused_wakeup()
+            {
+                maarse_fw_common::bus::BOOT_WAKE_PIN.store(sensor::DIGITAL[i] as i32, core::sync::atomic::Ordering::Relaxed);
+            }
+        }
         (sensor::Pins { gpio, i2c }, gpio4_adc)
     };
     #[cfg(not(feature = "board-heltec-v4"))]

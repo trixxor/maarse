@@ -65,6 +65,8 @@ struct SensorNode {
     setup: Option<J>,
     window_start: i64,
     window_count: u32,
+    /// Alarms up to this time are read ("Mark as read"): they no longer show as active.
+    dismissed: i64,
 }
 
 #[derive(Default)]
@@ -112,6 +114,7 @@ impl Store {
                     first_seen: v["first_seen"].as_i64().unwrap_or(0),
                     last_seen: v["last_seen"].as_i64().unwrap_or(0),
                     setup: v.get("setup").filter(|s| !s.is_null()).cloned(),
+                    dismissed: v["dismissed"].as_i64().unwrap_or(0),
                     ..SensorNode::default()
                 };
                 if let Some(chs) = v["channels"].as_object() {
@@ -165,7 +168,7 @@ impl Store {
             map.insert(
                 hex(addr),
                 json!({"name": n.name, "favourite": n.favourite, "first_seen": n.first_seen, "last_seen": n.last_seen,
-                       "channels": chs, "alarms": alarms, "setup": n.setup}),
+                       "channels": chs, "alarms": alarms, "setup": n.setup, "dismissed": n.dismissed}),
             );
         }
         let tmp = path.with_extension("tmp");
@@ -226,6 +229,14 @@ impl Store {
         true
     }
 
+    /// Marks the alarms of a sensor as read.
+    pub fn dismiss(&mut self, node: &Address, now: i64) {
+        if let Some(n) = self.nodes.get_mut(node) {
+            n.dismissed = now;
+            self.dirty = true;
+        }
+    }
+
     /// The sensors this host has a setup for.
     pub fn managed(&self) -> Vec<Address> {
         self.nodes.iter().filter(|(_, n)| n.setup.is_some()).map(|(a, _)| *a).collect()
@@ -245,7 +256,7 @@ impl Store {
                 .collect();
             // An alarm is active while its last record is a "raised".
             let mut active: BTreeMap<u8, &AlarmRec> = BTreeMap::new();
-            for a in &n.alarms {
+            for a in n.alarms.iter().filter(|a| a.t > n.dismissed) {
                 if a.raised {
                     active.insert(a.rule, a);
                 } else {
@@ -329,7 +340,13 @@ fn input_from(v: &J) -> Result<Input, String> {
     Ok(match t {
         "battery" => Input::Battery,
         "chip_temp" => Input::ChipTemp,
-        "gpio_in" => Input::GpioIn { pin: u8_of(&v["pin"], "pin")?, pull: pull_from(&v["pull"]), invert: v["invert"].as_bool().unwrap_or(false) },
+        "gpio_in" => {
+            let invert = v["invert"].as_bool().unwrap_or(false);
+            let wake = v["wake"].as_bool().unwrap_or(false);
+            // A wake pin is held at the level that does not wake the node: the pull follows.
+            let pull = if wake { if invert { Pull::Up } else { Pull::Down } } else { pull_from(&v["pull"]) };
+            Input::GpioIn { pin: u8_of(&v["pin"], "pin")?, pull, invert, wake }
+        }
         "adc" => {
             let mul = v["mul"].as_f64().unwrap_or(1.0);
             if !(1.0 / 16.0..=15.0).contains(&mul) {
@@ -356,7 +373,7 @@ fn input_json(i: &Input) -> J {
     match *i {
         Input::Battery => json!({"type": "battery"}),
         Input::ChipTemp => json!({"type": "chip_temp"}),
-        Input::GpioIn { pin, pull, invert } => json!({"type": "gpio_in", "pin": pin, "pull": pull_name(pull), "invert": invert}),
+        Input::GpioIn { pin, pull, invert, wake } => json!({"type": "gpio_in", "pin": pin, "pull": pull_name(pull), "invert": invert, "wake": wake}),
         Input::Adc { pin, mul16 } => json!({"type": "adc", "pin": pin, "mul": mul16 as f64 / 16.0}),
         Input::Bme280 { addr, what } => {
             let what = ["temperature", "humidity", "pressure"][what.min(2) as usize];
@@ -418,6 +435,10 @@ pub fn compile(setup: &J) -> Result<Recipe, String> {
     for s in setup["sources"].as_array().ok_or("The setup has no sources")? {
         let src = Source { chan: u8_of(&s["chan"], "chan")?, kind: kind_from(&s["kind"])?, input: input_from(&s["input"])? };
         r.sources.push(src).map_err(|_| format!("At most {} sources", sensor::MAX_SOURCES))?;
+    }
+    // Only some pins can wake a sleeping ESP32 (the RTC pins).
+    if setup["board"].as_str() == Some("heltec_v4") && r.wake_pins().iter().any(|(p, _)| ![3, 4, 6].contains(p)) {
+        return Err("On the Heltec V4 only GPIO 3, 4 and 6 can wake the sensor".into());
     }
     let sources: Vec<Source> = r.sources.to_vec();
     for (i, rule) in setup["rules"].as_array().ok_or("The setup has no rules")?.iter().enumerate() {
@@ -587,7 +608,11 @@ fn scenario_value(scenario: &str, s: &Source, t: u32) -> Option<i32> {
 pub fn simulate(r: &Recipe, scenario: &str) -> J {
     let mut engine = sensor::Engine::new(r.clone());
     let mut outputs = 0u8;
-    let (mut t, end) = (0u32, 24 * 3600);
+    let (mut next_reg, end) = (0u32, 24 * 3600);
+    // A node with a wake pin is woken the moment the pin changes, between two cycles.
+    let wake_idx = r.sources.iter().position(|s| matches!(s.input, Input::GpioIn { wake: true, .. }));
+    let wake_events: Vec<u32> = if wake_idx.is_some() && scenario == "door" { vec![490 * 60, 870 * 60] } else { Vec::new() };
+    let mut ei = 0usize;
     let mut times: Vec<u32> = Vec::new();
     let mut series: BTreeMap<u8, Vec<J>> = BTreeMap::new();
     let mut events: Vec<J> = Vec::new();
@@ -595,7 +620,11 @@ pub fn simulate(r: &Recipe, scenario: &str) -> J {
     let mut last_out_t = 0u32;
     let mut bytes_sent = 0usize;
     let mut cycles = 0u32;
-    while t < end {
+    while next_reg < end || ei < wake_events.len() {
+        let (t, is_event) = match wake_events.get(ei) {
+            Some(&e) if e <= next_reg || next_reg >= end => (e, true),
+            _ => (next_reg, false),
+        };
         let silent = scenario == "silent" && t >= 10 * 3600;
         let mut values: Vec<Option<i32>> = r
             .sources
@@ -605,6 +634,10 @@ pub fn simulate(r: &Recipe, scenario: &str) -> J {
             .collect();
         if values.is_empty() {
             values.push(None);
+        }
+        if is_event && let Some(i) = wake_idx {
+            values[i] = Some(1);
+            engine.pin_woke(i as u8, 1);
         }
         if !silent {
             cycles += 1;
@@ -659,7 +692,11 @@ pub fn simulate(r: &Recipe, scenario: &str) -> J {
                 }
             }
         }
-        t += engine.interval_s().max(sensor::MIN_INTERVAL_S as u32);
+        if is_event {
+            ei += 1;
+        } else {
+            next_reg += engine.interval_s().max(sensor::MIN_INTERVAL_S as u32);
+        }
     }
     if outputs != 0 {
         out_on_s += end - last_out_t;
@@ -684,8 +721,8 @@ fn compile_json(setup: &J) -> J {
             }
             // Pins are read once per cycle: a short event between two cycles is missed.
             let pin_rule = r.rules.iter().any(|ru| matches!(ru.cond, Cond::Edge { .. }));
-            if pin_rule && r.interval_s > 120 {
-                warnings.push("A pin is read once per cycle: an opening shorter than the interval is missed. Use a shorter interval to catch short events");
+            if pin_rule && r.interval_s > 120 && r.wake_pins().is_empty() {
+                warnings.push("A pin is read once per cycle: an opening shorter than the interval is missed. Switch on \"Wake the sensor\" for the pin, or use a shorter interval");
             }
             if r.report_to == 0 && r.alarm_to == 0 {
                 warnings.push("Nobody receives anything: choose who gets the readings and alarms");
@@ -764,6 +801,12 @@ pub fn api(method: &str, path: &str, query: &str, body: &[u8]) -> Option<(&'stat
                 n.favourite = f;
             }
             store.dirty = true;
+            ok(json!({"ok": true}))
+        }
+        ("POST", "/dismiss") => {
+            let Ok(v) = parsed() else { return bad("not JSON") };
+            let Some(node) = v["node"].as_str().and_then(parse_addr) else { return bad("node?") };
+            store.dismiss(&node, unix_now());
             ok(json!({"ok": true}))
         }
         ("POST", "/forget") => {
@@ -873,6 +916,34 @@ mod tests {
     }
 
     #[test]
+    fn a_wake_pin_catches_the_post_that_a_slow_timer_misses() {
+        let setup = |wake: bool| json!({"v": 1, "board": "xiao_nrf52840", "interval_s": 3600, "sleep": true,
+            "report_to": {"owners": [0]}, "alarm_to": {"owners": [0]},
+            "sources": [{"chan": 1, "kind": "digital", "input": {"type": "gpio_in", "pin": 0, "pull": "up", "invert": true, "wake": wake}}],
+            "rules": [{"id": 1, "when": {"type": "edge", "chan": 1, "to": "high"}, "then": [{"type": "alarm", "text": "Post in the mailbox"}]}]});
+        let count = |wake: bool| {
+            let r = compile(&setup(wake)).unwrap();
+            let sim = simulate(&r, "door");
+            sim["events"].as_array().unwrap().iter().filter(|e| e["type"] == "alarm" && e["raised"] == true).count()
+        };
+        assert_eq!(count(true), 2, "woken by the pin at 08:10 and 14:30");
+        assert_eq!(count(false), 0, "an hourly look misses a 20-minute opening at 08:10 only if it falls between looks");
+        // A wake pin gets its pull from the wake level, and survives the round trip.
+        let r = compile(&setup(true)).unwrap();
+        assert!(matches!(r.sources[0].input, Input::GpioIn { pull: Pull::Up, invert: true, wake: true, .. }));
+        assert_eq!(r.wake_pins().as_slice(), &[(0, false)]);
+        let again = compile(&decompile(&Recipe::from_bytes(&r.to_bytes().unwrap()).unwrap())).unwrap();
+        assert_eq!(again, r);
+        // On the Heltec V4 only RTC pins can wake the node.
+        let mut s = setup(true);
+        s["board"] = json!("heltec_v4");
+        s["sources"][0]["input"]["pin"] = json!(38);
+        assert!(compile(&s).unwrap_err().contains("only GPIO 3, 4 and 6"));
+        s["sources"][0]["input"]["pin"] = json!(4);
+        assert!(compile(&s).is_ok());
+    }
+
+    #[test]
     fn readings_are_stored_deduplicated_and_listed() {
         let mut store = Store::default();
         let node = Address([7; 16]);
@@ -895,6 +966,11 @@ mod tests {
         let c = sensor::encode_alarm(1, false, 0, Value { chan: 1, kind: kind::TEMPERATURE, value: 1300 }, "Frost");
         store.ingest(node, &c, 10_200);
         assert!(store.list_json(10_200)[0]["alarm"].is_null());
+        // "Mark as read" clears an alarm that never clears itself (a mailbox).
+        store.ingest(node, &a, 10_300);
+        assert!(!store.list_json(10_300)[0]["alarm"].is_null());
+        store.dismiss(&node, 10_400);
+        assert!(store.list_json(10_400)[0]["alarm"].is_null());
     }
 
     #[test]

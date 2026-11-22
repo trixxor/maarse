@@ -56,7 +56,7 @@ impl Pins {
         match s.input {
             Input::Battery => Some(power::BATTERY_MV.load(Relaxed) as i32).filter(|v| *v > 0),
             Input::ChipTemp => power::temperature_dc().map(|t| t as i32 * 10),
-            Input::GpioIn { pin, pull: p, invert } => {
+            Input::GpioIn { pin, pull: p, invert, .. } => {
                 let f = self.pin(pin)?;
                 f.set_output_enable(false);
                 f.apply_input_config(&InputConfig::default().with_pull(pull(p)));
@@ -139,6 +139,24 @@ pub async fn sleep_task(lpwr: esp_hal::peripherals::LPWR<'static>) {
             core::mem::forget(Output::new(esp_hal::peripherals::GPIO37::steal(), Level::Low, OutputConfig::default()));
             core::mem::forget(Output::new(esp_hal::peripherals::GPIO36::steal(), Level::High, OutputConfig::default()));
         }
+    }
+    // Wake pins (a reed switch, a button): the pin holds its level through the
+    // sleep with its pull, and the opposite level wakes the chip. A pin that is
+    // already at its wake level is not armed (it would wake the chip at once, every
+    // time); the next timer wake looks again.
+    let wake = maarse_fw_common::bus::WAKE_PINS.lock(|w| w.borrow().clone());
+    for (pin, high) in wake {
+        // SAFETY: the pin belongs to the sensor task, which is idle now; the chip sleeps next.
+        let mut f = esp_hal::gpio::Flex::new(unsafe { esp_hal::gpio::AnyPin::steal(pin) });
+        f.set_output_enable(false);
+        f.apply_input_config(&InputConfig::default().with_pull(if high { HPull::Down } else { HPull::Up }));
+        f.set_input_enable(true);
+        Timer::after_micros(300).await;
+        if f.is_high() != high {
+            let _ = f.apply_wakeup_config(&esp_hal::gpio::WakeupConfig::default().with_low_power_path(true));
+            f.listen(if high { esp_hal::gpio::Event::HighLevel } else { esp_hal::gpio::Event::LowLevel });
+        }
+        core::mem::forget(f);
     }
     let mut lp = esp_hal::rtc_cntl::sleep::LowPower::new(lpwr);
     lp.set_wakeup_deadline(esp_hal::time::Instant::now() + esp_hal::time::Duration::from_secs(secs as u64));

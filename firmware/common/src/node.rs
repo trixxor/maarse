@@ -7,12 +7,13 @@
 mod ext;
 mod identity;
 mod range;
+mod sensor;
 
 use crate::bus::{
     Frame, Pkt, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_TX, RSTATS, TxReq, USB_IN, USB_OUT,
 };
 use core::sync::atomic::Ordering::Relaxed;
-use embassy_futures::select::{Either3, Either4, select3, select4};
+use embassy_futures::select::{Either4, select4};
 use embassy_futures::yield_now;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::{FnvIndexMap, FnvIndexSet};
@@ -157,6 +158,30 @@ pub trait Settings {
         Default::default()
     }
 
+    /// Stores the sensor recipe (empty = none). Returns `false` if it could
+    /// not be stored. Default: cannot.
+    fn save_sensor_recipe(&mut self, _recipe: &[u8]) -> bool {
+        false
+    }
+    /// The stored sensor recipe; empty if none.
+    fn load_sensor_recipe(&mut self) -> heapless::Vec<u8, 256> {
+        heapless::Vec::new()
+    }
+    /// Stores the sensor owners (see node/sensor.rs). Default: cannot.
+    fn save_owners(&mut self, _owners: &[u8]) -> bool {
+        false
+    }
+    fn load_owners(&mut self) -> heapless::Vec<u8, 816> {
+        heapless::Vec::new()
+    }
+    /// What a sensor node needs after a deep sleep (see node/sensor.rs).
+    fn save_sensor_state(&mut self, _state: &[u8]) -> bool {
+        false
+    }
+    fn load_sensor_state(&mut self) -> heapless::Vec<u8, 512> {
+        heapless::Vec::new()
+    }
+
     // ----- mailbox (optional; default: none) -----
 
     /// Stores an encrypted message for `recipient`. Returns an ID.
@@ -273,6 +298,8 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     files: files::Files,
     /// Diagnostics, battery and sharing (see node/ext.rs).
     ext: ext::Ext,
+    /// Sensor recipe, owners and cycles (see node/sensor.rs).
+    sensor: sensor::Sensor,
     ota: crate::ota::OtaManager,
     /// Last counter in an outgoing control command (must increase strictly).
     last_control: u32,
@@ -397,6 +424,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             region_names: RegionNames::new(),
             files: files::Files::new(),
             ext: ext::Ext::new(),
+            sensor: sensor::Sensor::new(),
             ota: crate::ota::OtaManager::new(),
             last_control: 0,
             range: range::Range::new(),
@@ -436,9 +464,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         n.ext.site = n.settings.load_site();
         let (strict, names) = n.settings.load_regions();
         n.apply_regions(strict, names);
+        n.sensor_load();
         n.admins = n.settings.load_admins();
         if let Some(mut limits) = n.settings.load_control_limits() {
-            limits.retain(|(admin, _)| n.admins.contains(admin));
+            limits.retain(|(admin, _)| n.admins.contains(admin) || n.sensor.is_owner_person(admin));
             for &(admin, limit) in &limits {
                 let _ = n.control_seen.insert(admin, limit);
             }
@@ -471,12 +500,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         loop {
             if self.stamping.is_some() {
                 self.stamp_step();
-                match select4(RADIO_RX.receive(), USB_IN.receive(), select3(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive()), yield_now()).await {
+                match select4(RADIO_RX.receive(), USB_IN.receive(), select4(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive()), yield_now()).await {
                     Either4::First((pkt, snr)) => self.on_radio(pkt, snr),
                     Either4::Second(frame) => self.on_frame(frame),
-                    Either4::Third(Either3::First(pkt)) => self.on_net(pkt),
-                    Either4::Third(Either3::Second(())) => self.toggle_radio(),
-                    Either4::Third(Either3::Third(c)) => self.on_display_cmd(c),
+                    Either4::Third(Either4::First(pkt)) => self.on_net(pkt),
+                    Either4::Third(Either4::Second(())) => self.toggle_radio(),
+                    Either4::Third(Either4::Third(c)) => self.on_display_cmd(c),
+                    Either4::Third(Either4::Fourth(values)) => self.sensor_samples(values),
                     Either4::Fourth(()) => {
                         if Instant::now() >= self.next_deadline() {
                             self.on_timer();
@@ -486,12 +516,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 continue;
             }
             let deadline = self.next_deadline();
-            match select4(RADIO_RX.receive(), USB_IN.receive(), select3(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive()), Timer::at(deadline)).await {
+            match select4(RADIO_RX.receive(), USB_IN.receive(), select4(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive()), Timer::at(deadline)).await {
                 Either4::First((pkt, snr)) => self.on_radio(pkt, snr),
                 Either4::Second(frame) => self.on_frame(frame),
-                Either4::Third(Either3::First(pkt)) => self.on_net(pkt),
-                Either4::Third(Either3::Second(())) => self.toggle_radio(),
-                Either4::Third(Either3::Third(c)) => self.on_display_cmd(c),
+                Either4::Third(Either4::First(pkt)) => self.on_net(pkt),
+                Either4::Third(Either4::Second(())) => self.toggle_radio(),
+                Either4::Third(Either4::Third(c)) => self.on_display_cmd(c),
+                    Either4::Third(Either4::Fourth(values)) => self.sensor_samples(values),
                 Either4::Fourth(()) => self.on_timer(),
             }
         }
@@ -523,7 +554,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             }
             return d;
         }
+        if self.sensor.sleeping {
+            // Asleep: only the sensor's own wake-up and the battery check.
+            return self.sensor.deadline().map_or(self.ext.next_power, |t| t.min(self.ext.next_power));
+        }
         let mut d = self.next_announce.min(self.ext.next_power);
+        if let Some(t) = self.sensor.deadline() {
+            d = d.min(t);
+        }
         if self.auto_role {
             d = d.min(self.next_auto_check);
         }
@@ -646,12 +684,18 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             self.next_mobile_check = Instant::now() + Duration::from_secs(5);
             return;
         }
+        if self.sensor.sleeping {
+            self.power_tick();
+            self.sensor_tick();
+            return;
+        }
         self.hold_direct_step();
         let actions = self.router.tick(now_ms());
         self.apply(actions);
         self.file_tick();
         self.power_tick();
         self.range_tick();
+        self.sensor_tick();
         self.check_settled();
         if Instant::now() >= self.next_mobile_check {
             self.next_mobile_check = Instant::now() + Duration::from_secs(15);
@@ -762,6 +806,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     }
                 }
                 Action::Acked { msg_id } => {
+                    self.sensor_on_ack(msg_id);
                     self.outbox.retain(|e| e.0 != msg_id);
                     if let Some(id) = self.mail_inflight.remove(&msg_id) {
                         self.settings.mail_remove(id);
@@ -970,6 +1015,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                                 .map(|e| e.0);
                             if let Some(msg_id) = found {
                                 self.outbox.retain(|e| e.0 != msg_id);
+                                self.sensor_on_ack(msg_id);
                                 emit(&Event::Acked { msg_id });
                             }
                         }
@@ -1043,7 +1089,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let Ok(cmd) = Command::decode(&frame) else {
             return err(0, error_code::BAD_FRAME, "invalid frame");
         };
-        let Some(cmd) = self.ext_command(cmd).and_then(|c| self.range_command(c)) else {
+        let Some(cmd) = self.ext_command(cmd).and_then(|c| self.range_command(c)).and_then(|c| self.sensor_command(c)) else {
             self.set_modem(false, &[]);
             return;
         };
@@ -1131,6 +1177,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::GetPerson => err(0, error_code::NOT_OVER_TCP, "Linked devices need maarse-host"),
             // Firmware sends a file in one go; nothing to stop.
             Command::CancelFile { .. } => {}
+            // Handled by `sensor_command` before this match.
+            Command::Sensor { .. } => {}
             Command::SendAlert { req, .. } => err(req, error_code::NOT_OVER_TCP, "Alerts are issued by maarse-host with an issuer key"),
             Command::RequestPage { req, dest, path } => match content::page_request(&path) {
                 Some(plain) => self.send_content(req, dest, &plain),
@@ -1174,9 +1222,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         | Command::OtaBegin { .. }
                         | Command::OtaChunk { .. }
                         | Command::OtaEnd { .. }
-                        | Command::OtaStatus)
+                        | Command::OtaStatus
+                        | Command::Sensor { .. })
                 ) {
-                    return err(req, error_code::BAD_FRAME, "Only status, radio, role and firmware can be controlled remotely");
+                    return err(req, error_code::BAD_FRAME, "Only status, radio, role, firmware and sensors can be controlled remotely");
                 }
                 let Some(now) = self.unix_now() else {
                     return err(req, error_code::BAD_FRAME, "The clock is not set (connect again)");
@@ -1193,12 +1242,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::SetAdmins { admins } => {
                 self.admins = admins;
                 self.settings.save_admins(&self.admins);
-                self.control_limits.retain(|(admin, _)| self.admins.contains(admin));
+                self.control_limits.retain(|(admin, _)| self.admins.contains(admin) || self.sensor.is_owner_person(admin));
                 let mut i = self.control_seen.len();
                 while i > 0 {
                     i -= 1;
                     if let Some(admin) = self.control_seen.keys().nth(i).copied()
                         && !self.admins.contains(&admin)
+                        && !self.sensor.is_owner_person(&admin)
                     {
                         self.control_seen.remove(&admin);
                     }
@@ -1304,6 +1354,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// Encrypts with forward secrecy if the other party can, otherwise static.
     /// Encrypts and sends a direct message (text or page request).
     fn send_content(&mut self, req: u16, dest: Address, plain: &[u8]) {
+        self.send_content_ret(req, dest, plain);
+    }
+
+    /// Like `send_content`; returns the message ID if the message was sent.
+    fn send_content_ret(&mut self, req: u16, dest: Address, plain: &[u8]) -> Option<u64> {
         // Text is compressed for a node that says it can read it (about 40 %
         // shorter for short chat messages).
         let z;
@@ -1316,7 +1371,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let Some(recipient) = self.known.get(&dest).map(|(id, _)| *id) else {
             // Ask the network for the key; the message goes when it comes.
             let Ok(p) = heapless::Vec::from_slice(plain) else {
-                return err(req, error_code::TOO_LARGE, "The message is too long");
+                err(req, error_code::TOO_LARGE, "The message is too long");
+                return None;
             };
             if self.await_key.is_full() {
                 let (r, ..) = self.await_key.remove(0);
@@ -1324,12 +1380,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             }
             let _ = self.await_key.push((req, dest, p, Instant::now()));
             self.ask_key(dest);
-            return log("The recipient has not been heard yet: asking the network for its key");
+            log("The recipient has not been heard yet: asking the network for its key");
+            return None;
         };
         self.pin(dest);
         let mut ct = [0u8; 255];
         let Ok(n) = self.seal(&recipient, plain, &mut ct) else {
-            return err(req, error_code::TOO_LARGE, "The message is too long");
+            err(req, error_code::TOO_LARGE, "The message is too long");
+            return None;
         };
         let mut token = [0u8; 16];
         self.rng.fill_bytes(&mut token);
@@ -1346,8 +1404,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     }
                     let _ = self.outbox.push((msg_id, dest, heapless::Vec::from_slice(&st[..m]).unwrap_or_default(), Instant::now(), false));
                 }
+                Some(msg_id)
             }
-            Err(_) => err(req, error_code::QUEUE_FULL, "The queue is full"),
+            Err(_) => {
+                err(req, error_code::QUEUE_FULL, "The queue is full");
+                None
+            }
         }
     }
 
@@ -1461,12 +1523,16 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             let _ = node.send_plain(from, &plain);
         };
         let deny = |msg: &str| Event::Error { req: 0, code: error_code::BAD_FRAME, text: text(msg.as_bytes()) };
-        if !self.admins.contains(&from) {
+        // A device of an owner (a person) is an administrator; the counter is
+        // the person's, shared by all their devices.
+        let owner = self.sensor.owner_person(&from);
+        let key = owner.unwrap_or(from);
+        if owner.is_none() && !self.admins.contains(&from) {
             return reply(self, deny("You are not an administrator of this node"));
         }
         // The counter (the sender's clock) must increase; if we know the time, it may
         // be at most 10 minutes from ours.
-        let last = self.control_seen.get(&from).copied().unwrap_or(0);
+        let last = self.control_seen.get(&key).copied().unwrap_or(0);
         let fresh = self.unix_now().is_none_or(|now| counter.abs_diff(now) <= 600);
         if counter <= last || !fresh {
             return;
@@ -1474,11 +1540,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let command = Command::decode(frame);
         let updates_node = matches!(&command,
             Ok(Command::SetRadio(_) | Command::SetRole { .. } | Command::OtaBegin { .. }
-                | Command::OtaChunk { .. } | Command::OtaEnd { .. }));
-        if updates_node && !self.reserve_control_counter(from, counter) {
+                | Command::OtaChunk { .. } | Command::OtaEnd { .. }))
+            || matches!(&command, Ok(Command::Sensor { op, .. })
+                if matches!(*op, maarse_core::sensor::op::WRITE_RECIPE | maarse_core::sensor::op::ADD_OWNER | maarse_core::sensor::op::REMOVE_OWNER));
+        if updates_node && !self.reserve_control_counter(key, counter) {
             return reply(self, deny("Could not reserve a persistent remote command counter"));
         }
-        let _ = self.control_seen.insert(from, counter);
+        let _ = self.control_seen.insert(key, counter);
         match command {
             Ok(Command::GetStats) => {
                 let items = self.stats();
@@ -1514,6 +1582,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 }
                 Err(e) => reply(self, deny(e)),
             },
+            Ok(Command::Sensor { op, data, .. }) => {
+                for (ev, d) in self.sensor_exec(false, op, &data) {
+                    reply(self, Event::Sensor { node: Address([0; 16]), op: ev, data: d });
+                }
+            }
             Ok(
                 c @ (Command::OtaBegin { .. }
                 | Command::OtaChunk { .. }
@@ -1632,6 +1705,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                             emit(&Event::RemoteReply { from, frame: text(frame) })
                         }
                         Some(Content::PageRequest(_)) => log("Page request: this node has no pages"),
+                        Some(Content::Person(content::person::LIST, list)) => self.sensor_person_list(list),
                         _ => {}
                     },
                     Err(CryptoError::UnknownSender(sender)) => {

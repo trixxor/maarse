@@ -241,3 +241,37 @@ pub static RADIO_DIAG: [AtomicU32; 4] = [
     AtomicU32::new(0xFFFF_FFFF),
     AtomicU32::new(0xFFFF_FFFF),
 ];
+
+// ---------- sensor nodes (see node/sensor.rs) ----------
+
+/// The node asks the board to read these sources.
+pub static SENSE_REQ: Signal<M, heapless::Vec<maarse_core::sensor::Source, 8>> = Signal::new();
+/// The board's answer: the reading of each source (None = could not be read).
+pub static SENSE_DONE: Channel<M, [Option<i32>; 8], 1> = Channel::new();
+/// The node sets an output source.
+pub static SET_OUT: Channel<M, (maarse_core::sensor::Source, bool), 4> = Channel::new();
+/// The node asks the board to sleep for this many seconds (deep sleep on the
+/// ESP32; on the nRF52 the node's own timer wakes it).
+pub static SLEEP_REQ: Signal<M, u32> = Signal::new();
+/// true = switch the LoRa radio off (sleep), false = on again.
+pub static RADIO_SLEEP: Signal<M, bool> = Signal::new();
+/// The radio loop has put the SX1262 to sleep.
+pub static RADIO_ASLEEP: Signal<M, ()> = Signal::new();
+/// Seconds added to the uptime to give a clock that also runs through deep
+/// sleep (set by board code that deep sleeps; 0 otherwise).
+pub static MONO_BASE_S: AtomicU32 = AtomicU32::new(0);
+/// What a sensor node keeps across a deep sleep (see `node/sensor.rs`): the
+/// node writes it before it sleeps, board code keeps it in memory that
+/// survives and puts it back at boot, before the node starts.
+pub static SENSOR_STATE: Mutex<M, RefCell<heapless::Vec<u8, 512>>> = Mutex::new(RefCell::new(heapless::Vec::new()));
+/// Set by board code that deep sleeps (the ESP32): the node keeps what
+/// it needs to know after a wake in flash, when it changes (see node/sensor.rs).
+pub static SENSOR_PERSIST: AtomicBool = AtomicBool::new(false);
+/// Seconds after a start (not a timer wake) during which a sensor node does
+/// not sleep, so there is time to connect over USB and set it up. Set by board
+/// code that cannot see USB power (the ESP32).
+pub static SENSOR_GRACE_S: AtomicU32 = AtomicU32::new(0);
+/// The sensor task asks for a fresh reading of the analogue input.
+pub static ADC_REQ: Signal<M, ()> = Signal::new();
+/// The analogue input in millivolts at the pin (-1 = none yet).
+pub static ADC_USER_MV: AtomicI32 = AtomicI32::new(-1);

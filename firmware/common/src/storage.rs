@@ -21,6 +21,11 @@
 //!   Older flash without "ROL1" (erased = 0xFF) gives repeater; without "REG1"
 //!   no regions (forward everything).
 //!
+//! * Sensor recipe and owners (one sector, 4 KB, optional:
+//!   [`FlashSettings::with_sensor`]): `"SEN1"` + length + recipe at 0x000,
+//!   `"OWN1"` + length + owners at 0x200, `"STA1"` + length + the state a
+//!   deep sleep must keep at 0x560 (see `node/sensor.rs`).
+//!
 //! * Known contacts (one sector, 4 KB, optional: [`FlashSettings::with_known`]):
 //!   `"KNW1"` at 0x000, then 63 slots of 64 bytes from 0x040, each a public
 //!   identity (signing key | DH key) or erased (0xFF). A new contact goes into
@@ -83,6 +88,19 @@ const USED: usize = (CONTROL_OFF + CONTROL_LEN).div_ceil(4) * 4;
 const _: () = assert!(SITE_OFF + SITE_LEN <= CONTROL_OFF && USED <= PAGE as usize);
 const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
 
+/// The sensor sector: "SEN1" + length (u16) + recipe (at most 256) at 0x000,
+/// "OWN1" + length (u16) + owners (at most 816) at 0x200.
+const SENSOR_AREA: usize = 0x780;
+const SEN_MAGIC: &[u8; 4] = b"SEN1";
+const SEN_MAX: usize = 256;
+const OWN_OFF: usize = 0x200;
+const OWN_MAGIC: &[u8; 4] = b"OWN1";
+const OWN_MAX: usize = 816;
+const STA_OFF: usize = 0x560;
+const STA_MAGIC: &[u8; 4] = b"STA1";
+const STA_MAX: usize = 512;
+const _: () = assert!(OWN_OFF + 6 + OWN_MAX <= STA_OFF && 6 + SEN_MAX <= OWN_OFF && STA_OFF + 6 + STA_MAX <= SENSOR_AREA);
+
 const KNOWN_MAGIC: &[u8; 4] = b"KNW1";
 const KNOWN_FIRST: u32 = 0x40;
 const KNOWN_SLOT: u32 = 64;
@@ -111,6 +129,8 @@ pub struct FlashSettings<F: NorFlash + 'static> {
     ota: Option<OtaConfig<F>>,
     /// The known contacts sector (4 KB, aligned), if the board has one.
     known: Option<u32>,
+    /// The sensor sector (4 KB, aligned), if the board has one.
+    sensor: Option<u32>,
 }
 
 /// Firmware update: where the staging area and the meta page are (absolute
@@ -134,7 +154,54 @@ impl<F: NorFlash> FlashSettings<F> {
             buf,
             ota: None,
             known: None,
+            sensor: None,
         }
+    }
+
+    /// Keeps the sensor recipe and the owners in the 4 KB sector at `addr`
+    /// (see the module docs).
+    pub fn with_sensor(mut self, addr: u32) -> Self {
+        self.sensor = Some(addr);
+        self
+    }
+
+    /// Reads the used part of the sensor sector into `self.buf`.
+    fn sensor_read(&mut self) -> Option<u32> {
+        let a = self.sensor?;
+        self.flash.read(a, &mut self.buf[..SENSOR_AREA]).ok()?;
+        Some(a)
+    }
+
+    /// The bytes stored at `off` behind `magic` and a length, if any.
+    fn sensor_get<const N: usize>(&mut self, off: usize, magic: &[u8; 4]) -> heapless::Vec<u8, N> {
+        let mut v = heapless::Vec::new();
+        if self.sensor_read().is_none() {
+            return v;
+        }
+        let b = &self.buf[off..];
+        if &b[..4] == magic {
+            let n = u16::from_le_bytes([b[4], b[5]]) as usize;
+            if n <= N && 6 + n <= SENSOR_AREA - off {
+                let _ = v.extend_from_slice(&b[6..6 + n]);
+            }
+        }
+        v
+    }
+
+    /// Stores `data` at `off` behind `magic` and a length; rewrites the sector.
+    fn sensor_put(&mut self, off: usize, magic: &[u8; 4], max: usize, data: &[u8]) -> bool {
+        if data.len() > max || self.sensor.is_none() {
+            return false;
+        }
+        let Some(a) = self.sensor_read() else { return false };
+        let b = &mut self.buf[..SENSOR_AREA];
+        b[off..off + 4].copy_from_slice(magic);
+        b[off + 4..off + 6].copy_from_slice(&(data.len() as u16).to_le_bytes());
+        b[off + 6..off + 6 + data.len()].copy_from_slice(data);
+        if self.flash.erase(a, a + PAGE).is_err() {
+            return false;
+        }
+        self.flash.write(a, &self.buf[..SENSOR_AREA]).is_ok()
     }
 
     /// Keeps known contacts in the 4 KB sector at `addr` (see the module docs).
@@ -519,6 +586,30 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
             }
         }
         v
+    }
+
+    fn save_sensor_recipe(&mut self, recipe: &[u8]) -> bool {
+        self.sensor_put(0, SEN_MAGIC, SEN_MAX, recipe)
+    }
+
+    fn load_sensor_recipe(&mut self) -> heapless::Vec<u8, 256> {
+        self.sensor_get(0, SEN_MAGIC)
+    }
+
+    fn save_sensor_state(&mut self, state: &[u8]) -> bool {
+        self.sensor_put(STA_OFF, STA_MAGIC, STA_MAX, state)
+    }
+
+    fn load_sensor_state(&mut self) -> heapless::Vec<u8, 512> {
+        self.sensor_get(STA_OFF, STA_MAGIC)
+    }
+
+    fn save_owners(&mut self, owners: &[u8]) -> bool {
+        self.sensor_put(OWN_OFF, OWN_MAGIC, OWN_MAX, owners)
+    }
+
+    fn load_owners(&mut self) -> heapless::Vec<u8, 816> {
+        self.sensor_get(OWN_OFF, OWN_MAGIC)
     }
 
     fn load_control_limits(&mut self) -> Option<heapless::Vec<(Address, u32), 4>> {

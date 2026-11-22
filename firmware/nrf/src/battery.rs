@@ -27,7 +27,7 @@ const DIVIDER_X1000: u32 = 2961;
 #[cfg(feature = "board-wismesh-tag")]
 const DIVIDER_X1000: u32 = 1730;
 
-fn vbus_present() -> bool {
+pub fn vbus_present() -> bool {
     // POWER (0x4000_0000) + USBREGSTATUS (0x438), bit 0 = VBUSDETECT.
     // Read only; embassy-nrf's own VBUS detection is not used (USB
     // runs with SoftwareVbusDetect).

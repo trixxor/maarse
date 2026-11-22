@@ -15,10 +15,12 @@ mod battery;
 mod ble;
 mod ota;
 mod radio;
+mod sensor;
 mod storage;
 mod usb;
 
 use embassy_executor::Spawner;
+use maarse_fw_common::node::Settings as _;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::nvmc::Nvmc;
 use embassy_nrf::rng::{self, Rng};
@@ -43,6 +45,7 @@ bind_interrupts!(pub struct Irqs {
     USBD => embassy_nrf::usb::InterruptHandler<peripherals::USBD>;
     RNG => rng::InterruptHandler<peripherals::RNG>;
     SAADC => embassy_nrf::saadc::InterruptHandler;
+    TWISPI0 => embassy_nrf::twim::InterruptHandler<peripherals::TWISPI0>;
     EGU0_SWI0 => nrf_sdc::mpsl::LowPrioInterruptHandler;
     CLOCK_POWER => nrf_sdc::mpsl::ClockInterruptHandler;
     RADIO => nrf_sdc::mpsl::HighPrioInterruptHandler;
@@ -66,6 +69,14 @@ async fn temp_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     }
 }
 
+/// Restarts when the node asks (a new sensor recipe needs other pins).
+#[embassy_executor::task]
+async fn restart_task() {
+    maarse_fw_common::bus::RESTART.wait().await;
+    embassy_time::Timer::after_millis(500).await;
+    cortex_m::peripheral::SCB::sys_reset();
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // The clocks are controlled by MPSL (Bluetooth); the external crystal for USB is requested
@@ -80,6 +91,7 @@ async fn main(spawner: Spawner) {
     interrupt::USBD.set_priority(Priority::P3);
     interrupt::RNG.set_priority(Priority::P3);
     interrupt::SAADC.set_priority(Priority::P3);
+    interrupt::TWISPI0.set_priority(Priority::P3);
 
     // ----- board-specific pins -----
     #[cfg(feature = "board-wismesh-tag")]
@@ -160,10 +172,43 @@ async fn main(spawner: Spawner) {
         MAIL_BUF.init([0xFF; maarse_fw_common::storage::MAIL_AREA]),
     )
     .with_ota(ota::config())
-    .with_known(storage::KNOWN_ADDR);
+    .with_known(storage::KNOWN_ADDR)
+    .with_sensor(storage::SENSOR_ADDR);
     let identity = flash.load_or_create_identity(&mut rng);
     let radio_cfg = flash.load_radio(maarse_core::companion::RadioConfig::EU_DEFAULT);
     let addr = identity.address();
+
+    // ----- sensor node: what the stored recipe needs, and whether to sleep -----
+    // On battery with a recipe that sleeps, Bluetooth, USB and the 32 MHz
+    // crystal stay off between cycles (plug in USB and press reset to talk to
+    // the node over USB).
+    let sensor_recipe = flash.load_sensor_recipe();
+    let usb_power = battery::vbus_present();
+    maarse_fw_common::power::EXT_POWER.store(usb_power as i32, core::sync::atomic::Ordering::Relaxed);
+    let low_power = maarse_core::sensor::recipe_sleeps(&sensor_recipe) && !usb_power;
+    let sensor_plan = maarse_core::sensor::recipe_pin_plan(&sensor_recipe);
+    #[cfg(feature = "board-xiao-nrf52840")]
+    let sensor_pins = {
+        use embassy_nrf::gpio::Flex;
+        let d0 = Flex::new(p.P0_02);
+        let (d6, d7, i2c) = if sensor_plan & 1 != 0 {
+            // I2C for a BME280: D6 = SDA, D7 = SCL.
+            let mut cfg = embassy_nrf::twim::Config::default();
+            cfg.sda_pullup = true;
+            cfg.scl_pullup = true;
+            static TX_RAM: StaticCell<[u8; 16]> = StaticCell::new();
+            let twim = embassy_nrf::twim::Twim::new(p.TWISPI0, Irqs, p.P1_11, p.P1_12, cfg, TX_RAM.init([0; 16]));
+            (None, None, Some(twim))
+        } else {
+            (Some(Flex::new(p.P1_11)), Some(Flex::new(p.P1_12)), None)
+        };
+        sensor::Pins { d0, d6, d7, i2c }
+    };
+    #[cfg(feature = "board-wismesh-tag")]
+    let sensor_pins = {
+        let _ = sensor_plan;
+        sensor::Pins { i2c: None }
+    };
 
     // ----- LoRa -----
     let mut spi_cfg = spim::Config::default();
@@ -202,7 +247,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(mpsl_task(mpsl).unwrap());
     spawner.spawn(temp_task(mpsl).unwrap());
     // USB needs the external crystal all the time.
-    if let Ok(hf) = mpsl.request_hfclk().await {
+    if !low_power && let Ok(hf) = mpsl.request_hfclk().await {
         core::mem::forget(hf);
     }
     let sdc_p = sdc::Peripherals::new(
@@ -216,7 +261,7 @@ async fn main(spawner: Spawner) {
         .and_then(|b| b.peripheral_count(1))
         .and_then(|b| b.buffer_cfg(251, 251, 3, 3))
         .and_then(|b| b.build(sdc_p, hw_rng, mpsl, sdc_mem));
-    if let Ok(controller) = built {
+    if let (Ok(controller), false) = (built, low_power) {
         let mut mac = [0u8; 6];
         mac.copy_from_slice(&addr.0[..6]);
         mac[5] |= 0xC0; // random static address
@@ -233,7 +278,13 @@ async fn main(spawner: Spawner) {
     }
 
     // ----- USB -----
-    spawner.spawn(usb::usb_task(p.USBD, Irqs).unwrap());
+    if !low_power {
+        spawner.spawn(usb::usb_task(p.USBD, Irqs).unwrap());
+    }
+
+    // ----- sensors, and restarts when a new recipe needs other pins -----
+    spawner.spawn(sensor::sensor_task(sensor_pins).unwrap());
+    spawner.spawn(restart_task().unwrap());
 
     // ----- the node itself -----
     let mut node =

@@ -26,6 +26,7 @@ mod display_ui;
 mod art;
 mod ota;
 mod radio;
+mod sensor;
 mod usb;
 #[cfg(feature = "wifi")]
 mod wifi;
@@ -213,6 +214,8 @@ const MAIL_START: u32 = MAARSE_PART + 0x1000;
 const OTA_META: u32 = MAARSE_PART + 0x3000;
 /// Known contacts (4 KB), kept across reboots.
 const KNOWN_ADDR: u32 = MAARSE_PART + 0x4000;
+/// Sensor recipe, owners and state (4 KB).
+const SENSOR_ADDR: u32 = MAARSE_PART + 0x5000;
 
 /// Restarts the board when the node asks (new Wi-Fi settings), after a
 /// short pause so the reply reaches the client.
@@ -348,14 +351,31 @@ async fn main(spawner: Spawner) {
     static MAIL_BUF: StaticCell<[u8; MAIL_AREA]> = StaticCell::new();
     let mut storage = FlashStorage::new(p.FLASH);
     let ota_cfg = ota::config(&mut storage, OTA_META);
-    let mut flash = FlashSettings::new(storage, CFG_ADDR, MAIL_START, MAIL_BUF.init([0xFF; MAIL_AREA])).with_known(KNOWN_ADDR);
+    let mut flash = FlashSettings::new(storage, CFG_ADDR, MAIL_START, MAIL_BUF.init([0xFF; MAIL_AREA])).with_known(KNOWN_ADDR).with_sensor(SENSOR_ADDR);
     if let Some(c) = ota_cfg {
         flash = flash.with_ota(c);
     }
     let identity = flash.load_or_create_identity(&mut rng);
     let radio_cfg = flash.load_radio(default_radio);
     let wifi_settings = flash.load_wifi();
-    let wifi_on = wifi_settings.enabled;
+    // ----- sensor node: a timer wake out of deep sleep runs just one cycle -----
+    // Bluetooth, Wi-Fi and the display stay off then. After a power-up or a
+    // reset the node stays awake for a while (time to connect and set it up).
+    let sensor_recipe = flash.load_sensor_recipe();
+    let sensor_sleeps = maarse_core::sensor::recipe_sleeps(&sensor_recipe);
+    let timer_wake = esp_hal::system::reset_reason() == Some(esp_hal::rtc_cntl::SocResetReason::CoreDeepSleep);
+    let lean = timer_wake && sensor_sleeps;
+    {
+        use core::sync::atomic::Ordering::Relaxed;
+        use maarse_fw_common::bus::{MONO_BASE_S, SENSOR_GRACE_S, SENSOR_PERSIST};
+        SENSOR_PERSIST.store(true, Relaxed);
+        SENSOR_GRACE_S.store(if sensor_sleeps && !timer_wake { 600 } else { 0 }, Relaxed);
+        // A clock that goes on through deep sleep: the RTC timer.
+        let rtc = esp_hal::rtc_cntl::Rtc::new(p.RTC_TIMER);
+        MONO_BASE_S.store(rtc.time_since_power_up().as_secs() as u32, Relaxed);
+    }
+    let sensor_plan = maarse_core::sensor::recipe_pin_plan(&sensor_recipe);
+    let wifi_on = wifi_settings.enabled && !lean;
     // Modem for a host over Wi-Fi: the node does not route (see wifi.rs).
     maarse_fw_common::bus::WIFI_MODEM.store(
         cfg!(feature = "wifi") && wifi_on && wifi_settings.modem,
@@ -396,7 +416,7 @@ async fn main(spawner: Spawner) {
     // `wifi`), the saved mode decides, and the heap then only has to hold one
     // of them (about 34 KB for Bluetooth, 37 KB for Wi-Fi), so no `coex`.
     #[cfg(feature = "ble")]
-    if cfg!(feature = "wifi") && wifi_on {
+    if lean || cfg!(feature = "wifi") && wifi_on {
         let _ = p.BT;
     } else if let Ok(connector) = esp_radio::ble::controller::BleConnector::new(p.BT, Default::default()) {
         let addr = identity.address();
@@ -427,7 +447,7 @@ async fn main(spawner: Spawner) {
         maarse_fw_common::bus::PANIC_FILE.store(c[0] & 0xFFFF, Relaxed);
     }
     #[cfg(feature = "wifi")]
-    if wifi_settings.enabled {
+    if wifi_on {
         spawner.spawn(wifi_start_task(spawner, p.WIFI, wifi_settings, rng.next_u64()).unwrap());
     }
     #[cfg(not(feature = "wifi"))]
@@ -436,12 +456,42 @@ async fn main(spawner: Spawner) {
     spawner.spawn(stable_task().unwrap());
     spawner.spawn(memory_task().unwrap());
 
+    // ----- sensor pins (see sensor.rs) -----
+    #[cfg(feature = "board-heltec-v4")]
+    let (sensor_pins, gpio4_adc) = {
+        use esp_hal::gpio::Flex;
+        let i2c = if sensor_plan & 1 != 0 {
+            let cfg = esp_hal::i2c::master::Config::default();
+            esp_hal::i2c::master::I2c::new(p.I2C1, cfg).ok().map(|i| i.with_sda(p.GPIO47).with_scl(p.GPIO48).into_async())
+        } else {
+            None
+        };
+        let (gpio4_adc, gpio4_flex) = if sensor_plan & 2 != 0 { (Some(p.GPIO4), None) } else { (None, Some(Flex::new(p.GPIO4))) };
+        let gpio = [
+            Some(Flex::new(p.GPIO3)),
+            gpio4_flex,
+            Some(Flex::new(p.GPIO6)),
+            Some(Flex::new(p.GPIO38)),
+            Some(Flex::new(p.GPIO39)),
+            Some(Flex::new(p.GPIO40)),
+            Some(Flex::new(p.GPIO41)),
+        ];
+        (sensor::Pins { gpio, i2c }, gpio4_adc)
+    };
+    #[cfg(not(feature = "board-heltec-v4"))]
+    let sensor_pins = {
+        let _ = sensor_plan;
+        sensor::Pins { gpio: [const { None }; 7], i2c: None }
+    };
+    spawner.spawn(sensor::sensor_task(sensor_pins).unwrap());
+    spawner.spawn(sensor::sleep_task(p.LPWR).unwrap());
+
     // ----- battery (Heltec V4; the XIAO ESP32-S3 has no divider: unknown) -----
     #[cfg(feature = "board-heltec-v4")]
     {
-        let (adc, pin) = battery::setup(adc1, p.GPIO1);
+        let (adc, pin, pin4) = battery::setup(adc1, p.GPIO1, gpio4_adc);
         let ctrl = Output::new(p.GPIO37, Level::Low, OutputConfig::default());
-        spawner.spawn(battery::battery_task(adc, pin, ctrl).unwrap());
+        spawner.spawn(battery::battery_task(adc, pin, ctrl, pin4).unwrap());
     }
     #[cfg(not(feature = "board-heltec-v4"))]
     let _ = adc1;
@@ -452,17 +502,20 @@ async fn main(spawner: Spawner) {
         // Vext (GPIO36, active low) powers the OLED; reset on GPIO21.
         let vext = Output::new(p.GPIO36, Level::Low, OutputConfig::default());
         core::mem::forget(vext);
-        let mut rst = Output::new(p.GPIO21, Level::Low, OutputConfig::default());
-        Timer::after_millis(20).await;
-        rst.set_high();
-        core::mem::forget(rst);
-        Timer::after_millis(20).await;
-        let i2c = esp_hal::i2c::master::I2c::new(p.I2C0, esp_hal::i2c::master::Config::default())
-            .unwrap()
-            .with_sda(p.GPIO17)
-            .with_scl(p.GPIO18);
-        let button = Input::new(p.GPIO0, InputConfig::default().with_pull(Pull::Up));
-        spawner.spawn(display::display_task(i2c, button).unwrap());
+        // A timer wake of a sensor node runs without the display.
+        if !lean {
+            let mut rst = Output::new(p.GPIO21, Level::Low, OutputConfig::default());
+            Timer::after_millis(20).await;
+            rst.set_high();
+            core::mem::forget(rst);
+            Timer::after_millis(20).await;
+            let i2c = esp_hal::i2c::master::I2c::new(p.I2C0, esp_hal::i2c::master::Config::default())
+                .unwrap()
+                .with_sda(p.GPIO17)
+                .with_scl(p.GPIO18);
+            let button = Input::new(p.GPIO0, InputConfig::default().with_pull(Pull::Up));
+            spawner.spawn(display::display_task(i2c, button).unwrap());
+        }
     }
 
     // ----- the node itself -----

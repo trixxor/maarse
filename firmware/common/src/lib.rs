@@ -3,6 +3,7 @@
 
 #![no_std]
 
+pub mod bme280;
 pub mod bus;
 pub mod node;
 pub mod power;

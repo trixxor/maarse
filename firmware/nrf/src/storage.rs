@@ -5,6 +5,7 @@
 //! * 0xEC000: identity, radio and administrators (4 KB)
 //! * 0xED000: known contacts (4 KB; the Adafruit bootloader leaves
 //!   0xED000-0xF3FFF to the application)
+//! * 0xEE000: sensor recipe and owners (4 KB)
 //!
 //! The app ends at 0x88000 at the latest (see build.rs); after that the staging area and
 //! meta page for firmware updates (see ota.rs). The bootloader starts at 0xF4000.
@@ -15,5 +16,7 @@ use maarse_fw_common::storage::FlashSettings;
 pub const MAIL_START: u32 = 0xEA000;
 pub const CFG_ADDR: u32 = 0xEC000;
 pub const KNOWN_ADDR: u32 = 0xED000;
+/// Sensor recipe and owners (4 KB, free in the Adafruit bootloader's layout).
+pub const SENSOR_ADDR: u32 = 0xEE000;
 
 pub type Flash = FlashSettings<Nvmc<'static>>;

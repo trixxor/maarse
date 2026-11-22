@@ -11,6 +11,7 @@ maarse-crypto = { path = "../../maarse-crypto", default-features = false }
 embassy-sync = "0.8.0"
 embassy-time = "0.5.1"
 embassy-futures = "0.1.2"
+embedded-hal-async = "1.0"
 heapless = "0.8"
 lora-phy = "3.0.1"
 rand_core = "0.6"

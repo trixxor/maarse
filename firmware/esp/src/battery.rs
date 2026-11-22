@@ -13,19 +13,29 @@
 
 use esp_hal::analog::adc::{Adc, AdcCalCurve, AdcConfig, AdcPin, Attenuation};
 use esp_hal::gpio::Output;
-use esp_hal::peripherals::{ADC1, GPIO1};
+use esp_hal::peripherals::{ADC1, GPIO1, GPIO4};
+use embassy_futures::select::select;
 use embassy_time::Timer;
+use maarse_fw_common::bus::{ADC_REQ, ADC_USER_MV};
 use maarse_fw_common::power;
 
 /// `4.9 * 1.045` × 1000.
 const DIVIDER_X1000: u32 = 5121;
 
 type Pin = AdcPin<GPIO1<'static>, ADC1<'static>, AdcCalCurve<ADC1<'static>>>;
+/// The sensor input (GPIO4), when a recipe uses the analogue input.
+pub type Pin4 = AdcPin<GPIO4<'static>, ADC1<'static>, AdcCalCurve<ADC1<'static>>>;
 
-pub fn setup(adc1: ADC1<'static>, gpio1: GPIO1<'static>) -> (Adc<'static, ADC1<'static>, esp_hal::Blocking>, Pin) {
+pub fn setup(
+    adc1: ADC1<'static>,
+    gpio1: GPIO1<'static>,
+    gpio4: Option<GPIO4<'static>>,
+) -> (Adc<'static, ADC1<'static>, esp_hal::Blocking>, Pin, Option<Pin4>) {
     let mut cfg = AdcConfig::new();
     let pin = cfg.enable_pin_with_cal::<_, AdcCalCurve<ADC1<'static>>>(gpio1, Attenuation::_2p5dB);
-    (Adc::new(adc1, cfg), pin)
+    // 11 dB: about 0-2.5 V at the pin.
+    let pin4 = gpio4.map(|g| cfg.enable_pin_with_cal::<_, AdcCalCurve<ADC1<'static>>>(g, Attenuation::_11dB));
+    (Adc::new(adc1, cfg), pin, pin4)
 }
 
 #[embassy_executor::task]
@@ -33,6 +43,7 @@ pub async fn battery_task(
     mut adc: Adc<'static, ADC1<'static>, esp_hal::Blocking>,
     mut pin: Pin,
     mut ctrl: Output<'static>,
+    mut pin4: Option<Pin4>,
 ) {
     loop {
         ctrl.set_high();
@@ -46,6 +57,17 @@ pub async fn battery_task(
         }
         ctrl.set_low();
         power::store_battery(samples);
-        Timer::after_secs(power::SAMPLE_EVERY_S).await;
+        // Wait for the next battery measurement; a sensor may ask for the
+        // analogue input in between.
+        loop {
+            match select(Timer::after_secs(power::SAMPLE_EVERY_S), ADC_REQ.wait()).await {
+                embassy_futures::select::Either::First(()) => break,
+                embassy_futures::select::Either::Second(()) => {
+                    if let Some(p) = pin4.as_mut() {
+                        ADC_USER_MV.store(adc.read_blocking(p) as i32, core::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
     }
 }

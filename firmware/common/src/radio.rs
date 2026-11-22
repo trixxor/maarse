@@ -2,9 +2,9 @@
 //! listen-before-talk (CAD) and a duty cycle budget. The settings can be
 //! changed while it runs (`RADIO_CFG`).
 
-use crate::bus::{Pkt, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_TX, RSTATS, TxReq};
+use crate::bus::{Pkt, RADIO_ASLEEP, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_SLEEP, RADIO_TX, RSTATS, TxReq};
 use core::sync::atomic::Ordering::Relaxed;
-use embassy_futures::select::{Either4, select4};
+use embassy_futures::select::{Either, Either5, select, select5};
 use embassy_time::{Duration, Instant, Timer};
 use lora_phy::mod_params::{
     Bandwidth, CodingRate, ModulationParams, PacketParams, SpreadingFactor,
@@ -255,15 +255,16 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             continue;
         }
         stage(7);
-        match select4(
+        match select5(
             lora.rx(&p.rx, &mut buf),
             RADIO_TX.receive(),
             RADIO_CFG.wait(),
             Timer::at(next),
+            RADIO_SLEEP.wait(),
         )
         .await
         {
-            Either4::First(Ok((len, status))) => {
+            Either5::First(Ok((len, status))) => {
                 let len = len as usize;
                 RSTATS.received(len, status.rssi as i32, status.snr as i32);
                 match Pkt::from_slice(&buf[..len]) {
@@ -278,11 +279,11 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                     }
                 }
             }
-            Either4::First(Err(_)) => {
+            Either5::First(Err(_)) => {
                 RSTATS.rx_err.fetch_add(1, Relaxed);
             }
-            Either4::Second(req) => plan(&mut queue, req, &urgent, &mut boost),
-            Either4::Third(cfg) => {
+            Either5::Second(req) => plan(&mut queue, req, &urgent, &mut boost),
+            Either5::Third(cfg) => {
                 let _ = lora.enter_standby().await;
                 if let Some(np) = params(lora, cfg) {
                     // Keep the airtime already used unless the limit itself
@@ -294,7 +295,21 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                     p = np;
                 }
             }
-            Either4::Fourth(()) => {}
+            Either5::Fourth(()) => {}
+            Either5::Fifth(true) => {
+                // A sensor node sleeps: nothing is sent or heard until woken.
+                queue.clear();
+                let _ = lora.sleep(true).await;
+                RADIO_ASLEEP.signal(());
+                loop {
+                    match select(RADIO_SLEEP.wait(), RADIO_TX.receive()).await {
+                        Either::First(false) => break,
+                        // Anything asked to be sent while asleep is dropped.
+                        _ => {}
+                    }
+                }
+            }
+            Either5::Fifth(false) => {}
         }
     }
 }

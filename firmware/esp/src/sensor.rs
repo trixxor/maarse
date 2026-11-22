@@ -27,6 +27,7 @@ use esp_hal::Async;
 use esp_hal::gpio::{Flex, InputConfig, Level, OutputConfig, Pull as HPull};
 use esp_hal::i2c::master::I2c;
 use maarse_core::sensor::{Input, Pull, Source};
+use maarse_fw_common::i2c_sensor::Cycle;
 use maarse_fw_common::bus::{ADC_REQ, ADC_USER_MV, RADIO_ASLEEP, SENSE_DONE, SENSE_REQ, SET_OUT, SLEEP_REQ};
 use maarse_fw_common::power;
 
@@ -52,7 +53,7 @@ impl Pins {
         self.gpio[i].as_mut()
     }
 
-    async fn read(&mut self, s: &Source, bme: &mut Option<(i32, u32, Option<u32>)>) -> Option<i32> {
+    async fn read(&mut self, s: &Source, cy: &mut Cycle) -> Option<i32> {
         match s.input {
             Input::Battery => Some(power::BATTERY_MV.load(Relaxed) as i32).filter(|v| *v > 0),
             Input::ChipTemp => power::temperature_dc().map(|t| t as i32 * 10),
@@ -76,12 +77,17 @@ impl Pins {
                 }
                 None
             }
+            Input::I2c(_) => {
+                let d = s.input.i2c_desc()?;
+                let i2c = self.i2c.as_mut()?;
+                cy.read_i2c(i2c, &d).await
+            }
             Input::Bme280 { addr, what } => {
-                if bme.is_none() {
+                if cy.bme.is_none() {
                     let i2c = self.i2c.as_mut()?;
-                    *bme = maarse_fw_common::bme280::read(i2c, addr).await.ok();
+                    cy.bme = maarse_fw_common::bme280::read(i2c, addr).await.ok();
                 }
-                let (t, p, h) = (*bme)?;
+                let (t, p, h) = cy.bme?;
                 match what {
                     0 => Some(t),
                     1 => h.map(|h| h as i32),
@@ -109,9 +115,9 @@ pub async fn sensor_task(mut pins: Pins) {
         match select(SENSE_REQ.wait(), SET_OUT.receive()).await {
             Either::First(sources) => {
                 let mut out = [None; 8];
-                let mut bme = None;
+                let mut cy = Cycle::default();
                 for (i, s) in sources.iter().enumerate().take(8) {
-                    out[i] = pins.read(s, &mut bme).await;
+                    out[i] = pins.read(s, &mut cy).await;
                 }
                 let _ = SENSE_DONE.try_send(out);
             }

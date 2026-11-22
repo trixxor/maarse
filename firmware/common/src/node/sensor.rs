@@ -650,6 +650,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let now_s = mono_s();
         let Some(engine) = self.sensor.engine.as_mut() else { return };
         let recipe = engine.recipe().clone();
+        // Scale the readings (a map turns millivolts into a percentage).
+        recipe.apply_maps(&mut values[..recipe.sources.len()]);
         // The level of an output is what the recipe last set.
         for (i, src) in recipe.sources.iter().enumerate() {
             if matches!(src.input, sensor::Input::GpioOut { .. }) {

@@ -4,6 +4,7 @@
 #![no_std]
 
 pub mod bme280;
+pub mod i2c_sensor;
 pub mod bus;
 pub mod node;
 pub mod power;

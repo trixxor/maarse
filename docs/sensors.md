@@ -394,6 +394,27 @@ and runs the same engine the nodes run, so the test in the designer shows what
 the node will do. A host keeps at most 50 sensors and drops a sensor that
 sends more than 400 readings an hour.
 
+Two settings in the setup JSON are not part of the recipe:
+
+- `rules[].on`: `false` keeps a rule in the designer but leaves it out of the
+  recipe (the sensor never gets it, and it does not count in the limits). A
+  missing value means on. A change reaches the sensor when the setup is sent.
+- `quiet`: `{"on": true, "min": 120}`, the host's "node went quiet" rule.
+  The host lists the sensor as `quiet` (and shows it in amber and under
+  Alarms) when it has heard nothing for `min` minutes (5 to 10080). It runs on
+  the host, so it needs the host to be running and the setup to be saved on the
+  host (sending the setup does that). Without the setting a sensor is quiet
+  after two hours, as before. The designer warns when `min` is shorter than
+  two reading intervals. There is no push notification yet: the state shows in
+  the lists.
+
+A setup can be shared as one line of text, `maarse-sensor:` followed by the
+setup JSON in base64url (the channel is left out). A setup opened from such a
+link or from a file never keeps its recipients or channel: it starts with you
+as the only receiver, so a setup from someone else cannot send your readings
+elsewhere. The designer reads the setup of another of your sensors the same
+way (the copy of the setup the host saved).
+
 ## What is not verified
 
 - **The catalogue update has not run against GitHub.** The workflow and the signature checks are tested, but the first publication on the `sensors` release (needs the repository secret `MAARSE_SIGN_KEY_B64` and variable `MAARSE_RELEASE_PUBKEY`) and a host fetching it have not happened. A development build has no release key and never updates.

@@ -778,6 +778,15 @@
   .sn-diff { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
   .sn-sign { width: 22px; height: 22px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: 800; flex: none; background: var(--line); color: var(--muted); }
   .sn-sign.add { background: var(--accent-soft); color: var(--accent); } .sn-sign.chg { background: var(--signal-soft); color: var(--signal); } .sn-sign.del { background: var(--warn-soft); color: var(--warn); }
+  .sn-switch { position: relative; display: inline-block; width: 40px; height: 24px; flex: none; }
+  .sn-switch input[type=checkbox] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; border: 0; }
+  .sn-switch i { position: absolute; inset: 0; border-radius: 99px; background: var(--line); transition: background .15s; pointer-events: none; }
+  .sn-switch i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .sn-switch input:checked + i { background: var(--accent); }
+  .sn-switch input:checked + i::after { left: 19px; }
+  .sn-switch input:focus-visible + i { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .sn-rule.off > :not(:first-child) { opacity: .45; }
+  .sn-rule.host { background: var(--bg); }
   .sn-checks { display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.4; }
 </style>
 </head>
@@ -7786,6 +7795,8 @@ const snMin = s => Math.round(s / 60);
 const snFmt = (v, d = 1) => v == null ? "–" : (Math.abs(v) >= 1000 ? Math.round(v) : Number(v.toFixed(d))).toString();
 const snAgo = s => s < 90 ? "just now" : s < 5400 ? Math.round(s / 60) + " min ago" : s < 129600 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " days ago";
 const snName = n => n.name || ("Sensor " + n.node.slice(0, 4));
+// Quiet: the host says so (its "Node went quiet" rule); an older host does not, then two hours.
+const snQuiet = n => n.quiet != null ? n.quiet : n.age_s > 7200;
 
 async function snApi(method, path, body) {
   const remote = remoteHost.get(), base = remote?.addr ? remoteOrigin(remote.addr) : location.origin, tok = hostToken();
@@ -7820,7 +7831,7 @@ for (const b of $("sensor-filters").querySelectorAll("button")) b.onclick = () =
 $("btn-sensor-new").onclick = () => { SN.sel = null; SN.design = null; setView("sensors"); renderChat(); };
 function snVisible(n) {
   if (SN.filter === "fav") return n.favourite;
-  if (SN.filter === "alarm") return !!n.alarm || (n.age_s > 7200);
+  if (SN.filter === "alarm") return !!n.alarm || snQuiet(n);
   return true;
 }
 function snRenderSide() {
@@ -7829,7 +7840,7 @@ function snRenderSide() {
   const shown = SN.list.filter(snVisible);
   if (!shown.length) box.append(el("p", { className: "hint", textContent: SN.list.length ? "Nothing here." : "No sensors yet. Set one up, or wait for one to send." }));
   for (const n of shown) {
-    const quiet = n.age_s > 7200;
+    const quiet = snQuiet(n);
     const first = n.channels.find(c => c.value != null);
     const b = el("button", { className: "sn-item" + (SN.sel === n.node ? " on" : "") },
       el("b", { textContent: (n.favourite ? "★ " : "") + snName(n) }),
@@ -7889,7 +7900,7 @@ function renderSensors(box) {
     read.onclick = async () => { await snApi("POST", "/api/sensors/dismiss", { node: n.node }); await snLoad(); snRenderSide(); renderChat(); };
     wrap.append(el("div", { className: "sn-banner" }, "⚠ " + n.alarm.text + " · " + snAgo(Math.floor(Date.now() / 1000) - n.alarm.t), read));
   }
-  else if (n.age_s > 7200) wrap.append(el("div", { className: "sn-quiet", textContent: "No reading for " + snAgo(n.age_s).replace(" ago", "") + ". The battery may be flat, or the sensor is out of range." }));
+  else if (snQuiet(n)) wrap.append(el("div", { className: "sn-quiet", textContent: "No reading for " + snAgo(n.age_s).replace(" ago", "") + ". The battery may be flat, or the sensor is out of range." }));
   const chips = el("div", { className: "sn-chips" });
   for (const [label, s] of [["24 hours", 86400], ["7 days", 604800]]) {
     const b = el("button", { textContent: label, className: SN.range === s ? "on" : "" }); b.onclick = () => { SN.range = s; SN.series = {}; renderChat(); }; chips.append(b);
@@ -7929,13 +7940,78 @@ function snStart(wrap) {
   });
   steps.append(s1, s2);
   const open = el("button", { textContent: "Open a saved file" });
-  open.onclick = () => snPickFile(s => snOpenDesigner(null, "blank").then(() => { if (SN.design) { SN.design.setup = { ...snNewSetup("blank"), ...s }; renderChat(); snRecompile(); } }));
-  wrap.append(el("div", { className: "sn-card sn-row" }, el("h3", { style: "margin:0;flex:1" }, el("span", { className: "sn-num", textContent: "3" }), "Or start from something you have"), open));
+  open.onclick = () => snPickFile(s => snOpenDesigner(null, "blank").then(() => { if (SN.design) { SN.design.setup = snImport(s); renderChat(); snRecompile(); } }));
+  const paste = el("button", { textContent: "Paste a shared link" }); paste.onclick = () => snPasteDialog();
+  const copy = el("button", { textContent: "Copy from one of my sensors" }); copy.onclick = () => snCopyDialog();
+  wrap.append(el("div", { className: "sn-card sn-row" }, el("h3", { style: "margin:0;flex:1" }, el("span", { className: "sn-num", textContent: "3" }), "Or start from something you have"), open, paste, copy));
   if (SN.list?.length) {
     const have = el("div", { className: "sn-card" }, el("h3", { textContent: "Your sensors" }));
     for (const n of SN.list) { const b = el("button", { textContent: snName(n) + (n.alarm ? " ⚠" : "") }); b.onclick = () => { SN.sel = n.node; snRenderSide(); renderChat(); }; have.append(b, " "); }
     wrap.append(have);
   }
+}
+
+// ----- sharing a setup: one line of text that can go in a chat or an email -----
+const SN_LINK = "maarse-sensor:";
+function snShareText(setup) {
+  const s = JSON.parse(JSON.stringify(setup)); delete s.channel;
+  return SN_LINK + btoa(unescape(encodeURIComponent(JSON.stringify(s)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function snFromShare(text) {
+  const m = text.trim().match(/maarse-sensor:([A-Za-z0-9_-]+)/);
+  if (!m || m[1].length > 24000) throw new Error("This is not a Må:rse sensor link.");
+  let b = m[1].replace(/-/g, "+").replace(/_/g, "/"); while (b.length % 4) b += "=";
+  const s = JSON.parse(decodeURIComponent(escape(atob(b))));
+  if (!s || !Array.isArray(s.sources) || !Array.isArray(s.rules)) throw new Error("The link does not hold a sensor setup.");
+  return s;
+}
+// A setup from a file or a link comes from somewhere else: it never brings its own recipients or channel.
+function snImport(s) {
+  const t = { ...snNewSetup("blank"), ...JSON.parse(JSON.stringify(s)) };
+  t.channel = ""; t.report_to = { owners: [0], channel: false }; t.alarm_to = { owners: [0], channel: false };
+  return t;
+}
+function snOpenImported(s) { return snOpenDesigner(null, "blank").then(() => { if (SN.design) { SN.design.setup = snImport(s); renderChat(); snRecompile(); } }); }
+function snModal(title, ...kids) {
+  const ov = el("div", { className: "sn-overlay" }), dlg = el("div", { className: "sn-dialog", role: "dialog", "aria-label": title }); ov.append(dlg);
+  const done = () => ov.remove(), close = el("button", { textContent: "Close" }); close.onclick = done;
+  dlg.append(el("h2", { textContent: title, style: "margin:0" }), ...kids, el("div", { className: "sn-row", style: "justify-content:flex-end" }, close));
+  document.body.append(ov); return done;
+}
+function snTemplateDialog() {
+  const d = SN.design, cat = SN.catalog;
+  if (!cat?.templates) { alert("The host did not send its starting points. Update maarse-host and try again."); return; }
+  const list = el("div", { className: "sn-tpls" }); let done;
+  for (const tp of cat.templates) {
+    const b = el("button", { className: "sn-tpl" }, el("b", { textContent: tp.title }), el("small", { textContent: tp.text }));
+    b.onclick = () => {
+      if (d.setup.rules.length && !confirm("Replace the inputs and rules of this sensor with \"" + tp.title + "\"?")) return;
+      const n = snNewSetup(tp.id); d.setup.sources = n.sources; d.setup.rules = n.rules; d.setup.interval_s = n.interval_s; if (!d.setup.name) d.setup.name = n.name || "";
+      done(); snRenderTop(); snRenderA(); snRenderB(); snRecompile();
+    };
+    list.append(b);
+  }
+  done = snModal("Start from a template", el("p", { className: "hint", textContent: "This replaces the inputs and rules. The name and who gets the messages stay." }), list);
+}
+function snPasteDialog() {
+  const ta = el("textarea", { rows: 4, placeholder: "maarse-sensor:…", "aria-label": "Shared link", style: "width:100%;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--raised);color:var(--ink);font:inherit;resize:vertical" });
+  const err = el("p", { className: "sn-bad" }), go = el("button", { className: "primary", textContent: "Open" }); let done;
+  go.onclick = () => { try { const s = snFromShare(ta.value); done(); snOpenImported(s); } catch (e) { err.textContent = e.message; } };
+  done = snModal("Paste a shared link", el("p", { className: "hint", textContent: "A link someone sent you for a sensor setup. It opens as a new setup; nothing is sent to a sensor until you press Send." }), ta, err, go);
+  ta.focus();
+}
+function snCopyDialog() {
+  const list = el("div", { className: "sn-row" }); let done;
+  for (const n of (SN.list || []).filter(x => x.has_setup)) {
+    const b = el("button", { textContent: snName(n) });
+    b.onclick = async () => {
+      try { const s = await snApi("GET", "/api/sensors/setup?node=" + n.node); if (!s?.sources) throw new Error("This sensor has no saved setup."); s.name = (s.name || snName(n)) + " copy"; done(); snOpenImported(s); }
+      catch (e) { alert(e.message); }
+    };
+    list.append(b);
+  }
+  if (!list.children.length) list.append(el("p", { className: "hint", textContent: "None of your sensors has a saved setup on this host yet." }));
+  done = snModal("Copy from one of my sensors", el("p", { className: "hint", textContent: "Start a new sensor from the setup of one you already have." }), list);
 }
 
 // ----- templates -----
@@ -8016,13 +8092,19 @@ function snRenderTop() {
   const name = el("input", { value: d.setup.name || "", placeholder: "Name, e.g. Cellar", style: "font-size:18px;font-weight:650;padding:6px 10px;border-radius:10px;border:1px solid var(--line);background:var(--raised);color:var(--ink);min-width:220px" });
   name.oninput = () => { d.setup.name = name.value; };
   const pill = el("span", { className: "sn-pill" }, el("span", { className: "sn-dotc" }), snBoard(d).name.replace(/ \+ .*/, "") + " · " + (snHasHost() ? "host connected" : "no host"));
-  const open = el("button", { textContent: "Open file" }); open.onclick = () => snPickFile(s => { d.setup = { ...snNewSetup("blank"), ...s }; snRecompile(); renderChat(); });
+  const open = el("button", { textContent: "Open file" }); open.onclick = () => snPickFile(s => { d.setup = snImport(s); snRecompile(); renderChat(); });
   const file = el("button", { textContent: "Save file" }); file.onclick = () => snSaveFile(d.setup);
+  const link = el("button", { textContent: "Copy link", title: "A line of text with this setup, to send to someone" });
+  link.onclick = async () => {
+    const text = snShareText(d.setup);
+    try { await navigator.clipboard.writeText(text); link.textContent = "Copied"; setTimeout(() => { link.textContent = "Copy link"; }, 2000); }
+    catch { snModal("Copy this link", el("textarea", { rows: 4, readOnly: true, value: text, "aria-label": "Link", style: "width:100%;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--raised);color:var(--ink);font:inherit" })); }
+  };
   const save = el("button", { textContent: "Save on this host" });
   save.onclick = async () => { if (!d.node) { alert("A new sensor is saved when you send the setup to it."); return; } await snApi("PUT", "/api/sensors/setup?node=" + d.node, d.setup); if (d.setup.name) await snApi("POST", "/api/sensors/meta", { node: d.node, name: d.setup.name }); log("Setup saved"); };
   const up = el("button", { className: "primary", textContent: "Send to the sensor …" }); up.onclick = () => snUploadDialog();
   const back = el("button", { textContent: "Close" }); back.onclick = () => { SN.design = null; renderChat(); };
-  top.append(el("div", { className: "sn-head" }, name, pill, el("span", { className: "spacer", style: "flex:1" }), back, open, file, save, up));
+  top.append(el("div", { className: "sn-head" }, name, pill, el("span", { className: "spacer", style: "flex:1" }), back, open, file, link, save, up));
   if (d.err) top.append(el("p", { className: "hint", textContent: d.err }));
 }
 function snRenderA() {
@@ -8324,6 +8406,19 @@ function snRecipients(d) {
 
 // ----- rules -----
 const SN_OPS = [["<", "is below"], [">", "is above"], ["<=", "is at most"], [">=", "is at least"], ["==", "is exactly"], ["!=", "is not"]];
+// The one rule that runs on the host: it notices a sensor that stopped sending (a flat battery).
+function snQuietCard(d) {
+  const q = d.setup.quiet || (d.setup.quiet = { on: true, min: 120 });
+  const card = el("div", { className: "sn-rule host" + (q.on === false ? " off" : "") });
+  const sw = el("label", { className: "sn-switch", title: "Switch this rule on or off" }, el("input", { type: "checkbox", checked: q.on !== false, "aria-label": "Rule is on" }), el("i"));
+  sw.firstChild.onchange = () => { q.on = sw.firstChild.checked; card.classList.toggle("off", !q.on); snRecompile(); };
+  card.append(el("div", { className: "sn-line" }, el("b", { textContent: "Node went quiet", style: "font-size:15px;flex:1" }), el("span", { className: "sn-tag", textContent: "On your host" }), sw),
+    el("div", { className: "sn-line" }, el("span", { className: "sn-kw", textContent: "When" }), el("span", { textContent: "no reading for" }),
+      snNum(q.min ?? 120, v => { q.min = Math.max(5, Math.round(v)); snRecompile(); }, "5", "80px"), el("span", { textContent: "minutes" }),
+      el("span", { className: "sn-kw", textContent: "Then" }), el("span", { className: "sn-act", textContent: "show it as quiet", style: "padding:6px 10px;border-radius:999px;font-size:13.5px" })),
+    el("small", { className: "hint", textContent: "Needs your phone or PC host to be running. Catches a dead battery. Saved on the host when you send the setup." }));
+  return card;
+}
 function snAddRule(kind) {
   const d = SN.design, id = Math.max(0, ...d.setup.rules.map(r => r.id)) + 1;
   const src = kind === "pin" ? snReadable(d).find(s => s.kind === "digital") : snReadable(d)[0];
@@ -8336,9 +8431,11 @@ function snRenderB() {
   const head = el("div", { className: "sn-head" }, el("h2", { textContent: "Rules", style: "font-size:20px" }));
   const addr = el("button", { className: "primary", textContent: "+ Add rule" });
   addr.onclick = () => snAddRule("value");
-  head.append(addr); b.append(head);
+  const tpl = el("button", { textContent: "Templates ▾" }); tpl.onclick = () => snTemplateDialog();
+  head.append(tpl, addr); b.append(head);
   d.setup.rules.forEach((r, i) => b.append(snRule(d, r, i)));
   if (!d.setup.rules.length) b.append(el("p", { className: "hint", textContent: "No rules yet. Add one, or start from a template on the Sensors page." }));
+  b.append(snQuietCard(d));
   const starts = el("div", { className: "sn-addrule" }, el("span", { className: "hint", textContent: "Add a rule that starts with", style: "font-weight:600" }));
   for (const [k, label, cls] of [["value", "a value …", "sn-src"], ["time", "a time …", "sn-trig"], ["pin", "a pin …", "sn-src"]]) {
     const bt = el("button", { className: cls, textContent: label, disabled: k === "pin" && !snReadable(d).some(s => s.kind === "digital") }); bt.onclick = () => snAddRule(k); starts.append(bt);
@@ -8350,7 +8447,10 @@ function snRule(d, r, idx) {
   const card = el("div", { className: "sn-rule" });
   const nm = el("input", { value: r.name || "", "aria-label": "Rule name", style: "font-weight:650;font-size:15px;border:0;background:transparent;color:var(--ink);flex:1" }); nm.oninput = () => { r.name = nm.value; };
   const rm = el("button", { textContent: "✕", title: "Remove rule", "aria-label": "Remove rule" }); rm.onclick = () => { d.setup.rules.splice(idx, 1); snRenderB(); snRecompile(); };
-  card.append(el("div", { className: "sn-line" }, nm, el("span", { className: "sn-tag", textContent: "On the node" }), rm));
+  const sw = el("label", { className: "sn-switch", title: "Switch this rule on or off. A rule that is off is not sent to the sensor." }, el("input", { type: "checkbox", checked: r.on !== false, "aria-label": "Rule is on" }), el("i"));
+  sw.firstChild.onchange = () => { r.on = sw.firstChild.checked; card.classList.toggle("off", !r.on); snRecompile(); };
+  card.classList.toggle("off", r.on === false);
+  card.append(el("div", { className: "sn-line" }, nm, el("span", { className: "sn-tag", textContent: "On the node" }), sw, rm));
   const readable = snReadable(d).map(s => [s.chan, s.name || SN_KINDS[s.kind]?.[0] || "Value"]);
   const w = r.when, when = el("div", { className: "sn-line" }, el("span", { className: "sn-kw", textContent: "When" }));
   when.append(snSel([["every", "every …"], ["compare", "a value …"], ["change", "a value changes by …"], ["edge", "a pin …"]], w.type, v => {

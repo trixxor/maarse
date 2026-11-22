@@ -21,6 +21,8 @@ data class SensorChan(val chan: Int, val kind: Int, val name: String, val unit: 
 data class SensorInfo(
     val node: String, val name: String, val favourite: Boolean, val ageS: Long,
     val alarm: String?, val alarmT: Long, val channels: List<SensorChan>,
+    /** The host's "node went quiet" rule says so (no reading for the time set in the setup). */
+    val quiet: Boolean = false, val hasSetup: Boolean = false,
 ) { val title get() = name.ifBlank { "Sensor " + node.take(4) } }
 
 class SensorDesign(var node: String?, var setup: JSONObject) {
@@ -205,7 +207,9 @@ object Sensors {
                         (0 until ch.length()).map { j ->
                             val c = ch.getJSONObject(j)
                             SensorChan(c.getInt("chan"), c.getInt("kind"), c.optString("name"), c.optString("unit"), if (c.isNull("value")) null else c.getDouble("value"))
-                        })
+                        },
+                        // An older host does not say: two hours, as before.
+                        o.optBoolean("quiet", o.optLong("age_s") > 7200), o.optBoolean("has_setup"))
                 }.sortedWith(compareBy<SensorInfo>({ !it.favourite }, { it.title.lowercase() }))
                 error.value = ""
             }.onFailure { error.value = it.message ?: "Error" }
@@ -307,6 +311,50 @@ object Sensors {
             main.post { status.value = "Sent. The pieces wait at a post office; the sensor applies the setup after its next wake-up." }
         }.start()
         return "Sending ..."
+    }
+
+    // ----- sharing a setup: one line of text for a chat or an email -----
+
+    private const val LINK = "maarse-sensor:"
+    private const val B64 = android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
+
+    fun shareText(setup: JSONObject): String {
+        val s = JSONObject(setup.toString()); s.remove("channel")
+        return LINK + android.util.Base64.encodeToString(s.toString().toByteArray(Charsets.UTF_8), B64)
+    }
+
+    fun fromShare(text: String): JSONObject {
+        val m = Regex("maarse-sensor:([A-Za-z0-9_-]+)").find(text.trim())
+        if (m == null || m.groupValues[1].length > 24000) throw Exception("This is not a Må:rse sensor link.")
+        val s = runCatching { JSONObject(String(android.util.Base64.decode(m.groupValues[1], B64), Charsets.UTF_8)) }.getOrNull()
+            ?: throw Exception("This is not a Må:rse sensor link.")
+        if (s.optJSONArray("sources") == null || s.optJSONArray("rules") == null) throw Exception("The link does not hold a sensor setup.")
+        return s
+    }
+
+    /** A setup from a link or from another sensor never brings its own recipients or channel. */
+    fun openImported(s: JSONObject) {
+        loadCatalog()
+        val t = newSetup("blank")
+        for (k in s.keys()) t.put(k, s.get(k))
+        t.put("channel", "")
+        t.put("report_to", JSONObject("""{"owners":[0],"channel":false}"""))
+        t.put("alarm_to", JSONObject("""{"owners":[0],"channel":false}"""))
+        design = SensorDesign(null, t)
+        status.value = null
+        progress.value = null
+        changed()
+    }
+
+    /** The setup this host saved for one of your sensors (to start another from it). */
+    fun copyFrom(node: String, done: (Result<JSONObject>) -> Unit) {
+        call("GET", "/api/sensors/setup?node=$node") { r ->
+            done(r.mapCatching { text ->
+                val s = runCatching { JSONObject(text) }.getOrNull()
+                if (s == null || !s.has("sources")) throw Exception("This sensor has no saved setup.")
+                s
+            })
+        }
     }
 
     fun saveSetup() {

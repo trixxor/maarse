@@ -70,7 +70,20 @@ can take up to one reading interval.
   the moment it happens. Use a reed switch that **closes** when the flap opens,
   between the pin and GND.
 - **No reading for hours:** a sensor that has gone quiet is shown in amber,
-  because a flat battery is the most common reason.
+  because a flat battery is the most common reason. The rule **Node went
+  quiet** under the other rules sets how long that is (it starts at 2 hours)
+  and can be switched off. It runs on your phone or computer host, so it only
+  works while that is running.
+- **Switch a rule off** with the switch on the rule. It stays in the designer
+  but is not sent to the sensor until you switch it on and send again.
+- **Start from something you have:** **Templates** in the designer replace
+  the inputs and rules with a starting point. **Copy link** gives one line of
+  text with your setup; **Paste a shared link** opens a setup someone sent you
+  (on the phone, copy the link first). **Open file** and **Copy from one of my
+  sensors** work the same way. A setup that comes from a link or a file never
+  keeps its recipients: it starts with you as the only receiver.
+- **Alarms and "quiet" are shown in the list only.** There is no push
+  notification yet.
 - **A pin or output that must stay on** (a heater relay) should not be used
   with a sleeping Heltec V4: outputs switch off while it sleeps.
 - **Plugged into USB the sensor stays awake**, so you can talk to it. After

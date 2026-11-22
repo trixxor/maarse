@@ -272,9 +272,11 @@ impl Store {
                 }
             }
             let alarm = active.values().next_back().map(|a| json!({"text": a.text, "t": a.t, "rule": a.rule}));
+            let quiet_min = quiet_minutes(n.setup.as_ref());
+            let quiet = n.last_seen > 0 && quiet_min.is_some_and(|m| now - n.last_seen > m as i64 * 60);
             out.push(json!({"node": hex(addr), "name": n.name, "favourite": n.favourite, "first_seen": n.first_seen,
                             "last_seen": n.last_seen, "age_s": now - n.last_seen, "channels": chans, "alarm": alarm,
-                            "has_setup": n.setup.is_some()}));
+                            "has_setup": n.setup.is_some(), "quiet_min": quiet_min.unwrap_or(0), "quiet": quiet}));
         }
         out.sort_by(|a, b| {
             let key = |v: &J| (!v["favourite"].as_bool().unwrap_or(false), v["name"].as_str().unwrap_or("").to_lowercase(), v["node"].as_str().unwrap_or("").to_string());
@@ -487,6 +489,18 @@ fn to_units(sources: &[Source], src: u8, x: f64) -> i32 {
 }
 
 /// Builds a recipe from the designer's setup.
+/// The host's "node went quiet" rule of a setup: minutes without a reading before
+/// the sensor counts as quiet, or None when the rule is switched off. A setup
+/// without the setting keeps the old behaviour: quiet after two hours.
+pub fn quiet_minutes(setup: Option<&J>) -> Option<u64> {
+    let q = setup.map(|s| &s["quiet"]);
+    match q {
+        Some(q) if q["on"].as_bool() == Some(false) => None,
+        Some(q) => Some(q["min"].as_u64().map_or(120, |m| m.clamp(5, 10_080))),
+        None => Some(120),
+    }
+}
+
 pub fn compile(setup: &J) -> Result<Recipe, String> {
     let mut r = Recipe {
         flags: 0,
@@ -534,6 +548,10 @@ pub fn compile(setup: &J) -> Result<Recipe, String> {
     }
     let sources: Vec<Source> = r.sources.to_vec();
     for (i, rule) in setup["rules"].as_array().ok_or("The setup has no rules")?.iter().enumerate() {
+        // A rule that is switched off stays in the designer but is not sent to the sensor.
+        if rule["on"].as_bool() == Some(false) {
+            continue;
+        }
         let id = rule["id"].as_u64().map_or(i as u64 + 1, |v| v) as u8;
         let w = &rule["when"];
         let cond = match w["type"].as_str().ok_or("A rule needs a condition")? {
@@ -847,6 +865,12 @@ pub(crate) fn compile_json(setup: &J) -> J {
             if r.report_to == 0 && r.alarm_to == 0 {
                 warnings.push("Nobody receives anything: choose who gets the readings and alarms");
             }
+            let mut warnings: Vec<String> = warnings.iter().map(|w| w.to_string()).collect();
+            if let Some(m) = quiet_minutes(Some(setup))
+                && m * 60 < 2 * r.interval_s as u64
+            {
+                warnings.push(format!("\"Node went quiet\" after {m} minutes is shorter than two readings ({} minutes apart): it would warn for no reason", r.interval_s / 60));
+            }
             json!({"ok": true, "hex": bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(), "size": bytes.len(),
                    "limit": sensor::MAX_RECIPE, "rules": r.rules.len(), "rule_limit": sensor::MAX_RULES,
                    "sources": r.sources.len(), "source_limit": sensor::MAX_SOURCES,
@@ -1024,6 +1048,34 @@ mod tests {
         assert_eq!(setup2["rules"][1]["then"][0]["text"], json!("Cellar is below 10 C"));
         // Alarm recipients: owners 0 and 1.
         assert_eq!(r.alarm_to, 0b11);
+    }
+
+    #[test]
+    fn a_rule_that_is_off_is_not_sent_to_the_sensor() {
+        let mut s = frost_setup();
+        s["rules"][2]["on"] = json!(false);
+        let r = compile(&s).unwrap();
+        assert_eq!(r.rules.len(), 2);
+        assert!(r.rules.iter().all(|x| x.id != 3));
+        // The rules that stay keep their ids.
+        assert_eq!(compile(&frost_setup()).unwrap().rules.len(), 3);
+    }
+
+    #[test]
+    fn quiet_rule_defaults_to_two_hours_and_can_be_changed_or_off() {
+        let mut s = frost_setup();
+        assert_eq!(quiet_minutes(None), Some(120));
+        assert_eq!(quiet_minutes(Some(&s)), Some(120));
+        s["quiet"] = json!({"on": true, "min": 45});
+        assert_eq!(quiet_minutes(Some(&s)), Some(45));
+        s["quiet"] = json!({"on": true, "min": 1});
+        assert_eq!(quiet_minutes(Some(&s)), Some(5));
+        s["quiet"] = json!({"on": false, "min": 45});
+        assert_eq!(quiet_minutes(Some(&s)), None);
+        // A quiet time shorter than two readings is warned about.
+        s["quiet"] = json!({"on": true, "min": 20});
+        let c = compile_json(&s);
+        assert!(c["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("went quiet")));
     }
 
     #[test]

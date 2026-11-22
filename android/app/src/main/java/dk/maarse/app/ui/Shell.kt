@@ -165,7 +165,7 @@ fun AppShell(nav: Nav) {
                         SensorDetailScreen(s.node, onBack = nav::back, onEdit = { Sensors.openDesign(it, "blank"); nav.go(Screen.SensorDesign) })
                     }
                     Screen.SensorStart -> SubPage("Set up a sensor", nav::back) {
-                        SensorStartScreen(onPick = { Sensors.openDesign(null, it); nav.go(Screen.SensorDesign) })
+                        SensorStartScreen(onPick = { Sensors.openDesign(null, it); nav.go(Screen.SensorDesign) }, onImported = { nav.go(Screen.SensorDesign) })
                     }
                     Screen.SensorDesign -> SubPage("Sensor setup", nav::back) {
                         SensorDesignScreen(onRule = { nav.go(Screen.SensorRule(it)) }, onSend = { nav.go(Screen.SensorSend) })

@@ -5,6 +5,9 @@ package dk.maarse.app.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import android.content.ClipData
+import android.content.ClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -184,7 +187,7 @@ fun SensorsPanel(onOpen: (String) -> Unit, onNew: () -> Unit) {
     val err by Sensors.error.collectAsState()
     LaunchedEffect(Unit) { Sensors.refresh() }
     val shown = (list ?: emptyList()).filter {
-        when (SensorsNav.filter) { "fav" -> it.favourite; "alarm" -> it.alarm != null || it.ageS > 7200; else -> true }
+        when (SensorsNav.filter) { "fav" -> it.favourite; "alarm" -> it.alarm != null || it.quiet; else -> true }
     }
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
@@ -227,7 +230,7 @@ private fun Spark(points: List<Pair<Double, Double?>>, color: Color) {
 @Composable
 private fun SensorCard(s: SensorInfo, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val quiet = s.ageS > 7200
+    val quiet = s.quiet
     val alarm = s.alarm != null
     var pts by remember(s.node) { mutableStateOf<List<Pair<Double, Double?>>>(emptyList()) }
     val lead = s.channels.firstOrNull { it.unit.isNotBlank() } ?: s.channels.firstOrNull()
@@ -279,7 +282,7 @@ fun SensorDetailScreen(node: String, onBack: () -> Unit, onEdit: (String) -> Uni
             Text("⚠ " + s.alarm, fontWeight = FontWeight.SemiBold)
             TextButton(onClick = { Sensors.dismiss(node) }) { Text("Mark as read") }
         }
-        else if (s.ageS > 7200) Text("No reading for ${s.ageS / 3600} hours. The battery may be flat, or the sensor is out of range.",
+        else if (s.quiet) Text("No reading for ${s.ageS / 3600} hours. The battery may be flat, or the sensor is out of range.",
             Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.tertiaryContainer).padding(14.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = s.favourite, onClick = { Sensors.meta(node, favourite = !s.favourite) }, label = { Text(if (s.favourite) "★ Favourite" else "☆ Favourite") })
@@ -318,8 +321,12 @@ private fun ChannelCard(node: String, c: SensorChan, range: Long) {
 // ---------- start, designer, rule, send ----------
 
 @Composable
-fun SensorStartScreen(onPick: (String) -> Unit) {
+fun SensorStartScreen(onPick: (String) -> Unit, onImported: () -> Unit) {
     Sensors.catalog.collectAsState().value
+    val ctx = LocalContext.current
+    val mine by Sensors.list.collectAsState()
+    var msg by remember { mutableStateOf("") }
+    var copyDialog by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { Sensors.loadCatalog() }
     val templates = Sensors.templates()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -330,6 +337,26 @@ fun SensorStartScreen(onPick: (String) -> Unit) {
         if (templates.isEmpty()) Text("Loading the starting points from your host … If this stays, the host is too old: update maarse-host.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         else SGroup {
             templates.forEachIndexed { i, t -> GroupRow(t.title, t.text, last = i == templates.lastIndex) { onPick(t.key) } }
+        }
+        STitle("Or start from something you have")
+        SGroup {
+            GroupRow("Paste a shared link", "Copy the link first, then press here", last = false) {
+                val text = (ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString() ?: ""
+                runCatching { Sensors.fromShare(text) }
+                    .onSuccess { Sensors.openImported(it); onImported() }
+                    .onFailure { msg = if (text.isBlank()) "Nothing is copied yet. Copy the link first." else it.message ?: "This is not a Må:rse sensor link." }
+            }
+            GroupRow("Copy from one of my sensors", "Start from a setup you already have", last = true) { copyDialog = true }
+        }
+        if (msg.isNotBlank()) Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        if (copyDialog) {
+            val withSetup = (mine ?: emptyList()).filter { it.hasSetup }
+            PickDialog("Copy from", withSetup.map { it.node to it.title }.ifEmpty { listOf("" to "None of your sensors has a saved setup yet.") }, null, { node ->
+                if (node.isNotEmpty()) Sensors.copyFrom(node) { r ->
+                    r.onSuccess { s -> s.put("name", s.optString("name") + " copy"); Sensors.openImported(s); onImported() }
+                        .onFailure { msg = it.message ?: "Error" }
+                }
+            }, { copyDialog = false })
         }
     }
 }
@@ -363,6 +390,9 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
     val d = Sensors.design ?: return
     val setup = d.setup
     var dialog by remember { mutableStateOf<String?>(null) }
+    var tplKey by remember { mutableStateOf<String?>(null) }
+    var copied by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
     val board = setup.optString("board", "xiao_nrf52840")
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         OutlinedTextField(setup.optString("name"), { setup.put("name", it.take(30)); Sensors.changed() }, Modifier.fillMaxWidth(), label = { Text("Name, e.g. Cellar") }, singleLine = true)
@@ -421,7 +451,14 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
         STitle("Rules")
         SGroup {
             val rules = setup.getJSONArray("rules").objs()
-            rules.forEachIndexed { i, r -> GroupRow(r.optString("name").ifBlank { "Rule ${i + 1}" }, ruleSummary(setup, r), last = false) { onRule(i) } }
+            rules.forEachIndexed { i, r -> GroupRow(r.optString("name").ifBlank { "Rule ${i + 1}" } + if (r.optBoolean("on", true)) "" else " (off)", ruleSummary(setup, r), last = false) { onRule(i) } }
+            val q = setup.optJSONObject("quiet")
+            GroupRow("Node went quiet", "On your host · " + if (q?.optBoolean("on", true) == false) "off" else "no reading for ${q?.optInt("min", 120) ?: 120} minutes", last = false) { dialog = "quiet" }
+            GroupRow("Start from a template", "Replaces the inputs and rules", last = false) { dialog = "template" }
+            GroupRow(if (copied) "Link copied" else "Copy link", "A line of text with this setup, to send to someone", last = false) {
+                (ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Må:rse sensor", Sensors.shareText(setup)))
+                copied = true
+            }
             GroupRow("+ Add a rule", null, last = true) {
                 val id = (rules.maxOfOrNull { it.optInt("id") } ?: 0) + 1
                 val src = readable(setup).firstOrNull()
@@ -442,7 +479,43 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
         "interval" -> NumberDialog("Wake and read every", (setup.optInt("interval_s", 900) / 60).toDouble(), "minutes", { setup.put("interval_s", maxOf(1, it.toInt()) * 60); Sensors.changed() }, { dialog = null })
         "addsource" -> AddSensorDialog(setup, board, onCustom = { dialog = "custom" }, onDismiss = { dialog = null })
         "custom" -> CustomSensorDialog(setup, null, onDismiss = { dialog = null })
+        "quiet" -> QuietDialog(setup, { dialog = null })
+        "template" -> PickDialog("Start from a template", Sensors.templates().map { it.key to it.title }, null, { tplKey = it }, { dialog = null })
     }
+    tplKey?.let { key ->
+        val title = Sensors.templates().firstOrNull { it.key == key }?.title ?: key
+        AlertDialog(onDismissRequest = { tplKey = null }, title = { Text(title) },
+            text = { Text("Replace the inputs and rules of this sensor with this starting point? The name and who gets the messages stay.") },
+            confirmButton = { TextButton(onClick = {
+                val n = Sensors.newSetup(key)
+                setup.put("sources", n.get("sources")); setup.put("rules", n.get("rules")); setup.put("interval_s", n.optInt("interval_s", 900))
+                if (setup.optString("name").isBlank()) setup.put("name", n.optString("name"))
+                Sensors.changed(); tplKey = null
+            }) { Text("Replace") } },
+            dismissButton = { TextButton(onClick = { tplKey = null }) { Text("Cancel") } })
+    }
+}
+
+/** The host rule "node went quiet": on or off, and after how many minutes without a reading. */
+@Composable
+private fun QuietDialog(setup: JSONObject, onDismiss: () -> Unit) {
+    val q = setup.optJSONObject("quiet") ?: JSONObject("""{"on":true,"min":120}""")
+    var on by remember { mutableStateOf(q.optBoolean("on", true)) }
+    var min by remember { mutableStateOf(q.optInt("min", 120).toString()) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Node went quiet") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Your phone or PC host shows the sensor as quiet when it sends nothing for a while. It catches a dead battery, and needs the host to be running.", style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Rule is on", Modifier.weight(1f)); Switch(on, { on = it }) }
+                OutlinedTextField(min, { min = it.filter { c -> c.isDigit() }.take(5) }, singleLine = true, label = { Text("No reading for") }, suffix = { Text("minutes") },
+                    enabled = on, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            }
+        },
+        confirmButton = { TextButton(onClick = {
+            setup.put("quiet", JSONObject().put("on", on).put("min", maxOf(5, min.toIntOrNull() ?: 120)))
+            Sensors.changed(); onDismiss()
+        }) { Text("OK") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 // ----- adding sensors (the choices come from the host's catalog) -----
@@ -810,6 +883,13 @@ fun SensorRuleScreen(index: Int, onBack: () -> Unit) {
             TextButton(onClick = onBack) { Text("Done", fontWeight = FontWeight.Bold) }
         }
         OutlinedTextField(r.optString("name"), { r.put("name", it.take(30)); Sensors.changed() }, Modifier.fillMaxWidth(), label = { Text("Rule name") }, singleLine = true)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Rule is on", fontWeight = FontWeight.SemiBold)
+                Text("A rule that is off is not sent to the sensor.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(r.optBoolean("on", true), { set { r.put("on", it) } })
+        }
         SCard {
             Kw("When")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -73,6 +73,18 @@ efter sin næste opvågning, så der kan gå op til ét måleinterval.
   åbnes, mellem pinnen og GND.
 - **Ingen måling i timer:** en sensor, der er blevet tavs, vises i gult, fordi
   et fladt batteri er den mest almindelige grund.
+  Reglen **Noden gik stille** blandt de andre regler bestemmer, hvor længe det
+  er (den starter på 2 timer), og den kan slås fra. Den kører på din telefon
+  eller computer som vært, så den virker kun, mens den kører.
+- **Slå en regel fra** med kontakten på reglen. Den bliver i designeren, men
+  sendes ikke til sensoren, før du tænder den og sender igen.
+- **Start fra noget, du har:** **Skabeloner** i designeren erstatter indgange
+  og regler med et udgangspunkt. **Kopiér link** giver en tekstlinje med din
+  opsætning, og **Indsæt et delt link** åbner en opsætning, nogen har sendt
+  dig (på telefonen skal du kopiere linket først). **Åbn fil** og **Kopiér
+  fra en af mine sensorer** virker på samme måde. En opsætning fra et link
+  eller en fil beholder aldrig sine modtagere: du er den eneste modtager.
+- **Alarmer og "stille" vises kun i listen.** Der er endnu ingen push-besked.
 - **En pin eller udgang, der skal blive tændt** (et varmerelæ), bør ikke bruges
   med en sovende Heltec V4: udgange slukker, mens den sover.
 - **Sat i USB bliver sensoren vågen,** så du kan tale med den. Efter en

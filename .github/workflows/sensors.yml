@@ -28,7 +28,7 @@ jobs:
       - name: Merge the files
         run: python3 tools/sensor_catalog.py build
       - name: Every description is valid and every data sheet test passes
-        run: cargo test --locked -p maarse-host sensors::
+        run: "cargo test --locked -p maarse-host sensors::"
       - uses: actions/upload-artifact@v4
         with:
           name: catalog
@@ -50,7 +50,7 @@ jobs:
           KEY_B64: ${{ secrets.MAARSE_SIGN_KEY_B64 }}
         run: |
           [ -n "$KEY_B64" ] && [ -n "$MAARSE_RELEASE_PUBKEY" ] || { echo "MAARSE_SIGN_KEY_B64 and MAARSE_RELEASE_PUBKEY are needed: the sensor list must be signed"; exit 1; }
-      - name: Merge the files (the version is the time: only a newer list is accepted)
+      - name: "Merge the files (the version is the time, so only a newer list is accepted)"
         run: python3 tools/sensor_catalog.py build
       - name: Sign
         env:

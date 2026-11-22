@@ -76,7 +76,7 @@ fn serve_one() -> Result<(), String> {
             line.push(byte[0]);
         }
         let answer = core::handle(&String::from_utf8_lossy(&line));
-        let text = serde_json::to_string(&answer).unwrap_or_default();
+        let text = serde_json::to_string(&answer).unwrap_or_default() + "\n";
         let _ = file.write_all(text.as_bytes());
         let _ = file.sync_all();
         unsafe { DisconnectNamedPipe(handle as _) };

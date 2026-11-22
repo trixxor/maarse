@@ -97,14 +97,14 @@ fn update_info() -> Option<UpdateInfo> {
 
 /// Polls the service every 3 seconds. Tells the window when something changed, opens the web client once
 /// when the host is first up, and notices when an update has replaced the files (the service then reports
-/// a new version): then this app starts itself again from the new files.
+/// a newer version than this app): then this app starts itself again from the new files.
 fn spawn_poller() {
     std::thread::spawn(|| {
         let mut last = String::new();
         loop {
             let r = ipc::request("status");
             if let Ok(s) = &r {
-                if s.version != VERSION && !s.version.is_empty() {
+                if maarse_service::update::is_newer(VERSION, &s.version) {
                     set_status(r);
                     post(&HWND_MAIN, WM_RESTART_SELF);
                     return;

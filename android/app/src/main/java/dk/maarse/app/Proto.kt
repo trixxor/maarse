@@ -104,6 +104,8 @@ object Cmd {
     // Linked devices (maarse-host only).
     fun linkDevice(req: Int, device: String) = frame(0x35) { u16(req); addr(device) }
     fun getPerson() = frame(0x36)
+    /** Sensors (0x39): dest all zeros = the connected node or the host itself. */
+    fun sensor(req: Int, dest: String, op: Int, data: ByteArray = byteArrayOf()) = frame(0x39) { u16(req); addr(dest); u8(op); bytes(data) }
     fun personSetup(req: Int, op: Int, text: String = "") = frame(0x37) { u16(req); u8(op); text(text) }
     fun meshcoreProof(req: Int, operation: Int, challenge: ByteArray, payload: String) = frame(0x37) { u16(req); u8(10); u8(operation); bytes(challenge); text(payload) }
 }
@@ -165,6 +167,8 @@ sealed class Ev {
     ) : Ev()
     data class DeviceLinked(val device: String, val index: Int, val words: String) : Ev()
     data class PersonPhrase(val phrase: String) : Ev()
+    /** Sensors (0xbd): an answer or a push about a sensor node, see maarse-core/src/sensor.rs. */
+    class Sensor(val node: String, val op: Int, val data: ByteArray) : Ev()
     data class PersonBackup(val code: String) : Ev()
     data class MeshCoreProof(val req: Int, val offset: Int, val total: Int, val bytes: ByteArray) : Ev()
     data class FileIncoming(val fileId: Long, val from: String, val size: Int, val mime: String, val name: String) : Ev()
@@ -248,6 +252,7 @@ fun decodeEvent(f: ByteArray): Ev {
                 (0 until n).map { r.addr(25 + 17 * it) to (r.u8(41 + 17 * it) != 0) }, r.txt(25 + 17 * n))
         }
         0xb7 -> Ev.PersonPhrase(r.txt(1))
+        0xbd -> if (f.size >= 18) Ev.Sensor(r.addr(1), r.u8(17), f.copyOfRange(18, f.size)) else Ev.Unknown(t)
         0xb8 -> Ev.PersonBackup(r.txt(1))
         0xbc -> if (f.size >= 7) Ev.MeshCoreProof(r.u16(1), r.u16(3), r.u16(5), f.copyOfRange(7, f.size)) else Ev.Unknown(t)
         0xb0 -> Ev.HistoryItem(r.u64(1), r.u32(9), r.u8(13) and 1 != 0, r.u8(13) and 2 != 0, r.u8(14), r.u8(15),

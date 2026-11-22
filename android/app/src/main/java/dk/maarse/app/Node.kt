@@ -888,6 +888,13 @@ object Node : LinkListener {
         }
     }
 
+    /** Where the host's HTTP API is (origin, access key): the phone's own node or the home computer; none for a radio alone. */
+    fun hostBase(): Pair<String, String>? = when (prefs.mode) {
+        Mode.PHONE -> HostFiles.accessKey(app)?.let { "http://127.0.0.1:${HostFiles.PORT}" to it }
+        Mode.REMOTE -> remoteOrigin()?.let { it.toString().trimEnd('/') to prefs.remoteKey.trim() }
+        else -> null
+    }
+
     private fun remoteRequest(path: String): okhttp3.Request.Builder {
         val origin = requireNotNull(remoteOrigin()) { "Invalid host address" }
         val url = requireNotNull(origin.resolve(path))
@@ -1021,6 +1028,7 @@ object Node : LinkListener {
                 person.value = ev
             }
             is Ev.PersonPhrase -> phrase.value = ev.phrase
+            is Ev.Sensor -> Sensors.onEvent(ev)
             is Ev.PersonBackup -> backupCode.value = ev.code
             is Ev.MeshCoreProof -> acceptMeshcoreProof(ev)
             is Ev.DeviceLinked -> { linked.value = ev; note("Device linked: ${shortAddr(ev.device)} (${ev.words})") }

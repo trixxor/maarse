@@ -73,6 +73,7 @@ import dk.maarse.app.HostFiles
 import dk.maarse.app.Mode
 import dk.maarse.app.ModemBridge
 import dk.maarse.app.Node
+import dk.maarse.app.Sensors
 import dk.maarse.app.PersonState
 import dk.maarse.app.R
 
@@ -93,6 +94,12 @@ sealed interface Screen {
     data class Net(val page: NetPage) : Screen
     data object Welcome : Screen
     data object WelcomeAccount : Screen
+    /** Sensors (Nodes > Sensors): one sensor, the start page, the designer, a rule and the test-and-send page. */
+    data class Sensor(val node: String) : Screen
+    data object SensorStart : Screen
+    data object SensorDesign : Screen
+    data class SensorRule(val index: Int) : Screen
+    data object SensorSend : Screen
 }
 
 /** Navigation: five places in a bar that never hides; each place has its own
@@ -155,6 +162,17 @@ fun AppShell(nav: Nav) {
                     Screen.Me -> SubPage("You", nav::back) { MeScreen(nav) }
                     is Screen.Page -> SubPage(s.page.title, nav::back) { MePageContent(s.page) }
                     is Screen.Net -> SubPage(s.page.title, nav::back) { NetPageContent(s.page) }
+                    is Screen.Sensor -> SubPage("Sensor", nav::back) {
+                        SensorDetailScreen(s.node, onBack = nav::back, onEdit = { Sensors.openDesign(it, "blank"); nav.go(Screen.SensorDesign) })
+                    }
+                    Screen.SensorStart -> SubPage("Set up a sensor", nav::back) {
+                        SensorStartScreen(onPick = { Sensors.openDesign(null, it); nav.go(Screen.SensorDesign) })
+                    }
+                    Screen.SensorDesign -> SubPage("Sensor setup", nav::back) {
+                        SensorDesignScreen(onRule = { nav.go(Screen.SensorRule(it)) }, onSend = { nav.go(Screen.SensorSend) })
+                    }
+                    is Screen.SensorRule -> SubPage("Edit a rule", nav::back) { SensorRuleScreen(s.index, onBack = nav::back) }
+                    Screen.SensorSend -> SubPage("Test and send", nav::back) { SensorSendScreen() }
                     else -> {}
                 }
             }
@@ -220,7 +238,8 @@ private fun Home(nav: Nav) {
         Box(Modifier.weight(1f)) {
             when (nav.tab) {
                 Tab.CHATS -> ChatsScreen(onOpen = { nav.go(Screen.Chat(it)) }, onAlerts = { nav.go(Screen.Net(NetPage.ALERTS)) })
-                Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onMeshcoreChat = { nav.select(Tab.CHATS, reset = false) }, onPages = { nav.select(Tab.PAGES, reset = false) }, onAnnounces = { nav.go(Screen.Net(NetPage.ANNOUNCES)) })
+                Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onMeshcoreChat = { nav.select(Tab.CHATS, reset = false) }, onPages = { nav.select(Tab.PAGES, reset = false) }, onAnnounces = { nav.go(Screen.Net(NetPage.ANNOUNCES)) },
+                    onSensor = { nav.go(Screen.Sensor(it)) }, onSensorNew = { nav.go(Screen.SensorStart) })
                 Tab.NETWORK -> NetworkScreen(onPage = { nav.go(Screen.Net(it)) })
                 Tab.SETTINGS -> MeScreen(nav)
                 Tab.PAGES -> {}

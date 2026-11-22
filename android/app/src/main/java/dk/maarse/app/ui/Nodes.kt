@@ -49,7 +49,9 @@ private fun reach(n: NodeEntry): String = buildList {
 
 /** People and nodes heard, newest first. */
 @Composable
-fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}, onAnnounces: () -> Unit = {}, onMeshcoreChat: () -> Unit = {}) {
+fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}, onAnnounces: () -> Unit = {}, onMeshcoreChat: () -> Unit = {},
+                   onSensor: (String) -> Unit = {}, onSensorNew: () -> Unit = {}) {
+    if (SensorsNav.on) { Column(Modifier.fillMaxSize()) { SensorsToggle(); SensorsPanel(onSensor, onSensorNew) }; return }
     val mcState by Node.meshcoreAccess.collectAsState()
     val link by Node.mcLink.collectAsState()
     val showMc = link.state != 0
@@ -65,6 +67,7 @@ fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}, onAnno
         .filter { filter.isBlank() || Node.label(it.addr).contains(filter, true) || it.addr.startsWith(filter.lowercase()) }
         .sortedWith(compareByDescending<NodeEntry> { Node.nicknames.value.containsKey(it.addr) }.thenByDescending { it.lastHeard })
     Column(Modifier.fillMaxSize()) {
+        SensorsToggle()
         if (showMc) McNodeChips()
         OutlinedTextField(
             filter, { filter = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), singleLine = true,

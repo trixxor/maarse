@@ -1,0 +1,526 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
+package dk.maarse.app.ui
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.unit.dp
+import dk.maarse.app.SensorChan
+import dk.maarse.app.SensorInfo
+import dk.maarse.app.Sensors
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** Whether the Nodes tab shows sensors (kept when you go into one and back). */
+object SensorsNav { var on by mutableStateOf(false); var filter by mutableStateOf("all") }
+
+private fun JSONArray.objs(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
+private fun fmt(v: Double?): String = if (v == null) "–" else if (kotlin.math.abs(v) >= 1000) v.toLong().toString() else String.format(java.util.Locale.ROOT, "%.1f", v).removeSuffix(".0")
+private fun ago(s: Long): String = when {
+    s < 90 -> "just now"; s < 5400 -> "${s / 60} min ago"; s < 129600 -> "${s / 3600} h ago"; else -> "${s / 86400} days ago"
+}
+
+// ---------- small parts ----------
+
+/** A rounded card that fills the width of the screen's own padding (the app's Card2 adds a margin of its own). */
+@Composable
+private fun SCard(content: @Composable () -> Unit) = Column(
+    Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(16.dp),
+    verticalArrangement = Arrangement.spacedBy(6.dp)) { content() }
+
+@Composable
+private fun SGroup(content: @Composable () -> Unit) = Column(
+    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer)) { content() }
+
+@Composable
+private fun STitle(t: String) = Text(t, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+    fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 12.dp, top = 6.dp))
+
+@Composable
+private fun Chip(text: String, kind: Int, onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val (bg, fg) = when (kind) {
+        0 -> c.secondaryContainer to c.onSecondaryContainer
+        1 -> c.tertiaryContainer to c.onTertiaryContainer
+        2 -> c.primaryContainer to c.onPrimaryContainer
+        else -> c.surfaceContainerHigh to c.onSurface
+    }
+    Box(Modifier.defaultMinSize(minHeight = 44.dp).clip(RoundedCornerShape(24.dp)).background(bg).clickable(onClick = onClick).padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+        Text(text, color = fg, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun Kw(t: String) = Text(t.uppercase(), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold,
+    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth())
+
+@Composable
+private fun PickDialog(title: String, options: List<Pair<String, String>>, current: String?, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                for ((v, l) in options) Row(Modifier.fillMaxWidth().clickable { onPick(v); onDismiss() }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = v == current, onClick = { onPick(v); onDismiss() }); Text(l)
+                }
+            }
+        })
+}
+
+@Composable
+private fun NumberDialog(title: String, initial: Double, unit: String, onOk: (Double) -> Unit, onDismiss: () -> Unit) {
+    var t by remember { mutableStateOf(fmt(initial)) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(title) },
+        text = { OutlinedTextField(t, { t = it }, singleLine = true, suffix = { Text(unit) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)) },
+        confirmButton = { TextButton(onClick = { t.replace(',', '.').toDoubleOrNull()?.let { onOk(it); onDismiss() } }) { Text("OK") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+@Composable
+private fun TextDialog(title: String, initial: String, onOk: (String) -> Unit, onDismiss: () -> Unit) {
+    var t by remember { mutableStateOf(initial) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(title) },
+        text = { OutlinedTextField(t, { t = it.take(40) }, singleLine = true) },
+        confirmButton = { TextButton(onClick = { onOk(t.trim()); onDismiss() }) { Text("OK") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+/** A simple line chart: readings over time, with dashed threshold lines, alarm marks and shaded spans. */
+@Composable
+private fun LineChart(points: List<Pair<Double, Double?>>, modifier: Modifier = Modifier, from: Double? = null, to: Double? = null,
+                      lines: List<Double> = emptyList(), marks: List<Pair<Double, Boolean>> = emptyList(), bands: List<Pair<Double, Double>> = emptyList()) {
+    val line = MaterialTheme.colorScheme.primary
+    val warn = MaterialTheme.colorScheme.error
+    val amber = Amber
+    val span = MaterialTheme.colorScheme.tertiaryContainer
+    Canvas(modifier.fillMaxWidth().height(110.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
+        val ys = points.mapNotNull { it.second } + lines
+        if (points.size < 2 || ys.isEmpty()) return@Canvas
+        val t0 = from ?: points.first().first; val t1 = to ?: points.last().first
+        var lo = ys.min(); var hi = ys.max(); if (hi - lo < 1) { lo -= .5; hi += .5 }
+        val pad = 8.dp.toPx()
+        fun x(t: Double) = (pad + (t - t0) / maxOf(1.0, t1 - t0) * (size.width - 2 * pad)).toFloat()
+        fun y(v: Double) = (pad + (1 - (v - lo) / (hi - lo)) * (size.height - 2 * pad)).toFloat()
+        for ((a, b) in bands) drawRect(span, Offset(x(a), pad), androidx.compose.ui.geometry.Size(maxOf(2f, x(b) - x(a)), size.height - 2 * pad))
+        for (l in lines) drawLine(amber, Offset(pad, y(l)), Offset(size.width - pad, y(l)), 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)))
+        val p = Path(); var first = true
+        for ((t, v) in points) { if (v == null) continue; if (first) { p.moveTo(x(t), y(v)); first = false } else p.lineTo(x(t), y(v)) }
+        drawPath(p, line, style = Stroke(width = 5f))
+        for ((t, bad) in marks) drawLine(if (bad) warn else line, Offset(x(t), pad), Offset(x(t), size.height - pad), 3f)
+    }
+}
+
+// ---------- the Nodes tab: Nodes | Sensors ----------
+
+@Composable
+fun SensorsToggle() {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = !SensorsNav.on, onClick = { SensorsNav.on = false }, label = { Text("Nodes") })
+        FilterChip(selected = SensorsNav.on, onClick = { SensorsNav.on = true; Sensors.refresh() }, label = { Text("Sensors") })
+    }
+}
+
+/** Your sensors, favourites first: values at a glance, alarms and quiet sensors stand out. */
+@Composable
+fun SensorsPanel(onOpen: (String) -> Unit, onNew: () -> Unit) {
+    val list by Sensors.list.collectAsState()
+    val err by Sensors.error.collectAsState()
+    LaunchedEffect(Unit) { Sensors.refresh() }
+    val shown = (list ?: emptyList()).filter {
+        when (SensorsNav.filter) { "fav" -> it.favourite; "alarm" -> it.alarm != null || it.ageS > 7200; else -> true }
+    }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for ((k, l) in listOf("all" to "Mine", "fav" to "Favourites", "alarm" to "Alarms"))
+                FilterChip(selected = SensorsNav.filter == k, onClick = { SensorsNav.filter = k }, label = { Text(l) })
+        }
+        if (err.isNotBlank()) Text(err, Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        else if (list != null && shown.isEmpty()) Text(if (list!!.isEmpty()) "No sensors yet. Set one up, or wait for one to send." else "Nothing here.",
+            Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
+            items(shown, key = { it.node }) { s -> SensorCard(s) { onOpen(s.node) } }
+        }
+        Button(onClick = onNew, Modifier.fillMaxWidth().padding(16.dp)) { Text("Set up a sensor") }
+    }
+}
+
+@Composable
+private fun SensorCard(s: SensorInfo, onClick: () -> Unit) {
+    val quiet = s.ageS > 7200
+    val bg = if (s.alarm != null) MaterialTheme.colorScheme.errorContainer else if (quiet) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainer
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(bg).clickable(onClick = onClick).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text((if (s.favourite) "★ " else "") + s.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text(if (s.alarm != null) "Alarm" else if (quiet) "Quiet ${s.ageS / 3600} h" else ago(s.ageS), style = MaterialTheme.typography.labelMedium)
+        }
+        if (s.alarm != null) Text("⚠ " + s.alarm, fontWeight = FontWeight.SemiBold)
+        else if (quiet) Text("No reading for ${s.ageS / 3600} hours. The battery may be flat.")
+        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            for (c in s.channels.take(3)) Column {
+                Text(c.name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(fmt(c.value) + " " + c.unit, style = MaterialTheme.typography.titleLarge)
+            }
+        }
+    }
+}
+
+// ---------- one sensor ----------
+
+@Composable
+fun SensorDetailScreen(node: String, onBack: () -> Unit, onEdit: (String) -> Unit) {
+    val list by Sensors.list.collectAsState()
+    val s = list?.firstOrNull { it.node == node }
+    var range by remember { mutableStateOf(86400L) }
+    var renaming by remember { mutableStateOf(false) }
+    var forgetting by remember { mutableStateOf(false) }
+    var alarms by remember { mutableStateOf<List<Triple<Long, Boolean, String>>>(emptyList()) }
+    LaunchedEffect(node) { Sensors.alarms(node) { alarms = it } }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (s == null) { Text("This sensor is not known to the host (any more)."); return@Column }
+        Text(s.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(node + " · heard " + ago(s.ageS), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (s.alarm != null) Text("⚠ " + s.alarm, Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.errorContainer).padding(14.dp), fontWeight = FontWeight.SemiBold)
+        else if (s.ageS > 7200) Text("No reading for ${s.ageS / 3600} hours. The battery may be flat, or the sensor is out of range.",
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.tertiaryContainer).padding(14.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = s.favourite, onClick = { Sensors.meta(node, favourite = !s.favourite) }, label = { Text(if (s.favourite) "★ Favourite" else "☆ Favourite") })
+            FilterChip(selected = range == 86400L, onClick = { range = 86400L }, label = { Text("24 hours") })
+            FilterChip(selected = range == 604800L, onClick = { range = 604800L }, label = { Text("7 days") })
+        }
+        for (c in s.channels) ChannelCard(node, c, range)
+        SCard { Text("Alarms", fontWeight = FontWeight.SemiBold)
+            if (alarms.isEmpty()) Text("None so far.", style = MaterialTheme.typography.bodySmall)
+            for ((t, raised, text) in alarms.take(10)) Text((if (raised) "⚠ " else "✓ Cleared: ") + text + " · " + time(t * 1000), style = MaterialTheme.typography.bodySmall)
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            FilledTonalButton(onClick = { onEdit(node) }) { Text("Edit setup") }
+            OutlinedButton(onClick = { renaming = true }) { Text("Rename") }
+            OutlinedButton(onClick = { forgetting = true }) { Text("Forget") }
+        }
+    }
+    if (renaming) TextDialog("Name of this sensor", s?.name ?: "", { Sensors.meta(node, name = it) }, { renaming = false })
+    if (forgetting) AlertDialog(onDismissRequest = { forgetting = false }, title = { Text("Forget this sensor?") },
+        text = { Text("Its history is removed from this host. The sensor itself is not changed.") },
+        confirmButton = { TextButton(onClick = { Sensors.forget(node); forgetting = false; onBack() }) { Text("Forget") } },
+        dismissButton = { TextButton(onClick = { forgetting = false }) { Text("Cancel") } })
+}
+
+@Composable
+private fun ChannelCard(node: String, c: SensorChan, range: Long) {
+    var pts by remember(node, c.chan, range) { mutableStateOf<List<Pair<Double, Double?>>>(emptyList()) }
+    LaunchedEffect(node, c.chan, range) { Sensors.series(node, c.chan, range) { pts = it } }
+    SCard {
+        Text(c.name + " · channel " + c.chan, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(fmt(c.value) + " " + c.unit, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        LineChart(pts)
+    }
+}
+
+// ---------- start, designer, rule, send ----------
+
+@Composable
+fun SensorStartScreen(onPick: (String) -> Unit) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Pick what it should do, test it here, then send it to the node. You can change it later, also over the radio.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SCard { Text("The first setup of a new board is done on a computer over USB (the sensor takes you as its owner). Changes after that can be sent from here.",
+            style = MaterialTheme.typography.bodySmall) }
+        STitle("Pick a starting point")
+        SGroup {
+            Sensors.TEMPLATES.forEachIndexed { i, t -> GroupRow(t.title, t.text, last = i == Sensors.TEMPLATES.lastIndex) { onPick(t.key) } }
+        }
+    }
+}
+
+private fun readable(setup: JSONObject) = setup.getJSONArray("sources").objs().filter { it.getJSONObject("input").getString("type") != "gpio_out" }
+private fun outputs(setup: JSONObject) = setup.getJSONArray("sources").objs().filter { it.getJSONObject("input").getString("type") == "gpio_out" }
+private fun srcName(setup: JSONObject, chan: Int) = setup.getJSONArray("sources").objs().firstOrNull { it.getInt("chan") == chan }?.optString("name") ?: "?"
+private fun unitOf(setup: JSONObject, chan: Int): String {
+    val k = setup.getJSONArray("sources").objs().firstOrNull { it.getInt("chan") == chan }?.optString("kind") ?: return ""
+    return mapOf("temperature" to "°C", "humidity" to "%", "pressure" to "hPa", "voltage" to "V", "percent" to "%", "distance" to "mm")[k] ?: ""
+}
+private val OPS = listOf("<" to "is below", ">" to "is above", "<=" to "is at most", ">=" to "is at least", "==" to "is exactly", "!=" to "is not")
+
+private fun ruleSummary(setup: JSONObject, r: JSONObject): String {
+    val w = r.getJSONObject("when")
+    val head = when (w.getString("type")) {
+        "every" -> "Every ${w.getInt("secs") / 60} minutes"
+        "compare" -> "When ${srcName(setup, w.getInt("chan"))} ${OPS.firstOrNull { it.first == w.getString("op") }?.second ?: ""} ${fmt(w.getDouble("value"))} ${unitOf(setup, w.getInt("chan"))}"
+        "change" -> "When ${srcName(setup, w.getInt("chan"))} changes by more than ${fmt(w.getDouble("delta"))}"
+        else -> "When ${srcName(setup, w.getInt("chan"))} ${when (w.optString("to")) { "high" -> "reads 1"; "low" -> "reads 0"; else -> "changes" }}"
+    }
+    val acts = r.getJSONArray("then").objs().joinToString(", ") {
+        when (it.getString("type")) { "report" -> "send readings"; "alarm" -> "alarm “${it.optString("text")}”"; "set_out" -> "set ${srcName(setup, it.getInt("chan"))} ${if (it.getBoolean("on")) "on" else "off"}"; else -> "wake every ${it.optInt("secs")} s" }
+    }
+    return "$head → $acts"
+}
+
+@Composable
+fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
+    Sensors.rev.collectAsState().value
+    val d = Sensors.design ?: return
+    val setup = d.setup
+    var dialog by remember { mutableStateOf<String?>(null) }
+    val board = setup.optString("board", "xiao_nrf52840")
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        OutlinedTextField(setup.optString("name"), { setup.put("name", it.take(30)); Sensors.changed() }, Modifier.fillMaxWidth(), label = { Text("Name, e.g. Cellar") }, singleLine = true)
+        if (d.note.isNotBlank()) Text(d.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        STitle("This sensor")
+        SCard {
+            Chip(Sensors.BOARDS.first { it.first == board }.second, 3) { dialog = "board" }
+            Text("Wake and read every", style = MaterialTheme.typography.bodySmall)
+            Chip("${setup.optInt("interval_s", 900) / 60} minutes", 3) { dialog = "interval" }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Sleep between readings (saves battery)", Modifier.weight(1f))
+                Switch(setup.optBoolean("sleep", true), { setup.put("sleep", it); Sensors.changed() })
+            }
+        }
+        STitle("Inputs and outputs")
+        SCard {
+            for (s in setup.getJSONArray("sources").objs()) Text("#${s.getInt("chan")}  ${s.optString("name")} · ${s.getJSONObject("input").getString("type").replace('_', ' ')}", style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(onClick = { dialog = "addsource" }) { Text("+ Add sensor or pin") }
+        }
+        STitle("Who gets it")
+        SCard {
+            for ((key, label) in listOf("report_to" to "Readings", "alarm_to" to "Alarms")) {
+                val to = setup.optJSONObject(key) ?: JSONObject("""{"owners":[0],"channel":false}""").also { setup.put(key, it) }
+                val me = (0 until to.getJSONArray("owners").length()).any { to.getJSONArray("owners").getInt(it) == 0 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("$label to me", Modifier.weight(1f))
+                    Switch(me, { on -> to.put("owners", JSONArray().also { a -> if (on) a.put(0) }); Sensors.changed() })
+                }
+            }
+            Text("Owners are people (accounts). Never the public channel.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        STitle("Rules")
+        SGroup {
+            val rules = setup.getJSONArray("rules").objs()
+            rules.forEachIndexed { i, r -> GroupRow(r.optString("name").ifBlank { "Rule ${i + 1}" }, ruleSummary(setup, r), last = false) { onRule(i) } }
+            GroupRow("+ Add a rule", null, last = true) {
+                val id = (rules.maxOfOrNull { it.optInt("id") } ?: 0) + 1
+                val src = readable(setup).firstOrNull()
+                val rule = JSONObject("""{"id":$id,"name":"Rule $id","then":[{"type":"alarm","text":"Alarm"}]}""")
+                rule.put("when", if (src != null) JSONObject("""{"type":"compare","chan":${src.getInt("chan")},"op":"<","value":10,"clear":10,"count":1}""") else JSONObject("""{"type":"every","secs":900}"""))
+                setup.getJSONArray("rules").put(rule); Sensors.changed(); onRule(rules.size)
+            }
+        }
+        Button(onClick = onSend, Modifier.fillMaxWidth()) { Text("Test and send") }
+        Text("Rules run on the sensor itself, so alarms work even when your phone is off.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
+    }
+    when (dialog) {
+        "board" -> PickDialog("Board", Sensors.BOARDS.map { it.first to it.second }, board, { setup.put("board", it); Sensors.changed() }, { dialog = null })
+        "interval" -> NumberDialog("Wake and read every", (setup.optInt("interval_s", 900) / 60).toDouble(), "minutes", { setup.put("interval_s", maxOf(1, it.toInt()) * 60); Sensors.changed() }, { dialog = null })
+        "addsource" -> {
+            val used = setup.getJSONArray("sources").objs().mapNotNull { it.getJSONObject("input").optInt("pin", -1).takeIf { p -> p >= 0 } }.toSet()
+            val hasBme = setup.getJSONArray("sources").objs().any { it.getJSONObject("input").getString("type") == "bme280" }
+            val i2c = if (hasBme) Sensors.i2cPins(board)?.toSet() ?: emptySet() else emptySet()
+            val free = Sensors.pins(board).filter { it.first !in used && it.first !in i2c }
+            val opts = buildList {
+                if (Sensors.i2cPins(board) != null && !hasBme) add("bme" to "Temperature, humidity, pressure (BME280)")
+                if (free.isNotEmpty()) { add("pin_in" to "Pin input (door, button)"); add("pin_out" to "Pin output (relay, LED)") }
+                add("battery" to "Battery voltage"); add("chip" to "Chip temperature")
+            }
+            PickDialog("Add", opts, null, { v ->
+                val arr = setup.getJSONArray("sources")
+                fun next(): Int { var c = 1; while (arr.objs().any { it.getInt("chan") == c }) c++; return c }
+                fun add(kind: String, name: String, input: String) = arr.put(JSONObject("""{"chan":${next()},"kind":"$kind","name":"$name","input":$input}"""))
+                when (v) {
+                    "bme" -> { add("temperature", "Temperature", """{"type":"bme280","addr":118,"what":"temperature"}"""); add("humidity", "Humidity", """{"type":"bme280","addr":118,"what":"humidity"}"""); add("pressure", "Pressure", """{"type":"bme280","addr":118,"what":"pressure"}""") }
+                    "pin_in" -> add("digital", "Pin ${free[0].second}", """{"type":"gpio_in","pin":${free[0].first},"pull":"up","invert":false}""")
+                    "pin_out" -> add("digital", "Output ${free[0].second}", """{"type":"gpio_out","pin":${free[0].first},"active_low":false}""")
+                    "battery" -> add("voltage", "Battery", """{"type":"battery"}""")
+                    else -> add("temperature", "Chip temperature", """{"type":"chip_temp"}""")
+                }
+                Sensors.changed()
+            }, { dialog = null })
+        }
+    }
+}
+
+@Composable
+fun SensorRuleScreen(index: Int, onBack: () -> Unit) {
+    Sensors.rev.collectAsState().value
+    val d = Sensors.design ?: return
+    val setup = d.setup
+    val rules = setup.getJSONArray("rules")
+    if (index >= rules.length()) { onBack(); return }
+    val r = rules.getJSONObject(index)
+    val w = r.getJSONObject("when")
+    var dialog by remember { mutableStateOf<String?>(null) }
+    var actionIdx by remember { mutableStateOf(0) }
+    val readableSrc = readable(setup).map { it.getInt("chan").toString() to it.optString("name") }
+    fun set(f: () -> Unit) { f(); Sensors.changed() }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        OutlinedTextField(r.optString("name"), { r.put("name", it.take(30)); Sensors.changed() }, Modifier.fillMaxWidth(), label = { Text("Rule name") }, singleLine = true)
+        SCard {
+            Kw("When")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip(when (w.getString("type")) { "every" -> "every …"; "compare" -> "a value …"; "change" -> "a value changes by …"; else -> "a pin …" }, 3) { dialog = "trigger" }
+                when (w.getString("type")) {
+                    "every" -> Chip("${w.getInt("secs") / 60} minutes", 3) { dialog = "secs" }
+                    "compare" -> {
+                        Chip(srcName(setup, w.getInt("chan")), 0) { dialog = "src" }
+                        Chip(OPS.first { it.first == w.getString("op") }.second, 1) { dialog = "op" }
+                        Chip(fmt(w.getDouble("value")) + " " + unitOf(setup, w.getInt("chan")), 1) { dialog = "value" }
+                        Chip("for ${w.optInt("count", 1)} readings", 1) { dialog = "count" }
+                    }
+                    "change" -> { Chip(srcName(setup, w.getInt("chan")), 0) { dialog = "src" }; Chip("by more than " + fmt(w.getDouble("delta")), 1) { dialog = "delta" } }
+                    else -> { Chip(srcName(setup, w.getInt("chan")), 0) { dialog = "src" }; Chip(when (w.optString("to")) { "high" -> "reads 1 (door open)"; "low" -> "reads 0"; else -> "changes" }, 1) { dialog = "edge" } }
+                }
+            }
+            if (w.getString("type") == "compare") {
+                Kw("Clear")
+                Chip("back to normal at " + fmt(w.getDouble("clear")) + " " + unitOf(setup, w.getInt("chan")), 1) { dialog = "clear" }
+            }
+            val acts = r.getJSONArray("then")
+            for (i in 0 until acts.length()) {
+                val a = acts.getJSONObject(i)
+                Kw(if (i == 0) "Then" else "and")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    when (a.getString("type")) {
+                        "report" -> Chip("send readings", 2) {}
+                        "alarm" -> { Chip("send alarm", 2) {}; Chip("“" + a.optString("text") + "”", 2) { actionIdx = i; dialog = "text" } }
+                        "set_out" -> { Chip("set " + srcName(setup, a.getInt("chan")) + if (a.getBoolean("on")) " on" else " off", 2) { actionIdx = i; dialog = "out" } }
+                        else -> Chip("wake every ${a.optInt("secs")} s", 2) { actionIdx = i; dialog = "interval" }
+                    }
+                    Chip("remove", 3) { set { val n = JSONArray(); for (j in 0 until acts.length()) if (j != i) n.put(acts.get(j)); r.put("then", n) } }
+                }
+            }
+            OutlinedButton(onClick = { dialog = "addaction" }) { Text("+ Add a step") }
+            if (r.getJSONArray("then").objs().any { it.getString("type") == "alarm" }) {
+                Kw("Limit")
+                Chip("at most one alarm every ${r.optInt("limit_min", 0)} minutes", 1) { dialog = "limit" }
+            }
+        }
+        OutlinedButton(onClick = { set { val n = JSONArray(); for (j in 0 until rules.length()) if (j != index) n.put(rules.get(j)); setup.put("rules", n) }; onBack() }) { Text("Remove this rule") }
+        androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
+    }
+    when (dialog) {
+        "trigger" -> PickDialog("When", listOf("every" to "every …", "compare" to "a value …", "change" to "a value changes by …", "edge" to "a pin …"), w.getString("type"), { v ->
+            val src = (if (v == "edge") readable(setup).firstOrNull { it.optString("kind") == "digital" } else readable(setup).firstOrNull())?.getInt("chan")
+            set { r.put("when", when {
+                v == "every" -> JSONObject("""{"type":"every","secs":900}""")
+                src == null -> JSONObject("""{"type":"every","secs":900}""")
+                v == "compare" -> JSONObject("""{"type":"compare","chan":$src,"op":"<","value":10,"clear":10,"count":1}""")
+                v == "change" -> JSONObject("""{"type":"change","chan":$src,"delta":1}""")
+                else -> JSONObject("""{"type":"edge","chan":$src,"to":"high"}""") }) }
+        }, { dialog = null })
+        "secs" -> NumberDialog("Every", (w.getInt("secs") / 60).toDouble(), "minutes", { set { w.put("secs", maxOf(1, it.toInt()) * 60) } }, { dialog = null })
+        "src" -> PickDialog("Which value", readableSrc, w.getInt("chan").toString(), { set { w.put("chan", it.toInt()) } }, { dialog = null })
+        "op" -> PickDialog("Compare", OPS, w.getString("op"), { set { w.put("op", it) } }, { dialog = null })
+        "value" -> NumberDialog("Threshold", w.getDouble("value"), unitOf(setup, w.getInt("chan")), { v -> set { val same = w.getDouble("clear") == w.getDouble("value"); w.put("value", v); if (same) w.put("clear", v) } }, { dialog = null })
+        "clear" -> NumberDialog("Back to normal at", w.getDouble("clear"), unitOf(setup, w.getInt("chan")), { set { w.put("clear", it) } }, { dialog = null })
+        "count" -> NumberDialog("For how many readings", w.optInt("count", 1).toDouble(), "readings", { set { w.put("count", maxOf(1, it.toInt())) } }, { dialog = null })
+        "delta" -> NumberDialog("Change by more than", w.getDouble("delta"), unitOf(setup, w.getInt("chan")), { set { w.put("delta", kotlin.math.abs(it)) } }, { dialog = null })
+        "edge" -> PickDialog("The pin", listOf("high" to "reads 1 (door open)", "low" to "reads 0", "any" to "changes"), w.optString("to"), { set { w.put("to", it) } }, { dialog = null })
+        "limit" -> NumberDialog("At most one alarm every", r.optInt("limit_min", 0).toDouble(), "minutes (0 = no limit)", { set { r.put("limit_min", maxOf(0, it.toInt())) } }, { dialog = null })
+        "text" -> TextDialog("Alarm message", r.getJSONArray("then").getJSONObject(actionIdx).optString("text"), { set { r.getJSONArray("then").getJSONObject(actionIdx).put("text", it) } }, { dialog = null })
+        "interval" -> NumberDialog("Wake every", r.getJSONArray("then").getJSONObject(actionIdx).optInt("secs", 60).toDouble(), "seconds", { set { r.getJSONArray("then").getJSONObject(actionIdx).put("secs", maxOf(30, it.toInt())) } }, { dialog = null })
+        "out" -> PickDialog("Set output", outputs(setup).flatMap { listOf("${it.getInt("chan")}:1" to "${it.optString("name")} on", "${it.getInt("chan")}:0" to "${it.optString("name")} off") }, null, { v ->
+            set { val a = r.getJSONArray("then").getJSONObject(actionIdx); a.put("chan", v.substringBefore(':').toInt()); a.put("on", v.endsWith(":1")) } }, { dialog = null })
+        "addaction" -> PickDialog("Add a step", buildList {
+            add("report" to "Send readings"); add("alarm" to "Send an alarm")
+            if (outputs(setup).isNotEmpty()) add("set_out" to "Set an output"); add("interval" to "Change the interval") }, null, { v ->
+            set { r.getJSONArray("then").put(when (v) {
+                "report" -> JSONObject("""{"type":"report"}""")
+                "alarm" -> JSONObject("""{"type":"alarm","text":"Alarm"}""")
+                "set_out" -> JSONObject("""{"type":"set_out","chan":${outputs(setup)[0].getInt("chan")},"on":true}""")
+                else -> JSONObject("""{"type":"interval","secs":60}""") }) } }, { dialog = null })
+    }
+}
+
+@Composable
+fun SensorSendScreen() {
+    Sensors.rev.collectAsState().value
+    val sent by Sensors.status.collectAsState()
+    val d = Sensors.design ?: return
+    val k = d.compiled
+    var result by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SCard {
+            Text("Pretend the sensor sees", fontWeight = FontWeight.SemiBold)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((key, label) in listOf("cold_night" to "A cold night", "door" to "Door opens", "silent" to "Sensor stops"))
+                    FilterChip(selected = d.scenario == key, onClick = { d.scenario = key; Sensors.changed() }, label = { Text(label) })
+            }
+            val sim = d.sim
+            if (sim != null) {
+                val setup = d.setup
+                val chan = setup.getJSONArray("rules").objs().firstOrNull { it.getJSONObject("when").has("chan") }?.getJSONObject("when")?.getInt("chan")
+                    ?: readable(setup).firstOrNull()?.getInt("chan")
+                val times = sim.getJSONArray("times"); val series = sim.getJSONObject("series").optJSONArray(chan.toString())
+                val pts = (0 until times.length()).map { times.getDouble(it) to (if (series == null || series.isNull(it)) null else series.getDouble(it)) }
+                val events = sim.getJSONArray("events").objs()
+                val lines = setup.getJSONArray("rules").objs().map { it.getJSONObject("when") }.filter { it.getString("type") == "compare" && it.getInt("chan") == chan }.map { it.getDouble("value") }
+                val marks = events.filter { it.getString("type") == "alarm" }.map { it.getDouble("t") to it.getBoolean("raised") }
+                val bands = mutableListOf<Pair<Double, Double>>(); var on: Double? = null
+                for (e in events) if (e.getString("type") == "output") { if (e.getBoolean("on")) on = e.getDouble("t") else if (on != null) { bands.add(on to e.getDouble("t")); on = null } }
+                if (on != null) bands.add(on to 86400.0)
+                LineChart(pts, from = 0.0, to = 86400.0, lines = lines, marks = marks, bands = bands)
+                val s = sim.getJSONObject("summary")
+                Text("${s.getInt("alarms")} alarm(s) · ${s.getInt("reports")} reports. Runs the same code as the sensor.", style = MaterialTheme.typography.bodySmall)
+            } else Text(if (k != null && !k.optBoolean("ok")) "" else "Working …", style = MaterialTheme.typography.bodySmall)
+        }
+        SCard {
+            if (k != null && k.optBoolean("ok")) {
+                Text("Fits on the sensor", fontWeight = FontWeight.SemiBold)
+                Text("Rules ${k.getInt("rules")} of ${k.getInt("rule_limit")} · inputs ${k.getInt("sources")} of ${k.getInt("source_limit")}")
+                Text("Setup size ${k.getInt("size")} of ${k.getInt("limit")} bytes")
+                Text("Radio time ≈ ${k.getDouble("airtime_s_per_day")} s per day (${k.getDouble("airtime_percent")} %)")
+                val w = k.optJSONArray("warnings")
+                if (w != null) for (i in 0 until w.length()) Text("! " + w.getString(i), color = Amber, style = MaterialTheme.typography.bodySmall)
+            } else Text(k?.optString("error") ?: "Checking …", color = MaterialTheme.colorScheme.error)
+        }
+        if (sent != null || result.isNotBlank()) SCard { Text(sent ?: result) }
+        Button(onClick = { result = Sensors.sendRadio() }, Modifier.fillMaxWidth(), enabled = k?.optBoolean("ok") == true) { Text("Send to the sensor over the radio") }
+        OutlinedButton(onClick = { Sensors.saveSetup(); result = "Saved on this host" }, Modifier.fillMaxWidth(), enabled = d.node != null) { Text("Save on this host") }
+        Text("Over the radio the sensor fetches it after its next wake-up (up to one interval). First setup of a new board needs a computer over USB.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
+    }
+}

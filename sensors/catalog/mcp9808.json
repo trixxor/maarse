@@ -1,0 +1,55 @@
+{
+ "id": "mcp9808",
+ "name": "MCP9808 temperature",
+ "group": "Temperature, humidity and pressure",
+ "bus": "i2c",
+ "grove": "Grove MCP9808",
+ "note": "Accurate to a quarter of a degree.",
+ "addrs": [
+  24,
+  25,
+  26,
+  27,
+  28,
+  29,
+  30,
+  31
+ ],
+ "measure_ms": 5,
+ "read": {
+  "init": [],
+  "trigger": "",
+  "wait_ms": 0,
+  "ptr": "05",
+  "read_len": 2,
+  "crc": false
+ },
+ "channels": [
+  {
+   "name": "Temperature",
+   "kind": "temperature",
+   "field": {
+    "bit_off": 3,
+    "bits": 13,
+    "signed": true,
+    "little": false,
+    "mul": 100,
+    "div": 16,
+    "add": 0
+   }
+  }
+ ],
+ "tests": [
+  {
+   "channel": 0,
+   "answer": "0194",
+   "value": 25.25
+  },
+  {
+   "channel": 0,
+   "answer": "bffc",
+   "value": -0.25
+  }
+ ],
+ "title": "Temperature (precise)"
+}

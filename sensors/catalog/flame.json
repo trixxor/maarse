@@ -1,0 +1,11 @@
+{
+ "id": "flame",
+ "name": "Flame",
+ "group": "Soil, water and weather",
+ "bus": "digital_in",
+ "kind": "digital",
+ "pull": "none",
+ "invert": true,
+ "grove": "Grove Flame Sensor",
+ "note": "1 when it sees a flame (the module pulls low)."
+}

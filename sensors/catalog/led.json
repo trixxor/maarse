@@ -1,0 +1,10 @@
+{
+ "id": "led",
+ "name": "LED",
+ "group": "Switch something on",
+ "bus": "digital_out",
+ "kind": "digital",
+ "active_low": false,
+ "grove": "Grove LED",
+ "note": ""
+}

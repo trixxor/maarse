@@ -1,0 +1,20 @@
+{
+ "id": "light_analog",
+ "name": "Light (analogue)",
+ "group": "Light",
+ "bus": "analog",
+ "kind": "percent",
+ "grove": "Grove Light Sensor",
+ "map": {
+  "in": [
+   0,
+   3000
+  ],
+  "out": [
+   0,
+   100
+  ]
+ },
+ "calibrate": "Measure it in the dark and in bright light.",
+ "note": "Brighter reads higher."
+}

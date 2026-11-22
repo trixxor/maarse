@@ -1,0 +1,19 @@
+{
+ "id": "rotary",
+ "name": "Rotary knob",
+ "group": "Buttons and switches",
+ "bus": "analog",
+ "kind": "percent",
+ "grove": "Grove Rotary Angle Sensor",
+ "map": {
+  "in": [
+   0,
+   3000
+  ],
+  "out": [
+   0,
+   100
+  ]
+ },
+ "note": "A knob as 0 to 100 %."
+}

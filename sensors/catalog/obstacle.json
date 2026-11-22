@@ -1,0 +1,11 @@
+{
+ "id": "obstacle",
+ "name": "Obstacle (infrared)",
+ "group": "Motion",
+ "bus": "digital_in",
+ "kind": "digital",
+ "pull": "none",
+ "invert": true,
+ "grove": "Grove IR Distance Interrupter, Grove Line Finder",
+ "note": "1 when something is in front (the module pulls low)."
+}

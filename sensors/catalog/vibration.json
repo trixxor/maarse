@@ -1,0 +1,11 @@
+{
+ "id": "vibration",
+ "name": "Vibration",
+ "group": "Motion",
+ "bus": "digital_in",
+ "kind": "digital",
+ "pull": "none",
+ "invert": false,
+ "grove": "Grove Vibration Sensor (SW-420)",
+ "note": "1 while it shakes."
+}

@@ -1,0 +1,32 @@
+{
+ "id": "bme280",
+ "name": "BME280 / BMP280",
+ "group": "Temperature, humidity and pressure",
+ "bus": "i2c",
+ "driver": "bme280",
+ "grove": "Grove BME280, Grove BMP280",
+ "note": "A BMP280 has no humidity.",
+ "addrs": [
+  118,
+  119
+ ],
+ "measure_ms": 20,
+ "channels": [
+  {
+   "name": "Temperature",
+   "kind": "temperature",
+   "what": 0
+  },
+  {
+   "name": "Humidity",
+   "kind": "humidity",
+   "what": 1
+  },
+  {
+   "name": "Pressure",
+   "kind": "pressure",
+   "what": 2
+  }
+ ],
+ "title": "Temperature, humidity and air pressure"
+}

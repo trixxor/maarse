@@ -1,0 +1,56 @@
+{
+ "id": "air",
+ "order": 5,
+ "title": "Air quality",
+ "text": "Warns when the air gets stuffy.",
+ "setup": {
+  "name": "Air",
+  "interval_s": 600,
+  "sources": [
+   {
+    "chan": 1,
+    "kind": "co2",
+    "name": "CO2",
+    "input": {
+     "type": "i2c",
+     "device": "scd41",
+     "what": 0
+    }
+   }
+  ],
+  "rules": [
+   {
+    "id": 1,
+    "name": "Report",
+    "when": {
+     "type": "every",
+     "secs": 600
+    },
+    "then": [
+     {
+      "type": "report"
+     }
+    ]
+   },
+   {
+    "id": 2,
+    "name": "Stuffy air",
+    "when": {
+     "type": "compare",
+     "chan": 1,
+     "op": ">",
+     "value": 1500,
+     "clear": 1200,
+     "count": 2
+    },
+    "limit_min": 60,
+    "then": [
+     {
+      "type": "alarm",
+      "text": "The air is stuffy: open a window"
+     }
+    ]
+   }
+  ]
+ }
+}

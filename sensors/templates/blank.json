@@ -1,0 +1,20 @@
+{
+ "id": "blank",
+ "order": 99,
+ "title": "Start empty",
+ "text": "Build every rule yourself.",
+ "setup": {
+  "name": "",
+  "sources": [
+   {
+    "chan": 1,
+    "kind": "voltage",
+    "name": "Battery",
+    "input": {
+     "type": "battery"
+    }
+   }
+  ],
+  "rules": []
+ }
+}

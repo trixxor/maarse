@@ -1,0 +1,10 @@
+{
+ "id": "buzzer",
+ "name": "Buzzer",
+ "group": "Switch something on",
+ "bus": "digital_out",
+ "kind": "digital",
+ "active_low": false,
+ "grove": "Grove Buzzer",
+ "note": "Sounds while on."
+}

@@ -1,0 +1,9 @@
+{
+ "id": "sound",
+ "name": "Sound level",
+ "group": "Sound",
+ "bus": "analog",
+ "kind": "voltage",
+ "grove": "Grove Sound Sensor",
+ "note": "The microphone's level in volts: louder reads higher. It does not measure decibels."
+}

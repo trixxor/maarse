@@ -1,0 +1,81 @@
+{
+ "id": "mailbox",
+ "order": 8,
+ "title": "Mailbox",
+ "text": "A switch wakes it when post arrives.",
+ "setup": {
+  "name": "Mailbox",
+  "interval_s": 3600,
+  "sources": [
+   {
+    "chan": 1,
+    "kind": "digital",
+    "name": "Mailbox flap",
+    "input": {
+     "type": "gpio_in",
+     "pin": 0,
+     "pull": "up",
+     "invert": true,
+     "wake": true
+    }
+   },
+   {
+    "chan": 2,
+    "kind": "voltage",
+    "name": "Battery",
+    "input": {
+     "type": "battery"
+    }
+   }
+  ],
+  "rules": [
+   {
+    "id": 1,
+    "name": "Post arrived",
+    "when": {
+     "type": "edge",
+     "chan": 1,
+     "to": "high"
+    },
+    "then": [
+     {
+      "type": "alarm",
+      "text": "Post in the mailbox"
+     }
+    ]
+   },
+   {
+    "id": 2,
+    "name": "Report",
+    "when": {
+     "type": "every",
+     "secs": 3600
+    },
+    "then": [
+     {
+      "type": "report"
+     }
+    ]
+   },
+   {
+    "id": 3,
+    "name": "Low battery",
+    "when": {
+     "type": "compare",
+     "chan": 2,
+     "op": "<",
+     "value": 3.5,
+     "clear": 3.7,
+     "count": 2
+    },
+    "limit_min": 720,
+    "then": [
+     {
+      "type": "alarm",
+      "text": "Battery is low"
+     }
+    ]
+   }
+  ]
+ }
+}

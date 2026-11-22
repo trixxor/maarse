@@ -1,0 +1,55 @@
+{
+ "id": "frost",
+ "order": 1,
+ "title": "Frost alarm",
+ "text": "Warn me below a temperature.",
+ "setup": {
+  "name": "Frost alarm",
+  "sources": [
+   {
+    "chan": 1,
+    "kind": "temperature",
+    "name": "Temperature",
+    "input": {
+     "type": "bme280",
+     "addr": 118,
+     "what": "temperature"
+    }
+   }
+  ],
+  "rules": [
+   {
+    "id": 1,
+    "name": "Report",
+    "when": {
+     "type": "every",
+     "secs": 900
+    },
+    "then": [
+     {
+      "type": "report"
+     }
+    ]
+   },
+   {
+    "id": 2,
+    "name": "Frost alarm",
+    "when": {
+     "type": "compare",
+     "chan": 1,
+     "op": "<",
+     "value": 10,
+     "clear": 12,
+     "count": 2
+    },
+    "limit_min": 30,
+    "then": [
+     {
+      "type": "alarm",
+      "text": "Frost: below 10 °C"
+     }
+    ]
+   }
+  ]
+ }
+}

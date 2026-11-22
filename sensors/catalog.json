@@ -1,0 +1,1797 @@
+{
+ "boards": [
+  {
+   "analog": [],
+   "available": true,
+   "grove": "Plug I2C sensors into a Grove connector wired to D6 (SDA) and D7 (SCL): the UART connector of the Grove Shield for XIAO is exactly that. The shield's other connectors are on pins the radio uses.",
+   "i2c": {
+    "scl": 7,
+    "sda": 6,
+    "text": "D6 = SDA, D7 = SCL"
+   },
+   "id": "xiao_nrf52840",
+   "name": "Seeed XIAO nRF52840 + Wio-SX1262",
+   "note": "The radio uses D1 to D5 and D8 to D10. Three pins are free: D0, D6 and D7.",
+   "pins": [
+    {
+     "id": 0,
+     "label": "D0"
+    },
+    {
+     "id": 6,
+     "label": "D6"
+    },
+    {
+     "id": 7,
+     "label": "D7"
+    }
+   ],
+   "wake": null,
+   "wake_text": ""
+  },
+  {
+   "analog": [
+    {
+     "id": 4,
+     "label": "GPIO4",
+     "max_mv": 2500
+    }
+   ],
+   "available": true,
+   "grove": "Wire a Grove cable (black GND, red 3V3, yellow SDA, white SCL) to the header pins; the OLED has its own bus.",
+   "i2c": {
+    "scl": 48,
+    "sda": 47,
+    "text": "GPIO47 = SDA, GPIO48 = SCL"
+   },
+   "id": "heltec_v4",
+   "name": "Heltec WiFi LoRa 32 V4",
+   "note": "Power a sensor from the Ve pin (switched off while the node sleeps) or 3V3.",
+   "pins": [
+    {
+     "id": 3,
+     "label": "GPIO3"
+    },
+    {
+     "id": 4,
+     "label": "GPIO4"
+    },
+    {
+     "id": 6,
+     "label": "GPIO6"
+    },
+    {
+     "id": 38,
+     "label": "GPIO38"
+    },
+    {
+     "id": 39,
+     "label": "GPIO39"
+    },
+    {
+     "id": 40,
+     "label": "GPIO40"
+    },
+    {
+     "id": 41,
+     "label": "GPIO41"
+    }
+   ],
+   "wake": [
+    3,
+    4,
+    6
+   ],
+   "wake_text": "GPIO 3, 4 and 6"
+  },
+  {
+   "analog": [
+    {
+     "id": 1,
+     "label": "D0",
+     "max_mv": 3100
+    },
+    {
+     "id": 2,
+     "label": "D1",
+     "max_mv": 3100
+    },
+    {
+     "id": 3,
+     "label": "D2",
+     "max_mv": 3100
+    },
+    {
+     "id": 4,
+     "label": "D3",
+     "max_mv": 3100
+    },
+    {
+     "id": 5,
+     "label": "D4",
+     "max_mv": 3100
+    },
+    {
+     "id": 6,
+     "label": "D5",
+     "max_mv": 3100
+    }
+   ],
+   "available": false,
+   "grove": "The Grove Shield for XIAO fits connectors 1 to 6 (D0 to D7); connectors 7 and 8 sit on the radio's SPI pins.",
+   "i2c": {
+    "scl": 6,
+    "sda": 5,
+    "text": "D4 = SDA, D5 = SCL"
+   },
+   "id": "xiao_esp32s3",
+   "name": "Seeed XIAO ESP32S3 + Wio-SX1262",
+   "note": "The radio uses D8 to D10 and the connector under the board, so D0 to D7 are free: six analogue inputs, I2C and a serial port.",
+   "pins": [
+    {
+     "id": 1,
+     "label": "D0"
+    },
+    {
+     "id": 2,
+     "label": "D1"
+    },
+    {
+     "id": 3,
+     "label": "D2"
+    },
+    {
+     "id": 4,
+     "label": "D3"
+    },
+    {
+     "id": 5,
+     "label": "D4"
+    },
+    {
+     "id": 6,
+     "label": "D5"
+    },
+    {
+     "id": 43,
+     "label": "D6"
+    },
+    {
+     "id": 44,
+     "label": "D7"
+    }
+   ],
+   "wake": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "wake_text": "D0 to D5"
+  }
+ ],
+ "kinds": [
+  {
+   "id": 1,
+   "key": "temperature",
+   "name": "Temperature",
+   "scale": 100,
+   "unit": "°C"
+  },
+  {
+   "id": 2,
+   "key": "humidity",
+   "name": "Humidity",
+   "scale": 100,
+   "unit": "%"
+  },
+  {
+   "id": 3,
+   "key": "pressure",
+   "name": "Pressure",
+   "scale": 100,
+   "unit": "hPa"
+  },
+  {
+   "id": 4,
+   "key": "voltage",
+   "name": "Voltage",
+   "scale": 1000,
+   "unit": "V"
+  },
+  {
+   "id": 5,
+   "key": "digital",
+   "name": "Pin",
+   "scale": 1,
+   "unit": ""
+  },
+  {
+   "id": 6,
+   "key": "counter",
+   "name": "Counter",
+   "scale": 1,
+   "unit": ""
+  },
+  {
+   "id": 7,
+   "key": "percent",
+   "name": "Level",
+   "scale": 100,
+   "unit": "%"
+  },
+  {
+   "id": 8,
+   "key": "distance",
+   "name": "Distance",
+   "scale": 1,
+   "unit": "mm"
+  },
+  {
+   "id": 9,
+   "key": "light",
+   "name": "Light",
+   "scale": 1,
+   "unit": "lx"
+  },
+  {
+   "id": 10,
+   "key": "co2",
+   "name": "CO2",
+   "scale": 1,
+   "unit": "ppm"
+  },
+  {
+   "id": 11,
+   "key": "accel",
+   "name": "Acceleration",
+   "scale": 1,
+   "unit": "mg"
+  },
+  {
+   "id": 128,
+   "key": "custom",
+   "name": "Value",
+   "scale": 1,
+   "unit": ""
+  }
+ ],
+ "schema": 1,
+ "sensors": [
+  {
+   "addrs": [
+    72,
+    73,
+    74,
+    75
+   ],
+   "advanced": true,
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 8,
+      "little": false,
+      "mul": 1,
+      "signed": true
+     },
+     "kind": "voltage",
+     "name": "Input A0",
+     "read": {
+      "crc": false,
+      "init": [
+       "01c383"
+      ],
+      "ptr": "00",
+      "read_len": 2,
+      "trigger": "",
+      "wait_ms": 12
+     }
+    },
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 8,
+      "little": false,
+      "mul": 1,
+      "signed": true
+     },
+     "kind": "voltage",
+     "name": "Input A1",
+     "read": {
+      "crc": false,
+      "init": [
+       "01d383"
+      ],
+      "ptr": "00",
+      "read_len": 2,
+      "trigger": "",
+      "wait_ms": 12
+     }
+    },
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 8,
+      "little": false,
+      "mul": 1,
+      "signed": true
+     },
+     "kind": "voltage",
+     "name": "Input A2",
+     "read": {
+      "crc": false,
+      "init": [
+       "01e383"
+      ],
+      "ptr": "00",
+      "read_len": 2,
+      "trigger": "",
+      "wait_ms": 12
+     }
+    },
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 8,
+      "little": false,
+      "mul": 1,
+      "signed": true
+     },
+     "kind": "voltage",
+     "name": "Input A3",
+     "read": {
+      "crc": false,
+      "init": [
+       "01f383"
+      ],
+      "ptr": "00",
+      "read_len": 2,
+      "trigger": "",
+      "wait_ms": 12
+     }
+    }
+   ],
+   "group": "Analogue inputs",
+   "grove": "Grove 16-bit ADC (ADS1115)",
+   "id": "ads1115",
+   "measure_ms": 20,
+   "name": "ADS1115 analogue input",
+   "note": "0 to 4.096 V. Four analogue Grove sensors on two wires.",
+   "read": {
+    "crc": false,
+    "init": [],
+    "ptr": "",
+    "read_len": 2,
+    "trigger": "",
+    "wait_ms": 0
+   },
+   "tests": [
+    {
+     "answer": "1000",
+     "channel": 2,
+     "value": 0.512
+    },
+    {
+     "answer": "f000",
+     "channel": 0,
+     "value": -0.512
+    }
+   ],
+   "title": "Analogue input adapter"
+  },
+  {
+   "addrs": [
+    83,
+    29
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 10,
+      "little": true,
+      "mul": 39,
+      "signed": true
+     },
+     "kind": "accel",
+     "name": "Acceleration X"
+    },
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 16,
+      "bits": 16,
+      "div": 10,
+      "little": true,
+      "mul": 39,
+      "signed": true
+     },
+     "kind": "accel",
+     "name": "Acceleration Y"
+    },
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 32,
+      "bits": 16,
+      "div": 10,
+      "little": true,
+      "mul": 39,
+      "signed": true
+     },
+     "kind": "accel",
+     "name": "Acceleration Z"
+    }
+   ],
+   "group": "Motion",
+   "grove": "Grove 3-axis accelerometer (ADXL345)",
+   "id": "adxl345",
+   "measure_ms": 20,
+   "name": "ADXL345 motion",
+   "note": "Tells how it is tilted and shaken.",
+   "read": {
+    "crc": false,
+    "init": [
+     "2d08"
+    ],
+    "ptr": "32",
+    "read_len": 6,
+    "trigger": "",
+    "wait_ms": 0
+   },
+   "tests": [
+    {
+     "answer": "000100ff0000",
+     "channel": 0,
+     "value": 998.0
+    },
+    {
+     "answer": "000100ff0000",
+     "channel": 1,
+     "value": -998.0
+    }
+   ],
+   "title": "Movement and tilt"
+  },
+  {
+   "addrs": [
+    56
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": -5000,
+      "bit_off": 28,
+      "bits": 20,
+      "div": 1048576,
+      "little": false,
+      "mul": 20000,
+      "signed": false
+     },
+     "kind": "temperature",
+     "name": "Temperature"
+    },
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 8,
+      "bits": 20,
+      "div": 1048576,
+      "little": false,
+      "mul": 10000,
+      "signed": false
+     },
+     "kind": "humidity",
+     "name": "Humidity"
+    }
+   ],
+   "group": "Temperature, humidity and pressure",
+   "grove": "Grove AHT20, Grove DHT20",
+   "id": "aht20",
+   "measure_ms": 100,
+   "name": "AHT20 / AHT21 / DHT20",
+   "note": "",
+   "read": {
+    "crc": false,
+    "init": [
+     "be0800"
+    ],
+    "ptr": "",
+    "read_len": 6,
+    "trigger": "ac3300",
+    "wait_ms": 80
+   },
+   "tests": [
+    {
+     "answer": "1c8000060000",
+     "channel": 0,
+     "value": 25.0
+    },
+    {
+     "answer": "1c8000060000",
+     "channel": 1,
+     "value": 50.0
+    }
+   ],
+   "title": "Temperature and humidity"
+  },
+  {
+   "addrs": [
+    35,
+    92
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 12,
+      "little": false,
+      "mul": 10,
+      "signed": false
+     },
+     "kind": "light",
+     "name": "Light"
+    }
+   ],
+   "group": "Light",
+   "grove": "Grove Digital Light (BH1750)",
+   "id": "bh1750",
+   "measure_ms": 190,
+   "name": "BH1750 light",
+   "note": "How bright it is, in lux.",
+   "read": {
+    "crc": false,
+    "init": [],
+    "ptr": "",
+    "read_len": 2,
+    "trigger": "20",
+    "wait_ms": 180
+   },
+   "tests": [
+    {
+     "answer": "0120",
+     "channel": 0,
+     "value": 240.0
+    }
+   ],
+   "title": "Brightness"
+  },
+  {
+   "addrs": [
+    118,
+    119
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "kind": "temperature",
+     "name": "Temperature",
+     "what": 0
+    },
+    {
+     "kind": "humidity",
+     "name": "Humidity",
+     "what": 1
+    },
+    {
+     "kind": "pressure",
+     "name": "Pressure",
+     "what": 2
+    }
+   ],
+   "driver": "bme280",
+   "group": "Temperature, humidity and pressure",
+   "grove": "Grove BME280, Grove BMP280",
+   "id": "bme280",
+   "measure_ms": 20,
+   "name": "BME280 / BMP280",
+   "note": "A BMP280 has no humidity.",
+   "title": "Temperature, humidity and air pressure"
+  },
+  {
+   "bus": "digital_in",
+   "group": "Buttons and switches",
+   "grove": "Grove Button, Grove Switch (P)",
+   "id": "button",
+   "invert": false,
+   "kind": "digital",
+   "name": "Button",
+   "note": "1 while pressed.",
+   "pull": "none"
+  },
+  {
+   "active_low": false,
+   "bus": "digital_out",
+   "group": "Switch something on",
+   "grove": "Grove Buzzer",
+   "id": "buzzer",
+   "kind": "digital",
+   "name": "Buzzer",
+   "note": "Sounds while on."
+  },
+  {
+   "bus": "digital_in",
+   "group": "Soil, water and weather",
+   "grove": "Grove Flame Sensor",
+   "id": "flame",
+   "invert": true,
+   "kind": "digital",
+   "name": "Flame",
+   "note": "1 when it sees a flame (the module pulls low).",
+   "pull": "none"
+  },
+  {
+   "bus": "digital_in",
+   "group": "Buttons and switches",
+   "grove": "Grove Hall Sensor",
+   "id": "hall",
+   "invert": true,
+   "kind": "digital",
+   "name": "Magnet (Hall)",
+   "note": "1 when a magnet is near (the module pulls low).",
+   "pull": "none"
+  },
+  {
+   "active_low": false,
+   "bus": "digital_out",
+   "group": "Switch something on",
+   "grove": "Grove LED",
+   "id": "led",
+   "kind": "digital",
+   "name": "LED",
+   "note": ""
+  },
+  {
+   "bus": "analog",
+   "calibrate": "Measure it in the dark and in bright light.",
+   "group": "Light",
+   "grove": "Grove Light Sensor",
+   "id": "light_analog",
+   "kind": "percent",
+   "map": {
+    "in": [
+     0,
+     3000
+    ],
+    "out": [
+     0,
+     100
+    ]
+   },
+   "name": "Light (analogue)",
+   "note": "Brighter reads higher."
+  },
+  {
+   "addrs": [
+    96,
+    102,
+    103
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 4,
+      "little": false,
+      "mul": 25,
+      "signed": true
+     },
+     "kind": "temperature",
+     "name": "Hot junction"
+    },
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 4,
+      "little": false,
+      "mul": 25,
+      "signed": true
+     },
+     "kind": "temperature",
+     "name": "Cold junction",
+     "read": {
+      "crc": false,
+      "init": [],
+      "ptr": "02",
+      "read_len": 2,
+      "trigger": "",
+      "wait_ms": 0
+     }
+    }
+   ],
+   "group": "Temperature, humidity and pressure",
+   "grove": "Grove Thermocouple (MCP9600)",
+   "id": "mcp9600",
+   "measure_ms": 5,
+   "name": "MCP9600 thermocouple",
+   "note": "For K-type thermocouples.",
+   "read": {
+    "crc": false,
+    "init": [],
+    "ptr": "00",
+    "read_len": 2,
+    "trigger": "",
+    "wait_ms": 0
+   },
+   "tests": [
+    {
+     "answer": "0190",
+     "channel": 0,
+     "value": 25.0
+    },
+    {
+     "answer": "fff0",
+     "channel": 1,
+     "value": -1.0
+    }
+   ],
+   "title": "High temperature (oven, kiln)"
+  },
+  {
+   "addrs": [
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 3,
+      "bits": 13,
+      "div": 16,
+      "little": false,
+      "mul": 100,
+      "signed": true
+     },
+     "kind": "temperature",
+     "name": "Temperature"
+    }
+   ],
+   "group": "Temperature, humidity and pressure",
+   "grove": "Grove MCP9808",
+   "id": "mcp9808",
+   "measure_ms": 5,
+   "name": "MCP9808 temperature",
+   "note": "Accurate to a quarter of a degree.",
+   "read": {
+    "crc": false,
+    "init": [],
+    "ptr": "05",
+    "read_len": 2,
+    "trigger": "",
+    "wait_ms": 0
+   },
+   "tests": [
+    {
+     "answer": "0194",
+     "channel": 0,
+     "value": 25.25
+    },
+    {
+     "answer": "bffc",
+     "channel": 0,
+     "value": -0.25
+    }
+   ],
+   "title": "Temperature (precise)"
+  },
+  {
+   "addrs": [
+    90
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": -27315,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 1,
+      "little": true,
+      "mul": 2,
+      "signed": false
+     },
+     "kind": "temperature",
+     "name": "Object"
+    },
+    {
+     "field": {
+      "add": -27315,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 1,
+      "little": true,
+      "mul": 2,
+      "signed": false
+     },
+     "kind": "temperature",
+     "name": "Ambient",
+     "read": {
+      "crc": false,
+      "init": [],
+      "ptr": "06",
+      "read_len": 3,
+      "trigger": "",
+      "wait_ms": 0
+     }
+    }
+   ],
+   "group": "Temperature, humidity and pressure",
+   "grove": "Grove IR temperature sensor (MLX90614)",
+   "id": "mlx90614",
+   "measure_ms": 10,
+   "name": "MLX90614 infrared thermometer",
+   "note": "Measures the surface it points at.",
+   "read": {
+    "crc": false,
+    "init": [],
+    "ptr": "07",
+    "read_len": 3,
+    "trigger": "",
+    "wait_ms": 0
+   },
+   "tests": [
+    {
+     "answer": "3c3a00",
+     "channel": 0,
+     "value": 25.01
+    }
+   ],
+   "title": "Temperature without touching"
+  },
+  {
+   "bus": "digital_in",
+   "group": "Motion",
+   "grove": "Grove IR Distance Interrupter, Grove Line Finder",
+   "id": "obstacle",
+   "invert": true,
+   "kind": "digital",
+   "name": "Obstacle (infrared)",
+   "note": "1 when something is in front (the module pulls low).",
+   "pull": "none"
+  },
+  {
+   "advanced": true,
+   "bus": "digital_in",
+   "group": "Other",
+   "grove": "",
+   "id": "pin_in",
+   "invert": false,
+   "kind": "digital",
+   "name": "Any pin (input)",
+   "note": "A switch or a module that gives 0 or 1.",
+   "pull": "none"
+  },
+  {
+   "active_low": false,
+   "advanced": true,
+   "bus": "digital_out",
+   "group": "Switch something on",
+   "grove": "",
+   "id": "pin_out",
+   "kind": "digital",
+   "name": "Any pin (output)",
+   "note": "A pin that is on or off."
+  },
+  {
+   "bus": "digital_in",
+   "group": "Motion",
+   "grove": "Grove PIR Motion Sensor, Grove Mini PIR, Grove Adjustable PIR",
+   "id": "pir",
+   "invert": false,
+   "kind": "digital",
+   "name": "Motion (PIR)",
+   "note": "1 while it sees movement. Give it a minute after power-up.",
+   "pull": "none"
+  },
+  {
+   "bus": "digital_in",
+   "group": "Buttons and switches",
+   "grove": "Grove Magnetic Switch",
+   "id": "reed",
+   "invert": true,
+   "kind": "digital",
+   "name": "Door or window contact (reed)",
+   "note": "1 when the magnet is away (open). Between the pin and GND, with a pull-up.",
+   "pull": "up",
+   "wake": true
+  },
+  {
+   "active_low": false,
+   "bus": "digital_out",
+   "group": "Switch something on",
+   "grove": "Grove Relay",
+   "id": "relay",
+   "kind": "digital",
+   "name": "Relay",
+   "note": "A 3.3 V relay module. Switches while the node is awake; the ESP32 switches it off in sleep."
+  },
+  {
+   "bus": "analog",
+   "group": "Buttons and switches",
+   "grove": "Grove Rotary Angle Sensor",
+   "id": "rotary",
+   "kind": "percent",
+   "map": {
+    "in": [
+     0,
+     3000
+    ],
+    "out": [
+     0,
+     100
+    ]
+   },
+   "name": "Rotary knob",
+   "note": "A knob as 0 to 100 %."
+  },
+  {
+   "addrs": [
+    98
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 1,
+      "little": false,
+      "mul": 1,
+      "signed": false
+     },
+     "kind": "co2",
+     "name": "CO2"
+    },
+    {
+     "field": {
+      "add": -4500,
+      "bit_off": 16,
+      "bits": 16,
+      "div": 65535,
+      "little": false,
+      "mul": 17500,
+      "signed": false
+     },
+     "kind": "temperature",
+     "name": "Temperature"
+    },
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 32,
+      "bits": 16,
+      "div": 65535,
+      "little": false,
+      "mul": 10000,
+      "signed": false
+     },
+     "kind": "humidity",
+     "name": "Humidity"
+    }
+   ],
+   "group": "Air quality",
+   "grove": "Grove SCD41",
+   "id": "scd41",
+   "measure_ms": 5200,
+   "name": "SCD41 CO2",
+   "note": "Uses a lot of power: on a battery, read every 5 minutes or less often.",
+   "read": {
+    "crc": true,
+    "init": [],
+    "ptr": "ec05",
+    "read_len": 9,
+    "trigger": "219d",
+    "wait_ms": 5100
+   },
+   "tests": [
+    {
+     "answer": "01f4336666935eb93c",
+     "channel": 0,
+     "value": 500.0
+    },
+    {
+     "answer": "01f4336666935eb93c",
+     "channel": 1,
+     "value": 25.0
+    },
+    {
+     "answer": "01f4336666935eb93c",
+     "channel": 2,
+     "value": 37.0
+    }
+   ],
+   "title": "Air quality (CO2)"
+  },
+  {
+   "addrs": [
+    68,
+    69
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": -4500,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 65535,
+      "little": false,
+      "mul": 17500,
+      "signed": false
+     },
+     "kind": "temperature",
+     "name": "Temperature"
+    },
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 16,
+      "bits": 16,
+      "div": 65535,
+      "little": false,
+      "mul": 10000,
+      "signed": false
+     },
+     "kind": "humidity",
+     "name": "Humidity"
+    }
+   ],
+   "group": "Temperature, humidity and pressure",
+   "grove": "Grove SHT31, Grove SHT35",
+   "id": "sht3x",
+   "measure_ms": 25,
+   "name": "SHT30 / SHT31 / SHT35",
+   "note": "",
+   "read": {
+    "crc": true,
+    "init": [],
+    "ptr": "",
+    "read_len": 6,
+    "trigger": "2400",
+    "wait_ms": 20
+   },
+   "tests": [
+    {
+     "answer": "6666938000a2",
+     "channel": 0,
+     "value": 25.0
+    },
+    {
+     "answer": "6666938000a2",
+     "channel": 1,
+     "value": 50.0
+    }
+   ],
+   "title": "Temperature and humidity"
+  },
+  {
+   "addrs": [
+    68
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": -4500,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 65535,
+      "little": false,
+      "mul": 17500,
+      "signed": false
+     },
+     "kind": "temperature",
+     "name": "Temperature"
+    },
+    {
+     "field": {
+      "add": -600,
+      "bit_off": 16,
+      "bits": 16,
+      "div": 65535,
+      "little": false,
+      "mul": 12500,
+      "signed": false
+     },
+     "kind": "humidity",
+     "name": "Humidity"
+    }
+   ],
+   "group": "Temperature, humidity and pressure",
+   "grove": "Grove SHT40, Grove SHT41",
+   "id": "sht4x",
+   "measure_ms": 20,
+   "name": "SHT40 / SHT41 / SHT45",
+   "note": "",
+   "read": {
+    "crc": true,
+    "init": [],
+    "ptr": "",
+    "read_len": 6,
+    "trigger": "fd",
+    "wait_ms": 10
+   },
+   "tests": [
+    {
+     "answer": "6666938000a2",
+     "channel": 0,
+     "value": 25.0
+    },
+    {
+     "answer": "6666938000a2",
+     "channel": 1,
+     "value": 56.5
+    }
+   ],
+   "title": "Temperature and humidity"
+  },
+  {
+   "bus": "analog",
+   "calibrate": "Dry in air reads about 2600 mV, in water about 1200 mV: measure yours and change the two numbers.",
+   "group": "Soil, water and weather",
+   "grove": "Grove Capacitive Moisture Sensor, Grove Moisture Sensor",
+   "id": "soil_moisture",
+   "kind": "percent",
+   "map": {
+    "in": [
+     2600,
+     1200
+    ],
+    "out": [
+     0,
+     100
+    ]
+   },
+   "name": "Soil moisture (capacitive)",
+   "note": "Percent of the way from dry to wet."
+  },
+  {
+   "bus": "analog",
+   "group": "Sound",
+   "grove": "Grove Sound Sensor",
+   "id": "sound",
+   "kind": "voltage",
+   "name": "Sound level",
+   "note": "The microphone's level in volts: louder reads higher. It does not measure decibels."
+  },
+  {
+   "bus": "digital_in",
+   "group": "Motion",
+   "grove": "Grove Tilt Switch",
+   "id": "tilt",
+   "invert": true,
+   "kind": "digital",
+   "name": "Tilt switch",
+   "note": "1 when tilted.",
+   "pull": "up"
+  },
+  {
+   "addrs": [
+    72,
+    73,
+    74,
+    75
+   ],
+   "bus": "i2c",
+   "channels": [
+    {
+     "field": {
+      "add": 0,
+      "bit_off": 0,
+      "bits": 16,
+      "div": 128,
+      "little": false,
+      "mul": 100,
+      "signed": true
+     },
+     "kind": "temperature",
+     "name": "Temperature"
+    }
+   ],
+   "group": "Temperature, humidity and pressure",
+   "grove": "",
+   "id": "tmp117",
+   "measure_ms": 5,
+   "name": "TMP117 temperature",
+   "note": "Very accurate: within 0.1 degrees.",
+   "read": {
+    "crc": false,
+    "init": [],
+    "ptr": "00",
+    "read_len": 2,
+    "trigger": "",
+    "wait_ms": 0
+   },
+   "tests": [
+    {
+     "answer": "0c80",
+     "channel": 0,
+     "value": 25.0
+    }
+   ],
+   "title": "Temperature (very precise)"
+  },
+  {
+   "bus": "digital_in",
+   "group": "Buttons and switches",
+   "grove": "Grove Touch Sensor",
+   "id": "touch",
+   "invert": false,
+   "kind": "digital",
+   "name": "Touch",
+   "note": "1 while touched.",
+   "pull": "none"
+  },
+  {
+   "bus": "analog",
+   "group": "Light",
+   "grove": "Grove UV Sensor (GUVA-S12D)",
+   "id": "uv",
+   "kind": "voltage",
+   "name": "UV (analogue)",
+   "note": "About 100 mV per UV index step."
+  },
+  {
+   "bus": "digital_in",
+   "group": "Motion",
+   "grove": "Grove Vibration Sensor (SW-420)",
+   "id": "vibration",
+   "invert": false,
+   "kind": "digital",
+   "name": "Vibration",
+   "note": "1 while it shakes.",
+   "pull": "none"
+  },
+  {
+   "bus": "analog",
+   "calibrate": "Measure it dry and wet and change the numbers.",
+   "group": "Soil, water and weather",
+   "grove": "Grove Water Sensor",
+   "id": "water_level",
+   "kind": "percent",
+   "map": {
+    "in": [
+     0,
+     2000
+    ],
+    "out": [
+     0,
+     100
+    ]
+   },
+   "name": "Water detector (analogue)",
+   "note": "Leak or water level on the strips."
+  }
+ ],
+ "templates": [
+  {
+   "id": "frost",
+   "order": 1,
+   "setup": {
+    "name": "Frost alarm",
+    "rules": [
+     {
+      "id": 1,
+      "name": "Report",
+      "then": [
+       {
+        "type": "report"
+       }
+      ],
+      "when": {
+       "secs": 900,
+       "type": "every"
+      }
+     },
+     {
+      "id": 2,
+      "limit_min": 30,
+      "name": "Frost alarm",
+      "then": [
+       {
+        "text": "Frost: below 10 °C",
+        "type": "alarm"
+       }
+      ],
+      "when": {
+       "chan": 1,
+       "clear": 12,
+       "count": 2,
+       "op": "<",
+       "type": "compare",
+       "value": 10
+      }
+     }
+    ],
+    "sources": [
+     {
+      "chan": 1,
+      "input": {
+       "addr": 118,
+       "type": "bme280",
+       "what": "temperature"
+      },
+      "kind": "temperature",
+      "name": "Temperature"
+     }
+    ]
+   },
+   "text": "Warn me below a temperature.",
+   "title": "Frost alarm"
+  },
+  {
+   "id": "door",
+   "order": 2,
+   "setup": {
+    "interval_s": 60,
+    "name": "Door",
+    "rules": [
+     {
+      "id": 1,
+      "limit_min": 5,
+      "name": "Door opened",
+      "then": [
+       {
+        "text": "Door opened",
+        "type": "alarm"
+       }
+      ],
+      "when": {
+       "chan": 1,
+       "to": "high",
+       "type": "edge"
+      }
+     },
+     {
+      "id": 2,
+      "name": "Report",
+      "then": [
+       {
+        "type": "report"
+       }
+      ],
+      "when": {
+       "secs": 3600,
+       "type": "every"
+      }
+     }
+    ],
+    "sources": [
+     {
+      "chan": 1,
+      "input": {
+       "invert": false,
+       "pin": 0,
+       "pull": "up",
+       "type": "gpio_in"
+      },
+      "kind": "digital",
+      "name": "Door contact"
+     }
+    ]
+   },
+   "text": "Tell me when it opens.",
+   "title": "Door or post box"
+  },
+  {
+   "id": "weather",
+   "order": 3,
+   "setup": {
+    "name": "Weather",
+    "rules": [
+     {
+      "id": 1,
+      "name": "Report",
+      "then": [
+       {
+        "type": "report"
+       }
+      ],
+      "when": {
+       "secs": 900,
+       "type": "every"
+      }
+     }
+    ],
+    "sources": [
+     {
+      "chan": 1,
+      "input": {
+       "addr": 118,
+       "type": "bme280",
+       "what": "temperature"
+      },
+      "kind": "temperature",
+      "name": "Temperature"
+     },
+     {
+      "chan": 2,
+      "input": {
+       "addr": 118,
+       "type": "bme280",
+       "what": "humidity"
+      },
+      "kind": "humidity",
+      "name": "Humidity"
+     },
+     {
+      "chan": 3,
+      "input": {
+       "addr": 118,
+       "type": "bme280",
+       "what": "pressure"
+      },
+      "kind": "pressure",
+      "name": "Pressure"
+     }
+    ]
+   },
+   "text": "Temperature, humidity, pressure.",
+   "title": "Weather station"
+  },
+  {
+   "id": "climate",
+   "order": 4,
+   "setup": {
+    "name": "Room",
+    "rules": [
+     {
+      "id": 1,
+      "name": "Report",
+      "then": [
+       {
+        "type": "report"
+       }
+      ],
+      "when": {
+       "secs": 900,
+       "type": "every"
+      }
+     },
+     {
+      "id": 2,
+      "limit_min": 60,
+      "name": "Too cold",
+      "then": [
+       {
+        "text": "It is getting cold",
+        "type": "alarm"
+       }
+      ],
+      "when": {
+       "chan": 1,
+       "clear": 12,
+       "count": 2,
+       "op": "<",
+       "type": "compare",
+       "value": 10
+      }
+     }
+    ],
+    "sources": [
+     {
+      "chan": 1,
+      "input": {
+       "device": "sht3x",
+       "type": "i2c",
+       "what": 0
+      },
+      "kind": "temperature",
+      "name": "Temperature"
+     },
+     {
+      "chan": 2,
+      "input": {
+       "device": "sht3x",
+       "type": "i2c",
+       "what": 1
+      },
+      "kind": "humidity",
+      "name": "Humidity"
+     }
+    ]
+   },
+   "text": "Temperature and humidity. Warns if it gets cold.",
+   "title": "Room climate"
+  },
+  {
+   "id": "air",
+   "order": 5,
+   "setup": {
+    "interval_s": 600,
+    "name": "Air",
+    "rules": [
+     {
+      "id": 1,
+      "name": "Report",
+      "then": [
+       {
+        "type": "report"
+       }
+      ],
+      "when": {
+       "secs": 600,
+       "type": "every"
+      }
+     },
+     {
+      "id": 2,
+      "limit_min": 60,
+      "name": "Stuffy air",
+      "then": [
+       {
+        "text": "The air is stuffy: open a window",
+        "type": "alarm"
+       }
+      ],
+      "when": {
+       "chan": 1,
+       "clear": 1200,
+       "count": 2,
+       "op": ">",
+       "type": "compare",
+       "value": 1500
+      }
+     }
+    ],
+    "sources": [
+     {
+      "chan": 1,
+      "input": {
+       "device": "scd41",
+       "type": "i2c",
+       "what": 0
+      },
+      "kind": "co2",
+      "name": "CO2"
+     }
+    ]
+   },
+   "text": "Warns when the air gets stuffy.",
+   "title": "Air quality"
+  },
+  {
+   "id": "motion",
+   "order": 6,
+   "setup": {
+    "interval_s": 60,
+    "name": "Motion",
+    "rules": [
+     {
+      "id": 1,
+      "limit_min": 5,
+      "name": "Movement",
+      "then": [
+       {
+        "text": "Movement detected",
+        "type": "alarm"
+       }
+      ],
+      "when": {
+       "chan": 1,
+       "to": "high",
+       "type": "edge"
+      }
+     },
+     {
+      "id": 2,
+      "name": "Report",
+      "then": [
+       {
+        "type": "report"
+       }
+      ],
+      "when": {
+       "secs": 3600,
+       "type": "every"
+      }
+     }
+    ],
+    "sources": [
+     {
+      "chan": 1,
+      "input": {
+       "invert": false,
+       "pin": 0,
+       "pull": "none",
+       "type": "gpio_in"
+      },
+      "kind": "digital",
+      "name": "Motion"
+     }
+    ]
+   },
+   "text": "Tells you when something moves.",
+   "title": "Motion alarm"
+  },
+  {
+   "id": "battery",
+   "order": 7,
+   "setup": {
+    "interval_s": 3600,
+    "name": "Battery",
+    "rules": [
+     {
+      "id": 1,
+      "name": "Report",
+      "then": [
+       {
+        "type": "report"
+       }
+      ],
+      "when": {
+       "secs": 3600,
+       "type": "every"
+      }
+     },
+     {
+      "id": 2,
+      "limit_min": 720,
+      "name": "Low battery",
+      "then": [
+       {
+        "text": "Battery is low",
+        "type": "alarm"
+       }
+      ],
+      "when": {
+       "chan": 1,
+       "clear": 3.7,
+       "count": 2,
+       "op": "<",
+       "type": "compare",
+       "value": 3.5
+      }
+     }
+    ],
+    "sources": [
+     {
+      "chan": 1,
+      "input": {
+       "type": "battery"
+      },
+      "kind": "voltage",
+      "name": "Battery"
+     }
+    ]
+   },
+   "text": "Warn when the battery is low.",
+   "title": "Battery watch"
+  },
+  {
+   "id": "mailbox",
+   "order": 8,
+   "setup": {
+    "interval_s": 3600,
+    "name": "Mailbox",
+    "rules": [
+     {
+      "id": 1,
+      "name": "Post arrived",
+      "then": [
+       {
+        "text": "Post in the mailbox",
+        "type": "alarm"
+       }
+      ],
+      "when": {
+       "chan": 1,
+       "to": "high",
+       "type": "edge"
+      }
+     },
+     {
+      "id": 2,
+      "name": "Report",
+      "then": [
+       {
+        "type": "report"
+       }
+      ],
+      "when": {
+       "secs": 3600,
+       "type": "every"
+      }
+     },
+     {
+      "id": 3,
+      "limit_min": 720,
+      "name": "Low battery",
+      "then": [
+       {
+        "text": "Battery is low",
+        "type": "alarm"
+       }
+      ],
+      "when": {
+       "chan": 2,
+       "clear": 3.7,
+       "count": 2,
+       "op": "<",
+       "type": "compare",
+       "value": 3.5
+      }
+     }
+    ],
+    "sources": [
+     {
+      "chan": 1,
+      "input": {
+       "invert": true,
+       "pin": 0,
+       "pull": "up",
+       "type": "gpio_in",
+       "wake": true
+      },
+      "kind": "digital",
+      "name": "Mailbox flap"
+     },
+     {
+      "chan": 2,
+      "input": {
+       "type": "battery"
+      },
+      "kind": "voltage",
+      "name": "Battery"
+     }
+    ]
+   },
+   "text": "A switch wakes it when post arrives.",
+   "title": "Mailbox"
+  },
+  {
+   "id": "blank",
+   "order": 99,
+   "setup": {
+    "name": "",
+    "rules": [],
+    "sources": [
+     {
+      "chan": 1,
+      "input": {
+       "type": "battery"
+      },
+      "kind": "voltage",
+      "name": "Battery"
+     }
+    ]
+   },
+   "text": "Build every rule yourself.",
+   "title": "Start empty"
+  }
+ ],
+ "version": 1795364668
+}

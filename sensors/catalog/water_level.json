@@ -1,0 +1,20 @@
+{
+ "id": "water_level",
+ "name": "Water detector (analogue)",
+ "group": "Soil, water and weather",
+ "bus": "analog",
+ "kind": "percent",
+ "grove": "Grove Water Sensor",
+ "map": {
+  "in": [
+   0,
+   2000
+  ],
+  "out": [
+   0,
+   100
+  ]
+ },
+ "calibrate": "Measure it dry and wet and change the numbers.",
+ "note": "Leak or water level on the strips."
+}

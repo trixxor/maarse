@@ -1,0 +1,63 @@
+{
+ "id": "aht20",
+ "name": "AHT20 / AHT21 / DHT20",
+ "group": "Temperature, humidity and pressure",
+ "bus": "i2c",
+ "grove": "Grove AHT20, Grove DHT20",
+ "note": "",
+ "addrs": [
+  56
+ ],
+ "measure_ms": 100,
+ "read": {
+  "init": [
+   "be0800"
+  ],
+  "trigger": "ac3300",
+  "wait_ms": 80,
+  "ptr": "",
+  "read_len": 6,
+  "crc": false
+ },
+ "channels": [
+  {
+   "name": "Temperature",
+   "kind": "temperature",
+   "field": {
+    "bit_off": 28,
+    "bits": 20,
+    "signed": false,
+    "little": false,
+    "mul": 20000,
+    "div": 1048576,
+    "add": -5000
+   }
+  },
+  {
+   "name": "Humidity",
+   "kind": "humidity",
+   "field": {
+    "bit_off": 8,
+    "bits": 20,
+    "signed": false,
+    "little": false,
+    "mul": 10000,
+    "div": 1048576,
+    "add": 0
+   }
+  }
+ ],
+ "tests": [
+  {
+   "channel": 0,
+   "answer": "1c8000060000",
+   "value": 25.0
+  },
+  {
+   "channel": 1,
+   "answer": "1c8000060000",
+   "value": 50.0
+  }
+ ],
+ "title": "Temperature and humidity"
+}

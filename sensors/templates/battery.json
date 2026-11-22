@@ -1,0 +1,54 @@
+{
+ "id": "battery",
+ "order": 7,
+ "title": "Battery watch",
+ "text": "Warn when the battery is low.",
+ "setup": {
+  "name": "Battery",
+  "interval_s": 3600,
+  "sources": [
+   {
+    "chan": 1,
+    "kind": "voltage",
+    "name": "Battery",
+    "input": {
+     "type": "battery"
+    }
+   }
+  ],
+  "rules": [
+   {
+    "id": 1,
+    "name": "Report",
+    "when": {
+     "type": "every",
+     "secs": 3600
+    },
+    "then": [
+     {
+      "type": "report"
+     }
+    ]
+   },
+   {
+    "id": 2,
+    "name": "Low battery",
+    "when": {
+     "type": "compare",
+     "chan": 1,
+     "op": "<",
+     "value": 3.5,
+     "clear": 3.7,
+     "count": 2
+    },
+    "limit_min": 720,
+    "then": [
+     {
+      "type": "alarm",
+      "text": "Battery is low"
+     }
+    ]
+   }
+  ]
+ }
+}

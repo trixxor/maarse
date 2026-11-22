@@ -1,0 +1,20 @@
+{
+ "id": "soil_moisture",
+ "name": "Soil moisture (capacitive)",
+ "group": "Soil, water and weather",
+ "bus": "analog",
+ "kind": "percent",
+ "grove": "Grove Capacitive Moisture Sensor, Grove Moisture Sensor",
+ "map": {
+  "in": [
+   2600,
+   1200
+  ],
+  "out": [
+   0,
+   100
+  ]
+ },
+ "calibrate": "Dry in air reads about 2600 mV, in water about 1200 mV: measure yours and change the two numbers.",
+ "note": "Percent of the way from dry to wet."
+}

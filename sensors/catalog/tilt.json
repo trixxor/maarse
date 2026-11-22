@@ -1,0 +1,11 @@
+{
+ "id": "tilt",
+ "name": "Tilt switch",
+ "group": "Motion",
+ "bus": "digital_in",
+ "kind": "digital",
+ "pull": "up",
+ "invert": true,
+ "grove": "Grove Tilt Switch",
+ "note": "1 when tilted."
+}

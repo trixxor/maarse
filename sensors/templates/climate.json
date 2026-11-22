@@ -1,0 +1,65 @@
+{
+ "id": "climate",
+ "order": 4,
+ "title": "Room climate",
+ "text": "Temperature and humidity. Warns if it gets cold.",
+ "setup": {
+  "name": "Room",
+  "sources": [
+   {
+    "chan": 1,
+    "kind": "temperature",
+    "name": "Temperature",
+    "input": {
+     "type": "i2c",
+     "device": "sht3x",
+     "what": 0
+    }
+   },
+   {
+    "chan": 2,
+    "kind": "humidity",
+    "name": "Humidity",
+    "input": {
+     "type": "i2c",
+     "device": "sht3x",
+     "what": 1
+    }
+   }
+  ],
+  "rules": [
+   {
+    "id": 1,
+    "name": "Report",
+    "when": {
+     "type": "every",
+     "secs": 900
+    },
+    "then": [
+     {
+      "type": "report"
+     }
+    ]
+   },
+   {
+    "id": 2,
+    "name": "Too cold",
+    "when": {
+     "type": "compare",
+     "chan": 1,
+     "op": "<",
+     "value": 10,
+     "clear": 12,
+     "count": 2
+    },
+    "limit_min": 60,
+    "then": [
+     {
+      "type": "alarm",
+      "text": "It is getting cold"
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -1,0 +1,56 @@
+{
+ "id": "weather",
+ "order": 3,
+ "title": "Weather station",
+ "text": "Temperature, humidity, pressure.",
+ "setup": {
+  "name": "Weather",
+  "sources": [
+   {
+    "chan": 1,
+    "kind": "temperature",
+    "name": "Temperature",
+    "input": {
+     "type": "bme280",
+     "addr": 118,
+     "what": "temperature"
+    }
+   },
+   {
+    "chan": 2,
+    "kind": "humidity",
+    "name": "Humidity",
+    "input": {
+     "type": "bme280",
+     "addr": 118,
+     "what": "humidity"
+    }
+   },
+   {
+    "chan": 3,
+    "kind": "pressure",
+    "name": "Pressure",
+    "input": {
+     "type": "bme280",
+     "addr": 118,
+     "what": "pressure"
+    }
+   }
+  ],
+  "rules": [
+   {
+    "id": 1,
+    "name": "Report",
+    "when": {
+     "type": "every",
+     "secs": 900
+    },
+    "then": [
+     {
+      "type": "report"
+     }
+    ]
+   }
+  ]
+ }
+}

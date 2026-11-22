@@ -1,0 +1,71 @@
+{
+ "id": "mcp9600",
+ "name": "MCP9600 thermocouple",
+ "group": "Temperature, humidity and pressure",
+ "bus": "i2c",
+ "grove": "Grove Thermocouple (MCP9600)",
+ "note": "For K-type thermocouples.",
+ "addrs": [
+  96,
+  102,
+  103
+ ],
+ "measure_ms": 5,
+ "read": {
+  "init": [],
+  "trigger": "",
+  "wait_ms": 0,
+  "ptr": "00",
+  "read_len": 2,
+  "crc": false
+ },
+ "channels": [
+  {
+   "name": "Hot junction",
+   "kind": "temperature",
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": true,
+    "little": false,
+    "mul": 25,
+    "div": 4,
+    "add": 0
+   }
+  },
+  {
+   "name": "Cold junction",
+   "kind": "temperature",
+   "read": {
+    "init": [],
+    "trigger": "",
+    "wait_ms": 0,
+    "ptr": "02",
+    "read_len": 2,
+    "crc": false
+   },
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": true,
+    "little": false,
+    "mul": 25,
+    "div": 4,
+    "add": 0
+   }
+  }
+ ],
+ "tests": [
+  {
+   "channel": 0,
+   "answer": "0190",
+   "value": 25.0
+  },
+  {
+   "channel": 1,
+   "answer": "fff0",
+   "value": -1.0
+  }
+ ],
+ "title": "High temperature (oven, kiln)"
+}

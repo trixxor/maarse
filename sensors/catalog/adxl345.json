@@ -1,0 +1,77 @@
+{
+ "id": "adxl345",
+ "name": "ADXL345 motion",
+ "group": "Motion",
+ "bus": "i2c",
+ "grove": "Grove 3-axis accelerometer (ADXL345)",
+ "note": "Tells how it is tilted and shaken.",
+ "addrs": [
+  83,
+  29
+ ],
+ "measure_ms": 20,
+ "read": {
+  "init": [
+   "2d08"
+  ],
+  "trigger": "",
+  "wait_ms": 0,
+  "ptr": "32",
+  "read_len": 6,
+  "crc": false
+ },
+ "channels": [
+  {
+   "name": "Acceleration X",
+   "kind": "accel",
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": true,
+    "little": true,
+    "mul": 39,
+    "div": 10,
+    "add": 0
+   }
+  },
+  {
+   "name": "Acceleration Y",
+   "kind": "accel",
+   "field": {
+    "bit_off": 16,
+    "bits": 16,
+    "signed": true,
+    "little": true,
+    "mul": 39,
+    "div": 10,
+    "add": 0
+   }
+  },
+  {
+   "name": "Acceleration Z",
+   "kind": "accel",
+   "field": {
+    "bit_off": 32,
+    "bits": 16,
+    "signed": true,
+    "little": true,
+    "mul": 39,
+    "div": 10,
+    "add": 0
+   }
+  }
+ ],
+ "tests": [
+  {
+   "channel": 0,
+   "answer": "000100ff0000",
+   "value": 998.0
+  },
+  {
+   "channel": 1,
+   "answer": "000100ff0000",
+   "value": -998.0
+  }
+ ],
+ "title": "Movement and tilt"
+}

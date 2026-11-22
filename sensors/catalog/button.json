@@ -1,0 +1,11 @@
+{
+ "id": "button",
+ "name": "Button",
+ "group": "Buttons and switches",
+ "bus": "digital_in",
+ "kind": "digital",
+ "pull": "none",
+ "invert": false,
+ "grove": "Grove Button, Grove Switch (P)",
+ "note": "1 while pressed."
+}

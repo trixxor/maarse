@@ -1,0 +1,11 @@
+{
+ "id": "hall",
+ "name": "Magnet (Hall)",
+ "group": "Buttons and switches",
+ "bus": "digital_in",
+ "kind": "digital",
+ "pull": "none",
+ "invert": true,
+ "grove": "Grove Hall Sensor",
+ "note": "1 when a magnet is near (the module pulls low)."
+}

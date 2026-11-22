@@ -1,0 +1,11 @@
+{
+ "id": "pir",
+ "name": "Motion (PIR)",
+ "group": "Motion",
+ "bus": "digital_in",
+ "kind": "digital",
+ "pull": "none",
+ "invert": false,
+ "grove": "Grove PIR Motion Sensor, Grove Mini PIR, Grove Adjustable PIR",
+ "note": "1 while it sees movement. Give it a minute after power-up."
+}

@@ -1,0 +1,54 @@
+{
+ "id": "motion",
+ "order": 6,
+ "title": "Motion alarm",
+ "text": "Tells you when something moves.",
+ "setup": {
+  "name": "Motion",
+  "interval_s": 60,
+  "sources": [
+   {
+    "chan": 1,
+    "kind": "digital",
+    "name": "Motion",
+    "input": {
+     "type": "gpio_in",
+     "pin": 0,
+     "pull": "none",
+     "invert": false
+    }
+   }
+  ],
+  "rules": [
+   {
+    "id": 1,
+    "name": "Movement",
+    "when": {
+     "type": "edge",
+     "chan": 1,
+     "to": "high"
+    },
+    "limit_min": 5,
+    "then": [
+     {
+      "type": "alarm",
+      "text": "Movement detected"
+     }
+    ]
+   },
+   {
+    "id": 2,
+    "name": "Report",
+    "when": {
+     "type": "every",
+     "secs": 3600
+    },
+    "then": [
+     {
+      "type": "report"
+     }
+    ]
+   }
+  ]
+ }
+}

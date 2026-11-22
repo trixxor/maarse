@@ -1,0 +1,12 @@
+{
+ "id": "reed",
+ "name": "Door or window contact (reed)",
+ "group": "Buttons and switches",
+ "bus": "digital_in",
+ "kind": "digital",
+ "pull": "up",
+ "invert": true,
+ "grove": "Grove Magnetic Switch",
+ "note": "1 when the magnet is away (open). Between the pin and GND, with a pull-up.",
+ "wake": true
+}

@@ -1,0 +1,11 @@
+{
+ "id": "touch",
+ "name": "Touch",
+ "group": "Buttons and switches",
+ "bus": "digital_in",
+ "kind": "digital",
+ "pull": "none",
+ "invert": false,
+ "grove": "Grove Touch Sensor",
+ "note": "1 while touched."
+}

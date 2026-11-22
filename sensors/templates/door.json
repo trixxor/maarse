@@ -1,0 +1,54 @@
+{
+ "id": "door",
+ "order": 2,
+ "title": "Door or post box",
+ "text": "Tell me when it opens.",
+ "setup": {
+  "name": "Door",
+  "interval_s": 60,
+  "sources": [
+   {
+    "chan": 1,
+    "kind": "digital",
+    "name": "Door contact",
+    "input": {
+     "type": "gpio_in",
+     "pin": 0,
+     "pull": "up",
+     "invert": false
+    }
+   }
+  ],
+  "rules": [
+   {
+    "id": 1,
+    "name": "Door opened",
+    "when": {
+     "type": "edge",
+     "chan": 1,
+     "to": "high"
+    },
+    "limit_min": 5,
+    "then": [
+     {
+      "type": "alarm",
+      "text": "Door opened"
+     }
+    ]
+   },
+   {
+    "id": 2,
+    "name": "Report",
+    "when": {
+     "type": "every",
+     "secs": 3600
+    },
+    "then": [
+     {
+      "type": "report"
+     }
+    ]
+   }
+  ]
+ }
+}

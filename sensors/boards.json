@@ -1,0 +1,173 @@
+[
+ {
+  "id": "xiao_nrf52840",
+  "name": "Seeed XIAO nRF52840 + Wio-SX1262",
+  "note": "The radio uses D1 to D5 and D8 to D10. Three pins are free: D0, D6 and D7.",
+  "available": true,
+  "pins": [
+   {
+    "id": 0,
+    "label": "D0"
+   },
+   {
+    "id": 6,
+    "label": "D6"
+   },
+   {
+    "id": 7,
+    "label": "D7"
+   }
+  ],
+  "i2c": {
+   "sda": 6,
+   "scl": 7,
+   "text": "D6 = SDA, D7 = SCL"
+  },
+  "analog": [],
+  "wake": null,
+  "wake_text": "",
+  "grove": "Plug I2C sensors into a Grove connector wired to D6 (SDA) and D7 (SCL): the UART connector of the Grove Shield for XIAO is exactly that. The shield's other connectors are on pins the radio uses."
+ },
+ {
+  "id": "heltec_v4",
+  "name": "Heltec WiFi LoRa 32 V4",
+  "note": "Power a sensor from the Ve pin (switched off while the node sleeps) or 3V3.",
+  "available": true,
+  "pins": [
+   {
+    "id": 3,
+    "label": "GPIO3"
+   },
+   {
+    "id": 4,
+    "label": "GPIO4"
+   },
+   {
+    "id": 6,
+    "label": "GPIO6"
+   },
+   {
+    "id": 38,
+    "label": "GPIO38"
+   },
+   {
+    "id": 39,
+    "label": "GPIO39"
+   },
+   {
+    "id": 40,
+    "label": "GPIO40"
+   },
+   {
+    "id": 41,
+    "label": "GPIO41"
+   }
+  ],
+  "i2c": {
+   "sda": 47,
+   "scl": 48,
+   "text": "GPIO47 = SDA, GPIO48 = SCL"
+  },
+  "analog": [
+   {
+    "id": 4,
+    "label": "GPIO4",
+    "max_mv": 2500
+   }
+  ],
+  "wake": [
+   3,
+   4,
+   6
+  ],
+  "wake_text": "GPIO 3, 4 and 6",
+  "grove": "Wire a Grove cable (black GND, red 3V3, yellow SDA, white SCL) to the header pins; the OLED has its own bus."
+ },
+ {
+  "id": "xiao_esp32s3",
+  "name": "Seeed XIAO ESP32S3 + Wio-SX1262",
+  "note": "The radio uses D8 to D10 and the connector under the board, so D0 to D7 are free: six analogue inputs, I2C and a serial port.",
+  "available": false,
+  "pins": [
+   {
+    "id": 1,
+    "label": "D0"
+   },
+   {
+    "id": 2,
+    "label": "D1"
+   },
+   {
+    "id": 3,
+    "label": "D2"
+   },
+   {
+    "id": 4,
+    "label": "D3"
+   },
+   {
+    "id": 5,
+    "label": "D4"
+   },
+   {
+    "id": 6,
+    "label": "D5"
+   },
+   {
+    "id": 43,
+    "label": "D6"
+   },
+   {
+    "id": 44,
+    "label": "D7"
+   }
+  ],
+  "i2c": {
+   "sda": 5,
+   "scl": 6,
+   "text": "D4 = SDA, D5 = SCL"
+  },
+  "analog": [
+   {
+    "id": 1,
+    "label": "D0",
+    "max_mv": 3100
+   },
+   {
+    "id": 2,
+    "label": "D1",
+    "max_mv": 3100
+   },
+   {
+    "id": 3,
+    "label": "D2",
+    "max_mv": 3100
+   },
+   {
+    "id": 4,
+    "label": "D3",
+    "max_mv": 3100
+   },
+   {
+    "id": 5,
+    "label": "D4",
+    "max_mv": 3100
+   },
+   {
+    "id": 6,
+    "label": "D5",
+    "max_mv": 3100
+   }
+  ],
+  "wake": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "wake_text": "D0 to D5",
+  "grove": "The Grove Shield for XIAO fits connectors 1 to 6 (D0 to D7); connectors 7 and 8 sit on the radio's SPI pins."
+ }
+]

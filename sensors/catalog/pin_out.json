@@ -1,0 +1,11 @@
+{
+ "id": "pin_out",
+ "name": "Any pin (output)",
+ "group": "Switch something on",
+ "bus": "digital_out",
+ "kind": "digital",
+ "active_low": false,
+ "grove": "",
+ "note": "A pin that is on or off.",
+ "advanced": true
+}

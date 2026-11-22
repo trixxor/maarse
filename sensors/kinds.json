@@ -1,0 +1,86 @@
+[
+ {
+  "key": "temperature",
+  "id": 1,
+  "name": "Temperature",
+  "unit": "°C",
+  "scale": 100
+ },
+ {
+  "key": "humidity",
+  "id": 2,
+  "name": "Humidity",
+  "unit": "%",
+  "scale": 100
+ },
+ {
+  "key": "pressure",
+  "id": 3,
+  "name": "Pressure",
+  "unit": "hPa",
+  "scale": 100
+ },
+ {
+  "key": "voltage",
+  "id": 4,
+  "name": "Voltage",
+  "unit": "V",
+  "scale": 1000
+ },
+ {
+  "key": "digital",
+  "id": 5,
+  "name": "Pin",
+  "unit": "",
+  "scale": 1
+ },
+ {
+  "key": "counter",
+  "id": 6,
+  "name": "Counter",
+  "unit": "",
+  "scale": 1
+ },
+ {
+  "key": "percent",
+  "id": 7,
+  "name": "Level",
+  "unit": "%",
+  "scale": 100
+ },
+ {
+  "key": "distance",
+  "id": 8,
+  "name": "Distance",
+  "unit": "mm",
+  "scale": 1
+ },
+ {
+  "key": "light",
+  "id": 9,
+  "name": "Light",
+  "unit": "lx",
+  "scale": 1
+ },
+ {
+  "key": "co2",
+  "id": 10,
+  "name": "CO2",
+  "unit": "ppm",
+  "scale": 1
+ },
+ {
+  "key": "accel",
+  "id": 11,
+  "name": "Acceleration",
+  "unit": "mg",
+  "scale": 1
+ },
+ {
+  "key": "custom",
+  "id": 128,
+  "name": "Value",
+  "unit": "",
+  "scale": 1
+ }
+]

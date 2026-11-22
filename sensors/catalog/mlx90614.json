@@ -1,0 +1,64 @@
+{
+ "id": "mlx90614",
+ "name": "MLX90614 infrared thermometer",
+ "group": "Temperature, humidity and pressure",
+ "bus": "i2c",
+ "grove": "Grove IR temperature sensor (MLX90614)",
+ "note": "Measures the surface it points at.",
+ "addrs": [
+  90
+ ],
+ "measure_ms": 10,
+ "read": {
+  "init": [],
+  "trigger": "",
+  "wait_ms": 0,
+  "ptr": "07",
+  "read_len": 3,
+  "crc": false
+ },
+ "channels": [
+  {
+   "name": "Object",
+   "kind": "temperature",
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": false,
+    "little": true,
+    "mul": 2,
+    "div": 1,
+    "add": -27315
+   }
+  },
+  {
+   "name": "Ambient",
+   "kind": "temperature",
+   "read": {
+    "init": [],
+    "trigger": "",
+    "wait_ms": 0,
+    "ptr": "06",
+    "read_len": 3,
+    "crc": false
+   },
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": false,
+    "little": true,
+    "mul": 2,
+    "div": 1,
+    "add": -27315
+   }
+  }
+ ],
+ "tests": [
+  {
+   "channel": 0,
+   "answer": "3c3a00",
+   "value": 25.01
+  }
+ ],
+ "title": "Temperature without touching"
+}

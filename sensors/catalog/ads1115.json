@@ -1,0 +1,131 @@
+{
+ "id": "ads1115",
+ "name": "ADS1115 analogue input",
+ "group": "Analogue inputs",
+ "bus": "i2c",
+ "grove": "Grove 16-bit ADC (ADS1115)",
+ "note": "0 to 4.096 V. Four analogue Grove sensors on two wires.",
+ "addrs": [
+  72,
+  73,
+  74,
+  75
+ ],
+ "measure_ms": 20,
+ "read": {
+  "init": [],
+  "trigger": "",
+  "wait_ms": 0,
+  "ptr": "",
+  "read_len": 2,
+  "crc": false
+ },
+ "channels": [
+  {
+   "name": "Input A0",
+   "kind": "voltage",
+   "read": {
+    "init": [
+     "01c383"
+    ],
+    "trigger": "",
+    "wait_ms": 12,
+    "ptr": "00",
+    "read_len": 2,
+    "crc": false
+   },
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": true,
+    "little": false,
+    "mul": 1,
+    "div": 8,
+    "add": 0
+   }
+  },
+  {
+   "name": "Input A1",
+   "kind": "voltage",
+   "read": {
+    "init": [
+     "01d383"
+    ],
+    "trigger": "",
+    "wait_ms": 12,
+    "ptr": "00",
+    "read_len": 2,
+    "crc": false
+   },
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": true,
+    "little": false,
+    "mul": 1,
+    "div": 8,
+    "add": 0
+   }
+  },
+  {
+   "name": "Input A2",
+   "kind": "voltage",
+   "read": {
+    "init": [
+     "01e383"
+    ],
+    "trigger": "",
+    "wait_ms": 12,
+    "ptr": "00",
+    "read_len": 2,
+    "crc": false
+   },
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": true,
+    "little": false,
+    "mul": 1,
+    "div": 8,
+    "add": 0
+   }
+  },
+  {
+   "name": "Input A3",
+   "kind": "voltage",
+   "read": {
+    "init": [
+     "01f383"
+    ],
+    "trigger": "",
+    "wait_ms": 12,
+    "ptr": "00",
+    "read_len": 2,
+    "crc": false
+   },
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": true,
+    "little": false,
+    "mul": 1,
+    "div": 8,
+    "add": 0
+   }
+  }
+ ],
+ "tests": [
+  {
+   "channel": 2,
+   "answer": "1000",
+   "value": 0.512
+  },
+  {
+   "channel": 0,
+   "answer": "f000",
+   "value": -0.512
+  }
+ ],
+ "title": "Analogue input adapter",
+ "advanced": true
+}

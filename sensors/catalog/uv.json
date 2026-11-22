@@ -1,0 +1,9 @@
+{
+ "id": "uv",
+ "name": "UV (analogue)",
+ "group": "Light",
+ "bus": "analog",
+ "kind": "voltage",
+ "grove": "Grove UV Sensor (GUVA-S12D)",
+ "note": "About 100 mV per UV index step."
+}

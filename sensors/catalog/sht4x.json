@@ -1,0 +1,61 @@
+{
+ "id": "sht4x",
+ "name": "SHT40 / SHT41 / SHT45",
+ "group": "Temperature, humidity and pressure",
+ "bus": "i2c",
+ "grove": "Grove SHT40, Grove SHT41",
+ "note": "",
+ "addrs": [
+  68
+ ],
+ "measure_ms": 20,
+ "read": {
+  "init": [],
+  "trigger": "fd",
+  "wait_ms": 10,
+  "ptr": "",
+  "read_len": 6,
+  "crc": true
+ },
+ "channels": [
+  {
+   "name": "Temperature",
+   "kind": "temperature",
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": false,
+    "little": false,
+    "mul": 17500,
+    "div": 65535,
+    "add": -4500
+   }
+  },
+  {
+   "name": "Humidity",
+   "kind": "humidity",
+   "field": {
+    "bit_off": 16,
+    "bits": 16,
+    "signed": false,
+    "little": false,
+    "mul": 12500,
+    "div": 65535,
+    "add": -600
+   }
+  }
+ ],
+ "tests": [
+  {
+   "channel": 0,
+   "answer": "6666938000a2",
+   "value": 25.0
+  },
+  {
+   "channel": 1,
+   "answer": "6666938000a2",
+   "value": 56.5
+  }
+ ],
+ "title": "Temperature and humidity"
+}

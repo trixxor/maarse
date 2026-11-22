@@ -1,0 +1,10 @@
+{
+ "id": "relay",
+ "name": "Relay",
+ "group": "Switch something on",
+ "bus": "digital_out",
+ "kind": "digital",
+ "active_low": false,
+ "grove": "Grove Relay",
+ "note": "A 3.3 V relay module. Switches while the node is awake; the ESP32 switches it off in sleep."
+}

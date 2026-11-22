@@ -1,0 +1,12 @@
+{
+ "id": "pin_in",
+ "name": "Any pin (input)",
+ "group": "Other",
+ "bus": "digital_in",
+ "kind": "digital",
+ "pull": "none",
+ "invert": false,
+ "grove": "",
+ "note": "A switch or a module that gives 0 or 1.",
+ "advanced": true
+}

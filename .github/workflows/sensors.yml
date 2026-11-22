@@ -1,0 +1,77 @@
+# The sensor catalogue (sensors/): tested on every change, and on main merged, signed with the release key and
+# published on the rolling "sensors" release. Hosts check that release about once a day and accept it only if the
+# signature matches the release key built into them (see maarse-host/src/sensors/catalog_update.rs).
+name: Sensor catalogue
+
+on:
+  pull_request:
+    paths: ["sensors/**", "tools/sensor_catalog.py", "maarse-host/src/sensors/**", ".github/workflows/sensors.yml"]
+  push:
+    branches: [main]
+    paths: ["sensors/**", "tools/sensor_catalog.py", ".github/workflows/sensors.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MAARSE_RELEASE_PUBKEY: ${{ vars.MAARSE_RELEASE_PUBKEY }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Merge the files
+        run: python3 tools/sensor_catalog.py build
+      - name: Every description is valid and every data sheet test passes
+        run: cargo test --locked -p maarse-host sensors::
+      - uses: actions/upload-artifact@v4
+        with:
+          name: catalog
+          path: sensors/catalog.json
+
+  publish:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Release key present
+        env:
+          KEY_B64: ${{ secrets.MAARSE_SIGN_KEY_B64 }}
+        run: |
+          [ -n "$KEY_B64" ] && [ -n "$MAARSE_RELEASE_PUBKEY" ] || { echo "MAARSE_SIGN_KEY_B64 and MAARSE_RELEASE_PUBKEY are needed: the sensor list must be signed"; exit 1; }
+      - name: Merge the files (the version is the time: only a newer list is accepted)
+        run: python3 tools/sensor_catalog.py build
+      - name: Sign
+        env:
+          KEY_B64: ${{ secrets.MAARSE_SIGN_KEY_B64 }}
+        run: |
+          mkdir -p out/sign
+          cp sensors/catalog.json out/sign/catalog.json
+          umask 077
+          printf '%s' "$KEY_B64" | base64 -d > "$RUNNER_TEMP/sign.key"
+          # sign-release signs every file in a folder: the list is named SHA256SUMS there, SHA256SUMS-sensors on the release.
+          cargo run --locked -q -p maarse-uf2 --bin maarse-sign -- sign-release --key "$RUNNER_TEMP/sign.key" out/sign
+          cargo run --locked -q -p maarse-uf2 --bin maarse-sign -- verify-release --pubkey "$MAARSE_RELEASE_PUBKEY" out/sign
+          cp out/sign/SHA256SUMS out/SHA256SUMS-sensors
+          cp out/sign/SHA256SUMS.sig out/SHA256SUMS-sensors.sig
+          cp out/sign/catalog.json out/catalog.json
+          rm -f "$RUNNER_TEMP/sign.key"
+      - name: Publish on the rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A pre-release, so it is never "latest" (the Windows updater reads /releases/latest).
+          gh release view sensors >/dev/null 2>&1 || gh release create sensors --prerelease --title "Sensor catalogue" \
+            --notes "The signed list of sensors and boards. Hosts fetch it themselves; see sensors/README.md." --target "$GITHUB_SHA"
+          gh release upload sensors out/catalog.json out/SHA256SUMS-sensors out/SHA256SUMS-sensors.sig --clobber

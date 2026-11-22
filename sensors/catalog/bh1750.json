@@ -1,0 +1,44 @@
+{
+ "id": "bh1750",
+ "name": "BH1750 light",
+ "group": "Light",
+ "bus": "i2c",
+ "grove": "Grove Digital Light (BH1750)",
+ "note": "How bright it is, in lux.",
+ "addrs": [
+  35,
+  92
+ ],
+ "measure_ms": 190,
+ "read": {
+  "init": [],
+  "trigger": "20",
+  "wait_ms": 180,
+  "ptr": "",
+  "read_len": 2,
+  "crc": false
+ },
+ "channels": [
+  {
+   "name": "Light",
+   "kind": "light",
+   "field": {
+    "bit_off": 0,
+    "bits": 16,
+    "signed": false,
+    "little": false,
+    "mul": 10,
+    "div": 12,
+    "add": 0
+   }
+  }
+ ],
+ "tests": [
+  {
+   "channel": 0,
+   "answer": "0120",
+   "value": 240.0
+  }
+ ],
+ "title": "Brightness"
+}

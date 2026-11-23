@@ -555,7 +555,7 @@ private fun ruleSummary(setup: JSONObject, r: JSONObject): String {
 
 /** "✓ Fits on the sensor" with the numbers; always visible at the bottom of the designer. */
 @Composable
-private fun FitBar(d: SensorDesign) {
+private fun FitBar(d: SensorDesign, @Suppress("UNUSED_PARAMETER") rev: Int) {
     val k = d.compiled
     val ok = k?.optBoolean("ok") == true
     val bad = k != null && !ok
@@ -598,7 +598,7 @@ private fun Stepper(step: Int, onStep: (Int) -> Unit) {
 
 @Composable
 fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
-    Sensors.rev.collectAsState().value
+    val rev = Sensors.rev.collectAsState().value
     val d = Sensors.design ?: return
     // A new design starts at step 1; coming back from a rule keeps the step.
     remember(d) { if (SensorsNav.stepFor !== d) { SensorsNav.stepFor = d; SensorsNav.step = 1 }; 0 }
@@ -614,14 +614,14 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Stepper(step) { SensorsNav.step = it }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (step == 1) SetupStep(setup, board, d.note, { dialog = it })
-            else if (step == 2) RulesStep(setup, ctx, copied, { copied = true }, { dialog = it }, onRule)
-            else TestAndSendBody(d, result)
+            if (step == 1) SetupStep(setup, board, d.note, rev, { dialog = it })
+            else if (step == 2) RulesStep(setup, ctx, copied, rev, { copied = true }, { dialog = it }, onRule)
+            else TestAndSendBody(d, result, rev)
             androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
         }
         // Fixed at the bottom: whether it fits, and the way on.
         Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            FitBar(d)
+            FitBar(d, rev)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (step > 1) OutlinedButton(onClick = { SensorsNav.step = step - 1 }, Modifier.weight(1f).height(48.dp)) { Text("Back") }
                 if (step < 3) Button(onClick = { SensorsNav.step = step + 1 }, Modifier.weight(1f).height(48.dp)) { Text("Next") }
@@ -656,7 +656,7 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
 
 /** Step 1: the name, the board, the inputs and outputs, and who gets the messages. */
 @Composable
-private fun SetupStep(setup: JSONObject, board: String, note: String, open: (String) -> Unit) {
+private fun SetupStep(setup: JSONObject, board: String, note: String, @Suppress("UNUSED_PARAMETER") rev: Int, open: (String) -> Unit) {
     OutlinedTextField(setup.optString("name"), { setup.put("name", it.take(30)); Sensors.changed() }, Modifier.fillMaxWidth(), label = { Text("Name, e.g. Cellar") }, singleLine = true)
     if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
     STitle("This sensor")
@@ -714,7 +714,7 @@ private fun SetupStep(setup: JSONObject, board: String, note: String, open: (Str
 
 /** Step 2: the rules as sentences, the host's "went quiet" rule, templates and the share link. */
 @Composable
-private fun RulesStep(setup: JSONObject, ctx: android.content.Context, copied: Boolean, onCopied: () -> Unit, open: (String) -> Unit, onRule: (Int) -> Unit) {
+private fun RulesStep(setup: JSONObject, ctx: android.content.Context, copied: Boolean, @Suppress("UNUSED_PARAMETER") rev: Int, onCopied: () -> Unit, open: (String) -> Unit, onRule: (Int) -> Unit) {
     val rules = setup.getJSONArray("rules").objs()
     STitle("Rules")
     SGroup {
@@ -1287,7 +1287,7 @@ private fun Meter(label: String, text: String, frac: Float) {
  * It is step 3 of the designer and also a page of its own.
  */
 @Composable
-private fun TestAndSendBody(d: SensorDesign, result: String) {
+private fun TestAndSendBody(d: SensorDesign, result: String, @Suppress("UNUSED_PARAMETER") rev: Int) {
     val sent by Sensors.status.collectAsState()
     val k = d.compiled
     SCard {
@@ -1344,12 +1344,12 @@ private fun TestAndSendBody(d: SensorDesign, result: String) {
 /** Test and send as a page of its own (the designer shows the same as its third step). */
 @Composable
 fun SensorSendScreen() {
-    Sensors.rev.collectAsState().value
+    val rev = Sensors.rev.collectAsState().value
     val d = Sensors.design ?: return
     var result by remember { mutableStateOf("") }
     val k = d.compiled
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        TestAndSendBody(d, result)
+        TestAndSendBody(d, result, rev)
         Button(onClick = { result = Sensors.sendRadio() }, Modifier.fillMaxWidth().height(52.dp), enabled = k?.optBoolean("ok") == true) { Text("Send to ${d.setup.optString("name").ifBlank { "the sensor" }}") }
         androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
     }

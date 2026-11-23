@@ -279,6 +279,7 @@ object Sensors {
                 if (my != busy || design !== d) return@call
                 val c = r.getOrNull()?.let { JSONObject(it) } ?: JSONObject().put("ok", false).put("error", r.exceptionOrNull()?.message ?: "Error")
                 d.compiled = c
+                rev.value = rev.value + 1
                 if (c.optBoolean("ok")) {
                     val req = JSONObject().put("setup", d.setup).put("scenario", d.scenario).toString()
                     call("POST", "/api/sensors/simulate", req) { s -> if (my == busy && design === d) { d.sim = s.getOrNull()?.let { JSONObject(it) }; rev.value = rev.value + 1 } }

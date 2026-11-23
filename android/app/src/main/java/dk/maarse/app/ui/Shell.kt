@@ -140,7 +140,9 @@ fun AppShell(nav: Nav) {
         else if (s == Screen.WelcomeAccount) WelcomeAccount(nav)
         else {
             val mcChat = nav.mcChatOpen
-            val onHome = s == Screen.Home && !mcChat
+            // A MeshCore node page (and the repeater screens) has its own back arrow: no place title, no bar.
+            val mcNode = s == Screen.Home && nav.tab == Tab.CONTACTS && McNav.node != null
+            val onHome = s == Screen.Home && !mcChat && !mcNode
             Column(Modifier.fillMaxSize()) {
                 // Screens without the bar keep clear of the system navigation bar themselves.
                 Box(Modifier.weight(1f).then(if (onHome) Modifier else Modifier.navigationBarsPadding())) {
@@ -234,6 +236,12 @@ fun MeAvatar(size: androidx.compose.ui.unit.Dp, onClick: () -> Unit) {
 
 @Composable
 private fun Home(nav: Nav) {
+    if (nav.tab == Tab.CONTACTS && McNav.node != null) {
+        Box(Modifier.fillMaxSize().statusBarsPadding()) {
+            ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onMeshcoreChat = { nav.select(Tab.CHATS, reset = false) })
+        }
+        return
+    }
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         // The title of the place; the avatar opens Settings (and Back returns here).
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {

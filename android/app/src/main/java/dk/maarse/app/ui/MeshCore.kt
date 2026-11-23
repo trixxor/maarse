@@ -210,9 +210,10 @@ fun McChatRow(c: Node.McConversation, mc: Node.MeshCoreAccess, onClick: () -> Un
         } else ChannelDisc()
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                RawText(c.title, Modifier.weight(1f, fill = false), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                NetworkTag(kind)
-                Box(Modifier.weight(1f))
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RawText(c.title, Modifier.weight(1f, fill = false), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    NetworkTag(kind)
+                }
                 Text(listTime(c.time), maxLines = 1, style = MaterialTheme.typography.labelSmall, color = if (c.unread > 0) Mc.color else muted)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

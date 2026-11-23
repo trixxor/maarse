@@ -238,13 +238,6 @@ private fun AlertCards(onAlerts: () -> Unit, onSensor: (String) -> Unit) {
 
 private fun addressIn(text: String): String? = Regex("[0-9a-fA-F]{32}").find(text)?.value?.lowercase()
 
-@Composable
-private fun RowIcon(icon: ImageVector, meshcore: Boolean = false) {
-    Box(Modifier.size(40.dp).clip(CircleShape).background(if (meshcore) Mc.container else MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
-        Icon(icon, null, tint = if (meshcore) Mc.color else MaterialTheme.colorScheme.onPrimaryContainer)
-    }
-}
-
 /** One screen, no tab bar (shown as a sub-page). `onOpen` opens a Må:rse chat; `onDone` just leaves the screen. */
 @Composable
 fun NewChatScreen(onOpen: (String) -> Unit, onDone: () -> Unit = {}) {

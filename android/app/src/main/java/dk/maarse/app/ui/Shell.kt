@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -144,7 +146,11 @@ fun AppShell(nav: Nav) {
     BackHandler(nav.welcome == null && nav.canGoBack) { nav.back() }
     PagesNav.open = { nav.select(Tab.PAGES, reset = false) }
     PagesNav.contact = { nav.go(Screen.Contact(it)) }
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    // Edge to edge: lift the whole app above the keyboard, and hide the tab bar while it is open,
+    // so the text field of any screen stays visible.
+    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+    val keyboardOpen = androidx.compose.foundation.layout.WindowInsets.Companion.isImeVisible
+    Surface(Modifier.fillMaxSize().imePadding(), color = MaterialTheme.colorScheme.background) {
         val s = nav.top
         if (s == Screen.Welcome) Welcome(nav)
         else if (s == Screen.WelcomeAccount) WelcomeAccount(nav)
@@ -175,7 +181,7 @@ fun AppShell(nav: Nav) {
                     else -> {}
                 }
             }
-            BottomBar(nav)
+            if (!keyboardOpen) BottomBar(nav)
         }
     }
     CallOverlay()

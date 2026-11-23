@@ -1,0 +1,78 @@
+# The offline map of Denmark (docs/map.md): cuts two extracts out of the Protomaps basemap (OpenStreetMap data, ODbL) and
+# publishes them, with a manifest, on the rolling "map-dk" release. Hosts download the file they want from there
+# (maarse-host/src/map.rs); nothing links to Protomaps' own servers. Run by hand when a newer map is wanted
+# (a few times a year is enough): Actions > "Offline map of Denmark" > Run workflow.
+name: Offline map of Denmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Protomaps daily build to cut from, e.g. 20261123 (empty = the newest one)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  PMTILES_VERSION: "1.31.2"
+  # The release asset's own SHA-256 as GitHub reports it (the project publishes no checksum file).
+  PMTILES_LINUX_SHA256: "3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install the pmtiles tool (pinned and checked)
+        run: |
+          curl -fsSL -o pmtiles.tgz "https://github.com/protomaps/go-pmtiles/releases/download/v${PMTILES_VERSION}/go-pmtiles_${PMTILES_VERSION}_Linux_x86_64.tar.gz"
+          echo "${PMTILES_LINUX_SHA256}  pmtiles.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/pmtiles"
+          tar -xzf pmtiles.tgz -C "$RUNNER_TEMP/pmtiles" pmtiles
+          echo "$RUNNER_TEMP/pmtiles" >> "$GITHUB_PATH"
+      - name: Pick the Protomaps build
+        env:
+          BUILD_INPUT: ${{ inputs.build }}
+        run: |
+          BUILD="$BUILD_INPUT"
+          if [ -z "$BUILD" ]; then
+            BUILD=$(curl -fsSL https://build-metadata.protomaps.dev/builds.json | jq -r 'map(.key) | map(select(test("^[0-9]{8}\\.pmtiles$"))) | sort | last | sub("\\.pmtiles$"; "")')
+          fi
+          case "$BUILD" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;; *) echo "bad build: $BUILD"; exit 1;; esac
+          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
+      - name: Cut the extracts (overview z0-10, detailed z0-13)
+        run: |
+          mkdir -p out
+          SRC="https://build.protomaps.com/${BUILD}.pmtiles"
+          pmtiles extract "$SRC" out/denmark-overview.pmtiles --region=tools/map/denmark-region.geojson --maxzoom=10
+          pmtiles extract "$SRC" out/denmark-detailed.pmtiles --region=tools/map/denmark-region.geojson --maxzoom=13
+          ls -l out
+      - name: Manifest
+        run: |
+          OSM=$(pmtiles show --metadata out/denmark-overview.pmtiles | jq -r '."planetiler:osm:osmosisreplicationtime" // ""')
+          entry() { # level name minzoom maxzoom
+            jq -n --arg level "$1" --arg name "$2" --argjson bytes "$(stat -c %s "out/$2")" --arg sha "$(sha256sum "out/$2" | cut -d' ' -f1)" \
+              --argjson minzoom "$3" --argjson maxzoom "$4" \
+              '{level:$level,name:$name,bytes:$bytes,sha256:$sha,bbox:[7.9,54.5,15.3,57.8],minzoom:$minzoom,maxzoom:$maxzoom}'
+          }
+          jq -n --arg build "$BUILD" --arg osm "$OSM" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson overview "$(entry overview denmark-overview.pmtiles 0 10)" --argjson detailed "$(entry detailed denmark-detailed.pmtiles 0 13)" \
+            '{schema:1,build:$build,built_at:$date,osm_data:$osm,attribution:"© OpenStreetMap contributors · Protomaps",license:"ODbL 1.0 (data), BSD-3-Clause (basemap)",files:[$overview,$detailed]}' > out/map-manifest.json
+          cat out/map-manifest.json
+      - name: Publish on the rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A pre-release, so it is never "latest" (the Windows updater reads /releases/latest).
+          NOTES="Offline map of Denmark for Må:rse: Protomaps basemap build ${BUILD} cut to Denmark. Data © OpenStreetMap contributors (ODbL), basemap by Protomaps (BSD-3-Clause). Hosts download from here themselves; see docs/map.md."
+          gh release view map-dk >/dev/null 2>&1 || gh release create map-dk --prerelease --title "Offline map of Denmark" --notes "$NOTES" --target "$GITHUB_SHA"
+          gh release edit map-dk --notes "$NOTES"
+          # The files first, the manifest last: a host only learns about a new map when it is all there.
+          gh release upload map-dk out/denmark-overview.pmtiles out/denmark-detailed.pmtiles --clobber
+          gh release upload map-dk out/map-manifest.json --clobber

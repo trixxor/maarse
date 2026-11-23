@@ -1047,6 +1047,10 @@ feed is disabled.
 - **Try on hardware (battery and diagnostics):** compare the battery voltage on the status page with a multimeter on each board (adjust the factor in `firmware/*/src/battery.rs` if it is off by more than about 50 mV); unplug USB and watch USB power change (nRF); watch the energy status drop below 3.6/3.4 V (e.g. with a bench supply); trace route over 2–3 repeaters and check that the SNR values match the status page's; neighbour list after an announce; noise floor in a quiet and a noisy environment; position with 1 km precision shown rounded at another node.
 - The pin assignments are taken from Meshtastic's board files.
 
+## Offline map of Denmark (host side)
+
+The host can download a free vector map of Denmark (Protomaps, OpenStreetMap data) into `<data>/map/` and serve it with HTTP Range at `/map/denmark.pmtiles`, together with the MapLibre files, style, fonts and sprites at `/map/*` (public read-only data, no access key). Two levels: overview (zoom 0-10, 22 MB) and detailed (zoom 0-13, about 185 MB). Calls: `GET /api/map/status`, `POST /api/map/check|download|cancel|delete|manifest`. The manifest address is the `--map-url` setting (default: the `map-dk` release of this repository, published by the manual workflow `map.yml`). Server mode does not serve the map. Full description, measured sizes, licences and publishing steps: [map.md](map.md). The web client and the Android app do not draw it yet.
+
 ## Firmware updates (signed, over USB, Bluetooth and the net)
 
 State-changing radio administrator commands reserve a monotonically increasing

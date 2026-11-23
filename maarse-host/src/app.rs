@@ -29,6 +29,7 @@ mod i18n;
 #[cfg(test)]
 mod fuzz_tests;
 mod links;
+mod map;
 mod mqtt;
 mod observe;
 mod public_history;
@@ -191,6 +192,8 @@ pub struct Config {
     /// knows with a shared position, and the radio links it hears) at
     /// `/api/public/map` to everyone.
     pub public_map: bool,
+    /// `--map-url`: the manifest of the offline map of Denmark (default: the project's release).
+    pub map_url: Option<String>,
     /// Publish short-lived aggregate counts and verified announce observations.
     pub public_traffic: bool,
     /// Hours of public traffic history kept for the website (0 = none).
@@ -491,6 +494,9 @@ Usage: maarse-host [options]
   --public-map          share this host's map data (its site, nodes with a
                         shared position, the radio links it hears) with
                         everyone at /api/public/map (for map pages)
+  --map-url <url>       where the offline map of Denmark is downloaded from
+                        (the address of its map-manifest.json; default: the
+                        project's release on GitHub)
   --public-traffic      with --public-map, publish packet counts and recent
                         observations of verified announces
   --public-history-hours <n>
@@ -619,6 +625,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
         require_key: backbone,
         allow_legacy_web_token: false,
         public_map: false,
+        map_url: None,
         public_traffic: false,
         public_history_hours: 24,
         observe_to: None,
@@ -710,6 +717,13 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--require-key" => c.require_key = true,
             "--allow-legacy-web-token" => c.allow_legacy_web_token = true,
             "--public-map" => c.public_map = true,
+            "--map-url" => {
+                let u = val("--map-url")?;
+                if !(u.starts_with("https://") || u.starts_with("http://")) {
+                    return Err("--map-url: expected an http:// or https:// address of a map-manifest.json".to_string());
+                }
+                c.map_url = Some(u);
+            }
             "--public-traffic" => c.public_traffic = true,
             "--public-history-hours" => {
                 c.public_history_hours = val("--public-history-hours")?.parse().map_err(|_| "--public-history-hours: expected a number of hours (0 = none)")?;
@@ -1050,6 +1064,7 @@ pub fn run(cli: Vec<String>) {
 
     guard::init(&cfg.data_dir, &cfg.block);
     fwupdate::open(&cfg.data_dir);
+    map::configure(&cfg.data_dir, cfg.map_url.as_deref());
     // Wi-Fi modems must prove the key; a server takes none without one.
     links::set_modem_auth(cfg.backbone, cfg.modem_key.as_deref().map(|k| maarse_core::modemauth::key(k.as_bytes())));
     if let Some(addr) = cfg.listen {

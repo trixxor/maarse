@@ -65,6 +65,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -139,7 +140,7 @@ private fun Chip(text: String, kind: Int, onClick: () -> Unit) {
 }
 
 @Composable
-private fun Kw(t: String) = Text(t.uppercase(), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold,
+private fun Kw(t: String) = Text(tr(t).uppercase(), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold,
     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth())
 
 @Composable
@@ -461,7 +462,7 @@ fun SensorStartScreen(onPick: (String) -> Unit, onImported: () -> Unit, onUsb: (
                 for (t in row) Column(Modifier.weight(1f).heightIn(min = 128.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
                     .clickable { onPick(t.key) }.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     androidx.compose.material3.Icon(templateIcon(t.key), null, tint = SensorColors.teal, modifier = Modifier.size(26.dp))
-                    Text(t.title, fontWeight = FontWeight.SemiBold)
+                    Text(t.title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleSmall.copy(hyphens = androidx.compose.ui.text.style.Hyphens.Auto, lineBreak = androidx.compose.ui.text.style.LineBreak.Paragraph))
                     Text(t.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (row.size == 1) androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
@@ -536,13 +537,18 @@ private val OPS = listOf("<" to "is below", ">" to "is above", "<=" to "is at mo
 private fun ruleSummary(setup: JSONObject, r: JSONObject): String {
     val w = r.getJSONObject("when")
     val head = when (w.getString("type")) {
-        "every" -> "Every ${w.getInt("secs") / 60} minutes"
-        "compare" -> "When ${srcName(setup, w.getInt("chan"))} ${OPS.firstOrNull { it.first == w.getString("op") }?.second ?: ""} ${fmt(w.getDouble("value"))} ${unitOf(setup, w.getInt("chan"))}"
-        "change" -> "When ${srcName(setup, w.getInt("chan"))} changes by more than ${fmt(w.getDouble("delta"))}"
-        else -> "When ${srcName(setup, w.getInt("chan"))} ${when (w.optString("to")) { "high" -> "reads 1"; "low" -> "reads 0"; else -> "changes" }}"
+        "every" -> tr("Every {0} minutes", w.getInt("secs") / 60)
+        "compare" -> tr("When") + " ${srcName(setup, w.getInt("chan"))} " + tr(OPS.firstOrNull { it.first == w.getString("op") }?.second ?: "") + " ${fmt(w.getDouble("value"))} ${unitOf(setup, w.getInt("chan"))}"
+        "change" -> tr("When {0} changes by more than {1}", srcName(setup, w.getInt("chan")), fmt(w.getDouble("delta")))
+        else -> tr(when (w.optString("to")) { "high" -> "When {0} reads 1"; "low" -> "When {0} reads 0"; else -> "When {0} changes" }, srcName(setup, w.getInt("chan")))
     }
     val acts = r.getJSONArray("then").objs().joinToString(", ") {
-        when (it.getString("type")) { "report" -> "send readings"; "alarm" -> "alarm “${it.optString("text")}”"; "set_out" -> "set ${srcName(setup, it.getInt("chan"))} ${if (it.getBoolean("on")) "on" else "off"}"; else -> "wake every ${it.optInt("secs")} s" }
+        when (it.getString("type")) {
+            "report" -> tr("send readings")
+            "alarm" -> tr("alarm “{0}”", it.optString("text"))
+            "set_out" -> tr(if (it.getBoolean("on")) "set {0} on" else "set {0} off", srcName(setup, it.getInt("chan")))
+            else -> tr("wake every {0} s", it.optInt("secs"))
+        }
     }
     return "$head → $acts"
 }
@@ -577,13 +583,13 @@ private fun Stepper(step: Int, onStep: (Int) -> Unit) {
         listOf("Setup", "Rules", "Test and send").forEachIndexed { i, label ->
             val n = i + 1
             val on = n == step
-            Row(Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp)).clickable { onStep(n) }.padding(horizontal = 4.dp),
+            Row(Modifier.weight(if (n == 3) 1.5f else if (n == 1) 1.3f else 1f).heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp)).clickable { onStep(n) }.padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(Modifier.size(24.dp).clip(androidx.compose.foundation.shape.CircleShape).background(if (on) cs.primary else if (n < step) cs.primaryContainer else cs.surfaceContainerHigh),
                     contentAlignment = Alignment.Center) {
                     Text(if (n < step) "✓" else "$n", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (on) cs.onPrimary else if (n < step) cs.onPrimaryContainer else cs.onSurfaceVariant)
                 }
-                Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal, maxLines = 1,
+                Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     color = if (on) cs.onSurface else cs.onSurfaceVariant)
             }
         }
@@ -659,7 +665,7 @@ private fun SetupStep(setup: JSONObject, board: String, note: String, open: (Str
         Sensors.boardNote(board).takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         Sensors.boardGrove(board).takeIf { it.isNotBlank() }?.let { g ->
             var more by remember { mutableStateOf(false) }
-            TextButton(onClick = { more = !more }, Modifier.heightIn(min = 48.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Text((if (more) "▾ " else "▸ ") + "Plugging in Grove sensors", style = MaterialTheme.typography.bodyMedium) }
+            TextButton(onClick = { more = !more }, Modifier.heightIn(min = 48.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Text((if (more) "▾ " else "▸ ") + tr("Plugging in Grove sensors"), style = MaterialTheme.typography.bodyMedium) }
             if (more) Text(g, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Text("Wake and read every", style = MaterialTheme.typography.bodySmall)
@@ -678,7 +684,7 @@ private fun SetupStep(setup: JSONObject, board: String, note: String, open: (Str
             val first = chipKey == null || chipKey !in chips
             if (s.getInt("chan") != setup.getJSONArray("sources").getJSONObject(0).getInt("chan")) androidx.compose.foundation.layout.Spacer(Modifier.height(10.dp))
             if (chipKey != null && first) chips[chipKey] = s.getInt("chan")
-            Text("#${s.getInt("chan")}  ${s.optString("name")} · " + if (first) inputText(inp, board) else "same chip as #${chips[chipKey]}", style = MaterialTheme.typography.bodyMedium)
+            Text("#${s.getInt("chan")}  ${tr(s.optString("name"))} · " + if (first) inputText(inp, board) else tr("same chip as #{0}", chips[chipKey]), style = MaterialTheme.typography.bodyMedium)
             SourceExtras(setup, s, board, first)
             if (inp.getString("type") == "gpio_in") Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Wake the sensor when this pin changes (a reed switch that closes, a button)", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
@@ -798,11 +804,11 @@ private fun sensorLabel(x: JSONObject): String {
 }
 
 private fun inputText(inp: JSONObject, board: String): String = when (inp.getString("type")) {
-    "i2c" -> (Sensors.sensorByDevice(inp.optString("device"))?.let { sensorLabel(it) } ?: inp.optString("device")) + " · sensor port"
-    "i2c_custom" -> "your own sensor · sensor port"
-    "bme280" -> "Temperature, humidity and air pressure · sensor port"
-    "battery", "chip_temp" -> "built in"
-    "adc" -> "analogue pin " + (Sensors.adcPins(board).firstOrNull { it.first == inp.optInt("pin") }?.second ?: "${inp.optInt("pin")}")
+    "i2c" -> (Sensors.sensorByDevice(inp.optString("device"))?.let { sensorLabel(it) } ?: inp.optString("device")) + " · " + tr("sensor port")
+    "i2c_custom" -> tr("your own sensor") + " · " + tr("sensor port")
+    "bme280" -> tr("Temperature, humidity and air pressure") + " · " + tr("sensor port")
+    "battery", "chip_temp" -> tr("built in")
+    "adc" -> tr("analogue pin") + " " + (Sensors.adcPins(board).firstOrNull { it.first == inp.optInt("pin") }?.second ?: "${inp.optInt("pin")}")
     else -> inp.getString("type").replace('_', ' ')
 }
 
@@ -1194,8 +1200,8 @@ fun SensorRuleScreen(index: Int, onBack: () -> Unit) {
                 }
             }
             if (w.getString("type") == "compare") {
-                Kw("Clear")
-                Chip("back to normal at " + fmt(w.getDouble("clear")) + " " + unitOf(setup, w.getInt("chan")), 1) { dialog = "clear" }
+                Kw("Back to normal")
+                Chip(tr("back to normal at {0}", fmt(w.getDouble("clear")) + " " + unitOf(setup, w.getInt("chan"))), 1) { dialog = "clear" }
             }
             val acts = r.getJSONArray("then")
             for (i in 0 until acts.length()) {

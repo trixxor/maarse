@@ -707,7 +707,7 @@ private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, lastOwn: Boolean, onSen
             if (open || (mine && lastOwn)) {
                 val (words, wordColor) = statusText(m.status, !isDm)
                 val how = if (mine) words else if (m.hops > 0) "Came over " + plural(m.hops, "hop") else "Came directly"
-                Text(how, style = MaterialTheme.typography.labelSmall, color = wordColor ?: MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(how, style = MaterialTheme.typography.labelSmall, color = readableTone(wordColor) ?: MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (!mine && m.hops > 0) MiniChip(plural(m.hops, "hop"), Modifier.padding(start = 8.dp, bottom = 2.dp))
@@ -837,7 +837,7 @@ fun ContactPage(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Avatar(avatarTitle(title), addr, 88.dp)
             RawText(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            n?.name?.let { RawText("Announces as ~$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            n?.name?.let { RawText(tr("Announces as {0}", "~$it"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             if (unnamed) OutlinedButton(onClick = { naming = true }, Modifier.heightIn(min = 48.dp)) { Text("Give this contact a name") }
             Text(n?.let { peopleReach(it) } ?: "Not heard yet", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
         }

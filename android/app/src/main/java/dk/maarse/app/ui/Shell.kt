@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -203,8 +204,8 @@ private fun BottomBar(nav: Nav) {
                     val m = if (t == Tab.CHATS) mc.totalUnread else 0
                     if (n > 0 || m > 0) BadgedBox(badge = {
                         Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            if (n > 0) Badge(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("$n") }
-                            if (m > 0) Badge(containerColor = Mc.color, contentColor = Mc.onColor) { Text("$m") }
+                            if (n > 0) Badge(Modifier.border(1.5.dp, MaterialTheme.colorScheme.surfaceContainer, CircleShape), containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("$n") }
+                            if (m > 0) Badge(Modifier.border(1.5.dp, MaterialTheme.colorScheme.surfaceContainer, CircleShape), containerColor = Mc.color, contentColor = Mc.onColor) { Text("$m") }
                         }
                     }) { Icon(icon, null) } else Icon(icon, null)
                 },

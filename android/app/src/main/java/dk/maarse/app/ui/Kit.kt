@@ -57,7 +57,7 @@ object Mc {
 @Composable
 fun NetworkTag(label: String = "MeshCore", modifier: Modifier = Modifier) {
     Box(modifier.clip(RoundedCornerShape(6.dp)).background(Mc.container).padding(horizontal = 7.dp, vertical = 1.dp)) {
-        Text(label.uppercase(), color = Mc.color, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp, maxLines = 1)
+        Text(tr(label).uppercase(), color = Mc.color, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp, maxLines = 1)
     }
 }
 
@@ -124,7 +124,7 @@ fun friendlyName(title: String): String =
     if (Regex("[0-9a-f]{8}").matches(title)) tr("Unnamed") + " · " + title.take(4) else title
 
 /** True for a person shown by their 8 hex characters only (no name, no nickname). */
-fun isUnnamed(title: String): Boolean = friendlyName(title) != title
+fun isUnnamed(title: String): Boolean = friendlyName(title) != title || title.startsWith(tr("Unnamed") + " · ")
 
 /** The text an avatar draws its letters from: unnamed people get "?", not the digits of their address. */
 fun avatarTitle(title: String): String = if (isUnnamed(title)) "?" else title

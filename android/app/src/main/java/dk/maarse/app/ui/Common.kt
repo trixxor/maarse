@@ -117,6 +117,11 @@ fun statusText(s: String, channel: Boolean = false): Pair<String, Color?> = when
     else -> s to null
 }
 
+/** A status colour (green, amber, red) that stays readable on a dark bubble: lightened in the dark theme. */
+@Composable
+fun readableTone(c: Color?): Color? =
+    if (c == null) null else if (androidx.compose.foundation.isSystemInDarkTheme()) androidx.compose.ui.graphics.lerp(c, Color.White, 0.5f) else c
+
 @Composable
 fun AlertCard(a: Ev.Alert, onHide: (() -> Unit)? = null) {
     val over = Node.alertCancelledOrUpdated(a)

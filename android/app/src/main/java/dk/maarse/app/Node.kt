@@ -778,8 +778,11 @@ object Node : LinkListener {
                         }
                         val contacts = json.optJSONArray("contacts")?.let { array -> List(array.length()) { array.optString(it) } }
                             ?: previous.contacts
+                        // The overview lists the joined channels too: without that the open channel was dropped on the next poll.
                         val channels = json.optJSONArray("channels")?.let { array -> List(array.length()) { array.optString(it) } }
-                            ?: previous.channels
+                            ?: json.optJSONArray("conversations")?.let { array ->
+                                (0 until array.length()).map { array.getJSONObject(it) }.filter { it.optString("kind") == "channel" }.map { it.optString("id") }
+                            } ?: previous.channels
                         val channelName = json.optString("channel").takeIf { it.matches(Regex("[a-z0-9-]{1,24}")) }
                         val activeChannel = previous.channel?.takeIf { it.contact in channels }
                         val channel = if (channelName == null) activeChannel else {

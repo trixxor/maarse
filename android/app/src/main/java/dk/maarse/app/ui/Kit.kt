@@ -1,11 +1,20 @@
 package dk.maarse.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -112,3 +121,44 @@ fun StatusPill(text: String, dot: Color, onClick: (() -> Unit)? = null, modifier
 /** Shows a person without a name as "Unnamed · 4230" instead of the 8 hex characters. */
 fun friendlyName(title: String): String =
     if (Regex("[0-9a-f]{8}").matches(title)) "Unnamed · " + title.take(4) else title
+
+/** True for a person shown by their 8 hex characters only (no name, no nickname). */
+fun isUnnamed(title: String): Boolean = friendlyName(title) != title
+
+/** The text an avatar draws its letters from: unnamed people get "?", not the digits of their address. */
+fun avatarTitle(title: String): String = if (isUnnamed(title)) "?" else title
+
+/** A row of filter chips that scrolls sideways when it does not fit. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChipRow(items: List<String>, selected: String, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items.forEach { label -> FilterChip(selected = label == selected, onClick = { onSelect(label) }, label = { Text(label, maxLines = 1) }) }
+    }
+}
+
+/**
+ * The frame of one chat bubble, shared by Må:rse and MeshCore chats: same shape, same colours, own messages on the
+ * right in the green container. The caller draws what is inside.
+ */
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+fun BubbleFrame(mine: Boolean, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, onLong: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
+        Column(
+            modifier.widthIn(max = 300.dp)
+                .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = if (mine) 18.dp else 6.dp, bottomEnd = if (mine) 6.dp else 18.dp))
+                .background(if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer)
+                .then(if (onClick != null || onLong != null) Modifier.combinedClickable(onClick = { onClick?.invoke() }, onLongClick = onLong) else Modifier)
+                .padding(start = 12.dp, end = 10.dp, top = 7.dp, bottom = 5.dp),
+            content = content,
+        )
+    }
+}
+
+/** A small rounded chip under a bubble or in a list, e.g. a route ("2 hops"). */
+@Composable
+fun MiniChip(text: String, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+    Text(text, modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 7.dp, vertical = 2.dp),
+        style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1)
+}

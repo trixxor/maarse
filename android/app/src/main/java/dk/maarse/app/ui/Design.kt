@@ -125,42 +125,6 @@ fun connectionSummary(): String {
     }
 }
 
-@Composable
-private fun UnusedChip(onClick: () -> Unit) {
-    val c by Node.conn.collectAsState()
-    val stats by Node.stats.collectAsState()
-    val (dot, state) = when (c.state) {
-        Conn.State.ONLINE -> MaterialTheme.colorScheme.primary to "online"
-        Conn.State.CONNECTING -> Amber to "connecting…"
-        Conn.State.OFF -> MaterialTheme.colorScheme.onSurfaceVariant to "not connected"
-    }
-    val extra = buildList {
-        if (c.state == Conn.State.ONLINE) {
-            stats[83]?.takeIf { it > 0 }?.let { add("$it nearby") }
-            stats[5]?.takeIf { it > 0 && c.mode != Mode.BLE }?.let { add("$it links") }
-            if ((stats[98] ?: 0) != 0) add("moving")
-        } else if (c.state == Conn.State.OFF && c.text.isNotBlank() && c.text != "Not connected") add(c.text)
-    }
-    Row(
-        Modifier.padding(horizontal = 16.dp, vertical = 4.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.secondaryContainer).clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(10.dp).clip(CircleShape).background(dot))
-        Spacer(Modifier.width(10.dp))
-        Text(
-            buildString {
-                append(modeName(c.mode)); append(" · "); append(state)
-                extra.forEach { append(" · "); append(it) }
-            },
-            Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSecondaryContainer, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
-        Text("Change", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-    }
-}
-
 // ---------- delivery ----------
 
 /** A small icon for a sent message's state; the words come on tap. */

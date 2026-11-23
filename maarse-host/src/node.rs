@@ -1087,7 +1087,7 @@ impl Node {
                 publish,
                 result,
             } => self.dht_done(target, publish, result),
-            In::ClientFrame { id, frame } if frame.as_slice() == [backbone::CMD_GET_BACKBONES] => self.backbones(id),
+            In::ClientFrame { id, frame } if is_get_backbones(&frame) => self.backbones(id),
             In::ClientFrame { id, frame } if crate::history::is_history_command(&frame) => {
                 self.hist_command(id, &frame)
             }
@@ -5711,5 +5711,23 @@ mod radio_file_e2e_tests {
         println!("half duplex: {:.1} s (x4 for real airtime), {lost} lost while deaf, {dropped} dropped from full queues", start.elapsed().as_secs_f64());
         assert!(got_b, "B did not receive the file; A: {done_a:?}; {lost} lost while deaf, {dropped} dropped");
         assert!(done_a.iter().any(|e| matches!(e, Event::FileDone { ok: true, .. })), "A was not told it was delivered: {done_a:?}");
+    }
+}
+
+/// GetBackbones is the bare command byte. Sensor commands share the byte 0x39 but carry content,
+/// so matching on the first byte alone swallowed every sensor command from a client.
+fn is_get_backbones(frame: &[u8]) -> bool {
+    frame == [backbone::CMD_GET_BACKBONES]
+}
+
+#[cfg(test)]
+mod get_backbones_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_bare_byte_is_get_backbones() {
+        assert!(is_get_backbones(&[backbone::CMD_GET_BACKBONES]));
+        assert!(!is_get_backbones(&[backbone::CMD_GET_BACKBONES, 1, 2, 3]));
+        assert!(!is_get_backbones(&[]));
     }
 }

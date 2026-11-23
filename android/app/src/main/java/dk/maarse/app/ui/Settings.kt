@@ -149,7 +149,7 @@ internal fun NodeSection(radioPart: Boolean = false) {
                 Text("Your radio's role. It decides whether the radio passes on messages for others.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Names.ROLES.forEachIndexed { i, r ->
-                    Row(Modifier.fillMaxWidth().clickable { Node.send(Cmd.setRole(i)); Node.send(Cmd.getStats()) }.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
+                    Row(Modifier.fillMaxWidth().clickable { Node.send(Cmd.setRole(i)); Node.send(Cmd.getStats()) }.heightIn(min = 48.dp).padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
                         RadioButton(role == i, { Node.send(Cmd.setRole(i)); Node.send(Cmd.getStats()) })
                         Column(Modifier.padding(top = 10.dp)) {
                             Text(r, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
@@ -171,7 +171,7 @@ internal fun NodeSection(radioPart: Boolean = false) {
                     "repeater" to ("Repeater" to "Passes on messages for others, but does not split paths. Choose it for a node that is on most of the time."),
                     "anchor" to ("Anchor" + (if (server) " (default)" else "") to "Passes on messages, splits long paths and answers path requests on behalf of others. Choose it for a node that is always on the internet."))
                     .forEach { (role, t) ->
-                        Row(Modifier.fillMaxWidth().clickable { if (role != current) asked = role }.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
+                        Row(Modifier.fillMaxWidth().clickable { if (role != current) asked = role }.heightIn(min = 48.dp).padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
                             RadioButton(current == role, { if (role != current) asked = role })
                             Column(Modifier.padding(top = 10.dp)) {
                                 Text(t.first, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
@@ -221,12 +221,12 @@ internal fun NodeSection(radioPart: Boolean = false) {
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (sh == null) Text("Fetching…") else {
             PRECISION.forEachIndexed { i, p ->
-                Row(Modifier.fillMaxWidth().clickable {
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable {
                     Node.setPrecision(i)
                     if (i > 0 && !Node.hasLocation(ctx)) ask.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION))
                 }, verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(sh.prec == i, null)
-                    Text(p)
+                    Text(p, Modifier.padding(start = 12.dp))
                 }
             }
             if (sh.prec > 0) Text(
@@ -234,7 +234,7 @@ internal fun NodeSection(radioPart: Boolean = false) {
                 else "Shared: %.3f, %.3f (updated every 10 minutes)".format(sh.lat, sh.lon),
                 style = MaterialTheme.typography.bodySmall,
             )
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Share battery and uptime")
                     Text("Helps others see if a node is healthy.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -268,7 +268,10 @@ internal fun NodeSection(radioPart: Boolean = false) {
     }
 
     if (!radioPart) {
-        TextButton(onClick = { Node.send(Cmd.announce()) }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { Text("Announce now (tell others who you are)") }
+        Card2(Modifier.padding(top = 8.dp)) {
+            Text("Tell others who you are right away, instead of waiting for the next automatic announce.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedButton(onClick = { Node.send(Cmd.announce()) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Announce now") }
+        }
         Hint("Address: " + (me?.addr ?: ""))
     }
 }
@@ -364,12 +367,12 @@ internal fun HostSection(server: Boolean) {
         val pw = HostFiles.adminPassword(ctx)
         Hint("Dashboard: http://<this phone's address>:8080 — log in with the admin password" + (pw?.let { ": $it" } ?: " (shown after the first start)."))
     } else Hint("Settings for the host running on this phone. Saved in its settings.txt; the node restarts.")
-    fields.forEach { f ->
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { fields.forEach { f ->
         when (f.kind) {
             Kind.BOOL, Kind.BOOL_OFF -> {
                 val present = lines.any { it.first == f.flag }
                 val on = if (f.kind == Kind.BOOL) present else !present
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(f.label)
                         if (f.help.isNotEmpty()) Text(f.help, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -389,10 +392,10 @@ internal fun HostSection(server: Boolean) {
                 supportingText = if (f.help.isNotEmpty()) ({ Text(f.help) }) else null,
             )
         }
-    }
+    } }
     saved?.let { Hint(it) }
-    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = {
+    Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(modifier = Modifier.heightIn(min = 48.dp), onClick = {
             HostFiles.writeSettings(ctx, server, raw)
             saved = "Saved. Restarting the node…"
             Node.restartHost()
@@ -407,41 +410,60 @@ internal fun AppSection() {
     val ctx = LocalContext.current
     var msgs by remember { mutableStateOf(Node.prefs.notifyMessages) }
     var chans by remember { mutableStateOf(Node.prefs.notifyChannels) }
-    SectionTitle("App")
-    LanguagePicker()
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Notify about direct messages", Modifier.weight(1f)); Switch(msgs, { msgs = it; Node.prefs.notifyMessages = it })
+    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        GroupTitle("Notifications")
+        Group {
+            SwitchRow("Direct messages", "Notify when someone writes to you", msgs) { msgs = it; Node.prefs.notifyMessages = it }
+            SwitchRow("Channel messages", "Notify about new messages in your channels", chans, last = true) { chans = it; Node.prefs.notifyChannels = it }
+        }
+        Hint("Alerts always notify. Severe, actual alerts use their own loud channel; change it in Android's notification settings.")
+        SoundPickers()
+        GroupTitle("Language")
+        Group { LanguageRow(last = true) }
+        GroupTitle("Background")
+        Group { BackgroundRow(last = true) }
+        Hint("Må:rse " + ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName)
     }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Notify about channel messages", Modifier.weight(1f)); Switch(chans, { chans = it; Node.prefs.notifyChannels = it })
-    }
-    Hint("Alerts always notify. Severe, actual alerts use their own loud channel; change it in Android's notification settings.")
-    SoundPickers()
-    val pm = ctx.getSystemService(PowerManager::class.java)
-    if (!pm.isIgnoringBatteryOptimizations(ctx.packageName)) {
-        Hint("Android may stop the connection when the screen is off. Allow Må:rse to run in the background:")
-        @SuppressLint("BatteryLife")
-        val go = { ctx.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + ctx.packageName))) }
-        OutlinedButton(onClick = go, modifier = Modifier.padding(horizontal = 16.dp)) { Text("Allow background use") }
-    }
-    HorizontalDivider(Modifier.padding(top = 16.dp))
-    Hint("Må:rse " + ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName)
 }
 
-/** Language: Automatic (the device's language), English, or one of the language files. */
+/** Keep the connection alive with the screen off: Android's battery optimisation exemption, shown as a switch. */
+@SuppressLint("BatteryLife")
 @Composable
-internal fun LanguagePicker() {
+internal fun BackgroundRow(last: Boolean = false) {
+    val ctx = LocalContext.current
+    val pm = ctx.getSystemService(PowerManager::class.java)
+    var allowed by remember { mutableStateOf(pm.isIgnoringBatteryOptimizations(ctx.packageName)) }
+    // Android decides on its own screen: read the answer again when the person comes back.
+    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) allowed = pm.isIgnoringBatteryOptimizations(ctx.packageName)
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+    SwitchRow("Keep running in the background", if (allowed) "Allowed. Messages arrive with the screen off." else "Android may stop the connection when the screen is off.", allowed, last) {
+        ctx.startActivity(
+            if (it) Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + ctx.packageName))
+            else Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+        )
+    }
+}
+
+/** The names of the choices in the Language row: Automatic (the device's language), English, or a language file. */
+private fun languageOptions() = listOf(I18n.AUTO to tr("Automatic (device language)"), "en" to "English") + I18n.languages.map { it.code to it.name }
+
+/** Language as a row of the Me screen: the current choice on the right, a menu to change it. */
+@Composable
+internal fun LanguageRow(last: Boolean = false, leading: (@Composable () -> Unit)? = null) {
     val ctx = LocalContext.current
     var open by remember { mutableStateOf(false) }
-    val options = listOf(I18n.AUTO to tr("Automatic (device language)"), "en" to "English") + I18n.languages.map { it.code to it.name }
+    val options = languageOptions()
     val current = options.firstOrNull { it.first == I18n.choice }?.second ?: options[0].second
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Language", Modifier.weight(1f))
-        Box {
-            OutlinedButton(onClick = { open = true }) { RawText(current) }
-            DropdownMenu(open, { open = false }) {
-                for ((code, name) in options) DropdownMenuItem(text = { RawText(name) }, onClick = { open = false; I18n.setChoice(ctx, code) })
-            }
+    Box {
+        ValueRow("Language", current, last, leading) { open = true }
+        DropdownMenu(open, { open = false }) {
+            for ((code, name) in options) DropdownMenuItem(text = { RawText(name) }, onClick = { open = false; I18n.setChoice(ctx, code) }, modifier = Modifier.heightIn(min = 48.dp))
         }
     }
 }

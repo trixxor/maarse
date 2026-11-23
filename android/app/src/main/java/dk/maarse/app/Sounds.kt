@@ -29,7 +29,10 @@ object Sounds {
         "dm" to "Direct messages",
         "channel" to "Channels",
         "mention" to "Mentions",
+        "meshcore" to "MeshCore messages",
     )
+    /** The kinds that belong to Må:rse itself; MeshCore has its own tone so you can hear which network called. */
+    val MARSE_KINDS = KINDS.filter { it.first != "meshcore" }
     val TONES = listOf("ding" to "Ding", "chime" to "Chime", "pop" to "Pop", "drops" to "Drops", "bell" to "Bell", "low" to "Low")
 
     private fun toneUri(ctx: Context, id: String): Uri? {

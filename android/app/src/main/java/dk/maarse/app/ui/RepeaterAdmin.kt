@@ -12,7 +12,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -57,7 +63,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
@@ -90,11 +95,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /** Admin screen for a logged-in repeater, room or sensor: Status, Command Line and Settings, as in the MeshCore app. */
-private val RAmber = Color(0xFFE9B25A)
-private val RAmberDark = Color(0xFF3A2C10)
-private val RAmberText = Color(0xFF2A1B00)
-private val RGreen = Color(0xFF5CC8A1)
-private val RDanger = Color(0xFFF08A7A)
+/** The look of the main app: the green accent for actions, red for errors. MeshCore is only marked with its small violet tag. */
+private val RAmber: Color @Composable get() = MaterialTheme.colorScheme.primary
+private val RAmberDark: Color @Composable get() = MaterialTheme.colorScheme.secondaryContainer
+private val RAmberText: Color @Composable get() = MaterialTheme.colorScheme.onPrimary
+private val RGreen: Color @Composable get() = MaterialTheme.colorScheme.primary
+private val RDanger: Color @Composable get() = MaterialTheme.colorScheme.error
 private val RLight = Color(0xFFE8F1EC)
 
 /** Talks to the repeater through the backbone: one command or request at a time, each waiting for its own answer. */
@@ -171,25 +177,31 @@ private fun duration(seconds: Long): String {
 
 // ------------------------------------------------------------------ The screen
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RepeaterAdminScreen(n: dk.maarse.app.Node.McNode, name: String, mc: Node.MeshCoreAccess, admin: Boolean, onLogout: () -> Unit) {
     val title = when (n.type) { 3 -> "Room Admin"; 4 -> "Sensor"; else -> "Repeater Admin" }
     val tool = Rep.tool
     BackHandler { if (tool != null) Rep.tool = null else onLogout() }
     LaunchedEffect(n.key) { Rep.reset() }
-    Column(Modifier.fillMaxSize()) {
+    val imeUp = WindowInsets.isImeVisible
+    Column(Modifier.fillMaxSize().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { if (tool != null) Rep.tool = null else onLogout() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    NetworkTag()
+                }
                 Text(name, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            OutlinedButton(onClick = onLogout, shape = RoundedCornerShape(18.dp)) { Text("Log out") }
+            OutlinedButton(onClick = onLogout, shape = RoundedCornerShape(18.dp), modifier = Modifier.heightIn(min = 48.dp)) { Text("Log out") }
         }
-        Box(Modifier.fillMaxWidth().background(if (admin) Color(0xFF1F5A37) else Color(0xFF3A4A1F)).padding(horizontal = 16.dp, vertical = 8.dp)) {
-            Text(if (admin) "You are logged in as an Admin" else "Logged in as a guest: status and sensor readings only", fontSize = 13.sp, color = Color.White)
+        Box(Modifier.fillMaxWidth().background(if (admin) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer).padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Text(if (admin) "You are logged in as an Admin" else "Logged in as a guest: status and sensor readings only", fontSize = 13.sp,
+                color = if (admin) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer)
         }
-        if (Rep.busy > 0) LinearProgressIndicator(Modifier.fillMaxWidth(), color = RAmber, trackColor = RAmberDark)
+        if (Rep.busy > 0) LinearProgressIndicator(Modifier.fillMaxWidth())
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
                 tool != null -> ToolScreen(tool, n, name, mc)
@@ -198,17 +210,17 @@ fun RepeaterAdminScreen(n: dk.maarse.app.Node.McNode, name: String, mc: Node.Mes
                 else -> SettingsTab(n.key, mc)
             }
         }
-        if (tool == null) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+        // The keyboard hides the tab bar, so the command field is never pushed off the screen.
+        if (tool == null && !imeUp) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
             val tabs = buildList {
                 add(Triple(0, "Status", Icons.Default.Info))
-                if (admin) add(Triple(1, "Command Line", Icons.Default.Terminal))
                 if (admin) add(Triple(2, "Settings", Icons.Default.Settings))
+                if (admin) add(Triple(1, "Console", Icons.Default.Terminal))
                 if (!admin) add(Triple(3, "Telemetry", Icons.Default.BarChart))
             }
             for ((index, label, icon) in tabs) NavigationBarItem(
                 selected = Rep.tab == index || (index == 3 && Rep.tab == 3), onClick = { Rep.tab = index },
-                icon = { Icon(icon, label) }, label = { Text(label, fontSize = 11.sp) },
-                colors = NavigationBarItemDefaults.colors(selectedIconColor = RAmberText, indicatorColor = RAmber),
+                icon = { Icon(icon, label) }, label = { Text(label, fontSize = 11.sp, maxLines = 1) },
             )
         }
     }
@@ -234,20 +246,30 @@ private fun StatusTab(key: String, admin: Boolean) {
             if (Rep.statusNote.isNotEmpty()) Text(Rep.statusNote, color = RDanger)
             val s = Rep.status
             if (s.isEmpty() && Rep.statusNote.isEmpty()) Text("Asking the node for its status…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            s["battery_mv"]?.toIntOrNull()?.let { mv ->
-                val pct = Math.round((mv - 3000) / 12.0).toInt().coerceIn(0, 100)
-                Item("Battery", "$pct% / ${"%.2f".format(mv / 1000.0)}v")
+            // Status tiles first: the numbers you look at most, two to a row.
+            val tiles = buildList {
+                s["battery_mv"]?.toIntOrNull()?.let { mv ->
+                    val pct = Math.round((mv - 3000) / 12.0).toInt().coerceIn(0, 100)
+                    add(Triple("Battery", "$pct %", "${"%.2f".format(mv / 1000.0)} V"))
+                }
+                s["uptime"]?.toLongOrNull()?.let { add(Triple("Uptime", "${it / 86400} d ${it % 86400 / 3600} h", duration(it))) }
+                if (Rep.clockText.isNotEmpty()) add(Triple("Clock", Rep.clockText, ""))
+                s["last_rssi"]?.let { add(Triple("Last RSSI", it, "")) }
+                s["last_snr"]?.let { add(Triple("Last SNR", it, "")) }
+                s["noise_floor"]?.let { add(Triple("Noise floor", "$it dB", "")) }
             }
-            if (Rep.clockText.isNotEmpty()) Item("Clock", Rep.clockText)
-            s["uptime"]?.toLongOrNull()?.let { Item("Uptime", duration(it)) }
-            if (s["tx_airtime"] != null) Item("Total Airtime", "TX: ${duration(s["tx_airtime"]!!.toLongOrNull() ?: 0)}\nRX: ${duration(s["rx_airtime"]?.toLongOrNull() ?: 0)}")
-            s["last_rssi"]?.let { Item("Last RSSI", it) }
-            s["last_snr"]?.let { Item("Last SNR", it) }
-            s["noise_floor"]?.let { Item("Noise Floor", "${it}dB") }
-            if (s["sent"] != null) Item("Packets Sent", "${s["sent"]}  (flood ${s["sent_flood"]}, direct ${s["sent_direct"]})")
-            if (s["recv"] != null) Item("Packets Received", "${s["recv"]}  (flood ${s["recv_flood"]}, direct ${s["recv_direct"]})")
+            tiles.chunked(2).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    row.forEach { (l, v, sub) -> StatTile(l, v, sub, Modifier.weight(1f)) }
+                    if (row.size == 1) Box(Modifier.weight(1f))
+                }
+            }
+            if (s["tx_airtime"] != null) Item("Total airtime", "TX: ${duration(s["tx_airtime"]!!.toLongOrNull() ?: 0)}\nRX: ${duration(s["rx_airtime"]?.toLongOrNull() ?: 0)}")
+            if (s["sent"] != null) Item("Packets sent", "${s["sent"]}  (flood ${s["sent_flood"]}, direct ${s["sent_direct"]})")
+            if (s["recv"] != null) Item("Packets received", "${s["recv"]}  (flood ${s["recv_flood"]}, direct ${s["recv_direct"]})")
             if (s["dups_flood"] != null) Item("Duplicates", "flood ${s["dups_flood"]}, direct ${s["dups_direct"]}")
             if (s["errors"] != null) Item("Errors", "events ${s["errors"]}, receive errors ${s["recv_errors"]}  ·  queue ${s["queue"]}")
+            Spacer(Modifier.height(64.dp))   // room for the refresh button
         }
         Box(
             Modifier.align(Alignment.BottomEnd).padding(20.dp).size(56.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceVariant)
@@ -259,8 +281,18 @@ private fun StatusTab(key: String, admin: Boolean) {
 @Composable
 private fun Item(label: String, value: String) {
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(label, fontSize = 20.sp)
-        Text(value, fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, style = MaterialTheme.typography.titleMedium)
+        Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** One number of the status page: label, the value large, a smaller line under it. */
+@Composable
+private fun StatTile(label: String, value: String, sub: String, modifier: Modifier = Modifier) {
+    Column(modifier.clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -280,7 +312,7 @@ private fun TerminalTab(key: String) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((label, cmd) in listOf("Version" to "ver", "Clock" to "clock", "Neighbours" to "neighbors", "Advert" to "advert", "Stats" to "stats-core"))
-                OutlinedButton(onClick = { run(cmd) }, shape = RoundedCornerShape(18.dp)) { Text(label) }
+                OutlinedButton(onClick = { run(cmd) }, shape = RoundedCornerShape(18.dp), modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
         }
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF0A100D)).padding(12.dp),
@@ -596,7 +628,7 @@ private fun RegionsPanel(key: String) {
             OutlinedTextField(name, { name = it.trim() }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Region name") })
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for ((label, cmd) in listOf("Add" to "region put", "Remove" to "region remove", "Allow flood" to "region allowf", "Deny flood" to "region denyf"))
-                    OutlinedButton(onClick = { if (name.isNotBlank()) run("$cmd $name") }, shape = RoundedCornerShape(18.dp)) { Text(label) }
+                    OutlinedButton(onClick = { if (name.isNotBlank()) run("$cmd $name") }, shape = RoundedCornerShape(18.dp), modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
             }
             Button(onClick = { run("region save") }, colors = ButtonDefaults.buttonColors(containerColor = RAmber, contentColor = RAmberText)) { Text("Save regions") }
         }

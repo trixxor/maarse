@@ -46,3 +46,7 @@ Windows only; on Linux use `--tcp`.
 MeshCore (MIT, Scott Powell / rippleradios.com), the Crypto library in
 `third_party/Crypto` (rweather/arduinolibs, MIT; the licence is in each file) and
 `third_party/base64` (Densaugeo, MIT).
+
+## Sending settings (path hash size and region scope)
+
+In service mode each person folder may hold `radio.txt`: `<path hash size 1-3> <region>[,<region>...]`, for example `2 dk,dk-nordjylland` (up to 8 regions). The worker re-reads it every few hundred milliseconds. Every flood the person sends (channel messages, adverts, direct messages and repeater requests that flood) uses that many bytes per hop in the path, and, if regions are set, is sent once per region, each copy carrying that region's transport code (key = SHA-256 of `#region`, first 16 bytes, like a repeater's `region put`), so only repeaters that know that region pass it on (a packet carries one code, so several regions mean several copies; repeaters drop the later copies of a packet they already passed on). Without the file the defaults apply: 1 byte, no scope. The web client and the Android app write the file through the backbone (MeshCore, Chats, "Sending settings").

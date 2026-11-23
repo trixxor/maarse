@@ -225,6 +225,7 @@ int main(int argc, char** argv) {
         }
         auto& node = *nodes[existing->second];
         node.reloadChannels();
+        node.reloadRadio();
         const auto admin = folder / "repeater-job.txt";
         if (std::filesystem::is_regular_file(admin, itemError)) {
           std::ifstream input(admin, std::ios::binary);

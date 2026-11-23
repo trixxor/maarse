@@ -599,7 +599,7 @@ object Node : LinkListener {
         val repeaterKey: String = "", val repeaterStatus: String = "", val totalUnread: Int = 0,
         val repeaterSeq: Long = 0, val repeaterKind: String = "", val repeaterData: String = "",
         val conversations: List<McConversation> = emptyList(), val nodes: List<McNode> = emptyList(), val scanning: Boolean = false,
-        val items: List<McMessage> = emptyList(), val scan: McScan = McScan())
+        val items: List<McMessage> = emptyList(), val scan: McScan = McScan(), val radio: McRadio = McRadio())
     /** One row of the MeshCore conversation list; kind is public, channel or direct. */
     data class McConversation(val kind: String, val id: String, val title: String, val last: String, val mine: Boolean,
                               val unread: Int, val time: Long)
@@ -638,6 +638,8 @@ object Node : LinkListener {
     data class McMessage(val id: Long, val text: String, val mine: Boolean, val ts: Long, val repeats: Int = -1,
                          val delivered: Boolean = false, val snr: Double = 0.0)
     /** Scan progress from the radio: waiting for it to start, listening now, nodes that answered so far. */
+    /** Outgoing MeshCore flood settings: path hash size (1-3 bytes) and region scope ("" for none). */
+    data class McRadio(val hashSize: Int = 1, val scope: String = "")
     data class McScan(val waiting: Boolean = false, val active: Boolean = false, val found: Int = 0)
     /** Can MeshCore be used now? state 0 not tried, 1 connecting, 2 ready, 3 not available (note says why). */
     data class McLink(val state: Int = 0, val note: String = "")
@@ -723,11 +725,14 @@ object Node : LinkListener {
                         // An older backbone refuses the new list requests: keep what we have instead of acting as if access was lost.
                         val sent = meshcoreAttempt?.payload.orEmpty()
                         if (!allowed && background && meshcoreAccess.value.allowed &&
-                            (sent == "overview" || sent == "nodes" || sent.startsWith("favorite:"))) {
+                            sent.isNotEmpty()) {
+                            // An older backbone refuses requests it does not know (new lists, sending settings).
                             meshcoreSocket = null
                             meshcoreAttempt = null
                             meshcoreAccess.update { it.copy(text = "The backbone server does not support this yet. Update the server.") }
                             socket.close(1000, null)
+                            mcCurrent?.done?.complete(null)
+                            mcCurrent = null
                             main.post { mcPump() }
                             return@post
                         }
@@ -792,6 +797,7 @@ object Node : LinkListener {
                             results = if (background) previous.results else results,
                             messages = if (contact == null && channelName == null) messages ?: previous.messages else previous.messages,
                             items = if (contact == null && channelName == null) items ?: previous.items else previous.items,
+                            radio = json.optJSONObject("radio")?.let { McRadio(it.optInt("hashSize", 1).coerceIn(1, 3), it.optString("scope")) } ?: previous.radio,
                             scan = json.optJSONObject("scan")?.let { McScan(it.optBoolean("waiting"), it.optBoolean("active"), it.optInt("found")) } ?: previous.scan,
                             unread = if (contact == null && channelName == null) json.optInt("unread", previous.unread) else previous.unread,
                             lastId = if (contact == null && channelName == null) json.optLong("lastId", previous.lastId) else previous.lastId,

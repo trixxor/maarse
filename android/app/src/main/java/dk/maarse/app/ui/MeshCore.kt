@@ -76,6 +76,8 @@ import androidx.compose.ui.unit.sp
 import dk.maarse.app.Node
 import dk.maarse.app.hex
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -209,9 +211,15 @@ fun MeshCoreChats() {
 @Composable
 private fun MeshCoreList(mc: Node.MeshCoreAccess) {
     var adding by remember { mutableStateOf(false) }
+    var sending by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         if (mc.conversations.isEmpty()) Text("Loading conversations…", Modifier.padding(24.dp), color = muted)
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 88.dp)) {
+            item {
+                TextButton(onClick = { sending = true }, Modifier.padding(horizontal = 12.dp)) {
+                    Text("Sending settings · ${mc.radio.hashSize} byte path hash" + (if (mc.radio.scope.isEmpty()) "" else " · ${mc.radio.scope.split(",").joinToString(" ") { "#$it" }}"), color = McAmber, fontSize = 13.sp)
+                }
+            }
             items(mc.conversations, key = { it.kind + it.id }) { c ->
                 Row(
                     Modifier.fillMaxWidth().clickable { McNav.open = c }.padding(horizontal = 20.dp, vertical = 10.dp),
@@ -242,6 +250,47 @@ private fun MeshCoreList(mc: Node.MeshCoreAccess) {
         ) { Icon(Icons.Default.Edit, "New chat", tint = McAmberText) }
     }
     if (adding) NewMeshCoreChat { adding = false }
+    if (sending) SendingSettings(mc.radio) { sending = false }
+}
+
+/** Path hash size and region scope for everything this account sends over MeshCore. */
+@Composable
+private fun SendingSettings(radio: Node.McRadio, onDone: () -> Unit) {
+    var size by remember { mutableStateOf(radio.hashSize) }
+    var region by remember { mutableStateOf(radio.scope) }
+    var error by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text("Sending settings") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Path hash size", fontSize = 13.sp, color = muted)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (n in 1..3) FilterChip(size == n, { size = n }, label = { Text(if (n == 1) "1 byte" else "$n bytes") })
+                }
+                OutlinedTextField(region, { region = it.replace(" ", "").replace("#", "") }, singleLine = true,
+                    label = { Text("Regions, comma separated, e.g. dk,dk-nordjylland") })
+                Text("2 or 3 bytes need repeaters that support it. A region scope makes only repeaters with that region pass your messages on. With several regions, each message is sent once per region.", fontSize = 12.sp, color = muted)
+                if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (region.isNotEmpty() && (region.split(",").size > 8 || !region.split(",").all { Regex("[A-Za-z0-9-]{1,24}").matches(it) })) {
+                    error = "Up to 8 regions, separated by commas. A region uses letters, digits and -, up to 24 characters."
+                } else {
+                    error = "Saving…"
+                    scope.launch {
+                        val answer = Node.mcCall("set-radio:$size:${region.toByteArray().hex()}")
+                        if (answer?.radio?.hashSize == size && answer.radio.scope == region) { Node.mcAsk("overview"); onDone() }
+                        else error = "Not saved. The backbone server did not accept it: it probably needs updating to the newest version."
+                    }
+                }
+            }) { Text("Save", color = McAmber) }
+        },
+        dismissButton = { TextButton(onClick = onDone) { Text("Cancel") } },
+    )
 }
 
 @Composable

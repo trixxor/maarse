@@ -5364,6 +5364,29 @@ function renderMeshcoreChats(box) {
     panel.append(el("h3", { textContent: "Start a conversation" }),
       el("div", { className: "row" }, join, go), el("div", { className: "row" }, key, write),
       el("p", { className: "hint", textContent: "Public and the channels you join are on the left. Write to a node from Nodes, where you also see who is nearby." }));
+    const radio = meshcoreAccess.radio || { hashSize: 1, scope: "" };
+    const hashSize = el("select", { ariaLabel: "Path hash size" },
+      ...[1, 2, 3].map(n => el("option", { value: String(n), textContent: n + (n === 1 ? " byte (default)" : " bytes"), selected: n === radio.hashSize })));
+    const scope = el("input", { placeholder: "Regions, comma separated, e.g. dk, dk-nordjylland (empty: no scope)", ariaLabel: "Region scope", value: radio.scope });
+    const saveRadio = el("button", { type: "button", textContent: "Save sending settings" });
+    saveRadio.onclick = () => {
+      const region = scope.value.split(",").map(r => r.trim().replace(/^#/, "")).filter(Boolean).join(",");
+      if (region && (region.split(",").length > 8 || !region.split(",").every(r => /^[A-Za-z0-9-]{1,24}$/.test(r)))) { meshcoreAccess.note = "Up to 8 regions, separated by commas. A region uses letters, digits and -, up to 24 characters."; return renderChat(); }
+      const wanted = Number(hashSize.value);
+      meshcoreAccess.radio = null;
+      meshcoreAccess.note = "Saving…";
+      mcAsk("set-radio:" + wanted + ":" + hex(enc.encode(region)), () => {
+        const got = meshcoreAccess.radio;
+        meshcoreAccess.note = got && got.hashSize === wanted && got.scope === region ? "Saved. New messages use these settings."
+          : "Not saved. The backbone server did not accept it: it probably needs updating to the newest version.";
+        renderChat();
+        mcAsk("overview");
+      });
+      renderChat();
+    };
+    panel.append(el("h3", { textContent: "Sending settings" }),
+      el("div", { className: "row" }, hashSize), el("div", { className: "row" }, scope, saveRadio),
+      el("p", { className: "hint", textContent: "Path hash size is how many bytes each repeater adds to a message's path; 2 or 3 bytes need repeaters that support it. A region scope makes only repeaters with that region pass your messages on. With several regions, each message is sent once per region." }));
     if (meshcoreAccess.note) panel.append(el("p", { role: "status", textContent: meshcoreAccess.note }));
     return;
   }
@@ -6028,8 +6051,8 @@ function connectMeshcoreAccess(value, operation, payload = "", background = fals
       pending.req = state.nextReq++ & 0xffff;
       transport?.send(Cmd.meshcoreProof(pending.req, operation, challenge, payload));
     } else if (typeof data.allowed === "boolean" && pending.received) {
-      if (data.allowed === false && background && meshcoreAccess.result?.allowed && (payload === "overview" || payload === "nodes" || payload.startsWith("favorite:"))) {
-        // An older backbone refuses the new list requests: keep what we have.
+      if (data.allowed === false && background && meshcoreAccess.result?.allowed && payload) {
+        // An older backbone refuses requests it does not know (new lists, sending settings): keep what we have.
         meshcoreAccess.note = "The backbone server does not support this yet. Update the server.";
         meshcoreAccess.pending = null;
         socket.close();
@@ -6055,6 +6078,7 @@ function connectMeshcoreAccess(value, operation, payload = "", background = fals
         meshcoreAccess.repeater = { key: data.repeater, status: data.repeaterStatus !== undefined ? (data.repeaterStatus || (data.queued ? "Request queued." : "")) : (before.status || ""),
           seq: data.repeaterSeq !== undefined ? data.repeaterSeq : (before.seq || 0), kind: data.repeaterKind ?? before.kind ?? "", data: data.repeaterData ?? before.data ?? "", error: data.error || "" };
       }
+      if (data.radio) meshcoreAccess.radio = data.radio;
       if (Array.isArray(data.contacts)) meshcoreAccess.contacts = data.contacts;
       if (Array.isArray(data.conversations)) meshcoreAccess.conversations = data.conversations;
       if (Array.isArray(data.nodes)) { meshcoreAccess.nodes = data.nodes; meshcoreAccess.scanning = !!data.scanning; }

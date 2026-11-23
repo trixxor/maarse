@@ -211,6 +211,12 @@ fn valid_operation(operation: &str) -> bool {
         if verb == "set-name" {
             return valid_message(rest) && unhex(rest).is_some_and(|name| name.len() <= 31);
         }
+        if verb == "set-radio" {
+            // set-radio:<path hash size 1-3>:<hex of the region name, empty for none>
+            let (size, region) = rest.split_once(':').unwrap_or((rest, ""));
+            return matches!(size, "1" | "2" | "3")
+                && (region.is_empty() || unhex(region).is_some_and(|list| region_list(&String::from_utf8_lossy(&list))));
+        }
         if verb == "favorite" {
             let (key, value) = rest.split_once(':').unwrap_or((rest, ""));
             return direct_key(key) && matches!(value, "0" | "1");
@@ -258,6 +264,25 @@ fn valid_operation(operation: &str) -> bool {
     operation
         .strip_prefix("public-read:")
         .is_some_and(|id| id.parse::<u64>().is_ok())
+}
+
+/// A region name for MeshCore transport scope: letters, digits and dashes, no leading `#`.
+fn region_name(name: &str) -> bool {
+    (1..=24).contains(&name.len()) && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+/// One to eight region names separated by commas. Every message goes out once per region.
+fn region_list(list: &str) -> bool {
+    let regions: Vec<&str> = list.split(',').collect();
+    regions.len() <= 8 && regions.iter().all(|region| region_name(region))
+}
+
+/// The person's outgoing flood settings from `radio.txt`: path hash size and region name.
+fn radio_settings(node: &Path) -> (u8, String) {
+    let text = fs::read_to_string(node.join("radio.txt")).unwrap_or_default();
+    let mut fields = text.split_whitespace();
+    let size = fields.next().and_then(|size| size.parse::<u8>().ok()).filter(|size| (1..=3).contains(size)).unwrap_or(1);
+    (size, fields.next().unwrap_or("").to_string())
 }
 
 fn channel_name(name: &str) -> bool {
@@ -473,6 +498,8 @@ fn radio_operation(dir: &Path, person: &str, operation: &str) -> io::Result<serd
             let unread: u64 = conversations.iter().filter_map(|c| c["unread"].as_u64()).sum();
             reply["conversations"] = serde_json::json!(conversations);
             reply["totalUnread"] = unread.into();
+            let (hash_size, scope) = radio_settings(&node);
+            reply["radio"] = serde_json::json!({"hashSize": hash_size, "scope": scope});
         }
         "nodes" => {
             let names = node_names(&node);
@@ -504,6 +531,16 @@ fn radio_operation(dir: &Path, person: &str, operation: &str) -> io::Result<serd
             fs::write(&pending, &name)?;
             fs::rename(pending, node.join("name.txt"))?;
             reply["queued"] = "set-name".into();
+        }
+        operation if operation.starts_with("set-radio:") => {
+            let mut fields = operation.split(':').skip(1);
+            let size = fields.next().unwrap_or("1");
+            let region = unhex(fields.next().unwrap_or("")).map(|name| String::from_utf8_lossy(&name).into_owned()).unwrap_or_default();
+            let pending = node.join("radio.tmp");
+            fs::write(&pending, format!("{size} {region}\n"))?;
+            fs::rename(pending, node.join("radio.txt"))?;
+            let (hash_size, scope) = radio_settings(&node);
+            reply["radio"] = serde_json::json!({"hashSize": hash_size, "scope": scope});
         }
         operation if operation.starts_with("favorite:") => {
             let mut fields = operation.split(':').skip(1);
@@ -889,6 +926,23 @@ mod tests {
     use rand_core::{OsRng, RngCore};
 
     #[test]
+    fn radio_settings_are_validated_and_stored() {
+        assert!(valid_operation("set-radio:2:"));
+        assert!(valid_operation(&format!("set-radio:3:{}", crate::debug::hex(b"dk-east"))));
+        assert!(!valid_operation("set-radio:4:"));
+        assert!(!valid_operation(&format!("set-radio:2:{}", crate::debug::hex(b"bad name"))));
+        assert!(valid_operation(&format!("set-radio:2:{}", crate::debug::hex(b"dk-east,dk-nordjylland"))));
+        assert!(!valid_operation(&format!("set-radio:2:{}", crate::debug::hex(b"dk-east,"))));
+        let dir = std::env::temp_dir().join(format!("maarse-radio-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(radio_settings(&dir), (1, String::new()));
+        fs::write(dir.join("radio.txt"), "2 dk-east
+").unwrap();
+        assert_eq!(radio_settings(&dir), (2, "dk-east".to_string()));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn overview_nodes_and_favourites_come_from_the_worker_files() {
         let dir = std::env::temp_dir().join(format!("maarse-mc-overview-{}", std::process::id()));
         let person = "0123456789abcdef0123456789abcdef";
@@ -906,6 +960,13 @@ mod tests {
             format!("{mette} 1 3 9.5 -87 2000 4 {}\n{skagen} 2 1 12.0 -71 2100 9 {}\n", hex("Mette"), hex("Skagen")),
         )
         .unwrap();
+
+        // Sending settings round trip: the operation as the clients send it, then the overview.
+        let saved = radio_operation(&dir, person, &format!("set-radio:2:{}", hex("dk,dk-nordjylland"))).unwrap();
+        assert_eq!(saved["radio"]["hashSize"], 2);
+        assert_eq!(saved["radio"]["scope"], "dk,dk-nordjylland");
+        assert_eq!(radio_operation(&dir, person, "overview").unwrap()["radio"]["hashSize"], 2);
+        assert!(valid_operation(&format!("set-radio:2:{}", hex("dk,dk-nordjylland"))));
 
         // The conversation list: Public first, then the latest message first.
         let overview = radio_operation(&dir, person, "overview").unwrap();

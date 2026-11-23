@@ -7,6 +7,7 @@
 #include <cctype>
 #include <fstream>
 #include <sstream>
+#include <SHA256.h>
 
 #define SEND_TIMEOUT_BASE_MILLIS          500
 #define FLOOD_SEND_TIMEOUT_FACTOR         16.0f
@@ -212,6 +213,65 @@ void VirtualNode::reloadChannels() {
   for (; index < MAX_GROUP_CHANNELS; ++index) setChannel(index, ChannelDetails{});
 }
 
+// radio.txt: "<path hash size 1-3> <region>[,<region>...]" (the regions part may be empty). Each region
+// becomes the MeshCore hashtag region key, SHA-256 of "#name" cut to 16 bytes, like a repeater's "region put".
+void VirtualNode::reloadRadio() {
+  std::ifstream file(path("radio.txt"), std::ios::binary);
+  const std::string config((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  if (config == _radioConfig) return;
+  _radioConfig = config;
+  std::istringstream record(config);
+  int size = 1;
+  std::string regions;
+  record >> size >> regions;
+  _hashSize = (size >= 1 && size <= 3) ? (uint8_t)size : 1;
+  _scopeKeys.clear();
+  std::istringstream list(regions);
+  std::string region;
+  while (_scopeKeys.size() < 8 && std::getline(list, region, ',')) {
+    if (!region.empty() && region[0] == '#') region.erase(0, 1);
+    if (region.empty() || region.size() > 30) continue;
+    const std::string tagged = "#" + region;
+    SHA256 sha;
+    uint8_t digest[32];
+    sha.update(tagged.data(), tagged.size());
+    sha.finalize(digest, sizeof(digest));
+    std::array<uint8_t, 16> key;
+    memcpy(key.data(), digest, key.size());
+    _scopeKeys.push_back(key);
+  }
+  printf("[%s] radio: path hash %u byte(s), %u scope(s)\n", tag(), _hashSize, (unsigned)_scopeKeys.size());
+}
+
+// Every flood goes out with the configured path hash size. With scopes set it goes out once per
+// region, each copy with that region's transport code (HMAC-SHA256 of the payload type and payload,
+// as MeshCore's own companion computes it). A packet carries only one code, so a list means copies;
+// repeaters drop the later copies of a packet they already passed on.
+void VirtualNode::floodOut(mesh::Packet* pkt, uint32_t delay_millis) {
+  if (_scopeKeys.empty()) { sendFlood(pkt, delay_millis, _hashSize); return; }
+  for (size_t i = 0; i < _scopeKeys.size(); ++i) {
+    const bool last = i + 1 == _scopeKeys.size();
+    mesh::Packet* out = pkt;
+    if (!last) {
+      out = obtainNewPacket();
+      if (!out) continue;
+      *out = *pkt;
+    }
+    const auto& key = _scopeKeys[i];
+    uint16_t codes[2];
+    SHA256 sha;
+    sha.resetHMAC(key.data(), key.size());
+    const uint8_t type = out->getPayloadType();
+    sha.update(&type, 1);
+    sha.update(out->payload, out->payload_len);
+    sha.finalizeHMAC(key.data(), key.size(), &codes[0], 2);
+    if (codes[0] == 0) codes[0]++;           // codes 0000 and FFFF are reserved
+    else if (codes[0] == 0xFFFF) codes[0]--;
+    codes[1] = 0;
+    sendFlood(out, codes, delay_millis + i * 400, _hashSize);
+  }
+}
+
 bool VirtualNode::sendNamedChannel(const std::string& name, const char* message) {
   for (int index = 1; index < MAX_GROUP_CHANNELS; ++index) {
     ChannelDetails details{};
@@ -238,7 +298,7 @@ bool VirtualNode::sendChannelMessage(const ChannelDetails& details, const std::s
   sent.timestamp = timestamp;
   packet->calculatePacketHash(sent.hash);
   sent.tracksHash = true;
-  sendFlood(packet);
+  floodOut(packet);
   trackSent(sent);
   logMessage(conversation, true, timestamp, message);
   return true;
@@ -566,7 +626,7 @@ void VirtualNode::sendSelfAdvert(bool flood) {
                  ? createSelfAdvert(_prefs.node_name, _prefs.node_lat, _prefs.node_lon)
                  : createSelfAdvert(_prefs.node_name);
   if (!pkt) { printf("[%s] ERR: unable to create advert\n", tag()); return; }
-  if (flood) sendFlood(pkt); else sendZeroHop(pkt);
+  if (flood) floodOut(pkt); else sendZeroHop(pkt);
   printf("[%s] advert sent (%s)\n", tag(), flood ? "flood" : "zero hop");
 }
 

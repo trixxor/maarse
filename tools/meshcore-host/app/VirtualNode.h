@@ -11,6 +11,7 @@
 #include <helpers/TxtDataHelpers.h>
 #include <string>
 #include <vector>
+#include <array>
 #include "VirtualRadio.h"
 
 class SystemMillis : public mesh::MillisecondClock {
@@ -58,7 +59,14 @@ class VirtualNode : public BaseChatMesh, ContactVisitor {
   std::vector<Heard> _heard;
   bool _heardChanged = false;
   bool _scanDirty = false;
+
+  // ---- outgoing flood settings, from the person's radio.txt (path hash size, region scope)
+  uint8_t _hashSize = 1;
+  std::vector<std::array<uint8_t, 16>> _scopeKeys;   // one MeshCore region key per scope; empty: unscoped
+  std::string _radioConfig;
+  void floodOut(mesh::Packet* pkt, uint32_t delay_millis = 0);
 public:
+  void reloadRadio();
   void renameTo(const char* name);
 private:
   // What happened to the messages sent from here: repeaters that passed a channel message on,
@@ -143,6 +151,8 @@ protected:
   uint32_t calcFloodTimeoutMillisFor(uint32_t pkt_airtime_millis) const override;
   uint32_t calcDirectTimeoutMillisFor(uint32_t pkt_airtime_millis, uint8_t path_len) const override;
   void onSendTimeout() override;
+  void sendFloodScoped(const ContactInfo&, mesh::Packet* pkt, uint32_t delay_millis = 0) override { floodOut(pkt, delay_millis); }
+  void sendFloodScoped(const mesh::GroupChannel&, mesh::Packet* pkt, uint32_t delay_millis = 0) override { floodOut(pkt, delay_millis); }
 
 public:
   VirtualNode(VirtualRadio& radio, mesh::RNG& rng, mesh::RTCClock& rtc)

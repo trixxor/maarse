@@ -33,10 +33,14 @@
 #ifdef KISS_BACKBONE
 BackboneStream tcp;
 GatewayWifi wifi;
-MomentaryButton setupButton(PIN_USER_BTN, 5000, true, true, false);
+MomentaryButton setupButton(PIN_USER_BTN, 60000, true, true, false);  // long press is timed in handleButtonAndScreen()
 static bool screenPresent = false;
 static bool resetArmed = false;
 static bool resetError = false;
+static uint32_t holdStart = 0;      // millis() when the current button press began, 0 = not held
+static uint32_t holdMs = 0;         // how long the button has been held now
+static const uint32_t HOLD_WARN_MS = 2000;   // display switches to the reset countdown
+static const uint32_t HOLD_RESET_MS = 5000;  // total hold time that arms the Wi-Fi reset
 static uint32_t screenWoke = 0;
 static uint32_t lastFrame = 0;
 
@@ -93,25 +97,41 @@ static void wakeScreen(uint32_t now) {
 static void handleButtonAndScreen() {
   const uint32_t now = millis();
   const int event = setupButton.check();
-  if (event == BUTTON_EVENT_LONG_PRESS) {
-    resetArmed = true;
-    resetError = false;
-    wakeScreen(now);
-  } else if (event == BUTTON_EVENT_CLICK && !resetArmed) {
+  const bool pressed = setupButton.isPressed();
+  if (pressed && !resetArmed) {
+    if (holdStart == 0) holdStart = now ? now : 1;
+    holdMs = now - holdStart;
+    if (holdMs >= HOLD_RESET_MS) {
+      resetArmed = true;
+      resetError = false;
+      wakeScreen(now);
+    } else if (holdMs >= HOLD_WARN_MS) {
+      resetError = false;
+      screenWoke = now;
+      if (screenPresent && !display.isOn()) display.turnOn();
+    }
+  } else if (!pressed) {
+    // Released before 5 s: cancel the countdown and return to the normal status.
+    const bool wasWarning = holdMs >= HOLD_WARN_MS;
+    holdStart = 0;
+    holdMs = 0;
+    if (wasWarning && !resetArmed) wakeScreen(now);
+  }
+  if (event == BUTTON_EVENT_CLICK && !resetArmed) {
     resetError = false;
     wakeScreen(now);
   }
   // GPIO0 also selects the boot mode. Wait for the button to be released.
-  if (resetArmed && !setupButton.isPressed()) {
+  if (resetArmed && !pressed) {
     if (wifi.reset()) ESP.restart();
     resetArmed = false;
     resetError = true;
     wakeScreen(now);
   }
   if (!screenPresent || !display.isOn()) return;
-  if (!resetArmed && now - screenWoke >= 30000) {
+  if (!resetArmed && holdMs < HOLD_WARN_MS && now - screenWoke >= 30000) {
     display.turnOff();
-  } else if (now - lastFrame >= 500) {
+  } else if (now - lastFrame >= 200) {
     lastFrame = now;
     drawStatus();
   }

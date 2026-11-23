@@ -117,6 +117,9 @@ impl Write for UpgradeStream {
     fn flush(&mut self) -> io::Result<()> { self.socket.flush() }
 }
 
+/// CORS for the public feeds. A page on the open internet (the Real network view) that reads this server by its LAN address needs the private-network answer too, or the browser blocks the call.
+const PUBLIC_CORS: &str = "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Private-Network: true\r\n";
+
 fn handle(mut stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
     if stream.set_write_timeout(Some(HTTP_TIMEOUT)).is_err() { return; }
     let Ok((request, end)) = read_head(&mut stream, Instant::now() + HTTP_TIMEOUT) else { return };
@@ -124,13 +127,16 @@ fn handle(mut stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
     let mut request_line = head.lines().next().unwrap_or("").split_whitespace();
     let (Some(method), Some(target)) = (request_line.next(), request_line.next()) else { return };
     let path = target.split('?').next().unwrap_or("");
+    if method == "OPTIONS" && path.starts_with("/api/public/") {
+        return send(&mut stream, "204 No Content", "text/plain", &format!("{PUBLIC_CORS}Access-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Max-Age: 86400\r\n"), b"");
+    }
     if method == "GET" && path == "/api/public/network" {
         let (status, body) = if crate::observe::public_enabled() {
             ("200 OK", crate::observe::public_feed())
         } else {
             ("404 Not Found", "{\"error\":\"this host does not share a network feed\"}".to_string())
         };
-        return send(&mut stream, status, "application/json", "Access-Control-Allow-Origin: *\r\n", body.as_bytes());
+        return send(&mut stream, status, "application/json", PUBLIC_CORS, body.as_bytes());
     }
     if method == "GET" && path == "/api/public/history" {
         let since = target.split_once('?').map_or("", |(_, q)| q).split('&').find_map(|kv| kv.strip_prefix("since=")).and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -139,7 +145,7 @@ fn handle(mut stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
         } else {
             ("404 Not Found", "{\"error\":\"this host does not keep a public history\"}".to_string())
         };
-        return send(&mut stream, status, "application/json", "Access-Control-Allow-Origin: *\r\n", body.as_bytes());
+        return send(&mut stream, status, "application/json", PUBLIC_CORS, body.as_bytes());
     }
     if method == "GET" && path == "/api/public/traffic" {
         let (status, body) = if PUBLIC_MAP.load(Ordering::Relaxed) && PUBLIC_TRAFFIC.load(Ordering::Relaxed) {
@@ -147,13 +153,13 @@ fn handle(mut stream: TcpStream, token: &str, data_dir: &Path, tx: Sender<In>) {
         } else {
             ("404 Not Found", "{\"error\":\"this host does not share public traffic\"}".to_string())
         };
-        return send(&mut stream, status, "application/json", "Access-Control-Allow-Origin: *\r\n", body.as_bytes());
+        return send(&mut stream, status, "application/json", PUBLIC_CORS, body.as_bytes());
     }
     if method == "GET" && path == "/api/public/map" {
         return if PUBLIC_MAP.load(Ordering::Relaxed) {
-            reply(&mut stream, "200 OK", "application/json", &crate::debug::public_map())
+            send(&mut stream, "200 OK", "application/json", PUBLIC_CORS, crate::debug::public_map().as_bytes())
         } else {
-            reply(&mut stream, "404 Not Found", "application/json", "{\"error\":\"this host does not share a public map (--public-map)\"}")
+            send(&mut stream, "404 Not Found", "application/json", PUBLIC_CORS, "{\"error\":\"this host does not share a public map (--public-map)\"}".as_bytes())
         };
     }
     let upgrade = method == "GET" && header(head, "upgrade").is_some_and(|value| value.eq_ignore_ascii_case("websocket"));

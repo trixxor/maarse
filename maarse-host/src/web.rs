@@ -520,6 +520,20 @@ fn server_http(mut stream: TcpStream, mut req: Vec<u8>, head_end: usize, data_di
                 Err(error) => send(&mut stream, "400 Bad Request", jsn, "", serde_json::json!({"error": error}).to_string().as_bytes()),
             }
         }
+        (_, p) if p.starts_with("/api/firmware") => {
+            let body: Vec<u8> = if method == "POST" {
+                match request_body(&mut stream, &mut req, head_end, 3 * 1024 * 1024 + 1024, HTTP_TIMEOUT) {
+                    Ok(body) => body.to_vec(),
+                    Err(error) => return send(&mut stream, "400 Bad Request", jsn, "", serde_json::json!({"error": error}).to_string().as_bytes()),
+                }
+            } else {
+                Vec::new()
+            };
+            match crate::fwupdate::api(&method, p, query, &body) {
+                Some((status, json)) => send(&mut stream, status, jsn, "", json.as_bytes()),
+                None => send(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "", b"Not found"),
+            }
+        }
         _ => send(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "", b"Not found"),
     }
 }
@@ -618,6 +632,21 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
         ("GET", "/api/devices") => {
             let body = crate::links::devices_json();
             reply(&mut stream, "200 OK", "application/json; charset=utf-8", &body)
+        }
+        // Firmware updates of the attached nodes (src/fwupdate.rs).
+        (_, p) if p.starts_with("/api/firmware") => {
+            let body: Vec<u8> = if method == "POST" {
+                match request_body(&mut stream, &mut req, head_end, 3 * 1024 * 1024 + 1024, HTTP_TIMEOUT) {
+                    Ok(body) => body.to_vec(),
+                    Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+                }
+            } else {
+                Vec::new()
+            };
+            match crate::fwupdate::api(method, p, query, &body) {
+                Some((status, json)) => reply(&mut stream, status, "application/json; charset=utf-8", &json),
+                None => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "Not found"),
+            }
         }
         // Sensor nodes: history, designer help (src/sensors.rs).
         (_, p) if p.starts_with("/api/sensors") => {

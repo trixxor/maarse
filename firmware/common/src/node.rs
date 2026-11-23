@@ -1306,6 +1306,18 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::OtaBegin { .. } | Command::OtaChunk { .. } | Command::OtaEnd { .. } | Command::OtaStatus => {
                 let ev = self.ota.handle(self.settings.ota(), &cmd, false);
                 emit(&ev);
+                // `OtaStatus` also says which board this is, so a host picks the right image.
+                let info = if matches!(cmd, Command::OtaStatus) { self.ota.info() } else { None };
+                if let Some(i) = &info {
+                    emit(i);
+                }
+                // A host on the Wi-Fi link updates the node too (see esp/src/wifi.rs).
+                if crate::bus::WIFI_STATE.load(core::sync::atomic::Ordering::Relaxed) == maarse_core::companion::wifi_state::LINKED as u32 {
+                    let _ = crate::bus::NET_EVT.try_send(ev.encode());
+                    if let Some(i) = &info {
+                        let _ = crate::bus::NET_EVT.try_send(i.encode());
+                    }
+                }
             }
             // Handled in node/ext.rs.
             Command::TraceRoute { .. }

@@ -44,6 +44,9 @@ pub struct OtaManager {
     rx: Receiver,
     key: Option<[u8; 32]>,
     install_at: Option<Instant>,
+    /// The board ID, learned from the port the first time a command arrives
+    /// (0 on a board that cannot be updated).
+    board: u16,
 }
 
 impl Default for OtaManager {
@@ -54,7 +57,7 @@ impl Default for OtaManager {
 
 impl OtaManager {
     pub fn new() -> Self {
-        OtaManager { rx: Receiver::new(), key: release_key(), install_at: None }
+        OtaManager { rx: Receiver::new(), key: release_key(), install_at: None, board: 0 }
     }
 
     pub fn deadline(&self) -> Option<Instant> {
@@ -72,6 +75,12 @@ impl OtaManager {
             current: fw_version(),
             text: text(msg.as_bytes()),
         }
+    }
+
+    /// The answer to `OtaStatus` that tells a host which board this is (none on a
+    /// board that cannot be updated).
+    pub fn info(&self) -> Option<Event> {
+        (self.board != 0).then_some(Event::OtaInfo { board: self.board })
     }
 
     fn current(&self, req: u16, msg: &str) -> Event {
@@ -97,6 +106,7 @@ impl OtaManager {
         let Some(port) = port else {
             return self.state(req, ota_state::UNSUPPORTED, "This board cannot be updated over the air");
         };
+        self.board = port.board();
         let Some(key) = self.key else {
             return self.state(req, ota_state::UNSUPPORTED, "OTA is disabled without a valid release key");
         };

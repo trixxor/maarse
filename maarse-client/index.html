@@ -2656,7 +2656,11 @@ function otaOnState(ev) {
 
 function renderFirmware(box) {
   $("chat-title").textContent = "Firmware update";
-  $("chat-sub").textContent = "Signed firmware over USB, Bluetooth or the network";
+  $("chat-sub").textContent = "Signed firmware over USB, Bluetooth, Wi-Fi or the network";
+  const host = el("div", { id: "fw-host" });
+  box.append(host, fwUploadBox(), el("h3", { textContent: "Update the connected radio directly" }));
+  fwBuild(host);
+  if (Date.now() - fw.at > 3000) fwLoad(); else fwSchedule();
   targetPicker(box);
   if (!ota.running) ota.target = state.target;
   const w = document.createElement("div");
@@ -2777,6 +2781,110 @@ const rt = {
   ref: store.get("rangeRef", { lat: "", lon: "" }), // the beacon's position, if it does not send one
   profile: store.get("rangeProfile", null),         // { base, rx, tx } in mA, measured by the user
   capacity: store.get("rangeCapacity", ""),          // battery capacity in mAh
+// ---------- firmware for the radios on this computer (host: maarse-host/src/fwupdate.rs) ----------
+// The host fetches the firmware (GitHub or the person's own files) and sends it to a radio on
+// USB, Bluetooth or Wi-Fi. The radio checks the signature itself and goes back to the old
+// firmware if the new one does not start, so nothing here has to be trusted.
+const fw = { data: null, err: "", msg: "", at: 0, timer: null, busy: false };
+async function fwCall(method, path, body, raw) {
+  const { base, headers } = hsBase();
+  const h = { ...headers };
+  if (body !== undefined && !raw) h["Content-Type"] = "application/json";
+  const r = await fetch(base + path, { method, headers: h, cache: "no-store", body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
+  const t = await r.text();
+  let j = null; try { j = JSON.parse(t); } catch { /* not JSON */ }
+  if (!j) throw new Error(t || String(r.status));
+  return j;
+}
+async function fwLoad(path = "/api/firmware", method = "GET", body, raw) {
+  try {
+    const j = await fwCall(method, path, body, raw);
+    fw.err = "";
+    if (j.devices) fw.data = j;
+    fw.msg = j.message || (method === "GET" ? fw.msg : "");
+  } catch (e) { fw.err = "Could not reach the computer's host: " + e.message; }
+  fw.at = Date.now();
+  fwSchedule();
+  fwPaint();
+}
+function fwSchedule() {
+  clearTimeout(fw.timer);
+  if (state.view !== "firmware") return;
+  fw.timer = setTimeout(() => fwLoad(), fw.data?.job?.state === "running" ? 1500 : 8000);
+}
+function fwPaint() {
+  const b = document.getElementById("fw-host");
+  if (b) { b.replaceChildren(); fwBuild(b); }
+}
+function fwAgo(t) { return t ? hsAgo(Math.max(0, Math.round(Date.now() / 1000 - t))) + " ago" : "not yet"; }
+async function fwUpdate(d, source, version) {
+  const what = source === "local" ? "your own build" : "the latest release";
+  if (!confirm(`Update ${d.name} to ${version} (${what})? The radio restarts and is away for about a minute.`)) return;
+  await fwLoad("/api/firmware/update", "POST", { id: d.id, source });
+}
+async function fwUpload(files) {
+  for (const f of files) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    await fwLoad("/api/firmware/upload?name=" + encodeURIComponent(f.name), "POST", bytes, true);
+  }
+}
+function fwDeviceRow(d) {
+  const kind = { "usb-modem": "USB", "wifi-modem": "Wi-Fi", "ble-modem": "Bluetooth" }[d.kind] || d.kind;
+  const row = el("div", { className: "row" }, el("b", { textContent: d.board_name || "Radio" }), " ",
+    el("span", { className: "hint", textContent: `${kind} · ${d.name}` }));
+  const line = el("div", { className: "hint" });
+  let canAct = false;
+  if (d.state === 255) line.textContent = "Waiting for an answer. A radio with older firmware never answers: update it once over USB with the web flasher, and from then on it updates here.";
+  else if (d.state === 5) line.textContent = "This radio cannot be updated over the air" + (d.note ? ": " + d.note : ".");
+  else if (!d.board) line.textContent = "Older firmware that cannot update itself. Update it once over USB with the web flasher; after that it updates here.";
+  else { line.textContent = `Running ${d.current_text}` + (d.github_newer || d.local_newer ? "" : " · up to date"); canAct = true; }
+  row.append(line);
+  if (canAct) {
+    const btns = el("div", { className: "row" });
+    const busy = fw.data?.job?.state === "running";
+    if (d.github_newer) btns.append(el("button", { className: "primary", textContent: "Update to " + d.github_newer, disabled: busy, onclick: () => fwUpdate(d, "github", d.github_newer) }));
+    if (d.local_newer && d.local_newer !== d.github_newer) btns.append(el("button", { textContent: "Update to " + d.local_newer + " (my file)", disabled: busy, onclick: () => fwUpdate(d, "local", d.local_newer) }));
+    if (btns.childNodes.length) row.append(btns);
+  }
+  return row;
+}
+function fwBuild(w) {
+  const d = fw.data;
+  if (fw.err) w.append(el("div", { className: "warn", textContent: fw.err }));
+  if (!d) { w.append(el("p", { className: "hint", textContent: "Loading…" })); return; }
+  w.append(el("h3", { textContent: "Your radios" }));
+  if (!d.devices.length) w.append(el("p", { className: "hint", textContent: "No radio is connected to this computer. A radio on USB or on Wi-Fi shows up here." }));
+  for (const dev of d.devices) w.append(fwDeviceRow(dev));
+  const j = d.job;
+  if (j && (j.state === "running" || Date.now() / 1000 - j.started < 1800)) {
+    const pct = j.total ? Math.floor(100 * j.sent / j.total) : 0;
+    const box = el("div", { className: "row" }, el("b", { textContent: `${j.name} → ${j.version}` }), " ",
+      el("span", { className: "hint", textContent: j.state === "error" ? "Failed: " + j.text : `${j.text} (${pct} %)` }));
+    const bar = el("div", { className: "progress" }, el("div"));
+    bar.firstChild.style.width = (j.state === "done" ? 100 : pct) + "%";
+    box.append(bar);
+    if (j.state === "running") box.append(el("div", { className: "row" }, el("button", { textContent: "Stop", onclick: () => fwLoad("/api/firmware/stop", "POST", {}) })));
+    w.append(box);
+  }
+  if (fw.msg) w.append(el("p", { className: "hint", textContent: fw.msg }));
+  w.append(el("h3", { textContent: "Where the firmware comes from" }));
+  const gh = d.github;
+  const have = gh.boards.map(b => `${b.name} ${b.version_text}`).join(", ");
+  const check = el("button", { textContent: "Check for a new release", onclick: () => fwLoad("/api/firmware/check", "POST", {}) });
+  w.append(el("div", { className: "row" }, el("b", { textContent: "Latest release on GitHub" }), " ",
+    el("span", { className: "hint", textContent: (have || "nothing found yet") + " · checked " + fwAgo(gh.checked_at) + (gh.error ? " · " + gh.error : "") }), check));
+  if (d.local.length) w.append(el("div", { className: "row" }, el("b", { textContent: "Your own files" }), " ",
+    el("span", { className: "hint", textContent: d.local.map(b => `${b.name} ${b.version_text}` + (b.image ? "" : " (image missing)")).join(", ") })));
+  if (!d.can_verify) w.append(el("p", { className: "hint", textContent: "This build of the host has no release key, so it cannot check signatures itself; the radio still does." }));
+}
+function fwUploadBox() {
+  const f = el("div", { className: "form" });
+  const pick = el("input", { type: "file", multiple: true, accept: ".bin,.manifest" });
+  pick.onchange = () => { fwUpload([...pick.files]); pick.value = ""; };
+  f.append(el("label", { textContent: "Your own build (.bin and .manifest)" }), pick);
+  return f;
+}
+
   xAxis: "time", gps: null, gpsErr: "", watch: null, poll: null, raf: 0,
 };
 

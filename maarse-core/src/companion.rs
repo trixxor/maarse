@@ -535,6 +535,11 @@ pub enum Event {
     /// the next expected offset, `size` and `version` from the manifest (0 without),
     /// `current` the running version. Text explains errors.
     OtaState { req: u16, state: u8, next: u32, size: u32, version: u32, current: u32, text: Text },
+    /// 0x9b: which board this is (`maarse_crypto::ota::board`), so a host can pick the
+    /// matching image. Sent after `OtaState` as the answer to `OtaStatus` by firmware that
+    /// can be updated; older firmware never sends it. (A new frame rather than a field of
+    /// `OtaState`, because that frame ends in free text.)
+    OtaInfo { board: u16 },
     /// 0x96: reply to `GetFileLimit`. Format: dest (16) | max_bytes (u32) |
     /// flags (u8: bit 0 = over LoRa or unknown route, bit 1 = the recipient
     /// cannot be reached, the file goes to a mailbox) | est_airtime_s (u32, estimated
@@ -1419,6 +1424,7 @@ impl Event {
                 .b(&current.to_le_bytes())
                 .b(text)
                 .done(),
+            Event::OtaInfo { board } => W::new(0x9b).b(&board.to_le_bytes()).done(),
             Event::Stats { items } => {
                 let mut w = W::new(0x91);
                 for (k, v) in items {
@@ -1654,6 +1660,7 @@ impl Event {
                 current: r.u32()?,
                 text: r.text()?,
             },
+            0x9b => Event::OtaInfo { board: r.u16()? },
             0x96 => {
                 let dest = r.addr()?;
                 let max_bytes = r.u32()?;
@@ -1983,6 +1990,7 @@ mod tests {
             current: 0x000100,
             text: text(b"ok"),
         });
+        roundtrip_ev(Event::OtaInfo { board: 3 });
         // An OTA chunk over radio: control header (5) + frame without length must
         // fit in a forward secrecy message (MAX_FS_TEXT = 143).
         let f = Command::OtaChunk { req: 2, offset: 0, data: text(&[0; 128]) }.encode();

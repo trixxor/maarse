@@ -40,6 +40,9 @@ pub(crate) const TCP_SNR: i8 = 10;
 /// First two bytes from an ESP32 node in Wi-Fi modem mode.
 pub const MODEM_HELLO: [u8; 2] = *b"MM";
 
+/// Start of a firmware-update command to a Wi-Fi modem (see `fwupdate.rs`).
+const OTA_MARK: [u8; 3] = [0xFF, b'O', b'T'];
+
 // ---------- device registry ----------
 
 /// One link as shown in the web client's device list.
@@ -558,7 +561,20 @@ fn run_tcp_modem(mut stream: TcpStream, name: String, tx: Sender<In>) {
         let _ = writer.shutdown(std::net::Shutdown::Both);
     });
     register_tcp(id, &name, "wifi-modem", &stream);
+    // Firmware updates ride on this link: `0xFF 'O' 'T' | frame` to the node.
+    let ota_tx = wtx.clone();
+    crate::fwupdate::link_up(
+        id,
+        "wifi-modem",
+        &name,
+        std::sync::Arc::new(move |frame: Vec<u8>| {
+            let mut p = OTA_MARK.to_vec();
+            p.extend_from_slice(&frame[2..]);
+            ota_tx.try_send(p).is_ok()
+        }),
+    );
     if tx.send(In::LinkUp { id, name, tx: LinkSender::Bounded(wtx) }).is_err() {
+        crate::fwupdate::link_down(id);
         unregister(id);
         return;
     }
@@ -576,6 +592,11 @@ fn run_tcp_modem(mut stream: TcpStream, name: String, tx: Sender<In>) {
         if crate::dht::read_by(&mut reader, &mut data, deadline).is_none() {
             break;
         }
+        // A reply to a firmware update (marker 0x7D): the companion event.
+        if data[0] == 0x7D {
+            crate::fwupdate::on_frame(id, &data[1..]);
+            continue;
+        }
         // The modem's own counters (marker 0x7E): telemetry, not a packet.
         if data[0] == 0x7E {
             if tx.send(In::ModemFrame { link: id, frame: data[1..].to_vec() }).is_err() {
@@ -590,6 +611,7 @@ fn run_tcp_modem(mut stream: TcpStream, name: String, tx: Sender<In>) {
         }
     }
     let _ = reader.shutdown(std::net::Shutdown::Both);
+    crate::fwupdate::link_down(id);
     unregister(id);
     let _ = tx.send(In::LinkDown { id });
 }
@@ -597,6 +619,73 @@ fn run_tcp_modem(mut stream: TcpStream, name: String, tx: Sender<In>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Wi-Fi modem is updated over its own link: the commands go out as `0xFF 'O' 'T' | frame`, the
+    /// replies come back as `0x7D | frame`, and the node runs the firmware's own receiver.
+    #[test]
+    fn a_wifi_modem_is_updated_over_its_link() {
+        use crate::fwupdate::testkit::NodeSim;
+        use crate::fwupdate::tests::{ONE_AT_A_TIME, temp, test_image};
+        use maarse_crypto::ota::{self, Manifest, SigningKey};
+        use std::net::TcpListener;
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = temp();
+        crate::fwupdate::open(&dir);
+        let key = SigningKey::from_bytes(&[21u8; 32]);
+        let image = test_image(9000);
+        let m = Manifest::sign(&key, ota::board::HELTEC_V4, 0x000300, &image);
+        assert_eq!(crate::fwupdate::api("POST", "/api/firmware/upload", "name=m.manifest", &m.to_bytes()).unwrap().0, "200 OK");
+        assert_eq!(crate::fwupdate::api("POST", "/api/firmware/upload", "name=i.bin", &image).unwrap().0, "200 OK");
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, _rx) = channel::<In>();
+        let host = thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            run_tcp_modem(s, "wifi-modem 127.0.0.1".into(), tx);
+        });
+        // The node: reads `length | packet`, answers firmware commands like the firmware does.
+        let mut node = TcpStream::connect(addr).unwrap();
+        node.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let mut sim = NodeSim::new(key.verifying_key().to_bytes(), ota::board::HELTEC_V4, 0x000100);
+        let mut finished = None;
+        let mut commands = 0;
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(20) {
+            let mut len = [0u8; 2];
+            if node.read_exact(&mut len).is_err() {
+                continue;
+            }
+            let mut p = vec![0u8; u16::from_le_bytes(len) as usize];
+            node.read_exact(&mut p).unwrap();
+            if !p.starts_with(&OTA_MARK) {
+                continue;
+            }
+            commands += 1;
+            for reply in sim.handle(&p[3..]) {
+                let mut out = ((reply.len() + 1) as u16).to_le_bytes().to_vec();
+                out.push(0x7D);
+                out.extend_from_slice(&reply);
+                node.write_all(&out).unwrap();
+            }
+            if commands == 1 {
+                // The host asked what we run; once it has the answer the update can start.
+                std::thread::sleep(Duration::from_millis(200));
+                let id = crate::fwupdate::status_json()["devices"][0]["id"].as_u64().unwrap();
+                let r = crate::fwupdate::api("POST", "/api/firmware/update", "", format!("{{\"id\":{id},\"source\":\"local\"}}").as_bytes()).unwrap();
+                assert_eq!(r.0, "200 OK", "{}", r.1);
+            }
+            if crate::fwupdate::status_json()["job"]["state"] == serde_json::json!("done") {
+                finished = Some(sim.installed.clone());
+                break;
+            }
+        }
+        assert_eq!(finished.as_deref(), Some(&image[..]), "{}", crate::fwupdate::status_json()["job"]);
+        drop(node);
+        let _ = host.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 
     #[test]
     fn hello_carries_caps_and_old_parsers_still_read_it() {
@@ -693,13 +782,20 @@ pub fn spawn_modem_tcp(addr: String, key: Option<String>, tx: Sender<In>) {
 fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind: &'static str, tx: &Sender<In>) {
     let id = next_id();
     let (wtx, wrx) = channel::<Vec<u8>>();
+    // Firmware updates: encoded companion commands, written to the port as they are.
+    let (ctl_tx, ctl_rx) = channel::<Vec<u8>>();
     // Put the node in modem mode: the host does the routing.
     if port.write_all(&modem_command()).is_err() {
         return;
     }
     let mut last_modem_cmd = std::time::Instant::now();
     register(id, &name, kind);
+    crate::fwupdate::link_up(id, kind, &name, {
+        let ctl = std::sync::Mutex::new(ctl_tx);
+        std::sync::Arc::new(move |frame: Vec<u8>| ctl.lock().is_ok_and(|c| c.send(frame).is_ok()))
+    });
     if tx.send(In::LinkUp { id, name, tx: wtx.into() }).is_err() {
+        crate::fwupdate::link_down(id);
         unregister(id);
         return;
     }
@@ -726,6 +822,8 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
                         });
                     } else if matches!(f.first(), Some(0x91 | 0x92)) {
                         let _ = tx.send(In::ModemFrame { link: id, frame: f.to_vec() });
+                    } else if matches!(f.first(), Some(0x9a | 0x9b)) {
+                        crate::fwupdate::on_frame(id, &f);
                     }
                 }
             }
@@ -759,6 +857,12 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
                 break 'link;
             }
         }
+        while let Ok(frame) = ctl_rx.try_recv() {
+            if let Err(e) = port.write_all(&frame) {
+                eprintln!("[modem] {kind}: write error: {e}");
+                break 'link;
+            }
+        }
         while let Ok(pkt) = wrx.try_recv() {
             let mut out = Vec::with_capacity(pkt.len() + 3);
             out.extend_from_slice(&((pkt.len() + 1) as u16).to_le_bytes());
@@ -771,6 +875,7 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
             note_tx(id);
         }
     }
+    crate::fwupdate::link_down(id);
     unregister(id);
     let _ = tx.send(In::LinkDown { id });
 }

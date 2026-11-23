@@ -83,7 +83,7 @@ enum class Tab(val title: String) { CHATS("Chats"), PAGES("Pages"), CONTACTS("No
 /** Pages behind "You". */
 enum class MePage(val title: String) {
     ACCOUNT("Account and devices"), MESHCORE("MeshCore setup"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and background"),
-    HOST("Internet link and post office"),
+    HOST("Internet link and post office"), FIRMWARE("Firmware"),
 }
 
 sealed interface Screen {
@@ -412,7 +412,8 @@ private fun MeScreen(nav: Nav) {
         }
         GroupTitle("This phone")
         Group {
-            GroupRow("Notifications and background", "Messages, channels, alerts", last = true) { nav.go(Screen.Page(MePage.APP)) }
+            GroupRow("Notifications and background", "Messages, channels, alerts") { nav.go(Screen.Page(MePage.APP)) }
+            GroupRow("Firmware", "Update your radios over USB, Bluetooth or Wi-Fi", last = true) { nav.go(Screen.Page(MePage.FIRMWARE)) }
         }
         Hint("Må:rse " + LocalContext.current.packageManager.getPackageInfo(LocalContext.current.packageName, 0).versionName)
     }
@@ -436,6 +437,7 @@ private fun MePageContent(p: MePage) {
             MePage.NODE -> if (me != null) NodeSection() else Hint("Connect first.")
             MePage.RADIO -> if (me != null) NodeSection(radioPart = true) else Hint("Connect first.")
             MePage.APP -> AppSection()
+            MePage.FIRMWARE -> FirmwareSection()
             MePage.HOST -> when (conn.mode) {
                 Mode.PHONE -> HostSection(server = false)
                 Mode.SERVER -> HostSection(server = true)

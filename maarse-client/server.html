@@ -335,6 +335,20 @@
     </div>
   </div>
 
+  <!-- Firmware -->
+  <div class="page" data-page="firmware">
+    <section>
+      <h2>Firmware for the radios on this server</h2>
+      <p class="help">A radio on USB, Bluetooth or Wi-Fi that is attached to this server can be updated here. The server fetches the signed firmware (the newest GitHub release, or your own build) and sends it to the radio. The radio checks the signature itself and goes back to its old firmware if the new one does not start. A radio with older firmware is updated once over USB with the web flasher; after that it updates here.</p>
+      <div id="fw-body"></div>
+    </section>
+    <section>
+      <h2>Your own build</h2>
+      <p class="help">Pick both the <span class="mono">.manifest</span> and the <span class="mono">.bin</span> file.</p>
+      <input type="file" id="fw-pick" multiple accept=".bin,.manifest">
+    </section>
+  </div>
+
   <!-- Settings -->
   <div class="page" data-page="settings">
     <section>
@@ -413,13 +427,14 @@ const names = () => { const m = new Map(); for (const n of T?.nodes || []) if (n
 let NAMES = new Map();
 
 // ---------- navigation ----------
-const PAGES = { overview: "Overview", live: "Live traffic", nodes: "Nodes & map", dests: "Destinations", routes: "Routes & repeaters", delivery: "Delivery & latency", journeys: "Journeys & carry", radio: "Radio & modem", links: "Links", backbone: "Backbone (DHT)", post: "Post office", pages: "Pages", counters: "Counters", conns: "Connections", settings: "Settings", log: "Log" };
+const PAGES = { overview: "Overview", live: "Live traffic", nodes: "Nodes & map", dests: "Destinations", routes: "Routes & repeaters", delivery: "Delivery & latency", journeys: "Journeys & carry", radio: "Radio & modem", links: "Links", backbone: "Backbone (DHT)", post: "Post office", pages: "Pages", counters: "Counters", conns: "Connections", firmware: "Firmware", settings: "Settings", log: "Log" };
 $("nav").innerHTML = Object.entries(PAGES).map(([k, v]) => `<button data-p="${k}">${v}</button>`).join("");
 $("nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) show(b.dataset.p); });
 function show(p) {
   page = PAGES[p] ? p : "overview"; history.replaceState(null, "", "#" + page);
   if ((page === "settings" || page === "pages") && !settingsState) loadSettings();
   if (page === "pages") loadFiles();
+  if (page === "firmware") fwLoad();
   if (page === "conns") { get("/api/guard").then(x => { G = x; renderConns(); }).catch(() => {}); loadMeshcore(); loadGateway(); }
   for (const b of $("nav").children) b.classList.toggle("on", b.dataset.p === page);
   for (const d of document.querySelectorAll(".page")) d.classList.toggle("on", d.dataset.page === page);
@@ -1204,6 +1219,72 @@ function pagesTab() {
     { sort: { i: 1, d: true }, num: [1, 2, 3, 4, 5, 6, 7], empty: "No page has been read yet." });
 }
 let pgFiles = [], pgDir = "", pgOpen = null;
+// ---------- firmware (maarse-host/src/fwupdate.rs) ----------
+let FW = null, fwMsg = "", fwTimer = null;
+async function fwCall(method, path, body, raw) {
+  const r = await fetch(path, { method, credentials: "same-origin", cache: "no-store", headers: body !== undefined && !raw ? { "Content-Type": "application/json" } : {}, body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
+  if (r.status === 401) { location.href = "/login"; throw 0; }
+  const t = await r.text();
+  try { return JSON.parse(t); } catch { throw new Error(t || r.status); }
+}
+async function fwLoad(path = "/api/firmware", method = "GET", body, raw) {
+  try {
+    const j = await fwCall(method, path, body, raw);
+    if (j.devices) FW = j;
+    fwMsg = j.message || (method === "GET" ? fwMsg : "");
+  } catch (e) { fwMsg = "No answer: " + e.message; }
+  fwRender();
+  clearTimeout(fwTimer);
+  if (page === "firmware") fwTimer = setTimeout(() => fwLoad(), FW?.job?.state === "running" ? 1500 : 8000);
+}
+async function fwUpdate(d, source, version) {
+  if (!confirm(`Update ${d.name} to ${version} (${source === "local" ? "your own build" : "the latest release"})? The radio restarts and is away for about a minute.`)) return;
+  await fwLoad("/api/firmware/update", "POST", { id: d.id, source });
+}
+function fwAgo(t) { if (!t) return "not yet"; const s = Math.max(0, Math.round(Date.now() / 1000 - t)); return (s < 60 ? s + " s" : s < 3600 ? Math.floor(s / 60) + " min" : Math.floor(s / 3600) + " h") + " ago"; }
+function fwRender() {
+  const box = $("fw-body"); if (!box) return;
+  box.replaceChildren();
+  const add = (tag, text, cls) => { const e = document.createElement(tag); e.textContent = text; if (cls) e.className = cls; box.append(e); return e; };
+  if (!FW) { add("p", fwMsg || "Loading…", "help"); return; }
+  const busy = FW.job?.state === "running";
+  if (!FW.devices.length) add("p", "No radio is attached to this server. A radio on USB, Bluetooth or Wi-Fi shows up here.", "help");
+  for (const d of FW.devices) {
+    const kind = { "usb-modem": "USB", "wifi-modem": "Wi-Fi", "ble-modem": "Bluetooth" }[d.kind] || d.kind;
+    const row = document.createElement("div"); row.className = "row"; row.style.margin = "8px 0";
+    const b = document.createElement("b"); b.textContent = (d.board_name || "Radio") + " "; row.append(b);
+    const h = document.createElement("span"); h.className = "help";
+    let line;
+    if (d.state === 255) line = "waiting for an answer (a radio with older firmware never answers: update it once over USB)";
+    else if (d.state === 5) line = "cannot be updated over the air" + (d.note ? ": " + d.note : "");
+    else if (!d.board) line = "older firmware that cannot update itself: update it once over USB with the web flasher";
+    else line = "running " + d.current_text + (d.github_newer || d.local_newer ? "" : " · up to date");
+    h.textContent = `${kind} · ${d.name} · ${line} `; row.append(h);
+    if (d.can_update) {
+      if (d.github_newer) { const u = document.createElement("button"); u.className = "b on"; u.textContent = "Update to " + d.github_newer; u.disabled = busy; u.onclick = () => fwUpdate(d, "github", d.github_newer); row.append(u, " "); }
+      if (d.local_newer && d.local_newer !== d.github_newer) { const u = document.createElement("button"); u.className = "b"; u.textContent = "Update to " + d.local_newer + " (my file)"; u.disabled = busy; u.onclick = () => fwUpdate(d, "local", d.local_newer); row.append(u); }
+    }
+    box.append(row);
+  }
+  const j = FW.job;
+  if (j && (j.state === "running" || Date.now() / 1000 - j.started < 1800)) {
+    const pct = j.total ? Math.floor(100 * j.sent / j.total) : 0;
+    add("p", `${j.name} → ${j.version}: ` + (j.state === "error" ? "failed: " + j.text : `${j.text} (${j.state === "done" ? 100 : pct} %)`));
+    if (busy) { const s = document.createElement("button"); s.className = "b"; s.textContent = "Stop"; s.onclick = () => fwLoad("/api/firmware/stop", "POST", {}); box.append(s); }
+  }
+  if (fwMsg) add("p", fwMsg, "help");
+  const g = FW.github;
+  const have = g.boards.map(x => `${x.name} ${x.version_text}`).join(", ");
+  add("p", `Latest release on GitHub: ${have || "nothing found yet"} · checked ${fwAgo(g.checked_at)}${g.error ? " · " + g.error : ""}`, "help");
+  const c = document.createElement("button"); c.className = "b"; c.textContent = "Check for a new release"; c.onclick = () => fwLoad("/api/firmware/check", "POST", {}); box.append(c);
+  if (FW.local.length) add("p", "Your own files: " + FW.local.map(x => `${x.name} ${x.version_text}` + (x.image ? "" : " (image missing)")).join(", "), "help");
+}
+document.addEventListener("change", async e => {
+  if (e.target?.id !== "fw-pick") return;
+  for (const f of [...e.target.files]) await fwLoad("/api/firmware/upload?name=" + encodeURIComponent(f.name), "POST", new Uint8Array(await f.arrayBuffer()), true);
+  e.target.value = "";
+});
+
 async function loadFiles() {
   try { pgFiles = (await get("/api/pages/files")).files || []; } catch { pgFiles = []; }
   drawFiles();

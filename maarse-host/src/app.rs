@@ -23,6 +23,7 @@ mod guard;
 mod extra_links;
 mod filebox;
 mod framing;
+mod fwupdate;
 mod history;
 mod i18n;
 #[cfg(test)]
@@ -1048,6 +1049,7 @@ pub fn run(cli: Vec<String>) {
     }
 
     guard::init(&cfg.data_dir, &cfg.block);
+    fwupdate::open(&cfg.data_dir);
     // Wi-Fi modems must prove the key; a server takes none without one.
     links::set_modem_auth(cfg.backbone, cfg.modem_key.as_deref().map(|k| maarse_core::modemauth::key(k.as_bytes())));
     if let Some(addr) = cfg.listen {

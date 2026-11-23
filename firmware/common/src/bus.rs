@@ -50,6 +50,9 @@ pub static NET_RX: Channel<M, Pkt, 4> = Channel::new();
 /// Packets to send on the Wi-Fi link, with the SNR they were heard with (only
 /// used in modem mode, where the host needs it).
 pub static NET_TX: Channel<M, (Pkt, i8), 8> = Channel::new();
+/// Firmware-update replies for the host over the Wi-Fi link (see
+/// `esp/src/wifi.rs`): the node puts `OtaState` frames here when the link is up.
+pub static NET_EVT: Channel<M, FrameBuf, 4> = Channel::new();
 /// The modem's own status frames for the host over Wi-Fi (`Stats` events,
 /// without length field), sent every 30 s in Wi-Fi modem mode.
 pub static NET_STATS: Channel<M, heapless::Vec<u8, { maarse_core::companion::MAX_FRAME }>, 3> = Channel::new();

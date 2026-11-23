@@ -14,7 +14,7 @@
 
 use core::sync::atomic::Ordering::Relaxed;
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_futures::select::{Either, Either4, select, select4};
 use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, Ipv4Address, Runner, Stack, StackResources};
@@ -23,7 +23,7 @@ use esp_radio::wifi::sta::StationConfig;
 use esp_radio::wifi::{AuthenticationMethodConfig, Config, Interface, WifiController};
 use maarse_core::MAX_PACKET;
 use maarse_core::companion::{WifiSettings, wifi_state};
-use maarse_fw_common::bus::{NET_RX, NET_STATS, NET_TX, Pkt, WIFI_IP, WIFI_STATE};
+use maarse_fw_common::bus::{Frame, NET_EVT, NET_RX, NET_STATS, NET_TX, Pkt, USB_IN, WIFI_IP, WIFI_STATE};
 use static_cell::StaticCell;
 
 /// Port used when `peer` has none (maarse-host's default `--listen`).
@@ -32,6 +32,30 @@ const DEFAULT_PORT: u16 = 4242;
 const RETRY: Duration = Duration::from_secs(5);
 /// Region greeting a host may send first (see maarse-host links.rs); skipped.
 const REGION_HELLO: [u8; 3] = [0xFF, b'R', b'G'];
+/// A host's firmware-update command: `0xFF 'O' 'T' | companion frame (no
+/// length)`. Only `OtaBegin`/`OtaChunk`/`OtaEnd`/`OtaStatus` get through, and
+/// the node itself checks signature, board and version, so the link needs no
+/// trust. The reply goes back as `length | 0x7D | OtaState frame`.
+const OTA_MARK: [u8; 3] = [0xFF, b'O', b'T'];
+/// Marker in the SNR byte of a frame from the node that carries a companion event.
+const EVT_MARK: u8 = 0x7D;
+
+/// Hands a host's firmware-update command to the node, as if it came from
+/// USB. Everything else is dropped; "allow an older version" is not
+/// accepted over the network.
+async fn ota_from_host(frame: &[u8]) {
+    use maarse_core::companion::{Command, OTA_ALLOW_DOWNGRADE};
+    let Ok(cmd) = Command::decode(frame) else { return };
+    let cmd = match cmd {
+        Command::OtaBegin { req, flags, manifest } => Command::OtaBegin { req, flags: flags & !OTA_ALLOW_DOWNGRADE, manifest },
+        c @ (Command::OtaChunk { .. } | Command::OtaEnd { .. } | Command::OtaStatus) => c,
+        _ => return,
+    };
+    let enc = cmd.encode();
+    if let Ok(f) = Frame::from_slice(&enc[2..]) {
+        USB_IN.send(f).await;
+    }
+}
 
 fn set_state(s: u8) {
     WIFI_STATE.store(s as u32, Relaxed);
@@ -157,6 +181,7 @@ async fn link_task(stack: Stack<'static>, peer: heapless::Vec<u8, 64>, modem: bo
         }
         // Packets queued while the link was down are stale.
         while NET_TX.try_receive().is_ok() {}
+        while NET_EVT.try_receive().is_ok() {}
         if WIFI_STATE.load(Relaxed) == wifi_state::LINKED as u32 {
             set_state(wifi_state::ONLINE);
         }
@@ -214,6 +239,10 @@ async fn run_link(socket: &mut TcpSocket<'_>, modem: bool, key: Option<&[u8; 32]
             if buf[..n].starts_with(&REGION_HELLO) {
                 continue;
             }
+            if modem && buf[..n].starts_with(&OTA_MARK) {
+                ota_from_host(&buf[3..n]).await;
+                continue;
+            }
             // The host asks us to prove the modem key (see modemauth).
             if modem && buf[..n].starts_with(&maarse_core::modemauth::CHALLENGE) {
                 if let Some(k) = key {
@@ -228,9 +257,23 @@ async fn run_link(socket: &mut TcpSocket<'_>, modem: bool, key: Option<&[u8; 32]
     };
     let tx = async {
         loop {
-            let (pkt, snr) = match select3(NET_TX.receive(), ANSWER.wait(), NET_STATS.receive()).await {
-                Either3::First(x) => x,
-                Either3::Third(status) => {
+            let (pkt, snr) = match select4(NET_TX.receive(), ANSWER.wait(), NET_STATS.receive(), NET_EVT.receive()).await {
+                Either4::First(x) => x,
+                Either4::Fourth(ev) => {
+                    // A reply to the host's firmware update (the frame without its length).
+                    if modem {
+                        let body = &ev[2..];
+                        let len = (body.len() as u16 + 1).to_le_bytes();
+                        if write_all(&mut writer, &len).await.is_none()
+                            || write_all(&mut writer, &[EVT_MARK]).await.is_none()
+                            || write_all(&mut writer, body).await.is_none()
+                        {
+                            return;
+                        }
+                    }
+                    continue;
+                }
+                Either4::Third(status) => {
                     // Our counters for the host (marker 0x7E in the snr byte).
                     if modem {
                         let len = (status.len() as u16 + 1).to_le_bytes();
@@ -243,7 +286,7 @@ async fn run_link(socket: &mut TcpSocket<'_>, modem: bool, key: Option<&[u8; 32]
                     }
                     continue;
                 }
-                Either3::Second(tag) => {
+                Either4::Second(tag) => {
                     let mut f = [0u8; 2 + 1 + 3 + 16];
                     f[..2].copy_from_slice(&20u16.to_le_bytes());
                     f[2] = maarse_core::modemauth::RESPONSE_MARK;

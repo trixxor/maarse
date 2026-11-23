@@ -1107,6 +1107,20 @@ Table limits: at most `MAX_PER_NET` = 4 contacts whose endpoint is in the same
 IPv4 /24 or IPv6 /48 (loopback and DNS names are not limited), against one
 machine filling the table with made-up IDs. Contacts are saved to
 `dht-contacts.txt` (one `address-hex endpoint` per line) and used as seeds at
+**Firmware updates through a modem link** (`maarse-host/src/fwupdate.rs`). The
+host updates the radios attached to it. On a USB or Bluetooth modem it writes
+the companion commands `OtaBegin`/`OtaChunk`/`OtaEnd`/`OtaStatus` to the same
+stream (the node also answers them in modem mode) and reads `OtaState`
+(0x9a) and `OtaInfo` (0x9b) frames back. A Wi-Fi modem carries them on its link: host -> node
+`length | 0xFF 'O' 'T' | command frame (no length)`, node -> host
+`length | 0x7D | OtaState or OtaInfo frame (no length)`. The node accepts only those four
+commands from the link and ignores the "allow an older version" flag there;
+it checks signature, board, version and SHA-256 itself, so the link needs no
+trust (a host that is not yours can send an update the node refuses, nothing
+more). Chunks are 200 bytes (a multiple of 4, and the whole frame stays under
+the 255-byte packet limit). Firmware from before this change does not answer
+on a Wi-Fi link and must be updated once over USB.
+
 the next start. A node with `--min-peers N` (maarse-server: 6) opens packet
 links to contacts from different buckets until it has N backbone links.
 **Wi-Fi modem key** (`maarse_core::modemauth`). After a modem's `MM` a host
@@ -1347,6 +1361,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0xa6 | Wifi | flags (1: bit 0 enabled, bit 1 modem) \| state (1) \| ip (4) \| ssid (str8) \| peer (text) |
 | 0xa7 | CarryAcked | msg_id (u64) |
 | 0xa8 | RangeState | config (15) \| sf (1) \| synced (1) \| count (u32) \| missed (u32) \| seq (u32) \| n × per-SF (12) |
+| 0x9b | OtaInfo | board (u16 LE, `maarse_crypto::ota::board`); sent after `OtaState` as the answer to `OtaStatus` by firmware that can be updated, so a host picks the matching image. Older firmware never sends it (the host then says "update once over USB"). A frame of its own because `OtaState` ends in free text. |
 | 0xa9 | RangeRx | see `RangeRx` in `companion.rs` |
 | 0xaa | RangeTx | see `RangeTx` in `companion.rs` |
 | 0xab | Power | see `PowerReport` in `companion.rs` |

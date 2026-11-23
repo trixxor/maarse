@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -67,7 +68,7 @@ fun FirmwareSection() {
         return
     }
     val d = data
-    SectionTitle("Your radios")
+    GroupTitle("Your radios")
     if (d == null) {
         Hint(message.ifBlank { "Loading…" })
         return
@@ -77,8 +78,8 @@ fun FirmwareSection() {
     for (i in 0 until (devices?.length() ?: 0)) {
         val dev = devices!!.getJSONObject(i)
         val kind = when (dev.optString("kind")) { "usb-modem" -> "USB"; "wifi-modem" -> "Wi-Fi"; "ble-modem" -> "Bluetooth"; else -> dev.optString("kind") }
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(dev.optString("board_name").ifBlank { "Radio" } + "  ·  " + kind, style = MaterialTheme.typography.bodyLarge)
+        Card2(Modifier.padding(vertical = 4.dp)) {
+            Text(dev.optString("board_name").ifBlank { "Radio" } + "  ·  " + kind, style = MaterialTheme.typography.bodyLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
             Text(dev.optString("name"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             val gh = dev.str("github_newer")
             val own = dev.str("local_newer")
@@ -89,10 +90,10 @@ fun FirmwareSection() {
                 else -> "Running " + dev.optString("current_text") + if (gh == null && own == null) " · up to date" else ""
             }
             Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (dev.optBoolean("can_update")) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (dev.optBoolean("can_update")) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val board = dev.optString("board_name")
-                if (gh != null) Button(enabled = !running && !busy, onClick = { ask = Ask(dev.optInt("id"), dev.optString("name"), board, gh, "github") }) { Text("Update to $gh") }
-                if (own != null && own != gh) OutlinedButton(enabled = !running && !busy, onClick = { ask = Ask(dev.optInt("id"), dev.optString("name"), board, own, "local") }) { Text("Update to $own (my file)") }
+                if (gh != null) Button(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !running && !busy, onClick = { ask = Ask(dev.optInt("id"), dev.optString("name"), board, gh, "github") }) { Text("Update to $gh") }
+                if (own != null && own != gh) OutlinedButton(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !running && !busy, onClick = { ask = Ask(dev.optInt("id"), dev.optString("name"), board, own, "local") }) { Text("Update to $own (my file)") }
             }
         }
     }
@@ -101,17 +102,17 @@ fun FirmwareSection() {
         val total = job.optInt("total")
         val sent = job.optInt("sent")
         val failed = job.optString("state") == "error"
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Card2(Modifier.padding(vertical = 4.dp)) {
             Text(job.optString("name") + " → " + job.optString("version"), style = MaterialTheme.typography.bodyLarge)
             val p = if (job.optString("state") == "done") 1f else if (total > 0) sent.toFloat() / total else 0f
             if (!failed) LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
             Text(if (failed) "Failed: " + job.optString("text") else job.optString("text") + " (" + (p * 100).toInt() + " %)", style = MaterialTheme.typography.bodySmall)
-            if (running) TextButton(onClick = { Firmware.stop() }) { Text("Stop") }
+            if (running) TextButton(modifier = Modifier.heightIn(min = 48.dp), onClick = { Firmware.stop() }) { Text("Stop") }
         }
     }
     if (message.isNotBlank()) Hint(message)
 
-    SectionTitle("Where the firmware comes from")
+    GroupTitle("Where the firmware comes from")
     val gh = d.optJSONObject("github")
     val boards = gh?.optJSONArray("boards")
     val have = (0 until (boards?.length() ?: 0)).joinToString(", ") { boards!!.getJSONObject(it).let { b -> b.optString("name") + " " + b.optString("version_text") } }
@@ -120,9 +121,9 @@ fun FirmwareSection() {
         "Latest release on GitHub: " + have.ifBlank { "nothing found yet" } + " · checked " +
             if (checked == 0L) "not yet" else ((System.currentTimeMillis() / 1000 - checked) / 60).toString() + " min ago",
     )
-    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(enabled = !busy, onClick = { Firmware.check() }) { Text("Check for a new release") }
-        OutlinedButton(onClick = { pick.launch(arrayOf("*/*")) }) { Text("Use my own build") }
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(enabled = !busy, onClick = { Firmware.check() }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Check for a new release") }
+        OutlinedButton(onClick = { pick.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Use my own build") }
     }
     val local = d.optJSONArray("local")
     if (local != null && local.length() > 0) {

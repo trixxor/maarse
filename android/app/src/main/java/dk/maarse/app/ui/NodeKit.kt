@@ -75,11 +75,23 @@ fun agoText(ms: Long): String {
     }
 }
 
+enum class NodeKind { PERSON, REPEATER, UNKNOWN }
+
 /**
- * What a Må:rse node is. The announce carries no role yet, so a node with a name
- * (a person's phone or PC, or one the user named) is a person and one without is a repeater.
+ * What a Må:rse node is, from its announce (app-data role byte 0x06 and person claim 0x08):
+ * a client role or a person claim is a person (a phone or a radio someone carries), a repeater,
+ * relay or anchor role is a repeater, and without either the kind is unknown (shown as "Node").
+ * Note: the role is the routing role, so a host on a PC announces as repeater or anchor too.
  */
-fun isPerson(n: NodeEntry): Boolean = n.name != null || Node.nicknames.value.containsKey(n.addr)
+fun kindOf(n: NodeEntry): NodeKind = when {
+    n.person || n.role == 0 -> NodeKind.PERSON
+    n.role != null && n.role in 1..3 -> NodeKind.REPEATER
+    else -> NodeKind.UNKNOWN
+}
+
+fun kindLabel(n: NodeEntry): String = when (kindOf(n)) { NodeKind.PERSON -> "Person"; NodeKind.REPEATER -> "Repeater"; NodeKind.UNKNOWN -> "Node" }
+
+fun isPerson(n: NodeEntry): Boolean = kindOf(n) == NodeKind.PERSON
 
 /** Signal in dB to a node we hear directly, from the neighbour list (null when not a neighbour). */
 fun snrOf(addr: String): Int? = Node.neighbors.value.firstOrNull { addr.startsWith(it.prefix) }?.snr

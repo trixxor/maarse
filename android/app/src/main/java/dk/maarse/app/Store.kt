@@ -40,6 +40,10 @@ data class NodeEntry(
     val usb: Boolean? = null,
     val lat: Double? = null,
     val lon: Double? = null,
+    /** Role byte of the announce (0 client, 1 repeater, 2 relay, 3 anchor), null until an announce with the field was heard. */
+    val role: Int? = null,
+    /** The announce claims this node is a device of a person (app-data field 0x08). */
+    val person: Boolean = false,
 )
 
 class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 2) {
@@ -66,6 +70,9 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 2) {
         // A fresh install creates version 2 through onCreate: add the columns there too.
         runCatching { db.execSQL("ALTER TABLE msg ADD COLUMN file TEXT") }
         runCatching { db.execSQL("ALTER TABLE msg ADD COLUMN mime TEXT") }
+        // Role and person claim of a node, from its announce.
+        runCatching { db.execSQL("ALTER TABLE node ADD COLUMN role INTEGER") }
+        runCatching { db.execSQL("ALTER TABLE node ADD COLUMN person INTEGER") }
         // Pages belong on the Pages screen only; remove any that once
         // ended up in a chat as a file.
         runCatching { db.delete("msg", "mime = ?", arrayOf(Pages.PAGE_MIME)) }
@@ -146,6 +153,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 2) {
         val v = ContentValues().apply {
             put("addr", n.addr); put("name", n.name); put("hops", n.hops); put("last_heard", n.lastHeard)
             put("mv", n.mv); put("usb", n.usb?.let { if (it) 1 else 0 }); put("lat", n.lat); put("lon", n.lon)
+            put("role", n.role); put("person", if (n.person) 1 else 0)
         }
         writableDatabase.insertWithOnConflict("node", null, v, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -157,6 +165,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "maarse.db", null, 2) {
             while (c.moveToNext()) add(NodeEntry(
                 c.getString(0), c.getColumnIndexOrThrow("name").let { if (c.isNull(it)) null else c.getString(it) },
                 int("hops"), c.getLong(c.getColumnIndexOrThrow("last_heard")), int("mv"), int("usb")?.let { it != 0 }, dbl("lat"), dbl("lon"),
+                int("role"), (int("person") ?: 0) != 0,
             ))
         }
     }

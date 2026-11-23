@@ -70,7 +70,7 @@ fun AnnouncesPage(onUser: (String) -> Unit = { PagesNav.contact(it) }) {
                 items(live) { (addr, hops, at) ->
                     val n = nodes[addr]
                     val tags = buildList {
-                        add(if (hops == 0) "direct" else "$hops hop${if (hops == 1) "" else "s"}")
+                        add(if (hops == 0) "direct" else plural(hops, "hop"))
                         if (n?.lat != null) add("shares position")
                         if (addr in Pages.sharing) add("has pages")
                         add(ago(now - at))

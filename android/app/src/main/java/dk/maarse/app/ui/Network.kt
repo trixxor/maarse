@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dk.maarse.app.tr
 import dk.maarse.app.Cmd
 import dk.maarse.app.Conn
 import dk.maarse.app.Mode
@@ -70,7 +71,7 @@ fun NetworkScreen(onPage: (NetPage) -> Unit, onConnect: (() -> Unit)? = null) {
         val near = if (hasRadio) s[83] ?: 0 else 0
         val off by Node.offline.collectAsState()
         val links = s[5] ?: 0
-        val role = s[7]?.let { Names.ROLES.getOrElse(it) { null } }?.lowercase()
+        val role = s[7]?.let { Names.ROLES.getOrElse(it) { null } }?.let { tr(it).lowercase() }
         // The dot, the headline and the sentence always agree.
         val (headline, color) = when {
             !online -> "Not connected" to MaterialTheme.colorScheme.onSurfaceVariant
@@ -85,12 +86,12 @@ fun NetworkScreen(onPage: (NetPage) -> Unit, onConnect: (() -> Unit)? = null) {
             !online -> "Choose how this phone connects."
             off -> "The phone has no internet" + (if (hasRadio) "" else " and no radio") + ". Messages you write wait and go out when you are back online."
             else -> buildList {
-                if (links > 0) add("You reach others over the internet (${plural(links, "link")})")
-                if (near > 0) add("${plural(near, "radio")} heard nearby over LoRa")
+                if (links > 0) add(tr("You reach others over the internet ({0})", tr(plural(links, "link"))))
+                if (near > 0) add(tr("{0} heard nearby over LoRa", tr(plural(near, "radio"))))
                 else if (hasRadio) add("No radio heard nearby yet")
                 if (!hasRadio) add("LoRa is not used. Add a radio to reach people nearby without internet")
                 if (links == 0 && near == 0) add("No internet link and no radio heard yet. Messages wait and go when someone is in reach")
-                role?.let { add("This node works as $it") }
+                role?.let { add(tr("This node works as {0}", it)) }
             }.joinToString(". ") + "."
         }
         Card2 {
@@ -176,7 +177,7 @@ private fun MeshCoreCard() {
         }
         if (ready) {
             val repeaters = mc.nodes.count { it.type == 2 }
-            Text("Hears ${plural(mc.nodes.size, "node")}, ${plural(repeaters, "repeater")} of them. Messages go out as floods until a path is learned.",
+            Text(tr("Hears {0}, {1} of them.", tr(plural(mc.nodes.size, "node")), tr(plural(repeaters, "repeater"))) + " " + tr("Messages go out as floods until a path is learned."),
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             MeshCoreActions(Modifier.padding(top = 4.dp))
         } else if (link.note.isNotBlank()) Text(link.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -330,7 +331,7 @@ private fun BackbonePage() {
         GroupTitle("Route and response time")
         Card2 {
             val t = traces.firstOrNull { it.dest == b.addr }
-            Text(rtt[b.addr]?.let { "Round trip ${it} ms" + (t?.let { tr -> " · ${tr.path.size} hop${if (tr.path.size == 1) "" else "s"}" } ?: "") } ?: "Not measured yet")
+            Text(rtt[b.addr]?.let { "Round trip ${it} ms" + (t?.let { tr -> " · " + plural(tr.path.size, "hop") } ?: "") } ?: "Not measured yet")
             TextButton(onClick = { Node.trace(b.addr) }) { Text("Measure") }
         }
         if (b.flags and 16 != 0) {

@@ -70,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dk.maarse.app.Mentions
+import dk.maarse.app.tr
 import dk.maarse.app.Node
 import dk.maarse.app.hex
 import kotlinx.coroutines.delay
@@ -154,7 +155,7 @@ private fun ago(seen: Long): String {
 }
 
 private fun snrText(n: Node.McNode) = "SNR ${if (n.snr > 0) "+" else ""}${Math.round(n.snr)}"
-private fun hops(n: Int) = "$n hop${if (n == 1) "" else "s"}"
+private fun hops(n: Int) = plural(n, "hop")
 private val mcTypes = listOf("Node", "Contact", "Repeater", "Room", "Sensor")
 
 private fun nodeIcon(type: Int): ImageVector = when (type) {
@@ -230,7 +231,7 @@ fun McSendingRow() {
     val mc by Node.meshcoreAccess.collectAsState()
     var open by remember { mutableStateOf(false) }
     TextButton(onClick = { open = true }, Modifier.padding(horizontal = 8.dp).heightIn(min = 48.dp)) {
-        Text("Sending settings · ${mc.radio.hashSize} byte path hash" + (if (mc.radio.scope.isEmpty()) "" else " · ${mc.radio.scope.split(",").joinToString(" ") { "#$it" }}"),
+        Text(tr("Sending settings · {0} byte path hash", mc.radio.hashSize) + (if (mc.radio.scope.isEmpty()) "" else " · ${mc.radio.scope.split(",").joinToString(" ") { "#$it" }}"),
             color = Mc.color, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
     if (open) McSendingSettings(mc.radio) { open = false }
@@ -250,7 +251,7 @@ fun McSendingSettings(radio: Node.McRadio, onDone: () -> Unit) {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Path hash size", style = MaterialTheme.typography.labelLarge, color = muted)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (n in 1..3) @OptIn(ExperimentalMaterial3Api::class) FilterChip(size == n, { size = n }, label = { Text(if (n == 1) "1 byte" else "$n bytes", maxLines = 1) })
+                    for (n in 1..3) @OptIn(ExperimentalMaterial3Api::class) FilterChip(size == n, { size = n }, label = { Text(plural(n, "byte"), maxLines = 1) })
                 }
                 OutlinedTextField(region, { region = it.replace(" ", "").replace("#", "") }, Modifier.fillMaxWidth(), singleLine = true,
                     label = { Text("Regions, e.g. dk,dk-nordjylland", maxLines = 1) })
@@ -315,7 +316,7 @@ private fun deliveryState(c: Node.McConversation, m: Node.McMessage): String {
     if (!m.mine) return ""
     return when {
         c.kind == "direct" -> if (m.delivered) "Delivered" else "Sent"
-        m.repeats > 0 -> "Heard by ${m.repeats} repeater${if (m.repeats == 1) "" else "s"}" +
+        m.repeats > 0 -> "Heard by " + plural(m.repeats, "repeater") +
             (if (m.snr != 0.0) " · best SNR ${if (m.snr > 0) "+" else ""}${Math.round(m.snr)}" else "")
         m.repeats == 0 -> "Sent · not heard by a repeater yet"
         else -> "Sent"
@@ -522,7 +523,7 @@ fun MeshCoreNodes(onChat: () -> Unit = {}) {
             if (favourites.isNotEmpty()) item { SectionLabel("Favourites", meshcore = true) }
             items(favourites, key = { "f" + it.key }) { McNodeRow(it) }
             val others = shown.filter { !it.favorite }
-            if (others.isNotEmpty()) item { SectionLabel("Heard nearby · ${others.size}", meshcore = true) }
+            if (others.isNotEmpty()) item { SectionLabel(tr("Heard nearby · {0}", others.size), meshcore = true) }
             items(others, key = { it.key }) { McNodeRow(it) }
         }
     }
@@ -545,7 +546,7 @@ private fun ScanStatus(mc: Node.MeshCoreAccess) {
         asked > 0 && sinceAsk < 30_000 && total == 0 -> {
             text = "Scan finished: no node answered. Nodes more than one hop away are found by their adverts instead."; running = false
         }
-        asked > 0 && sinceAsk < 30_000 -> { text = "Scan complete: $total node${if (total == 1) "" else "s"} answered"; running = false }
+        asked > 0 && sinceAsk < 30_000 -> { text = "Scan complete: " + plural(total, "node") + " answered"; running = false }
         else -> return
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

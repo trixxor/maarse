@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -47,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dk.maarse.app.Node
 import dk.maarse.app.Sensors
+import dk.maarse.app.tr
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.floor
@@ -55,7 +55,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /** What is drawn on the map. */
-private enum class PKind { PERSON, REPEATER, SENSOR }
+private enum class PKind { PERSON, REPEATER, SENSOR, NODE }
 
 private data class MapPoint(
     val id: String, val name: String, val kind: PKind, val lat: Double, val lon: Double,
@@ -83,7 +83,7 @@ fun MapScreen(onNode: (String) -> Unit, onSensor: (String) -> Unit = {}, onMessa
     val all = buildList {
         for (n in nodes.values) {
             if (n.lat == null || n.lon == null || n.addr in sensorNodes) continue
-            add(MapPoint(n.addr, friendlyName(Node.label(n.addr)), if (isPerson(n)) PKind.PERSON else PKind.REPEATER, n.lat!!, n.lon!!, n.hops, n.lastHeard))
+            add(MapPoint(n.addr, friendlyName(Node.label(n.addr)), when (kindOf(n)) { NodeKind.PERSON -> PKind.PERSON; NodeKind.REPEATER -> PKind.REPEATER; NodeKind.UNKNOWN -> PKind.NODE }, n.lat!!, n.lon!!, n.hops, n.lastHeard))
         }
         for (s in sensors ?: emptyList()) {
             val e = nodes[s.node] ?: continue
@@ -98,21 +98,22 @@ fun MapScreen(onNode: (String) -> Unit, onSensor: (String) -> Unit = {}, onMessa
     val sel = all.firstOrNull { it.id == selected }
     val noPosition = nodes.values.count { it.lat == null && it.addr !in sensorNodes }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+    // The grid takes all the height that is left; the card or hint, the legend and the one note sit below it.
+    Column(Modifier.fillMaxSize()) {
         ChipRow(MAP_FILTERS, filter, { filter = it; selected = null })
-        MapCanvas(all, shown, selected, { selected = it })
-        if (sel != null) PointCard(sel, onNode, onSensor, onMessage)
-        else if (all.isEmpty()) Column(Modifier.padding(horizontal = 24.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("No node shares a position yet", fontWeight = FontWeight.SemiBold)
-            Text("A node shows up here when it shares where it is (under Name and position). Nothing is guessed.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else if (shown.isEmpty()) Text("Nothing in this filter shares a position.", Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        else Text("Tap a point to see who it is and how well you hear it.", Modifier.padding(horizontal = 24.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Legend()
-        if (all.isNotEmpty() && noPosition > 0) Text(
-            "${plural(noPosition, "node")} ${if (noPosition == 1) "has" else "have"} not shared a position and ${if (noPosition == 1) "is" else "are"} not drawn.",
-            Modifier.padding(horizontal = 24.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("Offline grid, no map tiles. Positions are shared by the nodes themselves.", Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        MapCanvas(all, shown, selected, { selected = it }, Modifier.weight(1f).heightIn(min = 160.dp))
+        Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState()).padding(bottom = 8.dp)) {
+            if (sel != null) PointCard(sel, onNode, onSensor, onMessage)
+            else if (all.isEmpty()) Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("No node shares a position yet", fontWeight = FontWeight.SemiBold)
+                Text("A node shows up here when it shares where it is (under Name and position). Nothing is guessed.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else if (shown.isEmpty()) Text("Nothing in this filter shares a position.", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else Text("Tap a point to see who it is and how well you hear it.", Modifier.padding(horizontal = 24.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Legend()
+            if (all.isNotEmpty() && noPosition > 0) Text(
+                if (noPosition == 1) "1 node has not shared a position and is not drawn." else "$noPosition nodes have not shared a position and are not drawn.",
+                Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -141,7 +142,7 @@ private fun makeView(points: List<MapPoint>, w: Float, h: Float): View {
 private fun kmText(km: Double) = if (km < 1) "${(km * 1000).toInt()} m" else if (km == floor(km)) "${km.toInt()} km" else "$km km"
 
 @Composable
-private fun MapCanvas(all: List<MapPoint>, shown: List<MapPoint>, selected: String?, onSelect: (String?) -> Unit) {
+private fun MapCanvas(all: List<MapPoint>, shown: List<MapPoint>, selected: String?, onSelect: (String?) -> Unit, modifier: Modifier = Modifier) {
     val measurer = rememberTextMeasurer()
     val cs = MaterialTheme.colorScheme
     val grid = cs.outlineVariant
@@ -157,7 +158,7 @@ private fun MapCanvas(all: List<MapPoint>, shown: List<MapPoint>, selected: Stri
     var box by remember { mutableStateOf(Size.Zero) }
     val view = remember(all, box) { makeView(all, box.width, box.height) }
     Canvas(
-        Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().aspectRatio(320f / 250f).clip(RoundedCornerShape(16.dp))
+        modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
             .background(cs.surfaceContainerHigh)
             .onSizeChanged { box = Size(it.width.toFloat(), it.height.toFloat()) }
             .pointerInput(shown, view) {
@@ -180,7 +181,7 @@ private fun MapCanvas(all: List<MapPoint>, shown: List<MapPoint>, selected: Stri
             var y = (((size.height / 2 + offY) % stepPx) + stepPx).toFloat() % stepPx
             while (y < size.height) { drawLine(grid, Offset(0f, y), Offset(size.width, y), 1.dp.toPx()); y += stepPx }
         }
-        drawText(measurer, "Offline grid · 1 square ≈ ${kmText(view.step)}", Offset(8.dp.toPx(), size.height - 18.dp.toPx()), small)
+        drawText(measurer, tr("Offline grid · 1 square ≈ {0}", kmText(view.step)), Offset(8.dp.toPx(), size.height - 18.dp.toPx()), small)
         // Dim the points the filter hides, draw the rest on top.
         val order = all.sortedBy { it.id == selected }
         for (p in order) {
@@ -190,6 +191,7 @@ private fun MapCanvas(all: List<MapPoint>, shown: List<MapPoint>, selected: Stri
             val r = 7.dp.toPx() + if (p.id == selected) 3.dp.toPx() else 0f
             when (p.kind) {
                 PKind.PERSON -> drawCircle(colours.getValue(p.id).copy(alpha = a), r, c)
+                PKind.NODE -> drawCircle(cs.outline.copy(alpha = a), r, c)
                 PKind.REPEATER -> drawRoundRect(primary.copy(alpha = a), Offset(c.x - r, c.y - r), Size(2 * r, 2 * r), CornerRadius(3.dp.toPx()))
                 PKind.SENSOR -> {
                     val fill = if (p.state == 1) amber else teal
@@ -222,7 +224,7 @@ private fun PointCard(p: MapPoint, onNode: (String) -> Unit, onSensor: (String) 
             Avatar(p.name, p.id, 44.dp)
             Column(Modifier.weight(1f)) {
                 Text(p.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val kind = when (p.kind) { PKind.PERSON -> "Person"; PKind.REPEATER -> "Repeater"; PKind.SENSOR -> "Sensor" }
+                val kind = when (p.kind) { PKind.PERSON -> "Person"; PKind.REPEATER -> "Repeater"; PKind.SENSOR -> "Sensor"; PKind.NODE -> "Node" }
                 Text(listOfNotNull(kind, if (p.kind == PKind.SENSOR) p.value.ifBlank { null } else hopsText(p.hops), if (p.heard > 0) "heard " + time(p.heard) else null).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -243,6 +245,7 @@ private fun Legend() {
     Row(Modifier.padding(horizontal = 24.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
         LegendItem(MaterialTheme.colorScheme.onSurfaceVariant, true, "Person")
         LegendItem(MaterialTheme.colorScheme.primary, false, "Repeater")
+        LegendItem(MaterialTheme.colorScheme.outline, true, "Node")
         LegendItem(SensorColors.teal, false, "Sensor")
     }
 }

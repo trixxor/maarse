@@ -80,6 +80,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Sensors as SensorsIcon
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Usb
+import dk.maarse.app.tr
 import dk.maarse.app.SensorDesign
 import dk.maarse.app.SensorChan
 import dk.maarse.app.SensorInfo
@@ -733,7 +734,7 @@ private fun RulesStep(setup: JSONObject, ctx: android.content.Context, copied: B
     }
     SGroup {
         val q = setup.optJSONObject("quiet")
-        GroupRow("Node went quiet", "On your host · " + if (q?.optBoolean("on", true) == false) "off" else "no reading for ${q?.optInt("min", 120) ?: 120} minutes", last = false) { open("quiet") }
+        GroupRow("Node went quiet", tr("On your host · {0}", if (q?.optBoolean("on", true) == false) tr("off") else tr("no reading for {0} minutes", q?.optInt("min", 120) ?: 120)), last = false) { open("quiet") }
         GroupRow("Start from a template", "Replaces the inputs and rules", last = false) { open("template") }
         GroupRow(if (copied) "Link copied" else "Copy link", "A line of text with this setup, to send to someone", last = true) {
             (ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Må:rse sensor", Sensors.shareText(setup)))
@@ -861,8 +862,8 @@ private fun AddSensorPage(setup: JSONObject, board: String, onCustom: () -> Unit
             // What this board can take, so a choice that does not fit is not a surprise.
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(SensorColors.tealContainer).padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(Sensors.boardName(board), fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                Text((if (hasI2c) "I²C on ${Sensors.i2cText(board)} · " else "No sensor port · ") + plural(freePins(setup, board).size, "free pin") +
-                    (if (Sensors.adcPins(board).isEmpty() && hasI2c) ". Analog sensors need an ADS1115." else "."),
+                Text((if (hasI2c) tr("I²C on {0}", Sensors.i2cText(board)) else tr("No sensor port")) + " · " + tr(plural(freePins(setup, board).size, "free pin")) +
+                    (if (Sensors.adcPins(board).isEmpty() && hasI2c) ". " + tr("Analog sensors need an ADS1115.") else "."),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             @Composable fun Items(items: List<JSONObject>) {

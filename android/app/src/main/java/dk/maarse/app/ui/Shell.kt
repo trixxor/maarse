@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -197,8 +198,15 @@ private fun BottomBar(nav: Nav) {
                 label = { Text(t.title, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip) },
                 colors = NavigationBarItemDefaults.colors(indicatorColor = MaterialTheme.colorScheme.primaryContainer),
                 icon = {
-                    val n = if (t == Tab.CHATS) unread.values.sum() + mc.totalUnread else 0
-                    if (n > 0) BadgedBox(badge = { Badge { Text("$n") } }) { Icon(icon, null) } else Icon(icon, null)
+                    // Må:rse unread in the primary colour; MeshCore unread as its own small violet badge.
+                    val n = if (t == Tab.CHATS) unread.values.sum() else 0
+                    val m = if (t == Tab.CHATS) mc.totalUnread else 0
+                    if (n > 0 || m > 0) BadgedBox(badge = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            if (n > 0) Badge(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("$n") }
+                            if (m > 0) Badge(containerColor = Mc.color, contentColor = Mc.onColor) { Text("$m") }
+                        }
+                    }) { Icon(icon, null) } else Icon(icon, null)
                 },
             )
         }

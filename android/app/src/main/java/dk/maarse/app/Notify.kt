@@ -31,6 +31,25 @@ object Notify {
         })
     }
 
+    /** Id of the one ongoing notification, shared by the app's and the host's foreground service. */
+    const val SERVICE_ID = 1
+
+    /**
+     * The single ongoing notification. Both foreground services (the app's keeps the UI process alive,
+     * the host's runs maarse-host) post it under the same id, so the person sees one entry.
+     */
+    fun service(ctx: Context, server: Boolean?, other: String? = null): Notification {
+        val open = PendingIntent.getActivity(ctx, 0, Intent(ctx, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val text = when (server) {
+            true -> "Backbone node and post office"
+            false -> "Own Må:rse node on the backbone"
+            null -> other ?: "Connected"
+        }
+        return Notification.Builder(ctx, CH_SERVICE)
+            .setContentTitle(tr("Må:rse is running")).setContentText(tr(text))
+            .setSmallIcon(R.drawable.ic_stat).setContentIntent(open).setOngoing(true).build()
+    }
+
     private fun allowed(ctx: Context) = Build.VERSION.SDK_INT < 33 ||
         ctx.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 

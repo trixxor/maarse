@@ -35,9 +35,10 @@ class HostService : Service() {
         }
         Notify.channels(this)
         server = intent?.getBooleanExtra(EXTRA_SERVER, false) ?: server
-        val n = notification(if (server) "Server running" else "Phone node running", if (server) "Backbone node and post office" else "Own Må:rse node on the backbone")
-        if (Build.VERSION.SDK_INT >= 34) startForeground(NOTE_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        else startForeground(NOTE_ID, n)
+        I18n.init(this)
+        val n = Notify.service(this, server)
+        if (Build.VERSION.SDK_INT >= 34) startForeground(Notify.SERVICE_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        else startForeground(Notify.SERVICE_ID, n)
         if (!started) {
             started = true
             System.loadLibrary("maarse_android")
@@ -59,17 +60,9 @@ class HostService : Service() {
         main.postDelayed(::checkServerConditions, 30_000)
     }
 
-    private fun notification(title: String, text: String): Notification {
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        return Notification.Builder(this, Notify.CH_SERVICE)
-            .setContentTitle(title).setContentText(text).setSmallIcon(R.drawable.ic_stat)
-            .setContentIntent(open).setOngoing(true).build()
-    }
-
     companion object {
         const val ACTION_STOP = "dk.maarse.app.STOP_HOST"
         const val EXTRA_SERVER = "server"
-        private const val NOTE_ID = 2
         @Volatile private var started = false
 
         @JvmStatic external fun runHost(args: Array<String>, server: Boolean)

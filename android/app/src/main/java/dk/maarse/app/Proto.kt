@@ -144,7 +144,7 @@ sealed class Ev {
     data class Name(val name: String) : Ev()
     /** Site of a fixed node; heightDm 0 = not set. */
     data class Site(val heightDm: Int, val gainHdb: Int, val txDbm: Int, val owner: String) : Ev()
-    data class NodeInfo(val addr: String, val hops: Int, val name: String?, val mv: Int?, val usb: Boolean?, val lat: Double?, val lon: Double?, val caps: Int? = null) : Ev()
+    data class NodeInfo(val addr: String, val hops: Int, val name: String?, val mv: Int?, val usb: Boolean?, val lat: Double?, val lon: Double?, val caps: Int? = null, val role: Int? = null, val person: Boolean = false) : Ev()
     data class IdentityChanged(val addr: String) : Ev()
     data class Alert(
         val issuer: String, val serial: Long, val issued: Long, val status: Int, val kind: Int, val event: Int,
@@ -267,6 +267,7 @@ fun decodeEvent(f: ByteArray): Ev {
 /** App data fields as in maarse-core::appdata (0x03 position, 0x04 telemetry, 0x05 name). */
 private fun nodeInfo(addr: String, hops: Int, b: ByteArray): Ev.NodeInfo {
     var name: String? = null; var mv: Int? = null; var usb: Boolean? = null; var lat: Double? = null; var lon: Double? = null; var caps: Int? = null
+    var role: Int? = null; var person = false
     var i = 0
     while (i + 1 < b.size) {
         val t = b[i].toInt() and 0xff; val n = b[i + 1].toInt() and 0xff
@@ -274,10 +275,12 @@ private fun nodeInfo(addr: String, hops: Int, b: ByteArray): Ev.NodeInfo {
         if (t == 0x03 && n >= 9) { lat = d.i32(1) / 1e7; lon = d.i32(5) / 1e7 }
         if (t == 0x04 && n >= 10) { mv = d.u16(0); usb = d.u8(2) and 1 != 0 }
         if (t == 0x05 && n > 0) name = d.txt(0).filter { it >= ' ' && it != '\u007f' }.trim()
+        if (t == 0x06 && n >= 1) role = d.u8(0)
         if (t == 0x07 && n >= 1) caps = d.u8(0)
+        if (t == 0x08 && n >= 17) person = true
         i += 2 + n
     }
-    return Ev.NodeInfo(addr, hops, name, mv, usb, lat, lon, caps)
+    return Ev.NodeInfo(addr, hops, name, mv, usb, lat, lon, caps, role, person)
 }
 
 private fun alert(r: Rd): Ev.Alert {

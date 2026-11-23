@@ -1,8 +1,6 @@
 package dk.maarse.app
 
 import android.app.Application
-import android.app.Notification
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -29,13 +27,11 @@ class NodeService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val n = Notification.Builder(this, Notify.CH_SERVICE)
-            .setContentTitle("Må:rse is connected")
-            .setContentText(Node.prefs.mode.title)
-            .setSmallIcon(R.drawable.ic_stat).setContentIntent(open).setOngoing(true).build()
-        if (Build.VERSION.SDK_INT >= 34) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        else startForeground(1, n)
+        Notify.channels(this)
+        val mode = Node.prefs.mode
+        val n = Notify.service(this, when (mode) { Mode.PHONE -> false; Mode.SERVER -> true; else -> null }, mode.title)
+        if (Build.VERSION.SDK_INT >= 34) startForeground(Notify.SERVICE_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        else startForeground(Notify.SERVICE_ID, n)
         return START_STICKY
     }
 

@@ -144,7 +144,7 @@ fun AlertCard(a: Ev.Alert, onHide: (() -> Unit)? = null) {
             if (a.text.isNotEmpty()) Text(a.text, style = MaterialTheme.typography.bodyLarge)
             val from = a.name.ifEmpty { "trusted key " + shortAddr(a.issuer) }
             val how = when (a.trust) { 1 -> "verified by certificate"; 2 -> "verified (old format, no expiry)"; else -> "verified by key" }
-            var who = "From $from · $how · issued ${time(a.issued * 1000)} · valid until ${time(a.endsMs)} · ${a.hops} hops · no. ${a.serial}"
+            var who = "From $from · $how · issued ${time(a.issued * 1000)} · valid until ${time(a.endsMs)} · ${plural(a.hops, "hop")} · no. ${a.serial}"
             a.area?.let { who += " · area %.3f, %.3f (%.1f km)".format(it.first, it.second, it.third) }
             if (over != null) who += if (over.kind == 2) " · CANCELLED" else " · replaced by an update"
             Text(who, style = MaterialTheme.typography.labelSmall)

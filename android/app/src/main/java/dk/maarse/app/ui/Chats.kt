@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
@@ -89,6 +90,7 @@ import dk.maarse.app.Conn
 import dk.maarse.app.Msg
 import dk.maarse.app.Mentions
 import dk.maarse.app.Node
+import dk.maarse.app.tr
 import dk.maarse.app.NodeEntry
 import dk.maarse.app.Sensors
 import dk.maarse.app.shortAddr
@@ -224,7 +226,7 @@ private fun AlertCards(onAlerts: () -> Unit, onSensor: (String) -> Unit) {
             ) {
                 Icon(Icons.Default.Warning, null, tint = androidx.compose.ui.graphics.Color.White)
                 Column(Modifier.weight(1f)) {
-                    RawText("Alarm · " + s.title, color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    RawText(tr("Alarm") + " · " + s.title, color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     RawText(s.alarm ?: "", color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -296,7 +298,7 @@ fun NewChatScreen(onOpen: (String) -> Unit, onDone: () -> Unit = {}) {
 private fun peopleReach(n: NodeEntry): String = when (n.hops) {
     null -> if (n.lastHeard > 0) "Heard " + time(n.lastHeard) else "Not heard yet"
     0 -> "Nearby · direct"
-    else -> "Reachable · ${n.hops} hops"
+    else -> "Reachable · " + plural(n.hops, "hop")
 }
 
 @Composable
@@ -357,7 +359,7 @@ private fun reachText(conv: String): String {
     return when (n.hops) {
         null -> "Heard " + time(n.lastHeard)
         0 -> "Nearby · direct"
-        else -> "Reachable · ${n.hops} hops"
+        else -> "Reachable · " + plural(n.hops, "hop")
     }
 }
 
@@ -383,6 +385,9 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
         if (msgs.isNotEmpty()) list.scrollToItem(msgs.size)
     }
     val isDm = conv.startsWith("dm:")
+    // Messages from another device of my own account arrive from the account address, which no node answers to.
+    val person by Node.person.collectAsState()
+    val ownAccount = isDm && conv.substringAfter(":") == person?.person
     val title = friendlyName(Node.convTitle(conv))
     // The delivery state in words sits under the last message of mine; tapping any message shows it too.
     val lastOwn = msgs.lastOrNull { it.mine }?.id
@@ -393,7 +398,7 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
         ) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             Row(
-                Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(enabled = isDm) { onContact(conv.substringAfter(":")) }.padding(4.dp),
+                Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(enabled = isDm && !ownAccount) { onContact(conv.substringAfter(":")) }.padding(4.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Avatar(avatarTitle(title), conv.substringAfter(":"), 40.dp)
@@ -402,7 +407,7 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
                     Text(reachText(conv), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
-            if (isDm && dk.maarse.app.Calls.possible()) {
+            if (isDm && !ownAccount && dk.maarse.app.Calls.possible()) {
                 val ctx = LocalContext.current
                 val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) dk.maarse.app.Calls.start(conv.substringAfter(":")) }
                 IconButton(onClick = {
@@ -507,7 +512,11 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
             if (r.start()) { recording = r; recSecs = 0 } else error = "The microphone could not be opened"
         }
         val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) startRec() else error = "Voice messages need the microphone" }
-        Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 10.dp, top = 6.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (ownAccount) Text(
+            "This is your own account: it shows messages written on your other devices. To answer, use the device you want to write on.",
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp).navigationBarsPadding(),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        else Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 10.dp, top = 6.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (recording != null) {
                 IconButton(onClick = { recording?.cancel(); recording = null }) { Icon(Icons.Default.Close, "Cancel recording") }
                 Row(Modifier.weight(1f).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.tertiaryContainer).padding(horizontal = 16.dp, vertical = 14.dp),
@@ -697,11 +706,11 @@ private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, lastOwn: Boolean, onSen
             }
             if (open || (mine && lastOwn)) {
                 val (words, wordColor) = statusText(m.status, !isDm)
-                val how = if (mine) words else if (m.hops > 0) "Came over ${m.hops} hops" else "Came directly"
+                val how = if (mine) words else if (m.hops > 0) "Came over " + plural(m.hops, "hop") else "Came directly"
                 Text(how, style = MaterialTheme.typography.labelSmall, color = wordColor ?: MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (!mine && m.hops > 0) MiniChip(if (m.hops == 1) "1 hop" else "${m.hops} hops", Modifier.padding(start = 8.dp, bottom = 2.dp))
+        if (!mine && m.hops > 0) MiniChip(plural(m.hops, "hop"), Modifier.padding(start = 8.dp, bottom = 2.dp))
     }
 }
 
@@ -853,7 +862,7 @@ fun ContactPage(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
         SectionLabel("Route")
         Card2 {
             if (trace != null) {
-                Text(if (trace.path.size == 1) "1 hop" else "${trace.path.size} hops", fontWeight = FontWeight.SemiBold)
+                Text(plural(trace.path.size, "hop"), fontWeight = FontWeight.SemiBold)
                 Text("Signal out: ${trace.out.joinToString(" · ") { "$it dB" }}", style = MaterialTheme.typography.bodySmall)
                 Text("Signal back: ${trace.back.joinToString(" · ") { "$it dB" }}", style = MaterialTheme.typography.bodySmall)
             } else Text(n?.let { peopleReach(it) } ?: "Not heard yet", style = MaterialTheme.typography.bodyMedium)

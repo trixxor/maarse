@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dk.maarse.app.tr
 import dk.maarse.app.Node
 import dk.maarse.app.NodeEntry
 import dk.maarse.app.Sensors
@@ -104,7 +105,7 @@ private fun NodesList(onContact: (String) -> Unit, onAnnounces: () -> Unit) {
     val sensorNodes = (Sensors.list.collectAsState().value ?: emptyList()).map { it.node }.toSet()
     val marse = nodes.values.filter { it.addr !in sensorNodes }
         .filter { q.isBlank() || Node.label(it.addr).contains(q, true) || it.addr.startsWith(q.lowercase()) }
-        .filter { filter == 0 || (filter == 1 && isPerson(it)) || (filter == 2 && !isPerson(it)) }
+        .filter { filter == 0 || (filter == 1 && isPerson(it)) || (filter == 2 && kindOf(it) == NodeKind.REPEATER) }
         .sortedWith(compareByDescending<NodeEntry> { Node.nicknames.value.containsKey(it.addr) }.thenByDescending { it.lastHeard })
     val mc = mcState.nodes
         .filter { q.isBlank() || it.name.contains(q, true) || it.key.startsWith(q.lowercase()) }
@@ -156,7 +157,7 @@ private val MC_KINDS = listOf("Node", "Chat", "Repeater", "Room", "Sensor")
 
 @Composable
 private fun McRow(n: Node.McNode) {
-    val name = n.name.ifEmpty { "Unnamed · " + n.key.take(4) }
+    val name = n.name.ifEmpty { tr("Unnamed") + " · " + n.key.take(4) }
     Row(
         Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { McNav.node = n.key }.padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -184,7 +185,7 @@ private fun ContactRow(n: NodeEntry, onContact: (String) -> Unit) {
         Avatar(title, n.addr, 44.dp)
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(listOfNotNull(if (isPerson(n)) "Person" else "Repeater", hopsText(n.hops), if (n.lastHeard > 0) "heard " + time(n.lastHeard) else null).joinToString(" · "),
+            Text(listOfNotNull(kindLabel(n), hopsText(n.hops), if (n.lastHeard > 0) "heard " + time(n.lastHeard) else null).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         snrOf(n.addr)?.let { SignalBars(it) }

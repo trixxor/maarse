@@ -104,7 +104,7 @@ object Node : LinkListener {
     }
 
     fun label(addr: String): String =
-        nicknames.value[addr] ?: nodes.value[addr]?.name?.let { "~$it" } ?: shortAddr(addr)
+        if (addr == person.value?.person) tr("My other device") else nicknames.value[addr] ?: nodes.value[addr]?.name?.let { "~$it" } ?: shortAddr(addr)
 
     fun convTitle(conv: String): String {
         val (k, a) = conv.split(":", limit = 2)
@@ -1057,7 +1057,7 @@ object Node : LinkListener {
             is Ev.Route -> heard(ev.dest) { it.copy(hops = ev.hops) }
             is Ev.NodeInfo -> heard(ev.addr) {
                 ev.caps?.let { Pages.noteCaps(ev.addr, it) }
-                it.copy(hops = ev.hops, name = ev.name ?: it.name, mv = ev.mv ?: it.mv, usb = ev.usb ?: it.usb, lat = ev.lat ?: it.lat, lon = ev.lon ?: it.lon)
+                it.copy(hops = ev.hops, name = ev.name ?: it.name, mv = ev.mv ?: it.mv, usb = ev.usb ?: it.usb, lat = ev.lat ?: it.lat, lon = ev.lon ?: it.lon, role = ev.role ?: it.role, person = ev.person || it.person)
             }
             is Ev.Sent -> pending.remove(ev.req)?.let { setStatus(it, "sent", ev.msgId) }
             is Ev.Acked -> db.byMsgId(ev.msgId)?.let { setStatus(it, "delivered") }

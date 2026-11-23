@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import dk.maarse.app.Firmware
+import dk.maarse.app.tr
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 
@@ -87,13 +88,14 @@ fun FirmwareSection() {
                 dev.optInt("state") == 255 -> "Waiting for an answer. A radio with older firmware never answers: update it once over USB with the web flasher, and from then on it updates here."
                 dev.optInt("state") == 5 -> "This radio cannot be updated over the air."
                 dev.optInt("board") == 0 -> "Older firmware that cannot update itself. Update it once over USB with the web flasher; after that it updates here."
-                else -> "Running " + dev.optString("current_text") + if (gh == null && own == null) " · up to date" else ""
+                gh == null && own == null -> tr("Running {0} · up to date", dev.optString("current_text"))
+                else -> tr("Running {0}", dev.optString("current_text"))
             }
             Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (dev.optBoolean("can_update")) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val board = dev.optString("board_name")
-                if (gh != null) Button(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !running && !busy, onClick = { ask = Ask(dev.optInt("id"), dev.optString("name"), board, gh, "github") }) { Text("Update to $gh") }
-                if (own != null && own != gh) OutlinedButton(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !running && !busy, onClick = { ask = Ask(dev.optInt("id"), dev.optString("name"), board, own, "local") }) { Text("Update to $own (my file)") }
+                if (gh != null) Button(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !running && !busy, onClick = { ask = Ask(dev.optInt("id"), dev.optString("name"), board, gh, "github") }) { Text(tr("Update to {0}", gh)) }
+                if (own != null && own != gh) OutlinedButton(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !running && !busy, onClick = { ask = Ask(dev.optInt("id"), dev.optString("name"), board, own, "local") }) { Text(tr("Update to {0} (my file)", own)) }
             }
         }
     }
@@ -118,8 +120,8 @@ fun FirmwareSection() {
     val have = (0 until (boards?.length() ?: 0)).joinToString(", ") { boards!!.getJSONObject(it).let { b -> b.optString("name") + " " + b.optString("version_text") } }
     val checked = gh?.optLong("checked_at") ?: 0L
     Hint(
-        "Latest release on GitHub: " + have.ifBlank { "nothing found yet" } + " · checked " +
-            if (checked == 0L) "not yet" else ((System.currentTimeMillis() / 1000 - checked) / 60).toString() + " min ago",
+        tr("Latest release on GitHub: {0}", have.ifBlank { tr("nothing found yet") }) + " · " +
+            if (checked == 0L) tr("not checked yet") else tr("checked {0} min ago", (System.currentTimeMillis() / 1000 - checked) / 60),
     )
     Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(enabled = !busy, onClick = { Firmware.check() }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Check for a new release") }
@@ -127,15 +129,15 @@ fun FirmwareSection() {
     }
     val local = d.optJSONArray("local")
     if (local != null && local.length() > 0) {
-        Hint("Your own files: " + (0 until local.length()).joinToString(", ") { local.getJSONObject(it).let { b -> b.optString("name") + " " + b.optString("version_text") + if (b.optBoolean("image")) "" else " (image missing)" } })
+        Hint(tr("Your own files: {0}", (0 until local.length()).joinToString(", ") { local.getJSONObject(it).let { b -> b.optString("name") + " " + b.optString("version_text") + if (b.optBoolean("image")) "" else " " + tr("(image missing)") } }))
     }
     Hint("Pick both the .manifest and the .bin file of your own build. The radio only installs firmware signed with the Må:rse release key, for its own board, and newer than what it runs; if the new firmware does not start, it goes back to the old one.")
 
     ask?.let { a ->
         AlertDialog(
             onDismissRequest = { ask = null },
-            title = { Text("Update " + a.name + "?") },
-            text = { Text("It will be updated to " + a.version + (if (a.source == "local") " (your own build)" else " (the latest release)") + ". The radio restarts and is away for about a minute.") },
+            title = { Text(tr("Update") + " " + a.name + "?") },
+            text = { Text(tr(if (a.source == "local") "It will be updated to {0} (your own build). The radio restarts and is away for about a minute." else "It will be updated to {0} (the latest release). The radio restarts and is away for about a minute.", a.version)) },
             confirmButton = { TextButton(onClick = { Firmware.update(a.id, a.board, a.source); ask = null }) { Text("Update") } },
             dismissButton = { TextButton(onClick = { ask = null }) { Text("Cancel") } },
         )

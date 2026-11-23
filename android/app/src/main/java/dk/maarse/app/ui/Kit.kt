@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dk.maarse.app.tr
 
 /**
  * Shared building blocks of the "Mesh native" design (redesign C).
@@ -120,7 +121,7 @@ fun StatusPill(text: String, dot: Color, onClick: (() -> Unit)? = null, modifier
 
 /** Shows a person without a name as "Unnamed · 4230" instead of the 8 hex characters. */
 fun friendlyName(title: String): String =
-    if (Regex("[0-9a-f]{8}").matches(title)) "Unnamed · " + title.take(4) else title
+    if (Regex("[0-9a-f]{8}").matches(title)) tr("Unnamed") + " · " + title.take(4) else title
 
 /** True for a person shown by their 8 hex characters only (no name, no nickname). */
 fun isUnnamed(title: String): Boolean = friendlyName(title) != title

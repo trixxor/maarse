@@ -102,7 +102,7 @@ object Firmware {
         Thread {
             val got = runCatching { download("maarse-$board-ota.manifest") to download("maarse-$board-ota.bin") }
             main.post {
-                got.onFailure { busy.value = false; message.value = "Could not download the firmware: " + (it.message ?: "no connection") }
+                got.onFailure { busy.value = false; message.value = tr("Could not download the firmware: {0}", it.message ?: tr("no connection")) }
                 got.onSuccess { (m, img) ->
                     upload("maarse-$board-ota.manifest", m, "github") { r1 ->
                         take(r1)

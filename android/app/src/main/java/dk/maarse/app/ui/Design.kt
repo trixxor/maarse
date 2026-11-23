@@ -122,7 +122,7 @@ fun connectionSummary(): String {
     return buildString {
         append(modeName(c.mode))
         append(when { c.state == Conn.State.OFF -> " · not connected"; c.state == Conn.State.CONNECTING -> " · connecting"; off -> " · no connection"; else -> " · online" })
-        if (c.state == Conn.State.ONLINE && c.mode == Mode.PHONE) stats[5]?.let { append(" · $it internet link${if (it == 1) "" else "s"}") }
+        if (c.state == Conn.State.ONLINE && c.mode == Mode.PHONE) stats[5]?.let { append(" · " + plural(it, "internet link")) }
     }
 }
 

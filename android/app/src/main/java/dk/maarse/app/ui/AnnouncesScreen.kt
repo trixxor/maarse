@@ -14,7 +14,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Tab
@@ -32,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dk.maarse.app.Node
 import dk.maarse.app.Pages
+import dk.maarse.app.tr
 
 /**
  * Who announces themselves, live. Users: favourites first, then every
@@ -70,10 +70,10 @@ fun AnnouncesPage(onUser: (String) -> Unit = { PagesNav.contact(it) }) {
                 items(live) { (addr, hops, at) ->
                     val n = nodes[addr]
                     val tags = buildList {
-                        add(if (hops == 0) "direct" else plural(hops, "hop"))
-                        if (n?.lat != null) add("shares position")
-                        if (addr in Pages.sharing) add("has pages")
-                        add(ago(now - at))
+                        add(tr(if (hops == 0) "direct" else plural(hops, "hop")))
+                        if (n?.lat != null) add(tr("shares position"))
+                        if (addr in Pages.sharing) add(tr("has pages"))
+                        add(tr(ago(now - at)))
                     }
                     Line(addr, tags.joinToString(" · "), 'u') { onUser(addr) }
                 }
@@ -103,7 +103,7 @@ private fun Line(addr: String, sub: String, kind: Char, title: String? = null, a
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 4.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FavStar(kind, addr)
-        Avatar(Node.label(addr), addr)
+        Avatar(avatarTitle(Node.label(addr)), addr)
         Column(Modifier.weight(1f)) {
             Text(title ?: friendlyName(Node.label(addr)), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

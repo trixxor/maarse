@@ -37,7 +37,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -374,7 +373,7 @@ fun McChatScreen(c: Node.McConversation, onBack: () -> Unit) {
                 )
             }
             if (node != null) IconButton(onClick = { Node.mcAsk("favorite:${node.key}:${if (node.favorite) 0 else 1}"); Node.mcAsk("nodes") }) {
-                Icon(if (node.favorite) Icons.Default.Star else Icons.Default.StarBorder, if (node.favorite) "Remove from favourites" else "Add to favourites",
+                Icon(if (node.favorite) Icons.Default.Star else Icons.Default.StarBorder, tr(if (node.favorite) "Remove from favourites" else "Add to favourites"),
                     tint = if (node.favorite) Mc.color else muted)
             }
         }
@@ -573,7 +572,7 @@ private fun McNodeRow(n: Node.McNode) {
         }
         if (n.seen > 0) SignalBars(Math.round(n.snr).toInt())
         IconButton(onClick = { Node.mcAsk("favorite:${n.key}:${if (n.favorite) 0 else 1}"); Node.mcAsk("nodes") }) {
-            Icon(if (n.favorite) Icons.Default.Star else Icons.Default.StarBorder, if (n.favorite) "Remove from favourites" else "Add to favourites",
+            Icon(if (n.favorite) Icons.Default.Star else Icons.Default.StarBorder, tr(if (n.favorite) "Remove from favourites" else "Add to favourites"),
                 tint = if (n.favorite) Mc.color else muted)
         }
     }
@@ -594,7 +593,7 @@ private fun McNodeScreen(n: Node.McNode, mc: Node.MeshCoreAccess, onChat: () -> 
             IconButton(onClick = { McNav.node = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             Text("Node", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             IconButton(onClick = { Node.mcAsk("favorite:${n.key}:${if (n.favorite) 0 else 1}"); Node.mcAsk("nodes") }) {
-                Icon(if (n.favorite) Icons.Default.Star else Icons.Default.StarBorder, if (n.favorite) "Remove from favourites" else "Add to favourites",
+                Icon(if (n.favorite) Icons.Default.Star else Icons.Default.StarBorder, tr(if (n.favorite) "Remove from favourites" else "Add to favourites"),
                     tint = if (n.favorite) Mc.color else muted)
             }
         }

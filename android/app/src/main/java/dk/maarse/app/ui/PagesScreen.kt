@@ -76,6 +76,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import dk.maarse.app.Node
 import dk.maarse.app.Pages
+import dk.maarse.app.tr
 
 /** A star that adds a user ('u') or a node's pages ('p') to the favourites. */
 @Composable
@@ -85,7 +86,7 @@ fun FavStar(kind: Char, addr: String) {
     androidx.compose.material3.IconButton(onClick = { Pages.toggleFav(kind, addr) }) {
         Text(if (on) "★" else "☆", style = MaterialTheme.typography.titleLarge,
             color = if (on) Color(0xFFE7A94B) else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.semantics { contentDescription = if (on) "Remove from favourites" else "Add to favourites" })
+            modifier = Modifier.semantics { contentDescription = tr(if (on) "Remove from favourites" else "Add to favourites") })
     }
 }
 
@@ -153,14 +154,14 @@ private fun BrowserBar(cur: Pages.Url?, onExit: () -> Unit, @Suppress("UNUSED_PA
         if (editing && cur != null) {
             // Typing an address: the field takes the whole bar, like a browser.
             androidx.compose.material3.IconButton(onClick = { editing = false }) {
-                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Close, "Cancel")
+                Icon(androidx.compose.material.icons.Icons.Default.Close, "Cancel")
             }
         } else {
             androidx.compose.material3.IconButton(onClick = { if (Pages.history.isNotEmpty()) Pages.back() else onExit() }) {
-                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, "Back")
             }
             if (!editing) androidx.compose.material3.IconButton(onClick = { Pages.forward() }, enabled = Pages.forwardStack.isNotEmpty()) {
-                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward, "Forward")
+                Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward, "Forward")
             }
         }
         // The address pill: the page's title and node when shown; tap to type.
@@ -195,19 +196,19 @@ private fun BrowserBar(cur: Pages.Url?, onExit: () -> Unit, @Suppress("UNUSED_PA
         }
         when {
             editing -> androidx.compose.material3.IconButton(onClick = { go() }) {
-                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward, "Go")
+                Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward, "Go")
             }
             Pages.loading -> androidx.compose.material3.IconButton(onClick = { Pages.home() }) {
-                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Close, "Stop")
+                Icon(androidx.compose.material.icons.Icons.Default.Close, "Stop")
             }
             else -> androidx.compose.material3.IconButton(onClick = { Pages.reload() }) {
-                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Refresh, "Reload")
+                Icon(androidx.compose.material.icons.Icons.Default.Refresh, "Reload")
             }
         }
         if (!editing) {
             if (cur != null) FavStar('p', cur.addr)
             androidx.compose.material3.IconButton(onClick = { Pages.home() }) {
-                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Home, "Start page")
+                Icon(androidx.compose.material.icons.Icons.Default.Home, "Start page")
             }
         }
     }
@@ -273,7 +274,7 @@ private fun StartPage(@Suppress("UNUSED_PARAMETER") version: Int) {
             keyboardActions = KeyboardActions(onGo = { if (q.isNotBlank()) Pages.open(q.trim()) }),
             trailingIcon = if (q.isNotBlank()) ({
                 androidx.compose.material3.IconButton(onClick = { if (isAddress) Pages.open(q.trim()) else q = "" }) {
-                    androidx.compose.material3.Icon(
+                    Icon(
                         if (isAddress) androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward else androidx.compose.material.icons.Icons.Default.Close,
                         if (isAddress) "Open" else "Clear")
                 }

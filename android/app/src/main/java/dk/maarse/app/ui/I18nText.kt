@@ -45,3 +45,24 @@ fun Text(
         textAlign, lineHeight, overflow, softWrap, maxLines, minLines, onTextLayout, style,
     )
 }
+
+/** Material's `Icon`, with the description (read aloud by TalkBack) translated like all other text. */
+@Composable
+fun Icon(
+    imageVector: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    tint: Color = androidx.compose.material3.LocalContentColor.current,
+) {
+    androidx.compose.material3.Icon(imageVector, contentDescription?.let { tr(it) }, modifier, tint)
+}
+
+@Composable
+fun Icon(
+    painter: androidx.compose.ui.graphics.painter.Painter,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    tint: Color = androidx.compose.material3.LocalContentColor.current,
+) {
+    androidx.compose.material3.Icon(painter, contentDescription?.let { tr(it) }, modifier, tint)
+}

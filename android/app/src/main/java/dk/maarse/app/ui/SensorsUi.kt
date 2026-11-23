@@ -250,7 +250,7 @@ private fun SensorSummary(alarm: Int, quiet: Int, fine: Int) {
 private fun SensorsEmpty(onNew: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Box(Modifier.size(72.dp).clip(androidx.compose.foundation.shape.CircleShape).background(SensorColors.tealContainer), contentAlignment = Alignment.Center) {
-            androidx.compose.material3.Icon(Icons.Default.SensorsIcon, null, tint = SensorColors.teal, modifier = Modifier.size(36.dp))
+            Icon(Icons.Default.SensorsIcon, null, tint = SensorColors.teal, modifier = Modifier.size(36.dp))
         }
         Text("No sensors yet", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Text("Set one up with a Grove or I²C sensor and a small radio, or wait for one nearby to announce itself.", textAlign = TextAlign.Center,
@@ -305,7 +305,7 @@ private fun SensorCard(s: SensorInfo, onClick: () -> Unit) {
         .clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(if (quiet && !alarm) Amber else SensorColors.teal), contentAlignment = Alignment.Center) {
-                androidx.compose.material3.Icon(Icons.Default.SensorsIcon, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.SensorsIcon, null, tint = Color.White, modifier = Modifier.size(16.dp))
             }
             Text((if (s.favourite) "★ " else "") + s.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
@@ -353,7 +353,7 @@ fun SensorDetailScreen(node: String, onBack: () -> Unit, onEdit: (String) -> Uni
             // Rename, Copy link and Forget live in a menu; Edit setup is the one main action.
             Box {
                 androidx.compose.material3.IconButton(onClick = { menu = true }) {
-                    androidx.compose.material3.Icon(Icons.Default.MoreVert, "More")
+                    Icon(Icons.Default.MoreVert, "More")
                 }
                 androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     androidx.compose.material3.DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; renaming = true })
@@ -446,14 +446,14 @@ fun SensorStartScreen(onPick: (String) -> Unit, onImported: () -> Unit, onUsb: (
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(SensorColors.tealContainer).clickable { if (onUsb != null) onUsb() else SensorsNav.usb = true }.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape).background(SensorColors.teal), contentAlignment = Alignment.Center) {
-                androidx.compose.material3.Icon(Icons.Default.Usb, null, tint = Color.White)
+                Icon(Icons.Default.Usb, null, tint = Color.White)
             }
             Column(Modifier.weight(1f)) {
                 Text("First setup of a new board", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                 Text("Done once on a computer over USB. The sensor takes you as its owner. After that, changes can be sent from here.", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            androidx.compose.material3.Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         STitle("Pick a starting point")
         if (templates.isEmpty()) Text("Loading the starting points from your host … If this stays, the host is too old: update maarse-host.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -461,7 +461,7 @@ fun SensorStartScreen(onPick: (String) -> Unit, onImported: () -> Unit, onUsb: (
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 for (t in row) Column(Modifier.weight(1f).heightIn(min = 128.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
                     .clickable { onPick(t.key) }.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    androidx.compose.material3.Icon(templateIcon(t.key), null, tint = SensorColors.teal, modifier = Modifier.size(26.dp))
+                    Icon(templateIcon(t.key), null, tint = SensorColors.teal, modifier = Modifier.size(26.dp))
                     Text(t.title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleSmall.copy(hyphens = androidx.compose.ui.text.style.Hyphens.Auto, lineBreak = androidx.compose.ui.text.style.LineBreak.Paragraph))
                     Text(t.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -820,7 +820,7 @@ private fun FullPage(title: String, onBack: () -> Unit, content: @Composable and
         androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
                 Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.material3.IconButton(onClick = onBack) { androidx.compose.material3.Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    androidx.compose.material3.IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
                 content()

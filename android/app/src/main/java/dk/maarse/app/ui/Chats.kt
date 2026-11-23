@@ -41,7 +41,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -845,7 +844,7 @@ fun ContactPage(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ActionTile(Icons.AutoMirrored.Filled.Chat, "Message", Modifier.weight(1f)) { onChat("dm:$addr") }
             if (dk.maarse.app.Calls.possible()) ActionTile(Icons.Default.Call, "Call", Modifier.weight(1f)) { dk.maarse.app.Calls.start(addr) }
-            ActionTile(Icons.Default.Edit, "Name", Modifier.weight(1f)) { naming = true }
+            if (!unnamed) ActionTile(Icons.Default.Edit, "Name", Modifier.weight(1f)) { naming = true }
         }
         // Trust: verified, or what to do about it.
         SectionLabel("Trust")

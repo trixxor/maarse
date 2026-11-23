@@ -1902,6 +1902,8 @@
   "port, name and token; the server makes its own certificates": "port, navn og token; serveren laver sine egne certifikater",
   "position precision": "positionspræcision",
   "post office": "posthus",
+  "server": "server",
+  "host": "vært",
   "post offices": "posthuse",
   "private endpoints the directory may use without making them seeds, host:port, one per line": "private endepunkter, mappen må bruge uden at gøre dem til seeds, vært:port, én pr. linje",
   "put every path request from the backbone on the radio (default: only for nodes heard over our own radio, or on a retry)": "læg hver stiforespørgsel fra backbonen på radioen (standard: kun for noder hørt over vores egen radio, eller ved et nyt forsøg)",

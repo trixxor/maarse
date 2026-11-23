@@ -293,10 +293,10 @@ private fun upFor(s: Long) = when {
 }
 
 private fun backboneSummary(b: dk.maarse.app.Ev.Backbone) = buildList {
-    add(if (b.flags and 1 != 0) "server" else "host")
-    if (b.flags and 4 != 0) add("post office")
-    if (b.flags and 8 != 0) add("relay")
-    add("up " + upFor(b.upSecs))
+    add(tr(if (b.flags and 1 != 0) "server" else "host"))
+    if (b.flags and 4 != 0) add(tr("post office"))
+    if (b.flags and 8 != 0) add(tr("relay"))
+    add(tr("up " + upFor(b.upSecs)))
 }.joinToString(" · ")
 
 /** One backbone: what it is, how well we reach it, and tests. */

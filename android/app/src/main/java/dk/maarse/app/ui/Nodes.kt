@@ -1,9 +1,12 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package dk.maarse.app.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -124,8 +127,8 @@ private fun NodesList(onContact: (String) -> Unit, onAnnounces: () -> Unit) {
         item { ChipRow(if (showMc) FILTERS else FILTERS.take(3), filter, { filter = it }, violet = if (showMc) 3 else -1) }
         if (ready) item {
             Column {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("MeshCore radio", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = Mc.color, fontWeight = FontWeight.SemiBold)
+                FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.Center) {
+                    Text("MeshCore radio", Modifier.align(Alignment.CenterVertically), maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelMedium, color = Mc.color, fontWeight = FontWeight.SemiBold)
                     MeshCoreActions()
                 }
                 if (McNav.advertNote.isNotEmpty()) Text(McNav.advertNote, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

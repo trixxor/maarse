@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package dk.maarse.app.ui
 
 import androidx.compose.foundation.Canvas
@@ -6,6 +8,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -242,7 +245,7 @@ private fun PointCard(p: MapPoint, onNode: (String) -> Unit, onSensor: (String) 
 
 @Composable
 private fun Legend() {
-    Row(Modifier.padding(horizontal = 24.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+    FlowRow(Modifier.padding(horizontal = 24.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         LegendItem(MaterialTheme.colorScheme.onSurfaceVariant, true, "Person")
         LegendItem(MaterialTheme.colorScheme.primary, false, "Repeater")
         LegendItem(MaterialTheme.colorScheme.outline, true, "Node")
@@ -254,6 +257,6 @@ private fun Legend() {
 private fun LegendItem(color: Color, round: Boolean, text: String) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(Modifier.size(10.dp).clip(if (round) RoundedCornerShape(50) else RoundedCornerShape(3.dp)).background(color))
-        Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
     }
 }

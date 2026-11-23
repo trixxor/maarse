@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package dk.maarse.app.ui
 
 import androidx.compose.material3.FilledTonalButton
@@ -8,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -101,7 +104,7 @@ fun NetworkScreen(onPage: (NetPage) -> Unit, onConnect: (() -> Unit)? = null) {
                 Text(headline, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
             Text(story, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FlowRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (online) FilledTonalButton(onClick = { Node.send(Cmd.announce()) }, Modifier.heightIn(min = 48.dp)) { Text("Announce now", maxLines = 1) }
                 if (!online || !hasRadio) onConnect?.let { OutlinedButton(onClick = it, Modifier.heightIn(min = 48.dp)) { Text(if (online) "Add a radio" else "Connection", maxLines = 1) } }
             }

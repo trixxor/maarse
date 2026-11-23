@@ -71,8 +71,10 @@ object I18n {
         File(context.filesDir, "i18n").listFiles()?.forEach { if (it.name.endsWith(".json")) codes += it.name.removeSuffix(".json") }
         return codes.mapNotNull { code ->
             val text = readFile(context, code) ?: return@mapNotNull null
-            val name = runCatching { JSONObject(text).getJSONObject("meta").getString("name") }.getOrDefault(code)
-            Lang(code, name)
+            // Only real language files: a file that is not named after its own meta.code (a work file) is not a language.
+            val meta = runCatching { JSONObject(text).getJSONObject("meta") }.getOrNull() ?: return@mapNotNull null
+            if (meta.optString("code") != code) return@mapNotNull null
+            Lang(code, meta.optString("name", code))
         }
     }
 

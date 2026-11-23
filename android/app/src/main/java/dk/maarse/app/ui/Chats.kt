@@ -112,6 +112,7 @@ fun ChatsScreen(onOpen: (String) -> Unit, onAlerts: () -> Unit = {}, onNew: () -
     val channels by Node.channels.collectAsState()
     val unread by Node.unread.collectAsState()
     Node.nicknames.collectAsState().value
+    Node.person.collectAsState().value
     val last = remember(version) { Node.db.lastPerConv() }
     val convs = last.map { it.conv } + channels.keys.map { "ch:$it" }.filter { c -> last.none { it.conv == c } }
     var removing by remember { mutableStateOf<String?>(null) }

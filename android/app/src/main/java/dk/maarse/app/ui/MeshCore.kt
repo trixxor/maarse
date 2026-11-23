@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dk.maarse.app.Mentions
 import dk.maarse.app.Node
 import dk.maarse.app.hex
 import kotlinx.coroutines.delay
@@ -229,11 +230,12 @@ private fun MeshCoreList(mc: Node.MeshCoreAccess) {
                     else Initial("#", McAmberDark, McAmber)
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Row(verticalAlignment = Alignment.Bottom) {
-                            Text(c.title, Modifier.weight(1f), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            RawText(c.title, Modifier.weight(1f), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(listTime(c.time), fontSize = 12.sp, color = muted)
                         }
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(if (c.last.isEmpty()) "No messages yet" else (if (c.mine) "You: " else "") + c.last,
+                            if (c.last.isEmpty()) Text("No messages yet", Modifier.weight(1f), fontSize = 14.sp, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            else RawText((if (c.mine) "You: " else "") + c.last,
                                 Modifier.weight(1f), fontSize = 14.sp, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             if (c.unread > 0) Box(
                                 Modifier.heightIn(min = 20.dp).widthIn(min = 20.dp).clip(RoundedCornerShape(10.dp)).background(McAmber).padding(horizontal = 6.dp),
@@ -367,7 +369,7 @@ private fun McConversationScreen(c: Node.McConversation, mc: Node.MeshCoreAccess
             if (c.kind == "direct") Initial(c.title.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "?", McPerson, McLight, 40)
             else Initial("#", McAmberDark, McAmber, 40)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(c.title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                RawText(c.title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     when (c.kind) {
                         "public" -> "MeshCore · public channel"
@@ -394,8 +396,14 @@ private fun McConversationScreen(c: Node.McConversation, mc: Node.MeshCoreAccess
                             modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 10.dp, vertical = 4.dp))
                     }
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (m.mine) Alignment.End else Alignment.Start, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        // In a channel, tap a message from someone else to mention them (@name).
+                        val sender = if (!m.mine && c.kind != "direct") Mentions.mcSender(m.text) else null
                         Box(
                             Modifier.widthIn(max = 300.dp).clip(RoundedCornerShape(16.dp)).background(if (m.mine) McAmberDark else McPerson)
+                                .then(if (sender == null) Modifier else Modifier.clickable {
+                                    val h = Mentions.handle(sender)
+                                    if (!text.contains(h)) text = (if (text.isEmpty() || text.endsWith(" ")) text else "$text ") + h
+                                })
                                 .padding(horizontal = 14.dp, vertical = 10.dp),
                         ) { RawText(m.text, color = if (m.mine) McAmberBubbleText else McLight, fontSize = 15.sp) }
                         Text(deliveryLine(c, m), fontSize = 11.sp, color = if (m.mine && (m.repeats > 0 || m.delivered)) McAmber else muted,

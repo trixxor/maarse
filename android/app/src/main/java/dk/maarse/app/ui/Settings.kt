@@ -416,6 +416,7 @@ internal fun AppSection() {
         Text("Notify about channel messages", Modifier.weight(1f)); Switch(chans, { chans = it; Node.prefs.notifyChannels = it })
     }
     Hint("Alerts always notify. Severe, actual alerts use their own loud channel; change it in Android's notification settings.")
+    SoundPickers()
     val pm = ctx.getSystemService(PowerManager::class.java)
     if (!pm.isIgnoringBatteryOptimizations(ctx.packageName)) {
         Hint("Android may stop the connection when the screen is off. Allow Må:rse to run in the background:")

@@ -40,9 +40,10 @@ object Notify {
         return PendingIntent.getActivity(ctx, conv?.hashCode() ?: 0, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
-    fun message(ctx: Context, conv: String, title: String, text: String) {
+    /** `kind` picks the sound the person chose for it (see [Sounds]): "dm", "channel" or "mention". */
+    fun message(ctx: Context, conv: String, title: String, text: String, kind: String = "dm") {
         if (!allowed(ctx)) return
-        val n = Notification.Builder(ctx, CH_MESSAGES)
+        val n = Notification.Builder(ctx, Sounds.channelFor(ctx, kind, Node.prefs.sound(kind)))
             .setSmallIcon(R.drawable.ic_stat).setContentTitle(title).setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(text))
             .setContentIntent(open(ctx, conv)).setAutoCancel(true).setCategory(Notification.CATEGORY_MESSAGE).build()

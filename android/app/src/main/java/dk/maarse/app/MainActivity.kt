@@ -44,7 +44,15 @@ class MainActivity : ComponentActivity() {
         when (val c = i?.getStringExtra("conv")) {
             null -> {}
             "alerts" -> { nav.home(Tab.NETWORK); nav.go(Screen.Net(NetPage.ALERTS)) }
-            else -> { nav.home(Tab.CHATS); nav.go(Screen.Chat(c)) }
+            else -> if (c.startsWith("mc:")) {
+                // A MeshCore mention: open that MeshCore conversation.
+                val (kind, id) = c.removePrefix("mc:").split(":", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+                val row = Node.meshcoreAccess.value.conversations.firstOrNull { it.kind == kind && it.id == id }
+                nav.home(Tab.CHATS)
+                dk.maarse.app.ui.MeshCoreMode.on = true
+                dk.maarse.app.ui.McNav.open = row ?: Node.McConversation(kind, id, if (kind == "public") "Public" else if (kind == "channel") "#$id" else id.take(8) + "…", "", false, 0, 0)
+                Notify.cancel(this, c)
+            } else { nav.home(Tab.CHATS); nav.go(Screen.Chat(c)) }
         }
     }
 }

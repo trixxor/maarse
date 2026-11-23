@@ -271,6 +271,7 @@ The web client can be installed as an app, so you can use a radio via Bluetooth 
 - **Android (Chrome):** open the client over https (e.g. from GitHub Pages or another static host) or from maarse-host. Tap the menu ⋮ → **Install app** (or "Add to home screen"), or tap **Install app** in the client. Then connect with **Bluetooth** (nRF nodes) or **USB** (needs a USB OTG cable).
 - **Windows, Linux and macOS (Chrome or Edge):** click the install icon in the address bar or **Install app** in the client.
 - **iPhone/iPad:** Safari has neither Web Bluetooth nor Web Serial. Only the connection via WebSocket to a maarse-host works (e.g. on a PC or Raspberry Pi on the same network).
+- **Notification sounds:** under **Notification sounds** in the side panel, choose a sound for direct messages, channels and mentions: Default, Silent, one of six built-in tones (Ding, Chime, Pop, Drops, Bell, Low) or your own audio file (up to 400 KB, kept in this browser). The sound plays when a message arrives in a chat you are not looking at. Direct messages and mentions have a sound by default; channels are silent until you pick one. The Android app has the same three choices in Settings → App; there you can also pick a sound from the phone. The tones are made by `tools/make_tones.py` (Android) and the `TONES` table in the web client; keep the two equal.
 - **Notifications:** tap **Turn on notifications** in the side panel. The client then shows a notification when a direct message or a channel message arrives while it is in the background. The number of unread messages is in the tab title.
 - **Updates:** when a new version exists, the client shows "New version – reload".
 
@@ -693,6 +694,17 @@ remotely, use the same HTTPS reverse proxy or SSH tunnel as for other admin acti
 On Android or web, open **Account → MeshCore**, enter the HTTPS address of the
 backbone and choose **Check access**. Once granted, choose **Create MeshCore
 identity**. A master device and its linked devices use the same public key.
+Android and the web client use the open backbone (`https://nj01.dk.eu.maarse.dk`)
+when no address has been entered, so a linked PC finds the account's MeshCore
+without typing the address again. On the web client the MeshCore switch then
+appears only once the account has access; a different backbone is set under
+**MeshCore setup**. The address is still stored per device (browser or phone), not
+synced between linked devices.
+Names: a scan finds nodes before they advertise a name. Both clients remember the
+name last seen for each MeshCore public key (500 keys; Android in the app's
+settings, web client in `localStorage` as `maarse:mc-names`) and show it for
+unnamed nodes in later scans and lists. A node that has never advertised stays
+unnamed (its key prefix is shown); there is no name request in the MeshCore protocol.
 Serve the dashboard and `/meshcore/session` behind an HTTPS reverse proxy that
 forwards WebSocket upgrades. The development worker described below must be
 running to create a new identity. Both clients show MeshCore beside Må:rse in the same places.
@@ -1046,6 +1058,15 @@ Bluetooth administration use the existing companion session.
 
 So solar repeaters in the field can be updated without being brought in. **Not tried on hardware yet** (see the checklist below).
 
+**From the host: USB, Bluetooth and Wi-Fi radios (working copy; not tried on hardware).** A radio that is attached to a `maarse-host` (a USB modem, a Bluetooth modem from the phone, or an ESP32 that joined the host over Wi-Fi) is listed in the web client under **Settings > Firmware > Your radios** and in the Android app under **Settings > Firmware**, with the version it runs and an **Update** button when something newer is available. The host fetches and pushes, the radio only receives: it needs no internet and no open port.
+
+- *Sources.* The newest GitHub release (the signed `maarse-<board>-ota.manifest` and `.bin`; the host uses `curl`, the Android app downloads the files itself and hands them to the host), or the person's own build (pick the `.manifest` and the `.bin`; kept under `<data>/firmware/local/`). Downloads are kept under `<data>/firmware/github/`. The host refuses a manifest that is not signed with the release key built into it (when the build has one); the radio checks the same and also the board, the version and the SHA-256.
+- *Safety.* Nothing on the way is trusted. A radio keeps its old firmware in the other A/B slot and goes back to it if the new one does not start. An update never goes to an older version, and the "allow older" flag is ignored over a modem link. Only one update runs at a time, and the list asks before it starts because the radio is away for about a minute.
+- *Transport.* USB and Bluetooth modems use the same stream as before; a Wi-Fi modem carries the commands on its existing link (protocol-spec section 8.2, "Firmware updates through a modem link"). 200-byte chunks, stop-and-wait with resume: an interrupted update continues from the first unfinished 4 KB block, also after a restart of the radio.
+- *API.* `GET /api/firmware`, `POST /api/firmware/check`, `POST /api/firmware/upload?name=<file>[&source=github]`, `POST /api/firmware/update` (`{"id": link, "source": "github" | "local"}`) and `POST /api/firmware/stop`, in `maarse-host/src/fwupdate.rs`, behind the same access key as the other `/api/` calls.
+- *One-time USB step.* Firmware from before this change cannot answer on a Wi-Fi link, and an older radio on USB does not tell its board. The list says so; update it once with the web flasher, and from then on it updates from the list. The node firmware of this change (the `OtaInfo` event 0x9b that tells the board, and the Wi-Fi channel) is in the working copy and not yet in a release.
+- *Not done.* A radio that is only connected over Bluetooth to the Android app (no host) still has no update screen in the app; the web client's **Update the connected radio directly** and the web flasher do that. Radios that are not attached to a host (a repeater on a mast that is only on LoRa) cannot be updated this way; LoRa updates stay shelved.
+
 **Signing.** A release is an image and a 112-byte manifest: board ID, version, size, SHA-256 and an Ed25519 signature (the format is in `maarse-crypto/src/ota.rs`). The node only installs when the signature matches the release key in the firmware, the board ID matches, and the version is newer than the running one (anti-rollback). Only locally (USB/Bluetooth) can an older version be allowed with a flag; via the net the flag is ignored.
 
 ```sh
@@ -1058,15 +1079,6 @@ MAARSE_SIGN_KEY=release.key ./scripts/build-firmware.sh xiao-nrf52840  # -> dist
 - CI checks the configured Ed25519 public key before building and checks that an online signing key, if provided, matches it. A release with no configured public key has OTA disabled.
 - maarse-sign sign takes an ELF, `.uf2` or `.bin`. On the nRF52840 the image is the app from its start address (0x27000 XIAO / 0x26000 WisMesh; a wrong board is rejected); on the ESP32-S3 an ESP-IDF app image from `espflash save-image` (the build script makes `dist/maarse-<board>-app.bin`).
 - The version is `major.minor.patch` (u32: major << 16 | minor << 8 | patch). Without `MAARSE_FW_VERSION` the crate version is used.
-**From the host: USB, Bluetooth and Wi-Fi radios (working copy; not tried on hardware).** A radio that is attached to a `maarse-host` (a USB modem, a Bluetooth modem from the phone, or an ESP32 that joined the host over Wi-Fi) is listed in the web client under **Settings > Firmware > Your radios** and in the Android app under **Settings > Firmware**, with the version it runs and an **Update** button when something newer is available. The host fetches and pushes, the radio only receives: it needs no internet and no open port.
-
-- *Sources.* The newest GitHub release (the signed `maarse-<board>-ota.manifest` and `.bin`; the host uses `curl`, the Android app downloads the files itself and hands them to the host), or the person's own build (pick the `.manifest` and the `.bin`; kept under `<data>/firmware/local/`). Downloads are kept under `<data>/firmware/github/`. The host refuses a manifest that is not signed with the release key built into it (when the build has one); the radio checks the same and also the board, the version and the SHA-256.
-- *Safety.* Nothing on the way is trusted. A radio keeps its old firmware in the other A/B slot and goes back to it if the new one does not start. An update never goes to an older version, and the "allow older" flag is ignored over a modem link. Only one update runs at a time, and the list asks before it starts because the radio is away for about a minute.
-- *Transport.* USB and Bluetooth modems use the same stream as before; a Wi-Fi modem carries the commands on its existing link (protocol-spec section 8.2, "Firmware updates through a modem link"). 200-byte chunks, stop-and-wait with resume: an interrupted update continues from the first unfinished 4 KB block, also after a restart of the radio.
-- *API.* `GET /api/firmware`, `POST /api/firmware/check`, `POST /api/firmware/upload?name=<file>[&source=github]`, `POST /api/firmware/update` (`{"id": link, "source": "github" | "local"}`) and `POST /api/firmware/stop`, in `maarse-host/src/fwupdate.rs`, behind the same access key as the other `/api/` calls.
-- *One-time USB step.* Firmware from before this change cannot answer on a Wi-Fi link, and an older radio on USB does not tell its board. The list says so; update it once with the web flasher, and from then on it updates from the list. The node firmware of this change (the `OtaInfo` event 0x9b that tells the board, and the Wi-Fi channel) is in the working copy and not yet in a release.
-- *Not done.* A radio that is only connected over Bluetooth to the Android app (no host) still has no update screen in the app; the web client's **Update the connected radio directly** and the web flasher do that. Radios that are not attached to a host (a repeater on a mast that is only on LoRa) cannot be updated this way; LoRa updates stay shelved.
-
 
 **Companion commands** (0x14–0x17 kept free for parallel work):
 

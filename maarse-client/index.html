@@ -120,6 +120,11 @@
   details.add[open] summary { color: var(--muted); }
   .row { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
   .row input { flex: 1 1 140px; }
+  .sounds { margin: 6px 8px; font-size: 13px; }
+  .sounds summary { cursor: pointer; padding: 6px 0; }
+  .snd { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+  .snd span { flex: 1; }
+  .snd select { max-width: 130px; }
   .hint { font-size: 12px; color: var(--muted); margin: 4px 8px; line-height: 1.45; }
   .muted { color: var(--muted); }
   .net { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .4px; padding: 0 5px; border-radius: 4px; line-height: 16px;
@@ -969,6 +974,7 @@
           <button id="btn-notify" hidden><svg class="i"><use href="#i-bell"/></svg><span>Turn on notifications<small>For new messages</small></span></button>
           <button id="btn-install" hidden><svg class="i"><use href="#i-plus"/></svg><span>Install app<small>Use Må:rse like an app</small></span></button>
         </nav>
+        <details class="sounds"><summary>Notification sounds</summary><div id="sound-box"></div></details>
       </div>
     </aside>
 
@@ -1390,6 +1396,116 @@ function log(s) {
 function announcedName(addr) { const n = state.nodeInfo.get(addr)?.name; return n ? "~" + n : null; }
 function label(addr) { return nicknames[addr] || announcedName(addr) || short(addr); }
 
+// ---------- mentions ----------
+// "@name" or "@[name]" in a message mentions that person (same rule as the Android app). Whole word, any case.
+const mentioned = new Set();   // chats where we were mentioned and have not looked yet
+function mentionsMe(text, name) {
+  const n = (name || "").trim();
+  if (!n || !String(text).includes("@")) return false;
+  return new RegExp("(?<![\\p{L}\\p{N}_])@\\[?" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\]?(?![\\p{L}\\p{N}_])", "iu").test(text);
+}
+function mentionHandle(name) {
+  const n = String(name).trim().replace(/^~/, "");
+  return /\s/.test(n) ? "@[" + n + "] " : "@" + n + " ";
+}
+// A MeshCore channel message is written "Name: text"; the sender, or null.
+function mcSender(text) {
+  const i = String(text).indexOf(": ");
+  if (i < 1 || i > 32) return null;
+  const s = text.slice(0, i);
+  return s.includes("\n") ? null : s;
+}
+// Puts "@name " in a message box (once), focused and ready to type on.
+function insertMention(input, name) {
+  const h = mentionHandle(name);
+  if (!input.value.includes(h)) input.value += (input.value && !input.value.endsWith(" ") ? " " : "") + h;
+  input.focus();
+  input.dispatchEvent(new Event("input"));
+}
+// ---------- notification sounds (same kinds and tones as the Android app: tools/make_tones.py) ----------
+const SOUND_KINDS = [["dm", "Direct messages"], ["channel", "Channels"], ["mention", "Mentions"]];
+// name: [frequency Hz, start s, length s, harmonics] per note. Keep equal to tools/make_tones.py.
+const TONES = {
+  ding: [[1320, 0, .45, 1]], chime: [[880, 0, .35, 1], [1175, .16, .5, 1]], pop: [[520, 0, .1, 1]],
+  drops: [[1000, 0, .12, 1], [800, .13, .12, 1], [1000, .26, .16, 1]], bell: [[660, 0, .8, 2]], low: [[330, 0, .3, 1], [247, .18, .4, 1]],
+};
+const TONE_NAMES = { ding: "Ding", chime: "Chime", pop: "Pop", drops: "Drops", bell: "Bell", low: "Low" };
+// Channels are busy: silent unless the person picks a sound.
+const SOUND_DEFAULT = { dm: "tone:ding", channel: "none", mention: "tone:chime" };
+let soundCtx = null;
+function soundSpec(kind) { return store.get("sound-" + kind, "") || SOUND_DEFAULT[kind]; }
+function playSpec(spec) {
+  if (!spec || spec === "none") return;
+  try {
+    if (spec.startsWith("file:")) { new Audio(store.get("soundfile-" + spec.slice(5), "")).play().catch(() => {}); return; }
+    const notes = TONES[spec.replace("tone:", "")];
+    if (!notes) return;
+    soundCtx ??= new AudioContext();
+    soundCtx.resume?.();
+    const t0 = soundCtx.currentTime;
+    for (const [f, start, len, harmonics] of notes) {
+      for (let k = 1; k <= harmonics; k++) {
+        const o = soundCtx.createOscillator(), g = soundCtx.createGain();
+        o.frequency.value = f * k;
+        const a = 0.45 / (k * k);
+        g.gain.setValueAtTime(0.0001, t0 + start);
+        g.gain.linearRampToValueAtTime(a, t0 + start + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + start + len);
+        o.connect(g).connect(soundCtx.destination);
+        o.start(t0 + start); o.stop(t0 + start + len + 0.02);
+      }
+    }
+  } catch {}
+}
+function playIncoming(kind, key) {
+  if (state.active === key && !document.hidden && state.view === "chat") return;
+  playSpec(soundSpec(kind));
+}
+function renderSoundSettings() {
+  const box = $("sound-box");
+  if (!box) return;
+  box.textContent = "";
+  for (const [kind, label] of SOUND_KINDS) {
+    const sel = el("select");
+    const cur = store.get("sound-" + kind, "");
+    const opts = [["", "Default"], ["none", "Silent"], ...Object.entries(TONE_NAMES).map(([id, n]) => ["tone:" + id, n])];
+    if (store.get("soundfile-" + kind, "")) opts.push(["file:" + kind, "Your file"]);
+    opts.push(["__file", "Choose an audio file…"]);
+    for (const [v, n] of opts) sel.append(el("option", { value: v, textContent: n, selected: v === cur }));
+    sel.onchange = () => {
+      if (sel.value === "__file") { pickSoundFile(kind); return; }
+      store.set("sound-" + kind, sel.value); playSpec(soundSpec(kind));
+    };
+    const test = el("button", { textContent: "▶", title: "Play", onclick: () => playSpec(soundSpec(kind)) });
+    box.append(el("label", { className: "snd" }, el("span", { textContent: label }), sel, test));
+  }
+  box.append(el("p", { className: "hint", textContent: "Plays when a message arrives in a chat you are not looking at." }));
+}
+function pickSoundFile(kind) {
+  const inp = el("input", { type: "file", accept: "audio/*" });
+  inp.onchange = () => {
+    const f = inp.files[0];
+    if (!f) return renderSoundSettings();
+    if (f.size > 400 * 1024) { log("The sound file is too large (max 400 KB)"); return renderSoundSettings(); }
+    const r = new FileReader();
+    r.onload = () => { store.set("soundfile-" + kind, r.result); store.set("sound-" + kind, "file:" + kind); renderSoundSettings(); playSpec("file:" + kind); };
+    r.readAsDataURL(f);
+  };
+  inp.click();
+  renderSoundSettings();
+}
+
+// Being mentioned always shows a notification (when the browser allows it), also with notifications otherwise off.
+function notifyMention(key, title, text) {
+  if (state.active === key && !document.hidden && state.view === "chat") return;
+  mentioned.add(key);
+  playSpec(soundSpec("mention"));
+  log(title + " mentioned you: " + String(text).slice(0, 60));
+  renderSide(); if (typeof renderMeshcoreList === "function") renderMeshcoreList(); pwaTitle();
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  pwaShow(key, title + " · mentioned you", text);
+}
+
 function conv(key) {
   if (!state.convs.has(key)) state.convs.set(key, []);
   return state.convs.get(key);
@@ -1412,12 +1528,12 @@ function convRow(key, name, title) {
   const av = document.createElement("span"); av.className = "av";
   av.textContent = key.startsWith("ch:") ? "#" : ((name.replace(/^~/, "").match(/[\p{L}\p{N}]/u) || ["?"])[0]).toUpperCase();
   const t = document.createElement("div"); t.className = "t";
-  const n = document.createElement("span"); n.className = "name"; n.textContent = name;
-  const pv = document.createElement("small"); pv.textContent = typeof lastLine === "function" ? lastLine(key) : "";
+  const n = document.createElement("span"); n.className = "name"; n.textContent = name; n.setAttribute("translate", "no");
+  const pv = document.createElement("small"); pv.textContent = typeof lastLine === "function" ? lastLine(key) : ""; pv.setAttribute("translate", "no");
   t.append(n, pv);
   d.append(av, t);
   const u = state.unread.get(key);
-  if (u) { const b = document.createElement("span"); b.className = "badge"; b.textContent = u; d.appendChild(b); }
+  if (u) { const b = document.createElement("span"); b.className = "badge"; b.textContent = (mentioned.has(key) ? "@ " : "") + u; if (mentioned.has(key)) b.title = "You were mentioned"; d.appendChild(b); }
   // Delete the whole chat (here, on the host's other screens and in its history).
   const x = el("button", { className: "delchat", textContent: "✕", title: "Delete this chat" });
   Object.assign(x.style, { marginLeft: "auto", background: "none", border: "0", color: "inherit", opacity: "0.45", cursor: "pointer", fontSize: "13px" });
@@ -1431,7 +1547,7 @@ Removes it here and from your node's history; the other person keeps their copy.
     forgetChat(key);
   };
   d.appendChild(x);
-  d.onclick = () => { markTab("chats"); setView("chat"); state.active = key; state.unread.delete(key); histMarkRead(key); renderSide(); renderChat(); };
+  d.onclick = () => { markTab("chats"); setView("chat"); state.active = key; state.unread.delete(key); mentioned.delete(key); histMarkRead(key); renderSide(); renderChat(); };
   return d;
 }
 
@@ -1515,19 +1631,24 @@ function renderChat() {
   if (!key) { box.appendChild($("empty") || document.createElement("div")); return; }
   const [kind, addr] = key.split(":");
   $("chat-title").textContent = kind === "ch" ? state.channels.get(addr) : label(addr);
+  $("chat-title").setAttribute("translate", "no");   // channel and contact names are never translated
   $("chat-sub").textContent = addr;
   for (const m of conv(key)) {
     const d = document.createElement("div");
     d.className = "msg" + (m.mine ? " mine" : "");
     if (!m.mine && kind === "ch") {
       const f = document.createElement("div"); f.className = "from";
-      const who = el("a", { href: "#", textContent: label(m.from), title: "Write to " + label(m.from) + " directly" });
-      who.onclick = (e) => {
+      // Tap the name to mention them (@name); the envelope writes to them directly.
+      const who = el("a", { href: "#", textContent: label(m.from), title: "Mention " + label(m.from) });
+      who.setAttribute("translate", "no");
+      who.onclick = (e) => { e.preventDefault(); insertMention($("text"), announcedName(m.from) || label(m.from)); };
+      const dm = el("a", { href: "#", textContent: " ✉", title: "Write to " + label(m.from) + " directly" });
+      dm.onclick = (e) => {
         e.preventDefault();
         if (!state.contacts.has(m.from)) state.contacts.set(m.from, { heard: true });
         state.active = "dm:" + m.from; state.unread.delete(state.active); markTab("chats"); setView("chat"); renderSide(); renderChat();
       };
-      f.append(who);
+      f.append(who, dm);
       d.appendChild(f);
     }
     if (m.url && m.voice) {
@@ -1544,7 +1665,7 @@ function renderChat() {
       const l = document.createElement("a"); l.href = m.url; l.download = m.name || "file"; l.textContent = "⬇ " + (m.name || "file");
       d.appendChild(l);
     }
-    if (m.text) { const t = document.createElement("div"); t.textContent = m.text; d.appendChild(t); }
+    if (m.text) { const t = document.createElement("div"); t.textContent = m.text; t.setAttribute("translate", "no"); d.appendChild(t); }
     if (m.progress !== undefined && m.progress < 1) {
       const p = document.createElement("div"); p.className = "progress";
       const bar = document.createElement("div"); bar.style.width = Math.round(m.progress * 100) + "%";
@@ -1682,12 +1803,14 @@ function onEvent(ev) {
     case "direct":
       state.contacts.set(ev.from, { heard: true });
       addMessage("dm:" + ev.from, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
-      pwaIncoming("dm:" + ev.from, label(ev.from), ev.text);
+      if (mentionsMe(ev.text, state.myName)) notifyMention("dm:" + ev.from, label(ev.from), ev.text);
+      else { playIncoming("dm", "dm:" + ev.from); pwaIncoming("dm:" + ev.from, label(ev.from), ev.text); }
       break;
     case "alert": alertOn(ev); break;
     case "channel":
       addMessage("ch:" + ev.channel, { from: ev.from, text: ev.text, hops: ev.hops, time: now() });
-      pwaIncoming("ch:" + ev.channel, (state.channels.get(ev.channel) || "channel") + " · " + label(ev.from), ev.text);
+      if (mentionsMe(ev.text, state.myName)) notifyMention("ch:" + ev.channel, (state.channels.get(ev.channel) || "channel") + " · " + label(ev.from), ev.text);
+      else { playIncoming("channel", "ch:" + ev.channel); pwaIncoming("ch:" + ev.channel, (state.channels.get(ev.channel) || "channel") + " · " + label(ev.from), ev.text); }
       break;
     case "stats": {
       // The firmware sends two frames (the first is full): merge by key.
@@ -2654,6 +2777,110 @@ function otaOnState(ev) {
   if (state.view === "firmware") renderChat();
 }
 
+// ---------- firmware for the radios on this computer (host: maarse-host/src/fwupdate.rs) ----------
+// The host fetches the firmware (GitHub or the person's own files) and sends it to a radio on
+// USB, Bluetooth or Wi-Fi. The radio checks the signature itself and goes back to the old
+// firmware if the new one does not start, so nothing here has to be trusted.
+const fw = { data: null, err: "", msg: "", at: 0, timer: null, busy: false };
+async function fwCall(method, path, body, raw) {
+  const { base, headers } = hsBase();
+  const h = { ...headers };
+  if (body !== undefined && !raw) h["Content-Type"] = "application/json";
+  const r = await fetch(base + path, { method, headers: h, cache: "no-store", body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
+  const t = await r.text();
+  let j = null; try { j = JSON.parse(t); } catch { /* not JSON */ }
+  if (!j) throw new Error(t || String(r.status));
+  return j;
+}
+async function fwLoad(path = "/api/firmware", method = "GET", body, raw) {
+  try {
+    const j = await fwCall(method, path, body, raw);
+    fw.err = "";
+    if (j.devices) fw.data = j;
+    fw.msg = j.message || (method === "GET" ? fw.msg : "");
+  } catch (e) { fw.err = "Could not reach the computer's host: " + e.message; }
+  fw.at = Date.now();
+  fwSchedule();
+  fwPaint();
+}
+function fwSchedule() {
+  clearTimeout(fw.timer);
+  if (state.view !== "firmware") return;
+  fw.timer = setTimeout(() => fwLoad(), fw.data?.job?.state === "running" ? 1500 : 8000);
+}
+function fwPaint() {
+  const b = document.getElementById("fw-host");
+  if (b) { b.replaceChildren(); fwBuild(b); }
+}
+function fwAgo(t) { return t ? hsAgo(Math.max(0, Math.round(Date.now() / 1000 - t))) + " ago" : "not yet"; }
+async function fwUpdate(d, source, version) {
+  const what = source === "local" ? "your own build" : "the latest release";
+  if (!confirm(`Update ${d.name} to ${version} (${what})? The radio restarts and is away for about a minute.`)) return;
+  await fwLoad("/api/firmware/update", "POST", { id: d.id, source });
+}
+async function fwUpload(files) {
+  for (const f of files) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    await fwLoad("/api/firmware/upload?name=" + encodeURIComponent(f.name), "POST", bytes, true);
+  }
+}
+function fwDeviceRow(d) {
+  const kind = { "usb-modem": "USB", "wifi-modem": "Wi-Fi", "ble-modem": "Bluetooth" }[d.kind] || d.kind;
+  const row = el("div", { className: "row" }, el("b", { textContent: d.board_name || "Radio" }), " ",
+    el("span", { className: "hint", textContent: `${kind} · ${d.name}` }));
+  const line = el("div", { className: "hint" });
+  let canAct = false;
+  if (d.state === 255) line.textContent = "Waiting for an answer. A radio with older firmware never answers: update it once over USB with the web flasher, and from then on it updates here.";
+  else if (d.state === 5) line.textContent = "This radio cannot be updated over the air" + (d.note ? ": " + d.note : ".");
+  else if (!d.board) line.textContent = "Older firmware that cannot update itself. Update it once over USB with the web flasher; after that it updates here.";
+  else { line.textContent = `Running ${d.current_text}` + (d.github_newer || d.local_newer ? "" : " · up to date"); canAct = true; }
+  row.append(line);
+  if (canAct) {
+    const btns = el("div", { className: "row" });
+    const busy = fw.data?.job?.state === "running";
+    if (d.github_newer) btns.append(el("button", { className: "primary", textContent: "Update to " + d.github_newer, disabled: busy, onclick: () => fwUpdate(d, "github", d.github_newer) }));
+    if (d.local_newer && d.local_newer !== d.github_newer) btns.append(el("button", { textContent: "Update to " + d.local_newer + " (my file)", disabled: busy, onclick: () => fwUpdate(d, "local", d.local_newer) }));
+    if (btns.childNodes.length) row.append(btns);
+  }
+  return row;
+}
+function fwBuild(w) {
+  const d = fw.data;
+  if (fw.err) w.append(el("div", { className: "warn", textContent: fw.err }));
+  if (!d) { w.append(el("p", { className: "hint", textContent: "Loading…" })); return; }
+  w.append(el("h3", { textContent: "Your radios" }));
+  if (!d.devices.length) w.append(el("p", { className: "hint", textContent: "No radio is connected to this computer. A radio on USB or on Wi-Fi shows up here." }));
+  for (const dev of d.devices) w.append(fwDeviceRow(dev));
+  const j = d.job;
+  if (j && (j.state === "running" || Date.now() / 1000 - j.started < 1800)) {
+    const pct = j.total ? Math.floor(100 * j.sent / j.total) : 0;
+    const box = el("div", { className: "row" }, el("b", { textContent: `${j.name} → ${j.version}` }), " ",
+      el("span", { className: "hint", textContent: j.state === "error" ? "Failed: " + j.text : `${j.text} (${pct} %)` }));
+    const bar = el("div", { className: "progress" }, el("div"));
+    bar.firstChild.style.width = (j.state === "done" ? 100 : pct) + "%";
+    box.append(bar);
+    if (j.state === "running") box.append(el("div", { className: "row" }, el("button", { textContent: "Stop", onclick: () => fwLoad("/api/firmware/stop", "POST", {}) })));
+    w.append(box);
+  }
+  if (fw.msg) w.append(el("p", { className: "hint", textContent: fw.msg }));
+  w.append(el("h3", { textContent: "Where the firmware comes from" }));
+  const gh = d.github;
+  const have = gh.boards.map(b => `${b.name} ${b.version_text}`).join(", ");
+  const check = el("button", { textContent: "Check for a new release", onclick: () => fwLoad("/api/firmware/check", "POST", {}) });
+  w.append(el("div", { className: "row" }, el("b", { textContent: "Latest release on GitHub" }), " ",
+    el("span", { className: "hint", textContent: (have || "nothing found yet") + " · checked " + fwAgo(gh.checked_at) + (gh.error ? " · " + gh.error : "") }), check));
+  if (d.local.length) w.append(el("div", { className: "row" }, el("b", { textContent: "Your own files" }), " ",
+    el("span", { className: "hint", textContent: d.local.map(b => `${b.name} ${b.version_text}` + (b.image ? "" : " (image missing)")).join(", ") })));
+  if (!d.can_verify) w.append(el("p", { className: "hint", textContent: "This build of the host has no release key, so it cannot check signatures itself; the radio still does." }));
+}
+function fwUploadBox() {
+  const f = el("div", { className: "form" });
+  const pick = el("input", { type: "file", multiple: true, accept: ".bin,.manifest" });
+  pick.onchange = () => { fwUpload([...pick.files]); pick.value = ""; };
+  f.append(el("label", { textContent: "Your own build (.bin and .manifest)" }), pick);
+  return f;
+}
+
 function renderFirmware(box) {
   $("chat-title").textContent = "Firmware update";
   $("chat-sub").textContent = "Signed firmware over USB, Bluetooth, Wi-Fi or the network";
@@ -2781,110 +3008,6 @@ const rt = {
   ref: store.get("rangeRef", { lat: "", lon: "" }), // the beacon's position, if it does not send one
   profile: store.get("rangeProfile", null),         // { base, rx, tx } in mA, measured by the user
   capacity: store.get("rangeCapacity", ""),          // battery capacity in mAh
-// ---------- firmware for the radios on this computer (host: maarse-host/src/fwupdate.rs) ----------
-// The host fetches the firmware (GitHub or the person's own files) and sends it to a radio on
-// USB, Bluetooth or Wi-Fi. The radio checks the signature itself and goes back to the old
-// firmware if the new one does not start, so nothing here has to be trusted.
-const fw = { data: null, err: "", msg: "", at: 0, timer: null, busy: false };
-async function fwCall(method, path, body, raw) {
-  const { base, headers } = hsBase();
-  const h = { ...headers };
-  if (body !== undefined && !raw) h["Content-Type"] = "application/json";
-  const r = await fetch(base + path, { method, headers: h, cache: "no-store", body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
-  const t = await r.text();
-  let j = null; try { j = JSON.parse(t); } catch { /* not JSON */ }
-  if (!j) throw new Error(t || String(r.status));
-  return j;
-}
-async function fwLoad(path = "/api/firmware", method = "GET", body, raw) {
-  try {
-    const j = await fwCall(method, path, body, raw);
-    fw.err = "";
-    if (j.devices) fw.data = j;
-    fw.msg = j.message || (method === "GET" ? fw.msg : "");
-  } catch (e) { fw.err = "Could not reach the computer's host: " + e.message; }
-  fw.at = Date.now();
-  fwSchedule();
-  fwPaint();
-}
-function fwSchedule() {
-  clearTimeout(fw.timer);
-  if (state.view !== "firmware") return;
-  fw.timer = setTimeout(() => fwLoad(), fw.data?.job?.state === "running" ? 1500 : 8000);
-}
-function fwPaint() {
-  const b = document.getElementById("fw-host");
-  if (b) { b.replaceChildren(); fwBuild(b); }
-}
-function fwAgo(t) { return t ? hsAgo(Math.max(0, Math.round(Date.now() / 1000 - t))) + " ago" : "not yet"; }
-async function fwUpdate(d, source, version) {
-  const what = source === "local" ? "your own build" : "the latest release";
-  if (!confirm(`Update ${d.name} to ${version} (${what})? The radio restarts and is away for about a minute.`)) return;
-  await fwLoad("/api/firmware/update", "POST", { id: d.id, source });
-}
-async function fwUpload(files) {
-  for (const f of files) {
-    const bytes = new Uint8Array(await f.arrayBuffer());
-    await fwLoad("/api/firmware/upload?name=" + encodeURIComponent(f.name), "POST", bytes, true);
-  }
-}
-function fwDeviceRow(d) {
-  const kind = { "usb-modem": "USB", "wifi-modem": "Wi-Fi", "ble-modem": "Bluetooth" }[d.kind] || d.kind;
-  const row = el("div", { className: "row" }, el("b", { textContent: d.board_name || "Radio" }), " ",
-    el("span", { className: "hint", textContent: `${kind} · ${d.name}` }));
-  const line = el("div", { className: "hint" });
-  let canAct = false;
-  if (d.state === 255) line.textContent = "Waiting for an answer. A radio with older firmware never answers: update it once over USB with the web flasher, and from then on it updates here.";
-  else if (d.state === 5) line.textContent = "This radio cannot be updated over the air" + (d.note ? ": " + d.note : ".");
-  else if (!d.board) line.textContent = "Older firmware that cannot update itself. Update it once over USB with the web flasher; after that it updates here.";
-  else { line.textContent = `Running ${d.current_text}` + (d.github_newer || d.local_newer ? "" : " · up to date"); canAct = true; }
-  row.append(line);
-  if (canAct) {
-    const btns = el("div", { className: "row" });
-    const busy = fw.data?.job?.state === "running";
-    if (d.github_newer) btns.append(el("button", { className: "primary", textContent: "Update to " + d.github_newer, disabled: busy, onclick: () => fwUpdate(d, "github", d.github_newer) }));
-    if (d.local_newer && d.local_newer !== d.github_newer) btns.append(el("button", { textContent: "Update to " + d.local_newer + " (my file)", disabled: busy, onclick: () => fwUpdate(d, "local", d.local_newer) }));
-    if (btns.childNodes.length) row.append(btns);
-  }
-  return row;
-}
-function fwBuild(w) {
-  const d = fw.data;
-  if (fw.err) w.append(el("div", { className: "warn", textContent: fw.err }));
-  if (!d) { w.append(el("p", { className: "hint", textContent: "Loading…" })); return; }
-  w.append(el("h3", { textContent: "Your radios" }));
-  if (!d.devices.length) w.append(el("p", { className: "hint", textContent: "No radio is connected to this computer. A radio on USB or on Wi-Fi shows up here." }));
-  for (const dev of d.devices) w.append(fwDeviceRow(dev));
-  const j = d.job;
-  if (j && (j.state === "running" || Date.now() / 1000 - j.started < 1800)) {
-    const pct = j.total ? Math.floor(100 * j.sent / j.total) : 0;
-    const box = el("div", { className: "row" }, el("b", { textContent: `${j.name} → ${j.version}` }), " ",
-      el("span", { className: "hint", textContent: j.state === "error" ? "Failed: " + j.text : `${j.text} (${pct} %)` }));
-    const bar = el("div", { className: "progress" }, el("div"));
-    bar.firstChild.style.width = (j.state === "done" ? 100 : pct) + "%";
-    box.append(bar);
-    if (j.state === "running") box.append(el("div", { className: "row" }, el("button", { textContent: "Stop", onclick: () => fwLoad("/api/firmware/stop", "POST", {}) })));
-    w.append(box);
-  }
-  if (fw.msg) w.append(el("p", { className: "hint", textContent: fw.msg }));
-  w.append(el("h3", { textContent: "Where the firmware comes from" }));
-  const gh = d.github;
-  const have = gh.boards.map(b => `${b.name} ${b.version_text}`).join(", ");
-  const check = el("button", { textContent: "Check for a new release", onclick: () => fwLoad("/api/firmware/check", "POST", {}) });
-  w.append(el("div", { className: "row" }, el("b", { textContent: "Latest release on GitHub" }), " ",
-    el("span", { className: "hint", textContent: (have || "nothing found yet") + " · checked " + fwAgo(gh.checked_at) + (gh.error ? " · " + gh.error : "") }), check));
-  if (d.local.length) w.append(el("div", { className: "row" }, el("b", { textContent: "Your own files" }), " ",
-    el("span", { className: "hint", textContent: d.local.map(b => `${b.name} ${b.version_text}` + (b.image ? "" : " (image missing)")).join(", ") })));
-  if (!d.can_verify) w.append(el("p", { className: "hint", textContent: "This build of the host has no release key, so it cannot check signatures itself; the radio still does." }));
-}
-function fwUploadBox() {
-  const f = el("div", { className: "form" });
-  const pick = el("input", { type: "file", multiple: true, accept: ".bin,.manifest" });
-  pick.onchange = () => { fwUpload([...pick.files]); pick.value = ""; };
-  f.append(el("label", { textContent: "Your own build (.bin and .manifest)" }), pick);
-  return f;
-}
-
   xAxis: "time", gps: null, gpsErr: "", watch: null, poll: null, raf: 0,
 };
 
@@ -5292,7 +5415,28 @@ const mc = { open: null, node: null, filter: "all", queue: [], done: null, sig: 
 const MC_TYPES = ["Node", "Chat", "Repeater", "Room", "Sensor"];
 const MC_CLASS = ["chat", "chat", "repeater", "room", "sensor"];
 
-function mcEndpoint() { return localStorage.getItem("maarse-meshcore-backbone") || ""; }
+// The open backbone every client joins by default. A linked PC then finds the account's MeshCore without
+// typing the address again; a different backbone can still be set under MeshCore setup.
+const MC_DEFAULT_BACKBONE = "https://nj01.dk.eu.maarse.dk";
+// A scan finds nodes before they advertise their name: give them the name seen for the same key before
+// (an advert, an earlier scan or a chat title), and remember the names that arrive.
+function mcResolveNames(nodes) {
+  const known = store.get("mc-names", {});
+  const titles = new Map((meshcoreAccess.conversations || []).filter(c => c.kind === "direct").map(c => [c.id, c.title]));
+  let changed = false;
+  const out = nodes.map(n => {
+    if (n.name) { if (known[n.key] !== n.name) { known[n.key] = n.name; changed = true; } return n; }
+    const t = titles.get(n.key);
+    const name = known[n.key] || (t && !t.endsWith("…") ? t : "");
+    return name ? { ...n, name } : n;
+  });
+  if (changed) {
+    const keys = Object.keys(known); if (keys.length > 500) for (const k of keys.slice(0, keys.length - 500)) delete known[k];
+    store.set("mc-names", known);
+  }
+  return out;
+}
+function mcEndpoint() { return localStorage.getItem("maarse-meshcore-backbone") || MC_DEFAULT_BACKBONE; }
 
 // Every reply says whether MeshCore can be used: backbone reached, access granted, gateway connected.
 function mcLinkFrom(data) {
@@ -5303,8 +5447,26 @@ function mcLinkFrom(data) {
     : { state: 2, note: "" };
   mc.next = Date.now() + (!ok ? 60000 : mc.link.state === 2 ? 30000 : 10000);
   if (data.scan) meshcoreAccess.scan = data.scan;
+  if (Array.isArray(data.conversations)) mcCheckMentions(data.conversations);
   if (mc.link.state === 2) mcSyncName();
   updateMeshcoreUnread();
+}
+
+// A new unread MeshCore message that mentions us gives a notification (the Må:rse name is also the MeshCore name).
+// The list has the latest message of each chat.
+const mcMentionSeen = new Set();
+function mcCheckMentions(rows) {
+  for (const c of rows) {
+    const key = "mc:" + c.kind + ":" + c.id;
+    const seen = key + ":" + c.time + ":" + c.last;
+    if (!c.unread || c.mine || !c.last || mcMentionSeen.has(seen)) continue;
+    mcMentionSeen.add(seen);
+    if (!document.hidden && state.view === "meshcore" && mc.open && mc.open.kind === c.kind && mc.open.id === c.id) continue;
+    if (!mentionsMe(c.last, state.myName)) continue;
+    const from = c.kind === "direct" ? "" : mcSender(c.last);
+    notifyMention(key, c.title + (from ? " · " + from : ""), c.last);
+  }
+  if (mcMentionSeen.size > 500) mcMentionSeen.clear();
 }
 
 // The Maarse name is also the MeshCore node's name.
@@ -5401,6 +5563,7 @@ function mcLastId() {
 
 function mcOpenConversation(row) {
   mc.open = { kind: row.kind, id: row.id, title: row.title };
+  mentioned.delete("mc:" + row.kind + ":" + row.id);
   mc.sig = "";
   renderMeshcoreList();
   renderChat();
@@ -5416,9 +5579,9 @@ function mcRow(row) {
   const d = el("div", { className: "conv" + (active ? " active" : ""), title: row.title },
     el("span", { className: "av " + (row.kind === "direct" ? "mp" : "mc"), textContent: initial }),
     el("div", { className: "t" },
-      el("div", { style: "display:flex;gap:8px;align-items:baseline" }, el("span", { className: "name", textContent: row.title }), el("small", { textContent: mcListTime(row.time) })),
-      el("small", { textContent: row.last ? (row.mine ? "You: " : "") + row.last : "No messages yet" })));
-  if (row.unread) d.append(el("span", { className: "badge mc", textContent: row.unread }));
+      el("div", { style: "display:flex;gap:8px;align-items:baseline" }, el("span", { className: "name", textContent: row.title, translate: false }), el("small", { textContent: mcListTime(row.time) })),
+      el("small", row.last ? { textContent: (row.mine ? "You: " : "") + row.last, translate: false } : { textContent: "No messages yet" })));
+  if (row.unread) d.append(el("span", { className: "badge mc", textContent: (mentioned.has("mc:" + row.kind + ":" + row.id) ? "@ " : "") + row.unread }));
   d.onclick = () => mcOpenConversation(row);
   return d;
 }
@@ -5500,12 +5663,13 @@ function renderMeshcoreChats(box) {
   }
   const node = o.kind === "direct" ? (meshcoreAccess.nodes || []).find(n => n.key === o.id) : null;
   $("chat-title").textContent = o.title;
+  $("chat-title").setAttribute("translate", "no");
   $("chat-sub").textContent = "";
   const sub = o.kind === "public" ? "MeshCore · public channel" : o.kind === "channel" ? "MeshCore · channel"
     : "MeshCore" + (node ? " · " + mcHops(node.hops) + " · " + mcSnr(node) : " · direct message");
   const head = el("div", { className: "mc-head" },
     el("span", { className: "av " + (o.kind === "direct" ? "mp" : "mc"), textContent: o.kind === "direct" ? ((o.title.match(/[\p{L}\p{N}]/u) || ["?"])[0]).toUpperCase() : "#", style: "width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-weight:700" }),
-    el("div", { className: "t" }, el("b", { textContent: o.title }), el("small", { textContent: sub })));
+    el("div", { className: "t" }, el("b", { textContent: o.title, translate: false }), el("small", { textContent: sub })));
   if (node) {
     const star = el("button", { type: "button", className: "mc-star" + (node.favorite ? " on" : ""), textContent: node.favorite ? "★" : "☆", ariaLabel: "Favourite" });
     star.onclick = () => mcAsk("favorite:" + node.key + ":" + (node.favorite ? 0 : 1), () => mcAsk("nodes"));
@@ -5517,8 +5681,12 @@ function renderMeshcoreChats(box) {
   messages.forEach((m, i) => {
     if (m.timestamp && (i === 0 || mcDayName(messages[i - 1].timestamp) !== mcDayName(m.timestamp))) list.append(el("div", { className: "mc-day", textContent: mcDayName(m.timestamp) }));
     const meta = mcMeta(o, m);
-    list.append(el("div", { className: "mc-bub" + (m.mine ? " mine" : "") }, el("div", { className: "b", textContent: m.text }),
-      el("div", { className: "m" + (meta.ok ? " ok" : ""), textContent: meta.text })));
+    // In a channel, tap a message from someone else to mention them (@name).
+    const sender = !m.mine && o.kind !== "direct" ? mcSender(m.text) : null;
+    const bub = el("div", { className: "mc-bub" + (m.mine ? " mine" : "") }, el("div", { className: "b", textContent: m.text, translate: false }),
+      el("div", { className: "m" + (meta.ok ? " ok" : ""), textContent: meta.text }));
+    if (sender) { bub.style.cursor = "pointer"; bub.title = "Mention " + sender; bub.onclick = () => insertMention(text, sender); }
+    list.append(bub);
   });
   const max = o.kind === "direct" ? 60 : 90;
   const text = el("input", { placeholder: "Write a message", ariaLabel: "Message" });
@@ -6084,8 +6252,9 @@ function updateMeshcoreUnread() {
     badge.textContent = `MC ${meshcoreAccess.totalUnread}`;
   }
   // The switch shows as soon as a backbone is set. It is grey, with the reason, while MeshCore cannot be reached.
-  const known = !!mcEndpoint() && mc.link.state !== 0;
+  // With the default backbone (nothing typed in) the switch appears only once the account has MeshCore.
   const ready = mc.link.state === 2 && !!meshcoreAccess.result?.publicKey && !meshcoreAccess.denied;
+  const known = (!!localStorage.getItem("maarse-meshcore-backbone") || ready) && mc.link.state !== 0;
   for (const id of ["btn-mc-mode", "btn-mc-nodes"]) { $(id).hidden = !known; $(id).disabled = !ready; }
   for (const id of ["mc-linknote", "mc-linknote2"]) {
     const note = $(id);
@@ -6189,7 +6358,7 @@ function connectMeshcoreAccess(value, operation, payload = "", background = fals
       if (data.radio) meshcoreAccess.radio = data.radio;
       if (Array.isArray(data.contacts)) meshcoreAccess.contacts = data.contacts;
       if (Array.isArray(data.conversations)) meshcoreAccess.conversations = data.conversations;
-      if (Array.isArray(data.nodes)) { meshcoreAccess.nodes = data.nodes; meshcoreAccess.scanning = !!data.scanning; }
+      if (Array.isArray(data.nodes)) { meshcoreAccess.nodes = mcResolveNames(data.nodes); meshcoreAccess.scanning = !!data.scanning; }
       if (Array.isArray(data.channels)) {
         meshcoreAccess.channels = data.channels;
         if (!data.channels.includes(meshcoreAccess.channel?.channel)) meshcoreAccess.channel = null;
@@ -6236,7 +6405,7 @@ function connectMeshcoreAccess(value, operation, payload = "", background = fals
 function appendMeshcoreAccess(container, setup = true) {
   const section = setup ? el("details", { open: !!meshcoreAccess.note }, el("summary", { textContent: "MeshCore setup" })) : el("div");
   const endpoint = el("input", { type: "url", placeholder: "https://backbone.example", ariaLabel: "Backbone address",
-    value: localStorage.getItem("maarse-meshcore-backbone") || "" });
+    value: mcEndpoint() });
   const check = el("button", { type: "button", textContent: "Check access", disabled: !!meshcoreAccess.pending });
   check.onclick = () => connectMeshcoreAccess(endpoint.value, 0);
   if (setup || !meshcoreAccess.result?.publicKey) section.append(el("div", { className: "row" }, endpoint, check));
@@ -7825,6 +7994,9 @@ function pwaIncoming(key, title, text) {
   if (state.active === key) pwaHiddenUnread++;
   pwaTitle();
   if (!("Notification" in window) || Notification.permission !== "granted" || !store.get("notify", false)) return;
+  pwaShow(key, title, text);
+}
+function pwaShow(key, title, text) {
   const opts = { body: text, tag: key, icon: "icon-192.png", badge: "icon-192.png", data: key };
   // Installed on Android, notifications require a service worker; otherwise a plain Notification.
   const viaSw = navigator.serviceWorker?.controller
@@ -7834,7 +8006,7 @@ function pwaIncoming(key, title, text) {
 
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
-    if (state.active) { state.unread.delete(state.active); histMarkRead(state.active); }
+    if (state.active) { state.unread.delete(state.active); mentioned.delete(state.active); histMarkRead(state.active); }
     pwaHiddenUnread = 0; renderSide();
     // Background tabs run timers late: if the host link was lost meanwhile, reconnect right away.
     if (!transport && wsRetry) {
@@ -7859,6 +8031,7 @@ $("btn-notify").onclick = async () => {
   pwaNotifyButton();
 };
 pwaNotifyButton();
+renderSoundSettings();
 
 // "Install app" (Chrome/Edge give us the prompt if the page can be installed).
 let pwaInstallPrompt = null;

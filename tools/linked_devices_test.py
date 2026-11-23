@@ -201,6 +201,18 @@ try:
     assert "via device " + E.hex()[:8] in log_of("C").split("To the person, lands on A")[-1] or "via device " + E.hex()[:8] in log_of("C")
     print("3c. redirect hint: A told C the user is on E; the next message went to E")
 
+    # 3d. E is a non-master device that never exchanged certificates with the
+    #     phone B. The phone writes in the channel; E must still show it as
+    #     the user's own message (the signed device list is enough), not as a
+    #     message from a stranger.
+    e.send(frame(0x04, b"#linked"))
+    e.wait(lambda f: f[0] == 0x88 and f[17:] == b"#linked", what="E joined the channel")
+    time.sleep(1)
+    b.send(frame(0x03, struct.pack("<H", 13), ch, b"Phone to E"))
+    e.wait(lambda f: hist(f, "Phone to E"), what="E shows the phone's message as its own")
+    assert not any(f[0] == 0x84 and f[34:] == b"Phone to E" for f in e.events), "E shows the phone's message as from another device"
+    print("3d. channel: E shows the phone's message as its own without a certificate")
+
     # 4. The phone is off; C writes to the person. C's host keeps it under the
     #    person (inbox key) and hands it to A when A announces.
     stop("B")

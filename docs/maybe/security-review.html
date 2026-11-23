@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sikkerhedsgennemgang af Må:rse</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1d1f;--muted:#5f6368;--card:#fff;--line:#e3e0d8;--accent:#2f6f5e;--hi:#b3261e;--mid:#b26a00;--lo:#2e7d32;--code:#f1efe9}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181a;--fg:#e8e6e1;--muted:#a3a7ad;--card:#202225;--line:#34373b;--accent:#6fc2a8;--hi:#ef9a9a;--mid:#ffb74d;--lo:#81c784;--code:#2a2c30}}
+:root[data-theme="dark"]{--bg:#17181a;--fg:#e8e6e1;--muted:#a3a7ad;--card:#202225;--line:#34373b;--accent:#6fc2a8;--hi:#ef9a9a;--mid:#ffb74d;--lo:#81c784;--code:#2a2c30}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:960px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:1.9rem;margin:0 0 4px;line-height:1.25}
+h2{margin-top:2.4rem;border-bottom:1px solid var(--line);padding-bottom:6px}
+.sub{color:var(--muted);margin:0 0 24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+.tldr{border-left:4px solid var(--accent)}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:.88em;overflow-wrap:anywhere}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600}
+.tag{display:inline-block;font-size:.75rem;font-weight:700;padding:0 6px;border-radius:4px;border:1px solid currentColor;white-space:nowrap}
+.hi{color:var(--hi)}.mid{color:var(--mid)}.lo{color:var(--lo)}.inf{color:var(--muted)}
+.small{color:var(--muted);font-size:.9rem}
+li{margin:4px 0}
+</style>
+</head>
+<body>
+<main>
+<h1>Sikkerhedsgennemgang af Må:rse</h1>
+<p class="sub">Kryptering, postkontorer, backbone-værter og det offentlige kort. Gennemgang af kildekoden pr. 2026-11-19 (arbejdskopi oven på 34ae658). Kun læsning; intet er ændret eller kørt mod eksterne tjenester. Linjenumre gælder den aktuelle, ikke-committede arbejdskopi.</p>
+
+<div class="card tldr">
+<b>Mærker:</b> <span class="tag hi">Høj</span> <span class="tag mid">Middel</span> <span class="tag lo">Lav</span> = alvor. "Bekræftet" betyder, at koden er læst og adfærden fremgår direkte af den. "Sandsynlig" betyder, at det ser sådan ud, men vi ikke har fulgt hele kæden eller testet det.
+</div>
+
+<h2>1. Sammendrag – top 5 risici</h2>
+<ol>
+<li><span class="tag hi">Høj</span> <b>Alle kan slette andres post i postkontorerne.</b> Beskeden "leveret, slet" (<code>OP_DELIVERED</code> over LoRa og <code>MailDelivered</code> over TCP/DHT) er ikke signeret af modtageren. Den, der kender et post-ID (fx en vært, der selv har haft kopien), kan slette brevet på alle tre kopier. Bekræftet.</li>
+<li><span class="tag hi">Høj</span> <b>Backbone-forbindelser er åbne og ukrypterede.</b> Standard lytter værten på <code>0.0.0.0:4242</code>, og vi har ikke fundet nogen godkendelse af backbone-modparter (kun Wi-Fi-modemmer kan kræve nøgle). Alle kan koble sig på, sende pakker ind og se al trafik (krypteret indhold, men åbne metadata). Bekræftet for standardopsætningen.</li>
+<li><span class="tag hi">Høj</span> <b>Postkasser har som standard ingen grænse.</b> <code>mail_quota_mb</code> er 0 = ubegrænset, og alle kan lægge post (<code>MailStore</code>/<code>OP_STORE</code>) til en hvilken som helst adresse. En angriber kan fylde disken på en frivillig vært. Bekræftet.</li>
+<li><span class="tag mid">Middel</span> <b>Post i postkassen har ikke fremadrettet hemmeligholdelse.</b> Post deponeres med det "statiske" segl. Hvis modtagerens hovednøgle senere stjæles, kan alt opsamlet post (og alt, en ondsindet vært har kopieret) læses. Ratchet-sessionerne, der løser det for samtaler, er selv markeret som udkast, der skal gennemgås af en kryptograf. Bekræftet (designvalg).</li>
+<li><span class="tag mid">Middel</span> <b>Alle kan hente andres (krypterede) post og opslå falske positioner.</b> <code>MailFetch</code> i DHT'en kræver ikke, at man er modtageren, og annonceringer (position, "site", ejertekst) er kun underskrevet af afsenderen selv – de beviser hvem, ikke hvor. Det offentlige kort viser disse påstande videre. Bekræftet; konsekvens er mest metadata og vildledning.</li>
+</ol>
+<p>Det gode: selve krypteringen af beskeder er sund i opbygningen (X25519 + ChaCha20-Poly1305, skjult afsender, frisk nøgle pr. besked), firmwareopdateringer kræver Ed25519-signatur og nyere version, adgangsnøglen til webklienten er 128 bit tilfældig og sammenlignes i konstant tid, og admin-login har PBKDF-lignende hashing, låsning efter 5 forsøg og HttpOnly/SameSite-cookie.</p>
+
+<h2>2. Hvad en ondsindet backbone kan og ikke kan</h2>
+<div class="card">
+<p><b>Kan ikke</b> (så længe nøglerne ikke er stjålet):</p>
+<ul>
+<li>Læse indholdet af direkte beskeder – de er krypteret ende-til-ende (<code>maarse-crypto/src/seal.rs:1-26</code>).</li>
+<li>Se afsenderen af en direkte besked inde i pakken – den er skjult med en nøgle kun modtageren kan udlede (<code>seal.rs:8-14</code>).</li>
+<li>Forfalske en besked fra en anden person, ændre i den eller opfinde nye adresser – AEAD-tag og underskrevne annonceringer forhindrer det (<code>maarse-crypto/src/lib.rs:174</code>, <code>maarse-host/src/dht.rs:12-13</code>).</li>
+<li>Installere falsk firmware via netværket – manifestet skal være signeret med udgivelsesnøglen og have højere version (<code>maarse-crypto/src/ota.rs:1-20</code>).</li>
+<li>Forfalske signerede advarsler/opslag, hvis modtageren kun stoler på de rigtige nøgler (<code>alert.rs:282</code>, <code>bulletin.rs:82</code>).</li>
+</ul>
+<p><b>Kan</b>:</p>
+<ul>
+<li><b>Se metadata:</b> modtageradresse, tidspunkt, størrelse, hvilke links pakken kom fra, hvem der er online (MailSync, annonceringer). Over tid giver det et "hvem taler med hvem, hvornår, hvor"-billede (trafikanalyse), særligt når afsenderens egen node er tæt på værten.</li>
+<li><b>Smide pakker væk eller forsinke dem</b> (stille sabotage). Der er ingen måling af, om en vært leverer.</li>
+<li><b>Slette post</b> hos andre postkontorer via usigneret "leveret" (fund F1).</li>
+<li><b>Kopiere alt deponeret post</b> og gemme det i årevis, i håb om at en nøgle senere lækker (fund F4).</li>
+<li><b>Gentage gamle pakker</b> (replay): gamle annonceringer verificeres stadig, og vi fandt ingen alderskontrol i <code>verify_announce</code> (fund F8). Dubletfiltre begrænser det kortvarigt.</li>
+<li><b>Oversvømme</b> nettet med pakker eller post (proof-of-work på annonceringer koster ~0,2 ms på en PC, <code>maarse-core/src/stamp.rs:34-50</code> – det bremser mikrocontrollere, ikke PC'er).</li>
+<li><b>Sybil/eclipse:</b> starte mange værter med billige nøgler. Postens tre kopier vælges ved "rendezvous hashing" ud fra modtagerens adresse (<code>maarse-core/src/mail.rs:12-14</code>); en angriber kan generere værtsadresser, indtil vedkommende ejer alle tre pladser for et bestemt offer, og så styre (eller slette) al deres post.</li>
+<li><b>Falske positioner, sites og ejertekster</b> på kortet.</li>
+</ul>
+</div>
+
+<h2>3. Fund</h2>
+<div class="tbl">
+<table>
+<thead><tr><th>#</th><th>Alvor</th><th>Område</th><th>Fil:linje</th><th>Beskrivelse</th><th>Forslag</th></tr></thead>
+<tbody>
+<tr><td>F1</td><td><span class="tag hi">Høj</span></td><td>Postkontor</td><td><code>maarse-host/src/node.rs:2708-2711</code>, <code>2845-2855</code>; <code>dht.rs:374,489</code></td><td>"Leveret, slet" er ikke signeret. Enhver kan sende <code>OP_DELIVERED</code>/<code>MailDelivered</code> for en anden modtager og få brevene slettet. ID'et er kun 4 byte af pakke-ID'et (<code>mail.rs:33</code>), så alle der har set brevet kender det. Bekræftet.</td><td>Kræv en signatur fra modtageren (Ed25519 over modtager | IDs | tid), eller et "leveringsbevis" som kun modtageren kan lave (fx HMAC med en nøgle inde i det krypterede brev).</td></tr>
+<tr><td>F2</td><td><span class="tag hi">Høj</span></td><td>Backbone</td><td><code>maarse-host/src/app.rs:312,466</code>; <code>links.rs:1-25</code></td><td>Backbone-port åben på alle netkort som standard; ingen godkendelse af modparter og ingen transportkryptering fundet (kun modem-nøgle, <code>links.rs:402-411</code>). Bekræftet for standard; ikke udtømmende gennemgået i <code>extra_links.rs</code>.</td><td>Valgfri "netnøgle" (som Reticulum IFAC) og/eller Noise-/TLS-forbindelse mellem værter med fastlåste nøgler; begrænsning pr. modpart.</td></tr>
+<tr><td>F3</td><td><span class="tag hi">Høj</span></td><td>Postkontor</td><td><code>app.rs:491</code>; <code>node.rs:2727-2744</code>; <code>dht.rs:480</code></td><td>Kvote 0 = ubegrænset som standard. Ingen grænse pr. modtager eller pr. afsender. Disk kan fyldes udefra.</td><td>Fornuftig standardkvote (fx 200 MB), loft pr. modtager (fx 1 MB / 200 breve), udløbstid, og hastighedsgrænse pr. TCP-modpart.</td></tr>
+<tr><td>F4</td><td><span class="tag mid">Middel</span></td><td>Krypto</td><td><code>maarse-core/src/mail.rs:27</code>; <code>seal.rs:17-19</code>; <code>ratchet.rs:3</code></td><td>Deponeret post bruger statisk segl: ingen forward secrecy over for modtagerens nøgle. Ratchet er "udkast". Init-beskeder i ratchet er lige så svage.</td><td>Forhåndsudgivne engangsnøgler (som Signals "prekeys") i annonceringen; ekstern kryptografisk gennemgang af <code>ratchet.rs</code>.</td></tr>
+<tr><td>F5</td><td><span class="tag mid">Middel</span></td><td>Postkontor / privatliv</td><td><code>dht.rs:372,485</code>; <code>node.rs:2817-2840</code>, <code>2702-2706</code></td><td>Alle kan hente en anden persons krypterede post fra replikaerne og udløse levering (<code>OP_SYNC</code>) – afslører antal, størrelse og tider, og giver materiale til "gem nu, knæk senere".</td><td>Kræv signeret forespørgsel fra modtageren (med tidsstempel), eller kun levering til modtageren selv.</td></tr>
+<tr><td>F6</td><td><span class="tag mid">Middel</span></td><td>Sybil / DHT</td><td><code>mail.rs:12-14</code>; <code>dht.rs:9-24</code></td><td>Replika-valg ud fra adresser, der er gratis at lave. En angriber kan "grinde" værtsadresser tæt på et offer.</td><td>Bland en tidsvarierende værdi ind i hashen, kræv proof-of-work eller alder for værter, og vælg mindst én replika blandt værter brugeren selv stoler på.</td></tr>
+<tr><td>F7</td><td><span class="tag mid">Middel</span></td><td>Flooding</td><td><code>maarse-core/src/stamp.rs:34-55</code></td><td>Proof-of-work er dimensioneret til mikrocontrollere; en PC laver ~5000 annonceringer/s. Sværhedsgrad er fast pr. version.</td><td>Hastighedsgrænse pr. adresse og pr. link i værten; højere sværhed for pakker, der kommer ind fra TCP.</td></tr>
+<tr><td>F8</td><td><span class="tag mid">Middel</span></td><td>Annonceringer</td><td><code>maarse-crypto/src/lib.rs:174-210</code>; <code>node.rs:1635-1645</code></td><td>Tidsstemplet er underskrevet, men vi fandt ingen kontrol af alder eller "nyere end sidst" i verificering eller i <code>on_announce</code>. Gamle annonceringer (gammel position, gammel postkasse via <code>APP_POSTBOX</code>) kan afspilles igen. Sandsynlig; kan være håndteret andetsteds.</td><td>Afvis annonceringer ældre end sidst kendte for samme adresse og meget gamle (fx &gt; 24 t), når uret er kendt.</td></tr>
+<tr><td>F9</td><td><span class="tag mid">Middel</span></td><td>Offentligt kort</td><td><code>maarse-host/src/web.rs:60-75</code>; <code>node.rs:4017-4041</code>; <code>telemetry.rs:732-743</code></td><td><code>/api/public/map</code> (kun med <code>--public-map</code>) viser andre noders position, ejertekst, hop-afstand, path-ID og værtens naboer med signalstyrke i 7 dage. Positioner er kun deres egen påstand (falske sites/positioner går direkte på kortet). Ejerteksten kan indeholde e-mail (se test i <code>appdata.rs:492</code>). Positivt: kun noder med <code>precision &gt; 0</code> (som selv har valgt at dele) tages med.</td><td>Mærk positioner som "påstået"; vis kun faste noder (ikke mobile); grov afrunding; ingen ejertekst for andre end værten selv; overvej om nabolisten skal med.</td></tr>
+<tr><td>F10</td><td><span class="tag mid">Middel</span></td><td>Webklient</td><td><code>web.rs:520-534</code>; <code>app.rs:465</code></td><td>Fra localhost gives fri adgang uden nøgle (medmindre <code>--require-key</code>). Bag en reverse proxy på samme maskine ligner alle forespørgsler localhost → fri adgang for alle. Adgangsnøglen sendes i URL'en (<code>?token=</code>), som havner i historik og logs. Backbone-tilstand lytter på 0.0.0.0:8080 uden TLS. Sandsynlig (proxy-scenariet er ikke testet).</td><td>Slå friadgang fra som standard i backbone-tilstand; nøglen i header/cookie i stedet for URL; dokumentér proxy-fælden; TLS eller kun 127.0.0.1.</td></tr>
+<tr><td>F11</td><td><span class="tag lo">Lav</span></td><td>Admin</td><td><code>maarse-host/src/admin.rs:81-90</code>, <code>186</code></td><td>Kodeord hashes med 200.000 runder SHA-256 (fornuftigt, men ikke hukommelsestungt som Argon2). Cookie har ikke <code>Secure</code>, og serveren taler ren HTTP, så kodeord går ukrypteret over nettet, hvis der ikke er en proxy med TLS foran.</td><td>Anbefal/indbyg TLS (fx Caddy-opskrift i installeren); <code>Secure</code> når TLS er aktiv; Argon2id på sigt.</td></tr>
+<tr><td>F12</td><td><span class="tag lo">Lav</span></td><td>Kanaler</td><td><code>maarse-crypto/src/lib.rs:226-234</code>; <code>seal.rs:21-26</code></td><td>Hashtag- og den offentlige kanal har nøgler udledt af navnet – alle kan læse og skrive. Afsenderen i kanaler er ikke bevist. Det er designet sådan, men brugerne skal vide det.</td><td>Tydelig tekst i app og webklient ("offentlig – alle kan læse og udgive sig for andre").</td></tr>
+<tr><td>F13</td><td><span class="tag lo">Lav</span></td><td>Simulator</td><td><code>docs/denmark/dhm.js:10-20,67,115</code></td><td>Brugerens egen Dataforsyningen-nøgle gemmes i <code>localStorage</code> og sendes som URL-parameter. Nøglen ligger ikke i koden (godt). Men alle GitHub Pages-projekter under samme bruger deler oprindelse (<code>trixxor.github.io</code>), så et script på en anden side derunder kan læse nøglen. Sandsynlig.</td><td>Forklar risikoen ved indtastning; tilbyd "husk ikke" (sessionStorage); eget domæne til simulatoren.</td></tr>
+<tr><td>F14</td><td><span class="tag inf">Info</span></td><td>OTA</td><td><code>maarse-crypto/src/ota.rs:1-21</code></td><td>Signatur, board-ID og anti-rollback ser rigtige ud. Udgivelsesnøglens opbevaring (CI-hemmelighed eller offline) har vi ikke kunnet se.</td><td>Hold signeringsnøglen offline eller i hardware; planlæg nøgleskift (flere nøgler i firmwaren).</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>4. Open source – hvad betyder det</h2>
+<div class="card">
+<p><b>Åben kildekode gør ikke krypteringen svagere.</b> Sikkerheden hviler på hemmelige nøgler, ikke på hemmelig kode. Det er samme princip som Signal, WireGuard og Reticulum. Åbenhed betyder, at fejl kan findes af venner – men også af fjender, så fund som F1 og F3 er lettere at udnytte, når koden er offentlig.</p>
+<p><b>At almindelige mennesker kører backbone-værter betyder:</b></p>
+<ul>
+<li>Værterne skal behandles som <b>ikke-betroede</b>. Al sikkerhed skal ligge ende-til-ende i appen/noden, ikke i at "værten opfører sig pænt". Kryptering af indholdet gør det allerede; postkassen og metadata gør det ikke helt endnu (F1, F5, F6).</li>
+<li>Enhver kan ændre koden og køre en udgave, der logger alt, sletter post eller spammer. Man kan ikke se udefra, hvilken kode en vært kører.</li>
+<li>Metadata (hvem, hvornår, hvor) er den største privatlivsrisiko. Den kan ikke løses fuldt ud på LoRa – pakkerne skal have en modtageradresse – men den kan mindskes.</li>
+<li>Et åbent kort og åbne annonceringer gør det let at kortlægge, hvem der har noder hvor. Det er et bevidst valg; brugerne skal tilvælge det, og det skal være tydeligt.</li>
+</ul>
+</div>
+
+<h2>5. Anbefalinger i prioriteret rækkefølge</h2>
+<h3>Hurtige gevinster (timer til få dage)</h3>
+<ol>
+<li><b>Standardkvote for post</b> + loft pr. modtager og udløb (F3). <code>app.rs:491</code>, <code>node.rs:store_mail</code>. Indsats: ½–1 dag.</li>
+<li><b>Hastighedsgrænse pr. TCP-modpart</b> for <code>MailStore</code>, annonceringer og floods (F3, F7). <code>dht.rs</code>, <code>links.rs</code>. Indsats: 1–2 dage.</li>
+<li><b>Kræv nøgle i backbone-tilstand</b> for webklienten, også fra localhost, og flyt nøglen ud af URL'en (F10). <code>web.rs:allowed</code>. Indsats: ½ dag + samme ændring i Android-appens forbindelse.</li>
+<li><b>Afvis gamle/ældre annonceringer</b> pr. adresse (F8). <code>node.rs:on_announce</code>. Indsats: ½ dag.</li>
+<li><b>Stram det offentlige kort</b>: ingen andres ejertekst, ingen mobile noder, mærk positioner som påståede (F9). <code>telemetry.rs:public_nodes</code>. Indsats: ½ dag.</li>
+<li><b>Tydelige advarsler</b> om offentlige kanaler og om nøglen i simulatoren (F12, F13) – i både app og webklient. Indsats: ½ dag.</li>
+</ol>
+<h3>Større ændringer (uger)</h3>
+<ol start="7">
+<li><b>Signeret "leveret" og signeret "hent min post"</b> (F1, F5): ny version af <code>Deposit</code>/<code>MailSync</code> og DHT-beskederne med modtagerens Ed25519-signatur og tidsstempel; firmware, vært og app skal følges ad. Indsats: 1–2 uger.</li>
+<li><b>Godkendte og krypterede backbone-forbindelser</b> (F2): Noise IK mellem værter med deres eksisterende nøgler, plus valgfri netnøgle (allerede i jeres "måske"-liste). Indsats: 2–3 uger.</li>
+<li><b>Robust replika-valg mod sybil</b> (F6): tidsvarierende salt, krav om værts-alder/proof-of-work, mulighed for at brugeren fastlåser sit "hjemmepostkontor". Indsats: 1–2 uger.</li>
+<li><b>Forward secrecy for postkassen</b> (F4): engangs-"prekeys" publiceret via annonceringer eller DHT, og ekstern kryptografisk gennemgang af <code>ratchet.rs</code> før v1.0. Indsats: 3–6 uger + ekstern gennemgang.</li>
+<li><b>TLS til admin og webklient</b> (F10, F11): Caddy-/certbot-opskrift i Debian-installeren, <code>Secure</code>-cookie, Argon2id. Indsats: 2–4 dage.</li>
+</ol>
+
+<h2>6. Hvad vi ikke har kunnet efterprøve</h2>
+<ul>
+<li>Ingen tests er kørt mod rigtige værter, boards eller netværk; alle fund bygger på læsning af koden.</li>
+<li>Firmwarens egen behandling af <code>OP_DELIVERED</code> og postkasser på repeatere (<code>firmware/common/src/node.rs</code>) er kun skimmet; F1 er bekræftet for værten.</li>
+<li><code>extra_links.rs</code> (UDP, KISS, seriel), <code>tunnel.rs</code>, <code>mqtt.rs</code>, <code>meshcore.rs</code> og <code>guard.rs</code> er ikke gennemgået i detaljer – de kan have egne begrænsninger eller huller.</li>
+<li>Om annonceringers alder kontrolleres et andet sted end <code>verify_announce</code>/<code>on_announce</code> (F8).</li>
+<li>Ratchet-protokollens korrekthed (<code>ratchet.rs</code>) – det kræver en kryptograf.</li>
+<li>Fjernadministration over LoRa, Android-appens lagring af nøgler, og hvor firmwarens udgivelsesnøgle opbevares.</li>
+<li>Reverse-proxy-scenariet i F10 er udledt af koden, ikke afprøvet.</li>
+</ul>
+<p class="small">Bemærk: rapporten er skrevet på dansk efter udtrykkeligt ønske, selvom projektets regel ellers er engelsk til nye dokumenter.</p>
+</main>
+</body>
+</html>

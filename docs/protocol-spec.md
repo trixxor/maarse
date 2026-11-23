@@ -730,6 +730,15 @@ nonce = the 8 bytes followed by 4 zero bytes;  AAD = the 8 nonce bytes
 `CHANNEL_OVERHEAD` = 40. The claimed sender is **not** authenticated: anyone
 with the key can write as anyone.
 
+Linked devices: maarse-host maps the claimed sender to a person before showing the
+message. A device that is on the host's own signed device list and not revoked
+counts as the person itself (no certificate needed), and its channel messages are
+shown on the person's other devices as sent by the person. A device of another
+person is shown as that person once its certificate has been checked. Because the
+sender is only claimed, someone who holds the channel key can also make a message
+appear as the person's own on that person's devices; the same trust boundary as
+writing as anyone. Direct messages are authenticated and have no such problem.
+
 Channel keys (`maarse-crypto/src/lib.rs`):
 
 | Channel | Key |
@@ -1098,15 +1107,6 @@ Wi-Fi modem    after "MM": node -> host: length (u16 LE) | snr (i8) | packet
                            host -> node: length (u16 LE) | packet
 ```
 
-### 8.3 DHT purpose and records
-
-Source: `maarse-host/src/dht.rs`. Kademlia-like, TCP only, never over LoRa.
-Node ID = the host's Må:rse address, distance = XOR.
-
-Table limits: at most `MAX_PER_NET` = 4 contacts whose endpoint is in the same
-IPv4 /24 or IPv6 /48 (loopback and DNS names are not limited), against one
-machine filling the table with made-up IDs. Contacts are saved to
-`dht-contacts.txt` (one `address-hex endpoint` per line) and used as seeds at
 **Firmware updates through a modem link** (`maarse-host/src/fwupdate.rs`). The
 host updates the radios attached to it. On a USB or Bluetooth modem it writes
 the companion commands `OtaBegin`/`OtaChunk`/`OtaEnd`/`OtaStatus` to the same
@@ -1121,6 +1121,15 @@ more). Chunks are 200 bytes (a multiple of 4, and the whole frame stays under
 the 255-byte packet limit). Firmware from before this change does not answer
 on a Wi-Fi link and must be updated once over USB.
 
+### 8.3 DHT purpose and records
+
+Source: `maarse-host/src/dht.rs`. Kademlia-like, TCP only, never over LoRa.
+Node ID = the host's Må:rse address, distance = XOR.
+
+Table limits: at most `MAX_PER_NET` = 4 contacts whose endpoint is in the same
+IPv4 /24 or IPv6 /48 (loopback and DNS names are not limited), against one
+machine filling the table with made-up IDs. Contacts are saved to
+`dht-contacts.txt` (one `address-hex endpoint` per line) and used as seeds at
 the next start. A node with `--min-peers N` (maarse-server: 6) opens packet
 links to contacts from different buckets until it has N backbone links.
 **Wi-Fi modem key** (`maarse_core::modemauth`). After a modem's `MM` a host
@@ -1352,6 +1361,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x95 | Regions | strict (1) \| names (text) |
 | 0x96 | FileLimit | dest (16) \| max_bytes (u32) \| flags (1: bit 0 via LoRa/unknown, bit 1 mailbox) \| est_airtime_s (u32) |
 | 0x9a | OtaState | req (2) \| state (1) \| next (u32) \| size (u32) \| version (u32) \| current (u32) \| text |
+| 0x9b | OtaInfo | board (u16 LE, `maarse_crypto::ota::board`); sent after `OtaState` as the answer to `OtaStatus` by firmware that can be updated, so a host picks the matching image. Older firmware never sends it (the host then says "update once over USB"). A frame of its own because `OtaState` ends in free text. |
 | 0xa0 | TraceResult | req (2) \| dest (16) \| k (1) \| k × PathId (u16 LE) \| m (1) \| m × SNR out (i8) \| SNR back (rest) |
 | 0xa1 | Neighbors | part (1) \| last (1) \| n × neighbour (15) |
 | 0xa2 | Sharing | sharing (10) |
@@ -1361,7 +1371,6 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0xa6 | Wifi | flags (1: bit 0 enabled, bit 1 modem) \| state (1) \| ip (4) \| ssid (str8) \| peer (text) |
 | 0xa7 | CarryAcked | msg_id (u64) |
 | 0xa8 | RangeState | config (15) \| sf (1) \| synced (1) \| count (u32) \| missed (u32) \| seq (u32) \| n × per-SF (12) |
-| 0x9b | OtaInfo | board (u16 LE, `maarse_crypto::ota::board`); sent after `OtaState` as the answer to `OtaStatus` by firmware that can be updated, so a host picks the matching image. Older firmware never sends it (the host then says "update once over USB"). A frame of its own because `OtaState` ends in free text. |
 | 0xa9 | RangeRx | see `RangeRx` in `companion.rs` |
 | 0xaa | RangeTx | see `RangeTx` in `companion.rs` |
 | 0xab | Power | see `PowerReport` in `companion.rs` |

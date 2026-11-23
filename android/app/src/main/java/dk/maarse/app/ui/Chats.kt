@@ -75,6 +75,7 @@ import dk.maarse.app.VoicePlayer
 import dk.maarse.app.VoiceRecorder
 import dk.maarse.app.Conn
 import dk.maarse.app.Msg
+import dk.maarse.app.Mentions
 import dk.maarse.app.Node
 import dk.maarse.app.shortAddr
 import java.text.SimpleDateFormat
@@ -144,13 +145,14 @@ fun ChatsScreen(onOpen: (String) -> Unit, onAlerts: () -> Unit = {}) {
                     Avatar(title, c.substringAfter(":"))
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            RawText(title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             m?.let { Text(time(it.ts), style = MaterialTheme.typography.labelSmall, color = if (n > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                         }
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (m?.mine == true) DeliveryIcon(m.status, c.startsWith("ch:"))
-                            Text(
-                                m?.let { (if (it.mine) "" else if (c.startsWith("ch:")) Node.label(it.from) + ": " else "") + it.text } ?: "No messages yet",
+                            if (m == null) Text("No messages yet", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            else RawText(
+                                (if (m.mine) "" else if (c.startsWith("ch:")) Node.label(m.from) + ": " else "") + m.text,
                                 Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
@@ -261,7 +263,7 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
             ) {
                 Avatar(title, conv.substringAfter(":"), 40.dp)
                 Column {
-                    Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    RawText(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(reachText(conv), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
@@ -287,7 +289,16 @@ fun ChatScreen(conv: String, onBack: () -> Unit, onContact: (String) -> Unit) {
                         }
                     }
                 }
-                item(key = m.id) { Bubble(m, isDm, shown == m.id, onSender = onContact, onLong = { menu = m }) { shown = if (shown == m.id) null else m.id } }
+                item(key = m.id) {
+                    Bubble(m, isDm, shown == m.id, onSender = onContact,
+                        onMention = { addr ->
+                            // The name the other person announced (the one they are mentioned by), else what we call them.
+                            val name = Node.nodes.value[addr]?.name?.takeIf { it.isNotBlank() } ?: Node.label(addr)
+                            val h = Mentions.handle(name)
+                            if (!text.contains(h)) text = (if (text.isEmpty() || text.endsWith(" ")) text else "$text ") + h
+                        },
+                        onLong = { menu = m }) { shown = if (shown == m.id) null else m.id }
+                }
             }
         }
         menu?.let { MessageMenu(it) { menu = null } }
@@ -505,7 +516,7 @@ private fun openFile(ctx: android.content.Context, path: String, mime: String) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onSender: (String) -> Unit, onLong: () -> Unit, onTap: () -> Unit) {
+private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onSender: (String) -> Unit, onMention: (String) -> Unit, onLong: () -> Unit, onTap: () -> Unit) {
     val mine = m.mine
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
         Column(
@@ -514,9 +525,10 @@ private fun Bubble(m: Msg, isDm: Boolean, open: Boolean, onSender: (String) -> U
                 .background(if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer)
                 .combinedClickable(onClick = onTap, onLongClick = onLong).padding(start = 12.dp, end = 10.dp, top = 7.dp, bottom = 5.dp),
         ) {
-            // In a channel: tap the sender to see them and write directly.
-            if (!mine && !isDm) Text(Node.label(m.from), style = MaterialTheme.typography.labelMedium, color = avatarColor(m.from), fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { onSender(m.from) }.padding(vertical = 2.dp))
+            // In a channel: tap the sender to mention them (@name), press and hold to see them and write directly.
+            // Names are never translated.
+            if (!mine && !isDm) RawText(Node.label(m.from), style = MaterialTheme.typography.labelMedium, color = avatarColor(m.from), fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).combinedClickable(onClick = { onMention(m.from) }, onLongClick = { onSender(m.from) }).padding(vertical = 2.dp))
             Attachment(m)
             // A file on its way (either direction): a progress bar, as in the web client.
             fileProgress(m)?.let { p ->

@@ -179,7 +179,8 @@ class Prefs(ctx: Context) {
     var bleAddress: String? get() = p.getString("ble", null); set(v) = p.edit().putString("ble", v).apply()
     var bleName: String? get() = p.getString("bleName", null); set(v) = p.edit().putString("bleName", v).apply()
     var remoteAddr: String get() = p.getString("remote", "") ?: ""; set(v) = p.edit().putString("remote", v).apply()
-    var meshcoreBackbone: String get() = p.getString("meshcoreBackbone", "") ?: ""; set(v) = p.edit().putString("meshcoreBackbone", v).apply()
+    /** The open backbone is the default, so a linked device finds the account's MeshCore without typing the address. */
+    var meshcoreBackbone: String get() = p.getString("meshcoreBackbone", "")?.ifEmpty { null } ?: "https://nj01.dk.eu.maarse.dk"; set(v) = p.edit().putString("meshcoreBackbone", v).apply()
     var remoteKey: String get() = p.getString("remoteKey", "") ?: ""; set(v) = p.edit().putString("remoteKey", v).apply()
     /** Should the app connect at start (the user pressed Connect and not Disconnect)? */
     var running: Boolean get() = p.getBoolean("running", false); set(v) = p.edit().putBoolean("running", v).apply()
@@ -197,6 +198,13 @@ class Prefs(ctx: Context) {
         set(v) = p.edit().putString("pageNodes", v.takeLast(50).joinToString(",")).apply()
     /** The first-start guide has been through. */
     var onboarded: Boolean get() = p.getBoolean("onboarded", false); set(v) = p.edit().putBoolean("onboarded", v).apply()
+    /** The sound chosen for a kind of notification ("dm", "channel", "mention"); see [Sounds]. */
+    fun sound(kind: String): String = p.getString("sound-$kind", "") ?: ""
+    fun setSound(kind: String, spec: String) = p.edit().putString("sound-$kind", spec).apply()
+    /** MeshCore names seen per public key, to name nodes that a scan finds before they advertise. */
+    var mcNames: Map<String, String>
+        get() = runCatching { JSONObject(p.getString("mcNames", "{}")!!).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.getOrDefault(emptyMap())
+        set(v) = p.edit().putString("mcNames", JSONObject(v).toString()).apply()
     var notifyChannels: Boolean get() = p.getBoolean("notifyCh", false); set(v) = p.edit().putBoolean("notifyCh", v).apply()
 
     var nicknames: Map<String, String>

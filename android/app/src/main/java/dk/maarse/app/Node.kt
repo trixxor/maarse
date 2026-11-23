@@ -620,6 +620,26 @@ object Node : LinkListener {
     /** A MeshCore node heard by the user's radio; type 1 chat, 2 repeater, 3 room, 4 sensor. */
     data class McNode(val key: String, val name: String, val type: Int, val hops: Int, val snr: Double, val rssi: Double,
                       val seen: Long, val count: Int, val favorite: Boolean)
+    /**
+     * Gives nodes without a name the name we have seen for the same key before (an advert, an earlier scan or a
+     * chat title), and remembers the names that arrive. A scan finds nodes before they advertise their name.
+     */
+    private fun mcResolveNames(list: List<McNode>, conversations: List<McConversation>): List<McNode> {
+        val known = prefs.mcNames.toMutableMap()
+        val titles = conversations.filter { it.kind == "direct" }.associate { it.id to it.title }
+        var changed = false
+        val out = list.map { n ->
+            if (n.name.isNotEmpty()) {
+                if (known[n.key] != n.name) { known[n.key] = n.name; changed = true }
+                n
+            } else {
+                val name = known[n.key] ?: titles[n.key]?.takeIf { !it.endsWith("…") } ?: ""
+                if (name.isEmpty()) n else n.copy(name = name)
+            }
+        }
+        if (changed) prefs.mcNames = known.entries.toList().takeLast(500).associate { it.key to it.value }
+        return out
+    }
     /** One request to the backbone. A waiting caller gets the new state when the answer is in (null if it failed). */
     class McTask(val payload: String, val done: kotlinx.coroutines.CompletableDeferred<MeshCoreAccess?>? = null)
     private val mcQueue = ArrayDeque<McTask>()
@@ -685,6 +705,26 @@ object Node : LinkListener {
         if (meshcoreSocket != null || System.currentTimeMillis() < mcNextPoll) return
         mcNextPoll = System.currentTimeMillis() + 10_000L
         checkMeshcoreAccess(address, 5, background = true)
+    }
+
+    /** Latest MeshCore message per conversation we have already looked at, so a mention notifies once. */
+    private val mcMentionSeen = HashSet<String>()
+
+    /**
+     * A new unread MeshCore message that mentions us (the Må:rse name is also the MeshCore name) gives a
+     * notification, also with MeshCore notifications otherwise off. The list has the latest message of each chat.
+     */
+    private fun mcCheckMentions(rows: List<McConversation>) {
+        for (c in rows) {
+            val key = "${c.kind}:${c.id}:${c.time}:${c.last.hashCode()}"
+            if (c.unread <= 0 || c.mine || c.last.isEmpty() || !mcMentionSeen.add(key)) continue
+            if (dk.maarse.app.ui.McNav.open?.let { it.kind == c.kind && it.id == c.id } == true) continue
+            if (!Mentions.mentions(c.last, me.value?.name)) continue
+            val from = Mentions.mcSender(c.last)
+            val title = (if (c.kind == "direct") c.title else "${c.title}" + (from?.let { " · $it" } ?: "")) + " · " + tr("mentioned you")
+            Notify.message(app, "mc:${c.kind}:${c.id}", title, c.last, "mention")
+        }
+        if (mcMentionSeen.size > 500) mcMentionSeen.clear()
     }
 
     /** The Maarse name is also the MeshCore node's name. */
@@ -826,11 +866,11 @@ object Node : LinkListener {
                                 McConversation(o.optString("kind"), o.optString("id"), o.optString("title"), o.optString("last"),
                                     o.optBoolean("mine"), o.optInt("unread"), o.optLong("time"))
                             } } ?: previous.conversations,
-                            nodes = json.optJSONArray("nodes")?.let { array -> List(array.length()) {
+                            nodes = json.optJSONArray("nodes")?.let { array -> mcResolveNames(List(array.length()) {
                                 val o = array.getJSONObject(it)
                                 McNode(o.optString("key"), o.optString("name"), o.optInt("type"), o.optInt("hops"), o.optDouble("snr"),
                                     o.optDouble("rssi"), o.optLong("seen"), o.optInt("count"), o.optBoolean("favorite"))
-                            } } ?: previous.nodes,
+                            }, previous.conversations) } ?: previous.nodes,
                             scanning = if (json.has("nodes")) json.optBoolean("scanning") else previous.scanning,
                             repeaterSeq = json.optLong("repeaterSeq", previous.repeaterSeq),
                             repeaterKind = if (json.has("repeaterKind")) json.optString("repeaterKind") else previous.repeaterKind,
@@ -838,6 +878,7 @@ object Node : LinkListener {
                             repeaterStatus = if (json.has("repeater")) json.optString("repeaterStatus").ifEmpty {
                                 if (json.has("queued")) "Request queued." else ""
                             } else previous.repeaterStatus) else MeshCoreAccess(if (background) "" else status)
+                        if (allowed && json.has("conversations")) mcCheckMentions(meshcoreAccess.value.conversations)
                         socket.close(1000, null)
                         mcCurrent?.done?.complete(meshcoreAccess.value)
                         mcCurrent = null
@@ -967,7 +1008,9 @@ object Node : LinkListener {
         if (openConv != conv) {
             unread.update { it + (conv to (it[conv] ?: 0) + 1) }
             val ch = conv.startsWith("ch:")
-            if (if (ch) prefs.notifyChannels else prefs.notifyMessages) Notify.message(app, conv, notifyTitle, text)
+            // Being mentioned always notifies, also when channel notifications are off.
+            if (Mentions.mentions(text, me.value?.name)) Notify.message(app, conv, "$notifyTitle · " + tr("mentioned you"), text, "mention")
+            else if (if (ch) prefs.notifyChannels else prefs.notifyMessages) Notify.message(app, conv, notifyTitle, text, if (ch) "channel" else "dm")
         }
     }
 

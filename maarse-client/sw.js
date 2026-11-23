@@ -1,7 +1,7 @@
 // Service worker for the Må:rse web client: caches the app shell so it can be opened offline.
 // Bump VERSION when the files change; the client then shows "New version – reload".
 "use strict";
-const VERSION = "maarse-v11";
+const VERSION = "maarse-v12";
 const SHELL = ["./", "index.html", "i18n.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {

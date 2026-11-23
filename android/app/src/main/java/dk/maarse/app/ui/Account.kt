@@ -298,7 +298,7 @@ fun MeshCoreAccessSection(setup: Boolean = false) {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 for (item in listOf("Public", "Channels", "Direct")) {
-                    TextButton(onClick = { section = item }, enabled = section != item) { Text(item) }
+                    TextButton(onClick = { section = item }, enabled = section != item) { if (item == "Public") androidx.compose.material3.Text(item) else Text(item) }   // "Public" is a channel name: never translated
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -308,7 +308,7 @@ fun MeshCoreAccessSection(setup: Boolean = false) {
             }
             when (section) {
                 "Public" -> {
-                    Text(if (access.unread > 0) "Public (${access.unread} unread)" else "Public", style = MaterialTheme.typography.titleMedium)
+                    androidx.compose.material3.Text(if (access.unread > 0) "Public (${access.unread} unread)" else "Public", style = MaterialTheme.typography.titleMedium)
                     OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 5) }, enabled = !access.busy) { Text("Refresh messages") }
                     OutlinedButton(onClick = { Node.checkMeshcoreAccess(address.trim(), 7, "public-read:${access.lastId}") },
                         enabled = access.unread > 0 && !access.busy) { Text("Mark read") }

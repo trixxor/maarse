@@ -1,0 +1,151 @@
+MAARSE SECURITY AND EFFICIENCY REVIEW
+20 November 2026
+
+Scope
+
+The review used the current working copy of C:\Projects\maarse with its
+existing local changes. It concentrated on browser and Android access,
+backbone and modem connections, administrator credentials, file and page
+handling, identity persistence, MeshCore authorization and traffic, firmware
+update checks, release tooling and the Rust dependency graph. The changes
+below concern the application and operational controls in source. No live
+server, release or physical firmware was changed during this review.
+
+Changes applied
+
+1. Local web access and request limits
+   The credential-free path now checks that the request authority identifies
+   the actual listener address. It accepts localhost on loopback or the
+   listener's numeric IP. Browser requests also need the same HTTP origin.
+   Other hostnames and remote clients use the existing access key. Enable
+   --require-key behind any reverse proxy, including one that rewrites Host.
+   A network-supplied name no longer qualifies for local access by resolving
+   to a local address. The server now reads the HTTP header once, with a
+   five-second deadline, a 16 KiB limit and 64 concurrent connections. It
+   passes the buffered bytes to the designated WebSocket endpoint or the HTTP
+   handler. HTTP updates read their complete declared bodies within route
+   limits before writing. The normal companion WebSocket is restricted to
+   /ws and caps messages and frames at 64 KiB. Browser responses share the
+   existing frame, content-type and referrer protections.
+   Files - maarse-host/src/web.rs and maarse-host/src/meshcore_access.rs.
+
+2. Administrator credentials and session rotation
+   Changing the password revokes dashboard sessions in memory and on disk.
+   Session tables use hashes consistently, and the stored hash cannot act
+   as a replacement credential. The first-start password goes to the local
+   bootstrap file and is excluded from the server log. New bootstrap and
+   password-hash files use owner-only permissions on Unix. The installer
+   sends the password over standard input and keeps it out of the process
+   arguments. The previous command-line option remains for compatibility.
+   Files - maarse-host/src/admin.rs, maarse-host/src/app.rs and
+   scripts/install-server.sh.
+
+3. Page-tree boundaries and image resource limits
+   Dashboard file management and served pages, images, previews, lock rules
+   and notice boards reject links and special files within the page tree.
+   Windows checks include reparse points and reserved device names. Page
+   reads are capped at 2 MiB. Image conversion limits decoded dimensions to
+   4096 by 4096, with a 64 MiB allocation limit where the decoder supports
+   it. Unreadable rules prevent serving affected content. Listing skips
+   links and caps depth and result count. The operator remains responsible
+   for exclusive write access to the tree during service operation.
+   Files - maarse-host/src/pagefiles.rs, maarse-host/src/node/pages.rs and
+   maarse-host/src/node/pagelock.rs.
+
+4. Identity and incoming transfer integrity
+   A missing key can be created. A malformed or unreadable key returns an
+   error, preserving the existing identity file. Key replacement and the
+   backup use private or ACL-inherited temporary files and atomic rename.
+   The host validates offer geometry and chunk lengths before allocation
+   or acceptance, rejects conflicting reuse of an active file ID and limits
+   active transfers to 32 total and eight per sender. A full-suite run
+   caught a 4-file draft limit interfering with the default page burst. The host confirms pull
+   completion after checking the size and digest. File request arithmetic
+   also uses bounded indices.
+   Files - maarse-host/src/node/identity.rs and maarse-host/src/node.rs.
+
+5. Gateway and modem resource handling
+   The TLS gateway checks the same authentication deadline before each
+   socket read. It uses the PEM parser already available through Rustls,
+   removing the unmaintained rustls-pemfile dependency. Wi-Fi modem
+   authentication and frame reads use absolute deadlines. Outgoing Wi-Fi
+   modem traffic uses the same bounded queue as the ordinary TCP link.
+   Files - maarse-host/src/meshcore_gateway.rs, maarse-host/src/links.rs,
+   maarse-host/Cargo.toml and Cargo.lock.
+
+6. Less work when refreshing MeshCore unread counts
+   The aggregate counter reuses the active conversation's count and scans
+   other histories without rebuilding their recent message JSON. It skips
+   the decoding work for read entries and outgoing messages. The remaining
+   disk scan scales with the stored history. The effect was verified through
+   regression tests; no performance benchmark was run.
+   File - maarse-host/src/meshcore_access.rs.
+
+7. Release job permissions
+   Firmware build jobs have read-only repository permissions. Release and
+   Pages publication receive write permissions in the publishing job only.
+   Checkout drops stored Git credentials, and the custom Pages domain
+   goes to the shell as environment data.
+   File - .github/workflows/release.yml.
+
+8. Local test lab isolation
+   The lab can start test and simulator subprocesses. It now binds only
+   to loopback and authorizes a browser control WebSocket only for the
+   actual local listener and matching Origin. It caps concurrent client
+   connections, incoming WebSocket size and socket waits.
+   File - maarse-lab/src/main.rs.
+
+Dependency review
+
+RustSec checked the workspace, ESP, nRF, common firmware and display preview
+lockfiles. They returned zero advisories classified as vulnerabilities at the
+reviewed database snapshot, 074ea9a7ed619f511b5b7374c7a97e98d1e98be4. The
+updated workspace has 215 dependencies, one unmaintained-package warning
+for transitive paste and nine informational soundness warnings for heapless.
+Firmware and tools still have additional informational warnings. Among the
+reported heapless operations is IndexMap insertion at 65535 entries. The
+firmware tables reviewed here have capacities no greater than 128. Other
+advisories have different prerequisites and indirect usage was not ruled
+out. A heapless migration requires coordinated embedded builds and testing.
+
+Sources
+https://rustsec.org/advisories/
+https://rustsec.org/advisories/RUSTSEC-2025-0134.html
+https://rustsec.org/advisories/RUSTSEC-2026-0582.html
+
+Verification and remaining exposure
+
+- The final Windows Rust workspace suite passed with 385 tests passed and
+  five ignored. The lab hardening was also checked with its separate
+  package test and a local HTTP and WebSocket smoke test. The LoRa
+  page-burst regression passed after raising the per-sender limit to eight.
+- Local Windows targeted regressions cover the listener authority, request
+  bodies, admin rotation and restart, stored session hashes, regular and
+  oversized page files, corrupted identity storage, transfer geometry,
+  authenticated file chunks and MeshCore device grants.
+- The local MeshCore test covers verified enrollment, stable identity,
+  discovery, message history, channel membership, shared read state and
+  permission revocation. A separate loopback TLS test confirms certificate
+  verification, gateway authentication, bidirectional KISS and reconnect.
+- Android native libraries built for arm64-v8a and x86_64. The common
+  firmware crate passed its host-side check. Installer Bash syntax,
+  password setup over stdin, and the workflow YAML passed local checks.
+  GitHub Actions was not run.
+- Production proxies, deployment permissions, physical radio operation and
+  repeater administrator access were outside this run. The Unix file-mode
+  and symbolic-link tests were not exercised on the Windows machine.
+- Backbone administrator revocation is checked for new MeshCore operations.
+  Device revocation depends on the newer signed device list reaching the
+  backbone. Protect the private radio worker directory and use an HTTPS
+  endpoint whose operator is trusted.
+- The dashboard still uses HTTP at the host listener. External access relies
+  on a correctly configured HTTPS reverse proxy or SSH tunnel. Protect the
+  data directory with appropriate ACLs, especially radio worker keys and
+  history, gateway credentials and temporary repeater requests.
+- The web connection cap bounds concurrent socket workers. Queues deeper in
+  the application can still grow under sustained traffic from admitted
+  clients. Load testing and a disk quota or indexed history remain useful
+  for a public deployment. RustSec coverage does not include Android, web
+  or vendor firmware dependencies that are outside the audited lockfiles.
+- This is a source review and local test pass. Independent cryptographic
+  review, production testing and firmware hardware validation remain open.

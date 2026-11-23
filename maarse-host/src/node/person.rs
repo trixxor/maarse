@@ -255,6 +255,13 @@ impl Persons {
 
     /// The person a device belongs to (checked certificate, not revoked).
     pub(super) fn person_of(&self, device: &Address) -> Option<Address> {
+        // Our own devices need no certificate: the device list is signed by
+        // our master and already says which devices are ours.
+        if let Some(m) = &self.me
+            && m.list.devices.iter().any(|d| d.addr == *device && !d.revoked)
+        {
+            return Some(m.person());
+        }
         let p = self.certs.get(device)?.person();
         if self.lists.get(&p).is_some_and(|l| l.is_revoked(device)) {
             return None;
@@ -1290,5 +1297,53 @@ impl Node {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod person_of_tests {
+    use super::*;
+
+    fn identity(seed: u8) -> Identity {
+        Identity::from_secret_bytes(&[seed; 64])
+    }
+
+    fn persons_with(me_device: Address, list: DeviceList, master: &Identity) -> Persons {
+        let dir = std::env::temp_dir().join(format!("maarse-person-of-{}", me_device.0[0]));
+        let _ = fs::create_dir_all(&dir);
+        let mut p = Persons::load(&dir, &me_device);
+        p.me = Some(Member { master: None, cert: DeviceCert::issue(master, &me_device, 2), list, inbox: None, old_inbox: None });
+        p
+    }
+
+    #[test]
+    fn own_devices_map_to_the_person_without_certificates_and_nobody_else_does() {
+        let master = identity(1);
+        let (pc, phone, old_pc, stranger) = (Address([10; 16]), Address([11; 16]), Address([12; 16]), Address([13; 16]));
+        let entries = [
+            DeviceEntry { addr: phone, revoked: false },
+            DeviceEntry { addr: old_pc, revoked: true },
+            DeviceEntry { addr: pc, revoked: false },
+        ];
+        let list = DeviceList::issue(&master, 3, &entries).unwrap();
+        let mut p = persons_with(pc, list, &master);
+        let person = master.public().address();
+
+        // The phone is on our signed list: shown as us, no certificate needed.
+        assert_eq!(p.person_of(&phone), Some(person));
+        // A revoked device and a device that is not listed are not us.
+        assert_eq!(p.person_of(&old_pc), None);
+        assert_eq!(p.person_of(&stranger), None);
+
+        // Claiming to be us in an announce is not enough.
+        p.claims.insert(stranger, (person, Instant::now()));
+        assert_eq!(p.person_of(&stranger), None);
+
+        // A certificate from another master maps to that master's person, never to ours.
+        let other = identity(2);
+        let c = DeviceCert::issue(&other, &stranger, 0);
+        p.certs.insert(stranger, c);
+        assert_eq!(p.person_of(&stranger), Some(other.public().address()));
+        assert_ne!(p.person_of(&stranger), Some(person));
     }
 }

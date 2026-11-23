@@ -3321,6 +3321,10 @@
   "back to normal at {0}": "tilbage til normal ved {0}",
   "and": "og",
   "remove": "fjern",
-  "Back to normal": "Tilbage til normal"
+  "Back to normal": "Tilbage til normal",
+  "connecting": "forbinder",
+  "online": "online",
+  "Client (default)": "Klient (standard)",
+  "Anchor (default)": "Anker (standard)"
  }
 }

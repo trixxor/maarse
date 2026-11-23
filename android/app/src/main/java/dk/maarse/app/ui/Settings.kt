@@ -167,9 +167,9 @@ internal fun NodeSection(radioPart: Boolean = false) {
                 Text(if (server) "This node is a server. Choose how it routes:" else "The phone comes and goes, so it is a client until you choose otherwise:",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 listOf(
-                    "client" to ("Client" + (if (server) "" else " (default)") to "Sends and receives your own messages and forwards nothing for others. Nobody can depend on it, so it suits a phone."),
+                    "client" to ((if (server) "Client" else "Client (default)") to "Sends and receives your own messages and forwards nothing for others. Nobody can depend on it, so it suits a phone."),
                     "repeater" to ("Repeater" to "Passes on messages for others, but does not split paths. Choose it for a node that is on most of the time."),
-                    "anchor" to ("Anchor" + (if (server) " (default)" else "") to "Passes on messages, splits long paths and answers path requests on behalf of others. Choose it for a node that is always on the internet."))
+                    "anchor" to ((if (server) "Anchor (default)" else "Anchor") to "Passes on messages, splits long paths and answers path requests on behalf of others. Choose it for a node that is always on the internet."))
                     .forEach { (role, t) ->
                         Row(Modifier.fillMaxWidth().clickable { if (role != current) asked = role }.heightIn(min = 48.dp).padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
                             RadioButton(current == role, { if (role != current) asked = role })

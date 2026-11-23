@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import dk.maarse.app.Conn
 import dk.maarse.app.Mode
 import dk.maarse.app.Node
+import dk.maarse.app.tr
 
 // ---------- avatars ----------
 
@@ -120,9 +121,9 @@ fun connectionSummary(): String {
     val off by Node.offline.collectAsState()
     val stats by Node.stats.collectAsState()
     return buildString {
-        append(modeName(c.mode))
-        append(when { c.state == Conn.State.OFF -> " · not connected"; c.state == Conn.State.CONNECTING -> " · connecting"; off -> " · no connection"; else -> " · online" })
-        if (c.state == Conn.State.ONLINE && c.mode == Mode.PHONE) stats[5]?.let { append(" · " + plural(it, "internet link")) }
+        append(tr(modeName(c.mode)))
+        append(" · " + tr(when { c.state == Conn.State.OFF -> "not connected"; c.state == Conn.State.CONNECTING -> "connecting"; off -> "no connection"; else -> "online" }))
+        if (c.state == Conn.State.ONLINE && c.mode == Mode.PHONE) stats[5]?.let { append(" · " + tr(plural(it, "internet link"))) }
     }
 }
 

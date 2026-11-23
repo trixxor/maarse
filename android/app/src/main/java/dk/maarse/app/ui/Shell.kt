@@ -54,7 +54,7 @@ enum class Tab(val title: String) { CHATS("Chats"), MAP("Map"), CONTACTS("Nodes"
 
 /** Pages behind "Me" (Settings). */
 enum class MePage(val title: String) {
-    ACCOUNT("Account and devices"), MESHCORE("MeshCore setup"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and background"),
+    ACCOUNT("Account and devices"), MESHCORE("MeshCore setup"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and sounds"),
     HOST("Internet link and post office"), FIRMWARE("Firmware"),
 }
 

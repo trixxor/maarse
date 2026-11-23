@@ -43,7 +43,7 @@ internal fun SoundPickers() {
     }
     McGroupTitle("MeshCore sounds", "own tone for the other network")
     Group { SoundRow("meshcore", "MeshCore messages", last = true) }
-    Hint("Pick one of the tones that come with Må:rse, a sound from the phone, or your own audio file. Alerts keep their own loud sound; change it in Android's notification settings.")
+    Hint("Pick one of the tones that come with Må:rse, a sound from the phone, or your own audio file.")
 }
 
 @Composable
@@ -77,7 +77,7 @@ internal fun SoundDialog(kind: String, label: String, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text(label) },
         text = {
-            Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 @Composable fun option(name: String, value: String) {
                     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { choose(value); Sounds.preview(ctx, value) }, verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(spec == value, { choose(value); Sounds.preview(ctx, value) })

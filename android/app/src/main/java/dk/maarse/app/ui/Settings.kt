@@ -418,11 +418,6 @@ internal fun AppSection() {
         }
         Hint("Alerts always notify. Severe, actual alerts use their own loud channel; change it in Android's notification settings.")
         SoundPickers()
-        GroupTitle("Language")
-        Group { LanguageRow(last = true) }
-        GroupTitle("Background")
-        Group { BackgroundRow(last = true) }
-        Hint("Må:rse " + ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName)
     }
 }
 
@@ -459,8 +454,8 @@ internal fun LanguageRow(last: Boolean = false, leading: (@Composable () -> Unit
     val ctx = LocalContext.current
     var open by remember { mutableStateOf(false) }
     val options = languageOptions()
-    val current = options.firstOrNull { it.first == I18n.choice }?.second ?: options[0].second
-    Box {
+    val current = if (I18n.choice == I18n.AUTO) tr("Automatic") else options.firstOrNull { it.first == I18n.choice }?.second ?: options[0].second
+    Column {
         ValueRow("Language", current, last, leading) { open = true }
         DropdownMenu(open, { open = false }) {
             for ((code, name) in options) DropdownMenuItem(text = { RawText(name) }, onClick = { open = false; I18n.setChoice(ctx, code) }, modifier = Modifier.heightIn(min = 48.dp))

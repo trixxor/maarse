@@ -213,7 +213,6 @@ fun MeScreen(nav: Nav) {
     // The sheets belong to this screen only, so leaving Me and coming back never shows an old one.
     var sending by remember { mutableStateOf(false) }
     var repeaters by remember { mutableStateOf(false) }
-    var meshcoreTone by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
         // Profile first: who you are and how you can be reached.
@@ -274,10 +273,8 @@ fun MeScreen(nav: Nav) {
 
         GroupTitle("Notifications")
         Group {
-            GroupRow("Må:rse sounds", "Direct · Channels · Mentions", leading = { RowIcon(Icons.Outlined.Notifications) }) { nav.go(Screen.Page(MePage.APP)) }
-            ValueRow("MeshCore sounds", Sounds.label(ctx, Node.prefs.sound("meshcore")), last = true, leading = { RowIcon(Icons.Outlined.Notifications, meshcore = true) }) { meshcoreTone = true }
+            GroupRow("Notifications and sounds", soundSummary(ctx), last = true, leading = { RowIcon(Icons.Outlined.Notifications) }) { nav.go(Screen.Page(MePage.APP)) }
         }
-        Hint("MeshCore has its own tone, so you can hear which network called.")
 
         GroupTitle("This phone")
         Group {
@@ -289,7 +286,6 @@ fun MeScreen(nav: Nav) {
 
     if (sending) SendingSheet(meshcore.radio) { sending = false }
     if (repeaters) RepeaterSheet(nav, meshcore.nodes) { repeaters = false }
-    if (meshcoreTone) SoundDialog("meshcore", "MeshCore messages") { meshcoreTone = false }
 }
 
 /** Path hash size and region scope for everything this account sends over MeshCore. */
@@ -485,4 +481,10 @@ fun WelcomeAccount(nav: Nav) {
                 Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+/** One line for the Notifications row in Me: which kinds notify, the tones live on the page behind it. */
+private fun soundSummary(ctx: android.content.Context): String {
+    val on = listOf(Node.prefs.notifyMessages, Node.prefs.notifyChannels).count { it }
+    return if (on == 2) tr("Direct and channels on") else if (on == 0) tr("Messages off") else tr("Some messages off")
 }

@@ -100,21 +100,40 @@ fn init_first_run() -> Result<(), String> {
         icacls(&root_dir(), &["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]);
         icacls(&log_dir(), &["/grant:r", "*S-1-5-32-545:(OI)(CI)RX"]);
     }
-    let marker = data_dir().join(".service-initialised");
-    if marker.exists() {
-        return Ok(());
-    }
     let settings = data_dir().join("settings.txt");
-    let old = fs::read_to_string(&settings).unwrap_or_default();
-    if !old.lines().any(|l| l.trim().starts_with("--role")) {
-        let mut text = old;
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
+    let marker = data_dir().join(".service-initialised");
+    if !marker.exists() {
+        let old = fs::read_to_string(&settings).unwrap_or_default();
+        if !old.lines().any(|l| l.trim().starts_with("--role")) {
+            let mut text = old;
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str("--role client\n");
+            fs::write(&settings, text).map_err(|e| format!("Could not write the settings: {e}"))?;
         }
-        text.push_str("--role client\n");
-        fs::write(&settings, text).map_err(|e| format!("Could not write the settings: {e}"))?;
+        fs::write(&marker, "role client chosen at first start\n").map_err(|e| e.to_string())?;
     }
-    fs::write(&marker, "role client chosen at first start\n").map_err(|e| e.to_string())
+    // Every client joins the open backbone (nj01) unless the person chose otherwise. Done once, also for
+    // installs that already started: removing `--public` later in Settings sticks.
+    let public = data_dir().join(".public-default");
+    if !public.exists() {
+        let old = fs::read_to_string(&settings).unwrap_or_default();
+        let chosen = old.lines().any(|l| {
+            let l = l.trim();
+            l.starts_with("--public ") || l == "--public" || l.starts_with("--peer")
+        });
+        if !chosen {
+            let mut text = old;
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str("--public\n");
+            fs::write(&settings, text).map_err(|e| format!("Could not write the settings: {e}"))?;
+        }
+        fs::write(&public, "the open backbone is on by default\n").map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Removes the `.old` files an update leaves behind.

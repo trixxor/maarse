@@ -29,6 +29,11 @@ class MainActivity : ComponentActivity() {
         setContent { MaarseTheme { AppShell(nav) } }
     }
 
+    override fun onStart() {
+        super.onStart()
+        Node.resume()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handle(intent)

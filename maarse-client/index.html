@@ -7728,6 +7728,11 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     if (state.active) { state.unread.delete(state.active); histMarkRead(state.active); }
     pwaHiddenUnread = 0; renderSide();
+    // Background tabs run timers late: if the host link was lost meanwhile, reconnect right away.
+    if (!transport && wsRetry) {
+      clearTimeout(wsRetry);
+      (async () => { await connect("ws", true); if (!transport) scheduleWsRetry(); })();
+    }
   }
 });
 

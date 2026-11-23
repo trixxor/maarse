@@ -166,6 +166,20 @@ object Node : LinkListener {
 
     private val retry = Runnable { connect() }
 
+    /**
+     * The app came to the front. While it was away, Android may have slowed the retry timer (backoff up to 30 s,
+     * longer in Doze) or left a dead link behind: reconnect now instead of waiting for the next try.
+     */
+    fun resume() {
+        if (!prefs.running || prefs.mode == Mode.SERVER) return
+        mcNextPoll = 0
+        if (link != null && conn.value.state == Conn.State.ONLINE) { send(Cmd.getStats()); return }
+        main.removeCallbacks(retry)
+        retryMs = 2000
+        link?.let { link = null; it.close() }
+        connect()
+    }
+
     private fun connect() {
         if (!prefs.running || link != null) return
         val mode = prefs.mode

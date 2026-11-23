@@ -776,17 +776,24 @@ fn websocket(stream: UpgradeStream, token: &str, tx: Sender<In>) {
                     }
                 }
             }
-            Ok(Message::Close(_)) => break,
+            Ok(Message::Close(frame)) => {
+                println!("[web] client {id} closed the socket: {frame:?}");
+                break;
+            }
             Ok(_) => {}
             Err(WsError::Io(e))
                 if matches!(
                     e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted
                 ) => {}
-            Err(_) => break,
+            Err(e) => {
+                println!("[web] client {id} read failed: {e}");
+                break;
+            }
         }
         while let Ok(frame) = crx.try_recv() {
-            if ws.send(Message::Binary(frame)).is_err() {
+            if let Err(e) = ws.send(Message::Binary(frame)) {
+                println!("[web] client {id} write failed: {e}");
                 break 'outer;
             }
         }

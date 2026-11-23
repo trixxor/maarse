@@ -128,6 +128,9 @@ pub(super) struct Persons {
     /// Mail IDs of inbox messages already opened (mail may come twice: from
     /// a post office and from the replicas).
     seen_mail: HashSet<u32>,
+    /// Live sibling copies already shown: (sender device, copy id, peer, hash of the text). A copy that
+    /// is delivered again (post office retry, resend) is not shown again.
+    seen_siblings: Vec<(Address, u32, Address, u64, Instant)>,
     last_fetch: Option<Instant>,
     /// When the user last sent from a sibling (its sent copies tell us).
     sibling_active: HashMap<Address, Instant>,
@@ -194,6 +197,7 @@ impl Persons {
             waiting: Vec::new(),
             pieces: HashMap::new(),
             seen_mail: HashSet::new(),
+            seen_siblings: Vec::new(),
             last_fetch: None,
             sibling_active: HashMap::new(),
             my_active: None,
@@ -1247,7 +1251,29 @@ impl Node {
         self.sibling_done(from, kind, peer, id, msg);
     }
 
+    /// `true` if this live copy was already handled: the same copy id from the same device, or the same
+    /// text from the same peer within two minutes (a resend under a new id).
+    fn sibling_seen(&mut self, from: Address, peer: Address, id: u32, msg: &[u8]) -> bool {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        msg.hash(&mut hasher);
+        let digest = hasher.finish();
+        let list = &mut self.persons.seen_siblings;
+        list.retain(|s| s.4.elapsed() < Duration::from_secs(3600));
+        if list.iter().any(|s| (s.0 == from && s.1 == id) || (s.0 == from && s.2 == peer && s.3 == digest && s.4.elapsed() < Duration::from_secs(120))) {
+            return true;
+        }
+        if list.len() >= 512 {
+            list.remove(0);
+        }
+        list.push((from, id, peer, digest, Instant::now()));
+        false
+    }
+
     fn sibling_done(&mut self, from: Address, kind: u8, peer: Address, id: u32, msg: Vec<u8>) {
+        if matches!(kind, op::SIBLING_RECEIVED | op::SIBLING_SENT) && self.sibling_seen(from, peer, id, &msg) {
+            return self.log(format!("copy from our device {} was already shown: ignored", short(&from)));
+        }
         match kind {
             op::SIBLING_RECEIVED => {
                 self.log(format!("copy from our device {}: message from {}", short(&from), short(&peer)));

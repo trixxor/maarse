@@ -160,7 +160,7 @@ fn run_framed<S: Read + Write>(mut io: S, name: String, kind: &'static str, fram
                     }
                 }
             }
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {}
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) => {}
             Err(_) => break,
         }
         loop {
@@ -284,7 +284,7 @@ fn run_udp(sock: UdpSocket, mut targets: Vec<UdpTarget>, tx: Sender<In>) {
                     return;
                 }
             }
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {}
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) => {}
             // Windows reports ICMP "port unreachable" from an earlier send as a
             // receive error (WSAECONNRESET); it says nothing about this socket.
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}

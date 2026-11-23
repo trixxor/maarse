@@ -24,6 +24,8 @@ mod install;
 mod pipe;
 #[cfg(windows)]
 mod svc;
+#[cfg(windows)]
+mod tray_guard;
 
 #[cfg(windows)]
 fn main() {

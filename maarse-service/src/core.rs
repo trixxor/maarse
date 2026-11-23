@@ -417,6 +417,7 @@ pub fn start() -> Result<(), String> {
         return Err(format!("maarse-host.exe was not found next to the service ({}).", install_dir().display()));
     }
     crate::pipe::spawn_server();
+    crate::tray_guard::spawn(install_dir(), log_line, || STOPPING.load(Ordering::SeqCst));
     start_supervisor();
     std::thread::spawn(|| {
         loop {

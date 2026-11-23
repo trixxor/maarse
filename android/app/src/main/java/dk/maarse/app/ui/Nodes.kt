@@ -191,63 +191,6 @@ private fun ContactRow(n: NodeEntry, onContact: (String) -> Unit) {
     }
 }
 
-/** One contact: name, how it is reached, actions and its address. */
-@Composable
-fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
-    val nodes by Node.nodes.collectAsState()
-    Node.nicknames.collectAsState().value
-    val traces by Node.traces.collectAsState()
-    var naming by remember { mutableStateOf(false) }
-    val n = nodes[addr]
-    val title = friendlyName(Node.label(addr))
-    val unnamed = title.startsWith("Unnamed")
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack, modifier = Modifier.padding(4.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-            androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
-            FavStar('u', addr)
-        }
-        Column(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Avatar(title, addr, 88.dp)
-            Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            n?.name?.let { Text("Announces as ~$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            Text(n?.let { reach(it) }?.ifBlank { null } ?: "Not heard yet",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-        }
-        // Icon above a short label, like other messengers: never cut off.
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Action(Icons.AutoMirrored.Filled.Chat, "Message", Modifier.weight(1f)) { onChat("dm:$addr") }
-            if (dk.maarse.app.Calls.possible()) Action(Icons.Default.Call, "Call", Modifier.weight(1f)) { dk.maarse.app.Calls.start(addr) }
-            else Action(Icons.Default.Route, "Route", Modifier.weight(1f)) { Node.trace(addr) }
-            Action(Icons.Default.Edit, if (unnamed) "Name" else "Rename", Modifier.weight(1f)) { naming = true }
-        }
-        if (unnamed) Text("Give this contact a name so you can find them again.", Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        traces.firstOrNull { it.dest == addr }?.let { t ->
-            GroupTitle("Route")
-            Card2 {
-                Text(plural(t.path.size, "hop"), fontWeight = FontWeight.SemiBold)
-                Text("Signal out: ${t.out.joinToString(" · ") { "$it dB" }}", style = MaterialTheme.typography.bodySmall)
-                Text("Signal back: ${t.back.joinToString(" · ") { "$it dB" }}", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        n?.let {
-            if (it.lat != null && it.lon != null) {
-                GroupTitle("Position (shared by them)")
-                Card2 { Text("%.4f, %.4f".format(it.lat, it.lon)) }
-            }
-        }
-        SafetyNumber(addr)
-        GroupTitle("Address")
-        Card2 {
-            SelectionContainer { Text(addr, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
-            Text("Messages to this address are end-to-end encrypted. Short form: ${shortAddr(addr)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        androidx.compose.foundation.layout.Spacer(Modifier.padding(bottom = 16.dp))
-    }
-    if (naming) NicknameDialog(addr) { naming = false }
-}
-
 /**
  * The safety number with a contact (as the web client's "Verify key"):
  * compare it with theirs in person or on a call; then mark it verified.

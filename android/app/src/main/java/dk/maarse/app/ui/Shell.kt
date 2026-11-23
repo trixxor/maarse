@@ -97,7 +97,7 @@ class Nav(start: Screen) {
         when {
             s == Screen.Welcome || s == Screen.WelcomeAccount -> welcome = s
             // Pages is a part of Nodes now.
-            s == Screen.Net(NetPage.PAGES) -> select(Tab.CONTACTS, reset = false)
+            s == Screen.Net(NetPage.PAGES) -> { select(Tab.CONTACTS, reset = false); NodesNav.showPages() }
             else -> stacks.getValue(tab).add(s)
         }
     }
@@ -127,7 +127,7 @@ fun AppShell(nav: Nav) {
         }
     }
     BackHandler(nav.welcome == null && nav.canGoBack) { nav.back() }
-    PagesNav.open = { nav.select(Tab.CONTACTS, reset = false) }
+    PagesNav.open = { nav.select(Tab.CONTACTS, reset = false); NodesNav.showPages() }
     PagesNav.contact = { nav.go(Screen.Contact(it)) }
     // Edge to edge: lift the whole app above the keyboard, and hide the tab bar while it is open,
     // so the text field of any screen stays visible.
@@ -237,10 +237,10 @@ private fun Home(nav: Nav) {
             when (nav.tab) {
                 Tab.CHATS -> ChatsScreen(onOpen = { nav.go(Screen.Chat(it)) }, onAlerts = { nav.go(Screen.Net(NetPage.ALERTS)) },
                     onNew = { nav.go(Screen.NewChat) }, onSensor = { nav.go(Screen.Sensor(it)) })
-                Tab.MAP -> MapScreen(onNode = { nav.go(Screen.Contact(it)) })
+                Tab.MAP -> MapScreen(onNode = { nav.go(Screen.Contact(it)) }, onSensor = { nav.go(Screen.Sensor(it)) }, onMessage = { nav.go(Screen.Chat(it)) })
                 Tab.CONTACTS -> ContactsScreen(onContact = { nav.go(Screen.Contact(it)) }, onMeshcoreChat = { nav.select(Tab.CHATS, reset = false) }, onPages = {},
                     onAnnounces = { nav.go(Screen.Net(NetPage.ANNOUNCES)) }, onSensor = { nav.go(Screen.Sensor(it)) }, onSensorNew = { nav.go(Screen.SensorStart) })
-                Tab.NETWORK -> NetworkScreen(onPage = { nav.go(Screen.Net(it)) })
+                Tab.NETWORK -> NetworkScreen(onPage = { nav.go(Screen.Net(it)) }, onConnect = { nav.sheet = true })
             }
         }
     }

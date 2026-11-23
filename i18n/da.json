@@ -3330,6 +3330,18 @@
   "connecting": "forbinder",
   "online": "online",
   "Client (default)": "Klient (standard)",
-  "Anchor (default)": "Anker (standard)"
+  "Anchor (default)": "Anker (standard)",
+  "Your own account": "Din egen konto",
+  "1 rule": "1 regel",
+  "{0} rules": "{0} regler",
+  "1 region": "1 region",
+  "{0} regions": "{0} regioner",
+  "1 contact": "1 kontakt",
+  "{0} contacts": "{0} kontakter",
+  "1 message": "1 besked",
+  "{0} messages": "{0} beskeder",
+  "1 input and output": "1 indgang og udgang",
+  "{0} inputs and outputs": "{0} indgange og udgange",
+  "sent": "sendt"
  }
 }

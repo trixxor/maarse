@@ -3132,6 +3132,9 @@
   "Messages to this address are end-to-end encrypted.": "Beskeder til denne adresse er ende-til-ende-krypteret.",
   "Copy full address": "Kopiér hele adressen",
   "The contact's key has changed since you verified it. Compare the number again before you trust it.": "Kontaktens nøgle er ændret, siden du bekræftede den. Sammenlign nummeret igen, før du stoler på den.",
-  "Heard nearby": "Hørt i nærheden"
+  "Heard nearby": "Hørt i nærheden",
+  "Connection of this page to the server": "Sidens forbindelse til serveren",
+  "Log out of the dashboard": "Log ud af oversigten",
+  "Time range of the charts": "Tidsrum for graferne"
  }
 }

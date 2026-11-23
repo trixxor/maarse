@@ -232,12 +232,11 @@ async fn main(spawner: Spawner) {
     let p = esp_hal::init(esp_hal::Config::default());
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
-    // Heap for the BLE controller (esp-radio), 72 KB. The rest of the firmware
-    // uses no heap. The 64 KB are in RAM that the bootloader frees
-    // after start-up; otherwise the static data takes so much that the stack
-    // has no room ("stack pointer out of range" and a restart at start-up).
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
-    esp_alloc::heap_allocator!(size: 8 * 1024);
+    // Heap for the BLE controller (esp-radio), 72 KB, all in RAM that the
+    // bootloader frees after start-up. A static heap would be taken from the
+    // stack: with a 4 KB static part sending a direct message (curve25519)
+    // overflowed the stack and the board restarted in a loop.
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
     // Wi-Fi (when enabled) needs buffers on top of Bluetooth's. 72 KB more
     // left too little stack and the board restarted at boot; 40 KB leaves
     // about 65 KB of stack.

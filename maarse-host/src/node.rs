@@ -4385,6 +4385,7 @@ pub(super) mod file_interop_tests {
             require_key: false,
             allow_legacy_web_token: false,
             public_map: false,
+            map_url: None,
             public_traffic: false,
             public_history_hours: 24,
             observe_to: None,

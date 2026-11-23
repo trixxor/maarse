@@ -188,6 +188,10 @@ fn http(mut stream: TcpStream, req: Vec<u8>, head_end: usize, token: &str, data_
     if path.starts_with("/api/") {
         return api(stream, &method, path, query, &line, req, token, data_dir);
     }
+    // The offline map: public, read-only data (see docs/map.md), so no access key; fixed names only.
+    if crate::map::is_map_path(path) {
+        return crate::map::serve(&mut stream, &method, path, query, &line, data_dir);
+    }
     if let Some((ctype, body)) = crate::i18n::route(path, data_dir) {
         return send(&mut stream, "200 OK", ctype, "", &body);
     }
@@ -644,6 +648,21 @@ fn api(mut stream: TcpStream, method: &str, path: &str, query: &str, head: &str,
                 Vec::new()
             };
             match crate::fwupdate::api(method, p, query, &body) {
+                Some((status, json)) => reply(&mut stream, status, "application/json; charset=utf-8", &json),
+                None => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "Not found"),
+            }
+        }
+        // The offline map of Denmark: status, download, delete (src/map.rs). The tiles themselves are at /map/.
+        (_, p) if p.starts_with("/api/map/") => {
+            let body: Vec<u8> = if method == "POST" {
+                match request_body(&mut stream, &mut req, head_end, 256 * 1024, HTTP_TIMEOUT) {
+                    Ok(body) => body.to_vec(),
+                    Err(error) => return reply(&mut stream, "400 Bad Request", "text/plain; charset=utf-8", error),
+                }
+            } else {
+                Vec::new()
+            };
+            match crate::map::api(method, p, query, &body) {
                 Some((status, json)) => reply(&mut stream, status, "application/json; charset=utf-8", &json),
                 None => reply(&mut stream, "404 Not Found", "text/plain; charset=utf-8", "Not found"),
             }

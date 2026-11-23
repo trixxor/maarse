@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -47,9 +48,6 @@ fun AnnouncesPage(onUser: (String) -> Unit = { PagesNav.contact(it) }) {
     val q = query.trim().lowercase()
     fun match(a: String, extra: String = "") = q.isEmpty() || Node.label(a).lowercase().contains(q) || a.startsWith(q) || extra.lowercase().contains(q)
     Column(Modifier.fillMaxSize()) {
-        TabRow(selectedTabIndex = tab) {
-            Tab(tab == 0, { tab = 0 }, text = { Text("Nodes and repeaters") })
-        }
         OutlinedTextField(
             query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), singleLine = true,
             placeholder = { Text("Search nodes and repeaters by name or address") },
@@ -91,7 +89,7 @@ fun AnnouncesPage(onUser: (String) -> Unit = { PagesNav.contact(it) }) {
                     val t = Pages.siteTitle(addr)
                     val when_ = last[addr]?.let { "announced " + ago(now - it) } ?: "visited earlier"
                     Line(addr, if (t.isEmpty()) when_ else Node.label(addr) + " · " + when_, 'p', title = t.ifEmpty { null },
-                        action = { Button(onClick = { Pages.open("maarse://$addr/"); PagesNav.open() }) { Text("Open") } }) {
+                        action = { Button(onClick = { Pages.open("maarse://$addr/"); PagesNav.open() }, Modifier.heightIn(min = 48.dp)) { Text("Open") } }) {
                         Pages.open("maarse://$addr/"); PagesNav.open()
                     }
                 }
@@ -107,7 +105,7 @@ private fun Line(addr: String, sub: String, kind: Char, title: String? = null, a
         FavStar(kind, addr)
         Avatar(Node.label(addr), addr)
         Column(Modifier.weight(1f)) {
-            Text(title ?: Node.label(addr), fontWeight = FontWeight.SemiBold)
+            Text(title ?: friendlyName(Node.label(addr)), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         action?.invoke()

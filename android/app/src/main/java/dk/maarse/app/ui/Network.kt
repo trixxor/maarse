@@ -1,8 +1,8 @@
 package dk.maarse.app.ui
 
 import androidx.compose.material3.FilledTonalButton
-
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -27,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dk.maarse.app.Cmd
@@ -39,12 +43,15 @@ import dk.maarse.app.STAT_GROUPS
 import dk.maarse.app.StatKey
 import dk.maarse.app.formatStat
 
-/** Pages behind the Network tab's "More". */
+/** Pages behind the Mesh place's Details list and backbones. */
 enum class NetPage(val title: String) { BACKBONE("Backbone"), ALERTS("Alerts"), NEIGHBOURS("Neighbours and routes"), NUMBERS("All numbers"), LOG("Log"), PAGES("Pages"), ANNOUNCES("Announces") }
 
-/** The network in plain words first, a few numbers, then the details. */
+/**
+ * Mesh: one honest sentence first, then only the tiles that apply, the airtime bar when a radio is in use,
+ * backbones, the MeshCore status card and the details. `onConnect` opens how this phone connects (optional).
+ */
 @Composable
-fun NetworkScreen(onPage: (NetPage) -> Unit) {
+fun NetworkScreen(onPage: (NetPage) -> Unit, onConnect: (() -> Unit)? = null) {
     val s by Node.stats.collectAsState()
     val conn by Node.conn.collectAsState()
     val alerts by Node.alerts.collectAsState()
@@ -54,36 +61,36 @@ fun NetworkScreen(onPage: (NetPage) -> Unit) {
         if (dk.maarse.app.Calls.possible()) Node.send(Cmd.getBackbones())
         onDispose { Node.fastPoll = false }
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 4.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (conn.mode == Mode.SERVER) { ServerPanel(); return@Column }
-        // The two things people do often, within reach at the top.
         val person by Node.person.collectAsState()
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            androidx.compose.material3.FilledTonalButton(onClick = { Node.send(Cmd.announce()) }, Modifier.weight(1f)) { Text("Announce now") }
-            androidx.compose.material3.FilledTonalButton(onClick = { Node.personSetup(dk.maarse.app.PersonOp.SYNC) }, Modifier.weight(1f),
-                enabled = person?.state == dk.maarse.app.PersonState.MEMBER) { Text("Sync now") }
-        }
         val online = conn.state == Conn.State.ONLINE
         // Radios heard: only with a radio (over Bluetooth, or as the phone's modem).
         val hasRadio = conn.mode == Mode.BLE || (conn.mode == Mode.PHONE && dk.maarse.app.ModemBridge.enabled(androidx.compose.ui.platform.LocalContext.current))
         val near = if (hasRadio) s[83] ?: 0 else 0
         val off by Node.offline.collectAsState()
         val links = s[5] ?: 0
+        val role = s[7]?.let { Names.ROLES.getOrElse(it) { null } }?.lowercase()
+        // The dot, the headline and the sentence always agree.
         val (headline, color) = when {
             !online -> "Not connected" to MaterialTheme.colorScheme.onSurfaceVariant
             off -> "No connection" to Amber
-            near == 0 && links == 0 -> "Connected, but nobody in reach yet" to Amber
-            else -> "All good" to MaterialTheme.colorScheme.primary
+            near == 0 && links == 0 -> "Connected, nobody in reach yet" to Amber
+            links > 0 && !hasRadio -> "Online, no radio in use" to MaterialTheme.colorScheme.primary
+            links > 0 && near == 0 -> "Online, no radio heard" to MaterialTheme.colorScheme.primary
+            links > 0 -> "Online, radios nearby" to MaterialTheme.colorScheme.primary
+            else -> "Radios nearby, no internet link" to MaterialTheme.colorScheme.primary
         }
         val story = when {
-            !online -> "Choose how this phone connects: tap your picture, then Connection."
+            !online -> "Choose how this phone connects."
             off -> "The phone has no internet" + (if (hasRadio) "" else " and no radio") + ". Messages you write wait and go out when you are back online."
             else -> buildList {
-                if (links > 0) add("You reach others over the internet ($links link${if (links == 1) "" else "s"})")
-                if (near > 0) add("$near radio${if (near == 1) "" else "s"} heard nearby over LoRa")
-                if (!hasRadio) add("No radio: LoRa is not used (add one under Connection)")
+                if (links > 0) add("You reach others over the internet (${plural(links, "link")})")
+                if (near > 0) add("${plural(near, "radio")} heard nearby over LoRa")
+                else if (hasRadio) add("No radio heard nearby yet")
+                if (!hasRadio) add("LoRa is not used. Add a radio to reach people nearby without internet")
                 if (links == 0 && near == 0) add("No internet link and no radio heard yet. Messages wait and go when someone is in reach")
-                s[7]?.let { add("this node works as ${Names.ROLES.getOrElse(it) { "?" }.lowercase()}") }
+                role?.let { add("this node works as $it") }
             }.joinToString(". ") + "."
         }
         Card2 {
@@ -93,19 +100,44 @@ fun NetworkScreen(onPage: (NetPage) -> Unit) {
                 Text(headline, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
             Text(story, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (online && s.isNotEmpty()) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Tile(Modifier.weight(1f), "Radio airtime", s[41]?.let { formatStat(41, it) } ?: "–", "of the 10 % allowed")
-                    Tile(Modifier.weight(1f), "Post office", "${s[61] ?: 0} kept", s[60]?.takeIf { it > 0 }?.let { "for $it people" } ?: "mail for people away")
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Tile(Modifier.weight(1f), "Carrying", "${s[96] ?: 0}", "messages for others")
-                    Tile(Modifier.weight(1f), "Backbone", "$links links", s[72]?.let { "$it DHT contacts" } ?: "internet links")
-                }
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (online) FilledTonalButton(onClick = { Node.send(Cmd.announce()) }, Modifier.heightIn(min = 48.dp)) { Text("Announce now", maxLines = 1) }
+                if (!online || !hasRadio) onConnect?.let { OutlinedButton(onClick = it, Modifier.heightIn(min = 48.dp)) { Text(if (online) "Add a radio" else "Connection", maxLines = 1) } }
             }
         }
+        if (online && hasRadio && s.isNotEmpty()) {
+            val permille = s[41] ?: 0
+            Card2 {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Airtime, last hour", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                    Text(formatStat(41, permille) + " of 10 %", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                LinearProgressIndicator(
+                    progress = { (permille / 100f).coerceIn(0f, 1f) }, Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)),
+                    color = if (permille > 80) Amber else MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                )
+                Text("The legal limit is 10 %. Nothing is sent when the limit is reached.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (online && s.isNotEmpty()) {
+            // Only the tiles that apply.
+            val tiles = buildList<@Composable (Modifier) -> Unit> {
+                add { m -> Tile(m, "Post office", "${s[61] ?: 0} kept", s[60]?.takeIf { it > 0 }?.let { "for ${plural(it, "person", "people")}" } ?: "mail for people away") }
+                if (links > 0) add { m -> Tile(m, "Backbone", plural(links, "link"), s[72]?.let { "$it DHT contacts" } ?: "internet links") }
+                if ((s[96] ?: 0) > 0 || role == "relay") add { m -> Tile(m, "Carrying", "${s[96] ?: 0}", "messages for others") }
+                if (hasRadio) add { m -> Tile(m, "Radio", if (near > 0) plural(near, "radio") else "none heard", "nearby over LoRa") }
+            }
+            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                tiles.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        row.forEach { it(Modifier.weight(1f)) }
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+                if (person?.state == dk.maarse.app.PersonState.MEMBER) TextButton(onClick = { Node.personSetup(dk.maarse.app.PersonOp.SYNC) }, Modifier.heightIn(min = 48.dp)) { Text("Sync now") }
+            }
+        }
+        MeshCoreCard()
         val bbs by Node.backbones.collectAsState()
         if (bbs.isNotEmpty()) {
             GroupTitle("Backbones")
@@ -118,9 +150,36 @@ fun NetworkScreen(onPage: (NetPage) -> Unit) {
         GroupTitle("Details")
         Group {
             GroupRow("Neighbours and routes", "Who you hear, and how well") { onPage(NetPage.NEIGHBOURS) }
+            GroupRow("Alerts", if (alerts.isEmpty()) "None received" else "${alerts.size} received") { onPage(NetPage.ALERTS) }
             GroupRow("All numbers", "Every counter the node keeps") { onPage(NetPage.NUMBERS) }
             GroupRow("Log", "What happened, live", last = true) { onPage(NetPage.LOG) }
         }
+    }
+}
+
+/** The MeshCore status card: shown once a MeshCore radio is set up. A marker, not a theme. */
+@Composable
+private fun MeshCoreCard() {
+    val link by Node.mcLink.collectAsState()
+    val mc by Node.meshcoreAccess.collectAsState()
+    if (link.state == 0 || !mc.allowed) return
+    val ready = link.state == 2
+    Card2 {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("MeshCore", color = Mc.color, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+            NetworkTag("separate network")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(10.dp).clip(CircleShape).background(if (ready) MaterialTheme.colorScheme.primary else if (link.state == 1) Amber else MaterialTheme.colorScheme.onSurfaceVariant))
+            Spacer(Modifier.width(8.dp))
+            Text(if (ready) "Radio connected" else if (link.state == 1) "Connecting to the MeshCore radio" else "MeshCore radio not available", fontWeight = FontWeight.SemiBold)
+        }
+        if (ready) {
+            val repeaters = mc.nodes.count { it.type == 2 }
+            Text("Hears ${plural(mc.nodes.size, "node")}, ${plural(repeaters, "repeater")} of them. Messages go out as floods until a path is learned.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            MeshCoreActions(Modifier.padding(top = 4.dp))
+        } else if (link.note.isNotBlank()) Text(link.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -131,7 +190,7 @@ private fun Tile(modifier: Modifier, title: String, value: String, sub: String) 
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1)
         Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

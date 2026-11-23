@@ -3,9 +3,11 @@ package dk.maarse.app.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,14 +22,15 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -35,77 +38,156 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dk.maarse.app.Node
 import dk.maarse.app.NodeEntry
+import dk.maarse.app.Sensors
 import dk.maarse.app.shortAddr
+import kotlinx.coroutines.delay
 
 private fun reach(n: NodeEntry): String = buildList {
-    n.hops?.let { add(if (it == 0) "nearby" else "$it hops") }
+    hopsText(n.hops)?.let { add(it) }
     if (n.lastHeard > 0) add("heard " + time(n.lastHeard))
     n.mv?.let { add("%.1f V".format(it / 1000.0)) }
 }.joinToString(" · ")
 
-/** People and nodes heard, newest first. */
+/** Which part of the Nodes place is open: Nodes, Sensors or Pages. Kept when you go into something and back. */
+object NodesNav {
+    var seg by mutableIntStateOf(0)
+    fun showSensors() { seg = 1 }
+    /** Opens the Pages segment (for the Announces list and links that open a page). */
+    fun showPages() { seg = 2 }
+}
+
+/** The Nodes place: a segment control Nodes | Sensors | Pages. */
 @Composable
 fun ContactsScreen(onContact: (String) -> Unit, onPages: () -> Unit = {}, onAnnounces: () -> Unit = {}, onMeshcoreChat: () -> Unit = {},
                    onSensor: (String) -> Unit = {}, onSensorNew: () -> Unit = {}) {
-    if (SensorsNav.on) { Column(Modifier.fillMaxSize()) { SensorsToggle(); SensorsPanel(onSensor, onSensorNew) }; return }
+    // A MeshCore node opened from the list shows its own page, with its own back.
+    if (McNav.node != null) { MeshCoreNodes(onMeshcoreChat); return }
+    Column(Modifier.fillMaxSize()) {
+        SegmentedTabs(listOf("Nodes", "Sensors", "Pages"), NodesNav.seg, { NodesNav.seg = it; if (it == 1) Sensors.refresh() })
+        when (NodesNav.seg) {
+            1 -> SensorsPanel(onSensor, onSensorNew)
+            2 -> PagesPage(onExit = { dk.maarse.app.Pages.home() })
+            else -> NodesList(onContact, onAnnounces)
+        }
+    }
+}
+
+private val FILTERS = listOf("All", "People", "Repeaters", "MeshCore")
+
+/** People and nodes heard, then what the MeshCore radio heard (violet tag). */
+@Composable
+private fun NodesList(onContact: (String) -> Unit, onAnnounces: () -> Unit) {
     val mcState by Node.meshcoreAccess.collectAsState()
     val link by Node.mcLink.collectAsState()
-    val showMc = link.state != 0
-    if (link.state != 2 || !mcState.allowed) McNav.nodeMode = false
-    if (showMc && McNav.nodeMode) {
-        Column(Modifier.fillMaxSize()) { McNodeChips(); MeshCoreNodes(onMeshcoreChat) }
-        return
-    }
     val nodes by Node.nodes.collectAsState()
     Node.nicknames.collectAsState().value
-    var filter by remember { mutableStateOf("") }
-    val list = nodes.values
-        .filter { filter.isBlank() || Node.label(it.addr).contains(filter, true) || it.addr.startsWith(filter.lowercase()) }
-        .sortedWith(compareByDescending<NodeEntry> { Node.nicknames.value.containsKey(it.addr) }.thenByDescending { it.lastHeard })
-    Column(Modifier.fillMaxSize()) {
-        SensorsToggle()
-        if (showMc) McNodeChips()
-        OutlinedTextField(
-            filter, { filter = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), singleLine = true,
-            placeholder = { Text("Search by name or address") }, leadingIcon = { Icon(Icons.Default.Search, null) },
-            shape = RoundedCornerShape(24.dp),
-        )
-        if (list.isEmpty()) Text("Nobody heard yet. People show up when they announce themselves or write to you. Give someone a name to save them.",
-            Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        val saved = list.filter { Node.nicknames.value.containsKey(it.addr) }
-        LazyColumn {
-            item {
-                Group {
-                    GroupRow("Announces", "Nodes and repeaters announcing themselves, live", last = true) { onAnnounces() }
-                }
-            }
-            if (saved.isNotEmpty()) item { GroupTitle("Saved (${saved.size})") }
-            items(saved, key = { "s" + it.addr }) { n -> ContactRow(n, onContact) }
-            if (list.size > saved.size) item { GroupTitle("Heard recently") }
-            items(list - saved.toSet(), key = { it.addr }) { n -> ContactRow(n, onContact) }
+    Node.neighbors.collectAsState().value
+    val ready = link.state == 2 && mcState.allowed
+    val showMc = link.state != 0 && mcState.allowed
+    var filter by remember { mutableIntStateOf(0) }
+    var query by remember { mutableStateOf("") }
+    if (!showMc && filter == 3) filter = 0
+    // Ask the MeshCore radio for its nodes while this list is open.
+    LaunchedEffect(ready) {
+        while (ready) {
+            Node.mcAsk("nodes")
+            val s = Node.meshcoreAccess.value.scan
+            val recent = McNav.scanAskedAt > 0 && System.currentTimeMillis() - McNav.scanAskedAt < 25_000
+            delay(if (s.waiting || s.active || recent) 2_000 else 15_000)
         }
+    }
+    val q = query.trim()
+    val sensorNodes = (Sensors.list.collectAsState().value ?: emptyList()).map { it.node }.toSet()
+    val marse = nodes.values.filter { it.addr !in sensorNodes }
+        .filter { q.isBlank() || Node.label(it.addr).contains(q, true) || it.addr.startsWith(q.lowercase()) }
+        .filter { filter == 0 || (filter == 1 && isPerson(it)) || (filter == 2 && !isPerson(it)) }
+        .sortedWith(compareByDescending<NodeEntry> { Node.nicknames.value.containsKey(it.addr) }.thenByDescending { it.lastHeard })
+    val mc = mcState.nodes
+        .filter { q.isBlank() || it.name.contains(q, true) || it.key.startsWith(q.lowercase()) }
+        .filter { filter == 0 || filter == 3 || (filter == 2 && it.type == 2) || (filter == 1 && it.type == 1) }
+        .sortedWith(compareByDescending<Node.McNode> { it.favorite }.thenByDescending { it.seen })
+    val saved = marse.filter { Node.nicknames.value.containsKey(it.addr) }
+    val showMarse = filter != 3
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+        item {
+            OutlinedTextField(
+                query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), singleLine = true,
+                placeholder = { Text("Search by name or address") }, leadingIcon = { Icon(Icons.Default.Search, null) },
+                shape = RoundedCornerShape(24.dp),
+            )
+        }
+        item { ChipRow(if (showMc) FILTERS else FILTERS.take(3), filter, { filter = it }, violet = if (showMc) 3 else -1) }
+        if (ready) item {
+            Column {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("MeshCore radio", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = Mc.color, fontWeight = FontWeight.SemiBold)
+                    MeshCoreActions()
+                }
+                if (McNav.advertNote.isNotEmpty()) Text(McNav.advertNote, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (showMarse && q.isBlank()) item {
+            Group { GroupRow("Announces", "Nodes and repeaters announcing themselves, live", last = true) { onAnnounces() } }
+        }
+        if (showMarse && marse.isEmpty() && (mc.isEmpty() || filter != 0)) item {
+            Text(if (q.isNotBlank() || filter != 0) "Nobody matches." else "Nobody heard yet. People show up when they announce themselves or write to you. Give someone a name to save them.",
+                Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (showMarse && saved.isNotEmpty()) item { SectionLabel("Saved (${saved.size})") }
+        if (showMarse) items(saved, key = { "s" + it.addr }) { n -> ContactRow(n, onContact) }
+        if (showMarse && marse.size > saved.size) item { SectionLabel("Heard recently") }
+        if (showMarse) items(marse - saved.toSet(), key = { it.addr }) { n -> ContactRow(n, onContact) }
+        if (showMc && (mc.isNotEmpty() || filter == 3)) {
+            item { SectionLabel("MeshCore", meshcore = true) }
+            if (mc.isEmpty()) item {
+                Text(if (mcState.nodes.isEmpty()) "No MeshCore nodes heard yet. Choose Scan now, or wait for adverts." else "Nobody matches.",
+                    Modifier.padding(horizontal = 24.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            items(mc, key = { "mc" + it.key }) { n -> McRow(n) }
+        }
+    }
+}
+
+private val MC_KINDS = listOf("Node", "Chat", "Repeater", "Room", "Sensor")
+
+@Composable
+private fun McRow(n: Node.McNode) {
+    val name = n.name.ifEmpty { "Unnamed · " + n.key.take(4) }
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { McNav.node = n.key }.padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Avatar(name, n.key, 44.dp)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(name, Modifier.weight(1f, fill = false), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                NetworkTag()
+            }
+            Text(listOfNotNull(MC_KINDS.getOrElse(n.type) { "Node" }, hopsText(n.hops), if (n.seen > 0) "heard " + agoText(n.seen * 1000) else null).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (n.seen > 0) SignalBars(Math.round(n.snr).toInt())
     }
 }
 
 @Composable
 private fun ContactRow(n: NodeEntry, onContact: (String) -> Unit) {
-    run {
-        run {
-                val title = Node.label(n.addr)
-                Row(
-                    Modifier.fillMaxWidth().clickable { onContact(n.addr) }.padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Avatar(title, n.addr, 44.dp)
-                    Column(Modifier.weight(1f)) {
-                        Text(title, fontWeight = FontWeight.SemiBold)
-                        Text(reach(n), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+    val title = friendlyName(Node.label(n.addr))
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { onContact(n.addr) }.padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Avatar(title, n.addr, 44.dp)
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(listOfNotNull(if (isPerson(n)) "Person" else "Repeater", hopsText(n.hops), if (n.lastHeard > 0) "heard " + time(n.lastHeard) else null).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        snrOf(n.addr)?.let { SignalBars(it) }
     }
 }
 
@@ -117,7 +199,8 @@ fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
     val traces by Node.traces.collectAsState()
     var naming by remember { mutableStateOf(false) }
     val n = nodes[addr]
-    val title = Node.label(addr)
+    val title = friendlyName(Node.label(addr))
+    val unnamed = title.startsWith("Unnamed")
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack, modifier = Modifier.padding(4.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
@@ -136,12 +219,14 @@ fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
             Action(Icons.AutoMirrored.Filled.Chat, "Message", Modifier.weight(1f)) { onChat("dm:$addr") }
             if (dk.maarse.app.Calls.possible()) Action(Icons.Default.Call, "Call", Modifier.weight(1f)) { dk.maarse.app.Calls.start(addr) }
             else Action(Icons.Default.Route, "Route", Modifier.weight(1f)) { Node.trace(addr) }
-            Action(Icons.Default.Edit, "Name", Modifier.weight(1f)) { naming = true }
+            Action(Icons.Default.Edit, if (unnamed) "Name" else "Rename", Modifier.weight(1f)) { naming = true }
         }
+        if (unnamed) Text("Give this contact a name so you can find them again.", Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         traces.firstOrNull { it.dest == addr }?.let { t ->
             GroupTitle("Route")
             Card2 {
-                Text("${t.path.size} hops", fontWeight = FontWeight.SemiBold)
+                Text(plural(t.path.size, "hop"), fontWeight = FontWeight.SemiBold)
                 Text("Signal out: ${t.out.joinToString(" · ") { "$it dB" }}", style = MaterialTheme.typography.bodySmall)
                 Text("Signal back: ${t.back.joinToString(" · ") { "$it dB" }}", style = MaterialTheme.typography.bodySmall)
             }
@@ -158,6 +243,7 @@ fun ContactScreen(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
             SelectionContainer { Text(addr, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
             Text("Messages to this address are end-to-end encrypted. Short form: ${shortAddr(addr)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        androidx.compose.foundation.layout.Spacer(Modifier.padding(bottom = 16.dp))
     }
     if (naming) NicknameDialog(addr) { naming = false }
 }

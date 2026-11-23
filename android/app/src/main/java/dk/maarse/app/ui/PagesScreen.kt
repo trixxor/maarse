@@ -101,10 +101,12 @@ fun PagesPage(onExit: () -> Unit = {}) {
     // Back walks the pages you visited; with none left, the app's rule takes over (to Chats).
     androidx.activity.compose.BackHandler(Pages.history.isNotEmpty()) { Pages.back() }
     Column(Modifier.fillMaxSize()) {
+        if (cur != null) {
         BrowserBar(cur, onExit, v)
         if (Pages.loading) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().height(3.dp))
         else androidx.compose.foundation.layout.Spacer(Modifier.height(3.dp))
         androidx.compose.material3.HorizontalDivider()
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // A page still coming shows what has come so far.
             val partial = cur?.let { if (Pages.markup(it) == null) Pages.partial(it) else null }
@@ -215,9 +217,10 @@ private fun BrowserBar(cur: Pages.Url?, onExit: () -> Unit, @Suppress("UNUSED_PA
 @Composable
 private fun RouteBadge(lora: Boolean) {
     Text(if (lora) "LoRa" else "Net", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold,
-        color = if (lora) Color(0xFF8A5A00) else MaterialTheme.colorScheme.primary,
+        // Amber means "waiting"; a slow route is only information.
+        color = if (lora) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.primary,
         modifier = Modifier.clip(RoundedCornerShape(6.dp))
-            .background(if (lora) Color(0x33E7A94B) else MaterialTheme.colorScheme.primaryContainer).padding(horizontal = 6.dp, vertical = 2.dp))
+            .background(if (lora) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.primaryContainer).padding(horizontal = 6.dp, vertical = 2.dp))
 }
 
 /** The bottom bar: route, size and when the page was fetched. */
@@ -249,7 +252,7 @@ private fun StartPage(@Suppress("UNUSED_PARAMETER") version: Int) {
     val head = MaterialTheme.typography.titleMedium
     val small = MaterialTheme.typography.labelSmall
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    @Composable fun Server(a: String) = Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { Pages.open("maarse://$a/") }.padding(vertical = 6.dp),
+    @Composable fun Server(a: String) = Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(12.dp)).clickable { Pages.open("maarse://$a/") }.padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Avatar(name(a), a)
         Column(Modifier.weight(1f)) {
@@ -258,11 +261,23 @@ private fun StartPage(@Suppress("UNUSED_PARAMETER") version: Int) {
         }
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        OutlinedTextField(q, { q = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Search pages and page servers") })
+        // Favourites first, the address field second (it also filters the lists below).
         val favs = Pages.favPages.filter { hit(name(it), it) }
         Text("Favourites", style = head, fontWeight = FontWeight.SemiBold)
         if (favs.isEmpty()) Text(if (q.isBlank()) "Star a page to keep it here." else "No favourite matches.", style = MaterialTheme.typography.bodySmall, color = muted)
         favs.forEach { Server(it) }
+        val isAddress = q.trim().let { it.startsWith("maarse://") || Regex("[0-9a-fA-F]{32}(/.*)?").matches(it) }
+        OutlinedTextField(q, { q = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Address or search") },
+            placeholder = { Text("maarse://… or a name") },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go, autoCorrectEnabled = false, keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri),
+            keyboardActions = KeyboardActions(onGo = { if (q.isNotBlank()) Pages.open(q.trim()) }),
+            trailingIcon = if (q.isNotBlank()) ({
+                androidx.compose.material3.IconButton(onClick = { if (isAddress) Pages.open(q.trim()) else q = "" }) {
+                    androidx.compose.material3.Icon(
+                        if (isAddress) androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowForward else androidx.compose.material.icons.Icons.Default.Close,
+                        if (isAddress) "Open" else "Clear")
+                }
+            }) else null)
         val recent = Pages.recent.filter { (u, t) -> hit(t, u.toString()) }
         if (recent.isNotEmpty()) {
             Text("Recently visited", style = head, fontWeight = FontWeight.SemiBold)
@@ -280,7 +295,7 @@ private fun StartPage(@Suppress("UNUSED_PARAMETER") version: Int) {
         Text("Page servers", style = head, fontWeight = FontWeight.SemiBold)
         if (servers.isEmpty()) Text(if (q.isBlank()) "No page servers heard yet." else "No page server matches.", style = MaterialTheme.typography.bodySmall, color = muted)
         servers.forEach { Server(it) }
-        Text("Or type an address in the bar above (maarse://<32 hex characters>/).", style = MaterialTheme.typography.bodySmall, color = muted)
+        Text("An address looks like maarse://<32 hex characters>/.", style = MaterialTheme.typography.bodySmall, color = muted)
     }
 }
 

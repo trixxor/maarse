@@ -761,6 +761,8 @@
   .mlb { overflow-y: auto; flex: 1; padding: 0 6px 8px; }
   .mlb .conv .av { width: 28px; height: 28px; font-size: 12px; }
   .mcard { position: absolute; right: 12px; top: 12px; width: 270px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, .18); display: grid; gap: 8px; }
+  .mtool .sc:empty { display: none; }
+  .mtool { max-width: calc(100% - 24px); flex-wrap: wrap; } .mtool button { white-space: nowrap; }
   .mtool { position: absolute; top: 12px; left: 304px; display: flex; gap: 8px; align-items: center; }
   .zoom { position: absolute; right: 12px; bottom: 60px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
   .zoom button { border: 0; border-radius: 0; width: 36px; height: 36px; padding: 0; justify-content: center; background: none; }
@@ -769,6 +771,34 @@
   .legend i.sq { border-radius: 2px; } .legend i.dia { border-radius: 1px; transform: rotate(45deg) scale(.85); }
   .legend i.sn { background: #17a2a2; border-radius: 3px; }
   .legend i.nd { background: var(--muted); }
+  .legend i.mcv { background: var(--mc); }
+  /* the real map (MapLibre) sits under the same controls as the offline grid */
+  .mapwrap .mgl { position: absolute; inset: 0; display: none; }
+  .mapwrap.gl .mgl { display: block; }
+  .mapwrap.gl .mapc { display: none; }
+  .mapwrap.gl .legend { bottom: 36px; }
+  .mapwrap .maplibregl-ctrl.maplibregl-ctrl-attrib { background: color-mix(in srgb, var(--panel) 88%, transparent); color: var(--muted); font: 11.5px/1.5 var(--font); border-radius: 8px 0 0 0; padding: 1px 8px; }
+  .mapwrap .maplibregl-ctrl-attrib a, .mapwrap .maplibregl-ctrl-attrib a:hover { color: var(--muted); }
+  .mapwrap .maplibregl-ctrl-bottom-right { right: 0; bottom: 0; }
+  .mchips { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 10px 8px; }
+  .mchips button { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12.5px; background: var(--bg); color: var(--muted); }
+  .mchips button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .mtool button.sm { background: var(--panel); }
+  .mnomap { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(380px, calc(100% - 24px)); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; box-shadow: 0 6px 20px rgba(0, 0, 0, .18); display: grid; gap: 8px; z-index: 3; }
+  .mnomap h4 { margin: 0; font-size: 15px; }
+  .mnomap p { margin: 0; font-size: 13px; color: var(--muted); }
+  .mscrim { position: absolute; inset: 0; background: rgba(0, 0, 0, .35); z-index: 6; display: flex; align-items: center; justify-content: center; padding: 12px; }
+  .mpanel { width: min(460px, 100%); max-height: 100%; overflow-y: auto; background: var(--raised); border: 1px solid var(--line); border-radius: 16px; padding: 16px; box-shadow: 0 20px 60px rgba(0, 0, 0, .4); display: grid; gap: 12px; }
+  .mpanel h3 { margin: 0; font-size: 16px; flex: 1; }
+  .mpanel .ph { display: flex; align-items: center; gap: 8px; }
+  .mpanel .lvl { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--bg); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; }
+  .mpanel .lvl b { font-size: 14px; }
+  .mpanel .lvl .muted { font-size: 12.5px; grid-column: 1; }
+  .mpanel .lvl button { grid-column: 2; grid-row: 1 / span 2; }
+  .mpanel .pbar { height: 8px; border-radius: 4px; background: var(--bg); overflow: hidden; border: 1px solid var(--line); }
+  .mpanel .pbar i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+  .mpanel .err { color: var(--warn); font-size: 13px; margin: 0; }
+  .mpanel .fine { font-size: 12px; color: var(--muted); margin: 0; }
 
   /* Mesh dashboard */
   .dash { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
@@ -899,7 +929,7 @@
     .count { display: none; }
     .two, .grid2 { grid-template-columns: minmax(0, 1fr); }
     .msg { max-width: 88%; }
-    .mlist { display: none; } .mtool, .legend { left: 12px; }
+    .mlist { display: none; } .mtool, .legend { left: 12px; } .legend { max-width: calc(100% - 24px); } .mapwrap.gl .zoom { bottom: 80px; }
     .keys { grid-template-columns: 1fr; }
     .messages { padding: 12px; }
     .vh { padding: 8px 10px; }
@@ -7748,6 +7778,7 @@ function applyTheme() {
   const t = store.get("theme", "system");
   if (t === "system") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
   $("theme-sub").textContent = { system: "Follows the system", light: "Light", dark: "Dark" }[t];
+  mapThemeChanged();
 }
 $("btn-theme").onclick = () => { const order = ["system", "light", "dark"]; store.set("theme", order[(order.indexOf(store.get("theme", "system")) + 1) % 3]); applyTheme(); };
 applyTheme();
@@ -8331,33 +8362,47 @@ function mapFit(wrap) {
 }
 function renderMap(box) {
   $("chat-title").textContent = "Map";
-  $("chat-sub").textContent = "Offline grid, no internet needed. Nodes that share a position in their announce.";
+  mapSub();
   box.classList.add("flush");
+  if (!MAPG.wrap) mapBuild();
+  box.append(MAPG.wrap);
+  const wrap = MAPG.wrap;
+  if (snHasHost() && !SN.list) snLoad().then(() => { if (state.view === "map") paintMap(); });
+  mapStatusLoad();
+  if (!MAPG.gl && (!MAPV.fitted || state.mapRefit || (MAPV.nfit === 0 && mapPoints().length))) { requestAnimationFrame(() => { mapFit(wrap); state.mapRefit = false; paintMap(); }); }
+  const pt = state.mapSel && mapPoints().find(p => p.id === state.mapSel);
+  if (pt) { MAPV.cx = pt.x; MAPV.cy = pt.y; MAPV.s = Math.max(MAPV.s, 4); MAPV.fitted = true; }
+  requestAnimationFrame(() => { if (MAPG.map) MAPG.map.resize(); paintMap(); if (pt && MAPG.gl) mapFocus(pt); });
+  paintMapList(); paintMapCard(); paintMapPrompt(); paintMapPanel();
+}
+function mapSub() {
+  $("chat-sub").textContent = MAPG.gl ? (MAPG.src === "online" ? "Online map. Nodes that share a position in their announce." : "Map from the file on this computer, no internet needed. Nodes that share a position in their announce.") : "Offline grid, no internet needed. Nodes that share a position in their announce.";
+}
+// The controls and the two drawing surfaces are built once and moved back in when the tab opens again, so the map keeps its place.
+function mapBuild() {
   const wrap = el("div", { className: "mapwrap", id: "mapwrap" });
+  const mgl = el("div", { className: "mgl", id: "mgl" });
   const mapc = el("div", { className: "mapc", id: "mapc" });
   const search = el("div", { className: "search" }); search.innerHTML = '<svg class="i s"><use href="#i-search"/></svg>';
-  const qi = el("input", { placeholder: "Find on map", value: state.mapQuery, ariaLabel: "Find on map" }); qi.oninput = () => { state.mapQuery = qi.value; paintMapList(); }; search.append(qi);
-  const list = el("div", { className: "mlist" }, search, el("div", { className: "mlb", id: "mlb" }));
+  const qi = el("input", { placeholder: "Find on map", value: state.mapQuery, ariaLabel: "Find on map" }); qi.oninput = () => { state.mapQuery = qi.value; paintMapList(); paintMap(); }; search.append(qi);
+  const list = el("div", { className: "mlist" }, search, el("div", { className: "mchips", id: "mchips" }), el("div", { className: "mlb", id: "mlb" }));
   const mk = (t, fn, txt) => { const b = el("button", { type: "button", title: t, ariaLabel: t }); b.innerHTML = txt; b.onclick = fn; return b; };
   const zoom = el("div", { className: "zoom" }, mk("Zoom in (+)", () => mapZoom(1.4), '<svg class="i"><use href="#i-plus"/></svg>'), mk("Zoom out (-)", () => mapZoom(1 / 1.4), '<svg class="i"><use href="#i-minus"/></svg>'));
-  const tool = el("div", { className: "mtool" }, el("span", { className: "sc", id: "mapscale" }));
+  const fit = dbtn("Show all nodes", () => mapShowAll(), "", "Zoom to the nodes on the map");
+  const file = dbtn("Use without internet", mapOpenPanel, "", "Download the map of Denmark to use it without internet, or remove it"); file.id = "mfilebtn"; file.hidden = true;
+  const tool = el("div", { className: "mtool" }, el("span", { className: "sc", id: "mapscale" }), fit, file);
   const legend = el("div", { className: "legend" });
   legend.innerHTML = '<span><i></i>Person</span><span><i class="sq"></i>Repeater</span><span><i class="nd"></i>Node</span><span><i class="sn"></i>Sensor</span><span><i style="background:none;border:2px solid var(--accent)"></i>You</span>';
-  wrap.append(mapc, tool, list, el("div", { id: "mcardslot" }), zoom, legend);
-  box.append(wrap);
-  if (snHasHost() && !SN.list) snLoad().then(() => { if (state.view === "map") paintMap(); });
+  wrap.append(mgl, mapc, tool, list, el("div", { id: "mcardslot" }), zoom, legend, el("div", { id: "mpromptslot" }), el("div", { id: "mpanelslot" }));
+  MAPG.wrap = wrap;
   let drag = null;
   mapc.onpointerdown = e => { if (e.target.closest("[data-pt]")) return; drag = { x: e.clientX, y: e.clientY }; mapc.classList.add("drag"); mapc.setPointerCapture(e.pointerId); };
   mapc.onpointermove = e => { if (!drag) return; MAPV.cx -= (e.clientX - drag.x) / MAPV.s; MAPV.cy -= (e.clientY - drag.y) / MAPV.s; drag = { x: e.clientX, y: e.clientY }; paintMap(); };
   mapc.onpointerup = mapc.onpointercancel = () => { drag = null; mapc.classList.remove("drag"); };
   mapc.onwheel = e => { e.preventDefault(); mapZoom(e.deltaY < 0 ? 1.2 : 1 / 1.2, e); };
-  if (!MAPV.fitted || state.mapRefit || (MAPV.nfit === 0 && mapPoints().length)) { requestAnimationFrame(() => { mapFit(wrap); state.mapRefit = false; paintMap(); }); }
-  const pt = state.mapSel && mapPoints().find(p => p.id === state.mapSel);
-  if (pt) { MAPV.cx = pt.x; MAPV.cy = pt.y; MAPV.s = Math.max(MAPV.s, 4); MAPV.fitted = true; }
-  requestAnimationFrame(() => { paintMap(); });
-  paintMapList(); paintMapCard();
 }
 function mapZoom(f, e) {
+  if (MAPG.gl && MAPG.map) { f > 1 ? MAPG.map.zoomIn() : MAPG.map.zoomOut(); return; }
   const c = $("mapc"); if (!c) return;
   const r = c.getBoundingClientRect(), W = r.width, H = r.height;
   const px = e ? e.clientX - r.left : W / 2, py = e ? e.clientY - r.top : H / 2;
@@ -8367,6 +8412,7 @@ function mapZoom(f, e) {
   paintMap();
 }
 function paintMap() {
+  if (MAPG.gl) { mapGlUpdate(); return; }
   const c = $("mapc"); if (!c) return;
   if (!MAPV.fitted) mapFit($("mapwrap"));
   const W = c.clientWidth || 800, H = c.clientHeight || 500, S = MAPV.s;
@@ -8376,11 +8422,10 @@ function paintMap() {
   let g = "";
   for (let x = Math.ceil(wx(0) / step) * step; x <= wx(W); x += step) { const p = (x - MAPV.cx) * S + W / 2; g += `<line class="gl" x1="${p}" y1="0" x2="${p}" y2="${H}"/>`; }
   for (let y = Math.ceil(wy(0) / step) * step; y <= wy(H); y += step) { const p = (y - MAPV.cy) * S + H / 2; g += `<line class="gl" x1="0" y1="${p}" x2="${W}" y2="${p}"/>`; }
-  const q = state.mapQuery.trim().toLowerCase();
   const pts = mapPoints();
   let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Map of nodes">${g}`;
   for (const p of pts) {
-    if (q && !p.name.toLowerCase().includes(q)) continue;
+    if (!mapShown(p)) continue;
     const X = (p.x - MAPV.cx) * S + W / 2, Y = (p.y - MAPV.cy) * S + H / 2;
     if (X < -40 || X > W + 40 || Y < -40 || Y > H + 40) continue;
     const sel = state.mapSel === p.id, r = sel ? 8 : 6;
@@ -8405,10 +8450,11 @@ function personColour(id) { let h = 0; for (const ch of id) h = (h * 31 + ch.cha
 function paintMapList() {
   const box = $("mlb"); if (!box) return;
   box.replaceChildren();
-  const q = state.mapQuery.trim().toLowerCase(), pts = mapPoints().filter(p => !q || p.name.toLowerCase().includes(q));
+  const q = state.mapQuery.trim().toLowerCase(), pts = mapPoints().filter(mapShown);
+  paintMapChips();
   for (const p of pts) {
     box.append(listRow({ glyph: initialOf(p.name), title: p.name, sub: p.kind === "Me" ? "Your shared position" : t(p.kind) + " · " + (p.hops == null ? "" : p.hops === 0 ? t("direct") : t(plural(p.hops, "hop"))),
-      active: state.mapSel === p.id, onClick: () => { state.mapSel = p.id; MAPV.cx = p.x; MAPV.cy = p.y; paintMap(); paintMapList(); paintMapCard(); } }));
+      active: state.mapSel === p.id, onClick: () => { state.mapSel = p.id; mapFocus(p); paintMap(); paintMapList(); paintMapCard(); } }));
   }
   const total = state.nodeInfo.size, drawn = mapPoints().filter(p => p.kind !== "Me").length;
   box.append(el("p", { className: "hint", textContent: pts.length ? (total > drawn ? (total - drawn === 1 ? "1 node has not shared a position and is not drawn." : `${total - drawn} nodes have not shared a position and are not drawn.`) : "") : (q ? "Nothing matches." : "No positions yet. Nodes appear here when they share a position in their announce (Settings › Name, position and sharing). MeshCore nodes are not drawn: their adverts carry no position here.") }));
@@ -8425,7 +8471,308 @@ function paintMapCard() {
   card.append(el("div", { className: "muted", style: "font-size:12px", textContent: PRECISION[p.prec] + " · " + p.lat.toFixed(p.prec === 3 ? 4 : 2) + ", " + p.lon.toFixed(p.prec === 3 ? 4 : 2) }));
   slot.append(card);
 }
-window.addEventListener("resize", () => { if (state.view === "map") paintMap(); });
+// ---------- map: the real map of Denmark, drawn from the host's map file (docs/map.md) ----------
+// MapLibre GL and the PMTiles reader are loaded from the host (/map/) the first time the Map tab opens. Without an installed
+// map file, or when the libraries cannot load, the offline grid above stays in use and a card offers the download.
+var MAPG = { wrap: null, map: null, gl: false, libs: "idle", libP: null, proto: null, status: null, statusErr: "", panel: false, poll: null,
+  busy: "", msg: "", err: "", theme: null, starting: false, fitDone: false, key: "", sig: "", checked: false };
+const MAP_DK = [[7.9, 54.5], [15.3, 57.8]];
+const MAP_LEVELS = [["overview", "Overview", "The whole country: towns, main roads and coast."], ["detailed", "Detailed", "Streets and buildings in towns."]];
+const mapRemote = () => !!remoteHost.get()?.addr;   // the map files are only served to the host's own page
+const mapDark = () => { const t = document.documentElement.dataset.theme; return t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches; };
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const mapMB = b => b >= 1e9 ? (b / 1e9).toFixed(2) + " GB" : (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + " MB";
+const mapDate = b => /^\d{8}$/.test(b || "") ? `${b.slice(0, 4)}-${b.slice(4, 6)}-${b.slice(6)}` : (b || "");
+function mapPlainError(e) {
+  e = String(e || "");
+  if (!e) return "";
+  if (/sha|hash|checksum|size|damaged/i.test(e)) return "The downloaded file was damaged and has been thrown away. Press Download to try again.";
+  if (/curl/i.test(e)) return "This computer has no download tool (curl), so it cannot fetch the map by itself.";
+  if (/manifest|resolve|connect|network|timed? ?out|unreachable|502|could not/i.test(e)) return "The map server could not be reached. Check the internet connection and try again.";
+  return "The download did not finish. Check the internet connection and try again.";
+}
+const mapCat = p => p.kind === "Me" ? "me" : p.kind === "Sensor" ? "sensor" : p.kind === "Backbone" || p.kind === "Repeater" ? "repeater" : p.kind === "Node" ? "unknown" : p.mc ? "mc" : "person";
+const MAP_CHIPS = [["all", "All"], ["person", "People"], ["repeater", "Repeaters"], ["sensor", "Sensors"]];
+function mapShown(p) {
+  const q = state.mapQuery.trim().toLowerCase();
+  if (q && !p.name.toLowerCase().includes(q)) return false;
+  const f = state.mapFilter || "all", c = mapCat(p);
+  return f === "all" || c === f || c === "me";
+}
+function paintMapChips() {
+  const box = $("mchips"); if (!box) return;
+  box.replaceChildren();
+  for (const [k, text] of MAP_CHIPS) {
+    const b = el("button", { type: "button", textContent: text, className: (state.mapFilter || "all") === k ? "on" : "", ariaPressed: String((state.mapFilter || "all") === k) });
+    b.onclick = () => { state.mapFilter = k; paintMapList(); paintMap(); };
+    box.append(b);
+  }
+}
+function mapPad() { const l = MAPG.wrap?.querySelector(".mlist"); return { left: l && l.offsetParent ? l.offsetWidth + 24 : 40, top: 56, right: 90, bottom: 90 }; }
+function mapFocus(p) {
+  MAPV.cx = p.x; MAPV.cy = p.y;
+  if (MAPG.gl && MAPG.map) MAPG.map.easeTo({ center: [p.lon, p.lat], zoom: Math.max(MAPG.map.getZoom(), 9), duration: 600, padding: { ...mapPad(), top: 0, right: 0, bottom: 0 } });
+}
+function mapShowAll(instant) {
+  if (!(MAPG.gl && MAPG.map)) { MAPV.fitted = false; const w = $("mapwrap"); if (w) { mapFit(w); paintMap(); } return; }
+  const pts = mapPoints().filter(mapShown), map = MAPG.map, d = instant ? 0 : 600;
+  if (!pts.length) map.fitBounds(MAP_DK, { padding: mapPad(), duration: d, maxZoom: 7 });
+  else if (pts.length === 1) map.easeTo({ center: [pts[0].lon, pts[0].lat], zoom: 10, duration: d, padding: { ...mapPad(), top: 0, right: 0, bottom: 0 } });
+  else { const b = new maplibregl.LngLatBounds(); for (const p of pts) b.extend([p.lon, p.lat]); map.fitBounds(b, { padding: mapPad(), duration: d, maxZoom: 12 }); }
+}
+
+// --- libraries and start ---
+function mapLoadLibs() {
+  if (MAPG.libP) return MAPG.libP;
+  const add = (tag, attrs) => new Promise((ok, no) => { const n = document.createElement(tag); Object.assign(n, attrs); n.onload = ok; n.onerror = () => no(new Error("could not load " + (attrs.src || attrs.href))); document.head.append(n); });
+  MAPG.libs = "loading";
+  MAPG.libP = Promise.all([add("link", { rel: "stylesheet", href: "/map/maplibre-gl.css" }), add("script", { src: "/map/maplibre-gl.js" }).then(() => add("script", { src: "/map/pmtiles.js" }))])
+    .then(() => { MAPG.libs = "ready"; }, e => { MAPG.libs = "failed"; MAPG.libP = null; throw e; });
+  return MAPG.libP;
+}
+// Two sources: the map file on this computer (works without internet), else OpenFreeMap online (the one request that leaves this computer).
+const MAP_ONLINE = { light: "https://tiles.openfreemap.org/styles/positron", dark: "https://tiles.openfreemap.org/styles/dark" };
+const mapOnlineOn = () => store.get("map-online", true) !== false;
+async function mapStyle(dark, src = MAPG.src) {
+  const r = await fetch(src === "online" ? MAP_ONLINE[dark ? "dark" : "light"] : "/map/style.json?flavor=" + (dark ? "dark" : "light"));
+  if (!r.ok) throw new Error("style " + r.status);
+  return r.json();
+}
+async function mapGlStart(src) {
+  if (MAPG.map || MAPG.starting) { if (MAPG.map) mapSetGl(true); return; }
+  MAPG.starting = true; MAPG.src = src;
+  try {
+    await mapLoadLibs();
+    maplibregl.addProtocol("pmtiles", (MAPG.proto = new pmtiles.Protocol()).tile);
+    MAPG.theme = mapDark();
+    const style = await mapStyle(MAPG.theme);
+    const map = new maplibregl.Map({ container: "mgl", style, center: [10.4, 56.1], zoom: 6, minZoom: 3, maxZoom: 17, attributionControl: false, dragRotate: false, pitchWithRotate: false, fadeDuration: 150 });
+    map.touchZoomRotate.disableRotation();
+    map.addControl(new maplibregl.AttributionControl({ compact: false }), "bottom-right");
+    map.on("style.load", () => mapAddOverlay(map));
+    MAPG.styleOk = false;
+    map.on("load", () => { MAPG.styleOk = true; });
+    map.on("error", e => { if (MAPG.src === "online" && !MAPG.styleOk && e && e.error) { MAPG.onlineFail = Date.now(); setTimeout(mapAfterStatus, 0); } });
+    MAPG.map = map;
+  } catch (e) {
+    MAPG.map = null; console.warn("map:", e);
+    if (MAPG.libs !== "failed" && src === "online") MAPG.onlineFail = Date.now();
+  }
+  MAPG.starting = false;
+  mapSetGl(!!MAPG.map);
+}
+function mapGlStop() {
+  if (MAPG.map) { MAPG.map.remove(); MAPG.map = null; try { maplibregl.removeProtocol("pmtiles"); } catch {} MAPG.proto = null; MAPG.fitDone = false; MAPG.src = ""; }
+  mapSetGl(false);
+}
+function mapSetGl(on) {
+  MAPG.gl = on;
+  MAPG.wrap?.classList.toggle("gl", on);
+  if (state.view === "map") mapSub();
+  if (on && MAPG.map) {
+    MAPG.map.resize();
+    if (!MAPG.fitDone) { MAPG.fitDone = true; const p = state.mapSel && mapPoints().find(x => x.id === state.mapSel); if (p) mapFocus(p); else mapShowAll(true); }
+  }
+  paintMap(); paintMapPrompt(); paintMapPanel();
+}
+function mapThemeChanged() {
+  if (!MAPG || !MAPG.map) return;
+  const dark = mapDark(); if (dark === MAPG.theme) return;
+  MAPG.theme = dark;
+  mapStyle(dark, MAPG.src).then(st => { if (MAPG.map && MAPG.theme === dark) MAPG.map.setStyle(st, { diff: false }); }).catch(() => {});
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTimeout(mapThemeChanged, 0));
+
+// --- nodes on top of the map ---
+function mapSquare(fill, edge) {
+  const c = document.createElement("canvas"); c.width = c.height = 40; const g = c.getContext("2d");
+  g.beginPath(); g.roundRect(5, 5, 30, 30, 8); g.fillStyle = fill; g.fill(); g.lineWidth = 3; g.strokeStyle = edge; g.stroke();
+  return g.getImageData(0, 0, 40, 40);
+}
+function mapRing(color) {
+  const c = document.createElement("canvas"); c.width = c.height = 64; const g = c.getContext("2d");
+  g.beginPath(); g.roundRect(5, 5, 54, 54, 14); g.lineWidth = 5; g.strokeStyle = color; g.stroke();
+  return g.getImageData(0, 0, 64, 64);
+}
+function mapFeatures() {
+  const accent = cssVar("--accent"), muted = cssVar("--muted"), mc = cssVar("--mc") || "#7b6fe0";
+  const feats = [];
+  for (const p of mapPoints()) {
+    if (!mapShown(p)) continue;
+    const cat = mapCat(p), sn = cat === "sensor" ? SN.list?.find(n => n.node === p.id) : null;
+    let h = 0; for (const ch of p.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    const rad = p.prec === 1 ? 10000 : p.prec === 2 ? 1000 : 0;
+    feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: {
+      id: p.id, lab: p.name.replace(/^~/, "").slice(0, 16), cat, sel: state.mapSel === p.id ? 1 : 0,
+      icon: cat === "sensor" ? "sq-sensor" : "sq-repeater", flag: sn ? (sn.alarm ? "ring-alarm" : snQuiet(sn) ? "ring-quiet" : "") : "",
+      col: cat === "me" ? accent : cat === "unknown" ? muted : cat === "mc" ? mc : `hsl(${h % 360}, 45%, 48%)`,
+      r0: rad ? rad / (78271.517 * Math.cos(p.lat * Math.PI / 180)) : 0 } });
+  }
+  return { type: "FeatureCollection", features: feats };
+}
+function mapAddOverlay(map) {
+  const accent = cssVar("--accent"), panel = cssVar("--panel"), ink = cssVar("--ink"), bg = cssVar("--bg");
+  const add = (n, img) => { if (!map.hasImage(n)) map.addImage(n, img, { pixelRatio: 2 }); };
+  add("sq-repeater", mapSquare(accent, panel)); add("sq-sensor", mapSquare("#17a2a2", panel));
+  add("ring-alarm", mapRing(cssVar("--warn"))); add("ring-quiet", mapRing(cssVar("--signal")));
+  map.addSource("nodes", { type: "geojson", data: mapFeatures() });
+  const isDot = ["in", ["get", "cat"], ["literal", ["person", "unknown", "mc", "me"]]];
+  map.addLayer({ id: "n-acc", type: "circle", source: "nodes", filter: [">", ["get", "r0"], 0], paint: {
+    "circle-radius": ["interpolate", ["exponential", 2], ["zoom"], 0, ["get", "r0"], 20, ["*", ["get", "r0"], 1048576]],
+    "circle-color": accent, "circle-opacity": .1, "circle-stroke-color": accent, "circle-stroke-opacity": .5, "circle-stroke-width": 1 } });
+  map.addLayer({ id: "n-ring-me", type: "circle", source: "nodes", filter: ["==", ["get", "cat"], "me"], paint: { "circle-radius": 11, "circle-color": accent, "circle-opacity": 0, "circle-stroke-color": accent, "circle-stroke-opacity": .5, "circle-stroke-width": 2 } });
+  map.addLayer({ id: "n-dot", type: "circle", source: "nodes", filter: isDot, paint: { "circle-radius": ["case", ["==", ["get", "cat"], "me"], 5, 7], "circle-color": ["get", "col"], "circle-stroke-color": panel, "circle-stroke-width": 2 } });
+  map.addLayer({ id: "n-sq", type: "symbol", source: "nodes", filter: ["!", isDot], layout: { "icon-image": ["get", "icon"], "icon-size": 1, "icon-allow-overlap": true, "icon-ignore-placement": true } });
+  map.addLayer({ id: "n-flag", type: "symbol", source: "nodes", filter: ["!=", ["get", "flag"], ""], layout: { "icon-image": ["get", "flag"], "icon-size": 1.15, "icon-allow-overlap": true, "icon-ignore-placement": true } });
+  map.addLayer({ id: "n-sel", type: "circle", source: "nodes", filter: ["==", ["get", "sel"], 1], paint: { "circle-radius": 14, "circle-color": accent, "circle-opacity": 0, "circle-stroke-color": accent, "circle-stroke-width": 2 } });
+  map.addLayer({ id: "n-lab", type: "symbol", source: "nodes", layout: { "text-field": ["get", "lab"], "text-font": ["Noto Sans Regular"], "text-size": 12, "text-anchor": "left", "text-offset": [1.1, 0], "text-optional": true },
+    paint: { "text-color": ink, "text-halo-color": bg, "text-halo-width": 1.6 } });
+  if (!MAPG.bound) {
+    MAPG.bound = true;
+    const hit = ["n-dot", "n-sq", "n-flag", "n-ring-me"];
+    map.on("click", e => {
+      const f = map.queryRenderedFeatures(e.point, { layers: hit.filter(l => map.getLayer(l)) })[0];
+      if (!f) return;
+      state.mapSel = f.properties.id; paintMap(); paintMapList(); paintMapCard();
+    });
+    map.on("dblclick", e => {
+      const f = map.queryRenderedFeatures(e.point, { layers: hit.filter(l => map.getLayer(l)) })[0];
+      if (!f) return;
+      e.preventDefault();
+      const id = f.properties.id; if (id !== "me") messageNode({ net: "m", id, name: label(id) });
+    });
+    map.on("mousemove", e => { map.getCanvas().style.cursor = map.queryRenderedFeatures(e.point, { layers: hit.filter(l => map.getLayer(l)) }).length ? "pointer" : ""; });
+  }
+}
+function mapGlUpdate() {
+  const map = MAPG.map, src = map && map.getSource && map.getSource("nodes");
+  if (src) src.setData(mapFeatures());
+  const sc = $("mapscale"); if (sc) sc.textContent = "";
+}
+
+// --- the map file on this computer: status, download, delete ---
+async function mapStatusLoad() {
+  if (mapRemote()) { MAPG.status = null; MAPG.statusErr = "remote"; mapAfterStatus(); return; }
+  if (Date.now() - (MAPG.onlineFail || 0) > 30000) MAPG.onlineFail = 0;
+  try { MAPG.status = await snApi("GET", "/api/map/status"); MAPG.statusErr = ""; }
+  catch (e) { MAPG.status = null; MAPG.statusErr = e.message || "error"; }
+  mapAfterStatus();
+}
+// The source in use: the installed file, else the online map (unless turned off or just failed), else the grid.
+function mapWanted() {
+  const st = MAPG.status;
+  if (st && st.installed && !mapRemote() && MAPG.libs !== "failed") return "local";
+  if (mapOnlineOn() && navigator.onLine !== false && MAPG.libs !== "failed" && !(MAPG.onlineFail && Date.now() - MAPG.onlineFail < 30000)) return "online";
+  return "none";
+}
+function mapAfterStatus() {
+  const st = MAPG.status, inst = st && st.installed;
+  if (st && st.download) { if (!MAPG.wasDl) MAPG.dlKey = MAPG.key; MAPG.wasDl = true; if (!MAPG.poll) MAPG.poll = setInterval(mapPollOnce, 1000); }
+  else {
+    if (MAPG.poll) { clearInterval(MAPG.poll); MAPG.poll = null; }
+    if (MAPG.wasDl && inst && !st.error && MAPG.panel && (inst.sha256 || inst.name) !== MAPG.dlKey) { MAPG.panel = false; MAPG.msg = ""; }   // finished: show the map
+    MAPG.wasDl = false;
+  }
+  const key = inst ? inst.sha256 || inst.name : "";
+  const want = mapWanted();
+  if (MAPG.map && (key !== MAPG.key || want !== MAPG.src)) mapGlStop();   // another file or source: drop the reader's cache and start again
+  MAPG.key = key;
+  if (want !== "none") mapGlStart(want); else mapSetGl(false);
+  paintMapPrompt(); paintMapPanel();
+}
+window.addEventListener("online", () => { MAPG.onlineFail = 0; if (MAPG.wrap) mapAfterStatus(); });
+window.addEventListener("offline", () => { if (MAPG.wrap) mapAfterStatus(); });
+async function mapPollOnce() {
+  if (MAPG.polling) return; MAPG.polling = true;
+  try { MAPG.status = await snApi("GET", "/api/map/status"); } catch {}
+  MAPG.polling = false;
+  mapAfterStatus();
+}
+async function mapCall(path, busy) {
+  MAPG.busy = busy; MAPG.err = ""; MAPG.msg = ""; paintMapPanel();
+  try { MAPG.status = await snApi("POST", path); }
+  catch (e) { MAPG.err = e.message || "error"; }
+  MAPG.busy = "";
+  mapAfterStatus();
+}
+async function mapCheck(force) {
+  const st = MAPG.status;
+  if (!st || !st.can_download || st.download || MAPG.busy) return;
+  if (!force && ((st.available || []).length || MAPG.checked)) return;
+  MAPG.checked = true;
+  await mapCall("/api/map/check", "check");
+}
+function mapOpenPanel() { MAPG.panel = true; paintMapPrompt(); paintMapPanel(); mapCheck(false); }
+function paintMapPrompt() {
+  const slot = $("mpromptslot"); if (!slot) return;
+  slot.replaceChildren();
+  const st = MAPG.status;
+  const fb = $("mfilebtn"); if (fb) { fb.hidden = !st || st.enabled === false; fb.textContent = I18N.t(st && st.installed ? "Offline map" : "Use without internet"); }
+  if (MAPG.gl || !st || st.enabled === false || MAPG.panel) return;
+  const card = (title, text, ...btns) => slot.append(el("div", { className: "mnomap" }, el("h4", { textContent: title }), el("p", { textContent: text }), el("div", { className: "btnrow" }, ...btns)));
+  if (st.installed) return card("The map could not be drawn", "The map file is installed, but its drawing library did not load. The offline grid is shown instead.", dbtn("Offline map", mapOpenPanel, "primary"));
+  const dl = dbtn(st.download ? "Show download" : "Download the map", mapOpenPanel, "primary");
+  if (!mapOnlineOn()) return card("Showing a plain grid", "The online map is turned off. Turn it on, or download the map of Denmark to use it without internet (22 MB for the overview).",
+    dbtn("Use online map", () => { store.set("map-online", true); MAPG.onlineFail = 0; mapAfterStatus(); }), dl);
+  card("The online map could not be loaded", "There is no internet, or the map server cannot be reached, so nodes are shown on a plain grid. Download the map of Denmark to use it without internet (22 MB for the overview).",
+    dl, dbtn("Try again", () => { MAPG.onlineFail = 0; mapAfterStatus(); }));
+}
+function paintMapPanel() {
+  const slot = $("mpanelslot"); if (!slot) return;
+  const st = MAPG.status;
+  if (!MAPG.panel || !st) { slot.replaceChildren(); MAPG.sig = ""; return; }
+  const d = st.download, inst = st.installed, av = st.available || [];
+  const total = d ? (d.total || 0) : 0, pct = d && total ? Math.min(100, Math.round(d.received / total * 100)) : 0;
+  const dtext = d ? (d.phase === "verifying" ? "Checking the downloaded file …" : d.phase === "manifest" ? "Contacting the map server …" :
+    `Downloading ${(MAP_LEVELS.find(l => l[0] === d.level) || [0, d.level])[1]}: ${mapMB(d.received)}${total ? " of " + mapMB(total) + " (" + pct + " %)" : ""}`) : "";
+  if (d && MAPG.pbar && MAPG.sig === JSON.stringify([d.level, d.phase, MAPG.busy, MAPG.err, st.error])) { MAPG.pbar.style.width = (d.phase === "verifying" ? 100 : pct) + "%"; MAPG.ptext.textContent = I18N.t(dtext); return; }
+  MAPG.sig = JSON.stringify([d && d.level, d && d.phase, MAPG.busy, MAPG.err, st.error]);
+  MAPG.pbar = MAPG.ptext = null;
+  const close = () => { MAPG.panel = false; MAPG.err = ""; MAPG.msg = ""; paintMapPanel(); paintMapPrompt(); };
+  const x = el("button", { className: "ghost icon", title: "Close", type: "button", ariaLabel: "Close" }); x.innerHTML = '<svg class="i"><use href="#i-x"/></svg>'; x.onclick = close;
+  const p = el("div", { className: "mpanel", role: "dialog", ariaLabel: "Map of Denmark" }, el("div", { className: "ph" }, el("h3", { textContent: "Offline map of Denmark" }), x));
+  p.append(el("p", { className: "hint", style: "margin:0", textContent: inst
+    ? `Installed: ${(MAP_LEVELS.find(l => l[0] === inst.level) || [0, inst.level])[1]}, ${mapMB(inst.bytes)}${inst.build ? ", built " + mapDate(inst.build) : ""}. The map is drawn from this file, with no internet.`
+    : "No map file is installed. Download one to use the map without internet, and without sending anything to a map server." }));
+  if (!inst) {
+    const cb = el("input", { type: "checkbox", id: "mapOnlineCb", style: "width:auto;flex:none;margin-top:3px" }); cb.checked = mapOnlineOn();
+    cb.onchange = () => { store.set("map-online", cb.checked); MAPG.onlineFail = 0; mapAfterStatus(); };
+    p.append(el("label", { style: "display:flex;gap:10px;align-items:flex-start;font-size:13.5px" }, cb, el("span", {}, el("b", { textContent: "Use online map" }),
+      el("div", { className: "muted", style: "font-size:12.5px", textContent: "Until a map file is installed, the map is loaded from OpenFreeMap over the internet. That server sees this computer's address and the area you look at. Turn it off to show only the plain grid." }))));
+  }
+  if (d) {
+    MAPG.ptext = el("div", { textContent: dtext }); MAPG.pbar = el("i"); MAPG.pbar.style.width = (d.phase === "verifying" ? 100 : pct) + "%";
+    p.append(el("div", { style: "display:grid;gap:6px" }, MAPG.ptext, el("div", { className: "pbar" }, MAPG.pbar)),
+      el("div", { className: "btnrow" }, dbtn("Cancel", () => mapCall("/api/map/cancel", "cancel")), el("span", { className: "muted", style: "font-size:12.5px;align-self:center", textContent: "A cancelled download carries on from where it stopped." })));
+  } else {
+    const idle = !st.can_download;
+    for (const [lv, name, desc] of MAP_LEVELS) {
+      const a = av.find(x => x.level === lv), here = inst && inst.level === lv;
+      const btn = dbtn(here ? "Installed" : a && a.part_bytes > 0 ? "Continue" : inst ? "Replace" : "Download", () => mapCall("/api/map/download?level=" + lv, "download"), here ? "" : "primary");
+      btn.disabled = here || idle || !!MAPG.busy;
+      p.append(el("div", { className: "lvl" }, el("b", { textContent: name }), btn,
+        el("span", { className: "muted" }, el("span", { textContent: desc }), " ",
+          el("span", { textContent: a ? mapMB(a.bytes) + (a.maxzoom != null ? " · zoom " + a.minzoom + "–" + a.maxzoom : "") : "" }),
+          a ? "" : el("span", { textContent: MAPG.busy === "check" ? "Looking up the size …" : "Size not known yet." }),
+          a && a.part_bytes > 0 && !here ? el("span", {}, " · ", el("span", { textContent: mapMB(a.part_bytes) + " already downloaded" })) : "")));
+    }
+    if (idle) p.append(el("p", { className: "err", textContent: "This computer cannot download the map by itself. Downloading needs the curl tool, which is part of Windows 10 and later and of most Linux systems." }));
+    else if (!av.length && !MAPG.busy) p.append(el("div", { className: "btnrow" }, dbtn("Check sizes", () => mapCheck(true))));
+  }
+  if (MAPG.err) p.append(el("p", { className: "err", textContent: mapPlainError(MAPG.err) + (MAPG.err ? " (" + MAPG.err + ")" : "") }));
+  else if (st.error && !d) p.append(el("p", { className: "err", textContent: mapPlainError(st.error) + " (" + st.error + ")" }));
+  if (MAPG.msg) p.append(el("p", { className: "hint", style: "margin:0", textContent: MAPG.msg }));
+  const foot = el("div", { className: "btnrow", style: "align-items:center" });
+  if (inst && !d) foot.append(dbtn("Delete the map", async () => {
+    if (await askConfirm("Delete the map file from this computer? The map then comes from the internet again (or shows the plain grid if the online map is turned off).", "Delete", true)) await mapCall("/api/map/delete", "delete");
+  }, "danger"));
+  foot.append(dbtn("Licences", () => tell("Map data © OpenStreetMap contributors, available under the Open Database Licence (ODbL), https://www.openstreetmap.org/copyright.\nOffline map: Protomaps basemap (BSD-3-Clause). Online map: OpenFreeMap (https://openfreemap.org) with OpenMapTiles (CC-BY 4.0) schema and design.\nMap drawing: MapLibre GL JS and PMTiles (BSD-3-Clause).\nFonts: Noto Sans (SIL Open Font Licence 1.1). Symbols: tangrams icons (MIT).\nThe full texts are kept in the maarse-client/map folder of the source code.")));
+  p.append(foot, el("p", { className: "fine", textContent: MAPG.src === "online" ? "OpenFreeMap © OpenMapTiles Data from OpenStreetMap" : "© " + ((st.attribution || "© OpenStreetMap contributors · Protomaps").replace(/^©\s*/, "")) }));
+  const sc = el("div", { className: "mscrim" }, p);
+  sc.onclick = e => { if (e.target === sc) close(); };
+  slot.replaceChildren(sc);
+}
+window.addEventListener("resize", () => { if (state.view === "map") { if (MAPG.map) MAPG.map.resize(); paintMap(); } });
 
 // ---------- Mesh: one dashboard for Må:rse and MeshCore ----------
 function renderNetwork(box) {

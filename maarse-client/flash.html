@@ -7,33 +7,49 @@
 <script src="i18n.js"></script>
 <link rel="icon" href="icon.svg">
 <style>
-:root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --mute:#5c6670; --line:#d9dee3; --accent:#0b6bcb; --ok:#1a7f37; --bad:#c62828; --warn-bg:#fff6e0; }
-@media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1a1e23; --fg:#e6e9ec; --mute:#9aa4ad; --line:#2c333a; --accent:#4c9bf0; --ok:#4cc26a; --bad:#ef6b6b; --warn-bg:#2d2614; } }
-* { box-sizing: border-box; }
-body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
-main { max-width:720px; margin:0 auto; padding:24px 16px 48px; }
-h1 { font-size:22px; margin:0 0 4px; }
-.sub { color:var(--mute); margin:0 0 20px; }
-.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
-.card h2 { font-size:16px; margin:0 0 10px; }
-label.board { display:flex; gap:10px; align-items:flex-start; padding:8px; border-radius:8px; cursor:pointer; }
-label.board:hover { background:var(--bg); }
-label.board small { display:block; color:var(--mute); }
-button { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; margin:4px 8px 4px 0; }
-button.ghost { background:transparent; color:var(--accent); }
-button:disabled { opacity:.45; cursor:default; }
-.warn { background:var(--warn-bg); border-radius:8px; padding:10px 12px; margin:10px 0; }
-progress { width:100%; height:14px; margin-top:10px; }
-#log { font:12px/1.45 ui-monospace, monospace; white-space:pre-wrap; max-height:260px; overflow:auto; background:var(--bg); border-radius:8px; padding:10px; margin:0; }
-.ok { color:var(--ok); } .bad { color:var(--bad); }
-.hidden { display:none; }
-ol { padding-left:20px; margin:6px 0; }
-code { font-size:13px; }
+  /* Må:rse design language (redesign C): green palette, amber = waiting, red = act. */
+  :root { --bg:#F7F8F6; --surface:#FFFFFF; --surface2:#EEF1EE; --fg:#1A1D1B; --muted:#5B635E; --line:#E3E7E4; --line2:#C9CFCB; --primary:#2F7D5B; --on-primary:#FFFFFF; --pc:#D8EEDF; --on-pc:#0E3A26; --amber-bg:#FDF1E6; --amber-fg:#5A2D05; --amber:#B7791F; --red:#C0392B; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111412; --surface:#1A1E1C; --surface2:#222825; --fg:#E2E6E3; --muted:#B4BCB7; --line:#2C332F; --line2:#3A423D; --primary:#7FD1A5; --on-primary:#00391F; --pc:#1F4D36; --on-pc:#BFEFD2; --amber-bg:#4A3214; --amber-fg:#FFDDB8; --amber:#E9B25A; --red:#FFB4A9; color-scheme: dark; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  :focus-visible { outline:2px solid var(--primary); outline-offset:1px; }
+  header { position:sticky; top:0; z-index:10; height:48px; display:flex; align-items:center; gap:14px; padding:0 14px; background:var(--surface); border-bottom:1px solid var(--line); }
+  header .logo { font:700 18px/1 "Space Grotesk", Inter, system-ui, sans-serif; white-space:nowrap; }
+  main { max-width:760px; margin:0 auto; padding:20px 16px 48px; }
+  h1 { font:700 22px/1.3 "Space Grotesk", Inter, system-ui, sans-serif; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 16px; font-size:14px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:14px; }
+  .card h2 { font:600 15px/1.4 "Space Grotesk", Inter, system-ui, sans-serif; margin:0 0 10px; }
+  label.board { display:flex; gap:10px; align-items:flex-start; min-height:32px; padding:8px 10px; border-radius:10px; cursor:pointer; }
+  label.board:hover { background:var(--surface2); }
+  label.board:has(input:checked) { background:var(--pc); color:var(--on-pc); }
+  label.board small { display:block; color:var(--muted); font-size:12.5px; }
+  label.board:has(input:checked) small { color:var(--on-pc); opacity:.85; }
+  input[type=radio], input[type=checkbox] { width:16px; height:16px; margin:3px 0 0; accent-color:var(--primary); flex:none; }
+  label:has(> input[type=checkbox]) { display:inline-flex; gap:8px; align-items:flex-start; min-height:32px; padding:4px 0; }
+  button { font:inherit; font-size:13.5px; min-height:32px; padding:0 14px; border-radius:8px; border:1px solid var(--primary); background:var(--primary); color:var(--on-primary); cursor:pointer; margin:4px 8px 4px 0; }
+  button:hover { filter:brightness(1.08); }
+  button.ghost { background:transparent; color:var(--fg); border-color:var(--line2); }
+  button.ghost:hover { background:var(--surface2); filter:none; }
+  button:disabled { opacity:.5; cursor:default; filter:none; }
+  input[type=file] { max-width:100%; }
+  input[type=file]::file-selector-button { min-height:32px; padding:0 12px; margin-right:10px; border-radius:8px; border:1px solid var(--line2); background:var(--surface); color:var(--fg); cursor:pointer; font:inherit; font-size:13.5px; }
+  input[type=file]::file-selector-button:hover { background:var(--surface2); }
+  summary { cursor:pointer; padding:6px 0; }
+  .warn { background:var(--amber-bg); color:var(--amber-fg); border:1px solid var(--amber); border-radius:10px; padding:10px 12px; margin:10px 0; }
+  progress { width:100%; height:12px; margin-top:4px; accent-color:var(--primary); }
+  #log { font:12.5px/1.5 ui-monospace, Consolas, monospace; white-space:pre-wrap; max-height:260px; overflow:auto; background:var(--surface2); border-radius:10px; padding:10px 12px; margin:10px 0 0; min-height:40px; }
+  .ok { color:var(--primary); } .bad { color:var(--red); }
+  .hidden { display:none; }
+  ol { padding-left:22px; margin:6px 0 12px; } li { margin:4px 0; }
+  code { font:12.5px ui-monospace, Consolas, monospace; background:var(--surface2); border-radius:5px; padding:1px 5px; }
+  label.board:has(input:checked) code { background:transparent; padding:0; }
+  .warn code { background:transparent; }
 </style>
 </head>
 <body>
+<header><span class="logo">Må:rse flasher</span></header>
 <main>
-  <h1>Må:rse flasher</h1>
   <p class="sub">Install Må:rse firmware over USB from the browser. Works on blank boards and boards running other firmware. Needs Chrome or Edge on a computer.</p>
 
   <div id="nosupport" class="warn hidden">This browser has no Web Serial. Use Chrome or Edge on Windows, macOS or Linux.</div>

@@ -1,0 +1,11 @@
+{
+ "meta": {
+  "code": "da",
+  "name": "Dansk"
+ },
+ "texts": {
+  "Connection of this page to the server": "Sidens forbindelse til serveren",
+  "Log out of the dashboard": "Log ud af oversigten",
+  "Time range of the charts": "Tidsrum for graferne"
+ }
+}

@@ -1,11 +1,27 @@
 # Offline map of Denmark
 
-Status: host side built and tested in the working copy (branch `map-dk-offline`); not released, the `map-dk`
+Status: host side built and tested in the working copy (branch `map-dk-offline`); the web client draws it (see below); not released, the `map-dk`
 release does not exist yet, and neither the web client nor the Android app draws the map from it yet.
 
 The map is one free vector tile archive (Protomaps basemap, OpenStreetMap data) that the host keeps on disk
 and serves to the web client and the Android app. Once it is installed nothing needs the internet to draw
 the map. Server mode (the dedicated VPS `maarse-server`) does not serve the map.
+
+## Online by default, offline file optional (web client, working copy)
+
+The web client's Map tab draws the real map without any download. The source is chosen in this order:
+
+1. **The installed map file** (`status.installed`): drawn from `/map/denmark.pmtiles`; no internet needed, nothing leaves this computer.
+2. **OpenFreeMap online** (`https://tiles.openfreemap.org/styles/positron` in the light theme, `.../styles/dark` in the dark theme): free, no key, viewing is unrestricted. Attribution shown on the map: "OpenFreeMap © OpenMapTiles Data from OpenStreetMap". Only used while no file is installed and the person has not turned it off.
+3. **The offline grid** (no tiles) when neither works: no file and no internet, or the online map is turned off, or the map libraries did not load. A card says why and offers the download.
+
+The attribution always matches the source in use. The node overlay is the same on both sources.
+
+**Privacy.** With the online map the OpenFreeMap server sees the IP address of the computer and the area that is viewed (through the tiles it asks for). It is the only request the web client makes to another server for the map; the style, fonts, sprites and libraries of the online map come from `tiles.openfreemap.org` too, those of the file map from the host. The map screen has a button "Use without internet" (the offline download panel) with a switch "Use online map" (default on, kept in the browser's local storage as `maarse:map-online`). Installing a map file removes the need for the online map entirely. There is no setting for the online map address: the standard default is built in.
+
+The download panel lives in the Map tab (button "Use without internet", "Offline map" once a file is installed): installed level and size, Overview and Detailed with the real sizes (from `POST /api/map/check`), progress while downloading (polls `/api/map/status` every second), Cancel (resumes later), Delete, plain-language errors and the licences. The service worker caches the libraries, style, fonts and sprites under `/map/` in its own cache (`maarse-map-v1`) and never `denmark.pmtiles` (range responses) or `/api/`.
+
+Verified in headless Edge against a test host (light and dark; 1920x1080, 1280x800, 800x900, 390x844; no horizontal scroll): online map, installed file with the internet blocked (no external request), download, cancel, resume, delete, fallback grid without internet. The Android app does not do this yet.
 
 ## How it works
 

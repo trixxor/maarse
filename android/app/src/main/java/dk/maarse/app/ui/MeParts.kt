@@ -34,7 +34,6 @@ import androidx.compose.ui.unit.dp
 internal fun McGroupTitle(title: String = "MeshCore", note: String? = null) {
     Row(Modifier.padding(start = 28.dp, end = 16.dp, top = 14.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.labelLarge, color = Mc.color, fontWeight = FontWeight.SemiBold)
-        NetworkTag()
         if (note != null) Text(note, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

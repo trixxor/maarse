@@ -90,7 +90,7 @@ fun NetworkScreen(onPage: (NetPage) -> Unit, onConnect: (() -> Unit)? = null) {
                 else if (hasRadio) add("No radio heard nearby yet")
                 if (!hasRadio) add("LoRa is not used. Add a radio to reach people nearby without internet")
                 if (links == 0 && near == 0) add("No internet link and no radio heard yet. Messages wait and go when someone is in reach")
-                role?.let { add("this node works as $it") }
+                role?.let { add("This node works as $it") }
             }.joinToString(". ") + "."
         }
         Card2 {

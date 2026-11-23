@@ -66,11 +66,12 @@ fun initials(title: String): String {
 
 @Composable
 fun Avatar(title: String, key: String, size: Dp = 48.dp) {
+    val channel = title.trim().startsWith("#")
     Box(
-        Modifier.size(size).clip(CircleShape).background(avatarColor(key)),
+        Modifier.size(size).clip(CircleShape).background(if (channel) MaterialTheme.colorScheme.primary else avatarColor(key)),
         contentAlignment = Alignment.Center,
     ) {
-        Text(initials(title), color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = (size.value * 0.38f).sp)
+        Text(initials(title), color = if (channel) MaterialTheme.colorScheme.onPrimary else Color.White, fontWeight = FontWeight.SemiBold, fontSize = (size.value * 0.38f).sp)
     }
 }
 

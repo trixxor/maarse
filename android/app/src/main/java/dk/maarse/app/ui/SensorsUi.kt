@@ -9,11 +9,13 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -28,6 +30,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.FlowRow
@@ -613,7 +617,9 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
     val who = setup.optString("name").ifBlank { "the sensor" }
     Column(Modifier.fillMaxSize()) {
         Stepper(step) { SensorsNav.step = it }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Every step starts at its top.
+        val stepScroll = remember(step) { androidx.compose.foundation.ScrollState(0) }
+        Column(Modifier.weight(1f).verticalScroll(stepScroll).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (step == 1) SetupStep(setup, board, d.note, rev, { dialog = it })
             else if (step == 2) RulesStep(setup, ctx, copied, rev, { copied = true }, { dialog = it }, onRule)
             else TestAndSendBody(d, result, rev)
@@ -625,7 +631,7 @@ fun SensorDesignScreen(onRule: (Int) -> Unit, onSend: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (step > 1) OutlinedButton(onClick = { SensorsNav.step = step - 1 }, Modifier.weight(1f).height(48.dp)) { Text("Back") }
                 if (step < 3) Button(onClick = { SensorsNav.step = step + 1 }, Modifier.weight(1f).height(48.dp)) { Text("Next") }
-                else Button(onClick = { result = Sensors.sendRadio() }, Modifier.weight(1f).height(48.dp), enabled = d.compiled?.optBoolean("ok") == true) { Text("Send to $who", maxLines = 1) }
+                else Button(onClick = { result = Sensors.sendRadio() }, Modifier.weight(1f).height(48.dp), enabled = d.compiled?.optBoolean("ok") == true) { Text("Send", maxLines = 1) }
             }
         }
     }
@@ -815,16 +821,18 @@ private fun inputText(inp: JSONObject, board: String): String = when (inp.getStr
 /** A page that covers the screen with its own back arrow (a sub-page of the designer that the shell has no screen for). */
 @Composable
 private fun FullPage(title: String, onBack: () -> Unit, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
-    androidx.compose.ui.window.Dialog(onDismissRequest = onBack,
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
-                Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.material3.IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                    Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                }
-                content()
+    // A full-height sheet: the sheet handles the status bar, the navigation bar and the keyboard (a plain dialog
+    // window ends up partly behind the navigation bar on some phones).
+    ModalBottomSheet(
+        onDismissRequest = onBack, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        dragHandle = null, shape = androidx.compose.ui.graphics.RectangleShape, containerColor = MaterialTheme.colorScheme.background,
+    ) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
+            Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             }
+            content()
         }
     }
 }
@@ -901,14 +909,14 @@ private fun AddSensorPage(setup: JSONObject, board: String, onCustom: () -> Unit
             val advRows = adv.filter { matches(it) }
             if (advRows.isNotEmpty()) {
                 val shown = more || q.isNotBlank()
-                TextButton(onClick = { more = !more }, Modifier.heightIn(min = 48.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Text((if (shown) "▾ " else "▸ ") + "More, for tinkerers", style = MaterialTheme.typography.bodyMedium) }
+                TextButton(onClick = { more = !more }, Modifier.heightIn(min = 48.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Text((if (shown) "▾ " else "▸ ") + tr("More, for tinkerers"), style = MaterialTheme.typography.bodyMedium) }
                 if (shown) Items(advRows)
             }
             if (simple.none { matches(it) } && advRows.isEmpty()) Text("Nothing matches. Try another word, like the name on the box.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp))
             if (update != null) {
                 val day = { t: Long -> java.text.DateFormat.getDateInstance().format(java.util.Date(t * 1000)) }
                 val ver = update.optLong("version")
-                Text("Sensor list from ${day(ver)} (" + (if (ver == update.optLong("built_in_version")) "came with this program" else "updated from GitHub") + ")" +
+                Text(tr("Sensor list from {0}", day(ver)) + " (" + tr(if (ver == update.optLong("built_in_version")) "came with this program" else "updated from GitHub") + ")" +
                     update.optString("error").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty() + if (note.isNotBlank()) " · $note" else "",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
                 if (update.optBoolean("can_update")) Row(verticalAlignment = Alignment.CenterVertically) {

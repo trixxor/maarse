@@ -951,6 +951,7 @@
   "Sensor": "Sensor",
   "Sensor designer": "Sensordesigner",
   "Sensor list from": "Sensorliste fra",
+  "Sensor list from {0}": "Sensorliste fra {0}",
   "Sensors": "Sensorer",
   "Sensors need maarse-host.": "Sensorer kræver maarse-host.",
   "Sensors need maarse-host: connect to it (this PC's host, or your phone).": "Sensorer kræver maarse-host: forbind til den (denne pc's vært eller din telefon).",

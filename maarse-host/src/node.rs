@@ -1087,7 +1087,7 @@ impl Node {
                 publish,
                 result,
             } => self.dht_done(target, publish, result),
-            In::ClientFrame { id, frame } if frame.first() == Some(&backbone::CMD_GET_BACKBONES) => self.backbones(id),
+            In::ClientFrame { id, frame } if frame.as_slice() == [backbone::CMD_GET_BACKBONES] => self.backbones(id),
             In::ClientFrame { id, frame } if crate::history::is_history_command(&frame) => {
                 self.hist_command(id, &frame)
             }

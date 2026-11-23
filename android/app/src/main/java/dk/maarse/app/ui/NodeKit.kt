@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dk.maarse.app.Node
+import dk.maarse.app.tr
 import dk.maarse.app.NodeEntry
 
 /** Small helpers shared by Nodes, Mesh, Map and Sensors (Kit.kt belongs to the shell work). */
@@ -38,7 +39,7 @@ import dk.maarse.app.NodeEntry
 fun plural(n: Int, one: String, many: String = one + "s") = "$n " + if (n == 1) one else many
 
 /** "3 hops", "1 hop", "Nearby". */
-fun hopsText(h: Int?): String? = h?.let { if (it == 0) "Nearby" else plural(it, "hop") }
+fun hopsText(h: Int?): String? = h?.let { tr(if (it == 0) "Nearby" else plural(it, "hop")) }
 
 /** The sensor colour: teal. Red is alarm, amber is quiet, green is fine. */
 object SensorColors {
@@ -89,7 +90,7 @@ fun kindOf(n: NodeEntry): NodeKind = when {
     else -> NodeKind.UNKNOWN
 }
 
-fun kindLabel(n: NodeEntry): String = when (kindOf(n)) { NodeKind.PERSON -> "Person"; NodeKind.REPEATER -> "Repeater"; NodeKind.UNKNOWN -> "Node" }
+fun kindLabel(n: NodeEntry): String = tr(when (kindOf(n)) { NodeKind.PERSON -> "Person"; NodeKind.REPEATER -> "Repeater"; NodeKind.UNKNOWN -> "Node" })
 
 fun isPerson(n: NodeEntry): Boolean = kindOf(n) == NodeKind.PERSON
 

@@ -168,7 +168,7 @@ private fun McRow(n: Node.McNode) {
                 Text(name, Modifier.weight(1f, fill = false), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 NetworkTag()
             }
-            Text(listOfNotNull(MC_KINDS.getOrElse(n.type) { "Node" }, hopsText(n.hops), if (n.seen > 0) "heard " + agoText(n.seen * 1000) else null).joinToString(" · "),
+            Text(listOfNotNull(MC_KINDS.getOrElse(n.type) { "Node" }, hopsText(n.hops), if (n.seen > 0) tr("heard {0}", agoText(n.seen * 1000)) else null).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (n.seen > 0) SignalBars(Math.round(n.snr).toInt())
@@ -185,7 +185,7 @@ private fun ContactRow(n: NodeEntry, onContact: (String) -> Unit) {
         Avatar(title, n.addr, 44.dp)
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(listOfNotNull(kindLabel(n), hopsText(n.hops), if (n.lastHeard > 0) "heard " + time(n.lastHeard) else null).joinToString(" · "),
+            Text(listOfNotNull(kindLabel(n), hopsText(n.hops), if (n.lastHeard > 0) tr("heard {0}", time(n.lastHeard)) else null).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         snrOf(n.addr)?.let { SignalBars(it) }

@@ -225,7 +225,7 @@ private fun PointCard(p: MapPoint, onNode: (String) -> Unit, onSensor: (String) 
             Column(Modifier.weight(1f)) {
                 Text(p.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val kind = when (p.kind) { PKind.PERSON -> "Person"; PKind.REPEATER -> "Repeater"; PKind.SENSOR -> "Sensor"; PKind.NODE -> "Node" }
-                Text(listOfNotNull(kind, if (p.kind == PKind.SENSOR) p.value.ifBlank { null } else hopsText(p.hops), if (p.heard > 0) "heard " + time(p.heard) else null).joinToString(" · "),
+                Text(listOfNotNull(kind, if (p.kind == PKind.SENSOR) p.value.ifBlank { null } else hopsText(p.hops), if (p.heard > 0) tr("heard {0}", time(p.heard)) else null).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (p.kind != PKind.SENSOR) snrOf(p.id)?.let { SignalBars(it) }

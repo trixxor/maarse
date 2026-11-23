@@ -84,13 +84,13 @@ fun NetworkScreen(onPage: (NetPage) -> Unit, onConnect: (() -> Unit)? = null) {
         }
         val story = when {
             !online -> "Choose how this phone connects."
-            off -> "The phone has no internet" + (if (hasRadio) "" else " and no radio") + ". Messages you write wait and go out when you are back online."
+            off -> tr(if (hasRadio) "The phone has no internet." else "The phone has no internet and no radio.") + " " + tr("Messages you write wait and go out when you are back online.")
             else -> buildList {
                 if (links > 0) add(tr("You reach others over the internet ({0})", tr(plural(links, "link"))))
                 if (near > 0) add(tr("{0} heard nearby over LoRa", tr(plural(near, "radio"))))
-                else if (hasRadio) add("No radio heard nearby yet")
-                if (!hasRadio) add("LoRa is not used. Add a radio to reach people nearby without internet")
-                if (links == 0 && near == 0) add("No internet link and no radio heard yet. Messages wait and go when someone is in reach")
+                else if (hasRadio) add(tr("No radio heard nearby yet"))
+                if (!hasRadio) add(tr("LoRa is not used. Add a radio to reach people nearby without internet"))
+                if (links == 0 && near == 0) add(tr("No internet link and no radio heard yet. Messages wait and go when someone is in reach"))
                 role?.let { add(tr("This node works as {0}", it)) }
             }.joinToString(". ") + "."
         }

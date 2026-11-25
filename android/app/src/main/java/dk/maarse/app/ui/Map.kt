@@ -83,7 +83,11 @@ fun MapScreen(onNode: (String) -> Unit, onSensor: (String) -> Unit = {}, onMessa
     var selected by remember { mutableStateOf<String?>(null) }
     val sensorNodes = (sensors ?: emptyList()).map { it.node }.toSet()
 
+    val stats by Node.stats.collectAsState()
     val all = buildList {
+        // Our own GPS position, exact (a fix from the radio), is drawn as "You".
+        val glat = stats[116]; val glon = stats[117]
+        if (glat != null && glon != null && (glat != 0 || glon != 0)) add(MapPoint("me", "You (GPS)", PKind.PERSON, glat / 1e7, glon / 1e7))
         for (n in nodes.values) {
             if (n.lat == null || n.lon == null || n.addr in sensorNodes) continue
             add(MapPoint(n.addr, friendlyName(Node.label(n.addr)), when (kindOf(n)) { NodeKind.PERSON -> PKind.PERSON; NodeKind.REPEATER -> PKind.REPEATER; NodeKind.UNKNOWN -> PKind.NODE }, n.lat!!, n.lon!!, n.hops, n.lastHeard))

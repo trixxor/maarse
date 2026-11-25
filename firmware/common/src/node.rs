@@ -498,6 +498,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// and received packets and commands are handled as normal.
     pub async fn run(&mut self) -> ! {
         loop {
+            // A board with a GPS module powers it only while a position is shared.
+            crate::gps::WANTED.store(self.ext.sharing.precision != 0, core::sync::atomic::Ordering::Relaxed);
             if self.stamping.is_some() {
                 self.stamp_step();
                 match select4(RADIO_RX.receive(), USB_IN.receive(), select5(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive(), crate::bus::PIN_WAKE.wait()), yield_now()).await {
@@ -1106,6 +1108,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::GetStats => {
                 emit(&Event::Stats { items: self.stats() });
                 emit(&Event::Stats { items: self.more_stats() });
+                emit(&Event::Stats { items: self.local_stats() });
             }
             Command::GetRadio => emit(&Event::Radio(self.radio)),
             Command::SetRadio(cfg) => match cfg.validate() {
@@ -2129,6 +2132,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         ] {
             let _ = items.push((k, v));
         }
+        self.link_stats(&mut items);
         items
     }
 

@@ -995,6 +995,35 @@ pub mod stat {
     pub const OUTBOX: u8 = 101;
     /// 1 when a Wi-Fi modem works as an ordinary node because its link is down.
     pub const MODEM_FALLBACK: u8 = 102;
+    /// Satellites in use (boards with a GPS module, while it is on).
+    pub const GPS_SATS: u8 = 103;
+    /// Seconds since the latest GPS fix (absent until there is one).
+    pub const GPS_FIX_AGE_S: u8 = 104;
+    /// GPS state: 0 = off (position sharing is off), 1 = on but the module sends nothing,
+    /// 2 = the module talks and is searching, 3 = has a fix.
+    pub const GPS_STATE: u8 = 105;
+    /// Satellites in view (GSV), including those not used for the fix.
+    pub const GPS_SATS_VIEW: u8 = 106;
+    /// NMEA bytes received from the GPS module since it was switched on.
+    pub const GPS_BYTES: u8 = 107;
+    /// Bluetooth: 0 = off, 1 = advertising (waiting for a phone), 2 = a phone is connected.
+    pub const BLE_STATE: u8 = 108;
+    /// Data received from / sent to a Bluetooth client (bytes since start).
+    pub const BLE_BYTES_IN: u8 = 109;
+    pub const BLE_BYTES_OUT: u8 = 110;
+    /// Data received from / sent to a USB host (bytes since start).
+    pub const USB_BYTES_IN: u8 = 111;
+    pub const USB_BYTES_OUT: u8 = 112;
+    /// Seconds since the USB host last sent a frame (absent = never).
+    pub const USB_IDLE_S: u8 = 113;
+    /// Host only: LoRa radios (USB, Bluetooth or Wi-Fi modems) connected right now.
+    pub const RADIOS_CONNECTED: u8 = 114;
+    /// Host only: seconds since a connected LoRa radio last sent anything (absent = never).
+    pub const RADIO_IDLE_S: u8 = 115;
+    /// Own GPS position in degrees x 10^7. Sent only to a directly attached companion
+    /// (USB, Bluetooth), never in a reply to a remote administrator.
+    pub const GPS_LAT_E7: u8 = 116;
+    pub const GPS_LON_E7: u8 = 117;
 }
 
 /// Error codes in `Event::Error`.

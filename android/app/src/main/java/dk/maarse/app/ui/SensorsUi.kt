@@ -10,6 +10,7 @@ import android.content.ClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -821,18 +822,20 @@ private fun inputText(inp: JSONObject, board: String): String = when (inp.getStr
 /** A page that covers the screen with its own back arrow (a sub-page of the designer that the shell has no screen for). */
 @Composable
 private fun FullPage(title: String, onBack: () -> Unit, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
-    // A full-height sheet: the sheet handles the status bar, the navigation bar and the keyboard (a plain dialog
-    // window ends up partly behind the navigation bar on some phones).
-    ModalBottomSheet(
-        onDismissRequest = onBack, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        dragHandle = null, shape = androidx.compose.ui.graphics.RectangleShape, containerColor = MaterialTheme.colorScheme.background,
+    // A full-screen dialog that cannot be dragged: a bottom sheet followed the finger when a list was grabbed near
+    // the top. The window draws edge to edge, so the bars and the keyboard are handled with insets here.
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onBack,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
-            Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                androidx.compose.material3.IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().statusBarsPadding().then(Modifier.navigationBarsPadding()).imePadding()) {
+                Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                }
+                content()
             }
-            content()
         }
     }
 }

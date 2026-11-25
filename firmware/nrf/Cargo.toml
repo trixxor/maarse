@@ -9,7 +9,9 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = []
-board-wismesh-tag = []
+# The button is on P0.09, a pin the chip also uses for NFC: the feature frees it (a one-time
+# UICR write at the first start, followed by a reset).
+board-wismesh-tag = ["embassy-nrf/nfc-pins-as-gpio"]
 board-xiao-nrf52840 = []
 
 [dependencies]

@@ -44,6 +44,8 @@ import dk.maarse.app.Names
 import dk.maarse.app.Node
 import dk.maarse.app.STATS
 import dk.maarse.app.STAT_GROUPS
+import dk.maarse.app.GPS_STATES
+import dk.maarse.app.formatAgo
 import dk.maarse.app.StatKey
 import dk.maarse.app.formatStat
 
@@ -244,6 +246,7 @@ private fun NeighboursPage() {
 private fun AllStats() {
     val s by Node.stats.collectAsState()
     Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
+        StatusOverview(s)
         if (s.isEmpty()) Hint("No numbers yet.")
         val groups = s.keys.groupBy { (STATS[it] ?: StatKey("Other", "Key $it")).group }
         (STAT_GROUPS + "Other").forEach { g ->
@@ -368,4 +371,73 @@ private fun verdict(lossPct: Double) = when {
     lossPct < 1 -> "Good connection"
     lossPct < 5 -> "Fair: calls may crackle now and then"
     else -> "Poor: calls will break up"
+}
+
+@Composable
+private fun OverviewRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
+        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+    }
+}
+
+/**
+ * The top of the numbers page, in plain words: is the LoRa radio connected, how much data went through
+ * it (LoRa, Bluetooth, USB) and what the GPS sees. Same content as the web client's status page.
+ */
+@Composable
+private fun StatusOverview(s: Map<Int, Int>) {
+    val conn by Node.conn.collectAsState()
+    val bytes = { k: Int -> formatStat(k, s[k] ?: 0) }
+    // 1. The LoRa radio.
+    GroupTitle("LoRa radio")
+    Group {
+        val radios = s[114]
+        when {
+            conn.state != Conn.State.ONLINE -> OverviewRow("Connection", "Not connected")
+            conn.mode == Mode.BLE -> OverviewRow("Connection", "Connected over Bluetooth")
+            radios != null && radios > 0 -> {
+                OverviewRow("Connection", "Connected")
+                s[115]?.let { OverviewRow("Last heard from it", formatAgo(it)) }
+            }
+            radios != null -> OverviewRow("Connection", "No radio connected")
+            else -> OverviewRow("Connection", "Asking…")
+        }
+    }
+    if (conn.state == Conn.State.ONLINE && s[114] == 0 && conn.mode != Mode.BLE)
+        Hint("No LoRa radio is connected to this phone right now. Check that it is on, and that Bluetooth is set up for it under Settings.")
+    // 2. Traffic.
+    val rows = buildList {
+        if (s[30] != null || s[32] != null) add("LoRa packets" to "${s[30] ?: 0} in · ${s[32] ?: 0} out")
+        if (s[42] != null || s[43] != null) add("LoRa data" to "${bytes(42)} in · ${bytes(43)} out")
+        s[41]?.let { add("LoRa airtime used (last hour)" to formatStat(41, it)) }
+        s[108]?.let { add("Bluetooth" to formatStat(108, it)) }
+        if (s[109] != null || s[110] != null) add("Bluetooth data" to "${bytes(109)} in · ${bytes(110)} out")
+        if (s[111] != null || s[112] != null) add("USB data" to "${bytes(111)} in · ${bytes(112)} out")
+        s[113]?.let { add("USB host last heard" to formatAgo(it)) }
+    }
+    GroupTitle("Data sent through the radio")
+    Group { if (rows.isEmpty()) OverviewRow("Counters", "None from the radio yet") else rows.forEach { (k, v) -> OverviewRow(k, v) } }
+    // 3. GPS.
+    GroupTitle("GPS")
+    val gs = s[105]
+    if (gs == null) {
+        Hint("No GPS reported: the connected radio has no GPS module, or has not told its status yet.")
+    } else {
+        Group {
+            OverviewRow("State", GPS_STATES.getOrElse(gs) { "$gs" })
+            s[103]?.let { OverviewRow("Satellites in use", "$it") }
+            s[106]?.let { OverviewRow("Satellites in view", "$it") }
+            s[104]?.let { OverviewRow("Last position", formatAgo(it)) }
+            s[107]?.let { OverviewRow("Data from the module", formatStat(107, it)) }
+            val lat = s[116]; val lon = s[117]
+            if (lat != null && lon != null) OverviewRow("Position", "%.5f°, %.5f°".format(lat / 1e7, lon / 1e7))
+        }
+        Hint(when (gs) {
+            0 -> "The GPS is only switched on while you share your position. Turn it on under Name and position."
+            1 -> "The module is powered but sends nothing. If the byte count stays at 0, it is not talking to the radio."
+            2 -> "The module works. It needs at least 4 satellites for a position: stay in the open, a first fix can take a few minutes."
+            else -> "The position is shown on the Map."
+        })
+    }
 }

@@ -2724,9 +2724,16 @@ const STAT = {
   63: ["Mailbox and files", "Files being received"],
   67: ["Network", "Packets in"], 68: ["Network", "Packets out"], 65: ["Network", "Data in", "bytes"],
   66: ["Network", "Data out", "bytes"], 71: ["Network", "Errors"],
+  103: ["GPS", "Satellites in use"], 106: ["GPS", "Satellites in view"], 105: ["GPS", "GPS state", "gps"], 104: ["GPS", "Last fix", "ago"],
+  107: ["GPS", "Data from the GPS module", "bytes"], 116: ["GPS", "Latitude", "deg"], 117: ["GPS", "Longitude", "deg"],
+  108: ["Bluetooth and USB", "Bluetooth", "ble"], 109: ["Bluetooth and USB", "Bluetooth data in", "bytes"], 110: ["Bluetooth and USB", "Bluetooth data out", "bytes"],
+  111: ["Bluetooth and USB", "USB data in", "bytes"], 112: ["Bluetooth and USB", "USB data out", "bytes"], 113: ["Bluetooth and USB", "USB last heard", "ago"],
+  114: ["General", "LoRa radios connected"], 115: ["General", "Radio last heard", "ago"],
   72: ["DHT", "Contacts"], 73: ["DHT", "Records stored"], 74: ["DHT", "Lookups"], 75: ["DHT", "Found"], 76: ["DHT", "Direct gateways"],
 };
-const GROUPS = ["General", "Power and diagnostics", "Radio", "Routing", "Mailbox and files", "Network"];
+const GROUPS = ["General", "Power and diagnostics", "Radio", "GPS", "Bluetooth and USB", "Routing", "Mailbox and files", "Network"];
+const GPS_STATES = ["Off", "On, but the module sends nothing", "Searching for satellites", "Has a position"];
+const BLE_STATES = ["Off", "Waiting for a phone", "Phone connected"];
 const ENERGY = ["Critical", "Low", "Ok", "Full"];
 const PRECISION = ["Off", "about 10 km", "about 1 km", "Precise"];
 
@@ -2735,6 +2742,10 @@ function fmt(v, unit) {
   if (unit === "role") return ["Client", "Repeater", "Relay", "Anchor", "Auto"][v] || v;
   if (unit === "energy") return ENERGY[v] ?? v;
   if (unit === "temp") return (v / 10).toFixed(1) + " °C";
+  if (unit === "gps") return GPS_STATES[v] ?? v;
+  if (unit === "ble") return BLE_STATES[v] ?? v;
+  if (unit === "deg") return (v / 1e7).toFixed(5) + "°";
+  if (unit === "ago") return v < 60 ? v + " s ago" : v < 3600 ? Math.floor(v / 60) + " min ago" : Math.floor(v / 3600) + " h ago";
   if (unit === "usb") return v < 0 ? "Unknown" : v ? "Yes" : "No";
   if (unit === "precision") return PRECISION[v] ?? v;
   if (unit === "MHz") return (v / 1000).toFixed(3) + " MHz";
@@ -2760,12 +2771,85 @@ function targetPicker(box) {
   box.appendChild(row);
 }
 
+// The top of the status page: is the LoRa radio connected, how much data has gone through it,
+// Bluetooth and USB, and what the GPS sees. Plain words; the numbers are in the table below.
+function statusOverview(box) {
+  const v = statValue;
+  const card = (title, rows, note) => {
+    const c = el("div", { className: "warn" }); c.style.maxWidth = "680px"; c.style.marginBottom = "12px";
+    c.append(el("b", { textContent: title }));
+    if (note) c.append(el("div", { className: "muted", textContent: note }));
+    if (rows.length) {
+      const t = el("table", { className: "stats" }); t.style.marginTop = "8px";
+      for (const [k, val] of rows) { const r = t.insertRow(); r.insertCell().textContent = k; const x = r.insertCell(); x.className = "v"; x.textContent = val; }
+      c.append(t);
+    }
+    box.append(c);
+  };
+  const bytes = x => fmt(x, "bytes");
+
+  // 1. The LoRa radio.
+  const host = transport instanceof WsTransport;
+  if (host) {
+    if (!hs.data && !hs.loading) { hs.loading = true; hsLoad().finally(() => { hs.loading = false; }); }
+    const radios = (hs.devices || []).filter(d => d.kind !== "backbone");
+    if (radios.length) {
+      for (const d of radios) {
+        card("LoRa radio: connected", [["How", DEVICE_KINDS[d.kind] || d.kind], ["Port or address", d.name], ["Connected for", hsAgo(d.up_s)],
+          ["Last heard from it", d.last_rx_s == null ? "nothing yet" : hsAgo(d.last_rx_s) + " ago"], ...(d.snr != null ? [["Latest signal (SNR)", d.snr + " dB"]] : [])]);
+      }
+    } else if (hs.devices == null) card("LoRa radio", [], "Asking the host…");
+    else if (hs.down && hs.down.length) card("LoRa radio: NOT connected", hs.down.map(d => [d.name, d.error || "trying to open it"]),
+      "The host is set up to use this radio but cannot open it. Is it plugged in, and is something else (a flasher, another program) holding the port? It tries again every few seconds.");
+    else card("LoRa radio: NOT connected", [], "No radio is set up on this host. Choose its port under Radios, role and regions.");
+  } else {
+    card("LoRa radio: connected", [["Connection", (transport && transport.name) || "directly"]], "This page talks to the radio itself, so the numbers below are the radio's own.");
+  }
+
+  // 2. Traffic.
+  const rows = [];
+  const pair = (label, a, b, f) => { if (v(a) !== undefined || v(b) !== undefined) rows.push([label, `${f(v(a) ?? 0)} in · ${f(v(b) ?? 0)} out`]); };
+  pair("LoRa packets", 30, 32, x => x.toLocaleString("en-GB"));
+  pair("LoRa data", 42, 43, bytes);
+  if (v(41) !== undefined) rows.push(["LoRa airtime used (last hour)", fmt(v(41), "permille")]);
+  if (v(108) !== undefined) rows.push(["Bluetooth", fmt(v(108), "ble")]);
+  pair("Bluetooth data", 109, 110, bytes);
+  pair("USB data", 111, 112, bytes);
+  if (v(113) !== undefined) rows.push(["USB host last heard", fmt(v(113), "ago")]);
+  if (host) pair("Host network data", 65, 66, bytes);
+  card("Data sent through the radio", rows, rows.length ? null : "No counters from the radio yet.");
+
+  // 3. GPS.
+  const gs = v(105);
+  if (gs === undefined) {
+    card("GPS", [], host ? "No GPS reported. Either the connected radio has no GPS module, or the host has not heard its status yet (it asks every 10 seconds)." : "This radio has no GPS module, or has not reported one.");
+  } else {
+    const g = [["State", GPS_STATES[gs] ?? gs]];
+    if (v(103) !== undefined) g.push(["Satellites in use", String(v(103))]);
+    if (v(106) !== undefined) g.push(["Satellites in view", String(v(106))]);
+    if (v(104) !== undefined) g.push(["Last position", fmt(v(104), "ago")]);
+    if (v(107) !== undefined) g.push(["Data from the module", bytes(v(107))]);
+    const lat = v(116), lon = v(117);
+    if (lat !== undefined && lon !== undefined) g.push(["Position", `${(lat / 1e7).toFixed(5)}°, ${(lon / 1e7).toFixed(5)}°`]);
+    const hint = gs === 0 ? "The GPS is only switched on while you share your position. Turn it on under Settings › Name, position and sharing."
+      : gs === 1 ? "The module is powered but sends nothing. If the byte count stays at 0, the module is not talking to the radio."
+      : gs === 2 ? "The module works. It needs at least 4 satellites for a position: stay in the open, a first fix can take a few minutes." : "";
+    card("GPS", g, hint);
+    if (lat !== undefined && lon !== undefined) {
+      const b = el("button", { textContent: "Show on the map", className: "primary" }); b.onclick = () => { state.mapSel = "me"; state.mapRefit = true; setTab("map"); };
+      box.append(el("div", { className: "row" }, b));
+    }
+  }
+}
+
 function renderStatus(box) {
   $("chat-title").textContent = "Status";
   $("chat-sub").textContent = state.target ? "Fetched over the network when you press the button (costs airtime)" : "Updated every 5 seconds";
   targetPicker(box);
   const items = state.target ? state.remoteStats : state.stats;
+  if (!state.target) statusOverview(box);
   if (!items || !items.length) { box.append(state.target ? "Waiting for a reply… (you must be an administrator of the node)" : "Fetching…"); return; }
+  box.append(el("h3", { textContent: "All numbers", style: "margin:18px 0 4px" }));
   const t = document.createElement("table"); t.className = "stats";
   const byGroup = new Map(GROUPS.map(g => [g, []]));
   for (const [k, v] of items) {
@@ -3368,7 +3452,9 @@ function setView(v) {
   } else if (transport) {
     if (v === "status") {
       transport.send(Cmd.getStats());
-      state.statsTimer = setInterval(() => transport?.send(Cmd.getStats()), 5000);
+      const poll = () => { transport?.send(Cmd.getStats()); if (transport instanceof WsTransport) hsLoadDevices().then(() => { if (state.view === "status") renderChat(); }); };
+      if (transport instanceof WsTransport) hsLoadDevices();
+      state.statsTimer = setInterval(poll, 5000);
     }
     if (v === "radio") {
       transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); transport.send(Cmd.getRegions()); transport.send(Cmd.getStats());
@@ -5731,10 +5817,11 @@ async function hsLoadDevices() {
   const { base, headers } = hsBase();
   try {
     const r = await fetch(`${base}/api/devices`, { cache: "no-store", headers });
-    hs.devices = r.ok ? (await r.json()).devices : null;
+    const j = r.ok ? await r.json() : null;
+    hs.devices = j ? j.devices : null; hs.down = j?.down || [];
   } catch { hs.devices = null; }
 }
-const DEVICE_KINDS = { "backbone": "Backbone (TCP)", "usb-modem": "LoRa modem (USB)", "wifi-modem": "LoRa modem (Wi-Fi)" };
+const DEVICE_KINDS = { "backbone": "Backbone (TCP)", "usb-modem": "LoRa modem (USB)", "wifi-modem": "LoRa modem (Wi-Fi)", "ble-modem": "LoRa modem (Bluetooth)" };
 function hsAgo(s) { return s == null ? "–" : s < 60 ? s + " s" : s < 3600 ? Math.floor(s / 60) + " min" : Math.floor(s / 3600) + " h"; }
 function renderDevices(wrap) {
   wrap.append(el("h3", { textContent: "Devices" }));
@@ -8341,7 +8428,10 @@ const kmOf = (lat, lon, lat0) => ({ x: (lon) * 111.32 * Math.cos(lat0 * Math.PI 
 function mapPoints() {
   const pts = [];
   const sh = state.sharing;
-  if (sh && sh.prec > 0 && (sh.lat || sh.lon)) pts.push({ id: "me", name: "You", kind: "Me", lat: sh.lat, lon: sh.lon, prec: sh.prec });
+  const glat = statValue(116), glon = statValue(117);
+  // A GPS fix from the radio is exact: it wins over the rounded shared position.
+  if (glat !== undefined && glon !== undefined && (glat || glon)) pts.push({ id: "me", name: "You (GPS)", kind: "Me", lat: glat / 1e7, lon: glon / 1e7, prec: 3 });
+  else if (sh && sh.prec > 0 && (sh.lat || sh.lon)) pts.push({ id: "me", name: "You", kind: "Me", lat: sh.lat, lon: sh.lon, prec: sh.prec });
   for (const k of state.nodeInfo.values()) {
     if (!k.position) continue;
     pts.push({ id: k.addr, name: label(k.addr), kind: nodeKindOf(k.addr), lat: k.position.lat, lon: k.position.lon, prec: k.position.prec, hops: k.hops, at: k.at });

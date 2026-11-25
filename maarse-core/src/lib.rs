@@ -20,6 +20,7 @@ pub mod content;
 pub mod dedup;
 pub mod diag;
 pub mod mail;
+pub mod nmea;
 pub mod bloom;
 pub mod clock;
 pub mod duty;

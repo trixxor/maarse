@@ -17,6 +17,7 @@ pub async fn usb_task(usb: USB_DEVICE<'static>) {
         loop {
             match rx.read(&mut buf).await {
                 Ok(n) if n > 0 => {
+                    maarse_fw_common::bus::USB_BYTES_IN.fetch_add(n as u32, core::sync::atomic::Ordering::Relaxed);
                     dec.push(&buf[..n]);
                     while let Some(f) = dec.next_frame() {
                         maarse_fw_common::bus::USB_LAST_RX.store(
@@ -35,14 +36,18 @@ pub async fn usb_task(usb: USB_DEVICE<'static>) {
             let frame = USB_OUT.receive().await;
             // If no host is connected, the FIFO fills up; write_all
             // then waits, and the frame is discarded after a second.
-            let _ = embassy_time::with_timeout(
+            let sent = embassy_time::with_timeout(
                 embassy_time::Duration::from_secs(1),
                 async {
-                    let _ = tx.write_all(&frame).await;
+                    let ok = tx.write_all(&frame).await.is_ok();
                     let _ = tx.flush().await;
+                    ok
                 },
             )
             .await;
+            if sent == Ok(true) {
+                maarse_fw_common::bus::USB_BYTES_OUT.fetch_add(frame.len() as u32, core::sync::atomic::Ordering::Relaxed);
+            }
         }
     };
     join(reader, writer).await;

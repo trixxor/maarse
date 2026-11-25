@@ -3,7 +3,7 @@
 //! only has a few hooks.
 
 use super::{FwNode, Settings, emit, err, log, now_ms};
-use crate::power;
+use crate::{gps, power};
 use core::sync::atomic::Ordering::Relaxed;
 use embassy_time::{Duration, Instant};
 use maarse_core::appdata::{self, AppBuf, Telemetry};
@@ -38,6 +38,17 @@ impl Ext {
 }
 
 impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
+    /// The position to share (rounded as chosen under sharing). A recent GPS fix wins over
+    /// the stored position; it is not saved, so a board without GPS is not affected.
+    pub(super) fn shared_position(&self) -> Option<appdata::Position> {
+        let mut s = self.ext.sharing;
+        if let Some((lat, lon)) = crate::gps::fix() {
+            s.lat_e7 = lat;
+            s.lon_e7 = lon;
+        }
+        s.position()
+    }
+
     pub(super) fn app_data(&self) -> AppBuf {
         let s = &self.ext.sharing;
         let tel = s.telemetry.then(|| Telemetry {
@@ -50,7 +61,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let name = (!self.ext.name.is_empty()).then_some(&self.ext.name[..]);
         // Name our home post office, so senders' offices can find our mail.
         let home = self.home_po.and_then(|h| h.1);
-        let mut v = appdata::build(home.as_ref(), true, s.position(), tel.as_ref(), name);
+        let mut v = appdata::build(home.as_ref(), true, self.shared_position(), tel.as_ref(), name);
         let flags = if self.router.hears_repeater(now_ms()) { appdata::ROLE_HEARS_REPEATER } else { 0 }
             | if self.router.mobile { appdata::ROLE_MOBILE } else { 0 };
         appdata::push_role_bridge(&mut v, self.router.role.as_u8(), flags, self.router.chosen_bridge(now_ms()));
@@ -213,5 +224,58 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
         put(stat::NEIGHBORS, self.router.neighbors.len() as i32);
         put(stat::POSITION_PRECISION, self.ext.sharing.precision as i32);
+    }
+
+    /// GPS, Bluetooth and USB: what the status page needs to tell whether each one works.
+    pub(super) fn link_stats(&self, items: &mut Stats) {
+        let mut put = |k: u8, v: i32| {
+            let _ = items.push((k, v));
+        };
+        let now = Instant::now().as_secs() as u32;
+        // Only a board with a GPS module reports it: the others never switch it on.
+        if gps::HAS_MODULE.load(Relaxed) {
+            put(stat::GPS_STATE, gps::state() as i32);
+            if gps::WANTED.load(Relaxed) {
+                let sats = gps::SATS.load(Relaxed);
+                if sats != gps::NO_DATA {
+                    put(stat::GPS_SATS, sats as i32);
+                }
+                let view = gps::SATS_VIEW.load(Relaxed);
+                if view != gps::NO_DATA {
+                    put(stat::GPS_SATS_VIEW, view as i32);
+                }
+                put(stat::GPS_BYTES, gps::BYTES.load(Relaxed) as i32);
+                let at = gps::FIX_AT_S.load(Relaxed);
+                if at != 0 {
+                    put(stat::GPS_FIX_AGE_S, now.saturating_sub(at) as i32);
+                }
+            }
+        }
+        let ble = if crate::bus::BLE_CONNECTED.load(Relaxed) {
+            2
+        } else if crate::bus::BLE_ACTIVE.load(Relaxed) {
+            1
+        } else {
+            0
+        };
+        put(stat::BLE_STATE, ble);
+        put(stat::BLE_BYTES_IN, crate::bus::BLE_BYTES_IN.load(Relaxed) as i32);
+        put(stat::BLE_BYTES_OUT, crate::bus::BLE_BYTES_OUT.load(Relaxed) as i32);
+        put(stat::USB_BYTES_IN, crate::bus::USB_BYTES_IN.load(Relaxed) as i32);
+        put(stat::USB_BYTES_OUT, crate::bus::USB_BYTES_OUT.load(Relaxed) as i32);
+        let usb = crate::bus::USB_LAST_RX.load(Relaxed);
+        if usb != 0 {
+            put(stat::USB_IDLE_S, now.saturating_sub(usb) as i32);
+        }
+    }
+
+    /// Only for a directly attached companion: our own GPS position, for the map.
+    pub(super) fn local_stats(&self) -> Stats {
+        let mut items = Stats::new();
+        if let Some((lat, lon)) = gps::fix() {
+            let _ = items.push((stat::GPS_LAT_E7, lat));
+            let _ = items.push((stat::GPS_LON_E7, lon));
+        }
+        items
     }
 }

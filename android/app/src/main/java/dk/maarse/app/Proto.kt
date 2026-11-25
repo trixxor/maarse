@@ -365,10 +365,21 @@ val STATS: Map<Int, StatKey> = mapOf(
     63 to StatKey("Mailbox and files", "Files being received"),
     67 to StatKey("Network", "Packets in"), 68 to StatKey("Network", "Packets out"), 65 to StatKey("Network", "Data in", "bytes"),
     66 to StatKey("Network", "Data out", "bytes"), 71 to StatKey("Network", "Errors"), 102 to StatKey("Network", "Wi-Fi modem fell back to a node", "bool"),
+    103 to StatKey("GPS", "Satellites in use"), 106 to StatKey("GPS", "Satellites in view"), 105 to StatKey("GPS", "GPS state", "gps"),
+    104 to StatKey("GPS", "Last fix", "ago"), 107 to StatKey("GPS", "Data from the GPS module", "bytes"),
+    116 to StatKey("GPS", "Latitude", "deg"), 117 to StatKey("GPS", "Longitude", "deg"),
+    108 to StatKey("Bluetooth and USB", "Bluetooth", "ble"), 109 to StatKey("Bluetooth and USB", "Bluetooth data in", "bytes"),
+    110 to StatKey("Bluetooth and USB", "Bluetooth data out", "bytes"), 111 to StatKey("Bluetooth and USB", "USB data in", "bytes"),
+    112 to StatKey("Bluetooth and USB", "USB data out", "bytes"), 113 to StatKey("Bluetooth and USB", "USB last heard", "ago"),
+    114 to StatKey("General", "LoRa radios connected"), 115 to StatKey("General", "Radio last heard", "ago"),
     72 to StatKey("DHT", "Contacts"), 73 to StatKey("DHT", "Records stored"), 74 to StatKey("DHT", "Lookups"),
     75 to StatKey("DHT", "Found"), 76 to StatKey("DHT", "Direct gateways"),
 )
-val STAT_GROUPS = listOf("General", "Carry and contacts", "Mailbox and files", "Routing", "Radio", "Power and diagnostics", "Network", "DHT")
+val STAT_GROUPS = listOf("General", "Radio", "GPS", "Bluetooth and USB", "Carry and contacts", "Mailbox and files", "Routing", "Power and diagnostics", "Network", "DHT")
+val GPS_STATES = listOf("Off", "On, but the module sends nothing", "Searching for satellites", "Has a position")
+val BLE_STATES = listOf("Off", "Waiting for a phone", "Phone connected")
+
+fun formatAgo(v: Int) = if (v < 60) "$v s ago" else if (v < 3600) "${v / 60} min ago" else "${v / 3600} h ago"
 
 val PRECISION = listOf("Off", "About 10 km", "About 1 km", "Precise")
 
@@ -378,6 +389,10 @@ fun formatStat(k: Int, v: Int): String {
         "time" -> { val h = v / 3600; val m = v / 60 % 60; if (h >= 24) "${h / 24} d ${h % 24} h" else if (h > 0) "$h h $m min" else "$m min ${v % 60} s" }
         "role" -> Names.ROLES.getOrElse(v) { "$v" }
         "energy" -> Names.ENERGY.getOrElse(v) { "$v" }
+        "gps" -> GPS_STATES.getOrElse(v) { "$v" }
+        "ble" -> BLE_STATES.getOrElse(v) { "$v" }
+        "deg" -> "%.5f°".format(v / 1e7)
+        "ago" -> formatAgo(v)
         "bool" -> if (v != 0) "yes" else "no"
         "usb" -> if (v < 0) "unknown" else if (v != 0) "yes" else "no"
         "MHz" -> "%.3f MHz".format(v / 1000.0)

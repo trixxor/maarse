@@ -77,6 +77,11 @@ pub static PANIC_FILE: AtomicU32 = AtomicU32::new(0);
 /// Bluetooth is running (advertising or connected), and a phone is connected.
 pub static BLE_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub static BLE_CONNECTED: AtomicBool = AtomicBool::new(false);
+/// Bytes of frames received from / sent to a Bluetooth client and a USB host since start.
+pub static BLE_BYTES_IN: AtomicU32 = AtomicU32::new(0);
+pub static BLE_BYTES_OUT: AtomicU32 = AtomicU32::new(0);
+pub static USB_BYTES_IN: AtomicU32 = AtomicU32::new(0);
+pub static USB_BYTES_OUT: AtomicU32 = AtomicU32::new(0);
 /// Uptime (s) of the last frame from the USB host, 0 = none yet.
 pub static USB_LAST_RX: AtomicU32 = AtomicU32::new(0);
 /// The board's button asks to switch between Bluetooth and Wi-Fi.

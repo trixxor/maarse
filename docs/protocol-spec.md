@@ -1439,6 +1439,15 @@ Keys in `Stats` (module `stat`): 1 uptime s, 2 known nodes, 3 routes,
 93 hellos sent, 94 key requests sent, 95 local repairs, 96 messages carried,
 97 pinned contacts, 98 mobile mode (0/1), 99 quota dropped, 100 messages
 waiting for a key, 101 outbox (messages kept for a post office deposit).
+Status page keys (2026-11-25, working copy, not released): 103 GPS satellites
+in use, 104 seconds since the last GPS fix, 105 GPS state (0 off, 1 on but the
+module is silent, 2 searching, 3 has a position), 106 satellites in view, 107
+NMEA bytes received, 108 Bluetooth state (0 off, 1 advertising, 2 connected),
+109/110 Bluetooth bytes in/out, 111/112 USB bytes in/out, 113 seconds since the
+USB host last sent a frame, 114 (host) LoRa radios connected, 115 (host)
+seconds since a radio last sent anything, 116/117 own GPS latitude/longitude
+x 10^7. Keys 116/117 are sent only to a directly attached companion (a third
+frame after `GetStats` over USB or Bluetooth), never in a remote-control reply.
 Clients must ignore unknown keys.
 
 A `Stats` frame holds at most 59 values (the frame limit is 300 bytes), so the
@@ -1447,7 +1456,10 @@ the second with the post office counters (60, 61, 70) and keys 93–101.
 Receivers merge them by key (a frame containing key 1 starts a new set).
 Over remote control the values come in chunks of 25 as before. In modem mode
 the firmware answers `GetStats` and `GetRadio` without leaving modem mode;
-maarse-server asks its modem every 30 s for its telemetry.
+maarse-host asks every USB or Bluetooth modem for its counters every 10 s and
+passes them on in extra `Stats` frames after its own (keys 30-59 and 80-117 that
+the host does not set itself), so a client of the host sees the radio's GPS,
+Bluetooth and USB numbers. A Wi-Fi modem pushes its own every 30 s.
 
 ### 9.7 Local-only commands
 

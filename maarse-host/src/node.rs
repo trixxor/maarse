@@ -3799,8 +3799,14 @@ impl Node {
                 ),
             ),
             Command::GetStats => {
-                let ev = Event::Stats { items: self.stats() };
+                let host = self.stats();
+                let extra = self.radio_stats(&host);
+                let ev = Event::Stats { items: host };
                 self.send_client(id, &ev);
+                // The radio's own counters (GPS, Bluetooth, USB, battery) in frames of their own.
+                for chunk in extra.chunks(40) {
+                    self.send_client(id, &Event::Stats { items: chunk.iter().copied().collect() });
+                }
             }
             // Handled in node/ext.rs.
             Command::TraceRoute { .. }
@@ -3886,6 +3892,14 @@ impl Node {
         }
     }
 
+    /// The attached LoRa radio's own counters, without the keys this host reports itself.
+    fn radio_stats(&self, host: &Stats) -> Vec<(u8, i32)> {
+        let (_, _, own) = crate::links::radio_summary();
+        own.into_iter()
+            .filter(|(k, _)| matches!(*k, 30..=59 | 80..=113 | 116..=117) && !host.iter().any(|(h, _)| h == k))
+            .collect()
+    }
+
     fn stats(&self) -> Stats {
         let r = self.router.stats;
         let c = &self.counters;
@@ -3933,6 +3947,11 @@ impl Node {
         ];
         if let Some(snr) = c.last_snr {
             items.push((stat::LAST_SNR_DB, snr as i32));
+        }
+        let (radios, idle, _) = crate::links::radio_summary();
+        items.push((stat::RADIOS_CONNECTED, radios as i32));
+        if let Some(s) = idle {
+            items.push((stat::RADIO_IDLE_S, s.min(i32::MAX as u64) as i32));
         }
         self.ext_stats(&mut items);
         items.into_iter().collect()

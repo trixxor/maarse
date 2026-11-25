@@ -282,6 +282,22 @@ fn stop_host() {
     }
 }
 
+/// Stops the host and waits (a few seconds at most) until the supervisor has ended.
+fn stop_host_and_wait() {
+    if matches!(STATE.load(Ordering::SeqCst), x if x == State::Updating as u8) {
+        return;
+    }
+    stop_host();
+    for _ in 0..50 {
+        if !SUPERVISOR_ACTIVE.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    set_state(State::Stopped);
+    log_line("the host was stopped from the tray");
+}
+
 // ---- update -----------------------------------------------------------------
 
 fn check_for_update() {
@@ -469,6 +485,13 @@ pub fn handle(command: &str) -> Status {
             if STATE.load(Ordering::SeqCst) == State::Stopped as u8 {
                 start_supervisor();
             }
+        }
+        // Stops the host (and with it the serial ports it holds, so a radio can be flashed).
+        // The service itself keeps running, so "start" brings the host back.
+        "stop" => stop_host_and_wait(),
+        "restart" => {
+            stop_host_and_wait();
+            start_supervisor();
         }
         _ => {}
     }

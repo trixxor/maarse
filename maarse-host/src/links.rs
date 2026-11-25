@@ -59,9 +59,22 @@ struct LinkInfo {
     tx: u64,
     last_rx: u64,
     last_snr: Option<i8>,
+    /// The radio's own counters (`Event::Stats` frames), merged by key.
+    stats: Vec<(u8, i32)>,
 }
 
 static REGISTRY: Mutex<Vec<LinkInfo>> = Mutex::new(Vec::new());
+
+/// A serial port the host is told to use, and why it is not open right now (if so).
+static PORTS: Mutex<Vec<(String, Option<String>)>> = Mutex::new(Vec::new());
+
+fn port_state(name: &str, error: Option<String>) {
+    let mut p = PORTS.lock().unwrap_or_else(|e| e.into_inner());
+    match p.iter_mut().find(|(n, _)| n == name) {
+        Some(e) => e.1 = error,
+        None => p.push((name.to_string(), error)),
+    }
+}
 
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -74,7 +87,7 @@ fn with_registry<T>(f: impl FnOnce(&mut Vec<LinkInfo>) -> T) -> T {
 pub(crate) fn register(id: u32, name: &str, kind: &'static str) {
     let now = unix_now();
     with_registry(|r| {
-        r.push(LinkInfo { id, name: name.to_string(), peer: None, kill: None, kind, since: now, rx: 0, tx: 0, last_rx: 0, last_snr: None })
+        r.push(LinkInfo { id, name: name.to_string(), peer: None, kill: None, kind, since: now, rx: 0, tx: 0, last_rx: 0, last_snr: None, stats: Vec::new() })
     });
 }
 
@@ -127,6 +140,36 @@ pub(crate) fn note_tx(id: u32) {
     });
 }
 
+/// Keeps the radio's own counters (GPS, Bluetooth, USB, battery ...) from a modem link.
+pub(crate) fn note_modem_stats(id: u32, items: &[(u8, i32)]) {
+    with_registry(|r| {
+        if let Some(l) = r.iter_mut().find(|l| l.id == id) {
+            // The firmware sends several frames; a frame with the uptime starts a new round.
+            if items.iter().any(|(k, _)| *k == 1) {
+                l.stats.retain(|(k, _)| matches!(*k, 60..=70 | 93..));
+            }
+            for (k, v) in items {
+                match l.stats.iter_mut().find(|(x, _)| x == k) {
+                    Some(e) => e.1 = *v,
+                    None => l.stats.push((*k, *v)),
+                }
+            }
+        }
+    });
+}
+
+/// What the status page needs about the LoRa radios: how many are connected, how long since
+/// one last sent anything, and the first one's own counters (the radio's keys, never the host's).
+pub fn radio_summary() -> (usize, Option<u64>, Vec<(u8, i32)>) {
+    let now = unix_now();
+    with_registry(|r| {
+        let radios: Vec<&LinkInfo> = r.iter().filter(|l| matches!(l.kind, "usb-modem" | "wifi-modem" | "ble-modem")).collect();
+        let idle = radios.iter().filter(|l| l.last_rx != 0).map(|l| now.saturating_sub(l.last_rx)).min();
+        let stats = radios.first().map(|l| l.stats.clone()).unwrap_or_default();
+        (radios.len(), idle, stats)
+    })
+}
+
 /// All links right now, as JSON for the web client.
 pub fn devices_json() -> String {
     let now = unix_now();
@@ -148,7 +191,16 @@ pub fn devices_json() -> String {
             })
             .collect()
     });
-    serde_json::json!({ "devices": list }).to_string()
+    // Ports that are set up but not open: the web client says so, with the reason.
+    let open: Vec<String> = with_registry(|r| r.iter().map(|l| l.name.clone()).collect());
+    let down: Vec<serde_json::Value> = PORTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(n, _)| !open.contains(n))
+        .map(|(n, e)| serde_json::json!({ "name": n, "error": e }))
+        .collect();
+    serde_json::json!({ "devices": list, "down": down }).to_string()
 }
 
 /// Start of a region hello over TCP.
@@ -721,8 +773,15 @@ pub fn spawn_serial_named(port: String, baud: u32, name: String, tx: Sender<In>)
                 .timeout(Duration::from_millis(10))
                 .open()
             {
-                Ok(p) => run_serial(p, name.clone(), &tx),
-                Err(e) => eprintln!("[serial] could not open {port}: {e}"),
+                Ok(p) => {
+                    port_state(&name, None);
+                    run_serial(p, name.clone(), &tx);
+                    port_state(&name, Some("the connection was lost".into()));
+                }
+                Err(e) => {
+                    eprintln!("[serial] could not open {port}: {e}");
+                    port_state(&name, Some(e.to_string()));
+                }
             }
             thread::sleep(Duration::from_secs(3));
         }
@@ -801,7 +860,7 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
     }
     let mut dec = FrameDecoder::new();
     let mut buf = [0u8; 256];
-    let mut last_poll = std::time::Instant::now() - std::time::Duration::from_secs(25);
+    let mut last_poll = std::time::Instant::now() - std::time::Duration::from_secs(10);
     'link: loop {
         match port.read(&mut buf) {
             Ok(0) => {
@@ -821,6 +880,10 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
                             open_channel: None,
                         });
                     } else if matches!(f.first(), Some(0x91 | 0x92)) {
+                        if let Ok(maarse_core::companion::Event::Stats { items }) = maarse_core::companion::Event::decode(&f) {
+                            let items: Vec<(u8, i32)> = items.iter().map(|(k, v)| (*k, *v)).collect();
+                            note_modem_stats(id, &items);
+                        }
                         let _ = tx.send(In::ModemFrame { link: id, frame: f.to_vec() });
                     } else if matches!(f.first(), Some(0x9a | 0x9b)) {
                         crate::fwupdate::on_frame(id, &f);
@@ -843,7 +906,7 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
         }
         // maarse-server: ask the modem for its own counters every 30 s (it
         // answers in modem mode without leaving it).
-        if crate::debug::enabled() && last_poll.elapsed() >= std::time::Duration::from_secs(30) {
+        if last_poll.elapsed() >= std::time::Duration::from_secs(10) {
             last_poll = std::time::Instant::now();
             use maarse_core::companion::Command;
             if port.write_all(&Command::GetStats.encode()).is_err() || port.write_all(&Command::GetRadio.encode()).is_err() {

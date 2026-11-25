@@ -2617,6 +2617,8 @@
   "Starting": "Starter",
   "Update {0} is ready - see what changed ...": "Opdatering {0} er klar - se, hvad der er ændret ...",
   "Start the host": "Start værten",
+  "Stop the host (frees the radio's USB port)": "Stop værten (frigiver radioens USB-port)",
+  "Restart the host": "Genstart værten",
   "Open the PC client": "Åbn pc-klienten",
   "Open log folder": "Åbn logmappen",
   "Close this icon (Må:rse keeps running)": "Luk dette ikon (Må:rse kører videre)",

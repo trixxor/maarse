@@ -38,6 +38,8 @@ const ID_UPDATE: usize = 3;
 const ID_LOGS: usize = 4;
 const ID_QUIT: usize = 5;
 const ID_START: usize = 6;
+const ID_STOP: usize = 7;
+const ID_RESTART: usize = 8;
 const ID_BTN_UPDATE: usize = 101;
 const ID_BTN_GITHUB: usize = 102;
 const ID_BTN_CLOSE: usize = 103;
@@ -399,6 +401,13 @@ fn show_menu(win: HWND) {
         if matches!(&st, Ok(s) if s.state == "stopped") {
             add(MF_STRING, ID_START, &tr("Start the host"));
         }
+        let up = matches!(&st, Ok(s) if s.state == "running" || s.state == "starting");
+        if up {
+            add(MF_STRING, ID_STOP, &tr("Stop the host (frees the radio's USB port)"));
+        }
+        if st.is_ok() {
+            add(MF_STRING, ID_RESTART, &tr("Restart the host"));
+        }
         AppendMenuW(m, MF_SEPARATOR, 0, std::ptr::null());
         add(if st.is_ok() { MF_STRING } else { MF_STRING | MF_GRAYED }, ID_WEB, &tr("Open the PC client"));
         add(MF_STRING, ID_LOGS, &tr("Open log folder"));
@@ -424,6 +433,8 @@ fn on_command(win: HWND, id: usize) {
         }
         ID_UPDATE => show_changes(win),
         ID_START => command_async("start"),
+        ID_STOP => command_async("stop"),
+        ID_RESTART => command_async("restart"),
         ID_LOGS => open(&log_dir().to_string_lossy()),
         ID_QUIT => unsafe {
             DestroyWindow(win);

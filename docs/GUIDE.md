@@ -498,6 +498,16 @@ The web client has a **Diagnostics** page (the button next to Status/Radio):
 - **Neighbour list** (`0x21`, reply `0xA1`): nodes heard directly (announces without hops and the previous hop in source paths and path requests) with SNR, RSSI, time and packet count.
 - **Noise floor** (status key 80): lora-phy does not give the instantaneous RSSI, so the noise floor is estimated from received packets: N = RSSI − 10·log10(1 + 10^(SNR/10)), moving average.
 
+## Status page: radio connection, data and GPS
+
+The **Status** page (Mesh › Status in the web client, Mesh › All numbers in the Android app) starts with three plain cards before the table of numbers:
+
+- **LoRa radio**: connected or not. On a host the card says how the radio is connected (USB, Bluetooth, Wi-Fi), for how long, and when it last sent anything. When a radio is set up but cannot be opened, it says NOT connected and gives the reason from the operating system (for example the port is held by another program); the host retries every 3 seconds. The list comes from `/api/devices`, which now also has a `down` array.
+- **Data sent through the radio**: LoRa packets, bytes and airtime, and, from the radio itself, Bluetooth state and bytes and USB bytes. Counters are since the radio started. The host asks each USB or Bluetooth modem for its numbers every 10 seconds.
+- **GPS** (boards with a GPS module, the RAK WisMesh Tag): state (off, silent, searching, has a position), satellites in use and in view, time since the last position, bytes received from the module and the position. The GPS is switched on only while position sharing is on; with sharing off the card says so. The position also appears on the Map as "You (GPS)", exact and not rounded, and is sent only to a directly attached companion, never to a remote administrator.
+
+Status keys 103-117 in `docs/protocol-spec.md`. Verified: unit tests for the NMEA parser (including satellites in view), builds of the nRF firmware for the tag, the host and the Android app. Not yet tested on the real tag with a satellite view (the firmware is not flashed).
+
 ## Range test (field measurement)
 
 The firmware has a range test mode for measuring real range, loss and power use (all earlier comparisons come from the simulator). One node is a beacon that sends numbered packets, optionally stepping through SF7–SF12. The other is a receiver that follows the beacon's SF schedule and reports every beacon with RSSI and SNR. The web client's **Range test** page (connect to the node directly over USB or Bluetooth) adds the phone's GPS position and distance, draws RSSI/SNR/loss and exports CSV. `tools/range_test.py` does the same from a PC. Both nodes estimate the charge used per mode from TX on-time and typical board currents. The step-by-step procedure for a test drive, how to read the results and a results template are in **[FIELD-TEST.md](FIELD-TEST.md)**. Protocol: commands `0x2a`/`0x2b`, events `0xA8`–`0xAB` (`maarse-core/src/rangetest.rs`, `companion.rs`).

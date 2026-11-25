@@ -230,7 +230,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         if self.range.cfg.flags & rangetest::FLAG_POSITION != 0 {
             return Some((self.range.cfg.lat_e7, self.range.cfg.lon_e7));
         }
-        self.ext.sharing.position().map(|p| (p.lat_e7, p.lon_e7))
+        self.shared_position().map(|p| (p.lat_e7, p.lon_e7))
     }
 
     /// New radio settings were applied (`SetRadio`): a receiver that is on

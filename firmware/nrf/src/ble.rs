@@ -49,6 +49,7 @@ pub async fn ble_task(sdc: SoftdeviceController<'static>, mac: [u8; 6], name: &'
             }
         },
         async {
+            maarse_fw_common::bus::BLE_ACTIVE.store(true, core::sync::atomic::Ordering::Relaxed);
             loop {
                 let Ok(conn) = advertise(name, &mut peripheral, &server).await else {
                     embassy_time::Timer::after_secs(1).await;
@@ -107,7 +108,10 @@ async fn rx_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '
                 if let GattEvent::Write(w) = &event
                     && w.handle() == rx_handle
                 {
-                    w.with_data(|_, data| dec.push(data));
+                    w.with_data(|_, data| {
+                        maarse_fw_common::bus::BLE_BYTES_IN.fetch_add(data.len() as u32, core::sync::atomic::Ordering::Relaxed);
+                        dec.push(data)
+                    });
                     while let Some(f) = dec.next_frame() {
                         USB_IN.send(f).await;
                     }
@@ -126,6 +130,7 @@ async fn tx_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '
     let tx = &server.nus.tx;
     loop {
         let frame = BLE_OUT.receive().await;
+        maarse_fw_common::bus::BLE_BYTES_OUT.fetch_add(frame.len() as u32, core::sync::atomic::Ordering::Relaxed);
         for chunk in frame.chunks(CHUNK) {
             let mut v: heapless09::Vec<u8, 244> = heapless09::Vec::new();
             let _ = v.extend_from_slice(chunk);

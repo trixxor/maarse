@@ -58,6 +58,7 @@ pub async fn usb_task(usbd: Peri<'static, USBD>, irqs: crate::Irqs) {
         loop {
             rx.wait_connection().await;
             while let Ok(n) = rx.read_packet(&mut buf).await {
+                maarse_fw_common::bus::USB_BYTES_IN.fetch_add(n as u32, core::sync::atomic::Ordering::Relaxed);
                 dec.push(&buf[..n]);
                 while let Some(f) = dec.next_frame() {
                     maarse_fw_common::bus::USB_LAST_RX.store(
@@ -83,6 +84,9 @@ pub async fn usb_task(usbd: Peri<'static, USBD>, irqs: crate::Irqs) {
             // A packet of exactly 64 bytes must be terminated with an empty packet.
             if ok && frame.len() % 64 == 0 {
                 let _ = tx.write_packet(&[]).await;
+            }
+            if ok {
+                maarse_fw_common::bus::USB_BYTES_OUT.fetch_add(frame.len() as u32, core::sync::atomic::Ordering::Relaxed);
             }
         }
     };

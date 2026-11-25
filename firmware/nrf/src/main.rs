@@ -17,6 +17,8 @@ mod ota;
 mod radio;
 mod sensor;
 mod storage;
+#[cfg(feature = "board-wismesh-tag")]
+mod tag;
 mod usb;
 
 use embassy_executor::Spawner;
@@ -46,6 +48,8 @@ bind_interrupts!(pub struct Irqs {
     RNG => rng::InterruptHandler<peripherals::RNG>;
     SAADC => embassy_nrf::saadc::InterruptHandler;
     TWISPI0 => embassy_nrf::twim::InterruptHandler<peripherals::TWISPI0>;
+    #[cfg(feature = "board-wismesh-tag")]
+    UARTE1 => embassy_nrf::uarte::InterruptHandler<peripherals::UARTE1>;
     EGU0_SWI0 => nrf_sdc::mpsl::LowPrioInterruptHandler;
     CLOCK_POWER => nrf_sdc::mpsl::ClockInterruptHandler;
     RADIO => nrf_sdc::mpsl::HighPrioInterruptHandler;
@@ -86,17 +90,27 @@ async fn main(spawner: Spawner) {
     let mut nrf_cfg = embassy_nrf::config::Config::default();
     nrf_cfg.gpiote_interrupt_priority = Priority::P2;
     nrf_cfg.time_interrupt_priority = Priority::P2;
+    // The tag has the 32.768 kHz crystal (MeshCore: USE_LFXO) and the DC/DC inductor: the
+    // crystal is more exact and costs less than the RC oscillator, the DC/DC saves current.
+    #[cfg(feature = "board-wismesh-tag")]
+    {
+        nrf_cfg.lfclk_source = embassy_nrf::config::LfclkSource::ExternalXtal;
+        nrf_cfg.dcdc.reg1 = true;
+    }
     let p = embassy_nrf::init(nrf_cfg);
     interrupt::SPI2.set_priority(Priority::P3);
     interrupt::USBD.set_priority(Priority::P3);
     interrupt::RNG.set_priority(Priority::P3);
     interrupt::SAADC.set_priority(Priority::P3);
     interrupt::TWISPI0.set_priority(Priority::P3);
+    #[cfg(feature = "board-wismesh-tag")]
+    interrupt::UARTE1.set_priority(Priority::P3);
 
     // ----- board-specific pins -----
     #[cfg(feature = "board-wismesh-tag")]
     let (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, led) = {
-        // RAK4630: the SX1262 gets power via P1.05; LED (blue) on P1.04.
+        // RAK4630: the SX1262 gets power via P1.05; TX LED (green) on P1.03. The blue LED on
+        // P1.04 is lit until `tag::ui_task` takes over, so a hang while starting shows.
         let power = Output::new(p.P1_05, Level::High, OutputDrive::Standard);
         core::mem::forget(power); // Must stay on.
         embassy_time::Timer::after_millis(10).await;
@@ -110,11 +124,13 @@ async fn main(spawner: Spawner) {
             Input::new(p.P1_14, Pull::None),
             None::<Output<'static>>,
             (
-                Output::new(p.P1_04, Level::Low, OutputDrive::Standard),
+                Output::new(p.P1_03, Level::Low, OutputDrive::Standard),
                 true,
             ),
         )
     };
+    #[cfg(feature = "board-wismesh-tag")]
+    let blue = Output::new(p.P1_04, Level::High, OutputDrive::Standard);
     #[cfg(feature = "board-xiao-nrf52840")]
     let (sck, miso, mosi, cs, reset, dio1, busy, rf_rx, led) = (
         // Wio-SX1262 for the XIAO: CS D4, DIO1 D1, BUSY D3, RESET D2, RXEN D5.
@@ -206,8 +222,15 @@ async fn main(spawner: Spawner) {
     };
     #[cfg(feature = "board-wismesh-tag")]
     let sensor_pins = {
-        let _ = sensor_plan;
-        sensor::Pins { i2c: None }
+        // I2C on the module's header: SDA P0.25, SCL P0.24 (as in MeshCore's variant).
+        let i2c = (sensor_plan & 1 != 0).then(|| {
+            let mut cfg = embassy_nrf::twim::Config::default();
+            cfg.sda_pullup = true;
+            cfg.scl_pullup = true;
+            static TX_RAM: StaticCell<[u8; 16]> = StaticCell::new();
+            embassy_nrf::twim::Twim::new(p.TWISPI0, Irqs, p.P0_25, p.P0_24, cfg, TX_RAM.init([0; 16]))
+        });
+        sensor::Pins { i2c }
     };
 
     // ----- LoRa -----
@@ -224,11 +247,22 @@ async fn main(spawner: Spawner) {
         use_dcdc: true,
         rx_boost: true,
     };
-    let lora = match LoRa::new(Sx126x::new(spi, iv, sx_cfg), false, Delay).await {
-        Ok(l) => Some(l),
-        Err(_) => None, // The radio does not answer: the node carries on without it, so USB works.
+    // lora-phy waits for the BUSY pin without a limit, so a radio that never answers (wrong
+    // pins, no power) would hang the start-up before USB and Bluetooth exist. The timeout
+    // keeps the node reachable without a radio.
+    let lora = match embassy_time::with_timeout(
+        embassy_time::Duration::from_secs(3),
+        LoRa::new(Sx126x::new(spi, iv, sx_cfg), false, Delay),
+    )
+    .await
+    {
+        Ok(Ok(l)) => Some(l),
+        // The radio does not answer: the node carries on without it, so USB works.
+        Ok(Err(_)) | Err(_) => None,
     };
     let radio_ok = lora.is_some();
+    #[cfg(feature = "board-wismesh-tag")]
+    tag::RADIO_FAILED.store(!radio_ok, core::sync::atomic::Ordering::Relaxed);
     if let Some(lora) = lora {
         spawner.spawn(radio::radio_task(lora, led.0, led.1, rng.next_u64(), radio_cfg).unwrap());
     }
@@ -236,9 +270,22 @@ async fn main(spawner: Spawner) {
     // ----- Bluetooth (MPSL + SoftDevice Controller) -----
     let mpsl_p = mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);
     let lfclk = mpsl::raw::mpsl_clock_lfclk_cfg_t {
+        #[cfg(feature = "board-wismesh-tag")]
+        source: mpsl::raw::MPSL_CLOCK_LF_SRC_XTAL as u8,
+        #[cfg(not(feature = "board-wismesh-tag"))]
         source: mpsl::raw::MPSL_CLOCK_LF_SRC_RC as u8,
+        // The crystal needs no calibration of an RC oscillator.
+        #[cfg(feature = "board-wismesh-tag")]
+        rc_ctiv: 0,
+        #[cfg(not(feature = "board-wismesh-tag"))]
         rc_ctiv: mpsl::raw::MPSL_RECOMMENDED_RC_CTIV as u8,
+        #[cfg(feature = "board-wismesh-tag")]
+        rc_temp_ctiv: 0,
+        #[cfg(not(feature = "board-wismesh-tag"))]
         rc_temp_ctiv: mpsl::raw::MPSL_RECOMMENDED_RC_TEMP_CTIV as u8,
+        #[cfg(feature = "board-wismesh-tag")]
+        accuracy_ppm: 20,
+        #[cfg(not(feature = "board-wismesh-tag"))]
         accuracy_ppm: mpsl::raw::MPSL_DEFAULT_CLOCK_ACCURACY_PPM as u16,
         skip_wait_lfclk_started: mpsl::raw::MPSL_DEFAULT_SKIP_WAIT_LFCLK_STARTED != 0,
     };
@@ -280,6 +327,22 @@ async fn main(spawner: Spawner) {
     // ----- USB -----
     if !low_power {
         spawner.spawn(usb::usb_task(p.USBD, Irqs).unwrap());
+    }
+
+    // ----- WisMesh Tag: button, LEDs, buzzer and GPS -----
+    #[cfg(feature = "board-wismesh-tag")]
+    {
+        use embassy_nrf::gpio::Pull as P;
+        use embassy_nrf::uarte::{self, Baudrate, Uarte};
+        let button = Input::new(p.P0_09, P::Up);
+        let buzzer = Output::new(p.P0_21, Level::Low, OutputDrive::Standard); // idle low
+        spawner.spawn(tag::ui_task(blue, buzzer, button).unwrap());
+        let mut ucfg = uarte::Config::default();
+        ucfg.baudrate = Baudrate::Baud9600;
+        let (_tx, rx) = Uarte::new(p.UARTE1, p.P0_15, p.P0_16, Irqs, ucfg).split_with_idle(p.TIMER1, p.PPI_CH0, p.PPI_CH1);
+        core::mem::forget(_tx);
+        let gps_en = Output::new(p.P1_02, Level::Low, OutputDrive::Standard);
+        spawner.spawn(tag::gps_task(gps_en, rx).unwrap());
     }
 
     // ----- sensors, and restarts when a new recipe needs other pins -----

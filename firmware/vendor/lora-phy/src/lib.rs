@@ -276,6 +276,52 @@ where
         }
     }
 
+    /// One step of a spectrum sweep: tunes to `frequency_in_hz`, listens for `settle_us` and returns the
+    /// signal strength as `-dBm x 2`. Call [`LoRa::prepare_for_rx`] first (it sets the bandwidth) and
+    /// [`LoRa::enter_standby`] when the sweep is over. While it sweeps, the chip cannot receive packets.
+    pub async fn sweep_step(&mut self, frequency_in_hz: u32, settle_us: u32) -> Result<u8, RadioError> {
+        // Failures are reported as values 248-253 (never a real strength) so a sweep shows what went wrong.
+        if self.radio_kind.set_standby().await.is_err() {
+            return Ok(253);
+        }
+        if self.radio_kind.set_channel(frequency_in_hz).await.is_err() {
+            return Ok(252);
+        }
+        if self.radio_kind.do_rx(RxMode::Continuous).await.is_err() {
+            return Ok(251);
+        }
+        self.delay.delay_us(settle_us).await;
+        match self.radio_kind.get_rssi_inst().await {
+            Ok(v) => Ok(v),
+            Err(RadioError::OpError(_)) => Ok(250),
+            Err(_) => Ok(248),
+        }
+    }
+
+    /// A faster sweep step: stays in receive mode and only moves the frequency (no standby, no new RX
+    /// setup). `first` does the full setup. Returns the strength as `-dBm x 2`, 248-253 on a failure.
+    pub async fn sweep_step_fast(&mut self, frequency_in_hz: u32, settle_us: u32, first: bool) -> Result<u8, RadioError> {
+        if first {
+            if self.radio_kind.set_standby().await.is_err() {
+                return Ok(253);
+            }
+            if self.radio_kind.set_channel(frequency_in_hz).await.is_err() {
+                return Ok(252);
+            }
+            if self.radio_kind.do_rx(RxMode::Continuous).await.is_err() {
+                return Ok(251);
+            }
+        } else if self.radio_kind.set_channel(frequency_in_hz).await.is_err() {
+            return Ok(252);
+        }
+        self.delay.delay_us(settle_us).await;
+        match self.radio_kind.get_rssi_inst().await {
+            Ok(v) => Ok(v),
+            Err(RadioError::OpError(_)) => Ok(250),
+            Err(_) => Ok(248),
+        }
+    }
+
     /// Prepare the Semtech chip for a channel activity detection operation
     pub async fn prepare_for_cad(&mut self, mdltn_params: &ModulationParams) -> Result<(), RadioError> {
         self.prepare_modem(mdltn_params).await?;

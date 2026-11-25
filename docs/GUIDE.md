@@ -506,7 +506,21 @@ The **Status** page (Mesh › Status in the web client, Mesh › All numbers in 
 - **Data sent through the radio**: LoRa packets, bytes and airtime, and, from the radio itself, Bluetooth state and bytes and USB bytes. Counters are since the radio started. The host asks each USB or Bluetooth modem for its numbers every 10 seconds.
 - **GPS** (boards with a GPS module, the RAK WisMesh Tag): state (off, silent, searching, has a position), satellites in use and in view, time since the last position, bytes received from the module and the position. The GPS is switched on only while position sharing is on; with sharing off the card says so. The position also appears on the Map as "You (GPS)", exact and not rounded, and is sent only to a directly attached companion, never to a remote administrator.
 
+**Beep for new messages and battery.** When a message arrives at the host (over LoRa, TCP or anywhere else), the host sends the frame `0x42` to every USB and Bluetooth radio, and a radio with a buzzer (RAK WisMesh Tag) plays two notes, even with a phone or PC attached. At most one beep every 2 seconds. Turn it off with the setting **Silence the radio's beeper** (web: Settings › Radio; Android: the phone node's settings; `--radio-quiet`). A double click on the tag's button also mutes it until it restarts. The top card of the status page shows the radio's battery as a percentage, voltage and bar, red below 20 %. Not yet tested on the tag.
+
 Status keys 103-117 in `docs/protocol-spec.md`. Verified: unit tests for the NMEA parser (including satellites in view), builds of the nRF firmware for the tag, the host and the Android app. Not yet tested on the real tag with a satellite view (the firmware is not flashed).
+
+## Experimental (Android, 2026-11-25, working copy)
+
+Settings › **Experimental** (beta) holds tools that only read from the radio:
+
+- **Spectrum and waterfall**: the radio measures the signal strength on 64 frequencies (EU 863-870 MHz in steps of 110 kHz; the tag's radio part is built for 863-928 MHz, so there is no 433 MHz band: a test on the tag showed a higher, flat noise floor there and nothing could be verified) and the app draws the latest sweep as a line and the last minutes as a waterfall that slides down smoothly. **Live** repeats sweeps (about 5-8 a second on the SX1262, an estimate that is not measured on hardware) and stops by itself after 2 minutes and when you leave the page; **Sweep once** does one. While it sweeps, the radio does not receive messages. Needs the new firmware. Commands `0x3d`/`0xBF`, see the protocol specification.
+- **GPS**: sky view with every satellite (in use filled), signal per satellite, height, speed, accuracy (HDOP), position and time from the satellites. Needs the new firmware on a board with a GPS module (RAK WisMesh Tag); the GPS is only on while position sharing is on. Satellites that are used are matched by number only, so with several systems a number can be marked used for the wrong one.
+- **Signal per neighbour**: a line per neighbour over 1 hour, 24 hours or 7 days, with a word for the trend.
+- **Battery and temperature**: the radio's battery with time left (estimated from the last 6 hours), 24 hour and 7 day history with charging marked, and chip temperature.
+- **Coverage on the map**: a choice on the Map tab (the Coverage chip, or Experimental): a dot where the radio heard someone and the phone knew its position (green strong, amber weak, red barely) and the outline of the reach. Max one dot per 25 m.
+
+History (battery, temperature, neighbour signals, coverage spots) is kept for 7 days in the app's own files on the phone, one value a minute while the app runs and a radio answers; it can be switched off under Experimental. The PC web client does not have these pages yet. Not tested on hardware.
 
 ## Range test (field measurement)
 

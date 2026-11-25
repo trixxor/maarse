@@ -318,7 +318,7 @@ fn now_ms() -> u64 {
     Instant::now().as_millis()
 }
 
-fn emit(ev: &Event) {
+pub(crate) fn emit(ev: &Event) {
     let f = ev.encode();
     let _ = crate::bus::BLE_OUT.try_send(f.clone());
     let _ = USB_OUT.try_send(f);
@@ -1082,6 +1082,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 self.set_modem(true, &frame[1..]);
                 return;
             }
+            Some(0x42) => {
+                crate::bus::BEEP.signal(());
+                return;
+            }
             Some(0x40) => {
                 if let Ok(pkt) = Pkt::from_slice(&frame[1..]) {
                     self.transmit(pkt, 0, 0);
@@ -1093,6 +1097,20 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let Ok(cmd) = Command::decode(&frame) else {
             return err(0, error_code::BAD_FRAME, "invalid frame");
         };
+        // GPS details and spectrum sweeps are answered without leaving modem mode.
+        match cmd {
+            Command::GetGps => {
+                if crate::gps::HAS_MODULE.load(Relaxed) {
+                    emit(&Event::Gps { data: crate::gps::info(Instant::now().as_secs() as u32).to_bytes() });
+                }
+                return;
+            }
+            Command::Sweep { start_khz, step_khz, count, sweeps } => {
+                crate::bus::SWEEP.signal(crate::bus::SweepReq { start_khz, step_khz, count, sweeps });
+                return;
+            }
+            _ => {}
+        }
         let Some(cmd) = self.ext_command(cmd).and_then(|c| self.range_command(c)).and_then(|c| self.sensor_command(c)) else {
             self.set_modem(false, &[]);
             return;
@@ -1332,7 +1350,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             | Command::SetSite(_)
             | Command::GetSite
             | Command::SetRangeTest(_)
-            | Command::GetRangeTest => {}
+            | Command::GetRangeTest
+            | Command::GetGps
+            | Command::Sweep { .. } => {}
             Command::FileBegin { req, dest, size, mime, name } => {
                 self.file_begin(req, dest, size, &mime, &name)
             }

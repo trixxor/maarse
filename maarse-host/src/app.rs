@@ -490,6 +490,7 @@ Usage: maarse-host [options]
                         create an alert root or issuer key and exit
   --sign-issuer-cert <root key> <issuer hex> <name> <days> <out> [events] [max severity]
                         sign an issuer certificate with a root key and exit
+  --radio-quiet         the radio (USB or Bluetooth) does not beep for new messages
   --no-browser          do not open the browser automatically
   --public-map          share this host's map data (its site, nodes with a
                         shared position, the radio links it hears) with
@@ -714,6 +715,7 @@ pub fn parse_from(argv: Vec<String>) -> Result<Config, String> {
             "--udp-peer" => c.udp_peers.push(val("--udp-peer")?),
             "--udp-broadcast" => c.udp_broadcast = Some(val("--udp-broadcast")?.parse().map_err(|_| "--udp-broadcast: invalid port")?),
             "--no-browser" => c.open_browser = false,
+            "--radio-quiet" => crate::links::RADIO_QUIET.store(true, std::sync::atomic::Ordering::Relaxed),
             "--require-key" => c.require_key = true,
             "--allow-legacy-web-token" => c.allow_legacy_web_token = true,
             "--public-map" => c.public_map = true,

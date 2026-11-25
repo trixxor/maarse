@@ -144,6 +144,32 @@ pub fn link_up(id: u32, kind: &'static str, name: &str, send: SendFn) {
     send(ask);
 }
 
+/// A message arrived (over LoRa, TCP or anywhere else): tell the radios that have a buzzer
+/// to beep (frame `0x42`; boards without a buzzer ignore it). At most one beep every 2 s.
+pub fn beep_radios() {
+    use std::sync::atomic::Ordering::Relaxed;
+    static LAST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    if crate::links::RADIO_QUIET.load(Relaxed) {
+        return;
+    }
+    let t = now();
+    if t - LAST.load(Relaxed) < 2 {
+        return;
+    }
+    LAST.store(t, Relaxed);
+    for d in devs().iter().filter(|d| d.kind != "wifi-modem") {
+        (d.send)(vec![1, 0, 0x42]);
+    }
+}
+
+/// A companion command (already encoded, with its length) to every USB and Bluetooth radio: GPS
+/// details and spectrum sweeps, which only the radio can answer.
+pub fn to_radios(frame: &[u8]) {
+    for d in devs().iter().filter(|d| d.kind != "wifi-modem") {
+        (d.send)(frame.to_vec());
+    }
+}
+
 pub fn link_down(id: u32) {
     devs().retain(|d| d.id != id);
 }

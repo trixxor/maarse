@@ -217,6 +217,20 @@ pub const DCMD_ROLE: u8 = 0;
 /// `DISPLAY_CMD`: send an announce now.
 pub const DCMD_ANNOUNCE: u8 = 10;
 
+/// A spectrum sweep asked for (`Command::Sweep`): the radio task measures and answers with `Sweep` events.
+/// `sweeps` 0 stops a running one.
+#[derive(Clone, Copy)]
+pub struct SweepReq {
+    pub start_khz: u32,
+    pub step_khz: u16,
+    pub count: u8,
+    pub sweeps: u8,
+}
+pub static SWEEP: Signal<M, SweepReq> = Signal::new();
+
+/// The host says a message arrived (frame `0x42`): the board may beep.
+pub static BEEP: Signal<M, ()> = Signal::new();
+
 /// Remembers the latest message (the sender's short address and the start of the text).
 pub fn note_message(from: &Address, text: &[u8]) {
     MSG_COUNT.fetch_add(1, Relaxed);

@@ -49,6 +49,10 @@ object Cmd {
     fun join(name: String) = frame(0x04) { text(name) }
     fun announce() = frame(0x05)
     fun getStats() = frame(0x09)
+    /** GPS details (satellites, height, speed ...); only a radio with a GPS module answers. */
+    fun getGps() = frame(0x3c)
+    /** A spectrum sweep: `count` steps of `stepKhz` from `startKhz`, `sweeps` times in a row (255 = until stopped or 2 minutes, 0 = stop). */
+    fun sweep(startKhz: Long, stepKhz: Int, count: Int, sweeps: Int) = frame(0x3d) { u32(startKhz); u16(stepKhz); u8(count); u8(sweeps) }
     fun setRadio(c: RadioCfg) = frame(0x0a) {
         u32(c.freq); u32(c.bw); u8(c.sf); u8(c.cr); u8(c.power); u16(c.duty); u16(c.preamble); u8(c.announce)
     }
@@ -135,6 +139,9 @@ sealed class Ev {
     data class Deposited(val msgId: Long) : Ev()
     data class CarryAcked(val msgId: Long) : Ev()
     data class Stats(val items: List<Pair<Int, Int>>) : Ev()
+    data class Gps(val info: GpsInfo) : Ev()
+    /** One spectrum sweep: `rssi` is -dBm x 2 for each step (255 = not measured). */
+    data class Sweep(val seq: Int, val startKhz: Long, val stepKhz: Int, val rssi: IntArray) : Ev()
     data class Radio(val cfg: RadioCfg) : Ev()
     data class Regions(val strict: Boolean, val names: String) : Ev()
     data class RemoteReply(val from: String, val inner: Ev?) : Ev()
@@ -211,6 +218,8 @@ fun decodeEvent(f: ByteArray): Ev {
         0x8e -> Ev.Log(r.txt(1))
         0x8f -> Ev.Error(r.u16(1), r.u8(3), r.txt(4))
         0x90 -> Ev.Deposited(r.u64(1))
+        0xbe -> GpsInfo.parse(f.copyOfRange(1, f.size))?.let { Ev.Gps(it) } ?: Ev.Unknown(t)
+        0xbf -> Ev.Sweep(r.u16(1), r.u32(3), r.u16(7), IntArray(maxOf(0, f.size - 9)) { r.u8(9 + it) })
         0x91 -> Ev.Stats((1 until f.size - 4 step 5).map { r.u8(it) to r.i32(it + 1) })
         0x92 -> Ev.Radio(RadioCfg(r.u32(1), r.u32(5), r.u8(9), r.u8(10), r.s8(11), r.u16(12), r.u16(14), r.u8(16)))
         0x93 -> Ev.RemoteReply(r.addr(1), if (f.size > 17) decodeEvent(f.copyOfRange(17, f.size)) else null)
@@ -405,5 +414,28 @@ fun formatStat(k: Int, v: Int): String {
         "bytes" -> if (v < 10240) "$v B" else if (v < 10485760) "%.1f KB".format(v / 1024.0) else "%.1f MB".format(v / 1048576.0)
         "" -> "$v"
         else -> "$v $unit"
+    }
+}
+
+/** One satellite: system (0 GPS, 1 GLONASS, 2 Galileo, 3 BeiDou), number, direction and signal (dB-Hz, 0 = not tracked). */
+data class GpsSat(val sys: Int, val prn: Int, val elevation: Int, val azimuth: Int, val snr: Int, val used: Boolean) {
+    val system get() = listOf("GPS", "GLO", "GAL", "BDS").getOrElse(sys) { "SAT" }
+}
+
+/** What the GPS page shows (the layout of `maarse_core::gpsinfo`). `altDm` is null when unknown. */
+data class GpsInfo(
+    val state: Int, val used: Int, val view: Int, val hdopX10: Int, val altDm: Int?, val speedCms: Int, val course: Int,
+    val utc: Long, val latE7: Int, val lonE7: Int, val sats: List<GpsSat>,
+) {
+    companion object {
+        fun parse(b: ByteArray): GpsInfo? {
+            if (b.size < 26) return null
+            val r = Rd(b)
+            val alt = r.i32(5)
+            val n = r.u8(25)
+            if (b.size < 26 + n * 7) return null
+            val sats = (0 until n).map { k -> val o = 26 + k * 7; GpsSat(r.u8(o), r.u8(o + 1), r.u8(o + 2), r.u16(o + 3), r.u8(o + 5), r.u8(o + 6) != 0) }
+            return GpsInfo(r.u8(0), r.u8(1), r.u8(2), r.u16(3), alt.takeIf { it != Int.MIN_VALUE }, r.u16(9), r.u16(11), r.u32(13), r.i32(17), r.i32(21), sats)
+        }
     }
 }

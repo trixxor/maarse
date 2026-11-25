@@ -1060,6 +1060,13 @@ impl Node {
                             t.modem_stats(&name, &items);
                         }
                     }
+                    // GPS details and spectrum rows go to the clients as they are.
+                    Ok(ev @ (Event::Gps { .. } | Event::Sweep { .. })) => {
+                        let f = ev.encode().to_vec();
+                        for tx in self.clients.values() {
+                            let _ = tx.send(f.clone());
+                        }
+                    }
                     Ok(Event::Radio(cfg)) => {
                         if let Some(t) = self.tele.as_mut() {
                             t.modem_radio(&name, format!("{:.3} MHz, SF{}, BW {} kHz, CR4/{}, {} dBm, duty {} ‰", cfg.freq_hz as f64 / 1e6, cfg.sf, cfg.bw_hz / 1000, cfg.cr, cfg.tx_power_dbm, cfg.duty_permille));
@@ -3425,6 +3432,7 @@ impl Node {
     fn broadcast(&mut self, ev: &Event) {
         self.hist_observe(ev);
         if matches!(ev, Event::DirectReceived { .. } | Event::ChannelReceived { .. }) {
+            crate::fwupdate::beep_radios();
             if self.inbox.len() >= 100 {
                 self.inbox.pop_front();
             }
@@ -3798,6 +3806,8 @@ impl Node {
                     "maarse-host is a gateway and always has the repeater role. Connect to the node via USB to choose a role.",
                 ),
             ),
+            // Only the radio knows: passed on to the USB and Bluetooth radios.
+            Command::GetGps | Command::Sweep { .. } => crate::fwupdate::to_radios(&cmd.encode()),
             Command::GetStats => {
                 let host = self.stats();
                 let extra = self.radio_stats(&host);

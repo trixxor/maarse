@@ -47,6 +47,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dk.maarse.app.History
 import dk.maarse.app.Node
 import dk.maarse.app.Sensors
 import dk.maarse.app.tr
@@ -104,11 +105,18 @@ fun MapScreen(onNode: (String) -> Unit, onSensor: (String) -> Unit = {}, onMessa
     val shown = all.filter { filter == 0 || (filter == 1 && it.kind == PKind.PERSON) || (filter == 2 && it.kind == PKind.REPEATER) || (filter == 3 && it.kind == PKind.SENSOR) }
     val sel = all.firstOrNull { it.id == selected }
     val noPosition = nodes.values.count { it.lat == null && it.addr !in sensorNodes }
+    val coverageOn by History.coverageOn.collectAsState()
+    val spots by History.spots.collectAsState()
 
     // The grid takes all the height that is left; the card or hint, the legend and the one note sit below it.
     Column(Modifier.fillMaxSize()) {
         ChipRow(MAP_FILTERS, filter, { filter = it; selected = null })
-        MapCanvas(all, shown, selected, { selected = it }, Modifier.weight(1f).heightIn(min = 160.dp))
+        // The coverage layer is a choice (Experimental): where the radio heard others, from the places you have been.
+        androidx.compose.material3.FilterChip(
+            coverageOn, { History.showCoverage = !coverageOn }, { Text("Coverage") },
+            Modifier.padding(horizontal = 16.dp),
+        )
+        MapCanvas(all, shown, selected, { selected = it }, Modifier.weight(1f).heightIn(min = 160.dp), if (coverageOn) spots else emptyList())
         Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState()).padding(bottom = 8.dp)) {
             if (sel != null) PointCard(sel, onNode, onSensor, onMessage)
             else if (all.isEmpty()) Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -116,6 +124,7 @@ fun MapScreen(onNode: (String) -> Unit, onSensor: (String) -> Unit = {}, onMessa
                 Text("A node shows up here when it shares where it is (under Name and position). Nothing is guessed.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else if (shown.isEmpty()) Text("Nothing in this filter shares a position.", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             else Text("Tap a point to see who it is and how well you hear it.", Modifier.padding(horizontal = 24.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (coverageOn) CoverageNote(spots)
             Legend()
             if (all.isNotEmpty() && noPosition > 0) Text(
                 if (noPosition == 1) "1 node has not shared a position and is not drawn." else "$noPosition nodes have not shared a position and are not drawn.",
@@ -149,7 +158,7 @@ private fun makeView(points: List<MapPoint>, w: Float, h: Float): View {
 private fun kmText(km: Double) = if (km < 1) "${(km * 1000).toInt()} m" else if (km == floor(km)) "${km.toInt()} km" else "$km km"
 
 @Composable
-private fun MapCanvas(all: List<MapPoint>, shown: List<MapPoint>, selected: String?, onSelect: (String?) -> Unit, modifier: Modifier = Modifier) {
+private fun MapCanvas(all: List<MapPoint>, shown: List<MapPoint>, selected: String?, onSelect: (String?) -> Unit, modifier: Modifier = Modifier, spots: List<History.Spot> = emptyList()) {
     val measurer = rememberTextMeasurer()
     val cs = MaterialTheme.colorScheme
     val grid = cs.outlineVariant
@@ -163,7 +172,8 @@ private fun MapCanvas(all: List<MapPoint>, shown: List<MapPoint>, selected: Stri
     val small = TextStyle(fontSize = 10.sp, color = muted)
     val colours = all.filter { it.kind == PKind.PERSON }.associate { it.id to avatarColor(it.id) }
     var box by remember { mutableStateOf(Size.Zero) }
-    val view = remember(all, box) { makeView(all, box.width, box.height) }
+    // The view also holds the coverage spots, so they are all on the map.
+    val view = remember(all, spots, box) { makeView(all + spots.map { MapPoint("spot", "", PKind.NODE, it.latE6 / 1e6, it.lonE6 / 1e6) }, box.width, box.height) }
     Canvas(
         modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
             .background(cs.surfaceContainerHigh)
@@ -189,6 +199,18 @@ private fun MapCanvas(all: List<MapPoint>, shown: List<MapPoint>, selected: Stri
             while (y < size.height) { drawLine(grid, Offset(0f, y), Offset(size.width, y), 1.dp.toPx()); y += stepPx }
         }
         drawText(measurer, tr("Offline grid · 1 square ≈ {0}", kmText(view.step)), Offset(8.dp.toPx(), size.height - 18.dp.toPx()), small)
+        // Coverage: a dot per place where something was heard (green strong, amber weak, red barely), and the outline of the reach.
+        if (spots.isNotEmpty()) {
+            hull(spots).takeIf { it.size >= 3 }?.let { h ->
+                val path = androidx.compose.ui.graphics.Path().apply { h.forEachIndexed { i, sp -> val o = Offset(view.x(sp.lonE6 / 1e6), view.y(sp.latE6 / 1e6)); if (i == 0) moveTo(o.x, o.y) else lineTo(o.x, o.y) }; close() }
+                drawPath(path, primary.copy(alpha = 0.08f))
+                drawPath(path, primary, style = Stroke(1.5.dp.toPx(), pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(14f, 10f))))
+            }
+            for (sp in spots) {
+                val c = if (sp.snr >= 0) primary else if (sp.snr >= -10) amber else red
+                drawCircle(c.copy(alpha = 0.6f), 5.dp.toPx(), Offset(view.x(sp.lonE6 / 1e6), view.y(sp.latE6 / 1e6)))
+            }
+        }
         // Dim the points the filter hides, draw the rest on top.
         val order = all.sortedBy { it.id == selected }
         for (p in order) {
@@ -263,4 +285,31 @@ private fun LegendItem(color: Color, round: Boolean, text: String) {
         Box(Modifier.size(10.dp).clip(if (round) RoundedCornerShape(50) else RoundedCornerShape(3.dp)).background(color))
         Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
     }
+}
+
+/** The outline of the places something was heard (convex hull, Andrew's monotone chain). */
+private fun hull(spots: List<History.Spot>): List<History.Spot> {
+    val pts = spots.distinctBy { it.latE6 to it.lonE6 }.sortedWith(compareBy({ it.lonE6 }, { it.latE6 }))
+    if (pts.size < 3) return pts
+    fun cross(o: History.Spot, a: History.Spot, b: History.Spot) =
+        (a.lonE6 - o.lonE6).toLong() * (b.latE6 - o.latE6) - (a.latE6 - o.latE6).toLong() * (b.lonE6 - o.lonE6)
+    val lower = ArrayList<History.Spot>()
+    for (p in pts) { while (lower.size >= 2 && cross(lower[lower.size - 2], lower.last(), p) <= 0) lower.removeAt(lower.size - 1); lower.add(p) }
+    val upper = ArrayList<History.Spot>()
+    for (p in pts.asReversed()) { while (upper.size >= 2 && cross(upper[upper.size - 2], upper.last(), p) <= 0) upper.removeAt(upper.size - 1); upper.add(p) }
+    return lower.dropLast(1) + upper.dropLast(1)
+}
+
+/** One line under the map when the coverage layer is on: how many spots and how far apart the farthest two are. */
+@Composable
+private fun CoverageNote(spots: List<History.Spot>) {
+    val text = if (spots.isEmpty())
+        "No coverage yet. A spot is saved when the radio hears someone and the phone knows where it is. It stays on the phone."
+    else {
+        val h = hull(spots)
+        var far = 0.0
+        for (a in h) for (b in h) far = max(far, History.distanceM(a.latE6 / 1e6, a.lonE6 / 1e6, b.latE6 / 1e6, b.lonE6 / 1e6))
+        tr("{0} spots in the last 7 days, farthest apart {1}.", spots.size, if (far < 1000) "${far.toInt()} m" else "%.1f km".format(far / 1000))
+    }
+    Text(text, Modifier.padding(horizontal = 24.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }

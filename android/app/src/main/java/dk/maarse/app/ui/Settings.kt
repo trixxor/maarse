@@ -318,6 +318,7 @@ private data class Field(val flag: String, val kind: Kind, val label: String, va
 
 private val HOST_FIELDS = listOf(
     Field("--public", Kind.BOOL, "Join the open backbone", "Connects to the public servers (nj01 …)."),
+    Field("--radio-quiet", Kind.BOOL, "Silence the radio's beeper", "A radio with a buzzer (RAK WisMesh Tag) beeps when a message arrives, over LoRa or TCP. Tick this to stop it."),
     Field("--peer", Kind.LIST, "Also connect to", "host:port, one per line, e.g. a friend's host or your home PC."),
     Field("--dht", Kind.LIST, "DHT seeds", "host:port, one per line."),
     Field("--listen", Kind.TEXT, "Accept connections on", "off, or e.g. 0.0.0.0:4242 (only useful on Wi-Fi; mobile networks cannot be reached)."),

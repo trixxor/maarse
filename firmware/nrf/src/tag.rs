@@ -99,6 +99,17 @@ impl Ui {
         !(bus::BLE_CONNECTED.load(Relaxed) || usb_recent)
     }
 
+    /// A beep asked for by the host.
+    async fn beep(&mut self) {
+        if MUTED.load(Relaxed) {
+            self.blink(60, 80, 3).await;
+            return;
+        }
+        self.blue.set_high();
+        self.melody(&[(1760, 70), (0, 40), (2349, 110)]).await;
+        self.blue.set_low();
+    }
+
     async fn on_message(&mut self) {
         if self.sound_allowed() {
             self.blue.set_high();
@@ -164,9 +175,12 @@ pub async fn ui_task(blue: Output<'static>, buzzer: Output<'static>, mut button:
     let mut seen = bus::MSG_COUNT.load(Relaxed);
     let mut next_beat = Instant::now() + Duration::from_secs(BEAT_S);
     loop {
-        match select(button.wait_for_low(), Timer::after_millis(250)).await {
+        match select(button.wait_for_low(), select(Timer::after_millis(250), bus::BEEP.wait())).await {
             Either::First(()) => handle_button(&mut ui, &mut button).await,
-            Either::Second(()) => {
+            // The host got a message (over LoRa or TCP) and asks for a beep: it plays even
+            // with a phone or PC attached, because the host chose it (`--radio-quiet` stops it).
+            Either::Second(Either::Second(())) => ui.beep().await,
+            Either::Second(Either::First(())) => {
                 let n = bus::MSG_COUNT.load(Relaxed);
                 if n != seen {
                     seen = n;
@@ -242,17 +256,30 @@ pub async fn gps_task(mut enable: Output<'static>, mut rx: UarteRxWithIdle<'stat
         gps::BYTES.store(0, Relaxed);
         gps::SATS.store(gps::NO_DATA, Relaxed);
         gps::SATS_VIEW.store(gps::NO_DATA, Relaxed);
+        gps::clear();
         while gps::WANTED.load(Relaxed) {
             if let Ok(Ok(n)) = with_timeout(Duration::from_secs(2), rx.read_until_idle(&mut buf)).await {
                 gps::BYTES.fetch_add(n as u32, Relaxed);
                 for &b in &buf[..n] {
-                    match parser.feed(b) {
-                        Some(Sentence::Fix { lat_e7, lon_e7 }) => {
-                            gps::store_fix(lat_e7, lon_e7, Instant::now().as_secs() as u32);
+                    let mut next = parser.feed(b);
+                    while let Some(sentence) = next {
+                        let now = Instant::now().as_secs() as u32;
+                        match sentence {
+                            Sentence::Fix { lat_e7, lon_e7 } => gps::store_fix(lat_e7, lon_e7, now),
+                            Sentence::Sats(n) => gps::SATS.store(n as u32, Relaxed),
+                            Sentence::InView(n) => gps::SATS_VIEW.store(n as u32, Relaxed),
+                            Sentence::Alt(dm) => gps::ALT_DM.store(dm, Relaxed),
+                            Sentence::Hdop(h) => gps::HDOP_X10.store(h as u32, Relaxed),
+                            Sentence::Motion { speed_cms, course } => {
+                                gps::SPEED_CMS.store(speed_cms as u32, Relaxed);
+                                gps::COURSE.store(course as u32, Relaxed);
+                            }
+                            Sentence::Utc(t) => gps::UTC.store(t, Relaxed),
+                            Sentence::Sat { sys, prn, elevation, azimuth, snr } => gps::note_sat(sys, prn, elevation, azimuth, snr, now),
+                            Sentence::Used { prns, n } => gps::note_used(&prns[..n as usize], now),
+                            Sentence::NoFix => {}
                         }
-                        Some(Sentence::Sats(n)) => gps::SATS.store(n as u32, Relaxed),
-                        Some(Sentence::InView(n)) => gps::SATS_VIEW.store(n as u32, Relaxed),
-                        Some(Sentence::NoFix) | None => {}
+                        next = parser.next();
                     }
                 }
             }

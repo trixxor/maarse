@@ -735,6 +735,16 @@ where
         }
     }
 
+    async fn get_rssi_inst(&mut self) -> Result<u8, RadioError> {
+        let op_code = [OpCode::GetRSSIInst.value()];
+        let mut raw = [0x00u8; 1];
+        let status = self.intf.read_with_status(&op_code, &mut raw).await?;
+        if OpStatusErrorMask::is_error(status) {
+            return Err(RadioError::OpError(status));
+        }
+        Ok(raw[0])
+    }
+
     async fn get_rx_packet_status(&mut self) -> Result<PacketStatus, RadioError> {
         let op_code = [OpCode::GetPacketStatus.value()];
         let mut pkt_status = [0x00u8; 3];

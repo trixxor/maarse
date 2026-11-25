@@ -94,6 +94,10 @@ pub trait RadioKind {
     ) -> Result<u8, RadioError>;
     /// Get the RSSI and SNR for the packet made available as the result of a receive operation
     async fn get_rx_packet_status(&mut self) -> Result<PacketStatus, RadioError>;
+    /// The signal strength right now, as `-dBm x 2` (a spectrum sweep). Only the SX126x has it.
+    async fn get_rssi_inst(&mut self) -> Result<u8, RadioError> {
+        Err(RadioError::InvalidRadioMode)
+    }
     /// Perform a channel activity detection operation
     async fn do_cad(&mut self, mdltn_params: &ModulationParams) -> Result<(), RadioError>;
     /// Set the LoRa chip to provide notification of specific events based on radio state

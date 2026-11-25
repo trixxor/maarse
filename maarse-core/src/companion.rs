@@ -132,6 +132,13 @@ pub enum Command {
     TraceRoute { req: u16, dest: Address },
     /// 0x21: show direct neighbours. The reply is one or more `Neighbors`.
     GetNeighbors,
+    /// 0x3c: GPS details (satellites with direction, height, speed, accuracy, time). The reply is
+    /// `Gps` (a board without GPS does not answer).
+    GetGps,
+    /// 0x3d: measure the signal strength on a row of frequencies (a spectrum sweep). `count` steps
+    /// (at most 128) of `step_khz`, the first at `start_khz`; the radio does `sweeps` sweeps in a row
+    /// (0 = stop), one `Sweep` event per sweep. While it sweeps, the radio cannot receive messages.
+    Sweep { start_khz: u32, step_khz: u16, count: u8, sweeps: u8 },
     /// 0x22: what the node shares in its announces: position (precision 0 =
     /// off, the default) and telemetry. Stored. The reply is `Sharing`.
     SetSharing(Sharing),
@@ -571,6 +578,11 @@ pub enum Event {
         last: bool,
         items: heapless::Vec<NeighborInfo, NEIGHBORS_PER_FRAME>,
     },
+    /// 0xbe: GPS details, in the layout of [`crate::gpsinfo`].
+    Gps { data: Text },
+    /// 0xbf: one spectrum sweep: the number of the sweep, the first frequency and the step, and the
+    /// strength of each step as `-dBm x 2` (one byte each; 255 = not measured).
+    Sweep { seq: u16, start_khz: u32, step_khz: u16, rssi: Text },
     /// 0xa2: sharing settings (see [`Sharing`]).
     Sharing(Sharing),
     /// 0xa4: the node's own display name (empty = none).
@@ -1191,6 +1203,8 @@ impl Command {
             Command::JoinPrivateChannel { key, name } => W::new(0x13).b(key).b(name).done(),
             Command::TraceRoute { req, dest } => W::new(0x20).b(&req.to_le_bytes()).b(&dest.0).done(),
             Command::GetNeighbors => W::new(0x21).done(),
+            Command::GetGps => W::new(0x3c).done(),
+            Command::Sweep { start_khz, step_khz, count, sweeps } => W::new(0x3d).b(&start_khz.to_le_bytes()).b(&step_khz.to_le_bytes()).b(&[*count, *sweeps]).done(),
             Command::SetSharing(s) => W::new(0x22).b(&s.to_bytes()).done(),
             Command::GetSharing => W::new(0x23).done(),
             Command::SetName { name } => W::new(0x24).b(name).done(),
@@ -1286,6 +1300,8 @@ impl Command {
             }
             0x20 => Command::TraceRoute { req: r.u16()?, dest: r.addr()? },
             0x21 => Command::GetNeighbors,
+            0x3c => Command::GetGps,
+            0x3d => Command::Sweep { start_khz: r.u32()?, step_khz: r.u16()?, count: r.u8()?, sweeps: r.u8()? },
             0x22 => Command::SetSharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
             0x23 => Command::GetSharing,
             0x24 => Command::SetName { name: r.text()? },
@@ -1495,6 +1511,10 @@ impl Event {
                         .b(&n.count.to_le_bytes());
                 }
                 w.done()
+            }
+            Event::Gps { data } => W::new(0xbe).b(data).done(),
+            Event::Sweep { seq, start_khz, step_khz, rssi } => {
+                W::new(0xbf).b(&seq.to_le_bytes()).b(&start_khz.to_le_bytes()).b(&step_khz.to_le_bytes()).b(rssi).done()
             }
             Event::Sharing(s) => W::new(0xa2).b(&s.to_bytes()).done(),
             Event::Site(site) => W::new(0xbb).b(&site.to_bytes()).done(),
@@ -1753,6 +1773,8 @@ impl Event {
                 }
                 Event::Neighbors { part, last, items }
             }
+            0xbe => Event::Gps { data: r.text()? },
+            0xbf => Event::Sweep { seq: r.u16()?, start_khz: r.u32()?, step_khz: r.u16()?, rssi: r.text()? },
             0xbb => Event::Site(crate::appdata::Site::from_bytes(r.text()?.as_slice()).ok_or(FrameError::TooShort)?),
             0xa2 => Event::Sharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
             0xa3 => {
@@ -2191,6 +2213,10 @@ mod tests {
     fn diagnostics_roundtrip() {
         roundtrip_cmd(Command::TraceRoute { req: 5, dest: Address([4; 16]) });
         roundtrip_cmd(Command::GetNeighbors);
+        roundtrip_cmd(Command::GetGps);
+        roundtrip_cmd(Command::Sweep { start_khz: 863_000, step_khz: 110, count: 64, sweeps: 3 });
+        roundtrip_ev(Event::Gps { data: text(&[1, 2, 3]) });
+        roundtrip_ev(Event::Sweep { seq: 7, start_khz: 863_000, step_khz: 110, rssi: text(&[200, 150, 255]) });
         roundtrip_cmd(Command::GetSharing);
         let sh = Sharing { precision: 2, lat_e7: 561_567_000, lon_e7: -102_107_000, telemetry: true };
         roundtrip_cmd(Command::SetSharing(sh));

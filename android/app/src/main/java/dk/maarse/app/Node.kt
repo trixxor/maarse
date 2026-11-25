@@ -47,6 +47,21 @@ object Node : LinkListener {
     /** Verified contacts: address -> the key that was verified. */
     val verified = MutableStateFlow<Map<String, String>>(emptyMap())
     val stats = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    /** GPS details from the radio (Experimental > GPS) and the latest spectrum sweeps (newest last). */
+    val gps = MutableStateFlow<GpsInfo?>(null)
+    val sweeps = MutableStateFlow<List<Ev.Sweep>>(emptyList())
+    /** How many sweeps fell off the front of [sweeps] (it keeps the last 600, about a minute), so a sweep keeps its number. */
+    @Volatile var sweepDropped = 0L
+        private set
+
+    private fun addSweep(ev: Ev.Sweep) {
+        synchronized(sweeps) {
+            val next = sweeps.value + ev
+            if (next.size > 600) { sweepDropped += next.size - 600; sweeps.value = next.takeLast(600) } else sweeps.value = next
+        }
+    }
+
+    fun clearSweeps() = synchronized(sweeps) { sweepDropped = 0; sweeps.value = emptyList() }
     val radio = MutableStateFlow<RadioCfg?>(null)
     val regions = MutableStateFlow<Ev.Regions?>(null)
     val sharing = MutableStateFlow<Ev.Sharing?>(null)
@@ -90,6 +105,7 @@ object Node : LinkListener {
         app = ctx.applicationContext
         db = Db(app)
         prefs = Prefs(app)
+        History.init(app)
         nicknames.value = prefs.nicknames
         keys.value = prefs.keys
         verified.value = prefs.verified
@@ -272,7 +288,7 @@ object Node : LinkListener {
     private val poll = object : Runnable {
         override fun run() {
             send(Cmd.getStats())
-            if (fastPoll) send(Cmd.getNeighbors())
+            if (fastPoll || History.wantsNeighbours()) send(Cmd.getNeighbors())
             updateOffline()
             if (System.currentTimeMillis() - lastPosition > 10 * 60_000) updatePosition()
             main.postDelayed(this, if (fastPoll) 5000 else 15_000)
@@ -1110,7 +1126,9 @@ object Node : LinkListener {
                 val m = if (fresh) old.filterKeys { it in 60..70 || it >= 93 }.toMutableMap() else old.toMutableMap()
                 ev.items.forEach { (k, v) -> m[k] = v }
                 m
-            }.also { updateOffline() }
+            }.also { updateOffline(); History.onStats(stats.value) }
+            is Ev.Gps -> gps.value = ev.info
+            is Ev.Sweep -> addSweep(ev)
             is Ev.Radio -> radio.value = ev.cfg
             is Ev.Regions -> regions.value = ev
             is Ev.Sharing -> {
@@ -1119,7 +1137,7 @@ object Node : LinkListener {
                 if (ev.prec > 0 && previous?.prec != ev.prec) updatePosition()
             }
             is Ev.Site -> site.value = ev
-            is Ev.Neighbors -> neighbors.update { if (ev.part == 0) ev.items else it + ev.items }
+            is Ev.Neighbors -> { neighbors.update { if (ev.part == 0) ev.items else it + ev.items }; if (ev.last) History.onNeighbours(neighbors.value) }
             is Ev.Trace -> {
                 traceSent.remove(ev.dest)?.let { t -> traceRtt.update { m -> m + (ev.dest to (System.currentTimeMillis() - t)) } }
                 traces.update { (listOf(ev) + it).take(10) }

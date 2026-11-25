@@ -2788,6 +2788,21 @@ function statusOverview(box) {
   };
   const bytes = x => fmt(x, "bytes");
 
+  // 0. The radio's battery, big and at the top.
+  const pct = v(85), mv = v(49);
+  if (pct !== undefined || mv) {
+    const level = pct ?? 0, low = level < 20, ext = v(82) === 1;
+    const c = el("div", { className: "warn" }); c.style.maxWidth = "680px"; c.style.marginBottom = "12px";
+    c.append(el("b", { textContent: "Radio battery" }));
+    const big = el("div", { textContent: (pct !== undefined ? pct + " %" : "") + (mv ? `  ·  ${(mv / 1000).toFixed(2)} V` : "") + (ext ? "  ·  charging or on USB power" : "") });
+    big.style.cssText = "font-size:28px;font-weight:700;margin:6px 0";
+    const bar = el("div"); bar.style.cssText = "height:14px;border-radius:7px;background:var(--line);overflow:hidden";
+    const fill = el("div"); fill.style.cssText = `height:100%;width:${Math.max(3, level)}%;background:${low ? "var(--warn)" : "var(--accent)"}`;
+    bar.append(fill); c.append(big, bar);
+    if (low && !ext) c.append(el("div", { className: "muted", textContent: "The battery is low. Charge the radio soon." }));
+    box.append(c);
+  }
+
   // 1. The LoRa radio.
   const host = transport instanceof WsTransport;
   if (host) {
@@ -5772,6 +5787,7 @@ const HS_FIELDS = [
   ["LoRa radio (serial)", [
     ["--serial", "port", "Port", "Node with modem firmware."],
     ["--baud", "text", "Baud rate", "Default 115200."],
+    ["--radio-quiet", "bool", "Silence the radio's beeper", "A radio with a buzzer (RAK WisMesh Tag) beeps when a message arrives, over LoRa or TCP. Tick this to stop it. A double click on the radio's button mutes it until it restarts."],
   ]],
   ["MQTT / Home Assistant", [
     ["--mqtt", "text", "Broker", "host:port, empty = disabled."],

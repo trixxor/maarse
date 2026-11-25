@@ -1456,6 +1456,21 @@ the second with the post office counters (60, 61, 70) and keys 93–101.
 Receivers merge them by key (a frame containing key 1 starts a new set).
 Over remote control the values come in chunks of 25 as before. In modem mode
 the firmware answers `GetStats` and `GetRadio` without leaving modem mode;
+Experimental tools (2026-11-25, working copy, not released): command `0x3c`
+`GetGps` (a board with a GPS module answers with event `0xBE` `Gps`, the layout of
+`maarse-core/src/gpsinfo.rs`: state, satellites used and in view, HDOP, height, speed,
+course, UTC, position and up to 24 satellites with system, number, elevation, azimuth,
+signal and used flag) and `0x3d` `Sweep` (start kHz u32, step kHz u16, count u8 (at most
+128), sweeps u8: 255 = until stopped or 2 minutes, 0 = stop). The radio measures the
+signal strength on each step and answers with one event `0xBF` `Sweep` per sweep: number
+u16, start kHz u32, step kHz u16 and one byte per step, `-dBm x 2` (255 = not measured).
+Both are answered in modem mode without leaving it; maarse-host passes them to its USB
+and Bluetooth radios and the events back to its clients. While it sweeps, the radio does
+not receive packets.
+
+Modem mode frame `0x42` (host to radio, one byte, no content): a message arrived at the
+host; a board with a buzzer beeps. It does not end modem mode. Boards without a buzzer ignore it.
+
 maarse-host asks every USB or Bluetooth modem for its counters every 10 s and
 passes them on in extra `Stats` frames after its own (keys 30-59 and 80-117 that
 the host does not set itself), so a client of the host sees the radio's GPS,

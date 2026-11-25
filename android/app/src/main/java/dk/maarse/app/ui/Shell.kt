@@ -55,6 +55,7 @@ enum class Tab(val title: String) { CHATS("Chats"), MAP("Map"), CONTACTS("Nodes"
 enum class MePage(val title: String) {
     ACCOUNT("Account and devices"), MESHCORE("MeshCore setup"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and sounds"),
     HOST("Internet link and post office"), FIRMWARE("Firmware"),
+    EXPERIMENTAL("Experimental"), X_SPECTRUM("Spectrum"), X_GPS("GPS"), X_NEIGHBOURS("Signal per neighbour"), X_POWER("Battery and temperature"),
 }
 
 sealed interface Screen {
@@ -159,7 +160,7 @@ fun AppShell(nav: Nav) {
                             NewChatScreen(onOpen = { c -> nav.back(); nav.go(Screen.Chat(c)) }, onDone = { nav.back() })
                         }
                         Screen.Me -> SubPage("Settings", nav::back) { MeScreen(nav) }
-                        is Screen.Page -> SubPage(s.page.title, nav::back) { MePageContent(s.page) }
+                        is Screen.Page -> SubPage(s.page.title, nav::back) { MePageContent(s.page) { nav.go(Screen.Page(it)) } }
                         is Screen.Net -> SubPage(s.page.title, nav::back) { NetPageContent(s.page) }
                         is Screen.Sensor -> SubPage("Sensor", nav::back) {
                             SensorDetailScreen(s.node, onBack = nav::back, onEdit = { Sensors.openDesign(it, "blank"); nav.go(Screen.SensorDesign) })

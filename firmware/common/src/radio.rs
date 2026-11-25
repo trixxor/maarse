@@ -2,9 +2,9 @@
 //! listen-before-talk (CAD) and a duty cycle budget. The settings can be
 //! changed while it runs (`RADIO_CFG`).
 
-use crate::bus::{Pkt, RADIO_ASLEEP, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_SLEEP, RADIO_TX, RSTATS, TxReq};
+use crate::bus::{Pkt, RADIO_ASLEEP, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_SLEEP, RADIO_TX, RSTATS, SWEEP, SweepReq, TxReq};
 use core::sync::atomic::Ordering::Relaxed;
-use embassy_futures::select::{Either, Either5, select, select5};
+use embassy_futures::select::{Either, Either6, select, select6};
 use embassy_time::{Duration, Instant, Timer};
 use lora_phy::mod_params::{
     Bandwidth, CodingRate, ModulationParams, PacketParams, SpreadingFactor,
@@ -255,16 +255,17 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             continue;
         }
         stage(7);
-        match select5(
+        match select6(
             lora.rx(&p.rx, &mut buf),
             RADIO_TX.receive(),
             RADIO_CFG.wait(),
             Timer::at(next),
             RADIO_SLEEP.wait(),
+            SWEEP.wait(),
         )
         .await
         {
-            Either5::First(Ok((len, status))) => {
+            Either6::First(Ok((len, status))) => {
                 let len = len as usize;
                 RSTATS.received(len, status.rssi as i32, status.snr as i32);
                 match Pkt::from_slice(&buf[..len]) {
@@ -279,11 +280,11 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                     }
                 }
             }
-            Either5::First(Err(_)) => {
+            Either6::First(Err(_)) => {
                 RSTATS.rx_err.fetch_add(1, Relaxed);
             }
-            Either5::Second(req) => plan(&mut queue, req, &urgent, &mut boost),
-            Either5::Third(cfg) => {
+            Either6::Second(req) => plan(&mut queue, req, &urgent, &mut boost),
+            Either6::Third(cfg) => {
                 let _ = lora.enter_standby().await;
                 if let Some(np) = params(lora, cfg) {
                     // Keep the airtime already used unless the limit itself
@@ -295,8 +296,8 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                     p = np;
                 }
             }
-            Either5::Fourth(()) => {}
-            Either5::Fifth(true) => {
+            Either6::Fourth(()) => {}
+            Either6::Fifth(true) => {
                 // A sensor node sleeps: nothing is sent or heard until woken.
                 queue.clear();
                 let _ = lora.sleep(true).await;
@@ -309,9 +310,70 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                     }
                 }
             }
-            Either5::Fifth(false) => {}
+            Either6::Fifth(false) => {}
+            Either6::Sixth(req) => sweep(lora, &p, req).await,
         }
     }
+}
+
+/// How long the radio listens on each step before it reads the strength (µs).
+/// Measured on the tag (RAK4630, SX1262): while the receiver stays on and only the frequency moves, 1 ms
+/// after each step gives every value (300 µs loses the first); a sweep of 64 steps takes about 100 ms. Setting
+/// the receiver up again on every step took 835 ms per sweep and needed 2 ms.
+const SWEEP_SETTLE_US: u32 = 1000;
+/// A run of sweeps ends by itself after this long, so messages are not missed by accident.
+const SWEEP_MAX: Duration = Duration::from_secs(120);
+
+/// A spectrum sweep: measures the strength on `count` frequencies, `sweeps` times, and sends each row as a
+/// `Sweep` event. A new request while it runs replaces it (`sweeps` 0 stops it). The radio hears no packets meanwhile.
+async fn sweep<RK: RadioKind, D: DelayNs>(lora: &mut LoRa<RK, D>, p: &Params, first: SweepReq) {
+    let mut req = first;
+    let began = Instant::now();
+    let mut seq: u16 = 0;
+    'run: while req.sweeps > 0 && req.count > 0 && Instant::now() < began + SWEEP_MAX {
+        if lora.prepare_for_rx(RxMode::Continuous, &p.mdltn, &p.rx).await.is_err() {
+            break;
+        }
+        let mut left = req.sweeps;
+        while left > 0 {
+            let mut row: maarse_core::companion::Text = maarse_core::companion::Text::new();
+            for i in 0..req.count.min(128) as u32 {
+                let khz = req.start_khz.saturating_add(i * req.step_khz as u32);
+                // The first step sets the receiver up (longer wait); the others only move the frequency.
+                let settle = if i == 0 { 2000 } else { SWEEP_SETTLE_US };
+                let v = lora.sweep_step_fast(khz.saturating_mul(1000), settle, i == 0).await.unwrap_or(255);
+                let _ = row.push(v);
+            }
+            crate::node::emit(&maarse_core::companion::Event::Sweep { seq, start_khz: req.start_khz, step_khz: req.step_khz, rssi: row });
+            seq = seq.wrapping_add(1);
+            if left != 255 {
+                left -= 1;
+            }
+            // A new request replaces this one; time is up after SWEEP_MAX.
+            if let Some(next) = SWEEP.try_take() {
+                req = next;
+                continue 'run;
+            }
+            if Instant::now() >= began + SWEEP_MAX {
+                break 'run;
+            }
+            // Let the link carry the row before the next one, so rows are not dropped on the way
+            // (Bluetooth moves about 20 bytes per notification); at most 150 ms.
+            let wait_until = Instant::now() + Duration::from_millis(150);
+            let usb_recent = {
+                let t = crate::bus::USB_LAST_RX.load(Relaxed);
+                t != 0 && (Instant::now().as_secs() as u32).saturating_sub(t) < 30
+            };
+            while ((crate::bus::BLE_CONNECTED.load(Relaxed) && crate::bus::BLE_OUT.len() > 3) || (usb_recent && crate::bus::USB_OUT.len() > 3))
+                && Instant::now() < wait_until
+            {
+                Timer::after_millis(2).await;
+            }
+            Timer::after_millis(1).await;
+        }
+        break;
+    }
+    let _ = lora.enter_standby().await;
 }
 
 /// Debugging: 1 standby, 2 CAD preparation, 3 CAD, 4 TX preparation,

@@ -389,6 +389,24 @@ private fun OverviewRow(label: String, value: String) {
 private fun StatusOverview(s: Map<Int, Int>) {
     val conn by Node.conn.collectAsState()
     val bytes = { k: Int -> formatStat(k, s[k] ?: 0) }
+    // 0. The radio's battery, big and at the top.
+    val pct = s[85]; val mv = s[49]
+    if (pct != null || (mv ?: 0) > 0) {
+        GroupTitle("Radio battery")
+        val low = (pct ?: 100) < 20 && s[82] != 1
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                listOfNotNull(pct?.let { "$it %" }, mv?.takeIf { it > 0 }?.let { "%.2f V".format(it / 1000.0) }, if (s[82] == 1) "charging or on USB power" else null).joinToString("  ·  "),
+                style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold,
+            )
+            LinearProgressIndicator(
+                progress = { (pct ?: 0).coerceIn(3, 100) / 100f },
+                modifier = Modifier.fillMaxWidth().height(14.dp).clip(RoundedCornerShape(7.dp)),
+                color = if (low) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            )
+            if (low) Text("The battery is low. Charge the radio soon.", color = MaterialTheme.colorScheme.error)
+        }
+    }
     // 1. The LoRa radio.
     GroupTitle("LoRa radio")
     Group {

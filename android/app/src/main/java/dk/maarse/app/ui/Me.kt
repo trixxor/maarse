@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PinDrop
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Router
+import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.SettingsInputAntenna
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material.icons.outlined.Tune
@@ -280,6 +281,10 @@ fun MeScreen(nav: Nav) {
             LanguageRow(leading = { RowIcon(Icons.Outlined.Public) })
             BackgroundRow(last = true)
         }
+        GroupTitle("Experimental")
+        Group {
+            GroupRow("Experimental", "Spectrum, GPS, signals, battery history", last = true, leading = { RowIcon(Icons.Outlined.Science) }) { nav.go(Screen.Page(MePage.EXPERIMENTAL)) }
+        }
         Hint("Må:rse " + ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName)
     }
 
@@ -362,7 +367,7 @@ private fun RepeaterSheet(nav: Nav, nodes: List<Node.McNode>, onDismiss: () -> U
 }
 
 @Composable
-fun MePageContent(p: MePage) {
+fun MePageContent(p: MePage, go: (MePage) -> Unit = {}) {
     val conn by Node.conn.collectAsState()
     val me by Node.me.collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(bottom = 24.dp)) {
@@ -380,6 +385,11 @@ fun MePageContent(p: MePage) {
             MePage.RADIO -> if (me != null) NodeSection(radioPart = true) else Hint("Connect first.")
             MePage.APP -> AppSection()
             MePage.FIRMWARE -> FirmwareSection()
+            MePage.EXPERIMENTAL -> ExperimentalMenu(go)
+            MePage.X_POWER -> PowerPage()
+            MePage.X_NEIGHBOURS -> NeighbourSignalPage()
+            MePage.X_GPS -> GpsPage()
+            MePage.X_SPECTRUM -> SpectrumPage()
             MePage.HOST -> when (conn.mode) {
                 Mode.PHONE -> HostSection(server = false)
                 Mode.SERVER -> HostSection(server = true)

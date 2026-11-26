@@ -2,7 +2,7 @@
 //! listen-before-talk (CAD) and a duty cycle budget. The settings can be
 //! changed while it runs (`RADIO_CFG`).
 
-use crate::bus::{Pkt, RADIO_ASLEEP, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_SLEEP, RADIO_TX, RSTATS, SWEEP, SweepReq, TxReq};
+use crate::bus::{Pkt, RADIO_ASLEEP, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_SLEEP, RADIO_TX, REC_REQ, REC_ROWS, REC_START_DELAY_MS, RSTATS, RecReq, RecRow, SWEEP, SweepReq, TxReq};
 use core::sync::atomic::Ordering::Relaxed;
 use embassy_futures::select::{Either, Either6, select, select6};
 use embassy_time::{Duration, Instant, Timer};
@@ -139,9 +139,14 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
     let urgent = maarse_crypto::bulletin::channel();
     let mut boost = BoostQuota { window: Instant::now(), used: 0 };
     let mut buf = [0u8; 255];
+    // The sweeps of a spectrum recording in progress (the node keeps the cells; see `rec_step`).
+    let mut rec: Option<RecRun> = None;
 
     loop {
         RSTATS.loops.fetch_add(1, Relaxed);
+        if let Some(r) = REC_REQ.try_take() {
+            rec = r.map(rec_begin);
+        }
         while let Ok(id) = RADIO_CANCEL.try_receive() {
             queue.retain(|q| q.req.id != id);
         }
@@ -160,7 +165,8 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
         if let Some(i) = queue
             .iter()
             .enumerate()
-            .filter(|(_, q)| q.due <= now)
+            // Nothing is sent while a recording runs: the radio would hear itself.
+            .filter(|(_, q)| q.due <= now && !rec.as_ref().is_some_and(|r| now >= r.began))
             .min_by_key(|(_, q)| (q.prio, q.due))
             .map(|(i, _)| i)
         {
@@ -240,11 +246,15 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
 
         // Listen until a packet arrives, a new job, new settings
         // or the next planned time.
-        let next = queue
+        let mut next = queue
             .iter()
             .map(|q| q.due)
             .min()
             .unwrap_or(now + Duration::from_secs(30));
+        if let Some(r) = &rec {
+            // While a recording sweeps only its sweeps matter: whatever waits to be sent waits.
+            next = if now >= r.began { r.next.min(r.end) } else { next.min(r.began) };
+        }
         stage(6);
         if lora
             .prepare_for_rx(RxMode::Continuous, &p.mdltn, &p.rx)
@@ -296,7 +306,13 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                     p = np;
                 }
             }
-            Either6::Fourth(()) => {}
+            Either6::Fourth(()) => {
+                if let Some(r) = rec.as_mut()
+                    && rec_step(lora, &p, r).await
+                {
+                    rec = None;
+                }
+            }
             Either6::Fifth(true) => {
                 // A sensor node sleeps: nothing is sent or heard until woken.
                 queue.clear();
@@ -374,6 +390,50 @@ async fn sweep<RK: RadioKind, D: DelayNs>(lora: &mut LoRa<RK, D>, p: &Params, fi
         break;
     }
     let _ = lora.enter_standby().await;
+}
+
+/// The sweeps of a recording on this radio (`Command::SweepRecStart`): one every `interval`, between listening.
+struct RecRun {
+    began: Instant,
+    next: Instant,
+    end: Instant,
+    interval: Duration,
+    start_khz: u32,
+    step_khz: u16,
+}
+
+fn rec_begin(r: RecReq) -> RecRun {
+    let now = Instant::now();
+    RecRun {
+        began: now + Duration::from_millis(REC_START_DELAY_MS),
+        next: now + Duration::from_millis(REC_START_DELAY_MS),
+        end: now + Duration::from_millis(REC_START_DELAY_MS) + Duration::from_secs(r.duration_s as u64),
+        interval: Duration::from_millis(r.interval_ms.clamp(100, 25_500) as u64),
+        start_khz: r.start_khz,
+        step_khz: r.step_khz,
+    }
+}
+
+/// Takes the next sweep if it is time and hands the row to the node. `true` = the recording is over.
+async fn rec_step<RK: RadioKind, D: DelayNs>(lora: &mut LoRa<RK, D>, p: &Params, r: &mut RecRun) -> bool {
+    let now = Instant::now();
+    if now >= r.end {
+        return true;
+    }
+    if now >= r.next {
+        let mut row = [255u8; maarse_core::sweeprec::BINS];
+        if lora.prepare_for_rx(RxMode::Continuous, &p.mdltn, &p.rx).await.is_ok() {
+            for (i, v) in row.iter_mut().enumerate() {
+                let khz = r.start_khz.saturating_add(i as u32 * r.step_khz as u32);
+                let settle = if i == 0 { 2000 } else { SWEEP_SETTLE_US };
+                *v = lora.sweep_step_fast(khz.saturating_mul(1000), settle, i == 0).await.unwrap_or(255);
+            }
+            REC_ROWS.signal(RecRow { t_ms: (now - r.began).as_millis() as u32, row });
+        }
+        // Keep the rhythm, but never try to catch up with a burst of sweeps.
+        r.next = (r.next + r.interval).max(Instant::now());
+    }
+    false
 }
 
 /// Debugging: 1 standby, 2 CAD preparation, 3 CAD, 4 TX preparation,

@@ -7,6 +7,7 @@
 mod ext;
 mod identity;
 mod range;
+mod rec;
 mod sensor;
 
 use crate::bus::{
@@ -305,10 +306,15 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     last_control: u32,
     /// Range test and power accounting (see node/range.rs).
     range: range::Range,
+    /// A spectrum recording on this radio (see node/rec.rs).
+    rec: rec::Rec,
     /// Direct messages from senders we do not know yet (no announce heard,
     /// e.g. right after a reboot without stored contacts): opened when the
     /// sender's announce arrives. (payload, hops)
     pending_rx: heapless::Vec<(heapless::Vec<u8, 256>, u8), PENDING_RX>,
+    /// A new contact was heard: the kept messages are opened from the timer, not inside the announce, whose stack is
+    /// already deep (opening one there overflowed the ESP32's stack: curve25519 on top of announce verification).
+    open_pending_due: bool,
 }
 
 /// Messages from unknown senders kept until their announce.
@@ -356,6 +362,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// then copied, the node (about 27 KB) took about 60 KB of stack on the
     /// ESP32-S3 at start-up and left 4.5 KB; the PHY calibration interrupt
     /// that came then ran past the end of the stack and crashed the board.
+    // Never inlined: inlined into the task that calls it, its start-up locals (about 42 KB) became part of that task's
+    // stack frame, reserved on every poll for as long as the node runs, and left no room for a remote command.
+    #[inline(never)]
     pub fn new_in<'a>(
         dest: &'a mut core::mem::MaybeUninit<Self>,
         identity: Identity,
@@ -428,7 +437,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             ota: crate::ota::OtaManager::new(),
             last_control: 0,
             range: range::Range::new(),
+            rec: rec::Rec::new(),
             pending_rx: heapless::Vec::new(),
+            open_pending_due: false,
         });
         // The first announce 5-35 s after the start, at random: after a power
         // cut many nodes start at the same moment and would collide.
@@ -556,6 +567,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             if let Some(t) = self.ota.deadline() {
                 d = d.min(t);
             }
+            if let Some(t) = self.rec.deadline() {
+                d = d.min(t);
+            }
             return d;
         }
         if self.sensor.sleeping {
@@ -563,6 +577,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             return self.sensor.deadline().map_or(self.ext.next_power, |t| t.min(self.ext.next_power));
         }
         let mut d = self.next_announce.min(self.ext.next_power);
+        if self.open_pending_due {
+            d = Instant::now();
+        }
         if let Some(t) = self.sensor.deadline() {
             d = d.min(t);
         }
@@ -585,6 +602,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             d = d.min(t);
         }
         if let Some(t) = self.range.deadline() {
+            d = d.min(t);
+        }
+        if let Some(t) = self.rec.deadline() {
             d = d.min(t);
         }
         d
@@ -669,6 +689,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     fn on_timer(&mut self) {
         self.update_display_info();
+        if core::mem::take(&mut self.open_pending_due) {
+            self.open_pending();
+        }
+        if self.rec.deadline().is_some() {
+            self.rec_tick();
+        }
         // The phone that used us as its LoRa modem over Bluetooth is gone:
         // route on our own again.
         if crate::bus::BLE_LOST.swap(false, Relaxed) && self.modem && !self.wifi_modem {
@@ -964,8 +990,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         }
                         let _ = self.known.insert(dest, (a.identity, a.timestamp));
                     }
-                    if new {
-                        self.open_pending();
+                    if new && !self.pending_rx.is_empty() {
+                        log("New contact: kept messages will be opened");
+                        self.open_pending_due = true;
                     }
                     self.release_await_key(dest);
                     if ratchet::announces_fs(a.app_data) {
@@ -1109,6 +1136,20 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 crate::bus::SWEEP.signal(crate::bus::SweepReq { start_khz, step_khz, count, sweeps });
                 return;
             }
+            Command::SweepRecStart { start_khz, step_khz, duration_s, interval_ds, thr_db } => {
+                let ev = self.rec_start(None, 0, start_khz, step_khz, duration_s, interval_ds, thr_db);
+                emit(&ev);
+                return;
+            }
+            Command::SweepRecStop => {
+                let ev = self.rec_stop();
+                emit(&ev);
+                return;
+            }
+            Command::SweepRecStatus => {
+                emit(&self.rec_status());
+                return;
+            }
             _ => {}
         }
         let Some(cmd) = self.ext_command(cmd).and_then(|c| self.range_command(c)).and_then(|c| self.sensor_command(c)) else {
@@ -1246,9 +1287,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         | Command::OtaChunk { .. }
                         | Command::OtaEnd { .. }
                         | Command::OtaStatus
-                        | Command::Sensor { .. })
+                        | Command::Sensor { .. }
+                        | Command::SweepRecStart { .. }
+                        | Command::SweepRecStop
+                        | Command::SweepRecStatus)
                 ) {
-                    return err(req, error_code::BAD_FRAME, "Only status, radio, role, firmware and sensors can be controlled remotely");
+                    return err(req, error_code::BAD_FRAME, "Only status, radio, role, firmware, sensors and spectrum recordings can be controlled remotely");
                 }
                 let Some(now) = self.unix_now() else {
                     return err(req, error_code::BAD_FRAME, "The clock is not set (connect again)");
@@ -1352,7 +1396,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             | Command::SetRangeTest(_)
             | Command::GetRangeTest
             | Command::GetGps
-            | Command::Sweep { .. } => {}
+            | Command::Sweep { .. }
+            | Command::SweepRecStart { .. }
+            | Command::SweepRecStop
+            | Command::SweepRecStatus => {}
             Command::FileBegin { req, dest, size, mime, name } => {
                 self.file_begin(req, dest, size, &mime, &name)
             }
@@ -1484,6 +1531,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             return;
         }
         let kept = core::mem::take(&mut self.pending_rx);
+        log("Opening kept messages");
         let addr = self.addr;
         for (p, hops) in kept {
             self.on_deliver(PacketType::Data, addr, &p, hops);
@@ -1562,6 +1610,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let deny = |msg: &str| Event::Error { req: 0, code: error_code::BAD_FRAME, text: text(msg.as_bytes()) };
         // A device of an owner (a person) is an administrator; the counter is
         // the person's, shared by all their devices.
+        log("Remote command received");
         let owner = self.sensor.owner_person(&from);
         let key = owner.unwrap_or(from);
         if owner.is_none() && !self.admins.contains(&from) {
@@ -1572,6 +1621,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let last = self.control_seen.get(&key).copied().unwrap_or(0);
         let fresh = self.unix_now().is_none_or(|now| counter.abs_diff(now) <= 600);
         if counter <= last || !fresh {
+            // A remote command that is old or comes from a clock far from ours is dropped without a reply.
+            log(if counter <= last { "Remote command ignored: its counter is not newer than the last one" } else { "Remote command ignored: the sender's clock differs from ours by more than 10 minutes" });
             return;
         }
         let command = Command::decode(frame);
@@ -1619,6 +1670,18 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 }
                 Err(e) => reply(self, deny(e)),
             },
+            Ok(Command::SweepRecStart { start_khz, step_khz, duration_s, interval_ds, thr_db }) => {
+                let ev = self.rec_start(Some(from), counter, start_khz, step_khz, duration_s, interval_ds, thr_db);
+                reply(self, ev);
+            }
+            Ok(Command::SweepRecStop) => {
+                let ev = self.rec_stop();
+                reply(self, ev);
+            }
+            Ok(Command::SweepRecStatus) => {
+                let ev = self.rec_status();
+                reply(self, ev);
+            }
             Ok(Command::Sensor { op, data, .. }) => {
                 for (ev, d) in self.sensor_exec(false, op, &data) {
                     reply(self, Event::Sensor { node: Address([0; 16]), op: ev, data: d });
@@ -1766,6 +1829,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         }
                         self.resync(a);
                     }
+                    Err(CryptoError::Decrypt) => log("Message could not be read (wrong key or damaged)"),
+                    Err(CryptoError::Malformed) => log("Message could not be read (malformed)"),
                     Err(_) => {}
                 }
     }

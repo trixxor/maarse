@@ -1408,6 +1408,12 @@ const Cmd = {
   getStats: () => frame(0x09),
   // A spectrum sweep: `count` steps of `stepKhz` from `startKhz`, `sweeps` times (255 = until stopped or 2 minutes, 0 = stop).
   sweep: (startKhz, stepKhz, count, sweeps) => frame(0x3d, u32(startKhz), u16(stepKhz), [count, sweeps]),
+  // Record the spectrum on the radio itself: 64 steps, one sweep every `intervalDs` tenths of a second (0 = 2 s), for
+  // `durationS` seconds. The radio makes the file and sends it back: over the air when asked through `remote`, else as an
+  // incoming file. The radio hears no messages while a sweep runs.
+  sweepRecStart: (startKhz, stepKhz, durationS, intervalDs, thrDb) => frame(0x3e, u32(startKhz), u16(stepKhz), u16(durationS), [intervalDs, thrDb]),
+  sweepRecStop: () => frame(0x3f),
+  sweepRecStatus: () => frame(0x43),
   setRadio: c => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [c.announce & 0xff]),
   getRadio: () => frame(0x0b),
   setRole: r => frame(0x10, [r]),
@@ -1496,6 +1502,8 @@ function decodeEvent(f) {
     case 0x90: return { type: "deposited", msgId: readU64(f, 1) };
     // One spectrum sweep: number, first frequency (kHz), step (kHz) and one byte per step, -dBm x 2 (255 = not measured).
     case 0xbf: return { type: "sweep", seq: f[1] | f[2] << 8, startKhz: rd32(f, 3), stepKhz: f[7] | f[8] << 8, rssi: f.slice(9) };
+    // How a spectrum recording on a radio goes: 0 idle, 1 recording, 2 ready, 3 sending, 4 failed.
+    case 0xb9: return { type: "sweepRecState", state: f[1], elapsedS: f[2] | f[3] << 8, durationS: f[4] | f[5] << 8, sweeps: f[6] | f[7] << 8, bytes: f[8] | f[9] << 8 };
     case 0x93: return { type: "remoteReply", from: a(1), inner: decodeEvent(f.slice(17)) };
     case 0x94: { const l = []; for (let o = 1; o + 16 <= f.length; o += 16) l.push(a(o)); return { type: "admins", list: l }; }
     case 0x95: return { type: "regions", strict: !!f[1], names: txt(2) };
@@ -2276,8 +2284,10 @@ function onEvent(ev) {
       bkOnIdentity(ev);
       break;
     case "ota": if (!ota.target) otaOnState(ev); break;
+    case "sweepRecState": xpRecState("", ev); break;
     case "remoteReply": {
       const i = ev.inner;
+      if (i.type === "sweepRecState") { xpRecState(ev.from, i); break; }
       if (ev.from !== state.target) break;
       if (i.type === "stats") state.remoteStats = state.remoteStats.concat(i.items);
       else if (i.type === "radio") state.remoteRadio = i.cfg;
@@ -2344,6 +2354,8 @@ function onEvent(ev) {
       break;
     }
     case "fileIncoming": {
+      // A spectrum recording goes to Settings > Experimental > Recordings, not into a chat.
+      if (ev.mime === XP_MSR_MIME) { state.files.set(ev.fileId, { from: ev.from, name: ev.name, mime: ev.mime, size: ev.size, parts: [], progress: 0, fileId: ev.fileId, text: "" }); break; }
       if (pageIncoming(ev)) break;
       // A page or page picture we did not (or no longer) wait for: Pages
       // only, never a file in a chat.
@@ -2387,6 +2399,7 @@ function onEvent(ev) {
         m.url = URL.createObjectURL(new Blob([buf], { type: m.mime || "application/octet-stream" }));
         m.text = m.mime?.startsWith("image/") ? "" : `${m.name} (${Math.ceil(m.size / 1024)} KB)`;
         if (m.mime === VOICE_MIME) { m.text = "Voice message – decoding…"; voiceReceived(m); }
+        if (m.mime === XP_MSR_MIME) xpRecordingReceived(m, buf);
         m.parts = [];
       } else m.text = ev.text.startsWith("cancelled") ? `${m.name}: ${ev.text}` : `${m.name}: error (${ev.text})`;
       // Kept in the host's file mailbox: stays known, so it can be cancelled
@@ -3538,10 +3551,11 @@ function setView(v) {
 }
 
 // <sweeprec>
-// Spectrum recordings (MSR1): port of maarse-core/src/sweeprec.rs. tools/test_sweeprec.mjs checks it byte for byte
-// against maarse-core/tests/data/sweeprec-golden.*. Change both together.
+// Spectrum recordings (MSR2, and MSR1 for reading): port of maarse-core/src/sweeprec.rs. tools/test_sweeprec.mjs checks it
+// byte for byte against maarse-core/tests/data/sweeprec-golden.*. Change both together.
 const SR = (() => {
-  const BINS = 64, MAXB = 120, MAXE = 200, MAXG = 48, HEAD = 24, CELLS = BINS * MAXB, STEP_DB = 3;
+  const BINS = 64, MAXB = 256, MAXB1 = 120, MAXE = 200, MAXG = 48, HEAD1 = 24, HEAD2 = 21 + BINS / 2, CELLS = BINS * MAXB, STEP_DB = 3;
+  const MIN_BUCKET_MS = 1000, WARM = 16, ZCTX = 18, PROBS = ZCTX + 16 * 16;
   const kinds = ["Constant", "Periodic", "Rising", "Long", "Pulses", "Single"];
 
   // A sweep where most steps read stronger than -60 dBm: a transmitter very close overloads the receiver.
@@ -3551,22 +3565,61 @@ const SR = (() => {
     return valid >= 8 && strong * 10 >= valid * 6;
   }
 
+  // The context of a cell: the cell before it in time (a), the one before that (a2) and the one for the step below (u).
+  function contexts(a, a2, u) { return [Math.min(a, 2) * 3 + Math.min(u, 2) + (a2 > 0 ? 9 : 0), a > 0 ? a : u]; }
+  const newProbs = () => new Uint16Array(PROBS).fill(1024);
+
+  // The range coder of LZMA (11-bit probabilities, shift 5). The first byte (always 0) is left out; the reader reads zeros past the end.
+  class RcEnc {
+    constructor() { this.out = []; this.low = 0; this.range = 0xFFFFFFFF; this.cache = 0; this.cacheSize = 1; this.first = true; }
+    byte(b) { if (this.first) { this.first = false; return; } this.out.push(b); }
+    shiftLow() {
+      if (this.low % 4294967296 < 0xFF000000 || this.low >= 4294967296) {
+        const carry = this.low >= 4294967296 ? 1 : 0;
+        let temp = this.cache;
+        do { this.byte((temp + carry) & 255); temp = 0xFF; } while (--this.cacheSize !== 0);
+        this.cache = Math.floor(this.low / 16777216) & 255;
+      }
+      this.cacheSize++;
+      this.low = (this.low % 16777216) * 256;
+    }
+    bit(pr, i, bit) {
+      const p = pr[i], bound = (this.range >>> 11) * p;
+      if (!bit) { this.range = bound; pr[i] = p + ((2048 - p) >> 5); }
+      else { this.low += bound; this.range -= bound; pr[i] = p - (p >> 5); }
+      while (this.range < 16777216) { this.range *= 256; this.shiftLow(); }
+    }
+    finish() { for (let i = 0; i < 5; i++) this.shiftLow(); while (this.out.length && this.out[this.out.length - 1] === 0) this.out.pop(); return this.out; }
+  }
+  class RcDec {
+    constructor(d, pos) { this.d = d; this.pos = pos; this.range = 0xFFFFFFFF; this.code = 0; for (let i = 0; i < 4; i++) this.code = this.code * 256 + this.next(); }
+    next() { return this.d[this.pos++] || 0; }
+    bit(pr, i) {
+      const p = pr[i], bound = (this.range >>> 11) * p;
+      let bit;
+      if (this.code < bound) { this.range = bound; pr[i] = p + ((2048 - p) >> 5); bit = 0; }
+      else { this.code -= bound; this.range -= bound; pr[i] = p - (p >> 5); bit = 1; }
+      while (this.range < 16777216) { this.range *= 256; this.code = this.code * 256 + this.next(); }
+      return bit;
+    }
+  }
+
   class Recorder {
     constructor(cfg) {
       if (!cfg.durationS || cfg.durationS > 7800 || !cfg.stepKhz) throw new Error("bad config");
       this.cfg = { ...cfg };
-      const iv = Math.min(25500, Math.max(100, cfg.intervalMs));
-      this.cfg.intervalMs = iv;
+      this.cfg.intervalMs = Math.min(25500, Math.max(100, cfg.intervalMs));
       const durMs = cfg.durationS * 1000;
-      this.bucketMs = Math.max(Math.floor(durMs / MAXB), iv);
+      this.bucketMs = Math.max(Math.ceil(durMs / MAXB), MIN_BUCKET_MS);
       this.nb = Math.min(Math.ceil(durMs / this.bucketMs), MAXB);
-      this.used = 0; this.sweeps = 0;
-      this.best = new Uint8Array(CELLS).fill(255); this.sum = new Uint16Array(CELLS);
-      this.grid = new Uint8Array(CELLS); this.cnt = new Uint16Array(MAXB);
+      this.used = 0; this.sweeps = 0; this.curK = 0; this.curCnt = 0; this.warmDone = false; this.peakRaw = 255;
+      this.cells = new Uint8Array(CELLS); this.cur = new Uint8Array(BINS).fill(255); this.floor = new Uint8Array(BINS).fill(236);
+      this.none = new Uint8Array(MAXB); this.warm = new Uint8Array(WARM * BINS);
     }
     push(tMs, rssi, masked) {
       if (rssi.length !== BINS) return;
-      const k = Math.min(Math.floor(tMs / this.bucketMs), this.nb - 1);
+      const k = Math.max(Math.min(Math.floor(tMs / this.bucketMs), this.nb - 1), this.curK);
+      while (this.curK < k) { this.closeBucket(); this.curK++; }
       this.used = Math.max(this.used, k + 1);
       this.sweeps = Math.min(65535, this.sweeps + 1);
       if (masked) return;
@@ -3575,112 +3628,176 @@ const SR = (() => {
         const v = rssi[b];
         if (v >= 248) continue;
         any = true;
-        const i = b * MAXB + k;
-        if (v < this.best[i]) this.best[i] = v;
-        this.sum[i] = Math.min(65535, this.sum[i] + v);
+        if (v < this.cur[b]) this.cur[b] = v;
+        if (v < this.peakRaw) this.peakRaw = v;
       }
-      if (any) this.cnt[k] = Math.min(65535, this.cnt[k] + 1);
+      if (any) this.curCnt = Math.min(65535, this.curCnt + 1);
     }
-    // Seconds recorded so far (whole buckets touched).
-    get elapsedMs() { return this.used * this.bucketMs; }
-    finish() {
-      const nb = Math.max(this.used, 1), g = this.grid, cnt = this.cnt, best = this.best, sum = this.sum;
-      const floor = new Uint8Array(BINS).fill(236);
+    // The usual peak of each step, with no step stronger than 2 dB over the middle of all steps.
+    floors() {
+      const typical = Array.from(this.floor).sort((x, y) => x - y)[BINS / 2], lim = Math.max(0, typical - 4);
+      return Array.from(this.floor, v => Math.max(v, lim));
+    }
+    levels(k, row, f) {
+      const thr2 = 2 * this.cfg.thrDb;
+      for (let b = 0; b < BINS; b++) {
+        const best = row[b];
+        if (best === 255) continue;
+        const d2 = f[b] - best;
+        this.cells[b * MAXB + k] = d2 >= thr2 ? Math.min(15, Math.max(1, Math.floor((d2 + STEP_DB) / (STEP_DB * 2)))) : 0;
+      }
+    }
+    finishWarm(n) {
       for (let b = 0; b < BINS; b++) {
         const tmp = [];
-        for (let k = 0; k < nb; k++) { const i = b * MAXB + k; if (cnt[k] > 0 && best[i] !== 255) tmp.push(Math.min(247, Math.floor(sum[i] / cnt[k]))); }
-        if (tmp.length) { tmp.sort((a, c) => a - c); floor[b] = tmp[tmp.length >> 1]; }
+        for (let k = 0; k < n; k++) { const v = this.warm[k * BINS + b]; if (v !== 255) tmp.push(v); }
+        if (tmp.length) { tmp.sort((x, y) => x - y); this.floor[b] = tmp[tmp.length >> 1]; }
       }
-      const typical = Array.from(floor).sort((a, c) => a - c)[BINS >> 1];
-      for (let b = 0; b < BINS; b++) floor[b] = Math.max(floor[b], Math.max(typical - 4, 0));
-      let valid = 0; for (let k = 0; k < nb; k++) if (cnt[k] > 0) valid++;
-      const maxRaw = new Uint8Array(BINS).fill(255), duty = new Uint8Array(BINS);
-      for (let b = 0; b < BINS; b++) {
-        let hot = 0;
-        for (let k = 0; k < nb; k++) {
-          const i = b * MAXB + k;
-          if (cnt[k] === 0 || best[i] === 255) { g[i] = 0; continue; }
-          maxRaw[b] = Math.min(maxRaw[b], best[i]);
-          const d2 = floor[b] - best[i];
-          const v = d2 >= 2 * this.cfg.thrDb ? Math.min(15, Math.max(1, Math.floor((d2 + 3) / 6))) : 0;
-          g[i] = v;
-          if (v > 0) hot++;
-        }
-        duty[b] = valid > 0 ? Math.floor((hot * 100 + (valid >> 1)) / valid) : 0;
-        if (maxRaw[b] === 255) maxRaw[b] = floor[b];
-        let k = 0;
-        while (k < nb) {
-          if (cnt[k] > 0) { k++; continue; }
-          let k1 = k;
-          while (k1 + 1 < nb && cnt[k1 + 1] === 0) k1++;
-          const v = k > 0 && k1 + 1 < nb ? Math.min(g[b * MAXB + k - 1], g[b * MAXB + k1 + 1]) : 0;
-          for (let q = k; q <= k1; q++) g[b * MAXB + q] = v;
-          k = k1 + 1;
+      const f = this.floors();
+      for (let k = 0; k < n; k++) this.levels(k, this.warm.subarray(k * BINS, (k + 1) * BINS), f);
+      this.warmDone = true;
+    }
+    closeBucket() {
+      const k = this.curK, row = this.cur.slice();
+      if (this.curCnt === 0) this.none[k] = 1;
+      if (!this.warmDone) {
+        this.warm.set(row, k * BINS);
+        if (k === WARM - 1) this.finishWarm(WARM);
+      } else if (this.curCnt > 0) {
+        this.levels(k, row, this.floors());
+        // The usual peak follows the band slowly: half a dB a bucket towards each value.
+        for (let b = 0; b < BINS; b++) {
+          const best = row[b], fl = this.floor[b];
+          if (best !== 255) { if (best > fl) this.floor[b] = fl + 1; else if (best < fl) this.floor[b] = fl - 1; }
         }
       }
-      // Events: connected areas.
-      const events = [];
-      const stack = [];
-      for (let start = 0; start < CELLS; start++) {
-        const b0 = Math.floor(start / MAXB), k0 = start % MAXB;
-        if (k0 >= nb || g[start] === 0 || (g[start] & 0x80)) continue;
-        const ev = { k0, k1: k0, b0, b1: b0, peak: 0 };
-        g[start] |= 0x80; stack.push(start);
-        while (stack.length) {
-          const x = stack.pop(), b = Math.floor(x / MAXB), k = x % MAXB, v = g[x] & 0x7f;
-          ev.b0 = Math.min(ev.b0, b); ev.b1 = Math.max(ev.b1, b); ev.k0 = Math.min(ev.k0, k); ev.k1 = Math.max(ev.k1, k);
-          ev.peak = Math.max(ev.peak, v * STEP_DB);
-          const visit = (nbin, nk) => { const y = nbin * MAXB + nk; if (g[y] !== 0 && !(g[y] & 0x80)) { g[y] |= 0x80; stack.push(y); } };
-          if (b > 0) visit(b - 1, k);
-          if (b + 1 < BINS) visit(b + 1, k);
-          if (k > 0) visit(b, k - 1);
-          if (k + 1 < nb) visit(b, k + 1);
-        }
-        if (events.length < MAXE) events.push(ev);
+      this.cur.fill(255); this.curCnt = 0;
+    }
+    end() {
+      if (this.used > 0) { this.closeBucket(); if (!this.warmDone) this.finishWarm(Math.min(this.used, WARM)); }
+      else { this.used = 1; this.none[0] = 1; }
+    }
+    // Makes the file (a Uint8Array). Call it once.
+    finish() {
+      this.end();
+      const nb = Math.max(this.used, 1), f = this.warmDone ? this.floors() : new Array(BINS).fill(236);
+      const dbm = f.map(v => -(v >> 1));
+      const base = dbm.slice().sort((x, y) => x - y)[BINS / 2];
+      let anyNone = false; for (let k = 0; k < nb; k++) if (this.none[k]) anyNone = true;
+      const sk = this.cfg.startKhz >>> 0, peak = this.peakRaw === 255 ? base : -(this.peakRaw >> 1);
+      const out = [77, 83, 82, 50, anyNone ? 1 : 0, this.cfg.thrDb, this.bucketMs & 255, (this.bucketMs >> 8) & 255, nb & 255, nb >> 8, this.sweeps & 255, this.sweeps >> 8,
+        sk & 255, (sk >> 8) & 255, (sk >> 16) & 255, (sk >>> 24) & 255, this.cfg.stepKhz & 255, (this.cfg.stepKhz >> 8) & 255, peak & 255, Math.floor(this.cfg.intervalMs / 100) & 255, base & 255];
+      const d = i => Math.max(-8, Math.min(7, dbm[i] - base)) & 15;
+      for (let b = 0; b < BINS / 2; b++) out.push(d(2 * b) | (d(2 * b + 1) << 4));
+      if (anyNone) { const bm = new Uint8Array(Math.ceil(nb / 8)); for (let k = 0; k < nb; k++) if (this.none[k]) bm[k >> 3] |= 1 << (k & 7); out.push(...bm); }
+      const enc = new RcEnc(), pr = newProbs(), c = this.cells;
+      for (let b = 0; b < BINS; b++) for (let k = 0; k < nb; k++) {
+        const v = c[b * MAXB + k], a = k > 0 ? c[b * MAXB + k - 1] : 0, a2 = k > 1 ? c[b * MAXB + k - 2] : 0, u = b > 0 ? c[(b - 1) * MAXB + k] : 0;
+        const [zc, vc] = contexts(a, a2, u);
+        enc.bit(pr, zc, v !== 0);
+        if (v !== 0) { const x = v - 1; let node = 1; for (let i = 3; i >= 0; i--) { const bit = (x >> i) & 1; enc.bit(pr, ZCTX + vc * 16 + node, bit); node = node * 2 + bit; } }
       }
-      for (let i = 0; i < CELLS; i++) g[i] &= 0x7f;
-      // The file.
-      const out = [];
-      const u16 = v => out.push(v & 255, (v >> 8) & 255);
-      const durationS = Math.min(65535, Math.ceil(nb * this.bucketMs / 1000));
-      out.push(77, 83, 82, 49, BINS, this.cfg.thrDb, Math.floor(this.cfg.intervalMs / 100), 0);
-      u16(durationS); u16(this.bucketMs & 0xffff); u16(nb); u16(this.sweeps);
-      const sk = this.cfg.startKhz >>> 0; out.push(sk & 255, (sk >> 8) & 255, (sk >> 16) & 255, (sk >>> 24) & 255);
-      u16(this.cfg.stepKhz); out.push(0, 0);
-      for (let b = 0; b < BINS; b++) out.push((-(floor[b] >> 1)) & 255);
-      for (let b = 0; b < BINS; b++) out.push((-(maxRaw[b] >> 1)) & 255);
-      for (let b = 0; b < BINS; b++) out.push(duty[b]);
-      const bm = new Uint8Array(Math.ceil(nb / 8));
-      for (let k = 0; k < nb; k++) if (cnt[k] === 0) bm[k >> 3] |= 1 << (k & 7);
-      out.push(...bm);
-      const lenAt = out.length; out.push(0, 0);
-      for (let b = 0; b < BINS; b++) {
-        let k = 0;
-        while (k < nb) {
-          const v = g[b * MAXB + k]; let run = 1;
-          if (v === 0) { while (k + run < nb && g[b * MAXB + k + run] === 0 && run < 128) run++; out.push(run - 1); }
-          else { while (k + run < nb && g[b * MAXB + k + run] === v && run < 8) run++; out.push(0x80 | (v << 3) | (run - 1)); }
-          k += run;
-        }
-      }
-      const slen = out.length - lenAt - 2; out[lenAt] = slen & 255; out[lenAt + 1] = slen >> 8;
-      u16(events.length);
-      for (const e of events) out.push(e.k0, e.k1, e.b0, e.b1, e.peak, 0);
+      const stream = enc.finish();
+      for (let i = 0; i < stream.length; i++) out.push(stream[i]);
       return Uint8Array.from(out);
     }
   }
 
+  function finishParsed(r, f) {
+    r.khz = bin => r.startKhz + r.stepKhz * bin;
+    r.lengthMs = r.buckets * r.bucketMs;
+    r.cell = (bin, bucket) => r.grid[bin * MAXB + bucket];
+    r.groups = () => groups(r);
+    r.size = f.length;
+    return r;
+  }
+
   function parse(f) {
-    if (f.length < HEAD || f[0] !== 77 || f[1] !== 83 || f[2] !== 82 || f[3] !== 49) throw new Error("This is not a spectrum recording.");
+    if (f.length >= 4 && f[0] === 77 && f[1] === 83 && f[2] === 82 && f[3] === 50) return parse2(f);
+    return parse1(f);
+  }
+
+  function parse2(f) {
+    const bad = () => new Error("The recording is damaged.");
+    if (f.length < HEAD2) throw bad();
+    const u16 = o => f[o] | f[o + 1] << 8;
+    const buckets = u16(8), bucketMs = u16(6);
+    if (!buckets || buckets > MAXB || !bucketMs) throw bad();
+    const peak = f[18] << 24 >> 24, base = f[20] << 24 >> 24;
+    const r = { thrDb: f[5], intervalMs: f[19] * 100, durationS: Math.min(65535, Math.ceil(buckets * bucketMs / 1000)), bucketMs, buckets, sweeps: u16(10),
+      startKhz: (f[12] | f[13] << 8 | f[14] << 16 | f[15] << 24) >>> 0, stepKhz: u16(16),
+      floor: new Int8Array(BINS), max: new Int8Array(BINS), duty: new Uint8Array(BINS), masked: new Array(MAXB).fill(false), grid: new Uint8Array(CELLS), events: [] };
+    for (let b = 0; b < BINS; b++) { const nib = (f[21 + (b >> 1)] >> ((b & 1) * 4)) & 15; r.floor[b] = Math.max(-128, Math.min(127, base + (nib << 28 >> 28))); }
+    let p = HEAD2;
+    if (f[4] & 1) {
+      const m = Math.ceil(buckets / 8);
+      if (f.length < p + m) throw bad();
+      for (let k = 0; k < buckets; k++) r.masked[k] = ((f[p + (k >> 3)] >> (k & 7)) & 1) === 1;
+      p += m;
+    }
+    const dec = new RcDec(f, p), pr = newProbs(), g = r.grid;
+    for (let b = 0; b < BINS; b++) for (let k = 0; k < buckets; k++) {
+      const a = k > 0 ? g[b * MAXB + k - 1] : 0, a2 = k > 1 ? g[b * MAXB + k - 2] : 0, u = b > 0 ? g[(b - 1) * MAXB + k] : 0;
+      const [zc, vc] = contexts(a, a2, u);
+      if (dec.bit(pr, zc)) { let node = 1; for (let i = 0; i < 4; i++) node = node * 2 + dec.bit(pr, ZCTX + vc * 16 + node); g[b * MAXB + k] = node - 16 + 1; }
+    }
+    let measured = 0; for (let k = 0; k < buckets; k++) if (!r.masked[k]) measured++;
+    measured = Math.max(1, measured);
+    for (let b = 0; b < BINS; b++) {
+      let hot = 0, top = 0;
+      for (let k = 0; k < buckets; k++) { const v = g[b * MAXB + k]; if (v > 0 && !r.masked[k]) hot++; top = Math.max(top, v); }
+      r.duty[b] = Math.floor((hot * 100 + (measured >> 1)) / measured);
+      r.max[b] = Math.max(r.floor[b], Math.min(peak, r.floor[b] + top * STEP_DB));
+    }
+    findEvents(r);
+    return finishParsed(r, f);
+  }
+
+  // The events: connected areas of cells above the threshold, in the order of their first cell. An area grows pass by pass
+  // over its own bounding box.
+  function findEvents(r) {
+    const g = r.grid, nb = r.buckets;
+    for (let start = 0; start < BINS * MAXB; start++) {
+      const b0 = Math.floor(start / MAXB), k0 = start % MAXB;
+      if (k0 >= nb || g[start] === 0 || (g[start] & 0x80)) continue;
+      const ev = { k0, k1: k0, b0, b1: b0, peak: g[start] * STEP_DB };
+      g[start] |= 0x80;
+      let reverse = false;
+      for (;;) {
+        let changed = false;
+        const lb = Math.max(0, ev.b0 - 1), hb = Math.min(BINS - 1, ev.b1 + 1), lk = Math.max(0, ev.k0 - 1), hk = Math.min(nb - 1, ev.k1 + 1);
+        for (let bi = 0; bi <= hb - lb; bi++) {
+          const b = reverse ? hb - bi : lb + bi;
+          for (let ki = 0; ki <= hk - lk; ki++) {
+            const k = reverse ? hk - ki : lk + ki, i = b * MAXB + k, v = g[i];
+            if (v === 0 || (v & 0x80)) continue;
+            const touches = (b > 0 && (g[i - MAXB] & 0x80)) || (b + 1 < BINS && (g[i + MAXB] & 0x80)) || (k > 0 && (g[i - 1] & 0x80)) || (k + 1 < nb && (g[i + 1] & 0x80));
+            if (touches) {
+              g[i] = v | 0x80;
+              ev.b0 = Math.min(ev.b0, b); ev.b1 = Math.max(ev.b1, b); ev.k0 = Math.min(ev.k0, k); ev.k1 = Math.max(ev.k1, k); ev.peak = Math.max(ev.peak, v * STEP_DB);
+              changed = true;
+            }
+          }
+        }
+        if (!changed) break;
+        reverse = !reverse;
+      }
+      if (r.events.length < MAXE) r.events.push(ev);
+    }
+    for (let i = 0; i < g.length; i++) g[i] &= 0x7f;
+  }
+
+  function parse1(f) {
+    if (f.length < HEAD1 || f[0] !== 77 || f[1] !== 83 || f[2] !== 82 || f[3] !== 49) throw new Error("This is not a spectrum recording.");
     const u16 = o => f[o] | f[o + 1] << 8;
     if (f[4] !== BINS) throw new Error("The recording is damaged.");
     const buckets = u16(12);
-    if (!buckets || buckets > MAXB) throw new Error("The recording is damaged.");
+    if (!buckets || buckets > MAXB1) throw new Error("The recording is damaged.");
     const r = { thrDb: f[5], intervalMs: f[6] * 100, durationS: u16(8), bucketMs: u16(10), buckets, sweeps: u16(14),
       startKhz: (f[16] | f[17] << 8 | f[18] << 16 | f[19] << 24) >>> 0, stepKhz: u16(20),
       floor: new Int8Array(BINS), max: new Int8Array(BINS), duty: new Uint8Array(BINS), masked: new Array(MAXB).fill(false),
-      grid: new Uint8Array(CELLS), events: [], size: f.length };
-    let p = HEAD; const nbm = Math.ceil(buckets / 8);
+      grid: new Uint8Array(CELLS), events: [] };
+    let p = HEAD1; const nbm = Math.ceil(buckets / 8);
     if (f.length < p + BINS * 3 + nbm + 2) throw new Error("The recording is damaged.");
     for (let b = 0; b < BINS; b++) { r.floor[b] = f[p + b] << 24 >> 24; r.max[b] = f[p + BINS + b] << 24 >> 24; r.duty[b] = f[p + 2 * BINS + b]; }
     p += BINS * 3;
@@ -3706,11 +3823,7 @@ const SR = (() => {
       if (e.k0 > e.k1 || e.k1 >= buckets || e.b0 > e.b1 || e.b1 >= BINS) throw new Error("The recording is damaged.");
       r.events.push(e);
     }
-    r.khz = bin => r.startKhz + r.stepKhz * bin;
-    r.lengthMs = buckets * r.bucketMs;
-    r.cell = (bin, bucket) => r.grid[bin * MAXB + bucket];
-    r.groups = () => groups(r);
-    return r;
+    return finishParsed(r, f);
   }
 
   function groups(r) {
@@ -3767,7 +3880,9 @@ const SR = (() => {
 // Settings > Experimental. These tools only read from the radio. The radio hears no messages while it sweeps.
 const XP_BAND = { label: "EU 863–870", startKhz: 863000, stepKhz: 110, count: 64 };
 const XP_MARSE_KHZ = 869525;
-const xp = { tab: "spectrum", rows: [], live: false, rec: null, recs: store.get("xpRecs", []), openId: null, dom: {}, msg: "" };
+const xp = { tab: "spectrum", rows: [], live: false, rec: null, recs: store.get("xpRecs", []), openId: null, dom: {}, msg: "",
+             remote: { target: "", dur: store.get("xpRemDur", 300), st: null, msg: "", timer: null } };
+const XP_MSR_MIME = "application/x-maarse-msr";
 const xpDbm = raw => raw >= 248 ? null : -raw / 2;
 const XP_STOPS = [[0, [10, 18, 32]], [.25, [27, 74, 107]], [.5, [47, 163, 154]], [.75, [232, 197, 71]], [1, [255, 90, 54]]];
 const XP_LUT = Array.from({ length: 256 }, (_, i) => {
@@ -3822,7 +3937,77 @@ function xpFinishRec() {
   xp.tab = "recordings"; xp.openId = id; xp.msg = `Saved ${name} (${xpSize(bytes.length)}, ${elapsed >= 60 ? Math.round(elapsed / 60) + " min" : elapsed + " s"}).`;
   renderChat();
 }
-function xpLeave() { xpCancelRec(); xpStopLive(); xp.rows = []; }
+function xpLeave() { xpCancelRec(); xpStopLive(); xp.rows = []; clearTimeout(xp.remote.timer); }
+
+// ---- A recording made by a radio (this one, or a repeater reached over LoRa) ----
+function xpRecSend(inner) {
+  const rm = xp.remote;
+  transport?.send(rm.target ? Cmd.remote(state.nextReq++ & 0xffff, rm.target, inner) : inner);
+}
+function xpRecStart() {
+  const rm = xp.remote;
+  if (!transport) { rm.msg = "Connect to your node first."; renderChat(); return; }
+  store.set("xpRemDur", rm.dur);
+  rm.st = null; rm.msg = rm.target ? "Asked " + label(rm.target) + ". Waiting for its reply over LoRa…" : "Asked the radio…";
+  xpRecSend(Cmd.sweepRecStart(XP_BAND.startKhz, XP_BAND.stepKhz, rm.dur, 0, 6));
+  xpRecPoll();
+  renderChat();
+}
+function xpRecStop() {
+  const rm = xp.remote;
+  clearTimeout(rm.timer); xpRecSend(Cmd.sweepRecStop()); rm.st = null; rm.msg = "Stopped."; renderChat();
+}
+// While it records, ask now and then how it goes (over LoRa each question costs airtime, so not often).
+function xpRecPoll() {
+  const rm = xp.remote; clearTimeout(rm.timer);
+  rm.timer = setTimeout(() => {
+    if (state.view !== "experimental" || !rm.st || rm.st.state !== 1) return;
+    xpRecSend(Cmd.sweepRecStatus()); xpRecPoll();
+  }, rm.target ? 30000 : 5000);
+}
+function xpRecState(from, ev) {
+  const rm = xp.remote;
+  if (from !== rm.target) return;
+  rm.st = ev; rm.msg = "";
+  if (ev.state === 1) xpRecPoll();
+  if (state.view === "experimental" && xp.tab === "remote") renderChat();
+}
+function xpRecordingReceived(m, buf) {
+  try { SR.parse(buf); } catch { return; }
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  const who = xp.remote.target ? label(m.from) : "radio";
+  const name = `Spectrum ${who} ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  const id = Date.now();
+  xp.recs.unshift({ id, name, at: id, b64: xpB64(buf) }); xpSaveRecs();
+  xp.openId = id; xp.remote.st = null; clearTimeout(xp.remote.timer);
+  xp.msg = `Received ${name} (${xpSize(buf.length)}).`;
+  if (state.view === "experimental") { xp.tab = "recordings"; renderChat(); }
+  else log(xp.msg + " Open it under Settings > Experimental > Recordings.");
+}
+function xpRemoteTab(wrap) {
+  const rm = xp.remote;
+  const names = ["Idle", "Recording", "Done, about to send", "Sending the file over LoRa", "Failed"];
+  const running = rm.st && (rm.st.state === 1 || rm.st.state === 2 || rm.st.state === 3);
+  const sel = el("select", {}, el("option", { value: "", textContent: "This radio (connected to this computer)" }),
+    ...[...state.contacts.keys()].map(a => el("option", { value: a, textContent: label(a) })));
+  sel.value = rm.target; sel.onchange = () => { rm.target = sel.value; rm.st = null; rm.msg = ""; clearTimeout(rm.timer); renderChat(); };
+  const dur = el("select", {}, ...[1, 2, 5, 10].map(mn => el("option", { value: mn * 60, textContent: mn + (mn === 1 ? " minute" : " minutes") })));
+  dur.value = rm.dur; dur.onchange = () => { rm.dur = +dur.value; };
+  const go = el("button", { className: "primary", textContent: "Start recording", onclick: xpRecStart });
+  const stop = el("button", { textContent: "Stop", onclick: xpRecStop });
+  go.disabled = !transport || !!(rm.st && rm.st.state === 1); stop.hidden = !running;
+  wrap.append(el("div", { className: "xp-bar" }, el("span", { className: "muted", textContent: "Radio" }), sel),
+              el("div", { className: "xp-bar" }, el("span", { className: "muted", textContent: "Record for" }), dur, go, stop));
+  const st = rm.st;
+  if (st) {
+    const pct = st.durationS ? Math.min(1, st.elapsedS / st.durationS) : 0;
+    wrap.append(el("div", { className: "xp-bar" }, el("progress", { value: st.state === 1 ? pct : 1, max: 1 }),
+      el("span", { className: st.state === 4 ? "warn" : "muted", textContent: `${names[st.state] || st.state}${st.state === 1 ? ` · ${xpClock(st.elapsedS)} of ${xpClock(st.durationS)} · ${st.sweeps} sweeps` : ""}${st.bytes ? ` · file ${xpSize(st.bytes)}` : ""}` })));
+  }
+  if (rm.msg) wrap.append(el("p", { className: "muted", textContent: rm.msg }));
+  wrap.append(el("p", { className: "muted", textContent: "The radio records on its own, 10 sweeps a second, and sends a small file (a few hundred bytes for 5 minutes) back when it is done; over LoRa that takes a minute or two. While it records it hears and sends nothing, so a repeater is out of the network for that time (at most 10 minutes). A repeater only obeys administrators. The result appears under Recordings." }));
+  if (!transport) wrap.append(el("p", { className: "warn", textContent: "Connect to your node first." }));
+}
 function xpOnSweep(ev) {
   if (ev.startKhz !== XP_BAND.startKhz) return;
   xp.rows.push(ev.rssi); if (xp.rows.length > 120) xp.rows.shift();
@@ -3885,11 +4070,11 @@ function renderExperimental(box) {
   if (!SR) { wrap.append(el("p", { textContent: "This page needs a newer maarse-client." })); return; }
   wrap.append(el("p", { className: "muted", textContent: "These tools are new. They only read from the radio and never change how messages are sent. Numbers can be rough." }));
   const tabs = el("div", { className: "xp-tabs" });
-  for (const [k, label] of [["spectrum", "Spectrum"], ["recordings", `Recordings (${xp.recs.length})`]]) {
+  for (const [k, label] of [["spectrum", "Spectrum"], ["remote", "Record on a radio"], ["recordings", `Recordings (${xp.recs.length})`]]) {
     tabs.append(el("button", { className: xp.tab === k ? "on" : "", textContent: label, onclick: () => { xp.tab = k; xp.msg = ""; renderChat(); } }));
   }
   wrap.append(tabs);
-  if (xp.tab === "spectrum") xpSpectrumTab(wrap); else xpRecordingsTab(wrap);
+  if (xp.tab === "spectrum") xpSpectrumTab(wrap); else if (xp.tab === "remote") xpRemoteTab(wrap); else xpRecordingsTab(wrap);
 }
 function xpSpectrumTab(wrap) {
   const d = xp.dom = {};
@@ -4086,7 +4271,7 @@ function xpPlayer(host, r, name) {
   const occ = r.duty.reduce((a, b) => a + b, 0) / 64;
   const F = (v, l) => el("div", { className: "xp-fact" }, el("b", { textContent: v }), el("span", { textContent: l }));
   const facts = el("div", { className: "xp-facts" },
-    F(xpClock(total), `recorded, ${r.sweeps} sweeps`), F((fs / 64).toFixed(0) + " dBm", `average noise floor (${fmin} to ${fmax})`),
+    F(xpClock(total), `recorded, ${r.sweeps} sweeps`), F((fs / 64).toFixed(0) + " dBm", `typical level between peaks (${fmin} to ${fmax})`),
     F(occ.toFixed(1) + " %", `average share over the threshold (${r.thrDb} dB)`), F(hi + " dBm", `highest level, bin ${hib} (${xpMhz(r.khz(hib))} MHz)`),
     F(`bin ${mdb} · ${md} %`, `most active frequency, ${xpMhz(r.khz(mdb))} MHz`), F(r.events.length + " / " + groups.length, "events / groups"),
     F((mb / NB * 100).toFixed(0) + " %", "of the time not measured"), F(xpSize(r.size), "file size, instead of " + xpSize(r.sweeps * 64) + " raw"));

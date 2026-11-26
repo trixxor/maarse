@@ -1060,8 +1060,10 @@ impl Node {
                             t.modem_stats(&name, &items);
                         }
                     }
-                    // GPS details and spectrum rows go to the clients as they are.
-                    Ok(ev @ (Event::Gps { .. } | Event::Sweep { .. })) => {
+                    // GPS details, spectrum rows and a spectrum recording (state, and the file the radio hands over) go to
+                    // the clients as they are. A radio in modem mode does not receive files from the air, so a file
+                    // event from it can only be its own recording.
+                    Ok(ev @ (Event::Gps { .. } | Event::Sweep { .. } | Event::SweepRecState { .. } | Event::FileIncoming { .. } | Event::FileChunk { .. } | Event::FileDone { .. })) => {
                         let f = ev.encode().to_vec();
                         for tx in self.clients.values() {
                             let _ = tx.send(f.clone());
@@ -3736,10 +3738,13 @@ impl Node {
                         | Command::OtaChunk { .. }
                         | Command::OtaEnd { .. }
                         | Command::OtaStatus
-                        | Command::Sensor { .. })
+                        | Command::Sensor { .. }
+                        | Command::SweepRecStart { .. }
+                        | Command::SweepRecStop
+                        | Command::SweepRecStatus)
                 );
                 if !ok {
-                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Only status, radio, role, firmware and sensors can be controlled remotely"));
+                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Only status, radio, role, firmware, sensors and spectrum recordings can be controlled remotely"));
                 }
                 // The counter follows the clock, so it also increases after a restart,
                 // but always increases (firmware chunks can come several per second).
@@ -3807,7 +3812,7 @@ impl Node {
                 ),
             ),
             // Only the radio knows: passed on to the USB and Bluetooth radios.
-            Command::GetGps | Command::Sweep { .. } => crate::fwupdate::to_radios(&cmd.encode()),
+            Command::GetGps | Command::Sweep { .. } | Command::SweepRecStart { .. } | Command::SweepRecStop | Command::SweepRecStatus => crate::fwupdate::to_radios(&cmd.encode()),
             Command::GetStats => {
                 let host = self.stats();
                 let extra = self.radio_stats(&host);

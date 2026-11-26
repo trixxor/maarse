@@ -53,6 +53,14 @@ object Cmd {
     fun getGps() = frame(0x3c)
     /** A spectrum sweep: `count` steps of `stepKhz` from `startKhz`, `sweeps` times in a row (255 = until stopped or 2 minutes, 0 = stop). */
     fun sweep(startKhz: Long, stepKhz: Int, count: Int, sweeps: Int) = frame(0x3d) { u32(startKhz); u16(stepKhz); u8(count); u8(sweeps) }
+    /**
+     * Record the spectrum on the radio itself: 64 steps, one sweep every `intervalDs` tenths of a second (0 = 2 s), for `durationS`
+     * seconds. The radio makes the file and sends it back: over the air when asked through [remote], else as an incoming file.
+     * The radio hears no messages while a sweep runs.
+     */
+    fun sweepRecStart(startKhz: Long, stepKhz: Int, durationS: Int, intervalDs: Int, thrDb: Int) = frame(0x3e) { u32(startKhz); u16(stepKhz); u16(durationS); u8(intervalDs); u8(thrDb) }
+    fun sweepRecStop() = frame(0x3f) { }
+    fun sweepRecStatus() = frame(0x43) { }
     fun setRadio(c: RadioCfg) = frame(0x0a) {
         u32(c.freq); u32(c.bw); u8(c.sf); u8(c.cr); u8(c.power); u16(c.duty); u16(c.preamble); u8(c.announce)
     }
@@ -142,6 +150,8 @@ sealed class Ev {
     data class Gps(val info: GpsInfo) : Ev()
     /** One spectrum sweep: `rssi` is -dBm x 2 for each step (255 = not measured). */
     data class Sweep(val seq: Int, val startKhz: Long, val stepKhz: Int, val rssi: IntArray) : Ev()
+    /** How a spectrum recording on a radio goes: state 0 idle, 1 recording, 2 ready, 3 sending, 4 failed. */
+    data class SweepRecState(val state: Int, val elapsedS: Int, val durationS: Int, val sweeps: Int, val bytes: Int) : Ev()
     data class Radio(val cfg: RadioCfg) : Ev()
     data class Regions(val strict: Boolean, val names: String) : Ev()
     data class RemoteReply(val from: String, val inner: Ev?) : Ev()
@@ -220,6 +230,7 @@ fun decodeEvent(f: ByteArray): Ev {
         0x90 -> Ev.Deposited(r.u64(1))
         0xbe -> GpsInfo.parse(f.copyOfRange(1, f.size))?.let { Ev.Gps(it) } ?: Ev.Unknown(t)
         0xbf -> Ev.Sweep(r.u16(1), r.u32(3), r.u16(7), IntArray(maxOf(0, f.size - 9)) { r.u8(9 + it) })
+        0xb9 -> Ev.SweepRecState(r.u8(1), r.u16(2), r.u16(4), r.u16(6), r.u16(8))
         0x91 -> Ev.Stats((1 until f.size - 4 step 5).map { r.u8(it) to r.i32(it + 1) })
         0x92 -> Ev.Radio(RadioCfg(r.u32(1), r.u32(5), r.u8(9), r.u8(10), r.s8(11), r.u16(12), r.u16(14), r.u8(16)))
         0x93 -> Ev.RemoteReply(r.addr(1), if (f.size > 17) decodeEvent(f.copyOfRange(17, f.size)) else null)

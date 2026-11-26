@@ -882,7 +882,7 @@ fn run_modem<P: std::io::Read + std::io::Write>(mut port: P, name: String, kind:
                             snr,
                             open_channel: None,
                         });
-                    } else if matches!(f.first(), Some(0x91 | 0x92 | 0xbe | 0xbf)) {
+                    } else if matches!(f.first(), Some(0x91 | 0x92 | 0xbe | 0xbf | 0xb9 | 0x89 | 0x8a | 0x8c)) {
                         if let Ok(maarse_core::companion::Event::Stats { items }) = maarse_core::companion::Event::decode(&f) {
                             let items: Vec<(u8, i32)> = items.iter().map(|(k, v)| (*k, *v)).collect();
                             note_modem_stats(id, &items);

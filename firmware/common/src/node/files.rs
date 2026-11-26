@@ -84,6 +84,12 @@ impl Files {
         }
     }
 
+    /// Lends the two file buffers to a spectrum recording (see `maarse_core::sweeprec::Tables`): the cells in the first, a
+    /// work area in the second, where the file is made, the same buffer a file is sent from.
+    pub(super) fn rec_tables(&mut self) -> maarse_core::sweeprec::Tables<'_> {
+        maarse_core::sweeprec::Tables { cells: &mut self.in_buf[..], work: &mut self.out_buf[..] }
+    }
+
     /// When the files need attention again.
     pub(super) fn deadline(&self) -> Option<Instant> {
         if self.stream.as_ref().is_some_and(|s| !s.waiting) {
@@ -111,6 +117,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     // ---------- from the client ----------
 
     pub(super) fn file_begin(&mut self, req: u16, dest: Address, size: u32, mime: &[u8], name: &[u8]) {
+        if self.rec_holds_buffers() {
+            return err(req, error_code::QUEUE_FULL, "A spectrum recording is running; wait until it is done");
+        }
         if self.files.out.is_some() {
             return err(req, error_code::QUEUE_FULL, "A file is already being sent; wait until it is done");
         }
@@ -164,6 +173,65 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             }
             Err(e) => err(req, error_code::UNKNOWN_DEST, e),
         }
+    }
+
+    /// No file is being sent, received or handed to the client.
+    pub(super) fn files_idle(&self) -> bool {
+        self.files.out.is_none() && self.files.upload.is_none() && self.files.incoming.is_none() && self.files.stream.is_none()
+    }
+
+    /// Sends the first `len` bytes of the send buffer (a spectrum recording made there) to `dest` over the air.
+    pub(super) fn file_send_staged(&mut self, dest: Address, len: usize, mime: &[u8], name: &[u8]) -> Result<(), &'static str> {
+        if self.files.out.is_some() || self.files.upload.is_some() {
+            return Err("A file is already being sent");
+        }
+        if !self.known.contains_key(&dest) {
+            return Err("The recipient has not been heard yet");
+        }
+        let mut id = [0u8; 8];
+        self.rng.fill_bytes(&mut id);
+        let mut key = [0u8; 32];
+        self.rng.fill_bytes(&mut key);
+        let (mut out, offer) = Outgoing::new(u64::from_le_bytes(id), key, dest, &self.files.out_buf[..len.min(MAX_FILE)], mime, name, now_ms())?;
+        let enc = offer.encode();
+        let msg_id = self.send_plain(dest, &enc)?;
+        out.offer_sent(msg_id, now_ms());
+        self.files.offer = enc;
+        self.files.out = Some(out);
+        log("Sending the spectrum recording");
+        Ok(())
+    }
+
+    /// Is a file being sent over the air?
+    pub(super) fn file_sending(&self) -> bool {
+        self.files.out.is_some()
+    }
+
+    /// Hands the first `len` bytes of the send buffer (a spectrum recording) to the client on USB or Bluetooth,
+    /// as if the file had arrived over the air.
+    pub(super) fn file_staged_to_client(&mut self, len: usize, mime: &[u8], name: &[u8]) -> Result<(), &'static str> {
+        if self.files.incoming.is_some() || self.files.stream.is_some() {
+            return Err("A file is already on its way to the client");
+        }
+        let n = len.min(MAX_FILE);
+        self.files.in_buf[..n].copy_from_slice(&self.files.out_buf[..n]);
+        let mut id = [0u8; 8];
+        self.rng.fill_bytes(&mut id);
+        let file_id = u64::from_le_bytes(id);
+        let offer = FileOffer {
+            file_id,
+            size: n as u32,
+            chunks: maarse_crypto::files::chunks_for(n),
+            chunk_size: 0,
+            key: [0; 32],
+            hash: [0; 16],
+            mime: maarse_core::content::Small::from_slice(&mime[..mime.len().min(64)]).unwrap_or_default(),
+            name: maarse_core::content::Small::from_slice(&name[..name.len().min(64)]).unwrap_or_default(),
+        };
+        emit(&Event::FileIncoming { file_id, from: self.addr, size: offer.size, mime: text(&offer.mime), name: text(&offer.name) });
+        self.files.stream = Some(Stream { from: self.addr, offer, pos: 0, last_push: Instant::now(), waiting: false });
+        self.file_stream();
+        Ok(())
     }
 
     // ---------- sending ----------
@@ -221,6 +289,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     // ---------- receiving ----------
 
     pub(super) fn file_offer(&mut self, from: Address, offer: FileOffer) {
+        if self.rec_holds_buffers() {
+            return log("File rejected: a spectrum recording is running");
+        }
         if let Some(inc) = &self.files.incoming {
             if inc.file_id() == offer.file_id {
                 return; // The offer again (the acknowledgement was lost).

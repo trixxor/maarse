@@ -54,6 +54,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import dk.maarse.app.Cmd
+import dk.maarse.app.Node
+import dk.maarse.app.RadioRec
 import dk.maarse.app.SweepRec
 import dk.maarse.app.SweepRecording
 import dk.maarse.app.SweepStore
@@ -109,6 +112,44 @@ private fun clock(s: Double): String { val n = Math.round(s).toInt(); return "%0
 private fun mhz(khz: Long) = "%.2f".format(khz / 1000.0)
 private fun size(n: Int) = if (n >= 1024) "%.1f KB".format(n / 1024.0) else "$n B"
 
+/** Record on a radio itself: the one connected to this phone, or a repeater over LoRa. It sends the finished file back. */
+@Composable
+fun RadioRecordCard() {
+    val target by RadioRec.target.collectAsState()
+    val st by RadioRec.state.collectAsState()
+    val message by RadioRec.message.collectAsState()
+    val nodes by Node.nodes.collectAsState()
+    var minutes by remember { mutableIntStateOf(5) }
+    var picking by remember { mutableStateOf(false) }
+    val running = st?.state in 1..3
+    val names = listOf("Recording", "", "Done, about to send", "Sending the file over LoRa", "Failed")
+    Card2(Modifier.padding(top = 4.dp)) {
+        Text("Record on a radio", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        Text(
+            "The radio records on its own, 10 sweeps a second, and sends a small file back when it is done (a few hundred bytes for 5 minutes). Over LoRa that takes a minute or two. While it records it hears and sends nothing, so a repeater is out of the network for up to 10 minutes. A repeater only obeys administrators.",
+            Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton({ picking = !picking }, Modifier.padding(top = 8.dp), enabled = !running) { Text(if (target.isEmpty()) "This phone's radio" else Node.label(target)) }
+        if (picking) {
+            TextButton({ RadioRec.target.value = ""; picking = false }) { Text("This phone's radio") }
+            nodes.keys.sortedBy { Node.label(it) }.forEach { a -> TextButton({ RadioRec.target.value = a; picking = false }) { Text(Node.label(a)) } }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            DURATIONS.forEach { m -> FilterChip(selected = minutes == m, onClick = { minutes = m }, enabled = !running, label = { Text("$m min") }) }
+        }
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button({ RadioRec.start(minutes * 60) }, enabled = st?.state != 1) { Text("Start recording") }
+            if (running) OutlinedButton({ RadioRec.stop() }) { Text("Stop") }
+        }
+        st?.let { s ->
+            LinearProgressIndicator(progress = { if (s.state == 1 && s.durationS > 0) (s.elapsedS / s.durationS.toFloat()).coerceIn(0f, 1f) else 1f }, Modifier.fillMaxWidth().padding(top = 8.dp))
+            val extra = (if (s.state == 1) " · ${clock(s.elapsedS.toDouble())} of ${clock(s.durationS.toDouble())} · ${s.sweeps} sweeps" else "") + (if (s.bytes > 0) " · file ${size(s.bytes)}" else "")
+            Text((names.getOrNull(s.state)?.ifEmpty { "Idle" } ?: "Idle") + extra, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall)
+        }
+        if (message.isNotEmpty()) Text(message, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
 /** Experimental > Recordings: the saved scans, with a player for the open one. */
 @Composable
 fun RecordingsPage() {
@@ -132,6 +173,7 @@ fun RecordingsPage() {
         if (uri != null && it != null) runCatching { ctx.contentResolver.openOutputStream(uri)!!.use { o -> o.write(SweepStore.read(it)) } }
             .onFailure { error = "Could not save the file." }
     }
+    RadioRecordCard()
     Card2(Modifier.padding(top = 4.dp)) {
         Text("Scans you recorded on the Spectrum page, or opened from a file. Each one is a small file you can keep or send to someone else.", style = MaterialTheme.typography.bodyMedium)
         OutlinedButton({ pick.launch(arrayOf("*/*")) }, Modifier.padding(top = 8.dp)) { Text("Open a file…") }
@@ -343,7 +385,7 @@ private fun RecordingPlayer(r: SweepRec.Recording, name: String) {
     Card2 {
         listOf(
             clock(total) to "recorded, ${r.sweeps} sweeps",
-            "%.0f dBm".format(fs) to "average noise floor (${r.floor.min()} to ${r.floor.max()})",
+            "%.0f dBm".format(fs) to "typical level between peaks (${r.floor.min()} to ${r.floor.max()})",
             "%.1f %%".format(r.duty.average()) to "average share over the threshold (${r.thrDb} dB)",
             "${r.max[hiBin]} dBm" to "highest level, bin $hiBin (${mhz(r.khz(hiBin))} MHz)",
             "bin $busy · ${r.duty[busy]} %" to "most active frequency, ${mhz(r.khz(busy))} MHz",

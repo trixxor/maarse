@@ -228,6 +228,35 @@ pub struct SweepReq {
 }
 pub static SWEEP: Signal<M, SweepReq> = Signal::new();
 
+/// A spectrum recording on this node (`Command::SweepRecStart`, see `maarse_core::sweeprec`): the radio task takes a
+/// sweep every `interval_ms` between listening and sends each row to the node in [`REC_ROWS`]; the node keeps the cells
+/// (in the buffers it uses for file transfers) and makes the file.
+#[derive(Clone, Copy)]
+pub struct RecReq {
+    pub start_khz: u32,
+    pub step_khz: u16,
+    pub duration_s: u16,
+    pub interval_ms: u16,
+}
+/// A recording starts this long after it was asked for: the acknowledgement and the answer to the request are sent first, because
+/// nothing is sent (or heard) once the sweeping has begun.
+pub const REC_START_DELAY_MS: u64 = 3000;
+/// `Some` starts sweeping for a recording (replacing one that runs), `None` stops it.
+pub static REC_REQ: Signal<M, Option<RecReq>> = Signal::new();
+/// Wakes the radio loop, which may sit in its listening `select` for up to 30 s and does not look at [`REC_REQ`] there:
+/// a sweep request that sweeps zero times does nothing but end that wait.
+pub fn wake_radio_loop() {
+    SWEEP.signal(SweepReq { start_khz: 0, step_khz: 0, count: 0, sweeps: 0 });
+}
+/// One sweep of a recording: the time since it began and one byte per step, `-dBm x 2`.
+pub struct RecRow {
+    pub t_ms: u32,
+    pub row: [u8; maarse_core::sweeprec::BINS],
+}
+/// The latest row of a recording, from the radio task to the node (one slot, to cost no RAM: the ESP32's stack is what is
+/// left of its RAM and has under 100 bytes to spare; the node looks every 100 ms, a row it has not taken yet is replaced).
+pub static REC_ROWS: Signal<M, RecRow> = Signal::new();
+
 /// The host says a message arrived (frame `0x42`): the board may beep.
 pub static BEEP: Signal<M, ()> = Signal::new();
 

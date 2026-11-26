@@ -14,7 +14,7 @@ class SweepRecTest {
     fun matchesTheRustFile() {
         val input = File(dir, "sweeprec-golden-sweeps.bin").readBytes()
         val want = File(dir, "sweeprec-golden.msr").readBytes()
-        val rec = SweepRec.Recorder(SweepRec.Config(863_000, 110, 300, 1000, 6))
+        val rec = SweepRec.Recorder(SweepRec.Config(863_000, 110, 300, 100, 6))
         var o = 0
         while (o + 68 <= input.size) {
             val t = (input[o].toLong() and 255) or ((input[o + 1].toLong() and 255) shl 8) or ((input[o + 2].toLong() and 255) shl 16) or ((input[o + 3].toLong() and 255) shl 24)

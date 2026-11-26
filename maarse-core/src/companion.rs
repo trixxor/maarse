@@ -139,6 +139,16 @@ pub enum Command {
     /// (at most 128) of `step_khz`, the first at `start_khz`; the radio does `sweeps` sweeps in a row
     /// (0 = stop), one `Sweep` event per sweep. While it sweeps, the radio cannot receive messages.
     Sweep { start_khz: u32, step_khz: u16, count: u8, sweeps: u8 },
+    /// 0x3e: record the spectrum on the radio itself (64 steps of `step_khz` from `start_khz`, one sweep
+    /// every `interval_ds` tenths of a second, 0 = 2 s) for `duration_s` seconds, and make the file
+    /// described in [`crate::sweeprec`]. The radio hears no messages while a sweep runs (about 100 ms
+    /// each). When it is done the radio sends the file to whoever asked (over the air through `Remote`,
+    /// or as an incoming file to the client on USB or Bluetooth). Answered with `SweepRecState`.
+    SweepRecStart { start_khz: u32, step_khz: u16, duration_s: u16, interval_ds: u8, thr_db: u8 },
+    /// 0x3f: stop a recording and throw away what it has (also a finished file that was not sent).
+    SweepRecStop,
+    /// 0x43: ask how a recording is going. Answered with `SweepRecState`.
+    SweepRecStatus,
     /// 0x22: what the node shares in its announces: position (precision 0 =
     /// off, the default) and telemetry. Stored. The reply is `Sharing`.
     SetSharing(Sharing),
@@ -311,9 +321,8 @@ pub struct AlertMeta {
 }
 
 impl AlertMeta {
-    fn put(&self, w: W) -> W {
-        let w = w
-            .b(&[self.status, self.kind, self.event, self.severity])
+    fn put<'a>(&self, w: &'a mut W) -> &'a mut W {
+        w.b(&[self.status, self.kind, self.event, self.severity])
             .b(&self.expires_min.to_le_bytes())
             .b(&self.reference.to_le_bytes());
         match self.area {
@@ -583,6 +592,9 @@ pub enum Event {
     /// 0xbf: one spectrum sweep: the number of the sweep, the first frequency and the step, and the
     /// strength of each step as `-dBm x 2` (one byte each; 255 = not measured).
     Sweep { seq: u16, start_khz: u32, step_khz: u16, rssi: Text },
+    /// 0xb9: how a spectrum recording on the radio is going: state (see [`sweep_rec_state`]), seconds
+    /// recorded, seconds asked for, sweeps taken, size of the file once it is made (else 0).
+    SweepRecState { state: u8, elapsed_s: u16, duration_s: u16, sweeps: u16, bytes: u16 },
     /// 0xa2: sharing settings (see [`Sharing`]).
     Sharing(Sharing),
     /// 0xa4: the node's own display name (empty = none).
@@ -1039,6 +1051,20 @@ pub mod stat {
 }
 
 /// Error codes in `Event::Error`.
+/// `Event::SweepRecState` states.
+pub mod sweep_rec_state {
+    /// Nothing recorded or recording.
+    pub const IDLE: u8 = 0;
+    /// Recording; the radio hears nothing while a sweep runs.
+    pub const RECORDING: u8 = 1;
+    /// The file is made and waits to be sent.
+    pub const READY: u8 = 2;
+    /// The file is on its way to whoever asked.
+    pub const SENDING: u8 = 3;
+    /// It did not work (no room to send, or the settings did not fit); the text of the log says why.
+    pub const FAILED: u8 = 4;
+}
+
 pub mod error_code {
     pub const UNKNOWN_DEST: u8 = 1;
     pub const TOO_LARGE: u8 = 2;
@@ -1062,20 +1088,26 @@ pub enum FrameError {
 struct W(FrameBuf);
 
 impl W {
-    fn new(kind: u8) -> Self {
-        let mut v = FrameBuf::new();
-        let _ = v.extend_from_slice(&[0, 0, kind]);
-        W(v)
+    fn empty() -> Self {
+        W(FrameBuf::new())
     }
-    fn b(mut self, b: &[u8]) -> Self {
+    /// Starts a frame of this kind.
+    fn start(&mut self, kind: u8) -> &mut Self {
+        self.0.clear();
+        let _ = self.0.extend_from_slice(&[0, 0, kind]);
+        self
+    }
+    // By reference, not by value: a method that took and returned the whole 300-byte frame left a copy on the stack for
+    // every link of a chain, and with about 100 arms `Event::encode` had a 17 KB stack frame (the ESP32 has no room).
+    fn b(&mut self, b: &[u8]) -> &mut Self {
         let room = self.0.capacity() - self.0.len();
         let _ = self.0.extend_from_slice(&b[..b.len().min(room)]);
         self
     }
-    fn done(mut self) -> FrameBuf {
+    fn done(&mut self) -> FrameBuf {
         let len = (self.0.len() - 2) as u16;
         self.0[..2].copy_from_slice(&len.to_le_bytes());
-        self.0
+        self.0.clone()
     }
 }
 
@@ -1150,100 +1182,112 @@ pub fn text(s: &[u8]) -> Text {
 
 impl Command {
     pub fn encode(&self) -> FrameBuf {
+        let mut w = W::empty();
+        self.write(&mut w);
+        w.done()
+    }
+
+    // One builder shared by every arm, so the stack frame is one frame buffer, not one per arm (it was 14 KB).
+    fn write<'a>(&self, w: &'a mut W) -> &'a mut W {
         match self {
-            Command::GetInfo => W::new(0x01).done(),
+            Command::GetInfo => w.start(0x01),
             Command::SendDirect { req, dest, text } => {
-                W::new(0x02).b(&req.to_le_bytes()).b(&dest.0).b(text).done()
+                w.start(0x02).b(&req.to_le_bytes()).b(&dest.0).b(text)
             }
-            Command::SendChannel { req, channel, text } => W::new(0x03)
+            Command::SendChannel { req, channel, text } => w.start(0x03)
                 .b(&req.to_le_bytes())
                 .b(&channel.0)
                 .b(text)
-                .done(),
-            Command::JoinChannel { name } => W::new(0x04).b(name).done(),
-            Command::AnnounceNow => W::new(0x05).done(),
+                ,
+            Command::JoinChannel { name } => w.start(0x04).b(name),
+            Command::AnnounceNow => w.start(0x05),
             Command::FileBegin {
                 req,
                 dest,
                 size,
                 mime,
                 name,
-            } => W::new(0x06)
+            } => w.start(0x06)
                 .b(&req.to_le_bytes())
                 .b(&dest.0)
                 .b(&size.to_le_bytes())
                 .b(&[mime.len() as u8])
                 .b(mime)
                 .b(name)
-                .done(),
-            Command::FileData { req, offset, data } => W::new(0x07)
+                ,
+            Command::FileData { req, offset, data } => w.start(0x07)
                 .b(&req.to_le_bytes())
                 .b(&offset.to_le_bytes())
                 .b(data)
-                .done(),
-            Command::FileEnd { req } => W::new(0x08).b(&req.to_le_bytes()).done(),
-            Command::GetStats => W::new(0x09).done(),
-            Command::SetRadio(c) => W::new(0x0a).b(&c.to_bytes()).done(),
-            Command::GetRadio => W::new(0x0b).done(),
-            Command::Remote { req, dest, frame } => W::new(0x0c).b(&req.to_le_bytes()).b(&dest.0).b(frame).done(),
+                ,
+            Command::FileEnd { req } => w.start(0x08).b(&req.to_le_bytes()),
+            Command::GetStats => w.start(0x09),
+            Command::SetRadio(c) => w.start(0x0a).b(&c.to_bytes()),
+            Command::GetRadio => w.start(0x0b),
+            Command::Remote { req, dest, frame } => w.start(0x0c).b(&req.to_le_bytes()).b(&dest.0).b(frame),
             Command::SetAdmins { admins } => {
-                let mut w = W::new(0x0d);
+                w.start(0x0d);
                 for a in admins {
-                    w = w.b(&a.0);
+                    w.b(&a.0);
                 }
-                w.done()
+                w
             }
-            Command::GetAdmins => W::new(0x0e).done(),
-            Command::SetTime { unix } => W::new(0x0f).b(&unix.to_le_bytes()).done(),
-            Command::SetRole { role } => W::new(0x10).b(&[*role]).done(),
+            Command::GetAdmins => w.start(0x0e),
+            Command::SetTime { unix } => w.start(0x0f).b(&unix.to_le_bytes()),
+            Command::SetRole { role } => w.start(0x10).b(&[*role]),
             Command::SetRegions { strict, names } => {
-                W::new(0x11).b(&[*strict as u8]).b(names).done()
+                w.start(0x11).b(&[*strict as u8]).b(names)
             }
-            Command::GetRegions => W::new(0x12).done(),
-            Command::JoinPrivateChannel { key, name } => W::new(0x13).b(key).b(name).done(),
-            Command::TraceRoute { req, dest } => W::new(0x20).b(&req.to_le_bytes()).b(&dest.0).done(),
-            Command::GetNeighbors => W::new(0x21).done(),
-            Command::GetGps => W::new(0x3c).done(),
-            Command::Sweep { start_khz, step_khz, count, sweeps } => W::new(0x3d).b(&start_khz.to_le_bytes()).b(&step_khz.to_le_bytes()).b(&[*count, *sweeps]).done(),
-            Command::SetSharing(s) => W::new(0x22).b(&s.to_bytes()).done(),
-            Command::GetSharing => W::new(0x23).done(),
-            Command::SetName { name } => W::new(0x24).b(name).done(),
-            Command::SetWifi(w) => W::new(0x28)
-                .b(&[w.enabled as u8 | (w.modem as u8) << 1, w.ssid.len() as u8])
-                .b(&w.ssid)
-                .b(&[w.password.len() as u8])
-                .b(&w.password)
-                .b(&w.peer)
-                .done(),
-            Command::GetWifi => W::new(0x29).done(),
-            Command::SetModemKey { passphrase } => W::new(0x2d).b(passphrase).done(),
-            Command::GetName => W::new(0x25).done(),
-            Command::SetSite(site) => W::new(0x3a).b(&site.to_bytes()).done(),
-            Command::GetSite => W::new(0x3b).done(),
-            Command::RequestPage { req, dest, path } => W::new(0x26).b(&req.to_le_bytes()).b(&dest.0).b(path).done(),
-            Command::PostBoard { req, dest, path, text } => W::new(0x2e).b(&req.to_le_bytes()).b(&dest.0).b(&[path.len() as u8]).b(path).b(text).done(),
-            Command::SendCall { dest, data } => W::new(0x27).b(&dest.0).b(data).done(),
+            Command::GetRegions => w.start(0x12),
+            Command::JoinPrivateChannel { key, name } => w.start(0x13).b(key).b(name),
+            Command::TraceRoute { req, dest } => w.start(0x20).b(&req.to_le_bytes()).b(&dest.0),
+            Command::GetNeighbors => w.start(0x21),
+            Command::GetGps => w.start(0x3c),
+            Command::Sweep { start_khz, step_khz, count, sweeps } => w.start(0x3d).b(&start_khz.to_le_bytes()).b(&step_khz.to_le_bytes()).b(&[*count, *sweeps]),
+            Command::SweepRecStart { start_khz, step_khz, duration_s, interval_ds, thr_db } => {
+                w.start(0x3e).b(&start_khz.to_le_bytes()).b(&step_khz.to_le_bytes()).b(&duration_s.to_le_bytes()).b(&[*interval_ds, *thr_db])
+            }
+            Command::SweepRecStop => w.start(0x3f),
+            Command::SweepRecStatus => w.start(0x43),
+            Command::SetSharing(s) => w.start(0x22).b(&s.to_bytes()),
+            Command::GetSharing => w.start(0x23),
+            Command::SetName { name } => w.start(0x24).b(name),
+            Command::SetWifi(cfg) => w
+                .start(0x28)
+                .b(&[cfg.enabled as u8 | (cfg.modem as u8) << 1, cfg.ssid.len() as u8])
+                .b(&cfg.ssid)
+                .b(&[cfg.password.len() as u8])
+                .b(&cfg.password)
+                .b(&cfg.peer),
+            Command::GetWifi => w.start(0x29),
+            Command::SetModemKey { passphrase } => w.start(0x2d).b(passphrase),
+            Command::GetName => w.start(0x25),
+            Command::SetSite(site) => w.start(0x3a).b(&site.to_bytes()),
+            Command::GetSite => w.start(0x3b),
+            Command::RequestPage { req, dest, path } => w.start(0x26).b(&req.to_le_bytes()).b(&dest.0).b(path),
+            Command::PostBoard { req, dest, path, text } => w.start(0x2e).b(&req.to_le_bytes()).b(&dest.0).b(&[path.len() as u8]).b(path).b(text),
+            Command::SendCall { dest, data } => w.start(0x27).b(&dest.0).b(data),
             Command::OtaBegin { req, flags, manifest } => {
-                W::new(0x18).b(&req.to_le_bytes()).b(&[*flags]).b(manifest).done()
+                w.start(0x18).b(&req.to_le_bytes()).b(&[*flags]).b(manifest)
             }
             Command::OtaChunk { req, offset, data } => {
-                W::new(0x19).b(&req.to_le_bytes()).b(&offset.to_le_bytes()).b(data).done()
+                w.start(0x19).b(&req.to_le_bytes()).b(&offset.to_le_bytes()).b(data)
             }
-            Command::OtaEnd { req, apply } => W::new(0x1a).b(&req.to_le_bytes()).b(&[*apply as u8]).done(),
-            Command::OtaStatus => W::new(0x1b).done(),
-            Command::GetFileLimit { dest } => W::new(0x14).b(&dest.0).done(),
+            Command::OtaEnd { req, apply } => w.start(0x1a).b(&req.to_le_bytes()).b(&[*apply as u8]),
+            Command::OtaStatus => w.start(0x1b),
+            Command::GetFileLimit { dest } => w.start(0x14).b(&dest.0),
             Command::SetIdentity { confirm, secret } => {
                 let flags = if *confirm { IDENTITY_CONFIRM } else { 0 };
-                W::new(0x34).b(&[flags]).b(secret).done()
+                w.start(0x34).b(&[flags]).b(secret)
             }
-            Command::SetRangeTest(c) => W::new(0x2a).b(&c.to_bytes()).done(),
-            Command::GetRangeTest => W::new(0x2b).done(),
-            Command::SendAlert { req, meta, text } => meta.put(W::new(0x2c).b(&req.to_le_bytes())).b(text).done(),
-            Command::LinkDevice { req, device } => W::new(0x35).b(&req.to_le_bytes()).b(&device.0).done(),
-            Command::GetPerson => W::new(0x36).done(),
-            Command::PersonSetup { req, op, text } => W::new(0x37).b(&req.to_le_bytes()).b(&[*op]).b(text).done(),
-            Command::CancelFile { file_id } => W::new(0x38).b(&file_id.to_le_bytes()).done(),
-            Command::Sensor { req, dest, op, data } => W::new(0x39).b(&req.to_le_bytes()).b(&dest.0).b(&[*op]).b(data).done(),
+            Command::SetRangeTest(c) => w.start(0x2a).b(&c.to_bytes()),
+            Command::GetRangeTest => w.start(0x2b),
+            Command::SendAlert { req, meta, text } => meta.put(w.start(0x2c).b(&req.to_le_bytes())).b(text),
+            Command::LinkDevice { req, device } => w.start(0x35).b(&req.to_le_bytes()).b(&device.0),
+            Command::GetPerson => w.start(0x36),
+            Command::PersonSetup { req, op, text } => w.start(0x37).b(&req.to_le_bytes()).b(&[*op]).b(text),
+            Command::CancelFile { file_id } => w.start(0x38).b(&file_id.to_le_bytes()),
+            Command::Sensor { req, dest, op, data } => w.start(0x39).b(&req.to_le_bytes()).b(&dest.0).b(&[*op]).b(data),
         }
     }
 
@@ -1302,6 +1346,9 @@ impl Command {
             0x21 => Command::GetNeighbors,
             0x3c => Command::GetGps,
             0x3d => Command::Sweep { start_khz: r.u32()?, step_khz: r.u16()?, count: r.u8()?, sweeps: r.u8()? },
+            0x3e => Command::SweepRecStart { start_khz: r.u32()?, step_khz: r.u16()?, duration_s: r.u16()?, interval_ds: r.u8()?, thr_db: r.u8()? },
+            0x3f => Command::SweepRecStop,
+            0x43 => Command::SweepRecStatus,
             0x22 => Command::SetSharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
             0x23 => Command::GetSharing,
             0x24 => Command::SetName { name: r.text()? },
@@ -1353,6 +1400,13 @@ impl Command {
 
 impl Event {
     pub fn encode(&self) -> FrameBuf {
+        let mut w = W::empty();
+        self.write(&mut w);
+        w.done()
+    }
+
+    // One builder shared by every arm, so the stack frame is one frame buffer, not one per arm (it was 14 KB).
+    fn write<'a>(&self, w: &'a mut W) -> &'a mut W {
         match self {
             Event::Info {
                 addr,
@@ -1361,106 +1415,106 @@ impl Event {
                 max_text,
                 max_file,
                 identity,
-            } => W::new(0x81)
+            } => w.start(0x81)
                 .b(&addr.0)
                 .b(&[*repeater as u8, *version, *max_text])
                 .b(&max_file.to_le_bytes())
                 .b(identity.as_ref().map_or(&[][..], |k| &k[..]))
-                .done(),
-            Event::Sent { req, msg_id } => W::new(0x82)
+                ,
+            Event::Sent { req, msg_id } => w.start(0x82)
                 .b(&req.to_le_bytes())
                 .b(&msg_id.to_le_bytes())
-                .done(),
+                ,
             Event::DirectReceived { from, hops, text } => {
-                W::new(0x83).b(&from.0).b(&[*hops]).b(text).done()
+                w.start(0x83).b(&from.0).b(&[*hops]).b(text)
             }
             Event::ChannelReceived {
                 channel,
                 from,
                 hops,
                 text,
-            } => W::new(0x84)
+            } => w.start(0x84)
                 .b(&channel.0)
                 .b(&from.0)
                 .b(&[*hops])
                 .b(text)
-                .done(),
-            Event::Acked { msg_id } => W::new(0x85).b(&msg_id.to_le_bytes()).done(),
-            Event::RouteLearned { dest, hops } => W::new(0x86).b(&dest.0).b(&[*hops]).done(),
-            Event::Heard { addr, hops, identity } => W::new(0x87)
+                ,
+            Event::Acked { msg_id } => w.start(0x85).b(&msg_id.to_le_bytes()),
+            Event::RouteLearned { dest, hops } => w.start(0x86).b(&dest.0).b(&[*hops]),
+            Event::Heard { addr, hops, identity } => w.start(0x87)
                 .b(&addr.0)
                 .b(&[*hops])
                 .b(identity.as_ref().map_or(&[][..], |k| &k[..]))
-                .done(),
-            Event::ChannelJoined { channel, name } => W::new(0x88).b(&channel.0).b(name).done(),
+                ,
+            Event::ChannelJoined { channel, name } => w.start(0x88).b(&channel.0).b(name),
             Event::FileIncoming {
                 file_id,
                 from,
                 size,
                 mime,
                 name,
-            } => W::new(0x89)
+            } => w.start(0x89)
                 .b(&file_id.to_le_bytes())
                 .b(&from.0)
                 .b(&size.to_le_bytes())
                 .b(&[mime.len() as u8])
                 .b(mime)
                 .b(name)
-                .done(),
+                ,
             Event::FileChunk {
                 file_id,
                 offset,
                 data,
-            } => W::new(0x8a)
+            } => w.start(0x8a)
                 .b(&file_id.to_le_bytes())
                 .b(&offset.to_le_bytes())
                 .b(data)
-                .done(),
+                ,
             Event::FileProgress {
                 file_id,
                 done,
                 total,
                 outgoing,
-            } => W::new(0x8b)
+            } => w.start(0x8b)
                 .b(&file_id.to_le_bytes())
                 .b(&done.to_le_bytes())
                 .b(&total.to_le_bytes())
                 .b(&[*outgoing as u8])
-                .done(),
+                ,
             Event::FileDone {
                 file_id,
                 ok,
                 outgoing,
                 text,
-            } => W::new(0x8c)
+            } => w.start(0x8c)
                 .b(&file_id.to_le_bytes())
                 .b(&[*ok as u8, *outgoing as u8])
                 .b(text)
-                .done(),
+                ,
             Event::FileStarted {
                 req,
                 file_id,
                 chunks,
-            } => W::new(0x8d)
+            } => w.start(0x8d)
                 .b(&req.to_le_bytes())
                 .b(&file_id.to_le_bytes())
                 .b(&chunks.to_le_bytes())
-                .done(),
-            Event::Log { text } => W::new(0x8e).b(text).done(),
-            Event::Deposited { msg_id } => W::new(0x90).b(&msg_id.to_le_bytes()).done(),
-            Event::Radio(c) => W::new(0x92).b(&c.to_bytes()).done(),
-            Event::RemoteReply { from, frame } => W::new(0x93).b(&from.0).b(frame).done(),
+                ,
+            Event::Log { text } => w.start(0x8e).b(text),
+            Event::Deposited { msg_id } => w.start(0x90).b(&msg_id.to_le_bytes()),
+            Event::Radio(c) => w.start(0x92).b(&c.to_bytes()),
+            Event::RemoteReply { from, frame } => w.start(0x93).b(&from.0).b(frame),
             Event::Admins { admins } => {
-                let mut w = W::new(0x94);
+                w.start(0x94);
                 for a in admins {
-                    w = w.b(&a.0);
+                    w.b(&a.0);
                 }
-                w.done()
+                w
             }
             Event::Regions { strict, names } => {
-                W::new(0x95).b(&[*strict as u8]).b(names).done()
+                w.start(0x95).b(&[*strict as u8]).b(names)
             }
-            Event::OtaState { req, state, next, size, version, current, text } => W::new(0x9a)
+            Event::OtaState { req, state, next, size, version, current, text } => w.start(0x9a)
                 .b(&req.to_le_bytes())
                 .b(&[*state])
                 .b(&next.to_le_bytes())
@@ -1468,41 +1522,43 @@ impl Event {
                 .b(&version.to_le_bytes())
                 .b(&current.to_le_bytes())
                 .b(text)
-                .done(),
-            Event::OtaInfo { board } => W::new(0x9b).b(&board.to_le_bytes()).done(),
+                ,
+            Event::OtaInfo { board } => w.start(0x9b).b(&board.to_le_bytes()),
             Event::Stats { items } => {
-                let mut w = W::new(0x91);
+                w.start(0x91);
                 for (k, v) in items {
-                    w = w.b(&[*k]).b(&v.to_le_bytes());
+                    w.b(&[*k]).b(&v.to_le_bytes());
                 }
-                w.done()
+                w
             }
-            Event::FileLimit { dest, max_bytes, via_lora, mailbox, est_airtime_s } => W::new(0x96)
+            Event::FileLimit { dest, max_bytes, via_lora, mailbox, est_airtime_s } => w.start(0x96)
                 .b(&dest.0)
                 .b(&max_bytes.to_le_bytes())
                 .b(&[*via_lora as u8 | (*mailbox as u8) << 1])
                 .b(&est_airtime_s.to_le_bytes())
-                .done(),
-            Event::Error { req, code, text } => W::new(0x8f)
+                ,
+            Event::Error { req, code, text } => w.start(0x8f)
                 .b(&req.to_le_bytes())
                 .b(&[*code])
                 .b(text)
-                .done(),
+                ,
             Event::TraceResult { req, dest, path, out, back } => {
-                let mut w = W::new(0xa0).b(&req.to_le_bytes()).b(&dest.0).b(&[path.len() as u8]);
+                w.start(0xa0);
+                w.b(&req.to_le_bytes()).b(&dest.0).b(&[path.len() as u8]);
                 for id in path {
-                    w = w.b(&id.to_le_bytes());
+                    w.b(&id.to_le_bytes());
                 }
-                w = w.b(&[out.len() as u8]);
+                w.b(&[out.len() as u8]);
                 for v in out.iter().chain(back.iter()) {
-                    w = w.b(&[*v as u8]);
+                    w.b(&[*v as u8]);
                 }
-                w.done()
+                w
             }
             Event::Neighbors { part, last, items } => {
-                let mut w = W::new(0xa1).b(&[*part, *last as u8]);
+                w.start(0xa1);
+                w.b(&[*part, *last as u8]);
                 for n in items {
-                    w = w
+                    w
                         .b(&n.id.to_le_bytes())
                         .b(&n.prefix)
                         .b(&[n.snr as u8])
@@ -1510,41 +1566,49 @@ impl Event {
                         .b(&n.age_s.to_le_bytes())
                         .b(&n.count.to_le_bytes());
                 }
-                w.done()
+                w
             }
-            Event::Gps { data } => W::new(0xbe).b(data).done(),
+            Event::Gps { data } => w.start(0xbe).b(data),
             Event::Sweep { seq, start_khz, step_khz, rssi } => {
-                W::new(0xbf).b(&seq.to_le_bytes()).b(&start_khz.to_le_bytes()).b(&step_khz.to_le_bytes()).b(rssi).done()
+                w.start(0xbf).b(&seq.to_le_bytes()).b(&start_khz.to_le_bytes()).b(&step_khz.to_le_bytes()).b(rssi)
             }
-            Event::Sharing(s) => W::new(0xa2).b(&s.to_bytes()).done(),
-            Event::Site(site) => W::new(0xbb).b(&site.to_bytes()).done(),
-            Event::Name { name } => W::new(0xa4).b(name).done(),
-            Event::Call { from, data } => W::new(0xa5).b(&from.0).b(data).done(),
-            Event::CarryAcked { msg_id } => W::new(0xa7).b(&msg_id.to_le_bytes()).done(),
-            Event::Wifi { enabled, modem, state, ip, ssid, peer } => W::new(0xa6)
+            Event::SweepRecState { state, elapsed_s, duration_s, sweeps, bytes } => w.start(0xb9)
+                .b(&[*state])
+                .b(&elapsed_s.to_le_bytes())
+                .b(&duration_s.to_le_bytes())
+                .b(&sweeps.to_le_bytes())
+                .b(&bytes.to_le_bytes())
+                ,
+            Event::Sharing(s) => w.start(0xa2).b(&s.to_bytes()),
+            Event::Site(site) => w.start(0xbb).b(&site.to_bytes()),
+            Event::Name { name } => w.start(0xa4).b(name),
+            Event::Call { from, data } => w.start(0xa5).b(&from.0).b(data),
+            Event::CarryAcked { msg_id } => w.start(0xa7).b(&msg_id.to_le_bytes()),
+            Event::Wifi { enabled, modem, state, ip, ssid, peer } => w.start(0xa6)
                 .b(&[*enabled as u8 | (*modem as u8) << 1, *state])
                 .b(ip)
                 .b(&[ssid.len() as u8])
                 .b(ssid)
                 .b(peer)
-                .done(),
+                ,
             Event::NodeInfo { addr, hops, position, telemetry, name, caps } => {
                 let mut data = crate::appdata::build(None, false, *position, telemetry.as_ref(), name.as_deref());
                 if let Some(c) = caps {
                     crate::appdata::push_caps(&mut data, *c);
                 }
-                W::new(0xa3).b(&addr.0).b(&[*hops]).b(&data).done()
+                w.start(0xa3).b(&addr.0).b(&[*hops]).b(&data)
             }
-            Event::IdentityChanged { addr, identity } => W::new(0xb4).b(&addr.0).b(identity).done(),
+            Event::IdentityChanged { addr, identity } => w.start(0xb4).b(&addr.0).b(identity),
             Event::RangeState(st) => {
-                let mut w = W::new(0xa8)
+                w.start(0xa8);
+                w
                     .b(&st.config.to_bytes())
                     .b(&[st.sf, st.synced as u8])
                     .b(&st.count.to_le_bytes())
                     .b(&st.missed.to_le_bytes())
                     .b(&st.seq.to_le_bytes());
                 for p in &st.per_sf {
-                    w = w
+                    w
                         .b(&[p.sf])
                         .b(&p.rx.to_le_bytes())
                         .b(&p.lost.to_le_bytes())
@@ -1553,10 +1617,11 @@ impl Event {
                         .b(&p.snr_avg_x4.to_le_bytes())
                         .b(&[p.snr_min as u8]);
                 }
-                w.done()
+                w
             }
             Event::RangeRx(x) => {
-                let w = W::new(0xa9)
+                w.start(0xa9);
+                w
                     .b(&x.uptime_ms.to_le_bytes())
                     .b(&x.sender)
                     .b(&x.seq.to_le_bytes())
@@ -1568,17 +1633,17 @@ impl Event {
                     .b(&[x.tx_power_dbm as u8])
                     .b(&x.battery_mv.to_le_bytes());
                 match x.position {
-                    Some((lat, lon)) => w.b(&lat.to_le_bytes()).b(&lon.to_le_bytes()).done(),
-                    None => w.done(),
+                    Some((lat, lon)) => w.b(&lat.to_le_bytes()).b(&lon.to_le_bytes()),
+                    None => w,
                 }
             }
             Event::Alert { issuer, serial, issued, meta, hops, trust, name, text } => meta
-                .put(W::new(0xac).b(&issuer.0).b(&serial.to_le_bytes()).b(&issued.to_le_bytes()))
+                .put(w.start(0xac).b(&issuer.0).b(&serial.to_le_bytes()).b(&issued.to_le_bytes()))
                 .b(&[*hops, *trust, name.len() as u8])
                 .b(name)
                 .b(text)
-                .done(),
-            Event::RangeTx(x) => W::new(0xaa)
+                ,
+            Event::RangeTx(x) => w.start(0xaa)
                 .b(&x.uptime_ms.to_le_bytes())
                 .b(&x.seq.to_le_bytes())
                 .b(&[x.sf, x.slot])
@@ -1586,27 +1651,29 @@ impl Event {
                 .b(&x.airtime_ms.to_le_bytes())
                 .b(&x.charge_ma_ms.to_le_bytes())
                 .b(&x.skipped.to_le_bytes())
-                .done(),
-            Event::DeviceLinked { device, index, words } => W::new(0xb5).b(&device.0).b(&[*index]).b(words).done(),
+                ,
+            Event::DeviceLinked { device, index, words } => w.start(0xb5).b(&device.0).b(&[*index]).b(words),
             Event::Person(p) => {
-                let mut w = W::new(0xb6)
+                w.start(0xb6);
+                w
                     .b(&[p.state, p.master as u8])
                     .b(&p.person.0)
                     .b(&[p.index])
                     .b(&p.version.to_le_bytes())
                     .b(&[p.devices.len() as u8]);
                 for (d, revoked) in &p.devices {
-                    w = w.b(&d.0).b(&[*revoked as u8]);
+                    w.b(&d.0).b(&[*revoked as u8]);
                 }
-                w.b(&p.words).done()
+                w.b(&p.words)
             }
-            Event::PersonPhrase { phrase } => W::new(0xb7).b(phrase).done(),
-            Event::Sensor { node, op, data } => W::new(0xbd).b(&node.0).b(&[*op]).b(data).done(),
-            Event::PersonBackup { code } => W::new(0xb8).b(code).done(),
-            Event::MeshCoreProof { req, offset, total, data } => W::new(0xbc)
-                .b(&req.to_le_bytes()).b(&offset.to_le_bytes()).b(&total.to_le_bytes()).b(data).done(),
+            Event::PersonPhrase { phrase } => w.start(0xb7).b(phrase),
+            Event::Sensor { node, op, data } => w.start(0xbd).b(&node.0).b(&[*op]).b(data),
+            Event::PersonBackup { code } => w.start(0xb8).b(code),
+            Event::MeshCoreProof { req, offset, total, data } => w.start(0xbc)
+                .b(&req.to_le_bytes()).b(&offset.to_le_bytes()).b(&total.to_le_bytes()).b(data),
             Event::Power(p) => {
-                let mut w = W::new(0xab)
+                w.start(0xab);
+                w
                     .b(&p.uptime_s.to_le_bytes())
                     .b(&p.battery_mv.to_le_bytes())
                     .b(&[p.ext_power as u8, p.mode, p.tx_power_dbm as u8])
@@ -1615,9 +1682,9 @@ impl Event {
                     .b(&p.tx_ma_x10.to_le_bytes())
                     .b(&p.tx_packets.to_le_bytes());
                 for ph in &p.phases {
-                    w = w.b(&ph.secs.to_le_bytes()).b(&ph.tx_ms.to_le_bytes()).b(&ph.charge_mas.to_le_bytes());
+                    w.b(&ph.secs.to_le_bytes()).b(&ph.tx_ms.to_le_bytes()).b(&ph.charge_mas.to_le_bytes());
                 }
-                w.done()
+                w
             }
         }
     }
@@ -1775,6 +1842,7 @@ impl Event {
             }
             0xbe => Event::Gps { data: r.text()? },
             0xbf => Event::Sweep { seq: r.u16()?, start_khz: r.u32()?, step_khz: r.u16()?, rssi: r.text()? },
+            0xb9 => Event::SweepRecState { state: r.u8()?, elapsed_s: r.u16()?, duration_s: r.u16()?, sweeps: r.u16()?, bytes: r.u16()? },
             0xbb => Event::Site(crate::appdata::Site::from_bytes(r.text()?.as_slice()).ok_or(FrameError::TooShort)?),
             0xa2 => Event::Sharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
             0xa3 => {
@@ -2215,6 +2283,10 @@ mod tests {
         roundtrip_cmd(Command::GetNeighbors);
         roundtrip_cmd(Command::GetGps);
         roundtrip_cmd(Command::Sweep { start_khz: 863_000, step_khz: 110, count: 64, sweeps: 3 });
+        roundtrip_cmd(Command::SweepRecStart { start_khz: 863_000, step_khz: 110, duration_s: 600, interval_ds: 20, thr_db: 6 });
+        roundtrip_cmd(Command::SweepRecStop);
+        roundtrip_cmd(Command::SweepRecStatus);
+        roundtrip_ev(Event::SweepRecState { state: sweep_rec_state::RECORDING, elapsed_s: 42, duration_s: 600, sweeps: 21, bytes: 0 });
         roundtrip_ev(Event::Gps { data: text(&[1, 2, 3]) });
         roundtrip_ev(Event::Sweep { seq: 7, start_khz: 863_000, step_khz: 110, rssi: text(&[200, 150, 255]) });
         roundtrip_cmd(Command::GetSharing);

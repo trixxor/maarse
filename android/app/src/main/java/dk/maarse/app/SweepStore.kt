@@ -126,3 +126,77 @@ object SweepRecording {
         job?.cancel(); active.value = null; stopSweeps()
     }
 }
+
+/**
+ * A spectrum recording made by a radio itself: the radio connected to this phone, or a repeater reached over LoRa
+ * (Experimental > Recordings > Record on a radio). The radio records on its own, then sends the finished file back
+ * (about 1 KB); it arrives as an incoming file with [MIME] and is saved in [SweepStore]. A radio hears no messages for
+ * about 100 ms at each sweep, so by default it sweeps once every 2 s.
+ */
+object RadioRec {
+    const val MIME = "application/x-maarse-msr"
+    private const val START_KHZ = 863_000L
+    private const val STEP_KHZ = 110
+
+    /** "" = the radio connected to this phone, else the address of a node (it must have us as an administrator). */
+    val target = MutableStateFlow("")
+    val state = MutableStateFlow<Ev.SweepRecState?>(null)
+    val message = MutableStateFlow("")
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var poll: Job? = null
+
+    private fun send(inner: ByteArray) {
+        val to = target.value
+        Node.send(if (to.isEmpty()) inner else Cmd.remote(Node.req(), to, inner))
+    }
+
+    /** The radio sweeps back to back, 10 a second, and hears and sends nothing until it is done (`durationS` at most 600). */
+    fun start(durationS: Int) {
+        state.value = null
+        message.value = if (target.value.isEmpty()) "Asked the radio…" else "Asked ${Node.label(target.value)}. Waiting for its reply over LoRa…"
+        send(Cmd.sweepRecStart(START_KHZ, STEP_KHZ, durationS, 0, 6))
+        watch()
+    }
+
+    fun stop() {
+        poll?.cancel()
+        send(Cmd.sweepRecStop())
+        state.value = null
+        message.value = "Stopped."
+    }
+
+    /** While it records, ask now and then how it goes (over LoRa each question costs airtime, so not often). */
+    private fun watch() {
+        poll?.cancel()
+        poll = scope.launch {
+            repeat(2000) {
+                delay(if (target.value.isEmpty()) 5_000 else 30_000)
+                val s = state.value
+                if (s == null || s.state != 1) return@launch
+                send(Cmd.sweepRecStatus())
+            }
+        }
+    }
+
+    fun onState(from: String, ev: Ev.SweepRecState) {
+        if (from != target.value) return
+        state.value = ev
+        message.value = ""
+        if (ev.state == 1) watch()
+    }
+
+    fun received(from: String, bytes: ByteArray) {
+        if (runCatching { SweepRec.parse(bytes) }.isFailure) return
+        val who = if (target.value.isEmpty()) "radio" else Node.label(from)
+        val name = "Spectrum $who " + SimpleDateFormat("yyyy-MM-dd HH-mm", Locale.US).format(Date())
+        val item = SweepStore.save(name, bytes)
+        SweepStore.open.value = item.id
+        poll?.cancel()
+        state.value = null
+        message.value = "Received ${item.name} (${bytes.size} bytes)."
+    }
+
+    fun failed(why: String) {
+        message.value = "The file did not arrive ($why)."
+    }
+}

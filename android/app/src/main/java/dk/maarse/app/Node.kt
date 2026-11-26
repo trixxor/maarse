@@ -411,6 +411,8 @@ object Node : LinkListener {
     // ---------- files and voice messages ----------
 
     private class Incoming(val row: Long, val buf: ByteArray, val mime: String, val name: String, val from: String)
+    /** Spectrum recordings on their way (they go to Experimental > Recordings, not into a chat). */
+    private val recIn = HashMap<Long, Incoming>()
     private val pendingFiles = HashMap<Int, Long>() // request -> row
     private val fileOut = HashMap<Long, Long>()     // file ID -> row
     private val fileIn = HashMap<Long, Incoming>()
@@ -479,7 +481,9 @@ object Node : LinkListener {
         when (ev) {
             is Ev.FileStarted -> pendingFiles.remove(ev.req)?.let { row -> fileOut[ev.fileId] = row; setStatus(row, "sending 0/${ev.chunks}") }
             // Pages and pictures we asked for go to the Pages screen, not a chat.
-            is Ev.FileIncoming -> if (!Pages.onIncoming(ev)) {
+            is Ev.FileIncoming -> if (ev.mime == RadioRec.MIME) {
+                if (ev.size in 1..65536) recIn[ev.fileId] = Incoming(0, ByteArray(ev.size), ev.mime, ev.name, ev.from)
+            } else if (!Pages.onIncoming(ev)) {
                 if (ev.size <= 0 || ev.size > 16 * 1024 * 1024) return
                 // A page or page picture we did not (or no longer) wait
                 // for: never a file in a chat.
@@ -491,7 +495,10 @@ object Node : LinkListener {
                 fileIn[ev.fileId] = Incoming(row, ByteArray(ev.size), ev.mime, ev.name, ev.from)
                 bump()
             }
-            is Ev.FileChunk -> if (!Pages.onChunk(ev)) fileIn[ev.fileId]?.let { f ->
+            is Ev.FileChunk -> if (recIn.containsKey(ev.fileId)) recIn[ev.fileId]?.let { f ->
+                val n = minOf(ev.data.size, f.buf.size - ev.offset)
+                if (ev.offset >= 0 && n > 0) System.arraycopy(ev.data, 0, f.buf, ev.offset, n)
+            } else if (!Pages.onChunk(ev)) fileIn[ev.fileId]?.let { f ->
                 val n = minOf(ev.data.size, f.buf.size - ev.offset)
                 if (ev.offset >= 0 && n > 0) System.arraycopy(ev.data, 0, f.buf, ev.offset, n)
             }
@@ -501,7 +508,9 @@ object Node : LinkListener {
                 }
             // A file kept in the node's file mailbox keeps its file id (in the
             // msgId column), so it can be cancelled and marked delivered later.
-            is Ev.FileDone -> if (!ev.outgoing && Pages.onDone(ev)) Unit else if (ev.outgoing) (fileOut.remove(ev.fileId) ?: db.byMsgId(ev.fileId))?.let { row ->
+            is Ev.FileDone -> if (!ev.outgoing && recIn.containsKey(ev.fileId)) recIn.remove(ev.fileId)?.let { f ->
+                if (ev.ok) RadioRec.received(f.from, f.buf) else RadioRec.failed(ev.text)
+            } else if (!ev.outgoing && Pages.onDone(ev)) Unit else if (ev.outgoing) (fileOut.remove(ev.fileId) ?: db.byMsgId(ev.fileId))?.let { row ->
                 when {
                     // "cancelled" or "cancelled by the recipient"
                     !ev.ok -> setStatus(row, if (ev.text.startsWith("cancelled")) ev.text else "error: ${ev.text}")
@@ -1131,6 +1140,8 @@ object Node : LinkListener {
             }.also { updateOffline(); History.onStats(stats.value) }
             is Ev.Gps -> gps.value = ev.info
             is Ev.Sweep -> addSweep(ev)
+            is Ev.SweepRecState -> RadioRec.onState("", ev)
+            is Ev.RemoteReply -> (ev.inner as? Ev.SweepRecState)?.let { RadioRec.onState(ev.from, it) } ?: Unit
             is Ev.Radio -> radio.value = ev.cfg
             is Ev.Regions -> regions.value = ev
             is Ev.Sharing -> {

@@ -13,7 +13,7 @@ const dir = path.join(root, "maarse-core/tests/data");
 const input = fs.readFileSync(path.join(dir, "sweeprec-golden-sweeps.bin"));
 const want = fs.readFileSync(path.join(dir, "sweeprec-golden.msr"));
 const wantGroups = fs.readFileSync(path.join(dir, "sweeprec-golden-groups.txt"), "utf8");
-const rec = new SR.Recorder({ startKhz: 863000, stepKhz: 110, durationS: 300, intervalMs: 1000, thrDb: 6 });
+const rec = new SR.Recorder({ startKhz: 863000, stepKhz: 110, durationS: 300, intervalMs: 100, thrDb: 6 });
 for (let o = 0; o + 68 <= input.length; o += 68) rec.push(input.readUInt32LE(o), input.subarray(o + 4, o + 68), false);
 const got = Buffer.from(rec.finish());
 let bad = 0;

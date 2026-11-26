@@ -55,7 +55,7 @@ enum class Tab(val title: String) { CHATS("Chats"), MAP("Map"), CONTACTS("Nodes"
 enum class MePage(val title: String) {
     ACCOUNT("Account and devices"), MESHCORE("MeshCore setup"), NODE("Name and position"), RADIO("Role and regions"), APP("Notifications and sounds"),
     HOST("Internet link and post office"), FIRMWARE("Firmware"),
-    EXPERIMENTAL("Experimental"), X_SPECTRUM("Spectrum"), X_RECORDINGS("Recordings"), X_GPS("GPS"), X_NEIGHBOURS("Signal per neighbour"), X_POWER("Battery and temperature"),
+    EXPERIMENTAL("Experimental"), X_SPECTRUM("Spectrum"), X_RECORDINGS("Recordings"), X_GPS("GPS"), X_NEIGHBOURS("Signal per neighbour"), X_POWER("Battery and temperature"), X_PING("Ping test"),
 }
 
 sealed interface Screen {

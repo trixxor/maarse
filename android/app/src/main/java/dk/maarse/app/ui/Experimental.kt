@@ -57,6 +57,7 @@ fun ExperimentalMenu(onGo: (MePage) -> Unit) {
         GroupRow("Recordings", SweepStore.items.collectAsState().value.size.let { if (it == 0) "Record a scan for minutes and play it back" else "$it saved scans" }, leading = { RowIcon(Icons.Outlined.Timeline) }) { onGo(MePage.X_RECORDINGS) }
         GroupRow("GPS", stats[103]?.let { "$it satellites in use" } ?: "Satellites, sky view, height, speed", leading = { RowIcon(Icons.Outlined.GpsFixed) }) { onGo(MePage.X_GPS) }
         GroupRow("Signal per neighbour", "How each link changes over time", leading = { RowIcon(Icons.Outlined.ShowChart) }) { onGo(MePage.X_NEIGHBOURS) }
+        GroupRow("Ping test", "Loss, round trip and range along a route", leading = { RowIcon(Icons.Outlined.Timeline) }) { onGo(MePage.X_PING) }
         GroupRow("Battery and temperature", stats[85]?.let { "$it %" } ?: "History and time left", last = true, leading = { RowIcon(Icons.Outlined.BatteryChargingFull) }) { onGo(MePage.X_POWER) }
     }
     GroupTitle("Options")

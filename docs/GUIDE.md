@@ -44,6 +44,7 @@ Then connect with the web client via **USB / serial** (needs Chrome or Edge) or 
 | Radio settings (MHz, bandwidth, SF, CR, dBm, duty %) | – | yes, stored in flash | yes, stored in flash |
 | Battery measurement and energy-driven routing | – (always full) | yes, both boards, + USB power | Heltec V4 yes; XIAO ESP32-S3: unknown (no divider) |
 | Diagnostics: trace route, neighbour list, noise floor | trace and neighbours | yes | yes |
+| Ping test (repeated trace routes with loss, round trip, hops, SNR, optional positions, CSV) | yes (Diagnostics) | yes | yes (Experimental > Ping test) |
 | Position (opt-in, rounded) and telemetry in announces | yes | yes, stored in flash | yes, stored in flash |
 | MQTT bridge with Home Assistant discovery | yes (`--mqtt`) | – | – |
 | Display name in announces | yes (`name.txt`) | yes, stored in flash (not tried on hardware) | yes, stored in flash (not tried on hardware) |
@@ -494,6 +495,7 @@ USB power is seen on the nRF52840 in the POWER register (VBUSDETECT); the ESP32 
 
 The web client has a **Diagnostics** page (the button next to Status/Radio):
 
+- **Ping test** (web client: Diagnostics > Ping test; Android: Experimental > Ping test): sends the trace route below again and again (1-100 pings, 5-600 s apart, default 10 pings every 10 s) and counts the answers: loss, round trip (fastest, average, slowest), hops and the worst SNR out and back for every ping, and a ping with no answer after 30 s counts as lost. With **Record my position with each ping** it adds the position of the phone or browser, shows where pings were answered (green) and lost (red) and the farthest answered ping, measured from the node when it shares its position, otherwise from the first position. **Export CSV** gives one row per ping (`tools/ping_test.mjs` tests the web client's logic). It sends nothing new over the air: each ping is an ordinary trace route, so a ping costs airtime and the first one may include a route search. It does not yet choose between LoRa and TCP; it measures the route the node picks.
 - **Trace route** (command `0x20`, reply `0xA0`): a `Probe` packet follows the known route (or finds one first), and every repeater appends the SNR it heard the packet with. The target answers along the reverse way, and the repeaters again append their SNR. The result is the SNR for every hop both ways. The packet ID is computed over the fixed part only, so implicit per-hop acknowledgements work as for other packets. Older nodes forward the packet unchanged. Format in `maarse-core/src/diag.rs`.
 - **Neighbour list** (`0x21`, reply `0xA1`): nodes heard directly (announces without hops and the previous hop in source paths and path requests) with SNR, RSSI, time and packet count.
 - **Noise floor** (status key 80): lora-phy does not give the instantaneous RSSI, so the noise floor is estimated from received packets: N = RSSI − 10·log10(1 + 10^(SNR/10)), moving average.

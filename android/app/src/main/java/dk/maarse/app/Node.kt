@@ -1105,7 +1105,7 @@ object Node : LinkListener {
                 else db.deleteLike(conv, ev.flags and 1 != 0, String(ev.content), ev.unix * 1000)
                 bump()
             }
-            is Ev.Error -> {
+            is Ev.Error -> if (!PingTest.onError(ev.req, ev.text)) {
                 pending.remove(ev.req)?.let { setStatus(it, "error: ${ev.text}") }
                 pendingFiles.remove(ev.req)?.let { setStatus(it, "error: ${ev.text}") }
                 if (ev.code == 9) Calls.failed(ev.text)
@@ -1154,7 +1154,7 @@ object Node : LinkListener {
             }
             is Ev.Site -> site.value = ev
             is Ev.Neighbors -> { neighbors.update { if (ev.part == 0) ev.items else it + ev.items }; if (ev.last) History.onNeighbours(neighbors.value) }
-            is Ev.Trace -> {
+            is Ev.Trace -> if (!PingTest.onTrace(ev)) {
                 traceSent.remove(ev.dest)?.let { t -> traceRtt.update { m -> m + (ev.dest to (System.currentTimeMillis() - t)) } }
                 traces.update { (listOf(ev) + it).take(10) }
             }

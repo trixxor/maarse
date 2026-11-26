@@ -2427,6 +2427,7 @@ function onEvent(ev) {
       break;
     case "fileLimit": limitAnswer(ev); break;
     case "error": {
+      if (pingOnError(ev)) break;
       if (state.view === "account") { acct.err = ev.text; renderChat(); }
       if (alerts.reqs.delete(ev.req)) { alerts.status = "Not issued: " + ev.text; if (state.view === "alerts") renderChat(); break; }
       if (ev.req === 0 && limitWaiters.length) limitAnswer(null); // the firmware does not know 0x14
@@ -2438,6 +2439,7 @@ function onEvent(ev) {
       break;
     }
     case "trace": {
+      if (pingOnTrace(ev)) { state.traceReq.delete(ev.req); break; }
       const dest = state.traceReq.get(ev.req) || ev.dest; state.traceReq.delete(ev.req);
       if (state.traceAt?.[dest]) { (state.bbRtt ||= {})[dest] = Date.now() - state.traceAt[dest]; delete state.traceAt[dest]; if (state.view === "network") renderChat(); }
       state.traces.unshift({ ...ev, dest, at: new Date() }); state.traces.length = Math.min(state.traces.length, 10);
@@ -3205,6 +3207,191 @@ function idName(id) {
 }
 function snrText(v) { return v === undefined ? "–" : (v > 0 ? "+" : "") + v + " dB"; }
 
+// ---------- ping test: repeated trace routes with statistics (range and route check) ----------
+// Each ping is one trace route (command 0x20): the answer says which repeaters carry it and the SNR for
+// every hop both ways, and the time to the answer is the round trip. Nothing new goes over the air.
+const ping = { run: null, reqs: new Map(), form: { dest: "", count: 10, interval: 10, gps: false } };
+const PING_TIMEOUT_MS = 30000;
+const pingMin = a => (a && a.length ? Math.min(...a) : undefined);
+
+function pingDistance(a, b) { // metres between two {lat, lon}
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function pingSummary(run) {
+  const rs = run.results, done = rs.filter(r => r.state !== "waiting");
+  const ok = rs.filter(r => r.state === "ok");
+  const rtts = ok.map(r => r.rtt);
+  const target = state.nodeInfo.get(run.dest);
+  const base = target && target.lat && target.lon ? { lat: target.lat, lon: target.lon } : (rs.find(r => r.lat !== undefined) || null);
+  const withPos = ok.filter(r => r.lat !== undefined && base);
+  return {
+    sent: rs.length, answered: ok.length, lost: done.length - ok.length,
+    loss: done.length ? Math.round(100 * (done.length - ok.length) / done.length) : 0,
+    min: rtts.length ? Math.min(...rtts) : undefined, max: rtts.length ? Math.max(...rtts) : undefined,
+    avg: rtts.length ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length) : undefined,
+    farthest: withPos.length ? Math.round(Math.max(...withPos.map(r => pingDistance(base, r)))) : undefined,
+    baseIsTarget: !!(target && target.lat && target.lon),
+  };
+}
+
+function pingFinish(run) {
+  if (ping.run !== run) return;
+  run.finished = true;
+  if (run.watch !== undefined) navigator.geolocation?.clearWatch(run.watch);
+  clearTimeout(run.timer);
+  if (state.view === "diag") renderChat();
+}
+
+/** All sent and every answer or time-out in: the run is done. */
+function pingMaybeDone(run) {
+  if (run.results.length >= run.count && run.results.every(r => r.state !== "waiting")) pingFinish(run);
+}
+
+function pingTick(run) {
+  if (ping.run !== run || run.stopped || run.results.length >= run.count) return;
+  const r = { seq: run.results.length + 1, state: "waiting", at: new Date(), t0: performance.now() };
+  if (run.pos) { r.lat = run.pos.lat; r.lon = run.pos.lon; r.acc = run.pos.acc; }
+  run.results.push(r);
+  const req = state.nextReq++ & 0xffff;
+  ping.reqs.set(req, { run, r });
+  state.traceReq.set(req, run.dest);
+  transport?.send(Cmd.traceRoute(req, run.dest));
+  r.timeout = setTimeout(() => {
+    if (r.state === "waiting") { r.state = "lost"; ping.reqs.delete(req); if (state.view === "diag") renderChat(); pingMaybeDone(run); }
+  }, PING_TIMEOUT_MS);
+  if (state.view === "diag") renderChat();
+  run.timer = setTimeout(() => pingTick(run), run.interval * 1000);
+}
+
+function pingStart(dest, count, interval, gps) {
+  pingStop();
+  const run = { dest, count, interval, gps, results: [], started: new Date(), pos: null };
+  ping.run = run;
+  if (gps && navigator.geolocation) {
+    run.watch = navigator.geolocation.watchPosition(
+      p => { run.pos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: Math.round(p.coords.accuracy) }; },
+      e => log("Position: " + e.message), { enableHighAccuracy: true, maximumAge: 2000 });
+  }
+  log(`Ping test to ${label(dest)}: ${count} pings, one every ${interval} s`);
+  pingTick(run);
+}
+
+function pingStop() {
+  const run = ping.run;
+  if (!run || run.finished) return;
+  run.stopped = true;
+  for (const r of run.results) if (r.state === "waiting") { r.state = "lost"; clearTimeout(r.timeout); }
+  pingFinish(run);
+}
+
+/** Called for every trace answer; true if it belonged to a ping. */
+function pingOnTrace(ev) {
+  const e = ping.reqs.get(ev.req);
+  if (!e) return false;
+  ping.reqs.delete(ev.req);
+  const r = e.r;
+  clearTimeout(r.timeout);
+  if (r.state !== "waiting") return true; // answered after the time-out: keep it lost
+  r.state = "ok"; r.rtt = Math.round(performance.now() - r.t0);
+  r.hops = ev.path.length; r.outMin = pingMin(ev.out); r.backMin = pingMin(ev.back);
+  r.path = ev.path.map(id => idName(id)).join(" > ");
+  if (state.view === "diag") renderChat();
+  pingMaybeDone(e.run);
+  return true;
+}
+
+function pingOnError(ev) {
+  const e = ping.reqs.get(ev.req);
+  if (!e) return false;
+  ping.reqs.delete(ev.req);
+  clearTimeout(e.r.timeout);
+  if (e.r.state === "waiting") { e.r.state = "error"; e.r.text = ev.text; }
+  if (state.view === "diag") renderChat();
+  pingMaybeDone(e.run);
+  return true;
+}
+
+function pingCsv() {
+  const run = ping.run;
+  return { name: "ping-test", text: rtCsv(
+    ["time_iso", "target", "seq", "result", "rtt_ms", "hops", "worst_snr_out_db", "worst_snr_back_db", "lat", "lon", "accuracy_m", "route"],
+    run.results.map(r => [r.at.toISOString(), run.dest, r.seq, r.state, r.rtt ?? "", r.hops ?? "", r.outMin ?? "", r.backMin ?? "",
+      r.lat ?? "", r.lon ?? "", r.acc ?? "", r.path ?? ""])) };
+}
+
+/** A small plot of where the pings went out (green) and where they were lost (red). */
+function pingTrack(run) {
+  const pts = run.results.filter(r => r.lat !== undefined && r.state !== "waiting");
+  if (pts.length < 2) return null;
+  const lat0 = pts.reduce((a, p) => a + p.lat, 0) / pts.length, k = Math.cos(lat0 * Math.PI / 180);
+  const xs = pts.map(p => p.lon * k), ys = pts.map(p => -p.lat);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const W = 320, H = 200, pad = 14, span = Math.max(maxX - minX, maxY - minY, 1e-6);
+  const sx = x => pad + (x - minX) / span * (W - 2 * pad), sy = y => pad + (y - minY) / span * (H - 2 * pad);
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.style.width = "100%"; svg.style.maxWidth = "420px";
+  svg.style.border = "1px solid var(--line)"; svg.style.borderRadius = "8px"; svg.style.marginTop = "8px";
+  const poly = document.createElementNS(ns, "polyline");
+  poly.setAttribute("points", pts.map((p, i) => `${sx(xs[i]).toFixed(1)},${sy(ys[i]).toFixed(1)}`).join(" "));
+  poly.setAttribute("fill", "none"); poly.setAttribute("stroke", "currentColor"); poly.setAttribute("stroke-opacity", ".25");
+  svg.appendChild(poly);
+  pts.forEach((p, i) => {
+    const c = document.createElementNS(ns, "circle");
+    c.setAttribute("cx", sx(xs[i]).toFixed(1)); c.setAttribute("cy", sy(ys[i]).toFixed(1)); c.setAttribute("r", "5");
+    c.setAttribute("fill", p.state === "ok" ? "#2e9d58" : "#d1453b");
+    const t = document.createElementNS(ns, "title"); t.textContent = `#${p.seq} ${p.state}${p.rtt ? " " + p.rtt + " ms" : ""}`;
+    c.appendChild(t); svg.appendChild(c);
+  });
+  return svg;
+}
+
+function pingPanel(w, table) {
+  const f = ping.form, run = ping.run;
+  const busy = !!(run && !run.finished);
+  const row = el("div", { className: "row" }); row.style.marginTop = "8px";
+  const sel = el("select"); sel.style.flex = "1";
+  for (const a of state.contacts.keys()) sel.append(new Option(label(a), a));
+  const inp = el("input", { placeholder: "or address (32 hex characters)", value: f.dest }); inp.style.flex = "1";
+  const cnt = el("input", { type: "number", min: 1, max: 100, value: f.count, title: "Number of pings" }); cnt.style.width = "70px";
+  const iv = el("input", { type: "number", min: 5, max: 600, value: f.interval, title: "Seconds between pings (at least 5: every ping uses airtime)" }); iv.style.width = "70px";
+  if (!f.dest) f.dest = sel.value || ""; else if ([...state.contacts.keys()].includes(f.dest)) sel.value = f.dest;
+  sel.onchange = () => { f.dest = sel.value; inp.value = ""; };
+  inp.oninput = () => { f.dest = inp.value.trim().toLowerCase(); };
+  cnt.oninput = () => { f.count = Math.max(1, Math.min(100, +cnt.value || 1)); };
+  iv.oninput = () => { f.interval = Math.max(5, Math.min(600, +iv.value || 10)); };
+  const gps = el("input", { type: "checkbox" }); gps.checked = f.gps; gps.onchange = () => { f.gps = gps.checked; };
+  const lbl = el("label"); lbl.style.display = "block"; lbl.style.marginTop = "6px";
+  lbl.append(gps, " Record my position with each ping (for a walk or drive; the browser asks for permission)");
+  const go = el("button", { textContent: busy ? "Stop" : "Start", className: "primary" });
+  go.onclick = () => {
+    if (busy) return pingStop();
+    const d = (f.dest || sel.value || "").toLowerCase();
+    if (!/^[0-9a-f]{32}$/.test(d)) return log("Choose a node or enter an address");
+    pingStart(d, f.count, f.interval, f.gps);
+  };
+  const exp = el("button", { textContent: "Export CSV" });
+  exp.disabled = !run || !run.results.length; exp.onclick = () => rtExport(pingCsv());
+  row.append(sel, inp); w.append(row);
+  const r2 = el("div", { className: "row" }); r2.style.marginTop = "6px";
+  r2.append("Pings", cnt, "every", iv, "s", go, exp); w.append(r2, lbl);
+  if (!run) return;
+  const s = pingSummary(run);
+  const sum = el("div"); sum.style.marginTop = "10px";
+  sum.append(el("b", {}, `${label(run.dest)}: ${s.answered} of ${s.sent} answered, ${s.loss} % lost`));
+  if (s.avg !== undefined) sum.append(el("div", { className: "muted" }, `Round trip ${s.min} / ${s.avg} / ${s.max} ms (fastest / average / slowest)`));
+  if (s.farthest !== undefined) sum.append(el("div", { className: "muted" }, `Farthest answered ping: ${s.farthest} m from ${s.baseIsTarget ? "the node" : "the first position"}`));
+  w.append(sum);
+  w.append(table(["#", "Result", "Round trip", "Hops", "Worst SNR out", "Worst SNR back", "Position"], run.results.map(r => [
+    r.seq, r.state === "ok" ? "answered" : r.state === "waiting" ? "waiting…" : r.state === "error" ? "error: " + r.text : "no answer",
+    r.rtt !== undefined ? r.rtt + " ms" : "–", r.hops ?? "–", snrText(r.outMin), snrText(r.backMin),
+    r.lat !== undefined ? `${r.lat.toFixed(5)}, ${r.lon.toFixed(5)} (±${r.acc} m)` : "–"])));
+  const track = pingTrack(run); if (track) w.append(track);
+}
+
 function renderDiag(box) {
   $("chat-title").textContent = "Diagnostics"; $("chat-sub").textContent = "Trace route, neighbours, noise floor and sharing";
   const sec = (title, help) => {
@@ -3255,6 +3442,11 @@ function renderDiag(box) {
       table(["Hop", "SNR out (heard here)", "SNR back (heard here)"], rows));
     tw.append(d);
   }
+
+  // Ping test
+  const pw = sec("Ping test", "Sends a trace route again and again and counts the answers: loss, round trip, hops and the worst SNR on the way, for range tests on a walk or a drive " +
+    "(tick the position box) and to check a route over time. A ping costs airtime, so keep the interval at 10 seconds or more.");
+  pingPanel(pw, table);
 
   // Neighbours
   const nw = sec("Direct neighbours", "Nodes heard without intermediate hops (announces and forwarded packets). Updated every 10 seconds.");

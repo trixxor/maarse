@@ -1471,40 +1471,74 @@ not receive packets.
 Modem mode frame `0x42` (host to radio, one byte, no content): a message arrived at the
 host; a board with a buzzer beeps. It does not end modem mode. Boards without a buzzer ignore it.
 
+Recording on the radio itself (2026-11-26, working copy, not released). Command `0x3e` `SweepRecStart` (start kHz
+u32, step kHz u16, duration s u16 (1 to 600), interval u8 in tenths of a second with 0 = 1, threshold dB u8 with 0 = 6) makes
+the radio record 64 steps from the start frequency, one sweep after the other (10 a second with an interval of 1), and make
+the file below. While it records the radio hears nothing and sends nothing (what waits to be sent waits), so a repeater is out
+of the network for the duration; a longer interval makes it listen between the sweeps, but then the strongest value of a
+bucket is mostly noise and the file is much larger (5 minutes, one sweep every 2 s: 1.9 KB). Command `0x3f` `SweepRecStop` stops it and drops what it has; command `0x43`
+`SweepRecStatus` asks how it goes. (`0x40`, `0x41` and `0x42` are modem frames, so a command number must not use them.)
+The answer to all three is event `0xB9` `SweepRecState`: state u8 (0 idle, 1 recording, 2 ready, 3 sending, 4 failed),
+seconds recorded u16, seconds asked for u16, sweeps u16, file size u16 (0 until it is made). When the file is made the radio
+sends it to whoever asked: through `Remote` (the three commands are accepted there, from administrators only) it goes to that
+node as an ordinary file over the air (MIME `application/x-maarse-msr`, name `Spectrum.msr`, the file transfer of section 7)
+and the requester also gets a `SweepRecState` with state 3 in a control reply; asked over USB or Bluetooth it arrives as an
+incoming file from the radio's own address. The radio keeps the cells of a recording in its two 8 KB file buffers, so a
+recording costs no RAM of its own (an ESP32's stack is what is left of its RAM and has no room): while it records, files
+cannot be sent or received, and a new recording is refused while a file is being transferred. A file that does not fit
+(6,400 bytes; a typical one is 0.1-1 KB) makes the recording fail. The file only exists in RAM: it is gone after a
+restart. maarse-host passes the three commands to its USB and Bluetooth radios and forwards the state event and a radio's
+own file events (a radio in modem mode receives no files from the air) to its clients; clients save a file with this MIME
+under Recordings instead of showing it in a chat.
+
 Spectrum recordings (2026-11-26, working copy, not released; `maarse-core/src/sweeprec.rs`). A
-long run of sweeps is kept as one small file, the "MSR1" format, so a recording of 10 minutes
-takes about 1 KB instead of 384 KB. The radio (later) or a client (now) collects the sweeps in time
-buckets (at most 120: the recording time divided by 120, but never shorter than the time between
-sweeps; 5 s for 10 minutes) and keeps the strongest and the mean value of each step in each bucket.
-All numbers are little endian. A sweep that is not 64 steps wide is ignored. Sweeps with a known
-packet on the air or an overloaded receiver (most steps stronger than -60 dBm) are *masked*: they
-count as time but not as a measurement.
+long run of sweeps is kept as one small file, the "MSR2" format: 5 minutes at 10 sweeps a second is 205 KB
+of sweeps and a few hundred bytes of file. All numbers are little endian. The recorder takes the strongest
+value of each step in each time bucket, `bucket ms = max(ceil(duration ms / 256), 1000)` (at most 256
+buckets; 1 s for up to 4 minutes, 1.17 s for 5, 2.3 s for 10: with fewer than about ten sweeps in a bucket the
+strongest value is mostly noise). A sweep that is not 64 steps wide is ignored. Sweeps with a known packet on
+the air or an overloaded receiver (most steps stronger than -60 dBm) are *masked*: they count as time, not
+as a measurement.
+
+The *usual peak* of a step is the middle of its bucket peaks, taken from the first 16 buckets (or all, in a
+shorter recording) and then followed half a dB a bucket towards each new value (a peak is compared with peaks:
+against the mean the strongest of a few dozen noise samples is 6 dB or more over it nearly everywhere), with no
+step stronger than 2 dB over the middle of all steps, so a constant carrier does not become its own floor. The
+*level* of a cell is how far its strongest value is over the usual peak of the step, in steps of 3 dB, rounded,
+1 to 15; 0 means under the threshold (default 6 dB) or not measured.
 
 | Part | Size | Content |
 |---|---|---|
-| header | 24 | `"MSR1"`, bins u8 (64), threshold dB u8, interval u8 (units of 0.1 s), reserved u8, duration s u16, bucket ms u16, buckets u16 (at most 120), sweeps u16, first frequency kHz u32, step kHz u16, reserved u16 |
-| floor | 64 | noise floor of each step, dBm, i8 |
-| max | 64 | highest level of each step, dBm, i8 |
-| duty | 64 | share of the measured buckets over the threshold, percent, u8 |
-| masked | ceil(buckets/8) | bit k = bucket k has no measurement |
-| profile | 2 + n | n u16, then n run-length tokens, step by step from step 0, each step over all its buckets: `0xxxxxxx` = `x + 1` cells of 0 (at most 128); `1vvvvrrr` = `r + 1` cells (at most 8) of the value `v` (1-15) |
-| events | 2 + 6 m | m u16, then per event: first bucket u8, last bucket u8, first step u8, last step u8, peak dB over the floor u8, reserved u8 |
+| header | 21 | `"MSR2"`, flags u8 (bit 0: a list of buckets without a measurement follows the floors), threshold dB u8, bucket ms u16, buckets u16, sweeps u16, first frequency kHz u32, step kHz u16, strongest dBm i8, interval u8 (units of 0.1 s), floor base dBm i8 |
+| floor | 32 | the usual peak of each step, dBm: the base plus a 4-bit signed difference in dB (-8 to 7), two steps a byte, step 0 in the low nibble |
+| masked | ceil(buckets/8) | only if flag bit 0: bit k = bucket k has no measurement |
+| profile | the rest | the level of every cell, step by step from step 0, each step over all its buckets, range coded (below); a tail of zero bytes is left out, a reader reads zeros past the end |
 
-The floor of a step is the middle of its bucket means, and no step may sit more than 2 dB above
-the middle of all steps, so a constant carrier does not become its own floor. A profile value is
-the level of the strongest sweep in the bucket over the floor in steps of 3 dB, rounded, 1 to 15;
-0 means under the threshold (default 6 dB). A masked bucket takes the lower of its two neighbours
-(0 at the ends). An event is a connected area (four neighbours) of non-zero cells. Readers join
-events that look alike (centres within 2 steps, widths within 3 steps) into groups and call each
-group *constant* (on more than 80 % of the time), *periodic* (three or more, regular), *rising*
-(one long event whose last third is more than 3 dB stronger than its first third), *long*,
-*pulses* or *single*; `Recording::groups` in `maarse-core` and the port in `maarse-client` do this
-the same way (`tools/test_sweeprec.mjs` checks the port byte for byte against
-`maarse-core/tests/data/sweeprec-golden.*`, written by `GOLDEN_WRITE=1 cargo test -p maarse-core golden`).
-The web client records from the live sweeps while a radio is connected to maarse-host. The radio ends a run
-after 2 minutes, so the client stops and starts it again every 105 s; the gap (a fraction of a second)
-is a masked part of a bucket. Recording on the radio itself, so that a repeater without a client
-can be asked over LoRa, is planned and not built.
+The profile uses the range coder of LZMA (11-bit probabilities initialised to 1024, shift 5, 32-bit range; its
+first byte, always 0, is not written). Each cell is coded as a bit "above the threshold" and, if so, the level
+minus 1 as 4 bits, high bit first, in a binary tree of 15 nodes (node 1 first, then `2 node + bit`). Context of a cell,
+with `a` the level of the previous bucket, `a2` the one before that and `u` the level of the step below in the same
+bucket (0 outside the recording): the bit uses `min(a,2) * 3 + min(u,2) + (a2 > 0 ? 9 : 0)`; the tree nodes use
+the context `a > 0 ? a : u` (16 contexts of 16 nodes, after the 18 of the bit). A reader reads buckets x 64 cells.
+
+The file has no events and no groups: a reader finds them. An *event* is a connected area (four neighbours) of
+cells with a non-zero level, found in the order of its first cell, step by step. Readers join events that look alike
+(centres within 2 steps, widths within 3 steps) into groups and call each group *constant* (on more than 80 % of the
+time), *periodic* (three or more, regular), *rising* (one long event whose last third is more than 3 dB stronger than
+its first third), *long*, *pulses* or *single*; `Recording::groups` in `maarse-core`, the port in `maarse-client` and
+the one in the Android app do this the same way (`tools/test_sweeprec.mjs` and `SweepRecTest` check the ports byte for
+byte against `maarse-core/tests/data/sweeprec-golden.*`, written by `GOLDEN_WRITE=1 cargo test -p maarse-core golden`).
+A reader also gives the duty of a step (share of measured buckets with a level) and its highest level (floor plus
+the highest level, at most the strongest dBm of the header).
+
+Files of the first format, "MSR1" (24-byte header, floor, highest level and duty of every step, 120 buckets of run-length
+coded levels, the events), are still read; no writer makes them any more. Real data, 5 minutes at 10 sweeps a second in a
+busy band: MSR1 with the strongest-against-mean floor 3,469 bytes, MSR1 with the floor above 781 bytes, MSR2 595 bytes
+(a file of 20 s: 69 bytes).
+
+The web client and the Android app record from the live sweeps while a radio is connected (maarse-host, USB or
+Bluetooth). The radio ends a run after 2 minutes, so the client stops and starts it again every 105 s; the gap (a
+fraction of a second) is a masked part of a bucket.
 
 maarse-host asks every USB or Bluetooth modem for its counters every 10 s and
 passes them on in extra `Stats` frames after its own (keys 30-59 and 80-117 that
@@ -1522,8 +1556,8 @@ flash. This policy preserves the existing control wire format.
 
 `SetAdmins`, `SetWifi`, `SetIdentity` and `SetRangeTest` are refused when they
 arrive through `Remote`. Through `Remote`, firmware accepts `GetStats`,
-`GetRadio`, `SetRadio`, `SetRole` and the OTA commands (downgrade flag
-ignored).
+`GetRadio`, `SetRadio`, `SetRole`, the OTA commands (downgrade flag
+ignored) and the three spectrum recording commands (`SweepRecStart`, `SweepRecStop`, `SweepRecStatus`).
 
 ---
 

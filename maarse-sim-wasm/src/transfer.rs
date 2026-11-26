@@ -2131,9 +2131,18 @@ mod tests {
         let ks: Vec<usize> = (0..4).map(|i| e.xf_page(3, 0, &format!("p{i}"), None).unwrap()).collect();
         run(&mut e, 900);
         let states: Vec<String> = ks.iter().map(|&k| e.item_json(k)["state"].as_str().unwrap().to_string()).collect();
-        assert_eq!(states, ["delivered", "delivered", "refused", "refused"]);
-        assert_eq!(e.item_json(ks[2])["why"], "slow down", "the third gets the Slow down page");
-        assert!(e.item_json(ks[3])["why"].as_str().unwrap().contains("quiet"));
+        // Which two requests get through first depends on how fast each finds its route
+        // (path requests are forwarded by 80 % of the repeaters), so count instead of
+        // looking at the order.
+        assert_eq!(states.iter().filter(|s| *s == "delivered").count(), 2, "{states:?}");
+        assert_eq!(states.iter().filter(|s| *s == "refused").count(), 2, "{states:?}");
+        let whys: Vec<String> = ks
+            .iter()
+            .filter(|&&k| e.item_json(k)["state"] == "refused")
+            .map(|&k| e.item_json(k)["why"].as_str().unwrap().to_string())
+            .collect();
+        assert!(whys.iter().any(|w| w == "slow down"), "the first refused gets the Slow down page: {whys:?}");
+        assert!(whys.iter().any(|w| w.contains("quiet")), "the next one is told to stay quiet: {whys:?}");
     }
 
     #[test]

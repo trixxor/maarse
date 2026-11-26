@@ -821,7 +821,15 @@ fn ptype_name(p: PacketType) -> &'static str {
 impl Engine {
     pub fn new(sc: Scenario) -> Engine {
         let mut rng = SmallRng::seed_from_u64(sc.seed);
-        let radios: Vec<Radio> = (7..=12).map(|sf| calibrated(Radio::with_band(sf, sc.tx_dbm, sc.freq_mhz, sc.bw_hz), &sc.radio_cal)).collect();
+        let radios: Vec<Radio> = (7..=12)
+            .map(|sf| {
+                let mut r = calibrated(Radio::with_band(sf, sc.tx_dbm, sc.freq_mhz, sc.bw_hz), &sc.radio_cal);
+                if sc.preamble > 0 {
+                    r.lora.preamble = sc.preamble;
+                }
+                r
+            })
+            .collect();
         let public_channel = Address([0xc0; 16]);
         let bulletin_channel = bulletin::channel();
         // The authority's signing key is derived from the seed, so runs repeat.
@@ -850,6 +858,12 @@ impl Engine {
             router.ring = sc.path_ring;
             if sc.announce_scope > 0 {
                 router.announce_scope = sc.announce_scope;
+            }
+            if sc.request_fwd_permille > 0 {
+                router.request_fwd_permille = sc.request_fwd_permille;
+            }
+            if sc.path_retry_s > 0 {
+                router.path_retry_ms = sc.path_retry_s * 1000;
             }
             router.weak_hop_penalty = sc.weak_hop_penalty;
             router.drop_unacked_routes = sc.drop_unacked_routes;
@@ -2084,7 +2098,8 @@ impl Engine {
             return;
         }
         let sf = self.nodes[node].sf;
-        let airtime = self.radio(sf).lora.airtime_us(self.nodes[node].txq[k].packet.len());
+        let air_len = self.air_len(&self.nodes[node].txq[k].packet);
+        let airtime = self.radio(sf).lora.airtime_us(air_len);
         if !self.nodes[node].duty.try_consume(self.now, airtime) {
             let wait = self.nodes[node].duty.wait_ms(self.now, airtime);
             self.nodes[node].duty_hits += 1;
@@ -2577,7 +2592,11 @@ impl Engine {
         if !want {
             return;
         }
-        let air = maarse_core::airtime::LoraParams::new(self.links[k].sf).airtime_ms(packet.len()) as u64;
+        let mut lp = maarse_core::airtime::LoraParams::new(self.links[k].sf);
+        if self.sc.preamble > 0 {
+            lp.preamble = self.sc.preamble;
+        }
+        let air = lp.airtime_ms(self.air_len(&packet)) as u64;
         // One frequency: trunks with a common endpoint share the channel there.
         let group: Vec<usize> = if self.sc.trunk_same_channel {
             let (a, b) = (self.links[k].a, self.links[k].b);
@@ -2728,7 +2747,32 @@ impl Engine {
 
     /// Size of a text message on the air (compressed or not).
     fn msg_size(&self) -> usize {
+        if self.sc.dm_overhead > 0 {
+            // Seal or session overhead + type byte + text.
+            return self.sc.dm_overhead as usize + 1 + if self.sc.text_compress { 23 } else { 40 };
+        }
         if self.sc.text_compress { 34 } else { 60 }
+    }
+
+    /// Bytes that count for airtime: the packet, or with `lean_header` the
+    /// size it would have in the lean frame (see `Scenario::lean_header`).
+    fn air_len(&self, packet: &[u8]) -> usize {
+        if !self.sc.lean_header {
+            return packet.len();
+        }
+        let Ok(p) = Packet::decode(packet) else { return packet.len() };
+        let t = p.header.ptype;
+        let mut cut = 0;
+        if t != PacketType::Announce {
+            cut += 8; // destination 16 -> 8 (acks: the token)
+        }
+        if p.header.path.is_some() {
+            cut += 1; // hops and path count in one byte
+        }
+        if t == PacketType::PathRequest {
+            cut += 8; // reply token 16 -> 8
+        }
+        packet.len().saturating_sub(cut)
     }
 
     // ---------- post offices ----------
@@ -4603,7 +4647,16 @@ impl Engine {
                 }
                 let (tx, f, bw) = (self.sc.tx_dbm, self.sc.freq_mhz, self.sc.bw_hz);
                 let cal = self.sc.radio_cal;
-                self.radios = (7..=12).map(|sf| calibrated(Radio::with_band(sf, tx, f, bw), &cal)).collect();
+                let pre = self.sc.preamble;
+                self.radios = (7..=12)
+                    .map(|sf| {
+                        let mut r = calibrated(Radio::with_band(sf, tx, f, bw), &cal);
+                        if pre > 0 {
+                            r.lora.preamble = pre;
+                        }
+                        r
+                    })
+                    .collect();
                 self.build_links();
                 // A new channel can fall in a stricter sub-band.
                 let duty = effective_duty(&self.sc);

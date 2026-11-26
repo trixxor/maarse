@@ -271,7 +271,8 @@ Source: `maarse-core/src/appdata.rs`.
 0x07 | len | capabilities (1)                                           capabilities (len 1)
 ```
 
-Capabilities (`APP_CAPS`): bit 0 `CAP_TEXTZ` (reads compressed text, content
+Capabilities (`APP_CAPS`): bit 6 `CAP_COMPACT` (reads compact forward-secrecy
+messages, section 6.3), bit 0 `CAP_TEXTZ` (reads compressed text, content
 type `TEXT_Z`, section 7.1), bit 1 `CAP_BUNDLE` (reads mail bundles,
 `OP_BUNDLE`, section 8.1). A sender compresses text and bundles mail only for
 a recipient whose announce has the bit; older nodes skip the field by its
@@ -405,12 +406,21 @@ announce, probe) are not forwarded; at `Critical` nothing is forwarded.
    stores the forward path as the route, acknowledges any included message,
    and sends queued messages along the route.
 
-Retries: an unanswered request is repeated after `PATH_RETRY_MS` = 45 000 ms
+Retries: an unanswered request is repeated after `PATH_RETRY_MS` = 20 000 ms
 with a new token (last token byte + 1), up to `PATH_RETRIES` = 2 times. A late
 reply to an older token is still accepted. After the last retry, queued
 messages are dropped (or carried, 5.10).
 
 ### 5.3 Floods
+
+A forwarder passes on only `REQUEST_FWD_PERMILLE` = 800 of 1000 path requests
+(chosen from the packet ID and its own ID, so the same node always makes the
+same choice for the same request; `Router::request_fwd_permille`, 0 or 1000 =
+all). Other floods are always forwarded. In maarse-sim (8 seeds, with the
+compact frame) this and the 20 s retry together changed the airtime by -9 %
+(forest), -24 % (car), -4 % (town), -13 % (national) and -16 % (outage) with the
+share delivered +0.2, +7.0, +5.2, +0.3 and -1.3 points
+(`docs/maybe/airtime-optimisation.md`, section 9). Not yet tested on boards.
 
 #### 5.3.1 Flood delay
 
@@ -688,9 +698,49 @@ type (1) | ratchet key (32) | sender XOR mask (16) | n (u16 LE) | pn (u16 LE)
 
 type  INIT    = 0xF0   (the other party has not answered in this session yet)
       RATCHET = 0xF1
+      COMPACT = 0xF2   (short form, see below)
 ```
 
 `HEADER_LEN` = 53, `FS_OVERHEAD` = 69, `MAX_FS_TEXT` = 212 − 69 = 143.
+
+**Compact form** (`CAP_COMPACT`, `maarse-crypto/src/ratchet.rs`). Once a
+session has taken its first ratchet step, a sender whose peer announces
+`CAP_COMPACT` sends most messages as:
+
+```text
+type 0xF2 (1) | session id (3) | n (u16 LE)
+  | ChaCha20-Poly1305(message key, message, AAD = these 6 bytes) | tag (16)
+
+session id = HKDF-Expand(prk = chain key at the start of the chain, "maarse/fs/v2/sid")[..3]
+```
+
+`COMPACT_OVERHEAD` = 22 (instead of 69). The tag is the full 16 bytes and the
+message key is new for every message, as in the long form. The recipient
+finds the session by session id (trying every session with that id) and the
+sender from the session. A compact message that opens under no session is
+rejected.
+
+Rules:
+
+* The first `FULL_FIRST` = 2 messages after a ratchet step carry the full
+  ratchet key (`0xF1`), so one lost message does not break the chain.
+* A sender that has heard a new ratchet key takes its next step after at most
+  `STEP_EVERY` = 8 messages on the current key, not at once. A step is never
+  delayed before the first one (the init chain is only as strong as the static
+  format). Without `CAP_COMPACT` the behaviour is exactly the long form.
+* Call audio datagrams and mail copies never use the compact form.
+* Measured average overhead (maarse-crypto tests): 29.7 bytes in mixed chat,
+  33.6 bytes in strictly alternating chat, against 69. With 20 % loss and three
+  tries per message and up to 20 % of messages swapped with the next one,
+  0.1 % of the messages did not open (long form: 0); they were all behind a
+  lost step message.
+* The session id and `n` are visible, so a listener can tell that messages
+  belong together (the ratchet key does the same in the long form); the
+  sender stays hidden. The post-compromise healing delay grows from one turn
+  to at most 8 messages in each direction.
+* Sessions are stored in a version 2 form (nine more bytes: both session ids,
+  the count on the current key and a flag byte); version 1 files load and
+  send the long form until their next step.
 
 Derivation:
 
@@ -707,7 +757,7 @@ Rules:
 
 * A node only uses this format towards a contact that announces `APP_FS`
   (0x02) or has already sent it an FS message; otherwise the static seal.
-* A received message starting with `0xF0`/`0xF1` is tried as FS first and, on
+* A received message starting with `0xF0`/`0xF1`/`0xF2` is tried as FS first and, on
   failure, as static (a static message starts with a random key byte).
 * Skipped message keys: at most `MAX_SKIP` = 8 per session; a chain may jump
   at most `MAX_JUMP` = 512 messages.
@@ -1580,6 +1630,7 @@ Stats key 118 shows the seconds left (second stats frame).
 | App-data TLVs (type ≥ 0x03) | Skipped by length; receivers read only the bytes they know inside a field. New fields must come after `0x02`. Nodes that predate TLVs stop at the first unknown byte, which is harmless because `0x01`/`0x02` come first. |
 | Stamp version | The version is inside the stamp; difficulty can be raised with a new version, and old versions removed from `difficulty()`. Nodes from before stamps reject stamped announces (length check) and new nodes drop unstamped ones: this was a breaking change. |
 | Ratchet vs. static seal | New nodes read both formats. FS is only used towards contacts that announce `APP_FS` or have sent an FS message. |
+| Compact FS messages (`0xF2`) | Sent only to contacts that announce `CAP_COMPACT`. A node without it never receives one (and a stray one is tried as a static message and fails). Version 1 session files load. |
 | Trace route | Older forwarders pass `Probe` packets unchanged; their SNR is missing. |
 | Local repair, edge bridge, anchors | No format change; any node can be on such a path. |
 | Companion frames | Optional fields are appended at the end (e.g. identity in `Info` and `Heard`); decoders accept their absence. Unknown command types give `Error`. Unknown stats keys must be ignored. |
@@ -1609,7 +1660,7 @@ Discrepancies found while writing this document. The spec follows the code.
 3. **Announce interval in `stamp.rs`.** The module doc says announces are sent
    every 15–30 minutes; the code sends every 600 s (host) and 900 s (firmware).
 4. **Path request retry in `stamp.rs`.** The module doc says path requests
-   repeat after 15 s; `PATH_RETRY_MS` is 45 000 ms.
+   repeat after 15 s; `PATH_RETRY_MS` is 20 000 ms (45 000 ms until 2026-11-26).
 5. **Packet type 5 `Control`.** Defined in `packet.rs` ("Remote control of
    repeaters") but never sent; remote control uses content type `0x02` inside
    an encrypted `Data` message.

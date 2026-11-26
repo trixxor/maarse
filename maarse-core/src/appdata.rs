@@ -139,8 +139,11 @@ pub fn push_person(v: &mut AppBuf, person: &Address, index: u8) {
 pub const CAP_TEXTZ: u8 = 0x01;
 /// Capability: reads mail bundles (`mail::OP_BUNDLE`).
 pub const CAP_BUNDLE: u8 = 0x02;
+/// Reads compact forward-secrecy messages (`ratchet::COMPACT`, 22 bytes
+/// overhead instead of 69).
+pub const CAP_COMPACT: u8 = 0x40;
 /// What this firmware/host can do.
-pub const MY_CAPS: u8 = CAP_TEXTZ | CAP_BUNDLE;
+pub const MY_CAPS: u8 = CAP_TEXTZ | CAP_BUNDLE | CAP_COMPACT;
 /// Reads sequence-numbered content (`content::SEQ`); maarse-host only.
 pub const CAP_SEQ: u8 = 0x04;
 /// Takes call audio as datagrams (no end-to-end acknowledgement, see

@@ -122,6 +122,53 @@ fn fuzz_open_ratchet() {
     });
 }
 
+/// Compact messages (`0xF2`): the parser and the session-id lookup must never
+/// panic on any input, and no mutated message may open.
+#[test]
+fn fuzz_open_compact() {
+    use maarse_crypto::ratchet::{self, FixedStore, SessionStore};
+    let (a, b) = ids();
+    let mut rng = rand_core::OsRng;
+    let a_pub = a.public();
+    let b_pub = b.public();
+    let mut sa: FixedStore<2> = FixedStore::new();
+    let mut sb: FixedStore<2> = FixedStore::new();
+    let mut out = [0u8; 255];
+    let mut pt = [0u8; 255];
+    // Build a session where A sends compact messages.
+    let mut corpus = Vec::new();
+    let n = ratchet::seal_compact(&a, &b_pub, &mut sa, true, true, &mut rng, b"one", &mut out).unwrap().0;
+    ratchet::open(&b, &out[..n], &mut sb, |_| Some(a_pub), &mut pt).unwrap();
+    let n = ratchet::seal_compact(&b, &a_pub, &mut sb, true, true, &mut rng, b"two", &mut out).unwrap().0;
+    ratchet::open(&a, &out[..n], &mut sa, |_| Some(b_pub), &mut pt).unwrap();
+    for i in 0..6u8 {
+        let n = ratchet::seal_compact(&a, &b_pub, &mut sa, true, true, &mut rng, &[i; 30], &mut out).unwrap().0;
+        corpus.push(out[..n].to_vec());
+        if i < 5 {
+            ratchet::open(&b, &out[..n], &mut sb, |_| Some(a_pub), &mut pt).unwrap();
+        }
+    }
+    // The last one is compact and not yet read: it is the genuine message.
+    let genuine = corpus.last().unwrap().clone();
+    assert_eq!(genuine[0], ratchet::COMPACT);
+    let b_state = sb.get_mut(&a_pub.address()).unwrap().clone();
+    run("open-compact", &corpus, 270, |p| {
+        let mut store: FixedStore<2> = FixedStore::new();
+        store.insert(b_state.clone());
+        let mut out = [0u8; 255];
+        let r = ratchet::open(&b, p, &mut store, |_| Some(a_pub), &mut out);
+        if p != &genuine[..] {
+            if let Ok(o) = r {
+                // Only a valid ciphertext may open; a changed message must not
+                // open as the genuine one.
+                assert!(p[0] != ratchet::COMPACT || o.len != 30 || out[..30] != [5u8; 30], "a changed compact message opened");
+            }
+        }
+        let mut small = [0u8; 8];
+        let _ = ratchet::open(&b, p, &mut store, |_| Some(a_pub), &mut small);
+    });
+}
+
 /// The firmware manifest is read from radio/USB before anything else is checked.
 #[test]
 fn fuzz_ota_manifest() {

@@ -1528,9 +1528,19 @@ impl Node {
         };
         let mut ct = [0u8; 255];
         let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
-        let (n, format) =
-            ratchet::seal(&self.identity, &recipient, &mut self.sessions, fs_ok, &mut OsRng, plain, &mut ct)
-                .map_err(|_| "The message is too long")?;
+        // Compact messages (22 bytes of overhead instead of 69) for a node that reads them.
+        let compact_ok = self.caps.get(&dest).is_some_and(|c| c & maarse_core::appdata::CAP_COMPACT != 0);
+        let (n, format) = ratchet::seal_compact(
+            &self.identity,
+            &recipient,
+            &mut self.sessions,
+            fs_ok,
+            compact_ok,
+            &mut OsRng,
+            plain,
+            &mut ct,
+        )
+        .map_err(|_| "The message is too long")?;
         self.sessions.save();
         self.last_sealed = ct[..n].to_vec();
         if matches!(kind, Pending::Message) {

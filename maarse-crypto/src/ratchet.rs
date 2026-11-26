@@ -47,6 +47,35 @@
 //!   all messages of the same turn, so a listener can see that they belong together.
 //! * The key is new for every message, so the nonce is fixed (zero).
 //!
+//! ## Compact messages (22 bytes overhead instead of 69)
+//!
+//! Once a session has taken a ratchet step, a sender that knows the other
+//! party can read them ([`CAP_COMPACT`](maarse_core::appdata::CAP_COMPACT)) sends
+//! most messages in a short form:
+//!
+//! ```text
+//! type 0xF2 (1) | session id (3) | n (u16 LE)
+//!   | ChaCha20-Poly1305(message key, message, AAD = these 6 bytes) | tag (16)
+//!
+//! session id = HKDF-Expand(chain key at the start of the chain, "maarse/fs/v2/sid")[..3]
+//! ```
+//!
+//! * The tag is the full 16 bytes and the message key is new for every
+//!   message, exactly as in the long form; only the repeated ratchet key and
+//!   the masked sender are left out. The recipient finds the session from the
+//!   session id and the sender from the session; a message that does not open
+//!   under any session with that id is rejected.
+//! * The first [`FULL_FIRST`] messages after a step still carry the full
+//!   ratchet key (so one lost message does not break the chain), and a sender
+//!   that has heard a new key from the other party takes its next step after
+//!   [`STEP_EVERY`] messages instead of at once. So the keys heal after at
+//!   most that many messages in each direction (not every turn). No step is
+//!   delayed before the first one (the init chain is only as strong as the
+//!   static format, so it is left at once, as before).
+//! * The session id and `n` are visible and repeat within a chain, so a
+//!   listener can tell that messages belong together (the ratchet key already
+//!   does that in the long form). The sender stays hidden.
+//!
 //! ## Derivation
 //!
 //! ```text
@@ -86,8 +115,19 @@ use zeroize::Zeroize;
 
 pub const INIT: u8 = 0xF0;
 pub const RATCHET: u8 = 0xF1;
+/// A compact message of an established session (see the module documentation).
+pub const COMPACT: u8 = 0xF2;
 pub const HEADER_LEN: usize = 1 + 32 + 16 + 2 + 2;
 pub const FS_OVERHEAD: usize = HEADER_LEN + 16;
+pub const SID_LEN: usize = 3;
+pub const COMPACT_HEADER_LEN: usize = 1 + SID_LEN + 2;
+/// Overhead of a compact message (the long form is [`FS_OVERHEAD`]).
+pub const COMPACT_OVERHEAD: usize = COMPACT_HEADER_LEN + 16;
+/// Messages on one sending key before a sender that could step does so, when
+/// it sends compact messages.
+pub const STEP_EVERY: u16 = 8;
+/// The first messages after a step always carry the full ratchet key.
+pub const FULL_FIRST: u16 = 2;
 /// Largest text that can be sent in both formats (one packet, full path).
 pub const MAX_FS_TEXT: usize = maarse_core::router::MAX_DIRECT_PAYLOAD - FS_OVERHEAD;
 /// Skipped message keys stored per session.
@@ -167,14 +207,27 @@ pub struct Session {
     skipped: [Skipped; MAX_SKIP],
     skip_cursor: u8,
     old_pubs: [[u8; 8]; OLD_PUBS],
+    /// Session ids of the sending and the receiving chain (see the module
+    /// documentation) and whether they are known.
+    sid_s: [u8; SID_LEN],
+    sid_r: [u8; SID_LEN],
+    has_sid_s: bool,
+    has_sid_r: bool,
+    /// We have taken at least one ratchet step (our sending chain no longer
+    /// depends on the init keys).
+    stepped: bool,
+    /// Messages sent on the current sending key.
+    sent_in_chain: u16,
 }
 
-/// The length of [`Session::to_bytes`].
-pub const SESSION_LEN: usize = 1 + 16 + 32 * 2 + 4 + 32 + 2 + 32 * 2 + 16 + 32 * 2 + 1
+/// The length of the version 1 form (before compact messages).
+pub const SESSION_LEN_V1: usize = 1 + 16 + 32 * 2 + 4 + 32 + 2 + 32 * 2 + 16 + 32 * 2 + 1
     + MAX_SKIP * SKIPPED_LEN
     + 1
     + OLD_PUBS * 8;
-const SESSION_VERSION: u8 = 1;
+/// The length of [`Session::to_bytes`].
+pub const SESSION_LEN: usize = SESSION_LEN_V1 + SID_LEN * 2 + 2 + 1;
+const SESSION_VERSION: u8 = 2;
 
 impl Drop for Session {
     fn drop(&mut self) {
@@ -206,6 +259,9 @@ pub trait SessionStore {
     /// Inserts or replaces the session for `s.peer()`. A full store
     /// may evict another session (it then falls back to init).
     fn insert(&mut self, s: Session);
+    /// The `skip`-th session whose receive chain has session id `sid`
+    /// (ids can collide, so the caller tries them one by one).
+    fn find_sid(&mut self, sid: &[u8; SID_LEN], skip: usize) -> Option<&mut Session>;
 }
 
 fn dh(secret: &[u8; 32], public: &[u8; 32]) -> Result<[u8; 32], CryptoError> {
@@ -285,6 +341,14 @@ fn fp(public: &[u8; 32]) -> [u8; 8] {
     f
 }
 
+/// Session id of a chain, from its first chain key.
+fn sid_of(ck: &[u8; 32]) -> [u8; SID_LEN] {
+    let hk = Hkdf::<Sha256>::from_prk(ck).expect("32 bytes PRK");
+    let mut sid = [0u8; SID_LEN];
+    let _ = hk.expand(b"maarse/fs/v2/sid", &mut sid);
+    sid
+}
+
 fn aead(mk: &[u8; 32]) -> ChaCha20Poly1305 {
     ChaCha20Poly1305::new(Key::from_slice(mk))
 }
@@ -312,6 +376,12 @@ impl Session {
             skipped: [Skipped::default(); MAX_SKIP],
             skip_cursor: 0,
             old_pubs: [[0; 8]; OLD_PUBS],
+            sid_s: [0; SID_LEN],
+            sid_r: [0; SID_LEN],
+            has_sid_s: false,
+            has_sid_r: false,
+            stepped: false,
+            sent_in_chain: 0,
         }
     }
 
@@ -334,6 +404,8 @@ impl Session {
         let mut s = Session::blank(peer_addr);
         s.rk = rk;
         s.cks = ck;
+        s.sid_s = sid_of(&ck);
+        s.has_sid_s = true;
         s.has_cks = true;
         s.dhs = a1;
         s.dhs_pub = a1_pub;
@@ -355,24 +427,39 @@ impl Session {
         !self.pending
     }
 
+    /// The session id of the chain we receive on, if known.
+    pub fn receive_sid(&self) -> Option<[u8; SID_LEN]> {
+        self.has_sid_r.then_some(self.sid_r)
+    }
+
     /// Encrypts `msg` to `peer` (must be the session's contact). Returns
-    /// the length (`msg.len() + FS_OVERHEAD`). On error the session is unchanged.
+    /// the length (`msg.len()` plus [`FS_OVERHEAD`], or [`COMPACT_OVERHEAD`]
+    /// for a compact message). On error the session is unchanged.
+    ///
+    /// `compact_ok`: the other party reads compact messages. Without it
+    /// nothing changes from the long form (a step at every turn).
     pub fn seal(
         &mut self,
         me: &Identity,
         peer: &PublicIdentity,
         rng: &mut impl CryptoRngCore,
+        compact_ok: bool,
         msg: &[u8],
         out: &mut [u8],
     ) -> Result<usize, CryptoError> {
-        let total = msg.len() + FS_OVERHEAD;
-        if out.len() < total || total > maarse_core::router::MAX_DIRECT_PAYLOAD {
-            return Err(CryptoError::BufferTooSmall);
-        }
         if peer.address() != self.peer || self.ns == u16::MAX {
             return Err(CryptoError::Malformed);
         }
-        if self.need_step {
+        // Delay a step only when we can send compact messages and our sending
+        // chain is already a ratcheted one.
+        let lazy = compact_ok && self.stepped && !self.pending && self.has_sid_s;
+        let step = self.need_step && (!lazy || self.sent_in_chain >= STEP_EVERY);
+        let compact = lazy && !step && self.sent_in_chain >= FULL_FIRST;
+        let total = msg.len() + if compact { COMPACT_OVERHEAD } else { FS_OVERHEAD };
+        if out.len() < total || total > maarse_core::router::MAX_DIRECT_PAYLOAD {
+            return Err(CryptoError::BufferTooSmall);
+        }
+        if step {
             let mut s = [0u8; 32];
             rng.fill_bytes(&mut s);
             let s_pub = public_of(&s);
@@ -381,6 +468,8 @@ impl Session {
             let (rk, ck) = kdf_rk(&self.rk, &d);
             self.rk = rk;
             self.cks = ck;
+            self.sid_s = sid_of(&ck);
+            self.has_sid_s = true;
             self.has_cks = true;
             self.pn = self.ns;
             self.ns = 0;
@@ -389,21 +478,32 @@ impl Session {
             self.has_dhs = true;
             self.mask = mask_key(&m, &s_pub, &self.peer);
             self.need_step = false;
+            self.stepped = true;
+            self.sent_in_chain = 0;
             s.zeroize();
         }
         if !self.has_cks {
             return Err(CryptoError::Malformed);
         }
         let (next, mut mk) = kdf_ck(&self.cks);
-        let me_addr = me.address();
-        out[0] = if self.pending { INIT } else { RATCHET };
-        out[1..33].copy_from_slice(&self.dhs_pub);
-        for i in 0..16 {
-            out[33 + i] = me_addr.0[i] ^ self.mask[i];
+        let head_len;
+        if compact {
+            head_len = COMPACT_HEADER_LEN;
+            out[0] = COMPACT;
+            out[1..1 + SID_LEN].copy_from_slice(&self.sid_s);
+            out[1 + SID_LEN..COMPACT_HEADER_LEN].copy_from_slice(&self.ns.to_le_bytes());
+        } else {
+            head_len = HEADER_LEN;
+            let me_addr = me.address();
+            out[0] = if self.pending { INIT } else { RATCHET };
+            out[1..33].copy_from_slice(&self.dhs_pub);
+            for i in 0..16 {
+                out[33 + i] = me_addr.0[i] ^ self.mask[i];
+            }
+            out[49..51].copy_from_slice(&self.ns.to_le_bytes());
+            out[51..53].copy_from_slice(&self.pn.to_le_bytes());
         }
-        out[49..51].copy_from_slice(&self.ns.to_le_bytes());
-        out[51..53].copy_from_slice(&self.pn.to_le_bytes());
-        let (head, rest) = out.split_at_mut(HEADER_LEN);
+        let (head, rest) = out.split_at_mut(head_len);
         rest[..msg.len()].copy_from_slice(msg);
         let tag = aead(&mk)
             .encrypt_in_place_detached(Nonce::from_slice(&[0u8; 12]), head, &mut rest[..msg.len()])
@@ -412,6 +512,7 @@ impl Session {
         mk.zeroize();
         self.cks = next;
         self.ns += 1;
+        self.sent_in_chain = self.sent_in_chain.saturating_add(1);
         Ok(total)
     }
 
@@ -448,8 +549,7 @@ impl Session {
         Ok(())
     }
 
-    /// Decrypts one message. Called on a copy; the copy is only stored on success.
-    #[allow(clippy::too_many_arguments)]
+    /// Decrypts one long-form message. Called on a copy; the copy is only stored on success.
     fn decrypt(
         &mut self,
         rpub: &[u8; 32],
@@ -460,8 +560,34 @@ impl Session {
         out: &mut [u8],
     ) -> Result<usize, CryptoError> {
         let len = payload.len() - FS_OVERHEAD;
-        let head = &payload[..HEADER_LEN];
-        let tag = Tag::from_slice(&payload[HEADER_LEN + len..]);
+        self.decrypt_parts(
+            rpub,
+            n,
+            pn,
+            allow_step,
+            &payload[..HEADER_LEN],
+            &payload[HEADER_LEN..HEADER_LEN + len],
+            &payload[HEADER_LEN + len..],
+            out,
+        )
+    }
+
+    /// Decrypts a message split into the authenticated header, the
+    /// ciphertext and the tag.
+    #[allow(clippy::too_many_arguments)]
+    fn decrypt_parts(
+        &mut self,
+        rpub: &[u8; 32],
+        n: u16,
+        pn: u16,
+        allow_step: bool,
+        head: &[u8],
+        body: &[u8],
+        tag: &[u8],
+        out: &mut [u8],
+    ) -> Result<usize, CryptoError> {
+        let len = body.len();
+        let tag = Tag::from_slice(tag);
         let f = fp(rpub);
         let mut mk = if let Some(i) = self.skipped.iter().position(|s| s.used && s.fp == f && s.n == n) {
             let mk = self.skipped[i].mk;
@@ -482,6 +608,8 @@ impl Session {
                 let (rk, ck) = kdf_rk(&self.rk, &d);
                 self.rk = rk;
                 self.ckr = ck;
+                self.sid_r = sid_of(&ck);
+                self.has_sid_r = true;
                 self.dhr = *rpub;
                 self.nr = 0;
                 self.has_ckr = true;
@@ -499,7 +627,7 @@ impl Session {
             self.nr += 1;
             mk
         };
-        out[..len].copy_from_slice(&payload[HEADER_LEN..HEADER_LEN + len]);
+        out[..len].copy_from_slice(body);
         let r = aead(&mk).decrypt_in_place_detached(
             Nonce::from_slice(&[0u8; 12]),
             head,
@@ -549,12 +677,19 @@ impl Session {
         for p in &self.old_pubs {
             w.put(p);
         }
+        w.put(&self.sid_s);
+        w.put(&self.sid_r);
+        w.put(&self.sent_in_chain.to_le_bytes());
+        w.put(&[self.has_sid_s as u8 | (self.has_sid_r as u8) << 1 | (self.stepped as u8) << 2]);
         debug_assert_eq!(w.i, SESSION_LEN);
         b
     }
 
+    /// Reads the current form, or the version 1 form (from before compact
+    /// messages, without session ids: it sends long messages until its next step).
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() != SESSION_LEN || b[0] != SESSION_VERSION {
+        let v1 = b.len() == SESSION_LEN_V1 && b.first() == Some(&1);
+        if !v1 && (b.len() != SESSION_LEN || b[0] != SESSION_VERSION) {
             return None;
         }
         let mut r = Reader { b, i: 1 };
@@ -587,6 +722,15 @@ impl Session {
         s.skip_cursor = c % MAX_SKIP as u8;
         for p in s.old_pubs.iter_mut() {
             *p = r.arr();
+        }
+        if !v1 {
+            s.sid_s = r.arr();
+            s.sid_r = r.arr();
+            s.sent_in_chain = u16::from_le_bytes(r.arr());
+            let [f2] = r.arr();
+            s.has_sid_s = f2 & 1 != 0;
+            s.has_sid_r = f2 & 2 != 0;
+            s.stepped = f2 & 4 != 0;
         }
         Some(s)
     }
@@ -627,12 +771,29 @@ pub fn seal(
     msg: &[u8],
     out: &mut [u8],
 ) -> Result<(usize, Format), CryptoError> {
+    seal_compact(me, peer, store, fs_ok, false, rng, msg, out)
+}
+
+/// Like [`seal`], and with `compact_ok` (the other party reads compact
+/// messages, [`CAP_COMPACT`](maarse_core::appdata::CAP_COMPACT)) the session
+/// sends the short form.
+#[allow(clippy::too_many_arguments)]
+pub fn seal_compact(
+    me: &Identity,
+    peer: &PublicIdentity,
+    store: &mut impl SessionStore,
+    fs_ok: bool,
+    compact_ok: bool,
+    rng: &mut impl CryptoRngCore,
+    msg: &[u8],
+    out: &mut [u8],
+) -> Result<(usize, Format), CryptoError> {
     if fs_ok {
         let addr = peer.address();
         let r = match store.get_mut(&addr) {
-            Some(s) => s.seal(me, peer, rng, msg, out).map(|n| (n, s.pending)),
+            Some(s) => s.seal(me, peer, rng, compact_ok, msg, out).map(|n| (n, s.pending)),
             None => Session::initiate(me, peer, rng).and_then(|mut s| {
-                let n = s.seal(me, peer, rng, msg, out)?;
+                let n = s.seal(me, peer, rng, compact_ok, msg, out)?;
                 store.insert(s);
                 Ok((n, true))
             }),
@@ -669,6 +830,16 @@ pub fn open(
     lookup: impl Fn(&Address) -> Option<PublicIdentity>,
     out: &mut [u8],
 ) -> Result<Opened, CryptoError> {
+    if payload.len() >= COMPACT_OVERHEAD && payload[0] == COMPACT {
+        return match open_compact(payload, store, out) {
+            Ok(o) => Ok(o),
+            // 1/256 of the old messages happen to start with 0xF2.
+            Err(e) => match crate::seal::open_direct(me, payload, &lookup, out) {
+                Ok((from, len)) => Ok(Opened { from, len, format: Format::Static }),
+                Err(_) => Err(e),
+            },
+        };
+    }
     if payload.len() >= FS_OVERHEAD && matches!(payload[0], INIT | RATCHET) {
         match open_fs(me, payload, store, &lookup, out) {
             Ok(o) => return Ok(o),
@@ -683,6 +854,43 @@ pub fn open(
     }
     let (from, len) = crate::seal::open_direct(me, payload, lookup, out)?;
     Ok(Opened { from, len, format: Format::Static })
+}
+
+/// Opens a compact message: finds the session by its session id and tries
+/// every session with that id (ids can collide).
+fn open_compact(
+    payload: &[u8],
+    store: &mut impl SessionStore,
+    out: &mut [u8],
+) -> Result<Opened, CryptoError> {
+    let len = payload.len() - COMPACT_OVERHEAD;
+    if out.len() < len {
+        return Err(CryptoError::BufferTooSmall);
+    }
+    let mut sid = [0u8; SID_LEN];
+    sid.copy_from_slice(&payload[1..1 + SID_LEN]);
+    let n = u16::from_le_bytes([payload[1 + SID_LEN], payload[2 + SID_LEN]]);
+    let mut skip = 0;
+    while let Some(sess) = store.find_sid(&sid, skip) {
+        let mut c = sess.clone();
+        let rpub = c.dhr;
+        if let Ok(len) = c.decrypt_parts(
+            &rpub,
+            n,
+            0,
+            false,
+            &payload[..COMPACT_HEADER_LEN],
+            &payload[COMPACT_HEADER_LEN..COMPACT_HEADER_LEN + len],
+            &payload[COMPACT_HEADER_LEN + len..],
+            out,
+        ) {
+            let from = c.peer;
+            *sess = c;
+            return Ok(Opened { from, len, format: Format::Ratchet });
+        }
+        skip += 1;
+    }
+    Err(CryptoError::Decrypt)
 }
 
 fn open_fs(
@@ -731,6 +939,8 @@ fn open_fs(
         let mut fresh = Session::blank(from);
         fresh.rk = rk;
         fresh.ckr = ck;
+        fresh.sid_r = sid_of(&ck);
+        fresh.has_sid_r = true;
         fresh.has_ckr = true;
         fresh.dhr = rpub;
         fresh.init_pub = rpub;
@@ -809,6 +1019,15 @@ impl<const N: usize> SessionStore for FixedStore<N> {
             *t = clock;
             s
         })
+    }
+
+    fn find_sid(&mut self, sid: &[u8; SID_LEN], skip: usize) -> Option<&mut Session> {
+        self.slots
+            .iter_mut()
+            .flatten()
+            .filter(|(_, s)| s.has_sid_r && s.sid_r == *sid)
+            .nth(skip)
+            .map(|(_, s)| s)
     }
 
     fn insert(&mut self, s: Session) {

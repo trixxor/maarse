@@ -244,6 +244,21 @@ pub struct Scenario {
     /// Text messages are compressed (maarse-core textz: about 56 % of the
     /// size for short chat messages): 34 bytes instead of 60.
     pub text_compress: bool,
+    /// Airtime experiments (all off by default, 2026-11-26).
+    /// Preamble symbols (0 = the simulator's old 8; the firmware default is 16).
+    pub preamble: u16,
+    /// Size model of a lean frame: 8-byte destination (not on announces),
+    /// hops and path count in one byte, 8-byte reply token in path requests.
+    /// Only the airtime changes; routing logic is untouched.
+    pub lean_header: bool,
+    /// Bytes added to a text message by the seal or session (0 = the old model
+    /// of 60 or 34 bytes in total). With it a message is this plus the type
+    /// byte plus 40 bytes of text (23 compressed). 69 = ratchet today, 19 = a
+    /// session frame with a 16-byte tag.
+    pub dm_overhead: u16,
+    pub request_fwd_permille: u16,
+    /// Wait before a path request is repeated (s), all nodes; 0 = the default.
+    pub path_retry_s: u32,
     /// Record the event trace (needed for follow / reach / animation).
     #[serde(default = "yes")]
     pub trace: bool,
@@ -322,6 +337,11 @@ impl Default for Scenario {
             weak_hop_penalty: false,
             drop_unacked_routes: false,
             text_compress: false,
+            preamble: 0,
+            lean_header: false,
+            dm_overhead: 0,
+            request_fwd_permille: 0,
+            path_retry_s: 0,
             trace: true,
         }
     }

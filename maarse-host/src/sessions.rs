@@ -6,7 +6,7 @@
 //! The file contains secret keys, just like `identity`.
 
 use maarse_core::Address;
-use maarse_crypto::ratchet::{SESSION_LEN, Session, SessionStore};
+use maarse_crypto::ratchet::{SESSION_LEN, SESSION_LEN_V1, SID_LEN, Session, SessionStore};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -25,7 +25,9 @@ impl Sessions {
     pub fn load(path: PathBuf) -> Self {
         let mut map = HashMap::new();
         if let Ok(b) = fs::read(&path) {
-            for (i, chunk) in b.chunks_exact(SESSION_LEN).enumerate() {
+            // Version 1 files (before compact messages) have shorter sessions.
+            let size = if b.first() == Some(&1) { SESSION_LEN_V1 } else { SESSION_LEN };
+            for (i, chunk) in b.chunks_exact(size).enumerate() {
                 if let Some(s) = Session::from_bytes(chunk) {
                     map.insert(s.peer(), (i as u64, s));
                 }
@@ -75,6 +77,16 @@ impl SessionStore for Sessions {
         // Only called when the session is about to be used (and typically changed).
         self.dirty = true;
         self.map.get_mut(peer).map(|(t, s)| {
+            *t = clock;
+            s
+        })
+    }
+
+    fn find_sid(&mut self, sid: &[u8; SID_LEN], skip: usize) -> Option<&mut Session> {
+        self.clock += 1;
+        let clock = self.clock;
+        self.dirty = true;
+        self.map.values_mut().filter(|(_, s)| s.receive_sid() == Some(*sid)).nth(skip).map(|(t, s)| {
             *t = clock;
             s
         })

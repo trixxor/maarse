@@ -121,7 +121,9 @@ pub const MOBILE_ROUTE_MS: u64 = 300_000;
 /// its way, and the new flood drowns the reply. In the simulator this was the main cause
 /// of lost acknowledgements in large, sparse nets (15 s gave 50 % acknowledged, 45 s
 /// gave over 80 %).
-pub const PATH_RETRY_MS: u64 = 45_000;
+pub const PATH_RETRY_MS: u64 = 20_000;
+/// Default share of path requests that are forwarded (per mille).
+pub const REQUEST_FWD_PERMILLE: u16 = 800;
 /// Number of repetitions of a path request.
 pub const PATH_RETRIES: u8 = 2;
 const MAX_FORWARDS: usize = 32;
@@ -625,6 +627,10 @@ pub struct Router<const R: usize, const D: usize> {
     /// How far announces are forwarded (hops). Nodes further away ask for a
     /// key with a key request when they need it.
     pub announce_scope: u8,
+    /// Share of path requests a forwarder passes on, in per mille (1000 or
+    /// 0 = all), decided from the packet id and our id. 80 % cut airtime by
+    /// 1-39 % in the simulator with the same or better delivery (docs/maybe/airtime-optimisation.md).
+    pub request_fwd_permille: u16,
     /// A hop heard with a weak signal counts as two when the destination
     /// picks among trails (a cheap stand-in for ETX: weak links cost
     /// retransmissions and lost acks).
@@ -731,6 +737,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             proxy_reply: false,
             ring: 0,
             announce_scope: ANNOUNCE_SCOPE,
+            request_fwd_permille: REQUEST_FWD_PERMILLE,
             weak_hop_penalty: false,
             heard_hops: heapless::Vec::new(),
             drop_unacked_routes: false,
@@ -2328,6 +2335,13 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let mut header = Header::new(PacketType::PathRequest, h.dest).with_path(record);
         header.hops = h.hops + 1 + (self.weak_hop_penalty && snr_db < self.weak_snr_db) as u8;
         let delay = self.flood_delay_ms(snr_db);
+        if self.request_fwd_permille > 0 && self.request_fwd_permille < 1000 {
+            let mix = packet_id(h.ptype, &h.dest, pkt.payload) ^ (self.id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let mix = mix ^ (mix >> 29);
+            if (mix % 1000) as u16 >= self.request_fwd_permille {
+                return;
+            }
+        }
         self.stats.forwarded += 1;
         self.emit_flood(&header, pkt.payload, delay, out);
     }
@@ -2699,7 +2713,32 @@ mod tests {
         let mut a = [n; 16];
         a[0] = 0;
         a[1] = n; // path ID = n
-        R::new(Address(a), role)
+        let mut r = R::new(Address(a), role);
+        // The tests build fixed topologies where every repeater must forward;
+        // the default drops one path request in five.
+        r.request_fwd_permille = 1000;
+        r
+    }
+
+    #[test]
+    fn about_four_fifths_of_path_requests_are_forwarded_by_default() {
+        let mut fwd = 0;
+        for i in 0..400u32 {
+            let mut r = R::new(Address([7; 16]), Role::Repeater);
+            assert_eq!(r.request_fwd_permille, REQUEST_FWD_PERMILLE);
+            let dest = Address([9; 16]);
+            let mut payload = Buf::new();
+            let _ = payload.extend_from_slice(&[i as u8, (i >> 8) as u8, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+            assert!(stamp::append(PacketType::PathRequest, &dest, &mut payload));
+            let h = Header::new(PacketType::PathRequest, dest).with_path(Path::new());
+            let pkt = encode(&h, &payload).unwrap();
+            let out = r.on_receive(&pkt, -5, 1000);
+            if !transmits(&out).is_empty() || out.iter().any(|a| matches!(a, Action::Transmit { .. })) {
+                fwd += 1;
+            }
+        }
+        // 80 % with a margin for the hash.
+        assert!((280..=360).contains(&fwd), "forwarded {fwd} of 400");
     }
 
     /// Lets `n` wait out the time slot in which it collects copies of a

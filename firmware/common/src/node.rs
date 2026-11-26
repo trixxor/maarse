@@ -1580,7 +1580,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     ) -> Result<usize, CryptoError> {
         let dest = recipient.address();
         let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
-        ratchet::seal(&self.identity, recipient, &mut self.sessions, fs_ok, &mut self.rng, plain, out)
+        let compact_ok = self.caps.get(&dest).is_some_and(|c| c & appdata::CAP_COMPACT != 0);
+        ratchet::seal_compact(&self.identity, recipient, &mut self.sessions, fs_ok, compact_ok, &mut self.rng, plain, out)
             .map(|(n, _)| n)
     }
 

@@ -13,6 +13,9 @@ impl SessionStore for Map {
     fn insert(&mut self, s: Session) {
         self.0.insert(s.peer(), s);
     }
+    fn find_sid(&mut self, sid: &[u8; SID_LEN], skip: usize) -> Option<&mut Session> {
+        self.0.values_mut().filter(|s| s.receive_sid() == Some(*sid)).nth(skip)
+    }
 }
 
 /// Deterministic "rng" for test vectors (SHA-256 over a counter).
@@ -523,3 +526,320 @@ const VEC_RK: &str = "6e39ed194475b8f3b1f32e225c637d19f4d31e10361548dfa874efc28a
 const VEC_RK_CK: &str = "9ec3b37f0577716421bae8fefa4b67059f26ca4e8f410b0feb65e51dce437d1e";
 const VEC_FIRST: &str = "f027b284f2a3ac7edc0860504d85386d5d9e32fbfd2423af930e47466bf9c4df4b8212db57d10029b528256067d755b4e000000000cfebb2a200bcbd44ac5367d7a6bd543caf70";
 const VEC_REPLY: &str = "f18d06fac5c8eafee9f706edd6211ad5de9e3794b795966ae5b9a22efd8871c847b29afc8d5888717fa01008bdcac5234f000000007a8f8d5286ad3404d729f4c6632db72048c115d2d1";
+
+// ---- compact messages ------------------------------------------------------
+
+impl Peer {
+    fn send_c(&mut self, to: &Peer, msg: &[u8]) -> (Vec<u8>, Format) {
+        let mut out = [0u8; 255];
+        let (n, f) =
+            seal_compact(&self.id, &to.id.public(), &mut self.store, true, true, &mut OsRng, msg, &mut out).unwrap();
+        (out[..n].to_vec(), f)
+    }
+}
+
+/// Both parties talk compact and A has taken its first ratchet step.
+fn compact_established() -> (Peer, Peer) {
+    let (mut a, mut b) = pair();
+    let (c, _) = a.send_c(&b, b"hi");
+    b.recv(&c).unwrap();
+    let (c, _) = b.send_c(&a, b"hi yourself");
+    a.recv(&c).unwrap();
+    // A's first send after the reply is the first step (never delayed).
+    let (c, f) = a.send_c(&b, b"first ratcheted");
+    assert_eq!((c[0], f), (RATCHET, Format::Ratchet));
+    b.recv(&c).unwrap();
+    (a, b)
+}
+
+#[test]
+fn compact_overhead_is_22_and_first_messages_are_full() {
+    let (mut a, mut b) = compact_established();
+    let mut kinds = vec![];
+    for i in 0..6u8 {
+        let (c, _) = a.send_c(&b, &[i; 10]);
+        kinds.push((c[0], c.len()));
+        assert_eq!(b.recv(&c).unwrap().0, vec![i; 10]);
+    }
+    // The step message was the first of the chain, so one more full one, then compact.
+    assert_eq!(kinds[0], (RATCHET, 10 + FS_OVERHEAD));
+    for k in &kinds[1..] {
+        assert_eq!(*k, (COMPACT, 10 + COMPACT_OVERHEAD));
+    }
+    assert_eq!(COMPACT_OVERHEAD, 22);
+}
+
+#[test]
+fn compact_message_roundtrip_many_both_ways_and_steps_every_few() {
+    let (mut a, mut b) = compact_established();
+    let mut full = 0;
+    let mut compact = 0;
+    for round in 0..200u32 {
+        let (from, to) = if round % 3 == 0 { (&mut b, &mut a) } else { (&mut a, &mut b) };
+        let msg = format!("msg {round}");
+        let (c, f) = from.send_c(to, msg.as_bytes());
+        assert_eq!(f, Format::Ratchet);
+        if c[0] == COMPACT {
+            compact += 1
+        } else {
+            full += 1
+        }
+        assert_eq!(to.recv(&c).unwrap().0, msg.into_bytes());
+    }
+    // Most messages are compact; the others carry a fresh key.
+    assert!(compact > full * 2, "compact {compact} full {full}");
+    let avg = (full * FS_OVERHEAD + compact * COMPACT_OVERHEAD) as f64 / (full + compact) as f64;
+    println!("average overhead with mixed chat: {avg:.1} bytes (long form {FS_OVERHEAD})");
+    assert!(avg < FS_OVERHEAD as f64 * 0.7);
+}
+
+#[test]
+fn compact_alternating_chat_average_overhead() {
+    // One message each way, strictly alternating: the worst case for compact.
+    let (mut a, mut b) = compact_established();
+    let mut total = 0usize;
+    let mut count = 0usize;
+    for round in 0..400u32 {
+        let (from, to) = if round % 2 == 0 { (&mut a, &mut b) } else { (&mut b, &mut a) };
+        let (c, _) = from.send_c(to, b"0123456789");
+        total += c.len() - 10;
+        count += 1;
+        to.recv(&c).unwrap();
+    }
+    let avg = total as f64 / count as f64;
+    println!("average overhead, strictly alternating: {avg:.1} bytes (long form {FS_OVERHEAD})");
+    assert!(avg < FS_OVERHEAD as f64);
+}
+
+#[test]
+fn a_step_is_taken_within_step_every_messages_once_a_new_key_was_heard() {
+    let (mut a, mut b) = compact_established();
+    for i in 0..(STEP_EVERY * 6) {
+        let (c, _) = a.send_c(&b, b"x");
+        let st = a.session(&b);
+        assert!(!(st.need_step && st.sent_in_chain > STEP_EVERY), "a held step for {} messages", st.sent_in_chain);
+        b.recv(&c).unwrap();
+        // B answers now and then, with the occasional new key of its own.
+        if i % 2 == 1 {
+            let (r, _) = b.send_c(&a, b"r");
+            a.recv(&r).unwrap();
+        }
+    }
+}
+
+#[test]
+fn compact_tampering_fails_in_every_field_and_leaves_state_untouched() {
+    let (mut a, mut b) = compact_established();
+    let (c0, _) = a.send_c(&b, b"warm");
+    b.recv(&c0).unwrap();
+    let (c, _) = a.send_c(&b, b"secret text");
+    assert_eq!(c[0], COMPACT);
+    let before = b.session(&a).to_bytes();
+    // Flip every single bit of the message (type, session id, n, body, tag).
+    for byte in 0..c.len() {
+        for bit in 0..8 {
+            let mut t = c.clone();
+            t[byte] ^= 1 << bit;
+            assert!(b.recv(&t).is_err(), "byte {byte} bit {bit} was accepted");
+        }
+    }
+    assert_eq!(b.session(&a).to_bytes()[..], before[..], "failed attempts must not change the session");
+    assert_eq!(b.recv(&c).unwrap().0, b"secret text");
+    assert!(b.recv(&c).is_err(), "a replay must be rejected");
+}
+
+#[test]
+fn compact_out_of_order_and_loss_within_window() {
+    let (mut a, mut b) = compact_established();
+    let msgs: Vec<_> = (0..5u8).map(|i| a.send_c(&b, &[i]).0).collect();
+    assert!(msgs.iter().any(|m| m[0] == COMPACT));
+    for i in [4usize, 2, 0, 3, 1] {
+        assert_eq!(b.recv(&msgs[i]).unwrap().0, vec![i as u8]);
+    }
+    let m: Vec<_> = (0..4u8).map(|i| a.send_c(&b, &[10 + i]).0).collect();
+    assert_eq!(b.recv(&m[0]).unwrap().0, vec![10]);
+    assert_eq!(b.recv(&m[3]).unwrap().0, vec![13]);
+    assert_eq!(b.recv(&m[1]).unwrap().0, vec![11]);
+}
+
+#[test]
+fn compact_wrong_recipient_or_unknown_session_id_is_rejected() {
+    let (mut a, mut b) = compact_established();
+    let (c0, _) = a.send_c(&b, b"warm");
+    b.recv(&c0).unwrap();
+    let (c, _) = a.send_c(&b, b"for b only");
+    assert_eq!(c[0], COMPACT);
+    // A third party who has no session with A cannot read it.
+    let mut eve = Peer::new();
+    eve.knows(&a);
+    assert!(eve.recv(&c).is_err());
+    // A party that lost its state cannot read it either.
+    let mut b2 = Peer::new();
+    b2.knows(&a);
+    assert!(b2.recv(&c).is_err());
+}
+
+#[test]
+fn compact_is_only_sent_with_the_new_api_and_the_flag() {
+    let (mut a, mut b) = compact_established();
+    for _ in 0..10 {
+        // `send` is the old API (compact_ok false): never compact.
+        let (c, _) = a.send(&b, b"old style");
+        assert_ne!(c[0], COMPACT);
+        b.recv(&c).unwrap();
+    }
+}
+
+#[test]
+fn compact_session_survives_serialization_and_version_1_files() {
+    let (mut a, mut b) = compact_established();
+    for i in 0..4u8 {
+        let (c, _) = a.send_c(&b, &[i]);
+        b.recv(&c).unwrap();
+    }
+    let bytes = a.session(&b).to_bytes();
+    assert_eq!(bytes.len(), SESSION_LEN);
+    let restored = Session::from_bytes(&bytes).unwrap();
+    a.store.0.insert(b.addr(), restored);
+    let (c, _) = a.send_c(&b, b"after restart");
+    assert_eq!(b.recv(&c).unwrap().0, b"after restart");
+    // A version 1 session (no session ids) still loads.
+    let mut v1 = bytes[..SESSION_LEN_V1].to_vec();
+    v1[0] = 1;
+    let old = Session::from_bytes(&v1).unwrap();
+    assert!(old.receive_sid().is_none());
+    assert!(Session::from_bytes(&v1[..SESSION_LEN_V1 - 1]).is_none());
+}
+
+#[test]
+fn compact_many_sessions_open_under_the_right_one() {
+    let mut me = Peer::new();
+    let mut peers = vec![];
+    for _ in 0..40 {
+        let mut p = Peer::new();
+        p.knows(&me);
+        me.knows(&p);
+        let (c, _) = p.send_c(&me, b"hello");
+        me.recv(&c).unwrap();
+        let (c, _) = me.send_c(&p, b"hello back");
+        p.recv(&c).unwrap();
+        let (c, _) = p.send_c(&me, b"step");
+        me.recv(&c).unwrap();
+        peers.push(p);
+    }
+    for p in peers.iter_mut() {
+        for i in 0..5u8 {
+            let (c, _) = p.send_c(&me, &[i, 7, 7]);
+            assert_eq!(me.recv(&c).unwrap().0, vec![i, 7, 7]);
+        }
+    }
+}
+
+/// Random sends in both directions, loss with the router's retry of the
+/// same bytes (three tries, 20 % lost each), and a message that arrives after
+/// the next one with probability `swap` per mille. Returns
+/// (delivered, lost for good, did not open, overhead bytes sent).
+fn random_loss_run(compact: bool, swap: u32, seed: u64) -> (u32, u32, u32, usize) {
+    let (mut a, mut b) = compact_established();
+    let mut rng = TestRng(seed);
+    let (mut lost_for_good, mut delivered, mut bad, mut overhead) = (0, 0, 0, 0usize);
+    // (receiver is b, bytes, plaintext)
+    let mut held: Option<(bool, Vec<u8>, Vec<u8>)> = None;
+    let mut deliver = |a: &mut Peer, b: &mut Peer, m: (bool, Vec<u8>, Vec<u8>), delivered: &mut u32, bad: &mut u32| {
+        let (to_b, c, msg) = m;
+        match if to_b { b.recv(&c) } else { a.recv(&c) } {
+            Ok((x, _)) => {
+                assert_eq!(x, msg);
+                *delivered += 1;
+            }
+            Err(_) => *bad += 1,
+        }
+    };
+    for i in 0..600u32 {
+        let from_a = rng.next_u32() % 3 != 0;
+        let msg = format!("m{i}").into_bytes();
+        let c = match (from_a, compact) {
+            (true, true) => a.send_c(&b, &msg).0,
+            (false, true) => b.send_c(&a, &msg).0,
+            (true, false) => a.send(&b, &msg).0,
+            (false, false) => b.send(&a, &msg).0,
+        };
+        overhead += c.len() - msg.len();
+        if !(0..3).any(|_| rng.next_u32() % 5 != 0) {
+            lost_for_good += 1;
+            continue;
+        }
+        let m = (from_a, c, msg);
+        if held.is_none() && rng.next_u32() % 1000 < swap {
+            held = Some(m);
+            continue;
+        }
+        deliver(&mut a, &mut b, m, &mut delivered, &mut bad);
+        if let Some(h) = held.take() {
+            deliver(&mut a, &mut b, h, &mut delivered, &mut bad);
+        }
+    }
+    if let Some(h) = held.take() {
+        deliver(&mut a, &mut b, h, &mut delivered, &mut bad);
+    }
+    (delivered, lost_for_good, bad, overhead)
+}
+
+#[test]
+fn compact_random_loss_retry_and_reordering() {
+    for swap in [0u32, 50, 200] {
+        let mut c = (0, 0, 0, 0);
+        let mut l = (0, 0, 0, 0);
+        for seed in 0..30u64 {
+            let x = random_loss_run(true, swap, 1000 + seed);
+            let y = random_loss_run(false, swap, 1000 + seed);
+            c = (c.0 + x.0, c.1 + x.1, c.2 + x.2, c.3 + x.3);
+            l = (l.0 + y.0, l.1 + y.1, l.2 + y.2, l.3 + y.3);
+        }
+        println!(
+            "swap {swap:>3}/1000  compact: opened {} did not open {} ({:.2} %) overhead {:.1} B/msg   long: did not open {} overhead {:.1} B/msg",
+            c.0,
+            c.2,
+            100.0 * c.2 as f64 / (c.0 + c.2) as f64,
+            c.3 as f64 / (30.0 * 600.0 - c.1 as f64 + c.1 as f64),
+            l.2,
+            l.3 as f64 / (30.0 * 600.0)
+        );
+        // Compact adds well under a percent of unreadable messages on top of the
+        // ones the link loses for good (here 20 % loss, three tries each).
+        assert!(c.2 as f64 <= (c.0 + c.2) as f64 * 0.005, "compact loses too many at swap {swap}");
+    }
+}
+
+#[test]
+fn compact_known_lengths() {
+    let mut rng = TestRng(7);
+    let a = Identity::generate(&mut rng);
+    let b = Identity::generate(&mut rng);
+    let mut sa = Map::default();
+    let mut sb = Map::default();
+    let mut buf = [0u8; 255];
+    let pa = a.public();
+    let pb = b.public();
+    let (n, _) = seal_compact(&a, &pb, &mut sa, true, true, &mut rng, b"x", &mut buf).unwrap();
+    let mut out = [0u8; 255];
+    open(&b, &buf[..n], &mut sb, |x| (*x == a.address()).then_some(pa), &mut out).unwrap();
+    let (n, _) = seal_compact(&b, &pa, &mut sb, true, true, &mut rng, b"y", &mut buf).unwrap();
+    open(&a, &buf[..n], &mut sa, |x| (*x == b.address()).then_some(pb), &mut out).unwrap();
+    let mut lens = vec![];
+    for i in 0..5u8 {
+        let (n, _) = seal_compact(&a, &pb, &mut sa, true, true, &mut rng, &[i; 20], &mut buf).unwrap();
+        lens.push((buf[0], n));
+        open(&b, &buf[..n], &mut sb, |x| (*x == a.address()).then_some(pa), &mut out).unwrap();
+    }
+    assert_eq!(
+        lens,
+        vec![
+            (RATCHET, 20 + FS_OVERHEAD),
+            (RATCHET, 20 + FS_OVERHEAD),
+            (COMPACT, 20 + COMPACT_OVERHEAD),
+            (COMPACT, 20 + COMPACT_OVERHEAD),
+            (COMPACT, 20 + COMPACT_OVERHEAD)
+        ]
+    );
+}

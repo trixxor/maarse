@@ -1,0 +1,2868 @@
+{
+ "when": "2026-11-26",
+ "note": "airtime_round.mjs; engine of 2026-11-26",
+ "results": {
+  "car": {
+   "legacy": {
+    "scenario": "car",
+    "config": "legacy",
+    "seeds": 8,
+    "delivered": 97.06207902788167,
+    "airtime": 953.8580480000002,
+    "latency": 2.7428749999999997,
+    "by": {
+     "Ack": 135.374,
+     "Announce": 132.89937500000002,
+     "Data": 223.47312499999998,
+     "Hello": 142.7065,
+     "PathRequest": 261.50125,
+     "PathResponse": 55.95537499999999,
+     "Carry": 2.7632499999999998,
+     "KeyRequest": 0.51075
+    },
+    "secs": 0.437
+   },
+   "honest": {
+    "scenario": "car",
+    "config": "honest",
+    "seeds": 8,
+    "delivered": 80.69517902168579,
+    "airtime": 2425.963648,
+    "latency": 10.78825,
+    "by": {
+     "Ack": 208.483125,
+     "Announce": 139.67874999999998,
+     "Carry": 7.1025,
+     "Data": 817.7776250000002,
+     "Hello": 163.23700000000002,
+     "PathRequest": 919.7714999999998,
+     "PathResponse": 171.55225,
+     "KeyRequest": 1.105
+    },
+    "secs": 0.575
+   },
+   "preamble8": {
+    "scenario": "car",
+    "config": "preamble8",
+    "seeds": 8,
+    "delivered": 92.72562705706079,
+    "airtime": 1907.951104,
+    "latency": 4.191875,
+    "by": {
+     "Ack": 168.53975,
+     "Announce": 132.181,
+     "Carry": 6.8535,
+     "Data": 681.7738749999999,
+     "Hello": 141.49625,
+     "PathRequest": 684.1217499999999,
+     "PathResponse": 94.14650000000002,
+     "KeyRequest": 0.482375
+    },
+    "secs": 0.495
+   },
+   "lean_header": {
+    "scenario": "car",
+    "config": "lean_header",
+    "seeds": 8,
+    "delivered": 89.68412706055162,
+    "airtime": 2212.196736,
+    "latency": 12.398124999999999,
+    "by": {
+     "Ack": 170.415125,
+     "Announce": 140.211875,
+     "Carry": 9.70325,
+     "Data": 764.0198750000001,
+     "Hello": 135.333,
+     "PathRequest": 852.5295000000001,
+     "PathResponse": 141.651875,
+     "KeyRequest": 0.9855
+    },
+    "secs": 0.557
+   },
+   "session16": {
+    "scenario": "car",
+    "config": "session16",
+    "seeds": 8,
+    "delivered": 95.26599058888421,
+    "airtime": 1187.61408,
+    "latency": 3.104,
+    "by": {
+     "Ack": 152.155875,
+     "Announce": 139.785375,
+     "Carry": 3.3753749999999996,
+     "Data": 313.12662500000005,
+     "Hello": 165.298375,
+     "PathRequest": 341.367625,
+     "PathResponse": 72.82412500000001,
+     "KeyRequest": 1.105
+    },
+    "secs": 0.404
+   },
+   "jitter2s": {
+    "scenario": "car",
+    "config": "jitter2s",
+    "seeds": 8,
+    "delivered": 86.84518757734251,
+    "airtime": 2483.127936,
+    "latency": 9.5215,
+    "by": {
+     "Ack": 210.365625,
+     "Announce": 132.74812500000002,
+     "Carry": 8.380125,
+     "Data": 804.512875,
+     "Hello": 163.237,
+     "PathRequest": 977.0326249999998,
+     "PathResponse": 189.373,
+     "KeyRequest": 0.2925
+    },
+    "secs": 0.589
+   },
+   "jitter6s": {
+    "scenario": "car",
+    "config": "jitter6s",
+    "seeds": 8,
+    "delivered": 81.44088125225228,
+    "airtime": 2645.0949119999996,
+    "latency": 19.141625,
+    "by": {
+     "Ack": 190.53787499999999,
+     "Announce": 140.95825,
+     "Carry": 9.966375,
+     "Data": 850.3612499999999,
+     "Hello": 163.1175,
+     "PathRequest": 1040.977375,
+     "PathResponse": 249.527,
+     "KeyRequest": 2.6325
+    },
+    "secs": 1.04
+   },
+   "fwd70": {
+    "scenario": "car",
+    "config": "fwd70",
+    "seeds": 8,
+    "delivered": 86.32857665060581,
+    "airtime": 2248.9303040000004,
+    "latency": 13.51,
+    "by": {
+     "Ack": 192.49474999999998,
+     "Announce": 113.23575,
+     "Carry": 8.545875,
+     "Data": 758.78175,
+     "Hello": 163.59549999999996,
+     "PathRequest": 827.8080000000001,
+     "PathResponse": 184.78725,
+     "KeyRequest": 2.275
+    },
+    "secs": 0.668
+   },
+   "fwd50": {
+    "scenario": "car",
+    "config": "fwd50",
+    "seeds": 8,
+    "delivered": 87.11864398855248,
+    "airtime": 2127.660032,
+    "latency": 4.368499999999999,
+    "by": {
+     "Ack": 169.37625,
+     "Announce": 85.72649999999999,
+     "Carry": 5.325,
+     "Data": 706.507125,
+     "Hello": 163.625375,
+     "PathRequest": 832.3011250000001,
+     "PathResponse": 166.01825,
+     "KeyRequest": 1.2025
+    },
+    "secs": 0.595
+   },
+   "scope2": {
+    "scenario": "car",
+    "config": "scope2",
+    "seeds": 8,
+    "delivered": 84.625136068914,
+    "airtime": 2693.4388480000002,
+    "latency": 13.132250000000003,
+    "by": {
+     "Ack": 214.165125,
+     "Announce": 107.26475,
+     "Carry": 8.932125,
+     "Data": 874.9362500000001,
+     "Hello": 162.549875,
+     "PathRequest": 1118.806875,
+     "PathResponse": 208.93525,
+     "KeyRequest": 0.8775
+    },
+    "secs": 0.932
+   },
+   "warmup1800": {
+    "scenario": "car",
+    "config": "warmup1800",
+    "seeds": 8,
+    "delivered": 78.54215331849485,
+    "airtime": 2559.232256,
+    "latency": 11.833499999999999,
+    "by": {
+     "Ack": 201.083875,
+     "Announce": 157.911625,
+     "Carry": 8.708625,
+     "Data": 840.260375,
+     "Hello": 163.05775,
+     "KeyRequest": 8.905000000000001,
+     "PathRequest": 976.6437500000001,
+     "PathResponse": 205.587625
+    },
+    "secs": 0.915
+   },
+   "secure_all": {
+    "scenario": "car",
+    "config": "secure_all",
+    "seeds": 8,
+    "delivered": 95.38084789110962,
+    "airtime": 1161.5998720000002,
+    "latency": 2.83975,
+    "by": {
+     "Ack": 144.0445,
+     "Announce": 135.772875,
+     "Carry": 2.489375,
+     "Data": 319.23975,
+     "Hello": 113.9325,
+     "PathRequest": 365.46399999999994,
+     "PathResponse": 81.11475,
+     "KeyRequest": 1.2554999999999998
+    },
+    "secs": 0.604
+   },
+   "secure_all_jitter": {
+    "scenario": "car",
+    "config": "secure_all_jitter",
+    "seeds": 8,
+    "delivered": 97.11990479001174,
+    "airtime": 861.7867519999999,
+    "latency": 2.4770000000000003,
+    "by": {
+     "Ack": 103.023,
+     "Announce": 129.51274999999998,
+     "Carry": 5.13,
+     "Data": 221.78050000000002,
+     "Hello": 114.28312500000001,
+     "PathRequest": 247.34350000000003,
+     "PathResponse": 41.749875,
+     "KeyRequest": 0.20925
+    },
+    "secs": 0.419
+   }
+  },
+  "forest": {
+   "legacy": {
+    "scenario": "forest",
+    "config": "legacy",
+    "seeds": 6,
+    "delivered": 99.14285714285714,
+    "airtime": 630.3354879999999,
+    "latency": 1.1503333333333334,
+    "by": {
+     "Ack": 14.846,
+     "Announce": 151.20083333333332,
+     "Channel": 52.724999999999994,
+     "Data": 35.26416666666667,
+     "Hello": 48.616,
+     "KeyRequest": 8.7395,
+     "PathRequest": 278.58866666666665,
+     "PathResponse": 41.1165
+    },
+    "secs": 1.163
+   },
+   "honest": {
+    "scenario": "forest",
+    "config": "honest",
+    "seeds": 6,
+    "delivered": 98.93717948717949,
+    "airtime": 950.4453973333333,
+    "latency": 2.232333333333333,
+    "by": {
+     "Ack": 15.533666666666667,
+     "Announce": 169.88916666666668,
+     "Channel": 66.898,
+     "Data": 61.11266666666668,
+     "Hello": 58.435500000000005,
+     "KeyRequest": 11.309999999999999,
+     "PathRequest": 512.943,
+     "PathResponse": 55.18866666666668
+    },
+    "secs": 1.155
+   },
+   "preamble8": {
+    "scenario": "forest",
+    "config": "preamble8",
+    "seeds": 6,
+    "delivered": 98.76403845126138,
+    "airtime": 877.7728,
+    "latency": 1.7818333333333332,
+    "by": {
+     "Ack": 14.535,
+     "Announce": 153.80066666666667,
+     "Channel": 56.36333333333334,
+     "Data": 58.03000000000001,
+     "Hello": 48.37566666666667,
+     "KeyRequest": 9.458333333333334,
+     "PathRequest": 495.08850000000007,
+     "PathResponse": 42.7535
+    },
+    "secs": 1.437
+   },
+   "lean_header": {
+    "scenario": "forest",
+    "config": "lean_header",
+    "seeds": 6,
+    "delivered": 99.35698545196998,
+    "airtime": 860.2221226666667,
+    "latency": 1.8643333333333332,
+    "by": {
+     "Ack": 13.169999999999998,
+     "Announce": 172.59033333333335,
+     "Channel": 55.86866666666667,
+     "Data": 54.358000000000004,
+     "Hello": 48.345,
+     "KeyRequest": 9.125,
+     "PathRequest": 462.24466666666666,
+     "PathResponse": 45.27933333333333
+    },
+    "secs": 1.669
+   },
+   "session16": {
+    "scenario": "forest",
+    "config": "session16",
+    "seeds": 6,
+    "delivered": 99.35421208410143,
+    "airtime": 707.231232,
+    "latency": 1.246,
+    "by": {
+     "Ack": 15.443333333333333,
+     "Announce": 168.894,
+     "Channel": 56.35283333333333,
+     "Data": 37.055499999999995,
+     "Hello": 58.4355,
+     "KeyRequest": 8.84,
+     "PathRequest": 316.544,
+     "PathResponse": 46.424166666666665
+    },
+    "secs": 1.505
+   },
+   "jitter2s": {
+    "scenario": "forest",
+    "config": "jitter2s",
+    "seeds": 6,
+    "delivered": 97.91177933079427,
+    "airtime": 898.9047466666668,
+    "latency": 1.8655,
+    "by": {
+     "Ack": 14.942333333333334,
+     "Announce": 159.08450000000002,
+     "Channel": 50.9795,
+     "Data": 58.734500000000004,
+     "Hello": 57.79816666666667,
+     "KeyRequest": 10.963333333333333,
+     "PathRequest": 497.4193333333334,
+     "PathResponse": 49.79633333333334
+    },
+    "secs": 1.632
+   },
+   "jitter6s": {
+    "scenario": "forest",
+    "config": "jitter6s",
+    "seeds": 6,
+    "delivered": 99.05188765482883,
+    "airtime": 1000.0083626666667,
+    "latency": 2.1515,
+    "by": {
+     "Ack": 17.0165,
+     "Announce": 146.00516666666667,
+     "Channel": 67.5025,
+     "Data": 64.11800000000001,
+     "Hello": 56.08533333333333,
+     "KeyRequest": 9.403333333333334,
+     "PathRequest": 584.4213333333333,
+     "PathResponse": 56.36433333333333
+    },
+    "secs": 1.877
+   },
+   "fwd70": {
+    "scenario": "forest",
+    "config": "fwd70",
+    "seeds": 6,
+    "delivered": 95.9468157626433,
+    "airtime": 901.541888,
+    "latency": 1.6781666666666666,
+    "by": {
+     "Ack": 13.983500000000001,
+     "Announce": 141.88233333333335,
+     "Channel": 57.36033333333333,
+     "Data": 51.544,
+     "Hello": 56.44383333333334,
+     "KeyRequest": 22.749999999999996,
+     "PathRequest": 507.48199999999997,
+     "PathResponse": 50.95166666666667
+    },
+    "secs": 1.754
+   },
+   "fwd50": {
+    "scenario": "forest",
+    "config": "fwd50",
+    "seeds": 6,
+    "delivered": 91.66131244928269,
+    "airtime": 875.111936,
+    "latency": 1.8058333333333332,
+    "by": {
+     "Ack": 15.197666666666667,
+     "Announce": 139.18116666666668,
+     "Channel": 62.12916666666668,
+     "Data": 55.942166666666665,
+     "Hello": 58.83383333333333,
+     "KeyRequest": 33.019999999999996,
+     "PathRequest": 464.7149999999999,
+     "PathResponse": 46.96
+    },
+    "secs": 1.541
+   },
+   "scope2": {
+    "scenario": "forest",
+    "config": "scope2",
+    "seeds": 6,
+    "delivered": 98.18485713980081,
+    "airtime": 963.9946239999999,
+    "latency": 1.9976666666666667,
+    "by": {
+     "Ack": 15.842,
+     "Announce": 165.0555,
+     "Channel": 61.79333333333334,
+     "Data": 60.9245,
+     "Hello": 57.99733333333333,
+     "KeyRequest": 14.993333333333332,
+     "PathRequest": 534.8073333333333,
+     "PathResponse": 53.461999999999996
+    },
+    "secs": 1.695
+   },
+   "warmup1800": {
+    "scenario": "forest",
+    "config": "warmup1800",
+    "seeds": 6,
+    "delivered": 95.39473370426651,
+    "airtime": 897.928704,
+    "latency": 1.7804999999999997,
+    "by": {
+     "Ack": 14.880999999999998,
+     "Announce": 153.82433333333333,
+     "Channel": 66.96516666666668,
+     "Data": 56.1785,
+     "Hello": 56.96166666666667,
+     "KeyRequest": 9.836666666666666,
+     "PathRequest": 491.3975,
+     "PathResponse": 48.70916666666666
+    },
+    "secs": 1.557
+   },
+   "secure_all": {
+    "scenario": "forest",
+    "config": "secure_all",
+    "seeds": 6,
+    "delivered": 98.69636205928875,
+    "airtime": 551.9320746666667,
+    "latency": 1.0548333333333335,
+    "by": {
+     "Ack": 11.110000000000001,
+     "Announce": 157.08466666666666,
+     "Channel": 53.7915,
+     "Data": 31.889166666666668,
+     "Hello": 39.875,
+     "KeyRequest": 7.037,
+     "PathRequest": 223.01766666666666,
+     "PathResponse": 28.801000000000002
+    },
+    "secs": 1.255
+   },
+   "secure_all_jitter": {
+    "scenario": "forest",
+    "config": "secure_all_jitter",
+    "seeds": 6,
+    "delivered": 98.63419192874026,
+    "airtime": 545.7459200000001,
+    "latency": 0.9893333333333333,
+    "by": {
+     "Ack": 10.630833333333333,
+     "Announce": 150.10616666666667,
+     "Channel": 45.5665,
+     "Data": 29.838666666666672,
+     "Hello": 39.7375,
+     "KeyRequest": 6.293,
+     "PathRequest": 234.96233333333333,
+     "PathResponse": 29.28183333333333
+    },
+    "secs": 1.437
+   }
+  },
+  "national": {
+   "legacy": {
+    "scenario": "national",
+    "config": "legacy",
+    "seeds": 5,
+    "delivered": 85.0308924510243,
+    "airtime": 49069.6464384,
+    "latency": 3.6437999999999997,
+    "by": {
+     "Ack": 1346.17,
+     "Announce": 10714.2376,
+     "Channel": 469.53000000000003,
+     "Data": 41.638200000000005,
+     "Deposit": 4952.657999999999,
+     "Hello": 1400.5328,
+     "KeyRequest": 35.639,
+     "MailSync": 231.8256,
+     "PathRequest": 26980.0532,
+     "PathResponse": 2954.6497999999997
+    },
+    "secs": 56.352
+   },
+   "honest": {
+    "scenario": "national",
+    "config": "honest",
+    "seeds": 5,
+    "delivered": 83.3063476976476,
+    "airtime": 51392.28078080001,
+    "latency": 4.2452000000000005,
+    "by": {
+     "Ack": 1231.1518,
+     "Announce": 10554.8846,
+     "Channel": 569.9226,
+     "Data": 64.8048,
+     "Deposit": 4199.740400000001,
+     "Hello": 1573.9078,
+     "KeyRequest": 34.944,
+     "MailSync": 234.0862,
+     "PathRequest": 29946.7128,
+     "PathResponse": 3037.1982
+    },
+    "secs": 46.16
+   },
+   "preamble8": {
+    "scenario": "national",
+    "config": "preamble8",
+    "seeds": 5,
+    "delivered": 81.43361160958314,
+    "airtime": 51019.69080319999,
+    "latency": 5.565200000000001,
+    "by": {
+     "Ack": 1237.4652,
+     "Announce": 10492.623599999999,
+     "Channel": 575.7939999999999,
+     "Data": 52.46920000000001,
+     "Deposit": 4589.2144,
+     "Hello": 1387.2776,
+     "KeyRequest": 37.9544,
+     "MailSync": 235.92380000000003,
+     "PathRequest": 29685.761800000004,
+     "PathResponse": 2777.7577999999994
+    },
+    "secs": 53.973
+   },
+   "lean_header": {
+    "scenario": "national",
+    "config": "lean_header",
+    "seeds": 5,
+    "delivered": 83.1699357140139,
+    "airtime": 48923.165900800006,
+    "latency": 4.213,
+    "by": {
+     "Ack": 1230.0983999999999,
+     "Announce": 10966.6492,
+     "Channel": 555.6700000000001,
+     "Data": 80.0568,
+     "Deposit": 4733.7555999999995,
+     "Hello": 1355.5432,
+     "KeyRequest": 50.808,
+     "MailSync": 246.6678,
+     "PathRequest": 26915.886400000003,
+     "PathResponse": 2862.1538000000005
+    },
+    "secs": 51.199
+   },
+   "session16": {
+    "scenario": "national",
+    "config": "session16",
+    "seeds": 5,
+    "delivered": 85.10555933668233,
+    "airtime": 50572.102860800005,
+    "latency": 3.5453999999999994,
+    "by": {
+     "Ack": 1298.8087999999998,
+     "Announce": 10600.884399999999,
+     "Channel": 557.752,
+     "Data": 44.579,
+     "Deposit": 4437.0008,
+     "Hello": 1577.0178,
+     "KeyRequest": 48.724,
+     "MailSync": 250.80780000000001,
+     "PathRequest": 28536.7644,
+     "PathResponse": 3276.3866000000003
+    },
+    "secs": 49.785
+   },
+   "jitter2s": {
+    "scenario": "national",
+    "config": "jitter2s",
+    "seeds": 5,
+    "delivered": 81.81672446613081,
+    "airtime": 50496.137216,
+    "latency": 4.7094000000000005,
+    "by": {
+     "Ack": 1264.6195999999998,
+     "Announce": 10556.7444,
+     "Channel": 520.3536,
+     "Data": 66.8572,
+     "Deposit": 4318.7026,
+     "Hello": 1591.6530000000002,
+     "KeyRequest": 42.016,
+     "MailSync": 248.66840000000002,
+     "PathRequest": 29074.795,
+     "PathResponse": 2866.0238000000004
+    },
+    "secs": 52.74
+   },
+   "jitter6s": {
+    "scenario": "national",
+    "config": "jitter6s",
+    "seeds": 5,
+    "delivered": 83.14548287636563,
+    "airtime": 51073.481523200004,
+    "latency": 4.785,
+    "by": {
+     "Ack": 1212.493,
+     "Announce": 10880.076799999999,
+     "Channel": 497.6244,
+     "Data": 45.2184,
+     "Deposit": 4051.6625999999997,
+     "Hello": 1591.1782,
+     "KeyRequest": 28.548000000000002,
+     "MailSync": 258.591,
+     "PathRequest": 29694.6898,
+     "PathResponse": 2867.8632
+    },
+    "secs": 52.9
+   },
+   "fwd70": {
+    "scenario": "national",
+    "config": "fwd70",
+    "seeds": 5,
+    "delivered": 82.32324988899379,
+    "airtime": 50851.5874816,
+    "latency": 5.0648,
+    "by": {
+     "Ack": 1367.3868,
+     "Announce": 6052.6258,
+     "Channel": 622.4738,
+     "Data": 54.0208,
+     "Deposit": 4553.4133999999995,
+     "Hello": 1714.7631999999999,
+     "KeyRequest": 53.92399999999999,
+     "MailSync": 288.0124,
+     "PathRequest": 33100.3588,
+     "PathResponse": 3103.439
+    },
+    "secs": 53.933
+   },
+   "fwd50": {
+    "scenario": "national",
+    "config": "fwd50",
+    "seeds": 5,
+    "delivered": 81.3715902168421,
+    "airtime": 52088.6603776,
+    "latency": 4.3186,
+    "by": {
+     "Ack": 1516.656,
+     "Announce": 3505.5162,
+     "Channel": 642.3014000000001,
+     "Data": 64.4956,
+     "Deposit": 5168.9326,
+     "Hello": 1751.4338000000002,
+     "KeyRequest": 32.552,
+     "MailSync": 259.0914,
+     "PathRequest": 35725.890999999996,
+     "PathResponse": 3485.0504
+    },
+    "secs": 55.643
+   },
+   "scope2": {
+    "scenario": "national",
+    "config": "scope2",
+    "seeds": 5,
+    "delivered": 83.48315998901356,
+    "airtime": 50836.4797952,
+    "latency": 4.302,
+    "by": {
+     "Ack": 1429.1302,
+     "Announce": 4439.7482,
+     "Channel": 592.0876000000001,
+     "Data": 82.0496,
+     "Deposit": 4836.3012,
+     "Hello": 1708.9066,
+     "KeyRequest": 49.244,
+     "MailSync": 249.0584,
+     "PathRequest": 34286.9676,
+     "PathResponse": 3223.3741999999997
+    },
+    "secs": 53.686
+   },
+   "warmup1800": {
+    "scenario": "national",
+    "config": "warmup1800",
+    "seeds": 5,
+    "delivered": 82.19521530015257,
+    "airtime": 51203.4476032,
+    "latency": 4.3806,
+    "by": {
+     "Ack": 1292.8468,
+     "Announce": 10873.8614,
+     "Channel": 571.6958,
+     "Data": 72.06139999999999,
+     "Deposit": 4293.3982,
+     "Hello": 1610.2728000000002,
+     "KeyRequest": 44.356,
+     "MailSync": 250.38980000000004,
+     "PathRequest": 29213.264600000002,
+     "PathResponse": 3036.26
+    },
+    "secs": 53.076
+   },
+   "secure_all": {
+    "scenario": "national",
+    "config": "secure_all",
+    "seeds": 5,
+    "delivered": 88.20219787317565,
+    "airtime": 44648.9319424,
+    "latency": 2.9135999999999997,
+    "by": {
+     "Ack": 1221.6828,
+     "Announce": 11310.377,
+     "Channel": 558.1813999999999,
+     "Data": 48.14699999999999,
+     "Deposit": 4936.9134,
+     "Hello": 1176.7928000000002,
+     "KeyRequest": 40.659600000000005,
+     "MailSync": 232.3604,
+     "PathRequest": 22734.925000000003,
+     "PathResponse": 2448.8552
+    },
+    "secs": 61.638
+   },
+   "secure_all_jitter": {
+    "scenario": "national",
+    "config": "secure_all_jitter",
+    "seeds": 5,
+    "delivered": 86.59701665113622,
+    "airtime": 46642.514943999995,
+    "latency": 2.9078,
+    "by": {
+     "Ack": 1253.1771999999999,
+     "Announce": 11227.347600000001,
+     "Channel": 513.3058,
+     "Data": 28.9106,
+     "Deposit": 5691.7842,
+     "Hello": 1160.8986,
+     "KeyRequest": 30.9876,
+     "MailSync": 208.1772,
+     "PathRequest": 23814.807800000002,
+     "PathResponse": 2776.2048
+    },
+    "secs": 65.287
+   }
+  },
+  "outage": {
+   "legacy": {
+    "scenario": "outage",
+    "config": "legacy",
+    "seeds": 6,
+    "delivered": 39.07692307692308,
+    "airtime": 98623.09751466666,
+    "latency": 5.240833333333333,
+    "by": {
+     "Ack": 1688.0208333333335,
+     "Announce": 11320.817500000001,
+     "Channel": 456.8883333333333,
+     "Data": 8.420166666666667,
+     "Deposit": 7050.205000000001,
+     "Hello": 2351.0065,
+     "KeyRequest": 495.4653333333333,
+     "MailSync": 398.3345,
+     "PathRequest": 67928.58116666667,
+     "PathResponse": 7049.469833333333
+    },
+    "secs": 136.116
+   },
+   "honest": {
+    "scenario": "outage",
+    "config": "honest",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 99690.04612266668,
+    "latency": 6.441,
+    "by": {
+     "Ack": 1791.6495,
+     "Announce": 11048.594666666666,
+     "Channel": 553.8563333333333,
+     "Data": 17.477,
+     "Deposit": 7024.758666666666,
+     "Hello": 2696.5493333333334,
+     "KeyRequest": 488.3666666666667,
+     "MailSync": 418.908,
+     "PathRequest": 68654.8835,
+     "PathResponse": 7113.964833333333
+    },
+    "secs": 124.751
+   },
+   "preamble8": {
+    "scenario": "outage",
+    "config": "preamble8",
+    "seeds": 6,
+    "delivered": 36.66666666666667,
+    "airtime": 99219.61079466666,
+    "latency": 13.866333333333332,
+    "by": {
+     "Ack": 1729.2858333333334,
+     "Announce": 11163.435666666666,
+     "Channel": 458.7383333333334,
+     "Data": 37.37466666666667,
+     "Deposit": 7504.077666666666,
+     "Hello": 2360.935833333333,
+     "KeyRequest": 474.6191666666667,
+     "MailSync": 395.33816666666667,
+     "PathRequest": 68440.91016666667,
+     "PathResponse": 6776.014833333333
+    },
+    "secs": 140.655
+   },
+   "lean_header": {
+    "scenario": "outage",
+    "config": "lean_header",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 95768.62344533333,
+    "latency": 128.882,
+    "by": {
+     "Ack": 1737.0633333333333,
+     "Announce": 11685.266,
+     "Channel": 471.505,
+     "Data": 18.151333333333334,
+     "Deposit": 7735.85,
+     "Hello": 2276.057,
+     "KeyRequest": 469.6455,
+     "MailSync": 391.24783333333335,
+     "PathRequest": 63905.54233333333,
+     "PathResponse": 7262.895333333334
+    },
+    "secs": 147.246
+   },
+   "session16": {
+    "scenario": "outage",
+    "config": "session16",
+    "seeds": 6,
+    "delivered": 36.66666666666667,
+    "airtime": 99218.50197333332,
+    "latency": 6.1985,
+    "by": {
+     "Ack": 1791.1043333333332,
+     "Announce": 11354.621333333333,
+     "Channel": 501.4663333333333,
+     "Data": 15.564333333333334,
+     "Deposit": 7104.72,
+     "Hello": 2709.7305,
+     "KeyRequest": 562.0333333333333,
+     "MailSync": 422.67800000000005,
+     "PathRequest": 67645.89883333334,
+     "PathResponse": 7229.078666666666
+    },
+    "secs": 125.866
+   },
+   "jitter2s": {
+    "scenario": "outage",
+    "config": "jitter2s",
+    "seeds": 6,
+    "delivered": 37.07692307692308,
+    "airtime": 99875.89939200002,
+    "latency": 6.068166666666667,
+    "by": {
+     "Ack": 1757.3646666666668,
+     "Announce": 11415.361666666668,
+     "Channel": 451.4271666666667,
+     "Data": 26.31466666666667,
+     "Deposit": 6893.429666666666,
+     "Hello": 2720.5753333333337,
+     "KeyRequest": 484.6833333333334,
+     "MailSync": 407.9193333333334,
+     "PathRequest": 68631.56933333333,
+     "PathResponse": 7205.627
+    },
+    "secs": 95.766
+   },
+   "jitter6s": {
+    "scenario": "outage",
+    "config": "jitter6s",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 99595.76234666667,
+    "latency": 6.5665,
+    "by": {
+     "Ack": 1726.3733333333332,
+     "Announce": 11675.4385,
+     "Channel": 468.689,
+     "Data": 26.851,
+     "Deposit": 6974.7315,
+     "Hello": 2739.8508333333334,
+     "KeyRequest": 480.4366666666666,
+     "MailSync": 406.4966666666666,
+     "PathRequest": 68223.578,
+     "PathResponse": 6990.8550000000005
+    },
+    "secs": 85.368
+   },
+   "fwd70": {
+    "scenario": "outage",
+    "config": "fwd70",
+    "seeds": 6,
+    "delivered": 37.333333333333336,
+    "airtime": 98633.95601066668,
+    "latency": 116.35283333333334,
+    "by": {
+     "Ack": 1899.3035,
+     "Announce": 7108.878833333333,
+     "Channel": 462.7783333333333,
+     "Data": 36.692499999999995,
+     "Deposit": 7405.329,
+     "Hello": 2854.1578333333337,
+     "KeyRequest": 543.27,
+     "MailSync": 401.2246666666666,
+     "PathRequest": 70659.92566666666,
+     "PathResponse": 7383.803
+    },
+    "secs": 86.23
+   },
+   "fwd50": {
+    "scenario": "outage",
+    "config": "fwd50",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 98278.45034666665,
+    "latency": 14.161499999999998,
+    "by": {
+     "Ack": 1934.062,
+     "Announce": 4411.3335,
+     "Channel": 441.88949999999994,
+     "Data": 26.759833333333336,
+     "Deposit": 7654.816333333333,
+     "Hello": 2889.2758333333336,
+     "KeyRequest": 574.6433333333334,
+     "MailSync": 427.2008333333333,
+     "PathRequest": 72544.65883333333,
+     "PathResponse": 7497.853666666666
+    },
+    "secs": 89.931
+   },
+   "scope2": {
+    "scenario": "outage",
+    "config": "scope2",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 98224.700416,
+    "latency": 10.089166666666667,
+    "by": {
+     "Ack": 1967.1174999999998,
+     "Announce": 5802.276333333333,
+     "Channel": 436.31466666666665,
+     "Data": 33.12683333333333,
+     "Deposit": 7735.134666666667,
+     "Hello": 2853.9831666666664,
+     "KeyRequest": 502.58000000000004,
+     "MailSync": 405.2078333333333,
+     "PathRequest": 71253.898,
+     "PathResponse": 7357.084
+    },
+    "secs": 86.971
+   },
+   "warmup1800": {
+    "scenario": "outage",
+    "config": "warmup1800",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 99093.30653866667,
+    "latency": 6.331666666666666,
+    "by": {
+     "Ack": 1742.8241666666668,
+     "Announce": 10351.755166666666,
+     "Channel": 422.74699999999996,
+     "Data": 21.243333333333332,
+     "Deposit": 6747.359333333333,
+     "Hello": 2739.5461666666665,
+     "KeyRequest": 459.5066666666667,
+     "MailSync": 405.6623333333333,
+     "PathRequest": 69164.80966666667,
+     "PathResponse": 7156.3185
+    },
+    "secs": 85.593
+   },
+   "secure_all": {
+    "scenario": "outage",
+    "config": "secure_all",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 92716.542976,
+    "latency": 9.6985,
+    "by": {
+     "Ack": 1530.8145,
+     "Announce": 11690.436833333333,
+     "Channel": 393.59366666666665,
+     "Data": 24.478833333333334,
+     "Deposit": 8227.492166666667,
+     "Hello": 1931.0631666666668,
+     "KeyRequest": 456.041,
+     "MailSync": 321.30199999999996,
+     "PathRequest": 61013.41216666666,
+     "PathResponse": 7265.968
+    },
+    "secs": 112.916
+   },
+   "secure_all_jitter": {
+    "scenario": "outage",
+    "config": "secure_all_jitter",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 93171.96697600001,
+    "latency": 18.111333333333334,
+    "by": {
+     "Ack": 1618.5295,
+     "Announce": 11405.966833333334,
+     "Channel": 440.47616666666676,
+     "Data": 13.8495,
+     "Deposit": 8743.4865,
+     "Hello": 1931.7461666666666,
+     "KeyRequest": 462.67499999999995,
+     "MailSync": 317.4243333333333,
+     "PathRequest": 61129.33266666666,
+     "PathResponse": 7247.847666666667
+    },
+    "secs": 114.573
+   }
+  },
+  "town": {
+   "legacy": {
+    "scenario": "town",
+    "config": "legacy",
+    "seeds": 6,
+    "delivered": 61.44395976936723,
+    "airtime": 7807.475029333334,
+    "latency": 3.859166666666667,
+    "by": {
+     "Ack": 83.304,
+     "Announce": 1764.7556666666665,
+     "Channel": 86.14833333333334,
+     "Data": 17.57916666666667,
+     "Deposit": 656.1946666666668,
+     "Hello": 608.6006666666666,
+     "KeyRequest": 273.49716666666666,
+     "MailSync": 9.93833333333333,
+     "PathRequest": 3583.0316666666663,
+     "PathResponse": 734.0776666666667
+    },
+    "secs": 19.682
+   },
+   "honest": {
+    "scenario": "town",
+    "config": "honest",
+    "seeds": 6,
+    "delivered": 54.707616825637686,
+    "airtime": 8132.760234666668,
+    "latency": 4.602500000000001,
+    "by": {
+     "Ack": 61.950500000000005,
+     "Announce": 1623.0276666666668,
+     "Channel": 84.69716666666665,
+     "Data": 14.672833333333333,
+     "Deposit": 501.58599999999996,
+     "Hello": 676.8720000000001,
+     "KeyRequest": 274.51666666666665,
+     "MailSync": 7.479833333333334,
+     "PathRequest": 4228.2300000000005,
+     "PathResponse": 668.7745
+    },
+    "secs": 20.316
+   },
+   "preamble8": {
+    "scenario": "town",
+    "config": "preamble8",
+    "seeds": 6,
+    "delivered": 55.17597651231184,
+    "airtime": 8289.613312,
+    "latency": 4.481999999999999,
+    "by": {
+     "Ack": 58.681000000000004,
+     "Announce": 1729.2190000000003,
+     "Channel": 87.69,
+     "Data": 20.533,
+     "Deposit": 531.4526666666667,
+     "Hello": 604.1296666666667,
+     "KeyRequest": 280.6476666666667,
+     "MailSync": 7.098333333333333,
+     "PathRequest": 4353.143999999999,
+     "PathResponse": 625.2796666666667
+    },
+    "secs": 21.186
+   },
+   "lean_header": {
+    "scenario": "town",
+    "config": "lean_header",
+    "seeds": 6,
+    "delivered": 57.684995942264614,
+    "airtime": 7744.339967999999,
+    "latency": 4.473833333333333,
+    "by": {
+     "Ack": 74.84933333333333,
+     "Announce": 1700.0225,
+     "Channel": 79.097,
+     "Data": 24.729166666666664,
+     "Deposit": 622.3051666666668,
+     "Hello": 582.4615,
+     "KeyRequest": 253.091,
+     "MailSync": 7.637833333333333,
+     "PathRequest": 3773.4674999999997,
+     "PathResponse": 636.6891666666667
+    },
+    "secs": 20.127
+   },
+   "session16": {
+    "scenario": "town",
+    "config": "session16",
+    "seeds": 6,
+    "delivered": 57.59000837780063,
+    "airtime": 7912.523093333333,
+    "latency": 3.8315,
+    "by": {
+     "Ack": 78.17,
+     "Announce": 1691.4098333333336,
+     "Channel": 95.44383333333334,
+     "Data": 17.943666666666665,
+     "Deposit": 620.9458333333333,
+     "Hello": 690.5098333333334,
+     "KeyRequest": 295.9233333333333,
+     "MailSync": 7.998833333333334,
+     "PathRequest": 3670.293,
+     "PathResponse": 752.9485
+    },
+    "secs": 20.414
+   },
+   "jitter2s": {
+    "scenario": "town",
+    "config": "jitter2s",
+    "seeds": 6,
+    "delivered": 54.19234377189085,
+    "airtime": 8505.995605333334,
+    "latency": 5.015833333333333,
+    "by": {
+     "Ack": 57.83233333333333,
+     "Announce": 1745.2525,
+     "Channel": 91.61533333333333,
+     "Data": 19.98966666666667,
+     "Deposit": 472.22316666666666,
+     "Hello": 685.3075,
+     "KeyRequest": 288.5566666666667,
+     "MailSync": 6.284666666666667,
+     "PathRequest": 4465.770833333334,
+     "PathResponse": 682.5203333333333
+    },
+    "secs": 18.013
+   },
+   "jitter6s": {
+    "scenario": "town",
+    "config": "jitter6s",
+    "seeds": 6,
+    "delivered": 55.97584223296412,
+    "airtime": 8537.798655999999,
+    "latency": 4.746333333333332,
+    "by": {
+     "Ack": 63.4505,
+     "Announce": 1858.359,
+     "Channel": 103.16799999999999,
+     "Data": 19.350833333333334,
+     "Deposit": 474.8108333333334,
+     "Hello": 689.1210000000001,
+     "KeyRequest": 274.47333333333336,
+     "MailSync": 7.3756666666666675,
+     "PathRequest": 4389.643333333333,
+     "PathResponse": 667.3240000000001
+    },
+    "secs": 17.591
+   },
+   "fwd70": {
+    "scenario": "town",
+    "config": "fwd70",
+    "seeds": 6,
+    "delivered": 54.093196257615034,
+    "airtime": 7684.8054613333325,
+    "latency": 4.117500000000001,
+    "by": {
+     "Ack": 71.248,
+     "Announce": 1324.8643333333334,
+     "Channel": 83.75683333333333,
+     "Data": 19.1055,
+     "Deposit": 513.4736666666666,
+     "Hello": 672.327,
+     "KeyRequest": 286.7366666666667,
+     "MailSync": 5.901333333333333,
+     "PathRequest": 4053.950333333333,
+     "PathResponse": 662.4206666666666
+    },
+    "secs": 18.157
+   },
+   "fwd50": {
+    "scenario": "town",
+    "config": "fwd50",
+    "seeds": 6,
+    "delivered": 53.553760350075635,
+    "airtime": 7580.203349333333,
+    "latency": 4.064333333333334,
+    "by": {
+     "Ack": 67.87716666666667,
+     "Announce": 1200.7213333333334,
+     "Channel": 91.01083333333332,
+     "Data": 23.43566666666667,
+     "Deposit": 512.8803333333333,
+     "Hello": 680.1041666666667,
+     "KeyRequest": 288.94666666666666,
+     "MailSync": 7.899333333333334,
+     "PathRequest": 4058.629666666667,
+     "PathResponse": 657.7023333333333
+    },
+    "secs": 19.204
+   },
+   "scope2": {
+    "scenario": "town",
+    "config": "scope2",
+    "seeds": 6,
+    "delivered": 55.047461676554605,
+    "airtime": 7914.059605333333,
+    "latency": 4.259833333333334,
+    "by": {
+     "Ack": 68.85266666666666,
+     "Announce": 1334.1646666666666,
+     "Channel": 88.257,
+     "Data": 22.722166666666666,
+     "Deposit": 507.9008333333333,
+     "Hello": 669.3903333333334,
+     "KeyRequest": 255.06,
+     "MailSync": 5.2835,
+     "PathRequest": 4292.148166666667,
+     "PathResponse": 679.3533333333334
+    },
+    "secs": 18.832
+   },
+   "warmup1800": {
+    "scenario": "town",
+    "config": "warmup1800",
+    "seeds": 6,
+    "delivered": 52.76402496891768,
+    "airtime": 7867.768490666666,
+    "latency": 4.989,
+    "by": {
+     "Ack": 54.063333333333325,
+     "Announce": 1578.0539999999999,
+     "Channel": 80.3985,
+     "Data": 13.229666666666667,
+     "Deposit": 454.6551666666666,
+     "Hello": 680.0314999999999,
+     "KeyRequest": 296.9633333333333,
+     "MailSync": 8.601833333333333,
+     "PathRequest": 4068.0485000000003,
+     "PathResponse": 642.628
+    },
+    "secs": 19.702
+   },
+   "secure_all": {
+    "scenario": "town",
+    "config": "secure_all",
+    "seeds": 6,
+    "delivered": 64.6777791854501,
+    "airtime": 7080.927914666667,
+    "latency": 3.2415,
+    "by": {
+     "Ack": 105.25333333333333,
+     "Announce": 1787.757,
+     "Channel": 91.462,
+     "Data": 35.778666666666666,
+     "Deposit": 859.7090000000001,
+     "Hello": 509.61333333333334,
+     "KeyRequest": 216.442,
+     "MailSync": 8.9185,
+     "PathRequest": 2834.0446666666667,
+     "PathResponse": 641.2803333333334
+    },
+    "secs": 21.816
+   },
+   "secure_all_jitter": {
+    "scenario": "town",
+    "config": "secure_all_jitter",
+    "seeds": 6,
+    "delivered": 66.81557364817206,
+    "airtime": 7154.33216,
+    "latency": 3.2513333333333336,
+    "by": {
+     "Ack": 109.83083333333332,
+     "Announce": 1730.5573333333334,
+     "Channel": 95.95833333333333,
+     "Data": 36.32333333333333,
+     "Deposit": 894.2548333333333,
+     "Hello": 492.7978333333333,
+     "KeyRequest": 228.191,
+     "MailSync": 9.926333333333332,
+     "PathRequest": 2918.081833333333,
+     "PathResponse": 647.9646666666666
+    },
+    "secs": 20.556
+   }
+  }
+ },
+ "results2": {
+  "car": {
+   "honest": {
+    "scenario": "car",
+    "config": "honest",
+    "seeds": 8,
+    "delivered": 80.69517902168579,
+    "airtime": 2425.963648,
+    "latency": 10.78825,
+    "by": {
+     "Ack": 208.483125,
+     "Announce": 139.67874999999998,
+     "Carry": 7.1025,
+     "Data": 817.7776250000002,
+     "Hello": 163.23700000000002,
+     "PathRequest": 919.7714999999998,
+     "PathResponse": 171.55225,
+     "KeyRequest": 1.105
+    },
+    "secs": 0.646
+   },
+   "req_jit1s": {
+    "scenario": "car",
+    "config": "req_jit1s",
+    "seeds": 8,
+    "delivered": 91.57790917862489,
+    "airtime": 1909.5804160000002,
+    "latency": 7.765124999999999,
+    "by": {
+     "Ack": 169.14800000000002,
+     "Announce": 139.67874999999998,
+     "Carry": 3.49275,
+     "Data": 642.58825,
+     "Hello": 164.34237499999998,
+     "PathRequest": 663.431125,
+     "PathResponse": 128.05325,
+     "KeyRequest": 1.04
+    },
+    "secs": 0.488
+   },
+   "req_jit3s": {
+    "scenario": "car",
+    "config": "req_jit3s",
+    "seeds": 8,
+    "delivered": 85.30171702122355,
+    "airtime": 2408.0812800000003,
+    "latency": 6.9316249999999995,
+    "by": {
+     "Ack": 200.892875,
+     "Announce": 139.67874999999998,
+     "Carry": 7.443375,
+     "Data": 848.7806249999999,
+     "Hello": 163.685125,
+     "PathRequest": 840.6456250000001,
+     "PathResponse": 208.60375000000002,
+     "KeyRequest": 1.105
+    },
+    "secs": 0.557
+   },
+   "req_fwd80": {
+    "scenario": "car",
+    "config": "req_fwd80",
+    "seeds": 8,
+    "delivered": 89.2408599637679,
+    "airtime": 1756.384512,
+    "latency": 5.536250000000001,
+    "by": {
+     "Ack": 174.08,
+     "Announce": 139.67874999999998,
+     "Carry": 8.295375,
+     "Data": 649.082,
+     "Hello": 163.98387500000004,
+     "PathRequest": 535.5285,
+     "PathResponse": 86.648,
+     "KeyRequest": 1.105
+    },
+    "secs": 0.476
+   },
+   "req_fwd60": {
+    "scenario": "car",
+    "config": "req_fwd60",
+    "seeds": 8,
+    "delivered": 72.8998132242593,
+    "airtime": 1716.400384,
+    "latency": 10.360750000000001,
+    "by": {
+     "Ack": 181.54325,
+     "Announce": 139.67874999999998,
+     "Carry": 13.450125,
+     "Data": 729.82025,
+     "Hello": 164.13325000000003,
+     "PathRequest": 437.673625,
+     "PathResponse": 50.918124999999996,
+     "KeyRequest": 1.105
+    },
+    "secs": 0.502
+   },
+   "retry90": {
+    "scenario": "car",
+    "config": "retry90",
+    "seeds": 8,
+    "delivered": 76.68623233436149,
+    "airtime": 2479.1102720000004,
+    "latency": 18.086000000000002,
+    "by": {
+     "Ack": 194.681375,
+     "Announce": 140.638375,
+     "Carry": 7.8142499999999995,
+     "Data": 798.706375,
+     "Hello": 162.8785,
+     "PathRequest": 957.5027500000001,
+     "PathResponse": 218.308625,
+     "KeyRequest": 1.3975
+    },
+    "secs": 0.746
+   },
+   "retry20": {
+    "scenario": "car",
+    "config": "retry20",
+    "seeds": 8,
+    "delivered": 94.35111011541218,
+    "airtime": 1820.9646080000002,
+    "latency": 4.270125,
+    "by": {
+     "Ack": 162.34175,
+     "Announce": 139.67874999999998,
+     "Carry": 7.880249999999999,
+     "Data": 542.076625,
+     "Hello": 164.760625,
+     "PathRequest": 696.716875,
+     "PathResponse": 108.42099999999999,
+     "KeyRequest": 1.1375
+    },
+    "secs": 0.794
+   },
+   "tcpmail": {
+    "scenario": "car",
+    "config": "tcpmail",
+    "seeds": 8,
+    "delivered": 80.69517902168579,
+    "airtime": 2425.963648,
+    "latency": 10.78825,
+    "by": {
+     "Ack": 208.483125,
+     "Announce": 139.67874999999998,
+     "Carry": 7.1025,
+     "Data": 817.7776250000002,
+     "Hello": 163.23700000000002,
+     "PathRequest": 919.7714999999998,
+     "PathResponse": 171.55225,
+     "KeyRequest": 1.105
+    },
+    "secs": 0.966
+   },
+   "proxy": {
+    "scenario": "car",
+    "config": "proxy",
+    "seeds": 8,
+    "delivered": 80.69517902168579,
+    "airtime": 2425.963648,
+    "latency": 10.78825,
+    "by": {
+     "Ack": 208.483125,
+     "Announce": 139.67874999999998,
+     "Carry": 7.1025,
+     "Data": 817.7776250000002,
+     "Hello": 163.23700000000002,
+     "PathRequest": 919.7714999999998,
+     "PathResponse": 171.55225,
+     "KeyRequest": 1.105
+    },
+    "secs": 0.851
+   }
+  },
+  "forest": {
+   "honest": {
+    "scenario": "forest",
+    "config": "honest",
+    "seeds": 6,
+    "delivered": 98.93717948717949,
+    "airtime": 950.4453973333333,
+    "latency": 2.232333333333333,
+    "by": {
+     "Ack": 15.533666666666667,
+     "Announce": 169.88916666666668,
+     "Channel": 66.898,
+     "Data": 61.11266666666668,
+     "Hello": 58.435500000000005,
+     "KeyRequest": 11.309999999999999,
+     "PathRequest": 512.943,
+     "PathResponse": 55.18866666666668
+    },
+    "secs": 1.204
+   },
+   "req_jit1s": {
+    "scenario": "forest",
+    "config": "req_jit1s",
+    "seeds": 6,
+    "delivered": 98.5039189444908,
+    "airtime": 1014.4525653333334,
+    "latency": 2.3986666666666667,
+    "by": {
+     "Ack": 16.5855,
+     "Announce": 172.306,
+     "Channel": 63.80833333333333,
+     "Data": 67.7375,
+     "Hello": 58.11683333333333,
+     "KeyRequest": 9.966666666666667,
+     "PathRequest": 566.2963333333332,
+     "PathResponse": 60.55233333333334
+    },
+    "secs": 1.142
+   },
+   "req_jit3s": {
+    "scenario": "forest",
+    "config": "req_jit3s",
+    "seeds": 6,
+    "delivered": 98.89473058780858,
+    "airtime": 934.7510613333333,
+    "latency": 2.2973333333333334,
+    "by": {
+     "Ack": 17.889166666666664,
+     "Announce": 164.34466666666665,
+     "Channel": 58.2335,
+     "Data": 64.6055,
+     "Hello": 57.91766666666666,
+     "KeyRequest": 10.659999999999998,
+     "PathRequest": 503.4863333333333,
+     "PathResponse": 58.48416666666667
+    },
+    "secs": 1.338
+   },
+   "req_fwd80": {
+    "scenario": "forest",
+    "config": "req_fwd80",
+    "seeds": 6,
+    "delivered": 98.73344018756549,
+    "airtime": 851.4309119999999,
+    "latency": 1.8563333333333334,
+    "by": {
+     "Ack": 16.0605,
+     "Announce": 164.2025,
+     "Channel": 64.95016666666668,
+     "Data": 63.20933333333333,
+     "Hello": 57.51933333333333,
+     "KeyRequest": 10.096666666666666,
+     "PathRequest": 426.96250000000003,
+     "PathResponse": 49.220666666666666
+    },
+    "secs": 1.599
+   },
+   "req_fwd60": {
+    "scenario": "forest",
+    "config": "req_fwd60",
+    "seeds": 6,
+    "delivered": 97.76895876086029,
+    "airtime": 777.4598826666667,
+    "latency": 1.8706666666666665,
+    "by": {
+     "Ack": 16.179666666666666,
+     "Announce": 161.6435,
+     "Channel": 49.03166666666667,
+     "Data": 59.937666666666665,
+     "Hello": 58.35583333333333,
+     "KeyRequest": 7.063333333333334,
+     "PathRequest": 379.4348333333333,
+     "PathResponse": 46.541999999999994
+    },
+    "secs": 1.448
+   },
+   "retry90": {
+    "scenario": "forest",
+    "config": "retry90",
+    "seeds": 6,
+    "delivered": 98.27680662907342,
+    "airtime": 929.7457493333334,
+    "latency": 2.250166666666667,
+    "by": {
+     "Ack": 16.759,
+     "Announce": 164.91333333333336,
+     "Channel": 59.37533333333333,
+     "Data": 67.59266666666667,
+     "Hello": 57.39983333333334,
+     "KeyRequest": 12.74,
+     "PathRequest": 497.61216666666667,
+     "PathResponse": 54.21
+    },
+    "secs": 1.802
+   },
+   "retry20": {
+    "scenario": "forest",
+    "config": "retry20",
+    "seeds": 6,
+    "delivered": 99.35466556742843,
+    "airtime": 931.0006613333333,
+    "latency": 1.9348333333333334,
+    "by": {
+     "Ack": 14.942666666666666,
+     "Announce": 167.47233333333332,
+     "Channel": 60.24850000000001,
+     "Data": 60.10916666666667,
+     "Hello": 57.91766666666667,
+     "KeyRequest": 11.44,
+     "PathRequest": 503.25183333333325,
+     "PathResponse": 56.46816666666667
+    },
+    "secs": 1.873
+   },
+   "tcpmail": {
+    "scenario": "forest",
+    "config": "tcpmail",
+    "seeds": 6,
+    "delivered": 98.93717948717949,
+    "airtime": 950.4453973333333,
+    "latency": 2.232333333333333,
+    "by": {
+     "Ack": 15.533666666666667,
+     "Announce": 169.88916666666668,
+     "Channel": 66.898,
+     "Data": 61.11266666666668,
+     "Hello": 58.435500000000005,
+     "KeyRequest": 11.309999999999999,
+     "PathRequest": 512.943,
+     "PathResponse": 55.18866666666668
+    },
+    "secs": 1.46
+   },
+   "proxy": {
+    "scenario": "forest",
+    "config": "proxy",
+    "seeds": 6,
+    "delivered": 98.93717948717949,
+    "airtime": 950.4453973333333,
+    "latency": 2.232333333333333,
+    "by": {
+     "Ack": 15.533666666666667,
+     "Announce": 169.88916666666668,
+     "Channel": 66.898,
+     "Data": 61.11266666666668,
+     "Hello": 58.435500000000005,
+     "KeyRequest": 11.309999999999999,
+     "PathRequest": 512.943,
+     "PathResponse": 55.18866666666668
+    },
+    "secs": 1.403
+   }
+  },
+  "national": {
+   "honest": {
+    "scenario": "national",
+    "config": "honest",
+    "seeds": 5,
+    "delivered": 83.3063476976476,
+    "airtime": 51392.28078080001,
+    "latency": 4.2452000000000005,
+    "by": {
+     "Ack": 1231.1518,
+     "Announce": 10554.8846,
+     "Channel": 569.9226,
+     "Data": 64.8048,
+     "Deposit": 4199.740400000001,
+     "Hello": 1573.9078,
+     "KeyRequest": 34.944,
+     "MailSync": 234.0862,
+     "PathRequest": 29946.7128,
+     "PathResponse": 3037.1982
+    },
+    "secs": 53.004
+   },
+   "req_jit1s": {
+    "scenario": "national",
+    "config": "req_jit1s",
+    "seeds": 5,
+    "delivered": 81.75380414085078,
+    "airtime": 50414.219264,
+    "latency": 5.1218,
+    "by": {
+     "Ack": 1234.3393999999998,
+     "Announce": 10585.5322,
+     "Channel": 645.4448,
+     "Data": 37.434400000000004,
+     "Deposit": 4210.3062,
+     "Hello": 1586.386,
+     "KeyRequest": 41.548,
+     "MailSync": 237.53719999999998,
+     "PathRequest": 28927.6554,
+     "PathResponse": 2962.307
+    },
+    "secs": 53.383
+   },
+   "req_jit3s": {
+    "scenario": "national",
+    "config": "req_jit3s",
+    "seeds": 5,
+    "delivered": 83.41651887244602,
+    "airtime": 49984.6703104,
+    "latency": 5.8568,
+    "by": {
+     "Ack": 1138.5016,
+     "Announce": 10811.9126,
+     "Channel": 601.5178000000001,
+     "Data": 57.683199999999985,
+     "Deposit": 3847.5322,
+     "Hello": 1577.2146,
+     "KeyRequest": 38.584,
+     "MailSync": 262.2652,
+     "PathRequest": 28808.4428,
+     "PathResponse": 2894.56
+    },
+    "secs": 52.49
+   },
+   "req_fwd80": {
+    "scenario": "national",
+    "config": "req_fwd80",
+    "seeds": 5,
+    "delivered": 83.52937195402448,
+    "airtime": 45940.3763712,
+    "latency": 3.8422,
+    "by": {
+     "Ack": 1553.893,
+     "Announce": 11601.4578,
+     "Channel": 569.2778,
+     "Data": 85.401,
+     "Deposit": 4871.1854,
+     "Hello": 1658.3846,
+     "KeyRequest": 55.172,
+     "MailSync": 331.4966,
+     "PathRequest": 22317.7778,
+     "PathResponse": 2946.5263999999997
+    },
+    "secs": 46.162
+   },
+   "req_fwd60": {
+    "scenario": "national",
+    "config": "req_fwd60",
+    "seeds": 5,
+    "delivered": 83.30280909684984,
+    "airtime": 38163.513344,
+    "latency": 2.9842000000000004,
+    "by": {
+     "Ack": 1742.2136,
+     "Announce": 12715.1796,
+     "Channel": 732.3316,
+     "Data": 66.37,
+     "Deposit": 5098.643,
+     "Hello": 1713.909,
+     "KeyRequest": 61.204,
+     "MailSync": 401.2908,
+     "PathRequest": 13135.758,
+     "PathResponse": 2538.4398
+    },
+    "secs": 38.5
+   },
+   "retry90": {
+    "scenario": "national",
+    "config": "retry90",
+    "seeds": 5,
+    "delivered": 82.46216866365624,
+    "airtime": 50016.4831232,
+    "latency": 4.0182,
+    "by": {
+     "Ack": 1362.6996,
+     "Announce": 10796.270199999999,
+     "Channel": 678.5714,
+     "Data": 56.4896,
+     "Deposit": 4283.3306,
+     "Hello": 1581.2522000000001,
+     "KeyRequest": 35.152,
+     "MailSync": 262.1386,
+     "PathRequest": 28224.918199999996,
+     "PathResponse": 2789.6358
+    },
+    "secs": 48.654
+   },
+   "retry20": {
+    "scenario": "national",
+    "config": "retry20",
+    "seeds": 5,
+    "delivered": 85.5752203622958,
+    "airtime": 49378.63802879999,
+    "latency": 4.7652,
+    "by": {
+     "Ack": 1079.6360000000002,
+     "Announce": 10930.442200000001,
+     "Channel": 537.3602,
+     "Data": 62.563599999999994,
+     "Deposit": 3371.6323999999995,
+     "Hello": 1535.8690000000001,
+     "KeyRequest": 35.776,
+     "MailSync": 254.61860000000001,
+     "PathRequest": 28904.606199999995,
+     "PathResponse": 2717.7508
+    },
+    "secs": 44.544
+   },
+   "tcpmail": {
+    "scenario": "national",
+    "config": "tcpmail",
+    "seeds": 5,
+    "delivered": 90.65565282628074,
+    "airtime": 42988.654387200004,
+    "latency": 3.5532,
+    "by": {
+     "Ack": 859.5342,
+     "Announce": 12367.279199999999,
+     "Channel": 923.1923999999999,
+     "Data": 102.23720000000002,
+     "Deposit": 2337.0075999999995,
+     "Hello": 1660.8968,
+     "KeyRequest": 77.896,
+     "MailSync": 377.80659999999995,
+     "PathRequest": 22630.295400000003,
+     "PathResponse": 1694.6394
+    },
+    "secs": 35.287
+   },
+   "proxy": {
+    "scenario": "national",
+    "config": "proxy",
+    "seeds": 5,
+    "delivered": 81.83203594848925,
+    "airtime": 48922.385408,
+    "latency": 4.057,
+    "by": {
+     "Ack": 1369.5629999999999,
+     "Announce": 11072.5328,
+     "Channel": 560.2506,
+     "Data": 69.1016,
+     "Deposit": 5628.9334,
+     "Hello": 1600.379,
+     "KeyRequest": 38.22,
+     "MailSync": 297.13640000000004,
+     "PathRequest": 22678.0276,
+     "PathResponse": 5662.3045999999995
+    },
+    "secs": 45.845
+   }
+  },
+  "outage": {
+   "honest": {
+    "scenario": "outage",
+    "config": "honest",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 99690.04612266668,
+    "latency": 6.441,
+    "by": {
+     "Ack": 1791.6495,
+     "Announce": 11048.594666666666,
+     "Channel": 553.8563333333333,
+     "Data": 17.477,
+     "Deposit": 7024.758666666666,
+     "Hello": 2696.5493333333334,
+     "KeyRequest": 488.3666666666667,
+     "MailSync": 418.908,
+     "PathRequest": 68654.8835,
+     "PathResponse": 7113.964833333333
+    },
+    "secs": 107.299
+   },
+   "req_jit1s": {
+    "scenario": "outage",
+    "config": "req_jit1s",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 97786.71513600001,
+    "latency": 141.46083333333334,
+    "by": {
+     "Ack": 1699.7433333333333,
+     "Announce": 11306.888333333332,
+     "Channel": 489.8465,
+     "Data": 25.57,
+     "Deposit": 6617.093166666666,
+     "Hello": 2703.0398333333333,
+     "KeyRequest": 545.22,
+     "MailSync": 437.8055,
+     "PathRequest": 66883.0685,
+     "PathResponse": 7194.8099999999995
+    },
+    "secs": 112.963
+   },
+   "req_jit3s": {
+    "scenario": "outage",
+    "config": "req_jit3s",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 97105.98144,
+    "latency": 405.7263333333333,
+    "by": {
+     "Ack": 1752.668666666667,
+     "Announce": 11369.5305,
+     "Channel": 481.3163333333333,
+     "Data": 22.147666666666666,
+     "Deposit": 7015.9595,
+     "Hello": 2715.0215,
+     "KeyRequest": 514.9733333333334,
+     "MailSync": 414.7468333333333,
+     "PathRequest": 66019.943,
+     "PathResponse": 6914.773666666666
+    },
+    "secs": 117.846
+   },
+   "req_fwd80": {
+    "scenario": "outage",
+    "config": "req_fwd80",
+    "seeds": 6,
+    "delivered": 36.66666666666667,
+    "airtime": 86980.79624533333,
+    "latency": 8.531500000000001,
+    "by": {
+     "Ack": 2302.4948333333336,
+     "Announce": 12411.917833333333,
+     "Channel": 559.767,
+     "Data": 24.328333333333337,
+     "Deposit": 8547.523000000001,
+     "Hello": 2763.1123333333335,
+     "KeyRequest": 519.3499999999999,
+     "MailSync": 507.12183333333337,
+     "PathRequest": 52703.6745,
+     "PathResponse": 6746.46
+    },
+    "secs": 98.108
+   },
+   "req_fwd60": {
+    "scenario": "outage",
+    "config": "req_fwd60",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 73911.41870933333,
+    "latency": 6.421833333333333,
+    "by": {
+     "Ack": 2859.8818333333334,
+     "Announce": 14245.985166666667,
+     "Channel": 645.4716666666667,
+     "Data": 37.66233333333333,
+     "Deposit": 10300.002,
+     "Hello": 2842.0386666666664,
+     "KeyRequest": 664.7333333333333,
+     "MailSync": 594.4161666666666,
+     "PathRequest": 36261.76433333334,
+     "PathResponse": 5549.881833333334
+    },
+    "secs": 67.3
+   },
+   "retry90": {
+    "scenario": "outage",
+    "config": "retry90",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 97822.31995733334,
+    "latency": 39.798,
+    "by": {
+     "Ack": 2075.259666666667,
+     "Announce": 11476.317333333334,
+     "Channel": 460.09166666666664,
+     "Data": 24.87133333333333,
+     "Deposit": 8070.470333333334,
+     "Hello": 2723.453333333333,
+     "KeyRequest": 519.8266666666667,
+     "MailSync": 448.0385,
+     "PathRequest": 65123.374,
+     "PathResponse": 7017.217333333334
+    },
+    "secs": 84.751
+   },
+   "retry20": {
+    "scenario": "outage",
+    "config": "retry20",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 99345.455104,
+    "latency": 7.805666666666666,
+    "by": {
+     "Ack": 1336.0661666666667,
+     "Announce": 11392.977833333332,
+     "Channel": 454.9198333333334,
+     "Data": 14.498,
+     "Deposit": 5198.681166666667,
+     "Hello": 2674.9106666666667,
+     "KeyRequest": 469.38666666666666,
+     "MailSync": 408.05749999999995,
+     "PathRequest": 70353.0055,
+     "PathResponse": 7160.1
+    },
+    "secs": 85.41
+   },
+   "tcpmail": {
+    "scenario": "outage",
+    "config": "tcpmail",
+    "seeds": 6,
+    "delivered": 37.333333333333336,
+    "airtime": 75853.019136,
+    "latency": 118.93316666666666,
+    "by": {
+     "Ack": 2258.1808333333333,
+     "Announce": 14466.539,
+     "Channel": 780.8796666666667,
+     "Data": 48.70616666666667,
+     "Deposit": 8204.777,
+     "Hello": 2804.2085,
+     "KeyRequest": 818.35,
+     "MailSync": 574.6778333333333,
+     "PathRequest": 42349.89116666667,
+     "PathResponse": 3632.7513333333327
+    },
+    "secs": 60.401
+   },
+   "proxy": {
+    "scenario": "outage",
+    "config": "proxy",
+    "seeds": 6,
+    "delivered": 36,
+    "airtime": 100116.32401066666,
+    "latency": 6.089666666666667,
+    "by": {
+     "Ack": 1686.5551666666668,
+     "Announce": 11528.262166666667,
+     "Channel": 419.85883333333334,
+     "Data": 26.887999999999998,
+     "Deposit": 7973.3341666666665,
+     "Hello": 2685.8914999999997,
+     "KeyRequest": 481.9533333333334,
+     "MailSync": 455.7018333333333,
+     "PathRequest": 64745.952,
+     "PathResponse": 10233.233666666665
+    },
+    "secs": 87.382
+   }
+  },
+  "town": {
+   "honest": {
+    "scenario": "town",
+    "config": "honest",
+    "seeds": 6,
+    "delivered": 54.707616825637686,
+    "airtime": 8132.760234666668,
+    "latency": 4.602500000000001,
+    "by": {
+     "Ack": 61.950500000000005,
+     "Announce": 1623.0276666666668,
+     "Channel": 84.69716666666665,
+     "Data": 14.672833333333333,
+     "Deposit": 501.58599999999996,
+     "Hello": 676.8720000000001,
+     "KeyRequest": 274.51666666666665,
+     "MailSync": 7.479833333333334,
+     "PathRequest": 4228.2300000000005,
+     "PathResponse": 668.7745
+    },
+    "secs": 18.887
+   },
+   "req_jit1s": {
+    "scenario": "town",
+    "config": "req_jit1s",
+    "seeds": 6,
+    "delivered": 55.396366971506296,
+    "airtime": 8184.543744,
+    "latency": 5.124,
+    "by": {
+     "Ack": 65.41499999999999,
+     "Announce": 1660.1051666666667,
+     "Channel": 87.451,
+     "Data": 24.8005,
+     "Deposit": 463.7948333333333,
+     "Hello": 682.5883333333333,
+     "KeyRequest": 277.55,
+     "MailSync": 5.042666666666667,
+     "PathRequest": 4249.8975,
+     "PathResponse": 676.9631666666668
+    },
+    "secs": 19.896
+   },
+   "req_jit3s": {
+    "scenario": "town",
+    "config": "req_jit3s",
+    "seeds": 6,
+    "delivered": 55.93497029375746,
+    "airtime": 8150.240426666667,
+    "latency": 5.585333333333333,
+    "by": {
+     "Ack": 59.4985,
+     "Announce": 1666.0936666666666,
+     "Channel": 88.92866666666667,
+     "Data": 18.085833333333333,
+     "Deposit": 463.42499999999995,
+     "Hello": 683.7766666666666,
+     "KeyRequest": 271.96,
+     "MailSync": 9.440166666666666,
+     "PathRequest": 4231.1585000000005,
+     "PathResponse": 666.8866666666667
+    },
+    "secs": 18.624
+   },
+   "req_fwd80": {
+    "scenario": "town",
+    "config": "req_fwd80",
+    "seeds": 6,
+    "delivered": 55.5486467728101,
+    "airtime": 8040.971264,
+    "latency": 4.002666666666666,
+    "by": {
+     "Ack": 77.42366666666666,
+     "Announce": 1669.4636666666668,
+     "Channel": 92.95866666666667,
+     "Data": 23.581166666666668,
+     "Deposit": 511.4805,
+     "Hello": 688.4915000000001,
+     "KeyRequest": 276.7266666666667,
+     "MailSync": 7.4145,
+     "PathRequest": 4042.530166666667,
+     "PathResponse": 659.9993333333333
+    },
+    "secs": 20.252
+   },
+   "req_fwd60": {
+    "scenario": "town",
+    "config": "req_fwd60",
+    "seeds": 6,
+    "delivered": 56.18127678601802,
+    "airtime": 7772.381354666667,
+    "latency": 3.957,
+    "by": {
+     "Ack": 83.67166666666667,
+     "Announce": 1711.7536666666667,
+     "Channel": 108.94433333333335,
+     "Data": 24.8005,
+     "Deposit": 520.1636666666667,
+     "Hello": 694.568,
+     "KeyRequest": 291.6766666666667,
+     "MailSync": 10.649000000000001,
+     "PathRequest": 3715.3141666666666,
+     "PathResponse": 619.7513333333334
+    },
+    "secs": 19.708
+   },
+   "retry90": {
+    "scenario": "town",
+    "config": "retry90",
+    "seeds": 6,
+    "delivered": 56.73051435117907,
+    "airtime": 8036.601002666666,
+    "latency": 4.4585,
+    "by": {
+     "Ack": 73.51783333333334,
+     "Announce": 1659.1345,
+     "Channel": 94.43633333333332,
+     "Data": 22.055,
+     "Deposit": 524.6638333333333,
+     "Hello": 683.5411666666666,
+     "KeyRequest": 275.5133333333333,
+     "MailSync": 8.378499999999999,
+     "PathRequest": 4028.075,
+     "PathResponse": 676.2266666666667
+    },
+    "secs": 19.969
+   },
+   "retry20": {
+    "scenario": "town",
+    "config": "retry20",
+    "seeds": 6,
+    "delivered": 57.91462127423806,
+    "airtime": 8136.288768,
+    "latency": 4.130333333333333,
+    "by": {
+     "Ack": 70.94316666666667,
+     "Announce": 1652.9443333333331,
+     "Channel": 97.59316666666668,
+     "Data": 16.368333333333332,
+     "Deposit": 479.12699999999995,
+     "Hello": 683.8781666666666,
+     "KeyRequest": 287.64666666666665,
+     "MailSync": 6.751833333333333,
+     "PathRequest": 4151.387,
+     "PathResponse": 698.6461666666667
+    },
+    "secs": 20.167
+   },
+   "tcpmail": {
+    "scenario": "town",
+    "config": "tcpmail",
+    "seeds": 6,
+    "delivered": 54.707616825637686,
+    "airtime": 8132.760234666668,
+    "latency": 4.602500000000001,
+    "by": {
+     "Ack": 61.950500000000005,
+     "Announce": 1623.0276666666668,
+     "Channel": 84.69716666666665,
+     "Data": 14.672833333333333,
+     "Deposit": 501.58599999999996,
+     "Hello": 676.8720000000001,
+     "KeyRequest": 274.51666666666665,
+     "MailSync": 7.479833333333334,
+     "PathRequest": 4228.2300000000005,
+     "PathResponse": 668.7745
+    },
+    "secs": 19.649
+   },
+   "proxy": {
+    "scenario": "town",
+    "config": "proxy",
+    "seeds": 6,
+    "delivered": 54.65034427946392,
+    "airtime": 8138.945706666667,
+    "latency": 4.665166666666667,
+    "by": {
+     "Ack": 61.5125,
+     "Announce": 1625.8780000000002,
+     "Channel": 84.15983333333332,
+     "Data": 14.240166666666667,
+     "Deposit": 502.71199999999993,
+     "Hello": 677.5058333333334,
+     "KeyRequest": 273.08666666666664,
+     "MailSync": 7.339833333333333,
+     "PathRequest": 4234.254500000001,
+     "PathResponse": 667.3083333333334
+    },
+    "secs": 20.511
+   }
+  }
+ },
+ "results3_tcponly_8seeds": {
+  "car": {
+   "legacy": {
+    "scenario": "car",
+    "config": "legacy",
+    "seeds": 8,
+    "delivered": 97.06207902788167,
+    "airtime": 953.8580480000002,
+    "latency": 2.7428749999999997,
+    "by": {
+     "Ack": 135.374,
+     "Announce": 132.89937500000002,
+     "Data": 223.47312499999998,
+     "Hello": 142.7065,
+     "PathRequest": 261.50125,
+     "PathResponse": 55.95537499999999,
+     "Carry": 2.7632499999999998,
+     "KeyRequest": 0.51075
+    },
+    "secs": 0.445
+   },
+   "honest": {
+    "scenario": "car",
+    "config": "honest",
+    "seeds": 8,
+    "delivered": 80.69517902168579,
+    "airtime": 2425.963648,
+    "latency": 10.78825,
+    "by": {
+     "Ack": 208.483125,
+     "Announce": 139.67874999999998,
+     "Carry": 7.1025,
+     "Data": 817.7776250000002,
+     "Hello": 163.23700000000002,
+     "PathRequest": 919.7714999999998,
+     "PathResponse": 171.55225,
+     "KeyRequest": 1.105
+    },
+    "secs": 0.58
+   },
+   "compact": {
+    "scenario": "car",
+    "config": "compact",
+    "seeds": 8,
+    "delivered": 91.0405601959495,
+    "airtime": 1689.559936,
+    "latency": 5.110625,
+    "by": {
+     "Ack": 232.843,
+     "Announce": 141.704625,
+     "Data": 493.61024999999995,
+     "Hello": 164.73074999999997,
+     "PathRequest": 543.803875,
+     "PathResponse": 108.18087500000001,
+     "Carry": 5.117875,
+     "KeyRequest": 1.69
+    },
+    "secs": 0.481
+   },
+   "c_pre8": {
+    "scenario": "car",
+    "config": "c_pre8",
+    "seeds": 8,
+    "delivered": 93.37461039219772,
+    "airtime": 1391.82592,
+    "latency": 2.9401249999999997,
+    "by": {
+     "Ack": 165.82937500000003,
+     "Announce": 132.181,
+     "Data": 421.246,
+     "Hello": 142.08849999999998,
+     "PathRequest": 437.115625,
+     "PathResponse": 90.67687500000002,
+     "Carry": 3.71675,
+     "KeyRequest": 0.51075
+    },
+    "secs": 0.445
+   },
+   "c_pre8_req": {
+    "scenario": "car",
+    "config": "c_pre8_req",
+    "seeds": 8,
+    "delivered": 96.86703682210869,
+    "airtime": 1102.4145919999999,
+    "latency": 3.45475,
+    "by": {
+     "Ack": 138.938375,
+     "Announce": 134.95187500000003,
+     "Data": 330.243875,
+     "Hello": 142.73225,
+     "PathRequest": 310.159875,
+     "PathResponse": 39.888875000000006,
+     "Carry": 5.4963750000000005,
+     "KeyRequest": 1.2485
+    },
+    "secs": 0.405
+   },
+   "c_pre8_req_lean": {
+    "scenario": "car",
+    "config": "c_pre8_req_lean",
+    "seeds": 8,
+    "delivered": 97.32676411577265,
+    "airtime": 945.3943039999999,
+    "latency": 3.2755,
+    "by": {
+     "Ack": 106.55162499999999,
+     "Announce": 138.3385,
+     "Carry": 4.359875,
+     "Data": 292.662875,
+     "Hello": 114.26249999999999,
+     "PathRequest": 253.8095,
+     "PathResponse": 34.63575,
+     "KeyRequest": 2.0692500000000003
+    },
+    "secs": 0.397
+   }
+  },
+  "forest": {
+   "legacy": {
+    "scenario": "forest",
+    "config": "legacy",
+    "seeds": 6,
+    "delivered": 99.14285714285714,
+    "airtime": 630.3354879999999,
+    "latency": 1.1503333333333334,
+    "by": {
+     "Ack": 14.846,
+     "Announce": 151.20083333333332,
+     "Channel": 52.724999999999994,
+     "Data": 35.26416666666667,
+     "Hello": 48.616,
+     "KeyRequest": 8.7395,
+     "PathRequest": 278.58866666666665,
+     "PathResponse": 41.1165
+    },
+    "secs": 1.178
+   },
+   "honest": {
+    "scenario": "forest",
+    "config": "honest",
+    "seeds": 6,
+    "delivered": 98.93717948717949,
+    "airtime": 950.4453973333333,
+    "latency": 2.232333333333333,
+    "by": {
+     "Ack": 15.533666666666667,
+     "Announce": 169.88916666666668,
+     "Channel": 66.898,
+     "Data": 61.11266666666668,
+     "Hello": 58.435500000000005,
+     "KeyRequest": 11.309999999999999,
+     "PathRequest": 512.943,
+     "PathResponse": 55.18866666666668
+    },
+    "secs": 1.158
+   },
+   "compact": {
+    "scenario": "forest",
+    "config": "compact",
+    "seeds": 6,
+    "delivered": 98.64435535100021,
+    "airtime": 788.8013653333333,
+    "latency": 1.4713333333333334,
+    "by": {
+     "Ack": 16.548333333333336,
+     "Announce": 168.894,
+     "Channel": 62.868,
+     "Data": 46.97916666666667,
+     "Hello": 57.678666666666665,
+     "KeyRequest": 10.833333333333332,
+     "PathRequest": 376.20616666666666,
+     "PathResponse": 49.48866666666667
+    },
+    "secs": 1.165
+   },
+   "c_pre8": {
+    "scenario": "forest",
+    "config": "c_pre8",
+    "seeds": 6,
+    "delivered": 99.11402269073498,
+    "airtime": 683.3706666666667,
+    "latency": 1.286,
+    "by": {
+     "Ack": 13.896333333333333,
+     "Announce": 150.6535,
+     "Channel": 56.98,
+     "Data": 39.561166666666665,
+     "Hello": 48.85633333333333,
+     "KeyRequest": 8.209833333333332,
+     "PathRequest": 327.4895,
+     "PathResponse": 38.206
+    },
+    "secs": 1.483
+   },
+   "c_pre8_req": {
+    "scenario": "forest",
+    "config": "c_pre8_req",
+    "seeds": 6,
+    "delivered": 97.300369994075,
+    "airtime": 686.3122773333333,
+    "latency": 1.4196666666666666,
+    "by": {
+     "Ack": 14.650333333333334,
+     "Announce": 154.34799999999998,
+     "Channel": 52.355000000000004,
+     "Data": 45.07,
+     "Hello": 48.616,
+     "KeyRequest": 8.399000000000001,
+     "PathRequest": 324.22,
+     "PathResponse": 39.159333333333336
+    },
+    "secs": 1.83
+   },
+   "c_pre8_req_lean": {
+    "scenario": "forest",
+    "config": "c_pre8_req_lean",
+    "seeds": 6,
+    "delivered": 98.91005598338499,
+    "airtime": 614.7116373333333,
+    "latency": 1.4356666666666666,
+    "by": {
+     "Ack": 12.592499999999998,
+     "Announce": 163.51583333333332,
+     "Channel": 49.29516666666667,
+     "Data": 43.086999999999996,
+     "Hello": 40.2325,
+     "KeyRequest": 7.502,
+     "PathRequest": 266.67116666666664,
+     "PathResponse": 32.667833333333334
+    },
+    "secs": 1.587
+   }
+  },
+  "national": {
+   "legacy": {
+    "scenario": "national",
+    "config": "legacy",
+    "seeds": 5,
+    "delivered": 93.39822369508883,
+    "airtime": 37607.6703744,
+    "latency": 2.2494,
+    "by": {
+     "Ack": 884.6472,
+     "Announce": 12272.863800000001,
+     "Channel": 701.8900000000001,
+     "Data": 51.437999999999995,
+     "Deposit": 2778.8016,
+     "Hello": 1455.1236,
+     "KeyRequest": 69.3258,
+     "MailSync": 347.3122,
+     "PathRequest": 17421.3988,
+     "PathResponse": 1665.9514
+    },
+    "secs": 35.865
+   },
+   "honest": {
+    "scenario": "national",
+    "config": "honest",
+    "seeds": 5,
+    "delivered": 90.65565282628074,
+    "airtime": 42988.654387200004,
+    "latency": 3.5532,
+    "by": {
+     "Ack": 859.5342,
+     "Announce": 12367.279199999999,
+     "Channel": 923.1923999999999,
+     "Data": 102.23720000000002,
+     "Deposit": 2337.0075999999995,
+     "Hello": 1660.8968,
+     "KeyRequest": 77.896,
+     "MailSync": 377.80659999999995,
+     "PathRequest": 22630.295400000003,
+     "PathResponse": 1694.6394
+    },
+    "secs": 35.663
+   },
+   "compact": {
+    "scenario": "national",
+    "config": "compact",
+    "seeds": 5,
+    "delivered": 90.96212069717825,
+    "airtime": 41772.1468928,
+    "latency": 3.1184,
+    "by": {
+     "Ack": 887.9154000000001,
+     "Announce": 12418.759,
+     "Channel": 906.5888,
+     "Data": 85.2958,
+     "Deposit": 2514.0914000000002,
+     "Hello": 1685.7507999999998,
+     "KeyRequest": 66.71600000000001,
+     "MailSync": 392.5782,
+     "PathRequest": 21086.6594,
+     "PathResponse": 1768.6252000000002
+    },
+    "secs": 38.243
+   },
+   "c_pre8": {
+    "scenario": "national",
+    "config": "c_pre8",
+    "seeds": 5,
+    "delivered": 90.47047614049025,
+    "airtime": 41848.154112000004,
+    "latency": 3.085,
+    "by": {
+     "Ack": 876.972,
+     "Announce": 12005.1816,
+     "Channel": 782.846,
+     "Data": 59.010000000000005,
+     "Deposit": 2789.9719999999998,
+     "Hello": 1445.4533999999999,
+     "KeyRequest": 70.2338,
+     "MailSync": 364.31339999999994,
+     "PathRequest": 21832.3738,
+     "PathResponse": 1659.8379999999997
+    },
+    "secs": 42.887
+   },
+   "c_pre8_req": {
+    "scenario": "national",
+    "config": "c_pre8_req",
+    "seeds": 5,
+    "delivered": 92.74757556213709,
+    "airtime": 34430.7070976,
+    "latency": 2.5682,
+    "by": {
+     "Ack": 868.4258,
+     "Announce": 12908.621,
+     "Channel": 885.7060000000001,
+     "Data": 56.863400000000006,
+     "Deposit": 2455.7718,
+     "Hello": 1415.7914,
+     "KeyRequest": 65.5122,
+     "MailSync": 383.4234,
+     "PathRequest": 13972.748800000001,
+     "PathResponse": 1449.6014
+    },
+    "secs": 33.706
+   },
+   "c_pre8_req_lean": {
+    "scenario": "national",
+    "config": "c_pre8_req_lean",
+    "seeds": 5,
+    "delivered": 92.5418383379422,
+    "airtime": 32691.9139328,
+    "latency": 2.252,
+    "by": {
+     "Ack": 820.3558,
+     "Announce": 13502.4346,
+     "Channel": 658.5264,
+     "Data": 56.90220000000001,
+     "Deposit": 2652.8856,
+     "Hello": 1161.8848,
+     "KeyRequest": 100.5144,
+     "MailSync": 320.283,
+     "PathRequest": 12144.154400000001,
+     "PathResponse": 1313.6727999999998
+    },
+    "secs": 37.319
+   }
+  },
+  "outage": {
+   "legacy": {
+    "scenario": "outage",
+    "config": "legacy",
+    "seeds": 6,
+    "delivered": 38,
+    "airtime": 70145.54112000001,
+    "latency": 4.7725,
+    "by": {
+     "Ack": 2141.067666666667,
+     "Announce": 13864.657833333333,
+     "Channel": 633.995,
+     "Data": 22.08383333333333,
+     "Deposit": 8382.211166666666,
+     "Hello": 2442.3198333333335,
+     "KeyRequest": 718.3793333333333,
+     "MailSync": 543.0706666666667,
+     "PathRequest": 38153.204999999994,
+     "PathResponse": 3330.7721666666666
+    },
+    "secs": 90.055
+   },
+   "honest": {
+    "scenario": "outage",
+    "config": "honest",
+    "seeds": 6,
+    "delivered": 37.333333333333336,
+    "airtime": 75853.019136,
+    "latency": 118.93316666666666,
+    "by": {
+     "Ack": 2258.1808333333333,
+     "Announce": 14466.539,
+     "Channel": 780.8796666666667,
+     "Data": 48.70616666666667,
+     "Deposit": 8204.777,
+     "Hello": 2804.2085,
+     "KeyRequest": 818.35,
+     "MailSync": 574.6778333333333,
+     "PathRequest": 42349.89116666667,
+     "PathResponse": 3632.7513333333327
+    },
+    "secs": 84.392
+   },
+   "compact": {
+    "scenario": "outage",
+    "config": "compact",
+    "seeds": 6,
+    "delivered": 38,
+    "airtime": 75675.17013333333,
+    "latency": 238.607,
+    "by": {
+     "Ack": 2310.0071666666663,
+     "Announce": 14318.580666666667,
+     "Channel": 764.8268333333333,
+     "Data": 21.59883333333333,
+     "Deposit": 8211.842333333334,
+     "Hello": 2799.214333333333,
+     "KeyRequest": 866.4933333333333,
+     "MailSync": 595.9923333333334,
+     "PathRequest": 42089.67016666666,
+     "PathResponse": 3782.905
+    },
+    "secs": 77.069
+   },
+   "c_pre8": {
+    "scenario": "outage",
+    "config": "c_pre8",
+    "seeds": 6,
+    "delivered": 38,
+    "airtime": 70056.18193066666,
+    "latency": 6.370166666666666,
+    "by": {
+     "Ack": 2145.5583333333334,
+     "Announce": 13821.9375,
+     "Channel": 719.7116666666666,
+     "Data": 14.704833333333333,
+     "Deposit": 8208.283666666666,
+     "Hello": 2437.7733333333335,
+     "KeyRequest": 708.467,
+     "MailSync": 544.7448333333333,
+     "PathRequest": 38300.88216666667,
+     "PathResponse": 3232.649333333333
+    },
+    "secs": 62.68
+   },
+   "c_pre8_req": {
+    "scenario": "outage",
+    "config": "c_pre8_req",
+    "seeds": 6,
+    "delivered": 36.66666666666667,
+    "airtime": 62150.36433066667,
+    "latency": 6.2509999999999994,
+    "by": {
+     "Ack": 2464.3395,
+     "Announce": 15641.558166666666,
+     "Channel": 772.6833333333334,
+     "Data": 25.1585,
+     "Deposit": 9447.061666666668,
+     "Hello": 2456.997,
+     "KeyRequest": 799.7588333333333,
+     "MailSync": 612.1803333333334,
+     "PathRequest": 26999.85083333333,
+     "PathResponse": 3001.0095
+    },
+    "secs": 56.561
+   },
+   "c_pre8_req_lean": {
+    "scenario": "outage",
+    "config": "c_pre8_req_lean",
+    "seeds": 6,
+    "delivered": 36.666666666666664,
+    "airtime": 58196.26171733333,
+    "latency": 5.427666666666666,
+    "by": {
+     "Ack": 2398.8733333333334,
+     "Announce": 16081.347666666665,
+     "Channel": 683.004,
+     "Data": 21.493333333333332,
+     "Deposit": 10833.764833333335,
+     "Hello": 1988.2261666666666,
+     "KeyRequest": 713.248,
+     "MailSync": 522.1826666666667,
+     "PathRequest": 22343.399166666666,
+     "PathResponse": 2689.9565
+    },
+    "secs": 61.824
+   }
+  },
+  "town": {
+   "legacy": {
+    "scenario": "town",
+    "config": "legacy",
+    "seeds": 6,
+    "delivered": 61.44395976936723,
+    "airtime": 7807.475029333334,
+    "latency": 3.859166666666667,
+    "by": {
+     "Ack": 83.304,
+     "Announce": 1764.7556666666665,
+     "Channel": 86.14833333333334,
+     "Data": 17.57916666666667,
+     "Deposit": 656.1946666666668,
+     "Hello": 608.6006666666666,
+     "KeyRequest": 273.49716666666666,
+     "MailSync": 9.93833333333333,
+     "PathRequest": 3583.0316666666663,
+     "PathResponse": 734.0776666666667
+    },
+    "secs": 20.584
+   },
+   "honest": {
+    "scenario": "town",
+    "config": "honest",
+    "seeds": 6,
+    "delivered": 54.707616825637686,
+    "airtime": 8132.760234666668,
+    "latency": 4.602500000000001,
+    "by": {
+     "Ack": 61.950500000000005,
+     "Announce": 1623.0276666666668,
+     "Channel": 84.69716666666665,
+     "Data": 14.672833333333333,
+     "Deposit": 501.58599999999996,
+     "Hello": 676.8720000000001,
+     "KeyRequest": 274.51666666666665,
+     "MailSync": 7.479833333333334,
+     "PathRequest": 4228.2300000000005,
+     "PathResponse": 668.7745
+    },
+    "secs": 16.736
+   },
+   "compact": {
+    "scenario": "town",
+    "config": "compact",
+    "seeds": 6,
+    "delivered": 57.51182534809236,
+    "airtime": 7922.049706666667,
+    "latency": 3.959166666666667,
+    "by": {
+     "Ack": 78.41549999999998,
+     "Announce": 1668.9055,
+     "Channel": 99.54100000000001,
+     "Data": 21.8855,
+     "Deposit": 544.6923333333333,
+     "Hello": 684.6521666666667,
+     "KeyRequest": 299.6066666666666,
+     "MailSync": 7.670333333333335,
+     "PathRequest": 3797.7736666666665,
+     "PathResponse": 727.8805
+    },
+    "secs": 19.132
+   },
+   "c_pre8": {
+    "scenario": "town",
+    "config": "c_pre8",
+    "seeds": 6,
+    "delivered": 58.747566461792445,
+    "airtime": 7805.750954666666,
+    "latency": 3.9378333333333337,
+    "by": {
+     "Ack": 77.855,
+     "Announce": 1724.8070000000002,
+     "Channel": 90.83500000000001,
+     "Data": 19.0765,
+     "Deposit": 615.8695,
+     "Hello": 609.775,
+     "KeyRequest": 271.15150000000006,
+     "MailSync": 9.607833333333334,
+     "PathRequest": 3698.7535000000003,
+     "PathResponse": 695.7398333333332
+    },
+    "secs": 20.134
+   },
+   "c_pre8_req": {
+    "scenario": "town",
+    "config": "c_pre8_req",
+    "seeds": 6,
+    "delivered": 66.71159082094151,
+    "airtime": 7574.807381333332,
+    "latency": 3.5934999999999997,
+    "by": {
+     "Ack": 83.90533333333333,
+     "Announce": 1870.164,
+     "Channel": 106.92999999999999,
+     "Data": 24.320833333333333,
+     "Deposit": 530.4421666666667,
+     "Hello": 627.4425,
+     "KeyRequest": 319.162,
+     "MailSync": 8.0475,
+     "PathRequest": 3354.9003333333335,
+     "PathResponse": 656.945
+    },
+    "secs": 18.946
+   },
+   "c_pre8_req_lean": {
+    "scenario": "town",
+    "config": "c_pre8_req_lean",
+    "seeds": 6,
+    "delivered": 69.34571872759354,
+    "airtime": 7009.080149333334,
+    "latency": 3.4741666666666666,
+    "by": {
+     "Ack": 89.04166666666666,
+     "Announce": 1872.6736666666666,
+     "Channel": 105.38966666666667,
+     "Data": 32.756,
+     "Deposit": 727.6406666666667,
+     "Hello": 520.5126666666667,
+     "KeyRequest": 249.51900000000003,
+     "MailSync": 9.8485,
+     "PathRequest": 2852.6049999999996,
+     "PathResponse": 558.7806666666667
+    },
+    "secs": 18.418
+   }
+  }
+ }
+}

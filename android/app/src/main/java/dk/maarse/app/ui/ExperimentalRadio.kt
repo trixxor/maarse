@@ -49,6 +49,7 @@ import dk.maarse.app.GpsInfo
 import dk.maarse.app.GpsSat
 import dk.maarse.app.GPS_STATES
 import dk.maarse.app.Node
+import dk.maarse.app.SweepRecording
 import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.cos
@@ -238,7 +239,7 @@ private val SPEEDS = listOf(0.25, 0.5, 1.0, 2.0)
  * radio sweeps it cannot receive messages, so Live stops by itself (after 2 minutes, or when you leave the page).
  */
 @Composable
-fun SpectrumPage() {
+fun SpectrumPage(go: (MePage) -> Unit) {
     val rows by Node.sweeps.collectAsState()
     val dropped = Node.sweepDropped
     val band = 0
@@ -253,7 +254,7 @@ fun SpectrumPage() {
     var lastArrival by remember { mutableStateOf(0L) }
     val b = BANDS[band]
     // The sweep belongs to this page: stop it when leaving.
-    DisposableEffect(Unit) { onDispose { Node.send(Cmd.sweep(0, 0, 0, 0)) } }
+    DisposableEffect(Unit) { onDispose { SweepRecording.cancel(); Node.send(Cmd.sweep(0, 0, 0, 0)) } }
     LaunchedEffect(live, band) {
         if (live) { Node.clearSweeps(); following = true; paused = false; Node.send(Cmd.sweep(b.startKhz, b.stepKhz, b.count, 255)) }
         else Node.send(Cmd.sweep(0, 0, 0, 0))
@@ -298,7 +299,7 @@ fun SpectrumPage() {
     // One quiet row on top: the band and the Live switch.
     Row(Modifier.fillMaxWidth().padding(end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("${b.label} MHz", Modifier.weight(1f).padding(start = 24.dp), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Button({ live = !live }, Modifier.height(40.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp)) { Text(if (live) "Stop" else "Live") }
+        Button({ live = !live }, Modifier.height(40.dp), enabled = SweepRecording.active.collectAsState().value == null, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp)) { Text(if (live) "Stop" else "Live") }
     }
     val shown = rows.filter { it.startKhz == b.startKhz }
     val top = (cursor.toLong() - dropped).toInt().coerceIn(0, (rows.size - 1).coerceAtLeast(0))
@@ -361,6 +362,7 @@ fun SpectrumPage() {
         }
         if (rows.takeLast(LINES + 1).any { isOverload(it) }) Text("Dark red: a transmitter very close overloads the radio. Left out of the numbers.", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE08A78))
     }
+    RecordBar(go)
     Text(
         "The radio hears no messages while it sweeps. Live stops after 2 minutes, or when you leave. Drag over the picture to read a frequency.",
         Modifier.padding(horizontal = 24.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,

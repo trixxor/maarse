@@ -1471,6 +1471,41 @@ not receive packets.
 Modem mode frame `0x42` (host to radio, one byte, no content): a message arrived at the
 host; a board with a buzzer beeps. It does not end modem mode. Boards without a buzzer ignore it.
 
+Spectrum recordings (2026-11-26, working copy, not released; `maarse-core/src/sweeprec.rs`). A
+long run of sweeps is kept as one small file, the "MSR1" format, so a recording of 10 minutes
+takes about 1 KB instead of 384 KB. The radio (later) or a client (now) collects the sweeps in time
+buckets (at most 120: the recording time divided by 120, but never shorter than the time between
+sweeps; 5 s for 10 minutes) and keeps the strongest and the mean value of each step in each bucket.
+All numbers are little endian. A sweep that is not 64 steps wide is ignored. Sweeps with a known
+packet on the air or an overloaded receiver (most steps stronger than -60 dBm) are *masked*: they
+count as time but not as a measurement.
+
+| Part | Size | Content |
+|---|---|---|
+| header | 24 | `"MSR1"`, bins u8 (64), threshold dB u8, interval u8 (units of 0.1 s), reserved u8, duration s u16, bucket ms u16, buckets u16 (at most 120), sweeps u16, first frequency kHz u32, step kHz u16, reserved u16 |
+| floor | 64 | noise floor of each step, dBm, i8 |
+| max | 64 | highest level of each step, dBm, i8 |
+| duty | 64 | share of the measured buckets over the threshold, percent, u8 |
+| masked | ceil(buckets/8) | bit k = bucket k has no measurement |
+| profile | 2 + n | n u16, then n run-length tokens, step by step from step 0, each step over all its buckets: `0xxxxxxx` = `x + 1` cells of 0 (at most 128); `1vvvvrrr` = `r + 1` cells (at most 8) of the value `v` (1-15) |
+| events | 2 + 6 m | m u16, then per event: first bucket u8, last bucket u8, first step u8, last step u8, peak dB over the floor u8, reserved u8 |
+
+The floor of a step is the middle of its bucket means, and no step may sit more than 2 dB above
+the middle of all steps, so a constant carrier does not become its own floor. A profile value is
+the level of the strongest sweep in the bucket over the floor in steps of 3 dB, rounded, 1 to 15;
+0 means under the threshold (default 6 dB). A masked bucket takes the lower of its two neighbours
+(0 at the ends). An event is a connected area (four neighbours) of non-zero cells. Readers join
+events that look alike (centres within 2 steps, widths within 3 steps) into groups and call each
+group *constant* (on more than 80 % of the time), *periodic* (three or more, regular), *rising*
+(one long event whose last third is more than 3 dB stronger than its first third), *long*,
+*pulses* or *single*; `Recording::groups` in `maarse-core` and the port in `maarse-client` do this
+the same way (`tools/test_sweeprec.mjs` checks the port byte for byte against
+`maarse-core/tests/data/sweeprec-golden.*`, written by `GOLDEN_WRITE=1 cargo test -p maarse-core golden`).
+The web client records from the live sweeps while a radio is connected to maarse-host. The radio ends a run
+after 2 minutes, so the client stops and starts it again every 105 s; the gap (a fraction of a second)
+is a masked part of a bucket. Recording on the radio itself, so that a repeater without a client
+can be asked over LoRa, is planned and not built.
+
 maarse-host asks every USB or Bluetooth modem for its counters every 10 s and
 passes them on in extra `Stats` frames after its own (keys 30-59 and 80-117 that
 the host does not set itself), so a client of the host sees the radio's GPS,

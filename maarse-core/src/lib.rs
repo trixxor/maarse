@@ -33,6 +33,7 @@ pub mod router;
 pub mod routes;
 pub mod sensor;
 pub mod stamp;
+pub mod sweeprec;
 pub mod textz;
 pub mod modemauth;
 

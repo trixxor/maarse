@@ -17,6 +17,7 @@ import androidx.compose.material.icons.outlined.BatteryChargingFull
 import androidx.compose.material.icons.outlined.GpsFixed
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.ShowChart
+import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dk.maarse.app.History
 import dk.maarse.app.Node
+import dk.maarse.app.SweepStore
 import dk.maarse.app.tr
 
 /** The Experimental menu (Settings > Experimental): new tools that only read from the radio. */
@@ -52,6 +54,7 @@ fun ExperimentalMenu(onGo: (MePage) -> Unit) {
     GroupTitle("Tools")
     Group {
         GroupRow("Spectrum and waterfall", "Who is on the air around you", leading = { RowIcon(Icons.Outlined.GraphicEq) }) { onGo(MePage.X_SPECTRUM) }
+        GroupRow("Recordings", SweepStore.items.collectAsState().value.size.let { if (it == 0) "Record a scan for minutes and play it back" else "$it saved scans" }, leading = { RowIcon(Icons.Outlined.Timeline) }) { onGo(MePage.X_RECORDINGS) }
         GroupRow("GPS", stats[103]?.let { "$it satellites in use" } ?: "Satellites, sky view, height, speed", leading = { RowIcon(Icons.Outlined.GpsFixed) }) { onGo(MePage.X_GPS) }
         GroupRow("Signal per neighbour", "How each link changes over time", leading = { RowIcon(Icons.Outlined.ShowChart) }) { onGo(MePage.X_NEIGHBOURS) }
         GroupRow("Battery and temperature", stats[85]?.let { "$it %" } ?: "History and time left", last = true, leading = { RowIcon(Icons.Outlined.BatteryChargingFull) }) { onGo(MePage.X_POWER) }

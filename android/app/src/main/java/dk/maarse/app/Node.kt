@@ -55,6 +55,7 @@ object Node : LinkListener {
         private set
 
     private fun addSweep(ev: Ev.Sweep) {
+        SweepRecording.onSweep(ev)
         synchronized(sweeps) {
             val next = sweeps.value + ev
             if (next.size > 600) { sweepDropped += next.size - 600; sweeps.value = next.takeLast(600) } else sweeps.value = next
@@ -106,6 +107,7 @@ object Node : LinkListener {
         db = Db(app)
         prefs = Prefs(app)
         History.init(app)
+        SweepStore.init(app)
         nicknames.value = prefs.nicknames
         keys.value = prefs.keys
         verified.value = prefs.verified

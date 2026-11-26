@@ -1102,6 +1102,43 @@
     .pop { right: 6px; left: 6px; width: auto; max-width: none; }
     .dlg, .pal { margin-top: 24px; }
   }
+  /* ---------- experimental: spectrum and recordings ---------- */
+  .xp { padding: 4px 2px 40px; max-width: 1000px; }
+  .xp h3 { margin: 22px 0 6px; font-size: 16px; }
+  .xp canvas { width: 100%; height: auto; display: block; background: #0a1220; border-radius: 6px; margin-top: 6px; }
+  .xp-tabs { display: flex; gap: 6px; margin: 8px 0; }
+  .xp-tabs button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .xp-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+  .xp-bar input[type=range] { flex: 1 1 220px; min-width: 0; accent-color: var(--accent); }
+  .xp-bar progress { width: 220px; accent-color: var(--accent); }
+  .xp-read { font-family: var(--mono); font-size: 12.5px; min-height: 1.4em; margin: 6px 0; }
+  .xp-ax { display: flex; justify-content: space-between; font: 11px var(--mono); color: var(--muted); margin-top: 3px; }
+  .xp-clock { font: 600 18px var(--mono); font-variant-numeric: tabular-nums; min-width: 11ch; }
+  .xp-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .xp-row { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); }
+  .xp-row.on { border-color: var(--accent); }
+  .xp-row .grow { flex: 1; min-width: 0; }
+  .xp-nowgrid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(200px, 1.3fr); gap: 16px; align-items: start; }
+  .xp-spec text { fill: var(--muted); font: 11px var(--mono); }
+  .xp-now { display: flex; flex-direction: column; gap: 8px; }
+  .xp-item { border-left: 3px solid var(--warn); padding: 2px 0 2px 10px; }
+  .xp-item small { display: block; font: 12px var(--mono); color: var(--muted); }
+  .xp-item.quiet { border-left-color: var(--line); color: var(--muted); }
+  .xp-scroll { overflow-x: auto; }
+  .xp-table { border-collapse: collapse; width: 100%; min-width: 680px; font-size: 14px; }
+  .xp-table th { font: 600 11px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--line); }
+  .xp-table td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .xp-table td.m { font: 13px var(--mono); }
+  .xp-click { cursor: pointer; }
+  .xp-click:hover td, .xp-click.on td { background: var(--accent-soft); }
+  .xp-pill { font: 600 11px var(--mono); letter-spacing: .05em; text-transform: uppercase; padding: 1px 7px; border-radius: 10px; border: 1px solid currentColor; }
+  .xp-pill.High { color: var(--warn); } .xp-pill.Medium { color: var(--signal); } .xp-pill.Low { color: var(--muted); }
+  .xp-tech { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; max-width: 84ch; }
+  .xp-tech li { padding-left: 12px; border-left: 2px solid var(--line); }
+  .xp-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 24px; }
+  .xp-fact b { display: block; font: 600 19px var(--mono); font-variant-numeric: tabular-nums; }
+  .xp-fact span { font-size: 13px; color: var(--muted); }
+  @media (max-width: 760px) { .xp-nowgrid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body data-tab="chats" class="side-open">
@@ -1233,6 +1270,7 @@
         <button class="si" id="btn-radio" data-view="radio" disabled><svg class="i"><use href="#i-radio"/></svg><span>Radios, role and regions</span></button>
         <button class="si" id="btn-firmware" data-view="firmware" disabled><svg class="i"><use href="#i-chip"/></svg><span>Firmware</span></button>
         <button class="si" id="btn-range" data-view="range" disabled title="Field measurement of range, loss and power use"><svg class="i"><use href="#i-range"/></svg><span>Range test</span></button>
+        <button class="si" id="btn-experimental" data-view="experimental" disabled title="New tools that only read from the radio: spectrum and recordings"><svg class="i"><use href="#i-range"/></svg><span>Experimental<small>Spectrum and recordings</small></span></button>
         <h3 class="grp mc">MeshCore</h3>
         <button class="si" id="btn-meshcore" data-view="meshcore-setup" disabled><svg class="i"><use href="#i-globe"/></svg><span>MeshCore setup</span></button>
         <h3 class="grp">This computer</h3>
@@ -1368,6 +1406,8 @@ const Cmd = {
   // Stops an outgoing file (being sent or kept in the host's file mailbox). id: decimal string.
   cancelFile: id => { let v = BigInt(id); const b = []; for (let i = 0; i < 8; i++) { b.push(Number(v & 0xffn)); v >>= 8n; } return frame(0x38, b); },
   getStats: () => frame(0x09),
+  // A spectrum sweep: `count` steps of `stepKhz` from `startKhz`, `sweeps` times (255 = until stopped or 2 minutes, 0 = stop).
+  sweep: (startKhz, stepKhz, count, sweeps) => frame(0x3d, u32(startKhz), u16(stepKhz), [count, sweeps]),
   setRadio: c => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [c.announce & 0xff]),
   getRadio: () => frame(0x0b),
   setRole: r => frame(0x10, [r]),
@@ -1454,6 +1494,8 @@ function decodeEvent(f) {
     case 0x8c: return { type: "fileDone", fileId: readU64(f, 1), ok: !!f[9], outgoing: !!f[10], text: txt(11) };
     case 0x8d: return { type: "fileStarted", req: f[1] | f[2] << 8, fileId: readU64(f, 3), chunks: f[11] | f[12] << 8 };
     case 0x90: return { type: "deposited", msgId: readU64(f, 1) };
+    // One spectrum sweep: number, first frequency (kHz), step (kHz) and one byte per step, -dBm x 2 (255 = not measured).
+    case 0xbf: return { type: "sweep", seq: f[1] | f[2] << 8, startKhz: rd32(f, 3), stepKhz: f[7] | f[8] << 8, rssi: f.slice(9) };
     case 0x93: return { type: "remoteReply", from: a(1), inner: decodeEvent(f.slice(17)) };
     case 0x94: { const l = []; for (let o = 1; o + 16 <= f.length; o += 16) l.push(a(o)); return { type: "admins", list: l }; }
     case 0x95: return { type: "regions", strict: !!f[1], names: txt(2) };
@@ -1985,6 +2027,7 @@ function renderChatInner() {
   if (state.view === "radio") return renderRadio(box);
   if (state.view === "diag") return renderDiag(box);
   if (state.view === "range") return renderRange(box);
+  if (state.view === "experimental") return renderExperimental(box);
   if (state.view === "pages") return renderPages(box);
   if (state.view === "remote") return renderRemote(box);
   if (state.view === "firmware") return renderFirmware(box);
@@ -2139,7 +2182,7 @@ function setConnected(on, name) {
   }
   $("host-hint").hidden = on && transport instanceof WsTransport;
   startStripPoll(on); updateStrip(); updateMe();
-  for (const id of ["btn-copy", "btn-join", "btn-diag2", "btn-radio", "btn-range", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
+  for (const id of ["btn-copy", "btn-join", "btn-diag2", "btn-radio", "btn-range", "btn-experimental", "btn-firmware", "btn-private-new", "btn-private-join"]) $(id).disabled = !on;
   shellConnected(on);
   if (!on) $("btn-myqr").disabled = true;
   $("btn-settings").disabled = $("btn-computer").disabled = !(on && transport instanceof WsTransport);
@@ -2159,6 +2202,7 @@ function setConnected(on, name) {
 const now = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 function onEvent(ev) {
+  if (ev.type === "sweep") { xpOnSweep(ev); return; }
   if (histOnEvent(ev)) return;
   if (snEventHook(ev)) return;
   switch (ev.type) {
@@ -3454,6 +3498,7 @@ function renderFirmware(box) {
 function setView(v) {
   if (v !== "backup") { bkReset(); bk.msg = ""; bk.qr = null; }
   else if (transport && !state.target) { transport.send(Cmd.getRegions()); transport.send(Cmd.getSharing()); transport.send(Cmd.getSite()); transport.send(Cmd.getStats()); }
+  if (state.view === "experimental" && v !== "experimental") xpLeave();
   state.view = v;
   markTab(tabOfView(v));
   mcEnter(v);
@@ -3491,6 +3536,569 @@ function setView(v) {
   }
   renderChat();
 }
+
+// <sweeprec>
+// Spectrum recordings (MSR1): port of maarse-core/src/sweeprec.rs. tools/test_sweeprec.mjs checks it byte for byte
+// against maarse-core/tests/data/sweeprec-golden.*. Change both together.
+const SR = (() => {
+  const BINS = 64, MAXB = 120, MAXE = 200, MAXG = 48, HEAD = 24, CELLS = BINS * MAXB, STEP_DB = 3;
+  const kinds = ["Constant", "Periodic", "Rising", "Long", "Pulses", "Single"];
+
+  // A sweep where most steps read stronger than -60 dBm: a transmitter very close overloads the receiver.
+  function isOverload(r) {
+    let valid = 0, strong = 0;
+    for (const v of r) { if (v < 248) valid++; if (v < 120) strong++; }
+    return valid >= 8 && strong * 10 >= valid * 6;
+  }
+
+  class Recorder {
+    constructor(cfg) {
+      if (!cfg.durationS || cfg.durationS > 7800 || !cfg.stepKhz) throw new Error("bad config");
+      this.cfg = { ...cfg };
+      const iv = Math.min(25500, Math.max(100, cfg.intervalMs));
+      this.cfg.intervalMs = iv;
+      const durMs = cfg.durationS * 1000;
+      this.bucketMs = Math.max(Math.floor(durMs / MAXB), iv);
+      this.nb = Math.min(Math.ceil(durMs / this.bucketMs), MAXB);
+      this.used = 0; this.sweeps = 0;
+      this.best = new Uint8Array(CELLS).fill(255); this.sum = new Uint16Array(CELLS);
+      this.grid = new Uint8Array(CELLS); this.cnt = new Uint16Array(MAXB);
+    }
+    push(tMs, rssi, masked) {
+      if (rssi.length !== BINS) return;
+      const k = Math.min(Math.floor(tMs / this.bucketMs), this.nb - 1);
+      this.used = Math.max(this.used, k + 1);
+      this.sweeps = Math.min(65535, this.sweeps + 1);
+      if (masked) return;
+      let any = false;
+      for (let b = 0; b < BINS; b++) {
+        const v = rssi[b];
+        if (v >= 248) continue;
+        any = true;
+        const i = b * MAXB + k;
+        if (v < this.best[i]) this.best[i] = v;
+        this.sum[i] = Math.min(65535, this.sum[i] + v);
+      }
+      if (any) this.cnt[k] = Math.min(65535, this.cnt[k] + 1);
+    }
+    // Seconds recorded so far (whole buckets touched).
+    get elapsedMs() { return this.used * this.bucketMs; }
+    finish() {
+      const nb = Math.max(this.used, 1), g = this.grid, cnt = this.cnt, best = this.best, sum = this.sum;
+      const floor = new Uint8Array(BINS).fill(236);
+      for (let b = 0; b < BINS; b++) {
+        const tmp = [];
+        for (let k = 0; k < nb; k++) { const i = b * MAXB + k; if (cnt[k] > 0 && best[i] !== 255) tmp.push(Math.min(247, Math.floor(sum[i] / cnt[k]))); }
+        if (tmp.length) { tmp.sort((a, c) => a - c); floor[b] = tmp[tmp.length >> 1]; }
+      }
+      const typical = Array.from(floor).sort((a, c) => a - c)[BINS >> 1];
+      for (let b = 0; b < BINS; b++) floor[b] = Math.max(floor[b], Math.max(typical - 4, 0));
+      let valid = 0; for (let k = 0; k < nb; k++) if (cnt[k] > 0) valid++;
+      const maxRaw = new Uint8Array(BINS).fill(255), duty = new Uint8Array(BINS);
+      for (let b = 0; b < BINS; b++) {
+        let hot = 0;
+        for (let k = 0; k < nb; k++) {
+          const i = b * MAXB + k;
+          if (cnt[k] === 0 || best[i] === 255) { g[i] = 0; continue; }
+          maxRaw[b] = Math.min(maxRaw[b], best[i]);
+          const d2 = floor[b] - best[i];
+          const v = d2 >= 2 * this.cfg.thrDb ? Math.min(15, Math.max(1, Math.floor((d2 + 3) / 6))) : 0;
+          g[i] = v;
+          if (v > 0) hot++;
+        }
+        duty[b] = valid > 0 ? Math.floor((hot * 100 + (valid >> 1)) / valid) : 0;
+        if (maxRaw[b] === 255) maxRaw[b] = floor[b];
+        let k = 0;
+        while (k < nb) {
+          if (cnt[k] > 0) { k++; continue; }
+          let k1 = k;
+          while (k1 + 1 < nb && cnt[k1 + 1] === 0) k1++;
+          const v = k > 0 && k1 + 1 < nb ? Math.min(g[b * MAXB + k - 1], g[b * MAXB + k1 + 1]) : 0;
+          for (let q = k; q <= k1; q++) g[b * MAXB + q] = v;
+          k = k1 + 1;
+        }
+      }
+      // Events: connected areas.
+      const events = [];
+      const stack = [];
+      for (let start = 0; start < CELLS; start++) {
+        const b0 = Math.floor(start / MAXB), k0 = start % MAXB;
+        if (k0 >= nb || g[start] === 0 || (g[start] & 0x80)) continue;
+        const ev = { k0, k1: k0, b0, b1: b0, peak: 0 };
+        g[start] |= 0x80; stack.push(start);
+        while (stack.length) {
+          const x = stack.pop(), b = Math.floor(x / MAXB), k = x % MAXB, v = g[x] & 0x7f;
+          ev.b0 = Math.min(ev.b0, b); ev.b1 = Math.max(ev.b1, b); ev.k0 = Math.min(ev.k0, k); ev.k1 = Math.max(ev.k1, k);
+          ev.peak = Math.max(ev.peak, v * STEP_DB);
+          const visit = (nbin, nk) => { const y = nbin * MAXB + nk; if (g[y] !== 0 && !(g[y] & 0x80)) { g[y] |= 0x80; stack.push(y); } };
+          if (b > 0) visit(b - 1, k);
+          if (b + 1 < BINS) visit(b + 1, k);
+          if (k > 0) visit(b, k - 1);
+          if (k + 1 < nb) visit(b, k + 1);
+        }
+        if (events.length < MAXE) events.push(ev);
+      }
+      for (let i = 0; i < CELLS; i++) g[i] &= 0x7f;
+      // The file.
+      const out = [];
+      const u16 = v => out.push(v & 255, (v >> 8) & 255);
+      const durationS = Math.min(65535, Math.ceil(nb * this.bucketMs / 1000));
+      out.push(77, 83, 82, 49, BINS, this.cfg.thrDb, Math.floor(this.cfg.intervalMs / 100), 0);
+      u16(durationS); u16(this.bucketMs & 0xffff); u16(nb); u16(this.sweeps);
+      const sk = this.cfg.startKhz >>> 0; out.push(sk & 255, (sk >> 8) & 255, (sk >> 16) & 255, (sk >>> 24) & 255);
+      u16(this.cfg.stepKhz); out.push(0, 0);
+      for (let b = 0; b < BINS; b++) out.push((-(floor[b] >> 1)) & 255);
+      for (let b = 0; b < BINS; b++) out.push((-(maxRaw[b] >> 1)) & 255);
+      for (let b = 0; b < BINS; b++) out.push(duty[b]);
+      const bm = new Uint8Array(Math.ceil(nb / 8));
+      for (let k = 0; k < nb; k++) if (cnt[k] === 0) bm[k >> 3] |= 1 << (k & 7);
+      out.push(...bm);
+      const lenAt = out.length; out.push(0, 0);
+      for (let b = 0; b < BINS; b++) {
+        let k = 0;
+        while (k < nb) {
+          const v = g[b * MAXB + k]; let run = 1;
+          if (v === 0) { while (k + run < nb && g[b * MAXB + k + run] === 0 && run < 128) run++; out.push(run - 1); }
+          else { while (k + run < nb && g[b * MAXB + k + run] === v && run < 8) run++; out.push(0x80 | (v << 3) | (run - 1)); }
+          k += run;
+        }
+      }
+      const slen = out.length - lenAt - 2; out[lenAt] = slen & 255; out[lenAt + 1] = slen >> 8;
+      u16(events.length);
+      for (const e of events) out.push(e.k0, e.k1, e.b0, e.b1, e.peak, 0);
+      return Uint8Array.from(out);
+    }
+  }
+
+  function parse(f) {
+    if (f.length < HEAD || f[0] !== 77 || f[1] !== 83 || f[2] !== 82 || f[3] !== 49) throw new Error("This is not a spectrum recording.");
+    const u16 = o => f[o] | f[o + 1] << 8;
+    if (f[4] !== BINS) throw new Error("The recording is damaged.");
+    const buckets = u16(12);
+    if (!buckets || buckets > MAXB) throw new Error("The recording is damaged.");
+    const r = { thrDb: f[5], intervalMs: f[6] * 100, durationS: u16(8), bucketMs: u16(10), buckets, sweeps: u16(14),
+      startKhz: (f[16] | f[17] << 8 | f[18] << 16 | f[19] << 24) >>> 0, stepKhz: u16(20),
+      floor: new Int8Array(BINS), max: new Int8Array(BINS), duty: new Uint8Array(BINS), masked: new Array(MAXB).fill(false),
+      grid: new Uint8Array(CELLS), events: [], size: f.length };
+    let p = HEAD; const nbm = Math.ceil(buckets / 8);
+    if (f.length < p + BINS * 3 + nbm + 2) throw new Error("The recording is damaged.");
+    for (let b = 0; b < BINS; b++) { r.floor[b] = f[p + b] << 24 >> 24; r.max[b] = f[p + BINS + b] << 24 >> 24; r.duty[b] = f[p + 2 * BINS + b]; }
+    p += BINS * 3;
+    for (let k = 0; k < buckets; k++) r.masked[k] = ((f[p + (k >> 3)] >> (k & 7)) & 1) === 1;
+    p += nbm;
+    const slen = u16(p); p += 2;
+    if (f.length < p + slen + 2) throw new Error("The recording is damaged.");
+    let b = 0, k = 0;
+    for (let i = 0; i < slen; i++) {
+      const t = f[p + i], v = t & 0x80 ? (t >> 3) & 15 : 0, run = t & 0x80 ? (t & 7) + 1 : (t & 127) + 1;
+      for (let q = 0; q < run; q++) {
+        if (b >= BINS) throw new Error("The recording is damaged.");
+        r.grid[b * MAXB + k] = v;
+        if (++k === buckets) { k = 0; b++; }
+      }
+    }
+    if (b !== BINS || k !== 0) throw new Error("The recording is damaged.");
+    p += slen;
+    const n = u16(p); p += 2;
+    if (n > MAXE || f.length < p + n * 6) throw new Error("The recording is damaged.");
+    for (let i = 0; i < n; i++) {
+      const o = p + i * 6, e = { k0: f[o], k1: f[o + 1], b0: f[o + 2], b1: f[o + 3], peak: f[o + 4] };
+      if (e.k0 > e.k1 || e.k1 >= buckets || e.b0 > e.b1 || e.b1 >= BINS) throw new Error("The recording is damaged.");
+      r.events.push(e);
+    }
+    r.khz = bin => r.startKhz + r.stepKhz * bin;
+    r.lengthMs = buckets * r.bucketMs;
+    r.cell = (bin, bucket) => r.grid[bin * MAXB + bucket];
+    r.groups = () => groups(r);
+    return r;
+  }
+
+  function groups(r) {
+    const order = r.events.map((e, idx) => ({ ...e, idx })).sort((a, c) => (a.b0 + a.b1) - (c.b0 + c.b1) || a.k0 - c.k0 || a.b0 - c.b0);
+    const gid = new Array(order.length).fill(255), gs = [];
+    order.forEach((e, i) => {
+      const c2 = e.b0 + e.b1, w = e.b1 - e.b0 + 1;
+      let g = gs.findIndex(x => Math.abs(x.sum - c2 * x.n) <= 4 * x.n && Math.abs(x.w - w) <= 3);
+      if (g < 0) { if (gs.length >= MAXG) return; gs.push({ sum: 0, n: 0, w }); g = gs.length - 1; }
+      gs[g].sum += c2; gs[g].n++; gid[i] = g;
+    });
+    const total = r.lengthMs, bl = r.bucketMs, out = [];
+    for (let g = 0; g < gs.length; g++) {
+      const m = order.filter((e, i) => gid[i] === g).sort((a, c) => a.k0 - c.k0 || a.b0 - c.b0);
+      const count = m.length;
+      let air = 0, b0 = 255, b1 = 0, peak = 0;
+      for (const e of m) { air += (e.k1 - e.k0 + 1) * bl; b0 = Math.min(b0, e.b0); b1 = Math.max(b1, e.b1); peak = Math.max(peak, e.peak); }
+      const first = m[0].k0 * bl;
+      let sumD = 0; for (let i = 1; i < m.length; i++) sumD += (m[i].k0 - m[i - 1].k0) * bl;
+      const nd = m.length - 1, mean = nd > 0 ? Math.floor(sumD / nd) : 0;
+      let v = 0; for (let i = 1; i < m.length; i++) { const d = (m[i].k0 - m[i - 1].k0) * bl; v += (d - mean) * (d - mean); }
+      const regular = nd >= 2 && mean > 0 && v * 16 < mean * mean * nd;
+      let growUp = false;
+      if (count === 1) {
+        const e = m[0], len = e.k1 - e.k0 + 1;
+        if (len >= 6) {
+          const level = k => { let x = 0; for (let b = e.b0; b <= e.b1; b++) x = Math.max(x, r.cell(b, k)); return x * STEP_DB; };
+          const t = Math.max(1, Math.floor(len / 3)); let a = 0, c = 0;
+          for (let q = 0; q < t; q++) { a += level(e.k0 + q); c += level(e.k1 - q); }
+          growUp = c - a > 3 * t;
+        }
+      }
+      const cov = air * 100;
+      let kind;
+      if (cov > 80 * total) kind = "Constant";
+      else if (count >= 3 && regular) kind = "Periodic";
+      else if (count === 1 && cov > 15 * total) kind = growUp ? "Rising" : "Long";
+      else if (count >= 2) kind = "Pulses";
+      else kind = "Single";
+      let severity;
+      if (kind === "Single" || kind === "Pulses") severity = count >= 3 || peak >= 27 ? "Medium" : "Low";
+      else severity = peak >= 18 || cov > 50 * total || kind === "Rising" ? "High" : "Medium";
+      out.push({ kind, severity, b0, b1, count, airMs: air, firstMs: first, peakDb: peak, intervalMs: mean, members: m.map(e => e.idx) });
+    }
+    out.sort((a, c) => c.airMs - a.airMs || a.firstMs - c.firstMs || a.b0 - c.b0);
+    return out;
+  }
+
+  return { BINS, MAXB, Recorder, parse, isOverload, kinds };
+})();
+// </sweeprec>
+
+// ---------- experimental tools: spectrum, recordings (maarse-core/src/sweeprec.rs, docs/protocol-spec.md) ----------
+// Settings > Experimental. These tools only read from the radio. The radio hears no messages while it sweeps.
+const XP_BAND = { label: "EU 863–870", startKhz: 863000, stepKhz: 110, count: 64 };
+const XP_MARSE_KHZ = 869525;
+const xp = { tab: "spectrum", rows: [], live: false, rec: null, recs: store.get("xpRecs", []), openId: null, dom: {}, msg: "" };
+const xpDbm = raw => raw >= 248 ? null : -raw / 2;
+const XP_STOPS = [[0, [10, 18, 32]], [.25, [27, 74, 107]], [.5, [47, 163, 154]], [.75, [232, 197, 71]], [1, [255, 90, 54]]];
+const XP_LUT = Array.from({ length: 256 }, (_, i) => {
+  const t = i / 255;
+  for (let j = 1; j < XP_STOPS.length; j++) {
+    if (t <= XP_STOPS[j][0]) { const [a, ca] = XP_STOPS[j - 1], [b, cb] = XP_STOPS[j], k = (t - a) / (b - a); return [0, 1, 2].map(q => ca[q] + (cb[q] - ca[q]) * k); }
+  }
+  return XP_STOPS[4][1];
+});
+const xpColor = t => XP_LUT[Math.round(Math.min(1, Math.max(0, t)) * 255)];
+const xpMhz = khz => (khz / 1000).toFixed(2);
+const xpClock = s => { s = Math.round(s); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); };
+const xpSize = n => n >= 1024 ? (n / 1024).toFixed(1) + " KB" : n + " B";
+const xpMedian = a => { const s = a.slice().sort((x, y) => x - y); return s.length ? s[s.length >> 1] : null; };
+function xpB64(u) { let s = ""; for (const b of u) s += String.fromCharCode(b); return btoa(s); }
+function xpUnB64(t) { const s = atob(t), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; }
+function xpSaveRecs() { xp.recs = xp.recs.slice(0, 40); store.set("xpRecs", xp.recs); }
+
+// ----- live sweeps and recording -----
+function xpSweepCmd(on) { transport?.send(on ? Cmd.sweep(XP_BAND.startKhz, XP_BAND.stepKhz, XP_BAND.count, 255) : Cmd.sweep(0, 0, 0, 0)); }
+function xpStartLive() {
+  xp.rows = []; xp.live = true; xp.msg = ""; xpSweepCmd(true);
+  clearTimeout(xp.liveTimer); xp.liveTimer = setTimeout(() => { if (!xp.rec) xpStopLive(); }, 121000);  // the radio ends a run after 2 minutes
+  xpRefreshBar();
+}
+function xpStopLive() { clearTimeout(xp.liveTimer); if (xp.live || xp.rec) xpSweepCmd(false); xp.live = false; xpRefreshBar(); }
+function xpStartRec(durationS) {
+  xpStopLive();
+  const r = new SR.Recorder({ startKhz: XP_BAND.startKhz, stepKhz: XP_BAND.stepKhz, durationS, intervalMs: 100, thrDb: 6 });
+  const rec = xp.rec = { r, t0: Date.now(), durationS, masked: 0 };
+  xp.rows = []; xp.live = true; xp.msg = ""; xpSweepCmd(true);
+  // The radio ends a run after 2 minutes by itself: stop and start again a little before, so a long recording goes on.
+  rec.restart = setInterval(() => { xpSweepCmd(false); setTimeout(() => { if (xp.rec === rec) xpSweepCmd(true); }, 300); }, 105000);
+  rec.end = setTimeout(() => xpFinishRec(), durationS * 1000);
+  rec.tick = setInterval(xpRefreshBar, 500);
+  xpRefreshBar();
+}
+function xpCancelRec() {
+  const rec = xp.rec; if (!rec) return;
+  clearInterval(rec.restart); clearTimeout(rec.end); clearInterval(rec.tick); xp.rec = null; xpSweepCmd(false); xp.live = false;
+}
+function xpFinishRec() {
+  const rec = xp.rec; if (!rec) return;
+  const elapsed = Math.round((Date.now() - rec.t0) / 1000);
+  clearInterval(rec.restart); clearTimeout(rec.end); clearInterval(rec.tick); xp.rec = null; xpSweepCmd(false); xp.live = false;
+  if (!rec.r.sweeps) { xp.msg = "No sweeps arrived. Is a radio connected to this computer (USB or Bluetooth)?"; renderChat(); return; }
+  const bytes = rec.r.finish();
+  const d = new Date(rec.t0), p = n => String(n).padStart(2, "0");
+  const name = `Spectrum ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  const id = Date.now();
+  xp.recs.unshift({ id, name, at: rec.t0, b64: xpB64(bytes) }); xpSaveRecs();
+  xp.tab = "recordings"; xp.openId = id; xp.msg = `Saved ${name} (${xpSize(bytes.length)}, ${elapsed >= 60 ? Math.round(elapsed / 60) + " min" : elapsed + " s"}).`;
+  renderChat();
+}
+function xpLeave() { xpCancelRec(); xpStopLive(); xp.rows = []; }
+function xpOnSweep(ev) {
+  if (ev.startKhz !== XP_BAND.startKhz) return;
+  xp.rows.push(ev.rssi); if (xp.rows.length > 120) xp.rows.shift();
+  if (xp.rec) { const over = SR.isOverload(ev.rssi); if (over) xp.rec.masked++; xp.rec.r.push(Date.now() - xp.rec.t0, ev.rssi, over); }
+  if (state.view === "experimental" && xp.tab === "spectrum") xpDrawLive();
+}
+function xpRefreshBar() {
+  const d = xp.dom; if (!d.live || !d.live.isConnected) return;
+  d.live.textContent = xp.live && !xp.rec ? "Stop" : "Live";
+  d.live.disabled = !!xp.rec;
+  d.rec.textContent = xp.rec ? "Stop and save" : "Record";
+  d.dur.disabled = !!xp.rec;
+  if (xp.rec) {
+    const s = (Date.now() - xp.rec.t0) / 1000;
+    d.prog.hidden = false; d.prog.max = xp.rec.durationS; d.prog.value = Math.min(s, xp.rec.durationS);
+    d.state.textContent = `Recording ${xpClock(s)} of ${xpClock(xp.rec.durationS)}. The radio hears no messages meanwhile.` + (xp.rec.masked ? ` ${xp.rec.masked} overloaded sweeps are left out.` : "");
+  } else { d.prog.hidden = true; d.state.textContent = xp.live ? "Live: the radio stops by itself after 2 minutes." : (xp.msg || ""); }
+}
+function xpDrawLive() {
+  const d = xp.dom; if (!d.line || !d.line.isConnected) return;
+  const rows = xp.rows, n = XP_BAND.count;
+  const good = rows.filter(r => !SR.isOverload(r));
+  const floor = xpMedian(good.slice(-10).flatMap(r => Array.from(r).map(xpDbm).filter(v => v !== null))) ?? -105;
+  // Waterfall: newest at the top, 2 px a row.
+  const wc = d.water, wx = wc.getContext("2d"), W = wc.width, H = wc.height;
+  wx.fillStyle = "#0a1220"; wx.fillRect(0, 0, W, H);
+  const cw = W / n;
+  rows.slice().reverse().forEach((r, y) => {
+    const over = SR.isOverload(r);
+    for (let b = 0; b < n; b++) {
+      const v = xpDbm(r[b]);
+      const c = over ? [142, 59, 42] : xpColor(((v ?? floor) - floor + 2) / 34);
+      wx.fillStyle = `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`; wx.fillRect(b * cw, y * 2, cw + .5, 2);
+    }
+  });
+  // Spectrum line: the latest sweep smoothed over three, with the highest value of the last 60 as a dashed line.
+  const lc = d.line, lx = lc.getContext("2d"), LW = lc.width, LH = lc.height;
+  lx.fillStyle = "#0a1220"; lx.fillRect(0, 0, LW, LH);
+  const y = v => LH - ((Math.min(-60, Math.max(-120, v)) + 120) / 60) * LH, x = i => i / (n - 1) * LW;
+  lx.strokeStyle = "rgba(255,255,255,.12)"; lx.lineWidth = 1;
+  for (const g of [-60, -80, -100, -120]) { lx.beginPath(); lx.moveTo(0, y(g)); lx.lineTo(LW, y(g)); lx.stroke(); }
+  const mx = (XP_MARSE_KHZ - XP_BAND.startKhz) / XP_BAND.stepKhz / (n - 1) * LW;
+  lx.setLineDash([4, 6]); lx.strokeStyle = "rgba(92,192,160,.7)"; lx.beginPath(); lx.moveTo(mx, 0); lx.lineTo(mx, LH); lx.stroke();
+  if (good.length) {
+    const near = good.slice(-3), peakRows = good.slice(-60);
+    const sm = Array.from({ length: n }, (_, i) => { const v = near.map(r => xpDbm(r[i])).filter(q => q !== null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : -120; });
+    const pk = Array.from({ length: n }, (_, i) => Math.max(-120, ...peakRows.map(r => xpDbm(r[i])).filter(q => q !== null)));
+    lx.setLineDash([8, 8]); lx.strokeStyle = "#7fd1a5"; lx.beginPath(); pk.forEach((v, i) => i ? lx.lineTo(x(i), y(v)) : lx.moveTo(x(i), y(v))); lx.stroke();
+    lx.setLineDash([]); lx.strokeStyle = "#5cc0a0"; lx.lineWidth = 2; lx.beginPath(); sm.forEach((v, i) => i ? lx.lineTo(x(i), y(v)) : lx.moveTo(x(i), y(v))); lx.stroke();
+    let hi = 0; sm.forEach((v, i) => { if (v > sm[hi]) hi = i; });
+    d.read.textContent = `noise ${floor.toFixed(0)} dBm · strongest ${xpMhz(XP_BAND.startKhz + XP_BAND.stepKhz * hi)} MHz at ${sm[hi].toFixed(0)} dBm`;
+  } else d.read.textContent = rows.length ? "A transmitter close by overloads the radio." : "Press Live to start.";
+  lx.setLineDash([]);
+}
+
+// ----- the page -----
+function renderExperimental(box) {
+  $("chat-title").textContent = "Experimental"; $("chat-sub").textContent = "New tools that only read from the radio";
+  const wrap = el("div", { className: "xp" }); box.append(wrap);
+  if (!SR) { wrap.append(el("p", { textContent: "This page needs a newer maarse-client." })); return; }
+  wrap.append(el("p", { className: "muted", textContent: "These tools are new. They only read from the radio and never change how messages are sent. Numbers can be rough." }));
+  const tabs = el("div", { className: "xp-tabs" });
+  for (const [k, label] of [["spectrum", "Spectrum"], ["recordings", `Recordings (${xp.recs.length})`]]) {
+    tabs.append(el("button", { className: xp.tab === k ? "on" : "", textContent: label, onclick: () => { xp.tab = k; xp.msg = ""; renderChat(); } }));
+  }
+  wrap.append(tabs);
+  if (xp.tab === "spectrum") xpSpectrumTab(wrap); else xpRecordingsTab(wrap);
+}
+function xpSpectrumTab(wrap) {
+  const d = xp.dom = {};
+  const direct = transport && !(transport instanceof WsTransport);
+  d.live = el("button", { textContent: "Live", className: "primary", onclick: () => { xp.live ? xpStopLive() : xpStartLive(); } });
+  d.dur = el("select", {}, ...[1, 2, 5, 10].map(m => el("option", { value: m * 60, textContent: m + (m === 1 ? " minute" : " minutes") })));
+  d.dur.value = store.get("xpDur", 300);
+  d.dur.onchange = () => store.set("xpDur", +d.dur.value);
+  d.rec = el("button", { textContent: "Record", onclick: () => { xp.rec ? xpFinishRec() : xpStartRec(+d.dur.value); } });
+  d.state = el("span", { className: "muted" }); d.prog = el("progress", { value: 0, max: 1 }); d.prog.hidden = true;
+  wrap.append(el("div", { className: "xp-bar" }, el("b", { textContent: XP_BAND.label + " MHz" }), d.live, el("span", { className: "muted", textContent: "Record for" }), d.dur, d.rec), el("div", { className: "xp-bar" }, d.prog, d.state));
+  d.read = el("div", { className: "xp-read", textContent: "Press Live to start." }); wrap.append(d.read);
+  d.line = el("canvas", { width: 640, height: 110 }); d.water = el("canvas", { width: 640, height: 240 });
+  wrap.append(d.line, d.water);
+  const ax = el("div", { className: "xp-ax" }); for (let i = 0; i <= 4; i++) ax.append(el("span", { textContent: ((XP_BAND.startKhz + XP_BAND.stepKhz * XP_BAND.count * i / 4) / 1000).toFixed(1) }));
+  wrap.append(ax);
+  wrap.append(el("p", { className: "muted", textContent: "The radio hears no messages while it sweeps. Live stops after 2 minutes. A recording goes on for as long as you choose and ends in a small file of about 1 KB with a summary of what stands out. The dashed vertical line is the Må:rse channel." }));
+  if (!transport) wrap.append(el("p", { className: "warn", textContent: "Connect to your node first." }));
+  else if (!direct) wrap.append(el("p", { className: "muted", textContent: "This needs a radio connected to maarse-host by USB or Bluetooth." }));
+  xpRefreshBar(); xpDrawLive();
+}
+function xpRecordingsTab(wrap) {
+  if (xp.msg) wrap.append(el("p", { className: "ok", textContent: xp.msg }));
+  const bar = el("div", { className: "xp-bar" });
+  const inp = el("input", { type: "file", accept: ".msr,application/octet-stream" }); inp.hidden = true;
+  inp.onchange = async () => {
+    const f = inp.files[0]; if (!f) return;
+    try {
+      const u = new Uint8Array(await f.arrayBuffer()); SR.parse(u);
+      const id = Date.now(); xp.recs.unshift({ id, name: f.name.replace(/\.msr$/i, ""), at: f.lastModified || id, b64: xpB64(u) }); xpSaveRecs();
+      xp.openId = id; xp.msg = ""; renderChat();
+    } catch (e) { xp.msg = e.message; renderChat(); }
+  };
+  bar.append(el("button", { textContent: "Open a file…", onclick: () => inp.click() }), inp);
+  wrap.append(bar);
+  if (!xp.recs.length) { wrap.append(el("p", { className: "muted", textContent: "No recordings yet. Press Record on the Spectrum tab, or open a .msr file." })); return; }
+  const list = el("div", { className: "xp-list" });
+  for (const rc of xp.recs) {
+    let info = "";
+    try { const r = SR.parse(xpUnB64(rc.b64)); info = `${xpClock(r.lengthMs / 1000)} · ${xpSize(r.size)} · ${r.groups().filter(g => g.severity !== "Low").length} things stand out`; } catch { info = "damaged"; }
+    const row = el("div", { className: "xp-row" + (rc.id === xp.openId ? " on" : "") },
+      el("div", { className: "grow" }, el("b", { textContent: rc.name }), el("div", { className: "muted", textContent: new Date(rc.at).toLocaleString() + " · " + info })),
+      el("button", { className: "sm", textContent: "Open", onclick: () => { xp.openId = rc.id; renderChat(); } }),
+      el("button", { className: "sm", textContent: "Save file", onclick: () => {
+        const a = el("a", { href: URL.createObjectURL(new Blob([xpUnB64(rc.b64)], { type: "application/octet-stream" })), download: rc.name.replace(/[^\w.-]+/g, "-") + ".msr" });
+        document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      } }),
+      el("button", { className: "sm", textContent: "Delete", onclick: async () => {
+        if (!await askConfirm(`Delete ${rc.name}?`, "Delete", true)) return;
+        xp.recs = xp.recs.filter(x => x !== rc); xpSaveRecs(); if (xp.openId === rc.id) xp.openId = null; renderChat();
+      } }));
+    list.append(row);
+  }
+  wrap.append(list);
+  const open = xp.recs.find(x => x.id === xp.openId);
+  if (open) { const host = el("div", { className: "xp-player" }); wrap.append(host); try { xpPlayer(host, SR.parse(xpUnB64(open.b64)), open.name); } catch (e) { host.append(el("p", { className: "warn", textContent: e.message })); } }
+}
+
+// ----- the player: reads only the file -----
+function xpFreq(r, g0, g1) { return g0 === g1 ? xpMhz(r.khz(g0)) + " MHz" : xpMhz(r.khz(g0)) + "–" + xpMhz(r.khz(g1 + 1)) + " MHz"; }
+const XP_LABEL = { Constant: "Constant carrier", Rising: "Noise that rises", Long: "Long event", Pulses: "Repeated short pulses", Single: "Single pulse" };
+function xpLabel(g) { return g.kind === "Periodic" ? `Periodic burst, every ${Math.round(g.intervalMs / 1000)} s` : XP_LABEL[g.kind]; }
+function xpDescribe(r, g) {
+  const where = `bin ${g.b0 === g.b1 ? g.b0 : g.b0 + "–" + g.b1} (${xpFreq(r, g.b0, g.b1)})`, air = xpClock(g.airMs / 1000), first = xpClock(g.firstMs / 1000);
+  switch (g.kind) {
+    case "Constant": return [where, `constant carrier, +${g.peakDb} dB over the floor, on ${Math.round(g.airMs * 100 / r.lengthMs)} % of the time. Looks like a fixed transmitter or interference close by.`];
+    case "Periodic": return [where, `periodic burst every ${Math.round(g.intervalMs / 1000)} s, ${g.count} times, about ${Math.round(g.airMs / g.count / 1000)} s each and up to +${g.peakDb} dB. The regularity points at a timer or controlled equipment.`];
+    case "Rising": return [where, `noise that rises from ${first} and lasts ${air}, up to +${g.peakDb} dB. Fits a new noise source that was switched on, or equipment warming up.`];
+    case "Long": return [where, `long event from ${first}, lasts ${air}, up to +${g.peakDb} dB.`];
+    case "Pulses": return [where, `${g.count} short pulses, ${air} on the air in total, up to +${g.peakDb} dB. Scattered, no fixed pattern.`];
+    default: return [where, `one short pulse at ${first}, +${g.peakDb} dB.`];
+  }
+}
+function xpPlayer(host, r, name) {
+  const HW = 960, RH = 4, HH = 64 * RH, NB = r.buckets, groups = r.groups();
+  const evGroup = new Map(); // index of an event -> index of its group
+  groups.forEach((g, gi) => g.members.forEach(i => evGroup.set(i, gi)));
+  let t = 0, playing = false, speed = 10, sel = -1, showEv = true, lastK = -1, last = 0;
+  // Static picture of the profile.
+  const base = document.createElement("canvas"); base.width = HW; base.height = HH;
+  { const x = base.getContext("2d"), img = x.createImageData(HW, HH), d = img.data;
+    for (let px = 0; px < HW; px++) {
+      const k = Math.min(NB - 1, Math.floor(px * NB / HW));
+      for (let b = 0; b < 64; b++) {
+        const c = XP_LUT[Math.round(r.cell(b, k) / 15 * 255)];
+        for (let q = 0; q < RH; q++) {
+          const yy = (63 - b) * RH + q, p = (yy * HW + px) * 4; let cr = c[0], cg = c[1], cb = c[2];
+          if (r.masked[k] && (px + yy) % 6 < 2) { cr = 123; cg = 135; cb = 152; }
+          d[p] = cr; d[p + 1] = cg; d[p + 2] = cb; d[p + 3] = 255;
+        }
+      }
+    }
+    x.putImageData(img, 0, 0); }
+  const heat = el("canvas", { width: HW, height: HH }), act = el("canvas", { width: HW, height: 44 });
+  const spec = el("div", { className: "xp-spec" }), nowList = el("div", { className: "xp-now" });
+  const clock = el("span", { className: "xp-clock" }), read = el("div", { className: "xp-read muted" });
+  const play = el("button", { className: "primary", textContent: "Play" });
+  const speedSel = el("select", {}, ...[1, 5, 10, 30, 60].map(s => el("option", { value: s, textContent: s + "×" }))); speedSel.value = 10;
+  const seek = el("input", { type: "range", min: 0, max: Math.round(r.lengthMs / 100), value: 0 });
+  const evBox = el("input", { type: "checkbox", checked: true });
+  const bar = el("div", { className: "xp-bar" }, play, speedSel, seek, clock, el("label", {}, evBox, " Show events"));
+  const total = r.lengthMs / 1000;
+  const seekTo = s => { t = Math.min(Math.max(s, 0), total - .001); frame(false); };
+  play.onclick = () => { if (!playing && t >= total - .05) t = 0; playing = !playing; play.textContent = playing ? "Pause" : "Play"; };
+  speedSel.onchange = () => { speed = +speedSel.value; };
+  seek.oninput = () => seekTo(seek.value / 10);
+  evBox.onchange = () => { showEv = evBox.checked; frame(true); };
+  for (const c of [heat, act]) {
+    const at = e => { const b = c.getBoundingClientRect(); seekTo((e.clientX - b.left) / b.width * total); };
+    c.style.touchAction = "none"; c.style.cursor = "crosshair";
+    c.onpointerdown = e => { c.setPointerCapture(e.pointerId); at(e); };
+    c.onpointermove = e => { if (e.buttons & 1) at(e); if (c === heat) hover(e); };
+  }
+  function hover(e) {
+    const b = heat.getBoundingClientRect(), k = Math.min(NB - 1, Math.max(0, Math.floor((e.clientX - b.left) / b.width * NB))), bin = Math.min(63, Math.max(0, 63 - Math.floor((e.clientY - b.top) / b.height * 64)));
+    const v = r.cell(bin, k);
+    read.textContent = `${xpClock(k * r.bucketMs / 1000)} · bin ${bin} · ${xpMhz(r.khz(bin))} MHz · ` + (r.masked[k] ? "not measured" : v ? `+${v * 3} dB over the floor (about ${r.floor[bin] + v * 3} dBm)` : "under the threshold");
+  }
+  function frame(force) {
+    const k = Math.min(NB - 1, Math.floor(t * 1000 / r.bucketMs));
+    const hc = heat.getContext("2d"); hc.drawImage(base, 0, 0);
+    r.events.forEach((e, i) => {
+      const on = evGroup.get(i) === sel; if (!on && !showEv) return;
+      hc.strokeStyle = on ? "#ffd23f" : "rgba(255,255,255,.4)"; hc.lineWidth = on ? 2 : 1;
+      hc.strokeRect(e.k0 * HW / NB + .5, (63 - e.b1) * RH + .5, (e.k1 - e.k0 + 1) * HW / NB - 1, (e.b1 - e.b0 + 1) * RH - 1);
+    });
+    const cx = t / total * HW; hc.fillStyle = "#fff"; hc.fillRect(cx - 1, 0, 2, HH);
+    const ac = act.getContext("2d"); ac.clearRect(0, 0, HW, 44); ac.fillStyle = "#0a1220"; ac.fillRect(0, 0, HW, 44);
+    const hot = Array.from({ length: NB }, (_, q) => { let c = 0; for (let b = 0; b < 64; b++) if (r.cell(b, q)) c++; return c; });
+    const mx = Math.max(8, ...hot), bw = HW / NB;
+    for (let q = 0; q < NB; q++) {
+      if (r.masked[q]) { ac.fillStyle = "#5b6779"; ac.fillRect(q * bw, 40, bw, 4); continue; }
+      const h = hot[q] / mx * 40; ac.fillStyle = q <= k ? "#5cc0a0" : "#2a6f6a"; ac.fillRect(q * bw, 44 - h, Math.max(1, bw - .5), h);
+    }
+    ac.fillStyle = "#fff"; ac.fillRect(cx - 1, 0, 2, 44);
+    clock.textContent = xpClock(t) + " / " + xpClock(total);
+    if (document.activeElement !== seek) seek.value = Math.round(t * 10);
+    if (k !== lastK || force) { lastK = k; drawNow(k); }
+  }
+  function drawNow(k) {
+    const L = 46, R = 8, pw = (960 - L - R) / 64, y = v => 10 + (-75 - v) * 140 / 50;
+    let s = "";
+    for (const g of [-120, -100, -80]) s += `<line x1="${L}" x2="${960 - R}" y1="${y(g)}" y2="${y(g)}" stroke="var(--line)"/><text x="${L - 6}" y="${y(g) + 4}" text-anchor="end">${g}</text>`;
+    s += `<text x="${L - 6}" y="9" text-anchor="end">dBm</text>`;
+    const mxm = (XP_MARSE_KHZ - r.startKhz) / r.stepKhz;
+    if (mxm >= 0 && mxm < 64) s += `<line x1="${L + (mxm + .5) * pw}" x2="${L + (mxm + .5) * pw}" y1="10" y2="${y(-125)}" stroke="var(--accent)" stroke-dasharray="3 4"/>`;
+    for (let b = 0; b < 64; b++) {
+      const fl = r.floor[b], v = r.cell(b, k), lv = fl + v * 3, x = L + b * pw;
+      let ph = 0; for (let q = 0; q <= k; q++) ph = Math.max(ph, r.cell(b, q));
+      if (v > 0) s += `<rect x="${x + 1}" y="${y(lv)}" width="${pw - 2}" height="${y(fl) - y(lv)}" rx="1" fill="var(--warn)"/>`;
+      s += `<line x1="${x + 1}" x2="${x + pw - 1}" y1="${y(fl)}" y2="${y(fl)}" stroke="var(--ink)" stroke-width="1.5"/>`;
+      if (ph > 0) s += `<line x1="${x + 1}" x2="${x + pw - 1}" y1="${y(fl + ph * 3)}" y2="${y(fl + ph * 3)}" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="3 2"/>`;
+    }
+    if (r.masked[k]) s += `<text x="${960 - R}" y="24" text-anchor="end" fill="var(--signal)">not measured here</text>`;
+    for (let b = 0; b < 64; b += 8) s += `<text x="${L + b * pw + pw / 2}" y="${y(-125) + 20}" text-anchor="middle">${b}</text><text x="${L + b * pw + pw / 2}" y="${y(-125) + 33}" text-anchor="middle">${xpMhz(r.khz(b))}</text>`;
+    s += `<text x="${L}" y="${y(-125) + 46}">bin and MHz</text>`;
+    spec.innerHTML = `<svg viewBox="0 0 960 250" width="100%" role="img" aria-label="Spectrum at the chosen time">${s}</svg>`;
+    nowList.replaceChildren();
+    const seen = new Map();
+    r.events.forEach((e, i) => {
+      if (k < e.k0 || k > e.k1) return;
+      let m = 0; for (let b = e.b0; b <= e.b1; b++) m = Math.max(m, r.cell(b, k));
+      const gi = evGroup.get(i), o = seen.get(gi);
+      if (!o || o.lv < m * 3) seen.set(gi, { e, lv: m * 3, g: groups[gi] });
+    });
+    if (r.masked[k]) nowList.append(el("div", { className: "xp-item quiet", textContent: "Not measured in this moment." }));
+    for (const o of seen.values()) nowList.append(el("div", { className: "xp-item" }, o.g ? xpLabel(o.g) : "Event", el("small", { textContent: `bin ${o.e.b0 === o.e.b1 ? o.e.b0 : o.e.b0 + "–" + o.e.b1} · ${xpFreq(r, o.e.b0, o.e.b1)} · +${o.lv} dB now` })));
+    if (!seen.size && !r.masked[k]) nowList.append(el("div", { className: "xp-item quiet", textContent: "Nothing over the threshold. Only the noise floor." }));
+  }
+  function tick(ts) {
+    if (!host.isConnected) return;
+    if (playing) { t += Math.min(.1, (ts - last) / 1000) * speed; if (t >= total) { t = total - .001; playing = false; play.textContent = "Play"; } frame(false); }
+    last = ts; requestAnimationFrame(tick);
+  }
+  // Table and summary.
+  const table = el("table", { className: "xp-table" });
+  table.append(el("tr", {}, ...["Priority", "What", "Frequency", "Seen", "On the air", "First seen", "Peak"].map(h => el("th", { textContent: h }))));
+  groups.slice(0, 12).forEach((g, gi) => {
+    const tr = el("tr", { className: "xp-click" }, el("td", {}, el("span", { className: "xp-pill " + g.severity, textContent: g.severity === "High" ? "high" : g.severity === "Medium" ? "medium" : "low" })),
+      el("td", { textContent: xpLabel(g) }), el("td", { className: "m", textContent: xpFreq(r, g.b0, g.b1) }), el("td", { className: "m", textContent: g.count + "×" }),
+      el("td", { className: "m", textContent: xpClock(g.airMs / 1000) }), el("td", { className: "m", textContent: xpClock(g.firstMs / 1000) }), el("td", { className: "m", textContent: "+" + g.peakDb + " dB" }));
+    tr.onclick = () => { sel = gi; [...table.querySelectorAll("tr.xp-click")].forEach(x => x.classList.toggle("on", x === tr)); lastK = -1; seekTo(Math.max(0, g.firstMs / 1000 - r.bucketMs / 1000)); };
+    table.append(tr);
+  });
+  if (groups.length > 12) table.append(el("tr", {}, el("td", { colSpan: 7, className: "muted", textContent: `… and ${groups.length - 12} smaller groups` })));
+  if (!groups.length) table.append(el("tr", {}, el("td", { colSpan: 7, textContent: "Nothing over the threshold." })));
+  const big = groups.filter(g => g.severity !== "Low").slice(0, 6), pick = big.length ? big : groups.slice(0, 3);
+  const tech = el("ul", { className: "xp-tech" }, ...pick.map(g => { const [w, text] = xpDescribe(r, g); return el("li", {}, el("b", { textContent: w }), ": " + text); }));
+  if (!pick.length) tech.append(el("li", { textContent: "Nothing stands out over the threshold." }));
+  // Statistics.
+  let fs = 0, fmin = 999, fmax = -999, hi = -999, hib = 0, md = 0, mdb = 0, mb = 0;
+  for (let b = 0; b < 64; b++) { fs += r.floor[b]; fmin = Math.min(fmin, r.floor[b]); fmax = Math.max(fmax, r.floor[b]); if (r.max[b] > hi) { hi = r.max[b]; hib = b; } if (r.duty[b] > md) { md = r.duty[b]; mdb = b; } }
+  for (let k = 0; k < NB; k++) if (r.masked[k]) mb++;
+  const occ = r.duty.reduce((a, b) => a + b, 0) / 64;
+  const F = (v, l) => el("div", { className: "xp-fact" }, el("b", { textContent: v }), el("span", { textContent: l }));
+  const facts = el("div", { className: "xp-facts" },
+    F(xpClock(total), `recorded, ${r.sweeps} sweeps`), F((fs / 64).toFixed(0) + " dBm", `average noise floor (${fmin} to ${fmax})`),
+    F(occ.toFixed(1) + " %", `average share over the threshold (${r.thrDb} dB)`), F(hi + " dBm", `highest level, bin ${hib} (${xpMhz(r.khz(hib))} MHz)`),
+    F(`bin ${mdb} · ${md} %`, `most active frequency, ${xpMhz(r.khz(mdb))} MHz`), F(r.events.length + " / " + groups.length, "events / groups"),
+    F((mb / NB * 100).toFixed(0) + " %", "of the time not measured"), F(xpSize(r.size), "file size, instead of " + xpSize(r.sweeps * 64) + " raw"));
+  host.append(el("h3", { textContent: name }), bar,
+    el("div", { className: "xp-plot" }, heat, act, el("div", { className: "xp-ax" }, ...[0, .25, .5, .75, 1].map(f => el("span", { textContent: xpClock(total * f) }))), read),
+    el("h3", { textContent: "Now" }), el("div", { className: "xp-nowgrid" }, spec, nowList),
+    el("p", { className: "muted", textContent: "Bars are rebuilt from the file: the noise floor plus the level stored for this moment. Frequencies under the threshold show as the floor, so the real level can be up to the threshold higher. The dashed line is the highest level seen so far." }),
+    el("h3", { textContent: "What stands out" }), el("div", { className: "xp-scroll" }, table), tech,
+    el("h3", { textContent: "Statistics" }), facts);
+  frame(true); requestAnimationFrame(tick);
+}
+
 
 // ---------- range test (see maarse-core/src/rangetest.rs and docs/FIELD-TEST.md) ----------
 // One node is the beacon, the other the receiver. The receiver's packets are
@@ -7468,6 +8076,7 @@ $("btn-disconnect").onclick = async () => { const t = transport; transport = nul
 $("btn-send").onclick = send;
 $("btn-radio").onclick = () => setView("radio");
 $("btn-range").onclick = () => { state.target = null; setView("range"); };
+$("btn-experimental").onclick = () => { state.target = null; setView("experimental"); };
 $("btn-firmware").onclick = () => setView("firmware");
 $("btn-file").onclick = () => $("file").click();
 $("btn-voice").onclick = () => rec.on ? voiceStop() : voiceStart();
@@ -7743,7 +8352,7 @@ Object.assign(state, { tab: "chats", activity: [], airHist: [], nodeSel: null, c
 var VIEW_TAB = { chat: "chats", meshcore: "chats", verify: "chats", invite: "chats", newprivate: "chats", joininvite: "chats",
   map: "map", node: "nodes", announces: "nodes", mcnodes: "nodes", sensors: "nodes", pages: "nodes",
   network: "mesh", activity: "mesh", status: "mesh", alerts: "mesh",
-  range: "settings", radio: "settings", firmware: "settings", settings: "settings", connections: "settings", computer: "settings", service: "settings",
+  range: "settings", experimental: "settings", radio: "settings", firmware: "settings", settings: "settings", connections: "settings", computer: "settings", service: "settings",
   backup: "settings", myqr: "settings", account: "settings", "meshcore-setup": "settings", overview: "settings", connect: "settings", remote: "settings",
   notifs: "settings", appearance: "settings", shortcuts: "settings" };
 const PLACES = [["chats", "Chats", "Ctrl 1"], ["map", "Map", "Ctrl 2"], ["nodes", "Nodes", "Ctrl 3"], ["mesh", "Mesh", "Ctrl 4"]];

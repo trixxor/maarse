@@ -389,7 +389,8 @@ fun MePageContent(p: MePage, go: (MePage) -> Unit = {}) {
             MePage.X_POWER -> PowerPage()
             MePage.X_NEIGHBOURS -> NeighbourSignalPage()
             MePage.X_GPS -> GpsPage()
-            MePage.X_SPECTRUM -> SpectrumPage()
+            MePage.X_SPECTRUM -> SpectrumPage(go)
+            MePage.X_RECORDINGS -> RecordingsPage()
             MePage.HOST -> when (conn.mode) {
                 Mode.PHONE -> HostSection(server = false)
                 Mode.SERVER -> HostSection(server = true)

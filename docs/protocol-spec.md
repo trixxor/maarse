@@ -1295,8 +1295,8 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x06 | FileBegin | req (2) \| dest (16) \| size (u32) \| mime (str8) \| name (text) | |
 | 0x07 | FileData | req (2) \| offset (u32) \| data (text) | |
 | 0x08 | FileEnd | req (2) | reply `FileStarted` |
-| 0x09 | GetStats | – | reply `Stats` |
-| 0x0a | SetRadio | radio config (16) | see 9.5 |
+| 0x09 | GetStats | optional: up to 24 stat keys (1 byte each) | reply `Stats`. With a key list the reply is one frame with only those keys; an older node ignores the list and answers as without it |
+| 0x0a | SetRadio | radio config (16) \| optional trial minutes (1) | see 9.5. Locally it is applied and saved at once. Through `Remote` it is a **trial**: applied but not saved until `ConfirmRadio`; the byte is the trial length (0 or absent = 5, at most 30). An older node saves at once |
 | 0x0b | GetRadio | – | reply `Radio` |
 | 0x0c | Remote | req (2) \| dest (16) \| frame (type + content, no length) | sent as content `CONTROL`; reply `RemoteReply` |
 | 0x0d | SetAdmins | up to 4 × address (16) | local only |
@@ -1333,6 +1333,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x34 | SetIdentity | flags (1: bit 0 confirm) \| secret (64) | local only; reply `IdentityChanged` |
 | 0x35–0x37 | – | reserved (linked devices) |
 | 0x39 | Sensor | req (2) \| dest (16, all zeros = the connected node or the host) \| op (1) \| data | sensor nodes: recipe, owners, status, host operations (history, simulation); a command for another node goes to it as a control command; see `docs/sensors.md` | |
+| 0x44 | ConfirmRadio | – | keep the radio settings on trial (allowed through `Remote`); reply `Radio` with the settings in use. Without a trial it only answers that, so a repeated confirmation is harmless |
 
 ### 9.3 Events
 
@@ -1438,7 +1439,7 @@ Keys in `Stats` (module `stat`): 1 uptime s, 2 known nodes, 3 routes,
 88 heap free, 89 heap min free, 90 crashes, 91 panic line, 92 panic file,
 93 hellos sent, 94 key requests sent, 95 local repairs, 96 messages carried,
 97 pinned contacts, 98 mobile mode (0/1), 99 quota dropped, 100 messages
-waiting for a key, 101 outbox (messages kept for a post office deposit).
+waiting for a key, 101 outbox (messages kept for a post office deposit), 118 seconds left of a remote radio change on trial (0 = none).
 Status page keys (2026-11-25, working copy, not released): 103 GPS satellites
 in use, 104 seconds since the last GPS fix, 105 GPS state (0 off, 1 on but the
 module is silent, 2 searching, 3 has a position), 106 satellites in view, 107
@@ -1555,9 +1556,16 @@ values to limit flash writes during a burst. Read-only commands do not reserve
 flash. This policy preserves the existing control wire format.
 
 `SetAdmins`, `SetWifi`, `SetIdentity` and `SetRangeTest` are refused when they
-arrive through `Remote`. Through `Remote`, firmware accepts `GetStats`,
-`GetRadio`, `SetRadio`, `SetRole`, the OTA commands (downgrade flag
+arrive through `Remote`. Through `Remote`, firmware accepts `GetStats` (with or without a key list),
+`GetRadio`, `SetRadio`, `ConfirmRadio`, `GetNeighbors` (the first 8 neighbours in one frame), `SetRole`, the OTA commands (downgrade flag
 ignored) and the three spectrum recording commands (`SweepRecStart`, `SweepRecStop`, `SweepRecStatus`).
+
+**Radio change on trial** (`maarse-core/src/radiotrial.rs`). A `SetRadio` through `Remote` applies the settings but leaves
+flash alone and starts a timer (default 5 minutes, at most 30). `ConfirmRadio` from an administrator saves what is in use. If the timer
+runs out first, the node returns to the settings in flash (a reboot during the trial does the same, as flash never changed). A second
+`SetRadio` during a trial restarts the timer but still returns to the settings that were in flash before the first one. The reply to
+`SetRadio` is sent before the switch; the administrator's own radio must hear the node on the new settings for `ConfirmRadio` to arrive.
+Stats key 118 shows the seconds left (second stats frame).
 
 ---
 

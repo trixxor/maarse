@@ -422,6 +422,7 @@ object Node : LinkListener {
     fun fileLabel(mime: String, name: String, data: ByteArray?): String = when {
         mime == Voice.MIME -> "Voice message" + (data?.let { " · ${Voice.seconds(it)} s" } ?: "")
         mime.startsWith("image/") -> "Photo"
+        mime == RadioRec.MIME -> "Spectrum scan (${((data?.size ?: 0) + 1023) / 1024} KB)"
         else -> "$name (${((data?.size ?: 0) + 1023) / 1024} KB)"
     }
 
@@ -453,6 +454,8 @@ object Node : LinkListener {
         if (offline.value || conn.value.state != Conn.State.ONLINE) return "Not connected — files are not queued; send it when you are online"
         val max = maxBytes?.let { minOf(it, fileMax()) } ?: fileMax()
         var (data, mime, name) = Triple(data0, mime0, name0)
+        // A spectrum recording is recognised by its MIME type on the other side, whatever the file picker says.
+        if (name.endsWith(".msr", ignoreCase = true)) mime = RadioRec.MIME
         // Pictures are made smaller like in other messengers: at most about
         // 150 KB (and the node's limit, 8 KB over LoRa), so they go quickly.
         val picMax = minOf(max, 150_000)
@@ -481,7 +484,7 @@ object Node : LinkListener {
         when (ev) {
             is Ev.FileStarted -> pendingFiles.remove(ev.req)?.let { row -> fileOut[ev.fileId] = row; setStatus(row, "sending 0/${ev.chunks}") }
             // Pages and pictures we asked for go to the Pages screen, not a chat.
-            is Ev.FileIncoming -> if (ev.mime == RadioRec.MIME) {
+            is Ev.FileIncoming -> if (RadioRec.expecting(ev.mime)) {
                 if (ev.size in 1..65536) recIn[ev.fileId] = Incoming(0, ByteArray(ev.size), ev.mime, ev.name, ev.from)
             } else if (!Pages.onIncoming(ev)) {
                 if (ev.size <= 0 || ev.size > 16 * 1024 * 1024) return
@@ -1141,7 +1144,7 @@ object Node : LinkListener {
             is Ev.Gps -> gps.value = ev.info
             is Ev.Sweep -> addSweep(ev)
             is Ev.SweepRecState -> RadioRec.onState("", ev)
-            is Ev.RemoteReply -> (ev.inner as? Ev.SweepRecState)?.let { RadioRec.onState(ev.from, it) } ?: Unit
+            is Ev.RemoteReply -> (ev.inner as? Ev.SweepRecState)?.let { RadioRec.onState(ev.from, it) } ?: RemoteAdmin.onReply(ev.from, ev.inner)
             is Ev.Radio -> radio.value = ev.cfg
             is Ev.Regions -> regions.value = ev
             is Ev.Sharing -> {

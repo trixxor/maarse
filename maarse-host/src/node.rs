@@ -3731,8 +3731,12 @@ impl Node {
                 let ok = matches!(
                     Command::decode(&frame),
                     Ok(Command::GetStats
+                        | Command::GetStatsKeys { .. }
                         | Command::GetRadio
                         | Command::SetRadio(_)
+                        | Command::SetRadioTrial { .. }
+                        | Command::ConfirmRadio
+                        | Command::GetNeighbors
                         | Command::SetRole { .. }
                         | Command::OtaBegin { .. }
                         | Command::OtaChunk { .. }
@@ -3744,7 +3748,7 @@ impl Node {
                         | Command::SweepRecStatus)
                 );
                 if !ok {
-                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Only status, radio, role, firmware, sensors and spectrum recordings can be controlled remotely"));
+                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Only status, radio, neighbours, role, firmware, sensors and spectrum recordings can be controlled remotely"));
                 }
                 // The counter follows the clock, so it also increases after a restart,
                 // but always increases (firmware chunks can come several per second).
@@ -3795,7 +3799,7 @@ impl Node {
                     "The range test runs on the radio node itself. Connect to it via USB or Bluetooth.",
                 ),
             ),
-            Command::GetRadio | Command::SetRadio(_) => self.send_client(
+            Command::GetRadio | Command::SetRadio(_) | Command::SetRadioTrial { .. } | Command::ConfirmRadio => self.send_client(
                 id,
                 &err_ev(
                     0,
@@ -3822,6 +3826,12 @@ impl Node {
                 for chunk in extra.chunks(40) {
                     self.send_client(id, &Event::Stats { items: chunk.iter().copied().collect() });
                 }
+            }
+            Command::GetStatsKeys { keys } => {
+                let host = self.stats();
+                let extra = self.radio_stats(&host);
+                let items: Vec<(u8, i32)> = host.into_iter().chain(extra).filter(|(k, _)| keys.contains(k)).collect();
+                self.send_client(id, &Event::Stats { items: items.into_iter().take(59).collect() });
             }
             // Handled in node/ext.rs.
             Command::TraceRoute { .. }
@@ -3897,7 +3907,11 @@ impl Node {
                     reply(self, Event::Stats { items: chunk.iter().copied().collect() });
                 }
             }
-            Ok(Command::GetRadio | Command::SetRadio(_)) => {
+            Ok(Command::GetStatsKeys { keys }) => {
+                let items: Vec<(u8, i32)> = self.stats().into_iter().filter(|(k, _)| keys.contains(k)).collect();
+                reply(self, Event::Stats { items: items.into_iter().take(59).collect() });
+            }
+            Ok(Command::GetRadio | Command::SetRadio(_) | Command::SetRadioTrial { .. } | Command::ConfirmRadio) => {
                 reply(self, err_ev(0, error_code::BAD_FRAME, "maarse-host has no radio of its own"));
             }
             Ok(Command::SetRole { .. }) => {

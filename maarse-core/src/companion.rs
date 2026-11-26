@@ -99,8 +99,19 @@ pub enum Command {
     FileEnd { req: u16 },
     /// 0x09: ask for status and statistics.
     GetStats,
-    /// 0x0a: set radio settings (stored in flash).
+    /// 0x09 followed by up to 24 stat keys: ask for only those keys (one `Stats` frame). A node that
+    /// does not know the list ignores it and answers as for `GetStats`.
+    GetStatsKeys { keys: heapless::Vec<u8, 24> },
+    /// 0x0a: set radio settings (stored in flash). Through `Remote` the change is only a trial (see
+    /// `ConfirmRadio`), for the default time.
     SetRadio(RadioConfig),
+    /// 0x0a with one more byte: as `SetRadio`, and through `Remote` the trial lasts `minutes` (0 = the
+    /// default, 5; at most 30). Locally it is the same as `SetRadio`. An old node saves at once.
+    SetRadioTrial { cfg: RadioConfig, minutes: u8 },
+    /// 0x44: keep the radio settings that are on trial (allowed through `Remote`, from an administrator).
+    /// If it does not come in time, the node goes back to the settings stored in flash. The reply is
+    /// `Radio` with the settings now in use; without a trial it only answers that.
+    ConfirmRadio,
     /// 0x0b: which radio settings are in use?
     GetRadio,
     /// 0x0c: send a command (`GetStats`, `GetRadio`, `SetRadio`, `SetRole`) to a
@@ -1048,6 +1059,8 @@ pub mod stat {
     /// (USB, Bluetooth), never in a reply to a remote administrator.
     pub const GPS_LAT_E7: u8 = 116;
     pub const GPS_LON_E7: u8 = 117;
+    /// Seconds left of a remote radio change that is still on trial (see `Command::ConfirmRadio`); 0 = none.
+    pub const RADIO_TRIAL_S: u8 = 118;
 }
 
 /// Error codes in `Event::Error`.
@@ -1222,7 +1235,10 @@ impl Command {
                 ,
             Command::FileEnd { req } => w.start(0x08).b(&req.to_le_bytes()),
             Command::GetStats => w.start(0x09),
+            Command::GetStatsKeys { keys } => w.start(0x09).b(keys),
             Command::SetRadio(c) => w.start(0x0a).b(&c.to_bytes()),
+            Command::SetRadioTrial { cfg, minutes } => w.start(0x0a).b(&cfg.to_bytes()).b(&[*minutes]),
+            Command::ConfirmRadio => w.start(0x44),
             Command::GetRadio => w.start(0x0b),
             Command::Remote { req, dest, frame } => w.start(0x0c).b(&req.to_le_bytes()).b(&dest.0).b(frame),
             Command::SetAdmins { admins } => {
@@ -1325,10 +1341,13 @@ impl Command {
                 data: r.text()?,
             },
             0x08 => Command::FileEnd { req: r.u16()? },
-            0x09 => Command::GetStats,
-            0x0a => Command::SetRadio(
-                RadioConfig::from_bytes(r.take(RadioConfig::LEN)?).ok_or(FrameError::TooShort)?,
-            ),
+            0x09 if r.0.is_empty() => Command::GetStats,
+            0x09 => Command::GetStatsKeys { keys: heapless::Vec::from_slice(r.take(r.0.len().min(24))?).map_err(|_| FrameError::TooLong)? },
+            0x0a => {
+                let cfg = RadioConfig::from_bytes(r.take(RadioConfig::LEN)?).ok_or(FrameError::TooShort)?;
+                if r.0.is_empty() { Command::SetRadio(cfg) } else { Command::SetRadioTrial { cfg, minutes: r.u8()? } }
+            }
+            0x44 => Command::ConfirmRadio,
             0x0b => Command::GetRadio,
             0x0c => Command::Remote { req: r.u16()?, dest: r.addr()?, frame: r.text()? },
             0x0d => Command::SetAdmins { admins: r.addrs()? },
@@ -2063,6 +2082,9 @@ mod tests {
         roundtrip_cmd(Command::GetStats);
         roundtrip_cmd(Command::SetRadio(RadioConfig::EU_DEFAULT));
         roundtrip_cmd(Command::GetRadio);
+        roundtrip_cmd(Command::GetStatsKeys { keys: heapless::Vec::from_slice(&[10, 32, 86]).unwrap() });
+        roundtrip_cmd(Command::SetRadioTrial { cfg: RadioConfig::EU_DEFAULT, minutes: 10 });
+        roundtrip_cmd(Command::ConfirmRadio);
         roundtrip_cmd(Command::SetRole { role: 2 });
         roundtrip_cmd(Command::JoinPrivateChannel { key: [9; 32], name: text("cabin æ".as_bytes()) });
         assert_eq!(&Command::JoinPrivateChannel { key: [7; 32], name: text(b"x") }.encode()[..3], &[34, 0, 0x13]);

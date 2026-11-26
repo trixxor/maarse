@@ -1406,6 +1406,13 @@ const Cmd = {
   // Stops an outgoing file (being sent or kept in the host's file mailbox). id: decimal string.
   cancelFile: id => { let v = BigInt(id); const b = []; for (let i = 0; i < 8; i++) { b.push(Number(v & 0xffn)); v >>= 8n; } return frame(0x38, b); },
   getStats: () => frame(0x09),
+  // Only the stat keys asked for (at most 24, one reply). An old node ignores the list and sends everything.
+  getStatsKeys: keys => frame(0x09, keys.slice(0, 24)),
+  // Keep the radio settings a remote administrator tried (see setRadioTrial).
+  confirmRadio: () => frame(0x44),
+  // As setRadio, and through `remote` the change is only a trial for `minutes`: the node saves it when confirmRadio
+  // arrives, else it goes back to what it had. (An old node saves at once.)
+  setRadioTrial: (c, minutes) => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [c.announce & 0xff, minutes]),
   // A spectrum sweep: `count` steps of `stepKhz` from `startKhz`, `sweeps` times (255 = until stopped or 2 minutes, 0 = stop).
   sweep: (startKhz, stepKhz, count, sweeps) => frame(0x3d, u32(startKhz), u16(stepKhz), [count, sweeps]),
   // Record the spectrum on the radio itself: 64 steps, one sweep every `intervalDs` tenths of a second (0 = 2 s), for
@@ -1721,7 +1728,7 @@ const state = {
   traces: [], neighbors: [], neighborsNext: [], sharing: null, nodeInfo: new Map(), traceReq: new Map(),
   stats: null, radio: null, statsTimer: null,
   target: null,          // null = this node, otherwise the address of a remote node
-  remoteStats: [], remoteRadio: null, admins: [], regions: null,
+  remoteStats: [], remoteRadio: null, remoteNeighbors: null, statusMode: "short", admins: [], regions: null,
   nextReq: 1,
 };
 
@@ -2099,6 +2106,11 @@ function renderChatInner() {
       img.onclick = () => showImage(m.url, m.name || "picture");
       d.appendChild(img);
     } else if (m.url) {
+      if (m.mime === XP_MSR_MIME || /\.msr$/i.test(m.name || "")) {
+        const v = document.createElement("button"); v.className = "sm"; v.textContent = "📈 View scan";
+        v.onclick = () => xpOpenFromUrl(m.url, (m.name || "Spectrum").replace(/\.msr$/i, ""));
+        d.appendChild(v);
+      }
       const l = document.createElement("a"); l.href = m.url; l.download = m.name || "file"; l.textContent = "⬇ " + (m.name || "file");
       d.appendChild(l);
     }
@@ -2290,7 +2302,8 @@ function onEvent(ev) {
       if (i.type === "sweepRecState") { xpRecState(ev.from, i); break; }
       if (ev.from !== state.target) break;
       if (i.type === "stats") state.remoteStats = state.remoteStats.concat(i.items);
-      else if (i.type === "radio") state.remoteRadio = i.cfg;
+      else if (i.type === "radio") { state.remoteRadio = i.cfg; rtReply(ev.from, i.cfg); }
+      else if (i.type === "neighbors") state.remoteNeighbors = i.items;
       else if (i.type === "error") log(`${label(ev.from)}: ${i.text}`);
       else if (i.type === "ota" && ev.from === ota.target) { otaOnState(i); break; }
       renderChat();
@@ -2355,7 +2368,8 @@ function onEvent(ev) {
     }
     case "fileIncoming": {
       // A spectrum recording goes to Settings > Experimental > Recordings, not into a chat.
-      if (ev.mime === XP_MSR_MIME) { state.files.set(ev.fileId, { from: ev.from, name: ev.name, mime: ev.mime, size: ev.size, parts: [], progress: 0, fileId: ev.fileId, text: "" }); break; }
+      // One we did not ask for (a person sent it) stays in the chat with a "View scan" button.
+      if (ev.mime === XP_MSR_MIME && xp.remote.waiting) { state.files.set(ev.fileId, { from: ev.from, name: ev.name, mime: ev.mime, size: ev.size, parts: [], progress: 0, fileId: ev.fileId, text: "", xpDivert: true }); break; }
       if (pageIncoming(ev)) break;
       // A page or page picture we did not (or no longer) wait for: Pages
       // only, never a file in a chat.
@@ -2399,7 +2413,7 @@ function onEvent(ev) {
         m.url = URL.createObjectURL(new Blob([buf], { type: m.mime || "application/octet-stream" }));
         m.text = m.mime?.startsWith("image/") ? "" : `${m.name} (${Math.ceil(m.size / 1024)} KB)`;
         if (m.mime === VOICE_MIME) { m.text = "Voice message – decoding…"; voiceReceived(m); }
-        if (m.mime === XP_MSR_MIME) xpRecordingReceived(m, buf);
+        if (m.xpDivert) xpRecordingReceived(m, buf);
         m.parts = [];
       } else m.text = ev.text.startsWith("cancelled") ? `${m.name}: ${ev.text}` : `${m.name}: error (${ev.text})`;
       // Kept in the host's file mailbox: stays known, so it can be cancelled
@@ -2743,6 +2757,8 @@ Compress the picture to 8 KB and send it over LoRa now?`)) {
   }
   const data = new Uint8Array(await blob.arrayBuffer());
   const req = state.nextReq++ & 0xffff;
+  // A spectrum recording is recognised by its MIME type on the other side, whatever the browser says.
+  if (/\.msr$/i.test(name) && blob.type !== XP_MSR_MIME) blob = new Blob([blob], { type: XP_MSR_MIME });
   const m = { mine: true, name, mime: blob.type, url: URL.createObjectURL(blob), progress: 0,
               text: blob.type.startsWith("image/") ? "" : `${name} (${Math.ceil(data.length / 1024)} KB)`,
               time: now(), status: "preparing…", kind: "file" };
@@ -2786,8 +2802,12 @@ const STAT = {
   108: ["Bluetooth and USB", "Bluetooth", "ble"], 109: ["Bluetooth and USB", "Bluetooth data in", "bytes"], 110: ["Bluetooth and USB", "Bluetooth data out", "bytes"],
   111: ["Bluetooth and USB", "USB data in", "bytes"], 112: ["Bluetooth and USB", "USB data out", "bytes"], 113: ["Bluetooth and USB", "USB last heard", "ago"],
   114: ["General", "LoRa radios connected"], 115: ["General", "Radio last heard", "ago"],
+  90: ["Power and diagnostics", "Crashes"], 118: ["Radio", "Radio change on trial", "trial"],
   72: ["DHT", "Contacts"], 73: ["DHT", "Records stored"], 74: ["DHT", "Lookups"], 75: ["DHT", "Found"], 76: ["DHT", "Direct gateways"],
 };
+// The short status of a remote node: uptime, role, traffic, errors, queue, signal, noise, battery, temperature, crashes
+// and the radio trial left. Few bytes over the air.
+const SHORT_STATS = [1, 7, 10, 11, 12, 13, 14, 32, 33, 40, 41, 44, 34, 35, 80, 49, 85, 86, 90, 118];
 const GROUPS = ["General", "Power and diagnostics", "Radio", "GPS", "Bluetooth and USB", "Routing", "Mailbox and files", "Network"];
 const GPS_STATES = ["Off", "On, but the module sends nothing", "Searching for satellites", "Has a position"];
 const BLE_STATES = ["Off", "Waiting for a phone", "Phone connected"];
@@ -2796,6 +2816,7 @@ const PRECISION = ["Off", "about 10 km", "about 1 km", "Precise"];
 
 function fmt(v, unit) {
   if (unit === "time") { const h = Math.floor(v / 3600), m = Math.floor(v % 3600 / 60); return h ? `${h} h ${m} min` : `${m} min ${v % 60} s`; }
+  if (unit === "trial") return v ? `${Math.floor(v / 60)} min ${v % 60} s left to confirm` : "None";
   if (unit === "role") return ["Client", "Repeater", "Relay", "Anchor", "Auto"][v] || v;
   if (unit === "energy") return ENERGY[v] ?? v;
   if (unit === "temp") return (v / 10).toFixed(1) + " °C";
@@ -2920,8 +2941,31 @@ function renderStatus(box) {
   targetPicker(box);
   const items = state.target ? state.remoteStats : state.stats;
   if (!state.target) statusOverview(box);
+  if (state.target) {
+    // Over the air every byte costs airtime: the short status is a few numbers in one reply; the full status is
+    // everything (several replies); the neighbours list is asked for only when you press its button.
+    const mode = el("div", { className: "row", style: "margin-bottom:10px" });
+    const pick = (text, m, title) => { const b = el("button", { textContent: text, title }); if (state.statusMode === m) b.className = "primary"; b.onclick = () => { state.statusMode = m; setView("status"); }; return b; };
+    const nb = el("button", { textContent: "Neighbours", title: "Who this node hears, with signal strength (one reply, the 8 heard most recently)" });
+    nb.onclick = () => { state.remoteNeighbors = null; transport?.send(Cmd.remote(state.nextReq++ & 0xffff, state.target, Cmd.getNeighbors())); renderChat(); };
+    mode.append(pick("Short status", "short", "A few numbers in one small reply"), pick("Full status", "full", "Everything the node reports; several replies"), nb);
+    box.append(mode);
+  }
+  if (state.target && state.remoteNeighbors) {
+    box.append(el("h3", { textContent: "Neighbours", style: "margin:12px 0 4px" }));
+    const table = (head, rows) => {
+      const t = el("table", { className: "stats" });
+      const h = t.insertRow(); h.className = "group"; for (const x of head) h.insertCell().textContent = x;
+      for (const r of rows) { const tr = t.insertRow(); for (const x of r) tr.insertCell().textContent = x; }
+      return t;
+    };
+    if (!state.remoteNeighbors.length) box.append(el("div", { className: "muted" }, "None heard yet."));
+    else box.append(table(["Neighbour", "SNR", "RSSI", "Last heard", "Packets"], state.remoteNeighbors.map(n => [
+      nodeName(n.prefix) || idName(n.id), snrText(n.snr), n.rssi ? n.rssi + " dBm" : "–",
+      n.age < 60 ? `${n.age} s ago` : n.age < 3600 ? `${Math.floor(n.age / 60)} min ago` : `${Math.floor(n.age / 3600)} h ago`, n.count])));
+  }
   if (!items || !items.length) { box.append(state.target ? "Waiting for a reply… (you must be an administrator of the node)" : "Fetching…"); return; }
-  box.append(el("h3", { textContent: "All numbers", style: "margin:18px 0 4px" }));
+  box.append(el("h3", { textContent: state.target && state.statusMode !== "full" ? "Short status" : "All numbers", style: "margin:18px 0 4px" }));
   const t = document.createElement("table"); t.className = "stats";
   const byGroup = new Map(GROUPS.map(g => [g, []]));
   for (const [k, v] of items) {
@@ -2946,6 +2990,57 @@ const PRESETS = {
 };
 const BWS = [7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000];
 
+// ---- A remote radio change is a trial: the node uses the new settings but saves them only when we confirm ----
+// If the confirmation does not reach it in time, it goes back to what it had. Our own radio must be able to hear it on
+// the new settings (change ours too, or reach it over the internet) for the confirmation to arrive.
+const RT_MINUTES = 5;
+const rtl = { t: null };
+const rtSame = (a, b) => a && b && ["freq", "bw", "sf", "cr", "power", "duty", "preamble", "announce"].every(k => a[k] === b[k]);
+function rtStart(target, cfg) {
+  rtStop();
+  rtl.t = { target, cfg, until: Date.now() + RT_MINUTES * 60000, phase: "applied" };
+  transport?.send(Cmd.remote(state.nextReq++ & 0xffff, target, Cmd.setRadioTrial(cfg, RT_MINUTES)));
+  rtl.tick = setInterval(rtTick, 1000);
+}
+function rtStop() { clearInterval(rtl.tick); clearInterval(rtl.retry); rtl.tick = rtl.retry = null; }
+function rtConfirm() {
+  const t = rtl.t; if (!t || t.phase === "saved" || t.phase === "expired") return;
+  t.phase = "confirming";
+  const send = () => transport?.send(Cmd.remote(state.nextReq++ & 0xffff, t.target, Cmd.confirmRadio()));
+  send(); clearInterval(rtl.retry); rtl.retry = setInterval(() => { if (rtl.t === t && t.phase === "confirming") send(); }, 15000);
+  renderChat();
+}
+// A radio reply from the node: after the confirmation, settings equal to the trial's mean it saved them.
+function rtReply(from, cfg) {
+  const t = rtl.t;
+  if (!t || t.target !== from || t.phase !== "confirming" || !rtSame(cfg, t.cfg)) return;
+  t.phase = "saved"; rtStop(); log(label(from) + ": the radio settings are saved.");
+}
+function rtLeft() { return rtl.t ? Math.max(0, Math.ceil((rtl.t.until - Date.now()) / 1000)) : 0; }
+function rtTick() {
+  const t = rtl.t; if (!t) return rtStop();
+  if (rtLeft() === 0 && (t.phase === "applied" || t.phase === "confirming")) {
+    t.phase = "expired"; rtStop();
+    log(label(t.target) + ": the radio change was not confirmed in time, so it goes back to its old settings.");
+    if (state.view === "radio") renderChat(); return;
+  }
+  const e = document.getElementById("rtl-left"); if (e) e.textContent = Math.floor(rtLeft() / 60) + ":" + String(rtLeft() % 60).padStart(2, "0");
+}
+function rtBanner(box) {
+  const t = rtl.t; if (!t || t.target !== state.target) return;
+  const w = el("div", { className: "warn" });
+  if (t.phase === "saved") { w.append(el("b", {}, "Saved. "), "The node confirmed the new radio settings."); box.append(w); return; }
+  if (t.phase === "expired") { w.append(el("b", {}, "Not confirmed. "), "The node goes back to its old settings (or already has). Fetch again to see which it uses."); box.append(w); return; }
+  w.append(el("b", {}, "On trial. "), "The node uses the new settings but has not saved them. Make sure your own radio hears it, then confirm. Time left: ",
+    el("b", { id: "rtl-left" }, ""), t.phase === "confirming" ? ". Confirming, trying every 15 seconds…" : ".");
+  const row = el("div", { className: "row", style: "margin-top:8px" });
+  const mine = el("button", { textContent: "Switch my radio to these settings too", title: "Saves them on the radio connected to you" });
+  mine.onclick = async () => { if (await askConfirm("This saves the same radio settings on your own radio, so it can hear the node. Continue?")) transport?.send(Cmd.setRadio(t.cfg)); };
+  const ok = el("button", { className: "primary", textContent: t.phase === "confirming" ? "Confirm again" : "Confirm and save" }); ok.onclick = rtConfirm;
+  row.append(mine, ok); w.append(row); box.append(w);
+  setTimeout(rtTick, 0);
+}
+
 function renderRadio(box) {
   $("chat-title").textContent = state.target ? "Manage " + label(state.target) : "Radios, role and regions"; $("chat-sub").textContent = "";
   if (state.target) {
@@ -2959,6 +3054,7 @@ function renderRadio(box) {
     if (transport instanceof WsTransport) { if (!hs.data && !hs.loading) { hs.loading = true; hsLoad().finally(() => { hs.loading = false; }); } renderSettings(box, "radio"); }
     renderAdmins(box); renderRegions(box);
   }
+  if (state.target) rtBanner(box);
   const c = state.target ? state.remoteRadio : state.radio;
   if (!c) { box.append(state.target ? "Waiting for a reply… (you must be an administrator of the node)"
                                     : transport instanceof WsTransport ? "No radio is connected to this host yet: choose its port under Connected radios above."
@@ -2991,14 +3087,14 @@ function renderRadio(box) {
     freq.value = (p.freq / 1e6).toFixed(3); bw.value = p.bw; sf.value = p.sf; cr.value = p.cr;
     power.value = p.power; duty.value = (p.duty / 10).toFixed(1); pre.value = p.preamble;
   };
-  const save = document.createElement("button"); save.className = "primary"; save.textContent = "Save on the node";
+  const save = document.createElement("button"); save.className = "primary"; save.textContent = state.target ? "Try on the node" : "Save on the node";
   save.onclick = async () => {
     const cfg = { freq: Math.round(parseFloat(freq.value) * 1e6), bw: +bw.value, sf: +sf.value, cr: +cr.value,
                   power: +power.value, duty: Math.round(parseFloat(duty.value) * 10), preamble: +pre.value,
                   announce: (() => { const q = Math.round(parseFloat(ann.value) * 4); return q === 48 ? 0 : Math.max(1, Math.min(255, q || 48)); })() };
     if (state.target) {
-      if (!await askConfirm("The remote node changes radio settings immediately. If it does not have the same settings as the rest of the network, you lose the connection to it. Continue?")) return;
-      transport?.send(Cmd.remote(state.nextReq++ & 0xffff, state.target, Cmd.setRadio(cfg)));
+      if (!await askConfirm("The remote node tries the new radio settings for " + RT_MINUTES + " minutes. It saves them only if you confirm in time (your own radio must hear it on the new settings); otherwise it goes back. Continue?")) return;
+      rtStart(state.target, cfg); renderChat();
     } else transport?.send(Cmd.setRadio(cfg));
   };
   f.append(document.createElement("span"), save);
@@ -3520,7 +3616,7 @@ function setView(v) {
   clearInterval(state.statsTimer);
   if (transport && state.target) {
     const req = state.nextReq++ & 0xffff;
-    if (v === "status") { state.remoteStats = []; transport.send(Cmd.remote(req, state.target, Cmd.getStats())); }
+    if (v === "status") { state.remoteStats = []; transport.send(Cmd.remote(req, state.target, state.statusMode === "full" ? Cmd.getStats() : Cmd.getStatsKeys(SHORT_STATS))); }
     if (v === "radio") { state.remoteRadio = null; transport.send(Cmd.remote(req, state.target, Cmd.getRadio())); }
   } else if (transport) {
     if (v === "status") {
@@ -3948,6 +4044,7 @@ function xpRecStart() {
   const rm = xp.remote;
   if (!transport) { rm.msg = "Connect to your node first."; renderChat(); return; }
   store.set("xpRemDur", rm.dur);
+  rm.waiting = true;
   rm.st = null; rm.msg = rm.target ? "Asked " + label(rm.target) + ". Waiting for its reply over LoRa…" : "Asked the radio…";
   xpRecSend(Cmd.sweepRecStart(XP_BAND.startKhz, XP_BAND.stepKhz, rm.dur, 0, 6));
   xpRecPoll();
@@ -3955,7 +4052,7 @@ function xpRecStart() {
 }
 function xpRecStop() {
   const rm = xp.remote;
-  clearTimeout(rm.timer); xpRecSend(Cmd.sweepRecStop()); rm.st = null; rm.msg = "Stopped."; renderChat();
+  clearTimeout(rm.timer); xpRecSend(Cmd.sweepRecStop()); rm.waiting = false; rm.st = null; rm.msg = "Stopped."; renderChat();
 }
 // While it records, ask now and then how it goes (over LoRa each question costs airtime, so not often).
 function xpRecPoll() {
@@ -3979,10 +4076,27 @@ function xpRecordingReceived(m, buf) {
   const name = `Spectrum ${who} ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   const id = Date.now();
   xp.recs.unshift({ id, name, at: id, b64: xpB64(buf) }); xpSaveRecs();
-  xp.openId = id; xp.remote.st = null; clearTimeout(xp.remote.timer);
+  xp.openId = id; xp.remote.st = null; xp.remote.waiting = false; clearTimeout(xp.remote.timer);
   xp.msg = `Received ${name} (${xpSize(buf.length)}).`;
-  if (state.view === "experimental") { xp.tab = "recordings"; renderChat(); }
-  else log(xp.msg + " Open it under Settings > Experimental > Recordings.");
+  xpShowRecordings();
+}
+// Opens Settings > Experimental > Recordings with the open recording on screen.
+function xpShowRecordings() {
+  xp.tab = "recordings";
+  if (state.view === "experimental") { renderChat(); return; }
+  state.target = null; markTab("settings"); setView("experimental");
+}
+// "View scan" on a recording file in a chat: keep a copy in Recordings (once) and open it.
+async function xpOpenFromUrl(url, name) {
+  try {
+    const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
+    SR.parse(buf);
+    const b64 = xpB64(buf);
+    let rc = xp.recs.find(x => x.b64 === b64);
+    if (!rc) { rc = { id: Date.now(), name, at: Date.now(), b64 }; xp.recs.unshift(rc); xpSaveRecs(); }
+    xp.openId = rc.id; xp.msg = "";
+    xpShowRecordings();
+  } catch { log("This file is not a spectrum recording Må:rse can read."); }
 }
 function xpRemoteTab(wrap) {
   const rm = xp.remote;

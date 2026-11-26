@@ -270,6 +270,15 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     }
 
     /// Only for a directly attached companion: our own GPS position, for the map.
+    /// The neighbours for a remote administrator: the 8 heard most recently, in one frame (small airtime). Out of line
+    /// so the command handler's stack frame does not grow.
+    #[inline(never)]
+    pub(super) fn remote_neighbors(&self) -> Event {
+        let now = now_ms();
+        let items = self.router.neighbors.sorted().iter().take(8).map(|n| maarse_core::companion::NeighborInfo::from_neighbor(n, now)).collect();
+        Event::Neighbors { part: 0, last: true, items }
+    }
+
     pub(super) fn local_stats(&self) -> Stats {
         let mut items = Stats::new();
         if let Some((lat, lon)) = gps::fix() {

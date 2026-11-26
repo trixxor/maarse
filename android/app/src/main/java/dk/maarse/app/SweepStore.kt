@@ -48,6 +48,10 @@ object SweepStore {
 
     fun read(item: Item): ByteArray = item.file.readBytes()
 
+    /** Keeps a recording that came in a chat: the saved copy if the same bytes are already here, else a new one. */
+    fun saveOnce(name: String, bytes: ByteArray): Item =
+        items.value.firstOrNull { it.file.length() == bytes.size.toLong() && it.file.readBytes().contentEquals(bytes) } ?: save(name, bytes)
+
     fun delete(item: Item) { item.file.delete(); refresh() }
 }
 
@@ -142,8 +146,15 @@ object RadioRec {
     val target = MutableStateFlow("")
     val state = MutableStateFlow<Ev.SweepRecState?>(null)
     val message = MutableStateFlow("")
+    /** Counts up each time a recording should be put on screen; the app shell opens Recordings when it changes. */
+    val showRequest = MutableStateFlow(0)
+    /** True from "Record on a radio" until the file arrives: only then does an incoming recording skip the chat. */
+    @Volatile var waiting = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var poll: Job? = null
+
+    /** Is this MSR file one we asked a radio for (so it goes to Recordings), not one a person sent in a chat? */
+    fun expecting(mime: String) = waiting && mime == MIME
 
     private fun send(inner: ByteArray) {
         val to = target.value
@@ -153,6 +164,7 @@ object RadioRec {
     /** The radio sweeps back to back, 10 a second, and hears and sends nothing until it is done (`durationS` at most 600). */
     fun start(durationS: Int) {
         state.value = null
+        waiting = true
         message.value = if (target.value.isEmpty()) "Asked the radio…" else "Asked ${Node.label(target.value)}. Waiting for its reply over LoRa…"
         send(Cmd.sweepRecStart(START_KHZ, STEP_KHZ, durationS, 0, 6))
         watch()
@@ -160,6 +172,7 @@ object RadioRec {
 
     fun stop() {
         poll?.cancel()
+        waiting = false
         send(Cmd.sweepRecStop())
         state.value = null
         message.value = "Stopped."
@@ -191,12 +204,23 @@ object RadioRec {
         val name = "Spectrum $who " + SimpleDateFormat("yyyy-MM-dd HH-mm", Locale.US).format(Date())
         val item = SweepStore.save(name, bytes)
         SweepStore.open.value = item.id
+        waiting = false
         poll?.cancel()
         state.value = null
         message.value = "Received ${item.name} (${bytes.size} bytes)."
+        showRequest.value++
+    }
+
+    /** "View scan" on a recording file in a chat: keep a copy (once) and open it in Recordings. Returns false if unreadable. */
+    fun view(name: String, bytes: ByteArray): Boolean {
+        if (runCatching { SweepRec.parse(bytes) }.isFailure) return false
+        SweepStore.open.value = SweepStore.saveOnce(name, bytes).id
+        showRequest.value++
+        return true
     }
 
     fun failed(why: String) {
+        waiting = false
         message.value = "The file did not arrive ($why)."
     }
 }

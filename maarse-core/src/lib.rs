@@ -28,6 +28,7 @@ pub mod duty;
 pub mod packet;
 pub mod qos;
 pub mod rangetest;
+pub mod radiotrial;
 pub mod region;
 pub mod router;
 pub mod routes;

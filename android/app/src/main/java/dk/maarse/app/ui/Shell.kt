@@ -62,6 +62,8 @@ sealed interface Screen {
     data object Home : Screen
     data class Chat(val conv: String) : Screen
     data class Contact(val addr: String) : Screen
+    /** Manage another node you administer: status, neighbours, radio change on trial. */
+    data class Manage(val addr: String) : Screen
     /** New chat: join a channel, add by QR code or link, or pick one of your people. */
     data object NewChat : Screen
     /** Settings, opened from the avatar at the top right of every place. */
@@ -128,6 +130,11 @@ fun AppShell(nav: Nav) {
             delay(5_000)
         }
     }
+    // A spectrum recording arrived (or "View scan" was tapped): show it.
+    val recShow by dk.maarse.app.RadioRec.showRequest.collectAsState()
+    LaunchedEffect(recShow) {
+        if (recShow > 0 && nav.top != Screen.Page(MePage.X_RECORDINGS)) nav.go(Screen.Page(MePage.X_RECORDINGS))
+    }
     BackHandler(nav.welcome == null && nav.canGoBack) { nav.back() }
     PagesNav.open = { nav.select(Tab.CONTACTS, reset = false); NodesNav.showPages() }
     PagesNav.contact = { nav.go(Screen.Contact(it)) }
@@ -154,8 +161,10 @@ fun AppShell(nav: Nav) {
                             ChatScreen(s.conv, onBack = nav::back, onContact = { nav.go(Screen.Contact(it)) })
                         }
                         is Screen.Contact -> Box(Modifier.statusBarsPadding()) {
-                            ContactPage(s.addr, onBack = nav::back, onChat = { c -> nav.home(Tab.CHATS); nav.go(Screen.Chat(c)) })
+                            ContactPage(s.addr, onBack = nav::back, onChat = { c -> nav.home(Tab.CHATS); nav.go(Screen.Chat(c)) },
+                                onManage = { nav.go(Screen.Manage(it)) })
                         }
+                        is Screen.Manage -> Box(Modifier.statusBarsPadding()) { ManageNodeScreen(s.addr, onBack = nav::back) }
                         Screen.NewChat -> SubPage("New chat", nav::back) {
                             NewChatScreen(onOpen = { c -> nav.back(); nav.go(Screen.Chat(c)) }, onDone = { nav.back() })
                         }

@@ -282,6 +282,8 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     told_choice: Option<u16>,
     settings: S,
     radio: RadioConfig,
+    /// A remote radio change on trial (flash keeps the old settings until `ConfirmRadio` comes).
+    radio_trial: maarse_core::radiotrial::RadioTrial,
     started: Instant,
     admins: heapless::Vec<Address, 4>,
     control_seen: FnvIndexMap<Address, u32, 4>,
@@ -319,6 +321,7 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
 
 /// Messages from unknown senders kept until their announce.
 const PENDING_RX: usize = 4;
+
 
 fn now_ms() -> u64 {
     Instant::now().as_millis()
@@ -421,6 +424,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             told_choice: None,
             settings,
             radio,
+            radio_trial: maarse_core::radiotrial::RadioTrial::new(),
             started: Instant::now(),
             admins: heapless::Vec::new(),
             control_seen: FnvIndexMap::new(),
@@ -500,6 +504,71 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     fn apply_radio_timing(&mut self) {
         let slot = maarse_core::qos::slot_ms(&self.radio.airtime());
         self.router.set_slot(slot, true);
+    }
+
+    /// Puts radio settings into use now. With `save` they are also written to flash; without it flash keeps
+    /// the old ones (a remote change on trial).
+    fn use_radio(&mut self, cfg: RadioConfig, save: bool) {
+        self.radio = cfg;
+        if self.announce_settled && self.announced {
+            self.reschedule_announce();
+        }
+        self.apply_radio_timing();
+        if save {
+            self.settings.save_radio(&cfg);
+        }
+        RADIO_CFG.signal(cfg);
+        self.range_radio_changed();
+    }
+
+    /// A remote administrator changes the radio settings: they apply now but are not saved until
+    /// `ConfirmRadio` comes. The trial starts from what flash holds, so a second change does not make an
+    /// unconfirmed one permanent. `minutes` 0 = 5, at most 30.
+    fn start_radio_trial(&mut self, cfg: RadioConfig, minutes: u8) {
+        self.radio_trial.start(self.radio, now_ms(), minutes);
+        self.use_radio(cfg, false);
+    }
+
+    /// `ConfirmRadio`: keep what is on trial. Without a trial it does nothing (a repeated confirmation).
+    fn confirm_radio(&mut self) {
+        if self.radio_trial.confirm() {
+            let cfg = self.radio;
+            self.settings.save_radio(&cfg);
+            log("Radio settings confirmed and saved");
+        }
+    }
+
+    /// The trial ran out without a confirmation: back to the settings in flash.
+    fn radio_trial_tick(&mut self) {
+        if let maarse_core::radiotrial::Tick::Revert(saved) = self.radio_trial.tick(now_ms()) {
+            self.use_radio(saved, false);
+            log("Radio change not confirmed: back to the saved settings");
+        }
+    }
+
+    /// Seconds left of a radio trial (0 = none).
+    fn radio_trial_left_s(&self) -> i32 {
+        self.radio_trial.left_s(now_ms()) as i32
+    }
+
+    /// The stats asked for by key, from both sets, in one frame. `local` also lets the position through (only
+    /// for a directly attached companion).
+    #[inline(never)] // keeps its two stats buffers out of the frame of the (stack-tight) command handlers
+    fn stats_for(&mut self, keys: &[u8], local: bool) -> Stats {
+        let mut out = Stats::new();
+        let mut take = |items: Stats| {
+            for (k, v) in items {
+                if keys.contains(&k) && out.iter().all(|(o, _)| *o != k) {
+                    let _ = out.push((k, v));
+                }
+            }
+        };
+        take(self.stats());
+        take(self.more_stats());
+        if local {
+            take(self.local_stats());
+        }
+        out
     }
 
     /// The main loop. If an announce stamp is being computed (about
@@ -689,6 +758,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     fn on_timer(&mut self) {
         self.update_display_info();
+        self.radio_trial_tick();
         if core::mem::take(&mut self.open_pending_due) {
             self.open_pending();
         }
@@ -1159,7 +1229,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         // Status and radio settings may be fetched without leaving modem mode.
         if !matches!(
             cmd,
-            Command::GetStats | Command::GetRadio | Command::SetRadio(_) | Command::SetRole { .. }
+            Command::GetStats | Command::GetStatsKeys { .. } | Command::GetRadio | Command::SetRadio(_) | Command::SetRadioTrial { .. } | Command::ConfirmRadio | Command::SetRole { .. }
         ) {
             self.set_modem(false, &[]);
         }
@@ -1169,22 +1239,23 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 emit(&Event::Stats { items: self.more_stats() });
                 emit(&Event::Stats { items: self.local_stats() });
             }
+            Command::GetStatsKeys { keys } => emit(&Event::Stats { items: self.stats_for(&keys, true) }),
             Command::GetRadio => emit(&Event::Radio(self.radio)),
-            Command::SetRadio(cfg) => match cfg.validate() {
+            // Over USB or Bluetooth the person is at the device: applied and saved at once. A trial
+            // length is for remote changes only.
+            Command::SetRadio(cfg) | Command::SetRadioTrial { cfg, .. } => match cfg.validate() {
                 Ok(()) => {
-                    self.radio = cfg;
-                    if self.announce_settled && self.announced {
-                        self.reschedule_announce();
-                    }
-                    self.apply_radio_timing();
-                    self.settings.save_radio(&cfg);
-                    RADIO_CFG.signal(cfg);
-                    self.range_radio_changed();
+                    self.radio_trial.clear();
+                    self.use_radio(cfg, true);
                     emit(&Event::Radio(cfg));
                     log("Radio settings saved");
                 }
                 Err(e) => err(0, error_code::BAD_FRAME, e),
             },
+            Command::ConfirmRadio => {
+                self.confirm_radio();
+                emit(&Event::Radio(self.radio));
+            }
             Command::SetRole { role } => match self.set_role(role) {
                 Ok(name) => {
                     emit(&Event::Stats { items: self.stats() });
@@ -1280,8 +1351,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 if !matches!(
                     Command::decode(&frame),
                     Ok(Command::GetStats
+                        | Command::GetStatsKeys { .. }
                         | Command::GetRadio
                         | Command::SetRadio(_)
+                        | Command::SetRadioTrial { .. }
+                        | Command::ConfirmRadio
+                        | Command::GetNeighbors
                         | Command::SetRole { .. }
                         | Command::OtaBegin { .. }
                         | Command::OtaChunk { .. }
@@ -1292,7 +1367,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         | Command::SweepRecStop
                         | Command::SweepRecStatus)
                 ) {
-                    return err(req, error_code::BAD_FRAME, "Only status, radio, role, firmware, sensors and spectrum recordings can be controlled remotely");
+                    return err(req, error_code::BAD_FRAME, "Only status, radio, neighbours, role, firmware, sensors and spectrum recordings can be controlled remotely");
                 }
                 let Some(now) = self.unix_now() else {
                     return err(req, error_code::BAD_FRAME, "The clock is not set (connect again)");
@@ -1627,7 +1702,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
         let command = Command::decode(frame);
         let updates_node = matches!(&command,
-            Ok(Command::SetRadio(_) | Command::SetRole { .. } | Command::OtaBegin { .. }
+            Ok(Command::SetRadio(_) | Command::SetRadioTrial { .. } | Command::ConfirmRadio | Command::SetRole { .. } | Command::OtaBegin { .. }
                 | Command::OtaChunk { .. } | Command::OtaEnd { .. }))
             || matches!(&command, Ok(Command::Sensor { op, .. })
                 if matches!(*op, maarse_core::sensor::op::WRITE_RECIPE | maarse_core::sensor::op::ADD_OWNER | maarse_core::sensor::op::REMOVE_OWNER));
@@ -1643,23 +1718,37 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     reply(self, Event::Stats { items: chunk.iter().copied().collect() });
                 }
             }
+            Ok(Command::GetStatsKeys { keys }) => {
+                // The position is never sent to a remote administrator, so no local set here.
+                let items = self.stats_for(&keys, false);
+                reply(self, Event::Stats { items });
+            }
+            Ok(Command::GetNeighbors) => {
+                let ev = self.remote_neighbors();
+                reply(self, ev);
+            }
             Ok(Command::GetRadio) => reply(self, Event::Radio(self.radio)),
+            // A remote change is only a trial: it is saved when `ConfirmRadio` comes, else the node goes back.
             Ok(Command::SetRadio(cfg)) => match cfg.validate() {
                 Ok(()) => {
                     // Reply first with the old settings active, so the reply
                     // can arrive; then switch.
                     reply(self, Event::Radio(cfg));
-                    self.radio = cfg;
-                    if self.announce_settled && self.announced {
-                        self.reschedule_announce();
-                    }
-                    self.apply_radio_timing();
-                    self.settings.save_radio(&cfg);
-                    RADIO_CFG.signal(cfg);
-                    self.range_radio_changed();
+                    self.start_radio_trial(cfg, 0);
                 }
                 Err(e) => reply(self, deny(e)),
             },
+            Ok(Command::SetRadioTrial { cfg, minutes }) => match cfg.validate() {
+                Ok(()) => {
+                    reply(self, Event::Radio(cfg));
+                    self.start_radio_trial(cfg, minutes);
+                }
+                Err(e) => reply(self, deny(e)),
+            },
+            Ok(Command::ConfirmRadio) => {
+                self.confirm_radio();
+                reply(self, Event::Radio(self.radio));
+            }
             Ok(Command::SetRole { role }) => match self.set_role(role) {
                 Ok(_) => {
                     let items = self.stats();
@@ -2214,6 +2303,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             (stat::AWAIT_KEY, self.await_key.len() as i32),
             (stat::OUTBOX, self.outbox.len() as i32),
             (stat::MODEM_FALLBACK, self.modem_fallback as i32),
+            (stat::RADIO_TRIAL_S, self.radio_trial_left_s()),
         ] {
             let _ = items.push((k, v));
         }

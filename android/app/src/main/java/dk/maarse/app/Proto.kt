@@ -49,6 +49,17 @@ object Cmd {
     fun join(name: String) = frame(0x04) { text(name) }
     fun announce() = frame(0x05)
     fun getStats() = frame(0x09)
+    /** Only these stat keys (at most 24, one reply). An old node ignores the list and sends everything. */
+    fun getStatsKeys(keys: List<Int>) = frame(0x09) { bytes(ByteArray(minOf(keys.size, 24)) { keys[it].toByte() }) }
+    /** Keep the radio settings a remote administrator tried (see [setRadioTrial]). */
+    fun confirmRadio() = frame(0x44)
+    /**
+     * As [setRadio], and through [remote] the change is only a trial for `minutes`: the node saves it when [confirmRadio]
+     * arrives, else it goes back to what it had. (An old node saves at once.)
+     */
+    fun setRadioTrial(c: RadioCfg, minutes: Int) = frame(0x0a) {
+        u32(c.freq); u32(c.bw); u8(c.sf); u8(c.cr); u8(c.power); u16(c.duty); u16(c.preamble); u8(c.announce); u8(minutes)
+    }
     /** GPS details (satellites, height, speed ...); only a radio with a GPS module answers. */
     fun getGps() = frame(0x3c)
     /** A spectrum sweep: `count` steps of `stepKhz` from `startKhz`, `sweeps` times in a row (255 = until stopped or 2 minutes, 0 = stop). */

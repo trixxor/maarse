@@ -22,7 +22,8 @@ const read = (p) => readFileSync(p, "utf8");
 
 // Known gaps: frame type -> why it is accepted.
 const APP_ONLY = {
-  // (none)
+  0x0a: "managing another node's radio (trial and confirm) is not in the simulated phone yet",
+  0x44: "managing another node's radio (trial and confirm) is not in the simulated phone yet",
 };
 const ENGINE_GAPS = {
   0x18: "firmware update (OTA) is not simulated",

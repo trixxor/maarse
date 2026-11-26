@@ -80,6 +80,8 @@ import androidx.compose.foundation.gestures.transformable
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.outlined.Timeline
+import dk.maarse.app.RadioRec
 import dk.maarse.app.Images
 import android.graphics.BitmapFactory
 import dk.maarse.app.Voice
@@ -613,6 +615,17 @@ private fun Attachment(m: Msg) {
                 RawText(m.text, color = MaterialTheme.colorScheme.onSurface)
             }
         }
+        mime == RadioRec.MIME || path.endsWith(".msr", ignoreCase = true) -> {
+            var bad by remember { mutableStateOf(false) }
+            Row(Modifier.clip(RoundedCornerShape(10.dp)).clickable {
+                val name = java.io.File(path).nameWithoutExtension.replaceFirst(Regex("^\\d+_"), "")
+                bad = !RadioRec.view(name, java.io.File(path).readBytes())
+            }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Timeline, null)
+                Text("  View scan", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+            }
+            if (bad) Text("Not a spectrum recording this app can read", color = MaterialTheme.colorScheme.error)
+        }
         else -> Row(Modifier.clip(RoundedCornerShape(10.dp)).clickable { openFile(ctx, path, mime) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Description, null)
             Text("  Open", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
@@ -814,7 +827,7 @@ private fun ActionTile(icon: ImageVector, label: String, modifier: Modifier, onC
 
 /** One contact. Replaces the old contact screen: shown by the shell for every contact. */
 @Composable
-fun ContactPage(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
+fun ContactPage(addr: String, onBack: () -> Unit, onChat: (String) -> Unit, onManage: (String) -> Unit = {}) {
     val nodes by Node.nodes.collectAsState()
     Node.nicknames.collectAsState().value
     Node.keys.collectAsState().value
@@ -874,6 +887,9 @@ fun ContactPage(addr: String, onBack: () -> Unit, onChat: (String) -> Unit) {
                 Card2 { Text("%.4f, %.4f".format(it.lat, it.lon)) }
             }
         }
+        // Administering a node (a repeater in the field) is for its administrators; a node that is not ours answers with an error.
+        SectionLabel("Manage")
+        Group { GroupRow("Manage this node", "Status, neighbours and radio settings, over LoRa or the internet (you must be its administrator)", last = true) { onManage(addr) } }
         // The address: short form and a copy button, not 32 characters on screen.
         SectionLabel("Address")
         Card2 {

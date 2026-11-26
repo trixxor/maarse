@@ -262,7 +262,7 @@ maarse-host is built as a library (`maarse-host/src/lib.rs`, the same `app.rs` a
 
 `python tools/build_apk.py` builds `dist/maarse.apk` with Gradle (`android/gradlew assembleRelease`); Gradle builds the native library with cargo-ndk first. Needs the Android SDK (platform 35, NDK 27.2.12479018 in `<sdk>/ndk/`), a JDK 17+, Rust with the `aarch64-linux-android` and `x86_64-linux-android` targets, and `cargo install cargo-ndk`. The APK is signed with the debug key, or with the release key from `tools/release.py`. Install with `adb install dist/maarse.apk` or by opening the file on the phone (allow unknown sources).
 
-Files and pictures (pictures are made small enough for LoRa), voice messages (Codec2 through `maarse-voice` over JNI, the same `audio/x-codec2` format as the web client) and calls (Opus with Android's MediaCodec, the web client's call frames, only over the internet) work in the app. **Not in the app yet** (use the web client): the map, remote administration of other nodes, the range test and the alert issuing form. Firmware updates for the radios attached to the phone's node or a home computer are in **Settings > Firmware**; updating a radio that is only connected over Bluetooth (no host) is still done in the web client or over USB.
+Files and pictures (pictures are made small enough for LoRa), voice messages (Codec2 through `maarse-voice` over JNI, the same `audio/x-codec2` format as the web client) and calls (Opus with Android's MediaCodec, the web client's call frames, only over the internet) work in the app. **Not in the app yet** (use the web client): the map, the range test and the alert issuing form. Remote administration of another Må:rse node (status, neighbours, radio settings) is on the contact page under **Manage this node**. Firmware updates for the radios attached to the phone's node or a home computer are in **Settings > Firmware**; updating a radio that is only connected over Bluetooth (no host) is still done in the web client or over USB.
 
 ## The web client as an app (PWA)
 
@@ -497,6 +497,21 @@ The web client has a **Diagnostics** page (the button next to Status/Radio):
 - **Trace route** (command `0x20`, reply `0xA0`): a `Probe` packet follows the known route (or finds one first), and every repeater appends the SNR it heard the packet with. The target answers along the reverse way, and the repeaters again append their SNR. The result is the SNR for every hop both ways. The packet ID is computed over the fixed part only, so implicit per-hop acknowledgements work as for other packets. Older nodes forward the packet unchanged. Format in `maarse-core/src/diag.rs`.
 - **Neighbour list** (`0x21`, reply `0xA1`): nodes heard directly (announces without hops and the previous hop in source paths and path requests) with SNR, RSSI, time and packet count.
 - **Noise floor** (status key 80): lora-phy does not give the instantaneous RSSI, so the noise floor is estimated from received packets: N = RSSI − 10·log10(1 + 10^(SNR/10)), moving average.
+
+## Managing a repeater in the field (2026-11-26, working copy)
+
+An administrator of a node can manage it over LoRa or the internet without a login: every command is signed by the administrator.
+Web client: Nodes > the node > Manage. Android: contact page > **Manage this node**.
+
+- **Short status** (the default) asks for about 20 stat keys in one small reply: uptime, role, traffic, errors, queue, signal, noise
+  floor, battery, temperature, crashes. **Full status** asks for everything (several replies). **Neighbours** asks for the 8 heard most recently
+  neighbours with signal strength. Over LoRa each byte costs airtime and the radio cannot hear while it transmits, so the heavy items are
+  asked for only when you press their buttons. An older node answers a short-status request with the full status.
+- **Radio change on trial.** A radio change sent to another node is only tried: the node uses the new settings for 5 minutes but does not
+  save them. Press **Confirm and save** (the client keeps trying every 15 seconds) and it saves them; if nothing arrives in time, the node goes back to
+  its old settings, also after a reboot. Your own radio must hear the node on the new settings: **Switch my radio to these settings too**
+  saves them on your radio. An older node saves a remote change at once. Specification: `docs/remote-repeater-info.md` and protocol spec 9.7.
+- Not built: a repeater that pushes its status to a TCP host by itself (to be looked at later).
 
 ## Status page: radio connection, data and GPS
 

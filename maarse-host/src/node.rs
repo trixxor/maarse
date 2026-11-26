@@ -332,6 +332,8 @@ pub struct Node {
     sessions: crate::sessions::Sessions,
     /// When we last started a new session because of an unreadable message.
     resynced: HashMap<Address, Instant>,
+    /// When we last announced because a compact message could not be read.
+    lost_session_announce: Option<Instant>,
     postboxes: HashMap<Address, Address>,
     my_postbox: Option<Address>,
     /// Channel address -> (name, key)
@@ -614,6 +616,7 @@ impl Node {
             fs_peers: HashSet::new(),
             sessions: crate::sessions::Sessions::load(cfg.data_dir.join("sessions.bin")),
             resynced: HashMap::new(),
+            lost_session_announce: None,
             postboxes: HashMap::new(),
             my_postbox: cfg.postbox,
             channels: HashMap::new(),
@@ -1771,6 +1774,10 @@ impl Node {
                 if ratchet::announces_fs(a.app_data) {
                     self.fs_peers.insert(dest);
                 }
+                // An announce can mean a restart: the next message to it goes in the long form.
+                if let Some(s) = ratchet::SessionStore::get_mut(&mut self.sessions, &dest) {
+                    s.force_full();
+                }
                 self.announce_cache.insert(dest, payload.to_vec());
                 let app = maarse_core::appdata::parse(a.app_data);
                 if let Some(sample) = self.public_rx_announce.take() {
@@ -1891,6 +1898,14 @@ impl Node {
                     self.broadcast(&Event::DirectReceived { from: a, hops, text: text(UNREADABLE_NOTICE.as_bytes()) });
                 }
                 self.resync(a);
+            }
+            Err(CryptoError::Decrypt) if payload.first() == Some(&ratchet::COMPACT) => {
+                self.counters.errors += 1;
+                self.log("compact message could not be read (the session may be lost): announcing, so the sender switches to the long form".to_string());
+                if self.lost_session_announce.is_none_or(|t| t.elapsed() > Duration::from_secs(30)) {
+                    self.lost_session_announce = Some(Instant::now());
+                    self.announce();
+                }
             }
             Err(e) => {
                 self.counters.errors += 1;

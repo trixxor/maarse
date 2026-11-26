@@ -249,6 +249,8 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     fs_peers: FnvIndexSet<Address, 64>,
     sessions: FixedStore<SESSIONS>,
     resynced: FnvIndexMap<Address, Instant, 8>,
+    /// When we last announced because a compact message could not be read.
+    lost_session_announce: Option<Instant>,
     channels: heapless::Vec<(Address, [u8; 32], Name), 4>,
     rng: R,
     modem: bool,
@@ -406,6 +408,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             fs_peers: FnvIndexSet::new(),
             sessions: FixedStore::new(),
             resynced: FnvIndexMap::new(),
+            lost_session_announce: None,
             channels: heapless::Vec::new(),
             rng,
             modem: false,
@@ -1067,6 +1070,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     self.release_await_key(dest);
                     if ratchet::announces_fs(a.app_data) {
                         self.mark_fs(dest);
+                    }
+                    // An announce can mean a restart: the next message to it goes in the long form.
+                    if let Some(s) = ratchet::SessionStore::get_mut(&mut self.sessions, &dest) {
+                        s.force_full();
                     }
                     self.on_app_data(dest, hops, a.app_data);
                     crate::bus::KNOWN_NODES.store(self.known.len() as u32, Relaxed);
@@ -1919,7 +1926,18 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         }
                         self.resync(a);
                     }
-                    Err(CryptoError::Decrypt) => log("Message could not be read (wrong key or damaged)"),
+                    Err(CryptoError::Decrypt) => {
+                        log("Message could not be read (wrong key or damaged)");
+                        // A compact message from a session we do not have (we restarted?):
+                        // the sender is unknown, so announce soon; the announce makes the
+                        // sender switch to the long form, which starts a new session.
+                        if payload.first() == Some(&ratchet::COMPACT)
+                            && self.lost_session_announce.is_none_or(|t| t.elapsed() > Duration::from_secs(30))
+                        {
+                            self.lost_session_announce = Some(Instant::now());
+                            self.next_announce = Instant::now() + Duration::from_millis(1000);
+                        }
+                    }
                     Err(CryptoError::Malformed) => log("Message could not be read (malformed)"),
                     Err(_) => {}
                 }

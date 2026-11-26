@@ -728,6 +728,12 @@ Rules:
   `STEP_EVERY` = 8 messages on the current key, not at once. A step is never
   delayed before the first one (the init chain is only as strong as the static
   format). Without `CAP_COMPACT` the behaviour is exactly the long form.
+* A session whose peer may have lost its state sends the next message in the
+  long form (`force_full`): when an announce from the peer arrives, and when a
+  static message arrives from a peer we have a session with. A node that
+  cannot read a compact message announces within a second (at most every
+  30 s), so the unknown sender switches to the long form, and the receiver of
+  the long form starts a new session as before (`NoSession` and resync).
 * Call audio datagrams and mail copies never use the compact form.
 * Measured average overhead (maarse-crypto tests): 29.7 bytes in mixed chat,
   33.6 bytes in strictly alternating chat, against 69. With 20 % loss and three

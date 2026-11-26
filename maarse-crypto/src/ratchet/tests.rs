@@ -843,3 +843,83 @@ fn compact_known_lengths() {
         ]
     );
 }
+
+// ---- a peer that lost its session (reboot) ---------------------------------
+
+/// A node that restarts: same identity, no sessions.
+fn rebooted(p: &Peer, others: &[&Peer]) -> Peer {
+    let mut n = Peer::new();
+    n.id = Identity::from_secret_bytes(&p.id.to_secret_bytes());
+    for o in others {
+        n.knows(o);
+    }
+    n
+}
+
+#[test]
+fn a_rebooted_peer_gets_the_long_form_and_the_conversation_recovers() {
+    let (mut a, mut b) = compact_established();
+    // A has been sending compact messages.
+    for i in 0..4u8 {
+        let (c, _) = a.send_c(&b, &[i]);
+        b.recv(&c).unwrap();
+    }
+    let (c, _) = a.send_c(&b, b"compact now");
+    assert_eq!(c[0], COMPACT);
+    b.recv(&c).unwrap();
+
+    // B restarts and has no sessions. Its first message goes out static
+    // (it does not know that A reads forward secrecy yet).
+    let mut b2 = rebooted(&b, &[&a]);
+    let mut out = [0u8; 255];
+    let n = seal_compact(&b2.id, &a.id.public(), &mut b2.store, false, false, &mut OsRng, b"I am back", &mut out)
+        .unwrap()
+        .0;
+    let (_, f) = a.recv(&out[..n]).map(|(t, f)| (t, f)).unwrap();
+    assert_eq!(f, Format::Static);
+
+    // A heard a static message from a peer it has a session with: the next
+    // message is the long form, which tells B who is writing.
+    let (c, _) = a.send_c(&b2, b"are you there?");
+    assert_eq!(c[0], RATCHET, "the long form after a static message");
+    match b2.recv(&c) {
+        Err(CryptoError::NoSession(x)) => assert_eq!(x, a.addr()),
+        other => panic!("expected NoSession, got {other:?}"),
+    }
+    // B answers with a new session (what the nodes do on NoSession); A adopts it.
+    reset(&b2.id, &a.id.public(), &mut b2.store, &mut OsRng).unwrap();
+    let (c, _) = b2.send(&a, b"new session");
+    assert_eq!(a.recv(&c).unwrap().0, b"new session");
+    // And the conversation works both ways again, compact included.
+    for i in 0..10u8 {
+        let (c, _) = a.send_c(&b2, &[i]);
+        assert_eq!(b2.recv(&c).unwrap().0, vec![i]);
+        let (c, _) = b2.send_c(&a, &[i]);
+        assert_eq!(a.recv(&c).unwrap().0, vec![i]);
+    }
+}
+
+#[test]
+fn force_full_gives_exactly_one_long_message() {
+    let (mut a, mut b) = compact_established();
+    for _ in 0..4 {
+        let (c, _) = a.send_c(&b, b"x");
+        b.recv(&c).unwrap();
+    }
+    a.store.0.get_mut(&b.addr()).unwrap().force_full();
+    let (c, _) = a.send_c(&b, b"long");
+    assert_eq!(c[0], RATCHET);
+    b.recv(&c).unwrap();
+    let (c, _) = a.send_c(&b, b"short again");
+    assert_eq!(c[0], COMPACT);
+    b.recv(&c).unwrap();
+}
+
+#[test]
+fn force_full_survives_serialization() {
+    let (mut a, b) = compact_established();
+    a.store.0.get_mut(&b.addr()).unwrap().force_full();
+    let bytes = a.session(&b).to_bytes();
+    let back = Session::from_bytes(&bytes).unwrap();
+    assert_eq!(back.to_bytes()[..], bytes[..]);
+}

@@ -710,3 +710,60 @@ bench test shows route discovery failing more often, set
 
 Not changed: preamble 16 (all nodes must change it together, bench test
 first) and the packet header (no lean header, see 9.1).
+
+## 11. Hardware test and the restart bug (2026-11-26)
+
+Boards: Heltec V4 (ESP32-S3, COM6) and XIAO nRF52840 + Wio-SX1262 (COM7), both
+flashed with the compact frame and the path request defaults. WisMesh Tag and
+XIAO ESP32-S3 build but were not on USB. `tools/compact_hw_test.py COM6 COM7`
+sends 28 messages of 40 bytes (12 alternating, 8 and 8 in one direction) and
+measures the airtime of both radios per message.
+
+### 11.1 A real bug, found on the first run
+
+The first run lost every message from the XIAO to the Heltec: the router
+acknowledged them, but the Heltec logged "could not be read". The test
+script opens the serial port with DTR/RTS, which restarts an ESP32-S3, so the
+Heltec had lost its sessions (they live in RAM) while the XIAO kept sending
+compact messages. In the long form an unknown session gives `NoSession`, the
+node then starts a new session (resync) and the conversation recovers. A
+compact message does not name its sender, so no node could tell who to
+resync with, and the sender never found out.
+
+Fix (crypto, host and firmware):
+
+* A session has a `force_full` flag: the next message goes in the long form,
+  then the flag clears. It is set when we hear an announce from the peer (a
+  restart announces within seconds) and when a static message arrives from a
+  peer we have a session with (it lost its state or does not know the session).
+* A node that cannot read a compact message announces within a second (at most
+  once per 30 s), so the unknown sender switches to the long form.
+* Loss after a restart is the same as in the old form: the one message that
+  could not be read.
+
+New tests: a restarted peer recovers (static message, long form, `NoSession`,
+new session, compact again), `force_full` gives exactly one long message,
+and the flag survives serialization. `maarse-crypto` has 78 tests.
+
+### 11.2 Result after the fix
+
+All 28 messages arrived and were acknowledged, with the Heltec restarted at
+the start of the run (the case that failed). Average airtime of both radios
+per message (the message and its ack, plus whatever else the radios sent in
+that window): the first four messages 1 436 ms, the later ones 885 ms; the
+shortest exchanges, 724 ms, are the compact frame, the 929-1 189 ms ones are
+long-form messages or retries. This is a hardware measurement of one pair of
+boards at 0 hops, not of a network.
+
+Stack on the Heltec (`tools/stack_probe.py`, stats key 87, after several
+connections and a restart): **14 360 bytes free** (limit 92, 15 032 before
+this work, 14 376 with the first version of the frame). Free heap 37 928
+bytes.
+
+### 11.3 Not done
+
+* WisMesh Tag and XIAO ESP32-S3 were built, not flashed or tested.
+* Three hosts or more, repeaters and routes over several hops were not tested on
+  hardware.
+* The restart loss window is bounded by the announce (within seconds after a
+  restart, or on the first unreadable compact message) but is not zero.

@@ -218,6 +218,10 @@ pub struct Session {
     stepped: bool,
     /// Messages sent on the current sending key.
     sent_in_chain: u16,
+    /// The next message is sent in the long form: the other party may have
+    /// lost its session (it sent us a static message or announced itself), and
+    /// only the long form lets it find the sender and start a new session.
+    force_full: bool,
 }
 
 /// The length of the version 1 form (before compact messages).
@@ -382,6 +386,7 @@ impl Session {
             has_sid_r: false,
             stepped: false,
             sent_in_chain: 0,
+            force_full: false,
         }
     }
 
@@ -427,6 +432,13 @@ impl Session {
         !self.pending
     }
 
+    /// The other party may have lost its session state: the next message is
+    /// sent in the long form (see [`Session::seal`]). Call it when we hear a
+    /// sign of that: an announce from the peer or a static message.
+    pub fn force_full(&mut self) {
+        self.force_full = true;
+    }
+
     /// The session id of the chain we receive on, if known.
     pub fn receive_sid(&self) -> Option<[u8; SID_LEN]> {
         self.has_sid_r.then_some(self.sid_r)
@@ -452,7 +464,7 @@ impl Session {
         }
         // Delay a step only when we can send compact messages and our sending
         // chain is already a ratcheted one.
-        let lazy = compact_ok && self.stepped && !self.pending && self.has_sid_s;
+        let lazy = compact_ok && self.stepped && !self.pending && self.has_sid_s && !self.force_full;
         let step = self.need_step && (!lazy || self.sent_in_chain >= STEP_EVERY);
         let compact = lazy && !step && self.sent_in_chain >= FULL_FIRST;
         let total = msg.len() + if compact { COMPACT_OVERHEAD } else { FS_OVERHEAD };
@@ -513,6 +525,7 @@ impl Session {
         self.cks = next;
         self.ns += 1;
         self.sent_in_chain = self.sent_in_chain.saturating_add(1);
+        self.force_full = false;
         Ok(total)
     }
 
@@ -680,7 +693,9 @@ impl Session {
         w.put(&self.sid_s);
         w.put(&self.sid_r);
         w.put(&self.sent_in_chain.to_le_bytes());
-        w.put(&[self.has_sid_s as u8 | (self.has_sid_r as u8) << 1 | (self.stepped as u8) << 2]);
+        w.put(&[
+            self.has_sid_s as u8 | (self.has_sid_r as u8) << 1 | (self.stepped as u8) << 2 | (self.force_full as u8) << 3,
+        ]);
         debug_assert_eq!(w.i, SESSION_LEN);
         b
     }
@@ -731,6 +746,7 @@ impl Session {
             s.has_sid_s = f2 & 1 != 0;
             s.has_sid_r = f2 & 2 != 0;
             s.stepped = f2 & 4 != 0;
+            s.force_full = f2 & 8 != 0;
         }
         Some(s)
     }
@@ -835,7 +851,10 @@ pub fn open(
             Ok(o) => Ok(o),
             // 1/256 of the old messages happen to start with 0xF2.
             Err(e) => match crate::seal::open_direct(me, payload, &lookup, out) {
-                Ok((from, len)) => Ok(Opened { from, len, format: Format::Static }),
+                Ok((from, len)) => {
+                    note_static(store, &from);
+                    Ok(Opened { from, len, format: Format::Static })
+                }
                 Err(_) => Err(e),
             },
         };
@@ -846,14 +865,26 @@ pub fn open(
             Err(e) => {
                 // 1/128 of the old messages happen to start with 0xF0/0xF1.
                 return match crate::seal::open_direct(me, payload, &lookup, out) {
-                    Ok((from, len)) => Ok(Opened { from, len, format: Format::Static }),
+                    Ok((from, len)) => {
+                        note_static(store, &from);
+                        Ok(Opened { from, len, format: Format::Static })
+                    }
                     Err(_) => Err(e),
                 };
             }
         }
     }
     let (from, len) = crate::seal::open_direct(me, payload, lookup, out)?;
+    note_static(store, &from);
     Ok(Opened { from, len, format: Format::Static })
+}
+
+/// A static message from a peer we have a session with: it has lost its
+/// session (or never had one), so our next message goes in the long form.
+fn note_static(store: &mut impl SessionStore, from: &Address) {
+    if let Some(s) = store.get_mut(from) {
+        s.force_full();
+    }
 }
 
 /// Opens a compact message: finds the session by its session id and tries

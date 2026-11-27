@@ -35,6 +35,7 @@ mod observe;
 mod public_history;
 mod node;
 mod pagefiles;
+mod private_file;
 mod sessions;
 mod service;
 mod settings;

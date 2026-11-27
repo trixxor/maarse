@@ -150,7 +150,7 @@ impl Node {
             "contacts_total": self.known.len(),
             "dht": {
                 "table": dht_table, "records": dht_records, "seeds": self.dht.seeds, "peers": self.dht.peers.iter().collect::<Vec<_>>(),
-                "reachable": self.dht.heard.len(), "lookups": self.dht.lookups, "found": self.dht.found,
+                "reachable": self.dht.heard.values().filter(|h| h.alive(std::time::Instant::now())).count(), "lookups": self.dht.lookups, "found": self.dht.found,
             },
             "mailbox": mailbox,
             "trunks": trunks,

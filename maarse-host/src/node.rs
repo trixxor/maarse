@@ -12,10 +12,12 @@ mod person;
 mod sensors;
 pub(crate) use person::{BACKUP_FILE, RESTORE_FILE};
 mod seq;
+mod seen;
 mod identity;
 mod alerts;
 mod debugview;
 mod announce_freshness;
+mod reach;
 
 use crate::dht::{self, Contact, Record};
 use crate::filebox::{self, Boxed, FileBox, LORA_MAX_FILE, PathKind};
@@ -33,7 +35,7 @@ use maarse_core::companion::{Command, Event, MAX_TEXT, Stats, error_code, stat, 
 use maarse_core::content::{self, Content, FileOffer, Small};
 use maarse_core::packet::{Header, Packet, encode};
 use maarse_core::stamp;
-use maarse_core::router::MAX_DIRECT_PAYLOAD;
+use maarse_core::router::{MAX_DIRECT_PAYLOAD, Proof};
 use maarse_core::{Action, Address, PacketType, Router};
 use maarse_crypto::bulletin;
 use maarse_crypto::ratchet::{self, Format, MAX_FS_TEXT};
@@ -294,6 +296,9 @@ const UNREADABLE_NOTICE: &str =
 /// A sent direct message that may need to go to the mailbox.
 struct OutMsg {
     dest: Address,
+    /// What a receipt for the mailbox copy must show (`None`: the recipient
+    /// is too old to prove delivery).
+    mail_proof: Option<Proof>,
     /// The message in the static format, for the mailbox. A mailbox can
     /// hold it for days, and a forward-secrecy message that late may fall
     /// outside the recipient's skipped-key window and never open.
@@ -388,6 +393,8 @@ pub struct Node {
     last_forwarded: u32,
     /// Where each address was last heard: link, TCP?, hops.
     heard_via: HashMap<Address, (LinkId, bool, u8)>,
+    /// The time in the latest announce heard on our own radio or a trunk.
+    radio_heard: HashMap<Address, u32>,
     /// Every announce we have heard (payload without stamp), to answer key
     /// requests: a host keeps all of them, a radio node cannot.
     announce_cache: HashMap<Address, Vec<u8>>,
@@ -481,6 +488,8 @@ pub struct Node {
     link_up: HashMap<LinkId, Instant>,
     /// Sequence numbers per conversation (node/seq.rs).
     seqs: seq::Seqs,
+    /// Messages already received (against replays).
+    seen: seen::Seen,
     /// Identities whose signed bulletins and alerts we show (`--bulletin-key`).
     bulletin_keys: Vec<PublicIdentity>,
     /// Alerts v2: roots, certificates, replay guard, issuer key (node/alerts.rs).
@@ -500,8 +509,8 @@ struct Dht {
     peers: HashSet<String>,
     /// Gateways we connected to because of a lookup.
     dynamic: HashSet<String>,
-    /// Addresses we can reach: latest announce, hops and when we published it.
-    heard: HashMap<Address, (Vec<u8>, u8, Option<Instant>)>,
+    /// Addresses heard on a link (see node/reach.rs).
+    heard: HashMap<Address, reach::Heard>,
     /// When we last looked up an address (against repeated lookups).
     looked_up: HashMap<Address, Instant>,
     last_bootstrap: Option<Instant>,
@@ -587,6 +596,10 @@ fn small(b: &[u8]) -> Small {
 impl Node {
     pub fn new(cfg: &Config) -> std::io::Result<Self> {
         fs::create_dir_all(&cfg.data_dir)?;
+        // Other users of this computer keep out: keys, sessions and history.
+        if let Err(e) = crate::private_file::restrict_dir(&cfg.data_dir) {
+            eprintln!("could not restrict the data folder to its owner: {e}");
+        }
         let identity = match identity::read_identity(&cfg.data_dir)? {
             Some(identity) => identity,
             None => {
@@ -602,6 +615,8 @@ impl Node {
         // Hellos tell the radio nodes nearby that a repeater/anchor is here,
         // and that we are a large post office.
         router.hello = true;
+        // A message is acknowledged when it has been opened (see open_direct).
+        router.app_acks = true;
         // A host keeps mail (it has a disk), unless told not to.
         router.mail_class = if cfg.no_post_office { maarse_core::mail::CLASS_NONE } else { maarse_core::mail::CLASS_LARGE };
         router.ring = 4;
@@ -659,6 +674,7 @@ impl Node {
             next_tele_save: Instant::now() + Duration::from_secs(300),
             last_forwarded: 0,
             heard_via: HashMap::new(),
+            radio_heard: HashMap::new(),
             announce_cache: HashMap::new(),
             announce_freshness: announce_freshness::AnnounceFreshness::open(&cfg.data_dir.join("announce-freshness.bin"), unix_now())?,
             bc_dropped: HashMap::new(),
@@ -740,6 +756,7 @@ impl Node {
             call_test: calltest::CallTest::load(&cfg.data_dir),
             link_up: HashMap::new(),
             seqs: seq::Seqs::load(&cfg.data_dir),
+            seen: seen::Seen::load(&cfg.data_dir),
             bulletin_keys: cfg.bulletin_keys.clone(),
             alerts: alerts::Alerts::load(cfg)?,
         };
@@ -908,8 +925,8 @@ impl Node {
                     let _ = tx.send(self.region_hello());
                     // A backbone link came up (perhaps a split healed):
                     // republish everything we can reach at the next maintenance.
-                    for (_, _, last) in self.dht.heard.values_mut() {
-                        *last = None;
+                    for heard in self.dht.heard.values_mut() {
+                        heard.published = None;
                     }
                 }
                 self.links.insert(id, (name, tx));
@@ -1516,8 +1533,7 @@ impl Node {
         if let Ok(pkt) = encode(&header, &stamped) {
             self.send_links(&pkt);
         }
-        // Our own address can always be reached here.
-        self.dht.heard.insert(self.addr, (payload.to_vec(), 0, None));
+        self.note_self(payload.to_vec());
     }
 
     /// Encrypts and sends a direct message. Returns the message's ID.
@@ -1569,7 +1585,7 @@ impl Node {
             &mut ct,
         )
         .map_err(|_| "The message is too long")?;
-        self.sessions.save();
+        self.keep_send_state(dest, format)?;
         self.last_sealed = ct[..n].to_vec();
         if matches!(kind, Pending::Message) {
             self.log(format!("message to {} ({})", short(&dest), format_name(format)));
@@ -1579,6 +1595,7 @@ impl Node {
             .router
             .send_direct(dest, &ct[..n], token(), now)
             .map_err(|_| "The queue is full, try again shortly")?;
+        self.expect_proof(&dest, &ct[..n], msg_id);
         if matches!(kind, Pending::Message) {
             let mail_sealed = if format == Format::Static {
                 ct[..n].to_vec()
@@ -1589,10 +1606,12 @@ impl Node {
                     Err(_) => ct[..n].to_vec(),
                 }
             };
+            let mail_proof = self.proof_from(&dest, &mail_sealed);
             self.outbox.insert(
                 msg_id,
                 OutMsg {
                     dest,
+                    mail_proof,
                     mail_sealed,
                     sent: Instant::now(),
                     deposited: false,
@@ -1603,6 +1622,50 @@ impl Node {
         self.awaiting.insert(msg_id, kind);
         self.apply(actions.into_iter().collect());
         Ok(msg_id)
+    }
+
+    /// The proof `dest` must give for the sealed message `sealed`, if it
+    /// is a node that proves delivery.
+    fn proof_from(&self, dest: &Address, sealed: &[u8]) -> Option<Proof> {
+        if self.caps.get(dest).is_none_or(|c| c & maarse_core::appdata::CAP_PROOF == 0) {
+            return None;
+        }
+        self.identity.receipt_proof(self.known.get(dest)?, dest, sealed)
+    }
+
+    /// Tells the router that only `dest`'s proof counts for our message
+    /// `msg_id` (the sealed bytes `sealed`).
+    fn expect_proof(&mut self, dest: &Address, sealed: &[u8], msg_id: u64) {
+        if let Some(p) = self.proof_from(dest, sealed) {
+            self.router.expect_proof(msg_id, p);
+        }
+    }
+
+    /// Our proof to `sender` that we opened its message `sealed`.
+    fn proof_to(&self, sender: &Address, sealed: &[u8]) -> Option<Proof> {
+        self.identity.receipt_proof(self.known.get(sender)?, &self.addr, sealed)
+    }
+
+    /// The message with packet ID `id` has been dealt with: the router may
+    /// acknowledge it.
+    fn acknowledge(&mut self, id: u64, proof: Option<Proof>) {
+        let now = self.now_ms();
+        let actions = self.router.acknowledge(id, proof, now);
+        self.apply(actions.into_iter().collect());
+    }
+
+    /// Saves the session after sealing and before sending. A session message
+    /// whose state is not safely on the disk must not leave: after a restart
+    /// the same key would be used again (see sessions.rs).
+    fn keep_send_state(&mut self, dest: Address, format: Format) -> Result<(), &'static str> {
+        if format == Format::Static {
+            self.sessions.save();
+            return Ok(());
+        }
+        self.sessions.commit_send(&dest).map_err(|e| {
+            self.log(format!("could not save the encryption state: {e}"));
+            "Could not save the encryption state (disk full or read-only?); the message was not sent"
+        })
     }
 
     /// Call audio: sealed like a message but sent as a datagram, without
@@ -1617,9 +1680,9 @@ impl Node {
         let recipient = *self.known.get(&dest).ok_or("The recipient has not been heard yet (no announce)")?;
         let mut ct = [0u8; 255];
         let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
-        let (n, _) = ratchet::seal(&self.identity, &recipient, &mut self.sessions, fs_ok, &mut OsRng, plain, &mut ct)
+        let (n, format) = ratchet::seal(&self.identity, &recipient, &mut self.sessions, fs_ok, &mut OsRng, plain, &mut ct)
             .map_err(|_| "The message is too long")?;
-        self.sessions.save();
+        self.keep_send_state(dest, format)?;
         let mut dg = maarse_core::appdata::CALL_DATAGRAM.to_vec();
         dg.extend_from_slice(&ct[..n]);
         let now = self.now_ms();
@@ -1751,8 +1814,16 @@ impl Node {
                 let Some((_, key)) = self.channels.get(&dest) else {
                     return;
                 };
+                let id = maarse_core::dedup::packet_id(PacketType::Channel, &dest, payload);
+                if self.seen.sender(id).is_some() {
+                    return;
+                }
                 let mut out = [0u8; 256];
-                match seal::open_channel(key, payload, &mut out) {
+                let opened = seal::open_channel(key, payload, &mut out);
+                if let Ok((from, _)) = &opened {
+                    self.seen.add(id, *from);
+                }
+                match opened {
                     Ok((from, n)) if from != self.addr && dest == bulletin::channel() => {
                         self.on_bulletin(from, hops, &out[..n]);
                     }
@@ -1836,6 +1907,9 @@ impl Node {
                 if let Some(link) = self.rx_link {
                     let tcp = self.links.get(&link).is_some_and(|(n, _)| crate::extra_links::is_backbone(n));
                     self.heard_via.insert(dest, (link, tcp, hops));
+                    if !tcp {
+                        self.radio_heard.insert(dest, a.timestamp);
+                    }
                     // Heard over our radio: maybe the replicas hold mail for
                     // it ("X is here", like a mobile network registering a
                     // phone).
@@ -1844,9 +1918,12 @@ impl Node {
                     }
                 }
                 self.broadcast(&Event::Heard { addr: dest, hops, identity: Some(a.identity.to_bytes()) });
-                if self.dht.public_ep.is_some() {
-                    let last = self.dht.heard.get(&dest).and_then(|h| h.2);
-                    self.dht.heard.insert(dest, (payload.to_vec(), hops, last));
+                // Only what came in on a link: an announce found by a DHT
+                // lookup is another gateway's to publish.
+                if self.dht.public_ep.is_some()
+                    && let Some(link) = self.rx_link
+                {
+                    self.note_heard(link, dest, payload, a.timestamp, hops);
                 }
                 self.retry_pending();
                 self.flush_mailbox(dest);
@@ -1860,21 +1937,29 @@ impl Node {
     }
 
     fn open_direct(&mut self, payload: Vec<u8>, hops: u8, first_time: bool) {
-        // Mail for our person, encrypted to its inbox key (node/person.rs).
-        match self.try_open_inbox(&payload, hops) {
-            Some(Ok(())) => return,
-            Some(Err(CryptoError::UnknownSender(a))) => {
-                if first_time {
-                    self.log(format!("inbox message from unknown {}: waiting for announce", short(&a)));
-                }
-                if self.pending_rx.len() >= PENDING_MAX {
-                    self.pending_rx.remove(0);
-                }
-                return self.pending_rx.push((payload, hops));
+        // A message we have had before (a recording sent again, or the same
+        // mail from a second post office): only the receipt is repeated.
+        let rid = maarse_core::mail::receipt_id(&self.addr, &payload);
+        if let Some(sender) = self.seen.sender(rid) {
+            let proof = self.proof_to(&sender, &payload);
+            self.acknowledge(rid, proof);
+            if self.receipt_wanted.remove(&rid) {
+                self.send_receipt(sender, rid, proof);
             }
-            // Not an inbox message after all: the other formats.
-            _ => {}
+            return self.log(format!("a message from {} that we already have was ignored", short(&sender)));
         }
+        // Mail for our person, encrypted to its inbox key (node/person.rs).
+        let inbox_stranger = match self.try_open_inbox(&payload, hops) {
+            Some(Ok(())) => {
+                self.seen.add(rid, self.addr);
+                return self.acknowledge(rid, None);
+            }
+            // It may wait for an announce, but only if nothing else reads it:
+            // a compact ratchet message starts with the same byte.
+            Some(Err(CryptoError::UnknownSender(a))) => Some(a),
+            // Not an inbox message after all: the other formats.
+            _ => None,
+        };
         let mut out = [0u8; 256];
         let known = &self.known;
         let res = ratchet::open(
@@ -1885,20 +1970,46 @@ impl Node {
             &mut out,
         );
         self.sessions.save();
+        if let (Some(a), Err(_)) = (inbox_stranger, &res) {
+            self.acknowledge(rid, None);
+            if first_time {
+                self.log(format!("inbox message from unknown {}: waiting for announce", short(&a)));
+            }
+            if self.pending_rx.len() >= PENDING_MAX {
+                self.pending_rx.remove(0);
+            }
+            return self.pending_rx.push((payload, hops));
+        }
         match res {
             Ok(o) => {
                 if o.format != Format::Static {
                     // It supports forward secrecy, even if we have not heard so.
                     self.fs_peers.insert(o.from);
                 }
+                // Call audio is too much to remember and worthless later. A
+                // file offer in the static format is sent again as it is, to
+                // start the file again, and changes nothing else.
+                let again = match content::parse(&out[..o.len]) {
+                    Some(Content::Call(_)) => true,
+                    Some(Content::FileOffer(_)) => o.format == Format::Static,
+                    _ => false,
+                };
+                if !again {
+                    self.seen.add(rid, o.from);
+                }
+                // Opened: now the sender may hear that it arrived.
+                let proof = self.proof_to(&o.from, &payload);
+                self.acknowledge(rid, proof);
                 // Mail from a post office: tell the sender it arrived.
-                let rid = maarse_core::mail::receipt_id(&self.addr, &payload);
                 if self.receipt_wanted.remove(&rid) {
-                    self.send_receipt(o.from, rid);
+                    self.send_receipt(o.from, rid, proof);
                 }
                 self.on_content(o.from, &out[..o.len], hops, o.format)
             }
             Err(CryptoError::UnknownSender(a)) => {
+                // Kept until its announce is heard; the route may confirm it
+                // now (a sender that expects a proof goes on waiting).
+                self.acknowledge(rid, None);
                 if first_time {
                     self.log(format!(
                         "message from unknown {}: waiting for announce",
@@ -2840,6 +2951,7 @@ impl Node {
             let Ok((msg_id, actions)) = self.router.send_direct(recipient, &b.offer, token(), now) else {
                 continue;
             };
+            self.expect_proof(&recipient, &b.offer, msg_id);
             self.log(format!("file mailbox: delivering file ({} bytes) to {}", b.size, short(&recipient)));
             let n = b.chunks.len();
             self.out_files.insert(
@@ -2906,12 +3018,15 @@ impl Node {
             }
             // A recipient says it got mail we deposited: the same as an ack.
             mail::OP_RECEIPT if d.recipient == self.addr => {
-                let ids: Vec<u64> = d.receipts().collect();
-                for id in ids {
+                // A receipt is the message's ID, followed by the proof from a
+                // recipient that has one.
+                let words: Vec<u64> = d.receipts().collect();
+                for (i, id) in words.iter().enumerate() {
                     let found = self
                         .outbox
                         .iter()
-                        .find(|(_, m)| mail::receipt_id(&m.dest, &m.mail_sealed) == id)
+                        .find(|(_, m)| mail::receipt_id(&m.dest, &m.mail_sealed) == *id)
+                        .filter(|(_, m)| m.mail_proof.is_none_or(|p| words.get(i + 1) == Some(&u64::from_le_bytes(p))))
                         .map(|(msg_id, _)| *msg_id);
                     if let Some(msg_id) = found {
                         self.log(format!("delivery receipt for message {msg_id:016x}"));
@@ -2924,9 +3039,11 @@ impl Node {
     }
 
     /// Tells `sender` that its mail, delivered by a post office, reached us.
-    fn send_receipt(&mut self, sender: Address, id: u64) {
+    fn send_receipt(&mut self, sender: Address, id: u64, proof: Option<Proof>) {
         let mut p: maarse_core::router::Buf = maarse_core::router::Buf::new();
-        if !maarse_core::mail::build(&mut p, &sender, maarse_core::mail::OP_RECEIPT, &id.to_le_bytes()) {
+        let mut body = id.to_le_bytes().to_vec();
+        body.extend_from_slice(proof.as_ref().map_or(&[], |p| &p[..]));
+        if !maarse_core::mail::build(&mut p, &sender, maarse_core::mail::OP_RECEIPT, &body) {
             return;
         }
         let now = self.now_ms();
@@ -3076,7 +3193,9 @@ impl Node {
     /// Has the backbone heard `recipient`: in the DHT's heard table, or
     /// heard by us over a TCP link?
     fn backbone_knows(&self, recipient: &Address) -> bool {
-        self.dht.heard.contains_key(recipient) || self.heard_via.get(recipient).is_some_and(|(_, tcp, _)| *tcp)
+        self.dht.heard.get(recipient).is_some_and(|h| h.alive(Instant::now()))
+            || self.dht.store.get(recipient).is_some_and(|r| r.gw != self.addr)
+            || self.heard_via.get(recipient).is_some_and(|(_, tcp, _)| *tcp)
     }
 
     /// Asks the replicas for `recipient`'s mail (answers come back as
@@ -3424,6 +3543,7 @@ impl Node {
                 Some((dest, _, true, sealed)) => {
                     let t = self.now_ms();
                     if let Ok((msg_id, actions)) = self.router.send_direct(dest, &sealed, token(), t) {
+                        self.expect_proof(&dest, &sealed, msg_id);
                         self.awaiting.insert(msg_id, Pending::FileOffer(file_id));
                         self.apply(actions.into_iter().collect());
                     }
@@ -3643,7 +3763,7 @@ impl Node {
                     }
                 })
                 .collect();
-            let _ = fs::write(self.data_dir.join("channels.txt"), lines.join("\n"));
+            let _ = crate::private_file::write(&self.data_dir.join("channels.txt"), lines.join("\n").as_bytes(), true);
         }
         (ch, name)
     }
@@ -3786,6 +3906,8 @@ impl Node {
                         | Command::SetRadio(_)
                         | Command::SetRadioTrial { .. }
                         | Command::ConfirmRadio
+                        | Command::SetBlePin { .. }
+                        | Command::GetBlePin
                         | Command::GetNeighbors
                         | Command::SetRole { .. }
                         | Command::OtaBegin { .. }
@@ -3798,7 +3920,7 @@ impl Node {
                         | Command::SweepRecStatus)
                 );
                 if !ok {
-                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Only status, radio, neighbours, role, firmware, sensors and spectrum recordings can be controlled remotely"));
+                    return self.send_client(id, &err_ev(req, error_code::BAD_FRAME, "Only status, radio, neighbours, role, Bluetooth code, firmware, sensors and spectrum recordings can be controlled remotely"));
                 }
                 // The counter follows the clock, so it also increases after a restart,
                 // but always increases (firmware chunks can come several per second).
@@ -3840,6 +3962,10 @@ impl Node {
             Command::SetWifi(_) | Command::GetWifi | Command::SetModemKey { .. } => self.send_client(
                 id,
                 &err_ev(0, error_code::BAD_FRAME, "maarse-host uses the computer's network; Wi-Fi settings are for ESP32 nodes."),
+            ),
+            Command::SetBlePin { .. } | Command::GetBlePin => self.send_client(
+                id,
+                &err_ev(0, error_code::BAD_FRAME, "maarse-host has no Bluetooth code. Set it on the radio node over USB or Bluetooth, or remotely as its administrator."),
             ),
             Command::SetRangeTest(_) | Command::GetRangeTest => self.send_client(
                 id,
@@ -4081,9 +4207,12 @@ impl Node {
                 None => dht::Resp::Nodes(self.dht_closest(&t)),
             },
             dht::Req::Store(r) => {
-                let ok = self.dht.store.put(r);
-                if ok && let Some(contact) = rsp_contact {
-                    self.dht.table.insert(contact);
+                let ok = self.dht.store.put(r.clone());
+                if ok {
+                    self.note_moved_elsewhere(&r);
+                    if let Some(contact) = rsp_contact {
+                        self.dht.table.insert(contact);
+                    }
                 }
                 dht::Resp::Stored(ok)
             }
@@ -4200,6 +4329,7 @@ impl Node {
                 short(&rec.gw),
                 rec.ep
             ));
+            self.note_moved_elsewhere(&rec);
             // A host in the DHT is reached over TCP (through its gateway) -
             // unless we hear it over our own radio: a DHT record can be old
             // (a phone that was online earlier), and trusting it sent our
@@ -4259,9 +4389,13 @@ impl Node {
 
     /// Looks up an unknown address if we do not already know a route.
     fn dht_maybe_lookup(&mut self, dest: Address) {
+        self.dht_maybe_lookup_at(dest, Instant::now());
+    }
+
+    fn dht_maybe_lookup_at(&mut self, dest: Address, now: Instant) {
         if dest == self.addr
             || self.router.has_route(&dest)
-            || self.dht.heard.contains_key(&dest)
+            || self.dht.heard.get(&dest).is_some_and(|h| h.alive(now))
             || self.channels.contains_key(&dest)
         {
             return;
@@ -4276,8 +4410,8 @@ impl Node {
         }
         self.dht.looked_up.insert(dest, Instant::now());
         self.dht.lookups += 1;
-        if let Some(rec) = self.dht.store.get(&dest) {
-            // We store the record ourselves.
+        if let Some(rec) = self.dht.store.get(&dest).filter(|r| r.gw != self.addr) {
+            // We store another gateway's record ourselves.
             let result = dht::Lookup {
                 record: Some(rec),
                 ..Default::default()
@@ -4359,7 +4493,7 @@ impl Node {
                 up.len(),
                 self.dht.table.len(),
                 self.dht.store.len(),
-                self.dht.heard.len(),
+                self.dht.heard.values().filter(|h| h.alive(now)).count(),
                 self.router.stats.forwarded,
                 self.mailbox.values().map(|m| m.len()).sum::<usize>(),
             );
@@ -4416,6 +4550,10 @@ impl Node {
 
     /// Bootstrap, publications and cleanup.
     fn dht_maintain(&mut self) {
+        self.dht_maintain_at(Instant::now());
+    }
+
+    fn dht_maintain_at(&mut self, now: Instant) {
         self.dht.store.expire();
         self.dht
             .looked_up
@@ -4443,16 +4581,16 @@ impl Node {
             .iter()
             // Without relaying, only what we reach over our own radio.
             .filter(|(a, _)| !no_relay || **a == me || heard_via.get(a).is_some_and(|(_, tcp, _)| !*tcp))
-            .filter(|(_, (_, _, last))| last.is_none_or(|t| t.elapsed() > dht::REPUBLISH))
+            .filter(|(_, h)| h.alive(now) && h.published.is_none_or(|t| now.saturating_duration_since(t) > dht::REPUBLISH))
             .map(|(a, _)| *a)
             .take(16)
             .collect();
         for dest in due {
-            let Some((announce, hops, last)) = self.dht.heard.get_mut(&dest) else {
+            let Some(heard) = self.dht.heard.get_mut(&dest) else {
                 continue;
             };
-            *last = Some(Instant::now());
-            let rec = Record::signed(&self.identity, dest, ep.clone(), *hops, announce.clone());
+            heard.published = Some(now);
+            let rec = Record::signed(&self.identity, dest, ep.clone(), heard.hops, heard.announce.clone());
             self.dht.store.put(rec.clone());
             self.dht_spawn(dest, false, Some(rec));
         }
@@ -4763,7 +4901,7 @@ mod filebox_node_tests {
         let recipient = Address([8; 16]);
         let sealed = b"sealed for the post office".to_vec();
         let msg_id = 0x1234_5678_9abc_def0u64;
-        n.outbox.insert(msg_id, OutMsg { dest: recipient, mail_sealed: sealed.clone(), sent: Instant::now(), deposited: true, next_deposit: None });
+        n.outbox.insert(msg_id, OutMsg { mail_proof: None, dest: recipient, mail_sealed: sealed.clone(), sent: Instant::now(), deposited: true, next_deposit: None });
         n.awaiting.insert(msg_id, Pending::Message);
         events(&rx);
 
@@ -4785,12 +4923,43 @@ mod filebox_node_tests {
         assert!(events(&rx).iter().any(|e| matches!(e, Event::Acked { msg_id: m } if *m == msg_id)));
 
         // A receipt addressed to someone else is not ours to act on.
-        n.outbox.insert(msg_id, OutMsg { dest: recipient, mail_sealed: sealed.clone(), sent: Instant::now(), deposited: true, next_deposit: None });
+        n.outbox.insert(msg_id, OutMsg { mail_proof: None, dest: recipient, mail_sealed: sealed.clone(), sent: Instant::now(), deposited: true, next_deposit: None });
         let mut p: Vec<u8> = Address([1; 16]).0.to_vec();
         p.push(mail::OP_RECEIPT);
         p.extend_from_slice(&mail::receipt_id(&recipient, &sealed).to_le_bytes());
         n.on_deposit(&p, 1);
         assert!(n.outbox.contains_key(&msg_id));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// For a recipient that proves delivery, a receipt without its proof
+    /// (anyone can make one from what is on the air) changes nothing.
+    #[test]
+    fn a_receipt_without_the_proof_is_ignored() {
+        use maarse_core::mail;
+        let (mut n, rx, dir) = node("receiptproof");
+        let recipient = Address([8; 16]);
+        let sealed = b"sealed for the post office".to_vec();
+        let proof = [3u8; 8];
+        let msg_id = 7u64;
+        n.outbox.insert(msg_id, OutMsg { mail_proof: Some(proof), dest: recipient, mail_sealed: sealed.clone(), sent: Instant::now(), deposited: true, next_deposit: None });
+        n.awaiting.insert(msg_id, Pending::Message);
+        events(&rx);
+        let receipt = |extra: &[u8]| {
+            let mut p: Vec<u8> = n.addr.0.to_vec();
+            p.push(mail::OP_RECEIPT);
+            p.extend_from_slice(&mail::receipt_id(&recipient, &sealed).to_le_bytes());
+            p.extend_from_slice(extra);
+            p
+        };
+        let (bare, wrong, right) = (receipt(&[]), receipt(&[4; 8]), receipt(&proof));
+        n.on_deposit(&bare, 1);
+        n.on_deposit(&wrong, 1);
+        assert!(n.outbox.contains_key(&msg_id));
+        assert!(events(&rx).is_empty());
+        n.on_deposit(&right, 1);
+        assert!(n.outbox.is_empty());
+        assert!(events(&rx).iter().any(|e| matches!(e, Event::Acked { msg_id: m } if *m == msg_id)));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -5736,6 +5905,156 @@ mod radio_file_e2e_tests {
         }
         let (_, eb, _, _) = run_radio(&mut a, &mut b, 90, &mut |_, _| false);
         assert_eq!(notices(&eb), 1, "one notice for the lost session");
+    }
+
+    /// A message whose encryption state cannot be saved does not leave: after
+    /// a restart its key could otherwise be used again.
+    #[test]
+    fn nothing_is_sent_when_the_encryption_state_cannot_be_saved() {
+        let (mut a, mut b) = radio_pair("nosave");
+        a.n.fs_peers.insert(b.n.addr);
+        a.n.sessions = crate::sessions::Sessions::load(a.n.data_dir.join("no-folder").join("sessions.bin"));
+        a.n.command(1, Command::SendDirect { req: 7, dest: b.n.addr, text: text(b"secret") });
+        let (ea, eb, _, _) = run_radio(&mut a, &mut b, 60, &mut |_, _| false);
+        assert!(ea.iter().any(|e| matches!(e, Event::Error { req: 7, .. })), "no error to the app: {ea:?}");
+        assert!(!eb.iter().any(|e| matches!(e, Event::DirectReceived { .. })), "the message left: {eb:?}");
+    }
+
+    /// A compact ratchet message starts with the same byte as inbox mail. If
+    /// its session id happens to look like an inbox key we hold, it must still
+    /// be read as a ratchet message.
+    #[test]
+    fn compact_message_that_looks_like_inbox_mail_is_read() {
+        let (mut a, mut b) = radio_pair("f2overlap");
+        let (a_pub, b_pub) = (a.n.identity.public(), b.n.identity.public());
+        let plain = |n: usize| {
+            let mut v = vec![content::TEXT];
+            v.extend_from_slice(format!("message number {n:060}").as_bytes());
+            v
+        };
+        let seal = |from: &mut Node, to: &maarse_crypto::PublicIdentity, text: &[u8]| {
+            let mut out = [0u8; 255];
+            let (n, _) = ratchet::seal_compact(&from.identity, to, &mut from.sessions, true, true, &mut OsRng, text, &mut out).unwrap();
+            out[..n].to_vec()
+        };
+        let this_week = maarse_crypto::person::week_of(unix_now());
+        let mut found = None;
+        for attempt in 0..2_000 {
+            ratchet::reset(&a.n.identity, &b_pub, &mut a.n.sessions, &mut OsRng).unwrap();
+            for turn in 0..2 {
+                let m = seal(&mut a.n, &b_pub, &plain(turn));
+                b.n.open_direct(m, 0, true);
+                let m = seal(&mut b.n, &a_pub, &plain(turn));
+                a.n.open_direct(m, 0, true);
+            }
+            // The step and the other full message after it, then compact ones.
+            for turn in 0..2 {
+                let m = seal(&mut a.n, &b_pub, &plain(10 + turn));
+                b.n.open_direct(m, 0, true);
+            }
+            let m = seal(&mut a.n, &b_pub, &plain(10_000 + attempt));
+            assert_eq!(m[0], ratchet::COMPACT);
+            if u16::from_le_bytes([m[2], m[3]]) <= this_week {
+                found = Some((m, format!("{:060}", 10_000 + attempt)));
+                break;
+            }
+            b.n.open_direct(m, 0, true);
+        }
+        let (m, number) = found.expect("no session id that looks like a week");
+        assert!(m.len() >= maarse_crypto::person::INBOX_OVERHEAD);
+        run_radio(&mut a, &mut b, 1, &mut |_, _| false);
+        // Straight before the message: the host drops old inbox weeks by itself.
+        b.n.link_for_test(maarse_crypto::person::InboxChain { chain: m[1], week: u16::from_le_bytes([m[2], m[3]]), k: [3; 32] });
+        b.n.open_direct(m, 0, true);
+        let (_, eb, _, _) = run_radio(&mut a, &mut b, 1, &mut |_, _| false);
+        assert!(
+            eb.iter().any(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.ends_with(number.as_bytes()))),
+            "not shown: {eb:?}"
+        );
+    }
+
+    /// A recording of a message, sent again later (the router's duplicate
+    /// filter has forgotten it, or the host restarted), is not shown again and
+    /// does not touch the encryption session.
+    #[test]
+    fn a_replayed_message_is_ignored_also_after_a_restart() {
+        let (mut a, mut b) = radio_pair("replay");
+        let (a_pub, b_pub) = (a.n.identity.public(), b.n.identity.public());
+        let seal = |from: &mut Node, to: &maarse_crypto::PublicIdentity, fs_ok: bool, words: &str| {
+            let mut plain = vec![content::TEXT];
+            plain.extend_from_slice(words.as_bytes());
+            let mut out = [0u8; 255];
+            let (n, _) = ratchet::seal(&from.identity, to, &mut from.sessions, fs_ok, &mut OsRng, &plain, &mut out).unwrap();
+            out[..n].to_vec()
+        };
+        let shown = |a: &mut Side, b: &mut Side| {
+            let (_, eb, _, _) = run_radio(a, b, 1, &mut |_, _| false);
+            eb.iter()
+                .filter_map(|e| match e {
+                    Event::DirectReceived { text: t, .. } => Some(String::from_utf8_lossy(t).into_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        shown(&mut a, &mut b);
+        // A static message (offline mail) and the first message of a session.
+        let mail = seal(&mut a.n, &b_pub, false, "mail");
+        let init = seal(&mut a.n, &b_pub, true, "hello");
+        b.n.open_direct(mail.clone(), 0, true);
+        b.n.open_direct(init.clone(), 0, true);
+        assert_eq!(shown(&mut a, &mut b), ["mail", "hello"]);
+        let reply = seal(&mut b.n, &a_pub, true, "hi");
+        a.n.open_direct(reply, 0, true);
+        // A newer session, as after a resync.
+        ratchet::reset(&a.n.identity, &b_pub, &mut a.n.sessions, &mut OsRng).unwrap();
+        let again = seal(&mut a.n, &b_pub, true, "new session");
+        b.n.open_direct(again, 0, true);
+        let reply = seal(&mut b.n, &a_pub, true, "ok");
+        a.n.open_direct(reply, 0, true);
+        shown(&mut a, &mut b);
+        b.n.seen = crate::node::seen::Seen::load(&b.n.data_dir);
+        b.n.open_direct(mail, 0, true);
+        b.n.open_direct(init, 0, true);
+        assert!(shown(&mut a, &mut b).is_empty(), "a replay was shown");
+        let next = seal(&mut a.n, &b_pub, true, "still here");
+        b.n.open_direct(next, 0, true);
+        assert_eq!(shown(&mut a, &mut b), ["still here"], "the replay disturbed the session");
+    }
+
+    #[test]
+    fn a_replayed_channel_message_is_shown_once() {
+        let (mut a, mut b) = radio_pair("replaych");
+        let key = public_channel_key();
+        let channel = channel_address(&key);
+        let mut out = [0u8; 255];
+        let n = seal::seal_channel(&key, &a.n.addr, [4; 8], b"to everyone", &mut out).unwrap();
+        run_radio(&mut a, &mut b, 1, &mut |_, _| false);
+        b.n.on_deliver(PacketType::Channel, channel, &out[..n], 0);
+        b.n.on_deliver(PacketType::Channel, channel, &out[..n], 0);
+        let (_, eb, _, _) = run_radio(&mut a, &mut b, 1, &mut |_, _| false);
+        let shown = eb.iter().filter(|e| matches!(e, Event::ChannelReceived { .. })).count();
+        assert_eq!(shown, 1, "{eb:?}");
+    }
+
+    /// "Delivered" means opened: a message the recipient cannot read (it
+    /// lost its session) is not acknowledged.
+    #[test]
+    fn a_message_the_recipient_cannot_read_is_not_acknowledged() {
+        let (mut a, mut b) = radio_pair("noack");
+        a.n.command(1, Command::SendDirect { req: 1, dest: b.n.addr, text: text(b"hello") });
+        let (ea, _, _, _) = run_radio(&mut a, &mut b, 60, &mut |ea, _| ea.iter().any(|e| matches!(e, Event::Acked { .. })));
+        assert!(ea.iter().any(|e| matches!(e, Event::Acked { .. })), "a readable message is acknowledged: {ea:?}");
+        b.n.command(1, Command::SendDirect { req: 2, dest: a.n.addr, text: text(b"hi") });
+        run_radio(&mut a, &mut b, 60, &mut |_, eb| eb.iter().any(|e| matches!(e, Event::Acked { .. })));
+        b.n.sessions = crate::sessions::Sessions::load(b.n.data_dir.join("gone.bin"));
+        a.n.command(1, Command::SendDirect { req: 3, dest: b.n.addr, text: text(b"lost") });
+        let (ea, _, _, _) = run_radio(&mut a, &mut b, 40, &mut |_, _| false);
+        let sent = ea.iter().find_map(|e| match e {
+            Event::Sent { req: 3, msg_id } => Some(*msg_id),
+            _ => None,
+        });
+        let sent = sent.expect("sent");
+        assert!(!ea.iter().any(|e| matches!(e, Event::Acked { msg_id } if *msg_id == sent)), "unreadable, yet acknowledged: {ea:?}");
     }
 
     /// A picture on a page over LoRa: B makes the small copy in the style

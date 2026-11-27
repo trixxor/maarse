@@ -227,7 +227,8 @@ try:
     assert sh[1] == 0, "position must be off by default"
     a.send(frame(0x22, bytes([2]), struct.pack("<ii", 561_567_000, 102_107_000), bytes([1])))
     a.wait(lambda f: f[0] == 0xA2 and f[1] == 2)
-    ni = b.wait(lambda f: f[0] == 0xA3 and f[1:17] == addr_a, secs=10)
+    # Not an older NodeInfo from before A shared its position.
+    ni = b.wait(lambda f: f[0] == 0xA3 and f[1:17] == addr_a and len(f) >= 29 and f[20] == 2, secs=10)
     lat, lon = struct.unpack("<ii", ni[21:29])
     assert ni[20] == 2 and (lat, lon) == (561_550_000, 102_150_000), (ni[20], lat, lon)
     ok("A shares position (rounded to a ~1 km cell) and telemetry; B sees it")

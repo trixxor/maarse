@@ -24,6 +24,8 @@ const read = (p) => readFileSync(p, "utf8");
 const APP_ONLY = {
   0x0a: "managing another node's radio (trial and confirm) is not in the simulated phone yet",
   0x44: "managing another node's radio (trial and confirm) is not in the simulated phone yet",
+  0x46: "the Bluetooth code of a radio: the simulated phone has no Bluetooth",
+  0x47: "the Bluetooth code of a radio: the simulated phone has no Bluetooth",
 };
 const ENGINE_GAPS = {
   0x18: "firmware update (OTA) is not simulated",

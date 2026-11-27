@@ -444,6 +444,24 @@ impl Session {
         self.has_sid_r.then_some(self.sid_r)
     }
 
+    /// The sending chain (an id for it) and the number of the next message,
+    /// if we have one. A store on disk uses this to never save a state that
+    /// could produce an already used message key again.
+    pub fn send_position(&self) -> Option<([u8; 8], u16)> {
+        self.has_cks.then(|| (fp(&self.dhs_pub), self.ns))
+    }
+
+    /// Moves the sending chain forward to message number `to` without sending:
+    /// the keys in between are never used. The recipient skips them.
+    pub fn advance_send(&mut self, to: u16) {
+        while self.has_cks && self.ns < to {
+            let (next, mut mk) = kdf_ck(&self.cks);
+            mk.zeroize();
+            self.cks = next;
+            self.ns += 1;
+        }
+    }
+
     /// Encrypts `msg` to `peer` (must be the session's contact). Returns
     /// the length (`msg.len()` plus [`FS_OVERHEAD`], or [`COMPACT_OVERHEAD`]
     /// for a compact message). On error the session is unchanged.
@@ -966,6 +984,9 @@ fn open_fs(
             return Ok(Opened { from, len: n, format: Format::Init });
         }
         let ss = me.dh.diffie_hellman(&XPublic::from(peer.dh));
+        if !ss.was_contributory() {
+            return Err(CryptoError::Decrypt);
+        }
         let (rk, ck) = kdf_init(es.as_bytes(), ss.as_bytes(), &rpub, &my_addr, &from);
         let mut fresh = Session::blank(from);
         fresh.rk = rk;

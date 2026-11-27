@@ -116,7 +116,7 @@ fn snapshot(page: u8, sel: u8, confirm: Option<u8>, screen: &'static str) -> Vie
         bt_on: BLE_ACTIVE.load(Relaxed),
         bt_connected: BLE_CONNECTED.load(Relaxed),
         wifi_supported: WIFI_SUPPORTED.load(Relaxed),
-        wifi_linked: WIFI_STATE.load(Relaxed) == wifi_state::LINKED as u32,
+        wifi_linked: matches!(WIFI_STATE.load(Relaxed), s if s == wifi_state::LINKED as u32 || s == wifi_state::HOTSPOT_CLIENTS as u32),
         wifi_ip: WIFI_IP.load(Relaxed),
         heap_free: HEAP_FREE.load(Relaxed),
         crashes: CRASHES.load(Relaxed),

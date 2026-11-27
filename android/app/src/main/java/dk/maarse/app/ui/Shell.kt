@@ -142,6 +142,7 @@ fun AppShell(nav: Nav) {
     // so the text field of any screen stays visible.
     @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
     val keyboardOpen = androidx.compose.foundation.layout.WindowInsets.Companion.isImeVisible
+    OwnCodeDialog()
     Surface(Modifier.fillMaxSize().imePadding(), color = MaterialTheme.colorScheme.background) {
         val s = nav.top
         if (s == Screen.Welcome) Welcome(nav)

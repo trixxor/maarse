@@ -112,7 +112,8 @@ impl Node {
         if public.is_some() {
             targets.push(me);
         }
-        targets.extend(self.dht.heard.iter().filter(|(a, (_, _, last))| **a != me && last.is_some()).map(|(a, _)| *a).take(3));
+        let now = std::time::Instant::now();
+        targets.extend(self.dht.heard.iter().filter(|(a, h)| **a != me && h.published.is_some() && h.alive(now)).map(|(a, _)| *a).take(3));
         let identity = self.identity.clone();
         let configured = self.dht.allowed_endpoints.clone();
         std::thread::spawn(move || {

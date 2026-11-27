@@ -36,6 +36,21 @@ interface LinkListener {
     fun onClosed(link: Link, why: String)
 }
 
+/**
+ * Why a Bluetooth connection ended. Status 5 or 137 from a paired radio: it no longer knows this phone (a new code
+ * makes it forget the paired ones), and Android keeps trying the old pairing until the person forgets the radio.
+ */
+fun bleLostText(name: String, status: Int, paired: Boolean): String =
+    if (paired && (status == 5 || status == 137)) "The radio no longer accepts this phone's pairing (was its Bluetooth code changed?). " +
+        "Forget $name in the phone's Bluetooth settings, then connect again"
+    else "Bluetooth connection lost (status $status)"
+
+/** Is a connection attempt that began `sinceMs` ago still worth waiting for, rather than starting another? */
+fun attemptStillFresh(connecting: Boolean, sinceMs: Long): Boolean = connecting && sinceMs < 10_000
+
+/** Is this a random static Bluetooth address (the two highest bits set), as every Må:rse radio uses? */
+fun isRandomStatic(address: String): Boolean = (address.substringBefore(':').toIntOrNull(16) ?: 0) >= 0xC0
+
 /** A radio node over Bluetooth LE (Nordic UART Service). */
 @SuppressLint("MissingPermission")
 class BleLink(ctx: Context, private val address: String, private val l: LinkListener, private val raw: Boolean = false) : Link {
@@ -47,17 +62,26 @@ class BleLink(ctx: Context, private val address: String, private val l: LinkList
     private var gatt: BluetoothGatt? = null
     private var rx: BluetoothGattCharacteristic? = null
     private var closed = false
+    private var pairTries = 0
     override var name = "Bluetooth"; private set
+    // Android sometimes reports nothing at all about an attempt; without this it would be waited for forever.
+    private val noAnswer = Runnable { gatt?.let { it.disconnect(); it.close() }; finish("The radio did not answer") }
 
     init {
-        val dev: BluetoothDevice = ctx.getSystemService(BluetoothManager::class.java).adapter.getRemoteDevice(address)
+        val adapter = ctx.getSystemService(BluetoothManager::class.java).adapter
+        // Say which kind of address it is: once the radio is forgotten, Android no longer knows and guesses "public".
+        // (Before Android 13 it cannot be said; there, choosing the radio again from the list teaches Android.)
+        val dev: BluetoothDevice = if (Build.VERSION.SDK_INT >= 33 && isRandomStatic(address))
+            adapter.getRemoteLeDevice(address, BluetoothDevice.ADDRESS_TYPE_RANDOM) else adapter.getRemoteDevice(address)
         name = "Bluetooth: " + (dev.name ?: address)
         gatt = dev.connectGatt(ctx, false, object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, state: Int) {
+                main.removeCallbacks(noAnswer)
                 if (state == BluetoothProfile.STATE_CONNECTED) g.requestMtu(247)
                 else if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                    val why = bleLostText(g.device.name ?: address, status, g.device.bondState == BluetoothDevice.BOND_BONDED)
                     g.close()
-                    main.post { finish("Bluetooth connection lost (status $status)") }
+                    main.post { finish(why) }
                 }
             }
 
@@ -72,13 +96,13 @@ class BleLink(ctx: Context, private val address: String, private val l: LinkList
                 rx = s.getCharacteristic(Nus.RX)
                 val tx = s.getCharacteristic(Nus.TX)
                 g.setCharacteristicNotification(tx, true)
-                val cccd = tx.getDescriptor(Nus.CCCD)
-                if (Build.VERSION.SDK_INT >= 33) g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                else @Suppress("DEPRECATION") run { cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; g.writeDescriptor(cccd) }
+                subscribe(g, tx.getDescriptor(Nus.CCCD))
             }
 
             override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
-                main.post { l.onOpen(this@BleLink) }
+                // 5, 15 and 137: the radio has a Bluetooth code and wants this phone paired first.
+                if (status != 5 && status != 15 && status != 137) main.post { l.onOpen(this@BleLink) }
+                else main.post { pairThenRetry(g, d) }
             }
 
             override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
@@ -95,6 +119,20 @@ class BleLink(ctx: Context, private val address: String, private val l: LinkList
                 main.post { writing = false; pump() }
             }
         }, BluetoothDevice.TRANSPORT_LE)
+        main.postDelayed(noAnswer, 20_000)
+    }
+
+    private fun subscribe(g: BluetoothGatt, cccd: BluetoothGattDescriptor) {
+        if (Build.VERSION.SDK_INT >= 33) g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        else @Suppress("DEPRECATION") run { cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; g.writeDescriptor(cccd) }
+    }
+
+    /** Android shows its own window for the code; try again while the person types it. */
+    private fun pairThenRetry(g: BluetoothGatt, cccd: BluetoothGattDescriptor) {
+        if (closed) return
+        if (pairTries == 0 && g.device.bondState == BluetoothDevice.BOND_NONE) g.device.createBond()
+        if (pairTries++ < 30) main.postDelayed({ if (!closed) subscribe(g, cccd) }, 2000)
+        else { g.disconnect(); g.close(); finish("Pair with the radio using its Bluetooth code, then connect again") }
     }
 
     /** Raw (a modem bridge): the bytes as they come; otherwise whole frames. */
@@ -128,6 +166,7 @@ class BleLink(ctx: Context, private val address: String, private val l: LinkList
     private fun finish(why: String) {
         if (closed) return
         closed = true
+        main.removeCallbacks(noAnswer)
         gatt = null; rx = null; out.clear()
         l.onClosed(this, why)
     }

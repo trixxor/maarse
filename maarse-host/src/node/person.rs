@@ -240,7 +240,7 @@ impl Persons {
         for c in [&m.inbox, &m.old_inbox].into_iter().flatten() {
             b.extend_from_slice(&c.to_bytes());
         }
-        let _ = fs::write(path, b);
+        let _ = crate::private_file::write(&path, &b, true);
     }
 
     fn remember_cert(&mut self, c: DeviceCert) {
@@ -628,7 +628,7 @@ impl Node {
         let code = pc::backup_code(&mut OsRng);
         let mut out = vec![0u8; plain.len() + pc::BACKUP_OVERHEAD];
         let Some(n) = pc::backup_seal(&code, &mut OsRng, &plain, &mut out) else { return fail(self, "Could not encrypt the backup") };
-        if let Err(e) = fs::write(self.data_dir.join(BACKUP_FILE), &out[..n]) {
+        if let Err(e) = crate::private_file::write(&self.data_dir.join(BACKUP_FILE), &out[..n], true) {
             return fail(self, &format!("Could not write the backup: {e}"));
         }
         self.log(format!("account backup written to {BACKUP_FILE}"));
@@ -1297,6 +1297,17 @@ impl Node {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+impl Node {
+    /// Makes this node a linked device holding `inbox` (for tests in node.rs).
+    pub(super) fn link_for_test(&mut self, inbox: InboxChain) {
+        let master = Identity::from_secret_bytes(&[1; 64]);
+        let list = DeviceList::issue(&master, 1, &[DeviceEntry { addr: self.addr, revoked: false }]).unwrap();
+        let cert = DeviceCert::issue(&master, &self.addr, 0);
+        self.persons.me = Some(Member { master: None, cert, list, inbox: Some(inbox), old_inbox: None });
     }
 }
 

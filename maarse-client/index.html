@@ -1410,6 +1410,9 @@ const Cmd = {
   getStatsKeys: keys => frame(0x09, keys.slice(0, 24)),
   // Keep the radio settings a remote administrator tried (see setRadioTrial).
   confirmRadio: () => frame(0x44),
+  // A new Bluetooth code for the node (6 digits, not the factory code 123456). The code is never sent back.
+  setBlePin: pin => frame(0x46, u32(pin)),
+  getBlePin: () => frame(0x47),
   // As setRadio, and through `remote` the change is only a trial for `minutes`: the node saves it when confirmRadio
   // arrives, else it goes back to what it had. (An old node saves at once.)
   setRadioTrial: (c, minutes) => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [c.announce & 0xff, minutes]),
@@ -1515,6 +1518,7 @@ function decodeEvent(f) {
     // How a spectrum recording on a radio goes: 0 idle, 1 recording, 2 ready, 3 sending, 4 failed.
     case 0xc0: return { type: "dhtLine", req: f[1] | f[2] << 8, level: f[3], last: !!f[4], text: dec.decode(f.slice(5)) };
     case 0xb9: return { type: "sweepRecState", state: f[1], elapsedS: f[2] | f[3] << 8, durationS: f[4] | f[5] << 8, sweeps: f[6] | f[7] << 8, bytes: f[8] | f[9] << 8 };
+    case 0xc1: return { type: "blePin", own: !!f[1] };
     case 0x93: return { type: "remoteReply", from: a(1), inner: decodeEvent(f.slice(17)) };
     case 0x94: { const l = []; for (let o = 1; o + 16 <= f.length; o += 16) l.push(a(o)); return { type: "admins", list: l }; }
     case 0x95: return { type: "regions", strict: !!f[1], names: txt(2) };
@@ -1704,7 +1708,17 @@ class BleTransport {
     const svc = await server.getPrimaryService(NUS_SERVICE);
     this.rx = await svc.getCharacteristic(NUS_RX);
     const tx = await svc.getCharacteristic(NUS_TX);
-    await tx.startNotifications();
+    // A node with a Bluetooth code asks to be paired here; the computer shows
+    // its own window for the code. Give the person time to type it.
+    for (let tries = 0; ; tries++) {
+      try { await tx.startNotifications(); break; }
+      catch (e) {
+        if (tries >= 30 || !this.device.gatt.connected) {
+          throw new Error("Bluetooth pairing is needed: type the node's Bluetooth code when asked (123456 on a new node), or pair it in the computer's Bluetooth settings, then connect again. If its code was changed, remove it from the computer's Bluetooth settings first. " + e.message);
+        }
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
     tx.addEventListener("characteristicvaluechanged", e => onBytes(new Uint8Array(e.target.value.buffer)));
     this.name = "Bluetooth: " + (this.device.name || "unknown");
   }
@@ -2295,6 +2309,19 @@ function onEvent(ev) {
     noteStats(); updateStrip(); if (["status", "radio", "diag", "network"].includes(state.view)) renderChat(); break;
     case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
     case "admins": state.admins = ev.list; if (state.view === "radio") renderChat(); break;
+    case "blePin":
+      state.ble = ev;
+      if (!ev.own && !(transport instanceof WsTransport) && !state.codeAsked) { state.codeAsked = true; state.awaitingCode = true; openOwnCode(); }
+      else if (ev.own) {
+        closeOwnCode();
+        if (state.awaitingCode) {
+          // Until now the node answered little over Bluetooth: ask again.
+          state.awaitingCode = false;
+          log("Bluetooth code saved");
+          transport?.send(Cmd.getInfo()); transport?.send(Cmd.getName()); transport?.send(Cmd.setTime());
+        }
+      }
+      if (state.view === "radio") renderChat(); break;
     case "regions": state.regions = ev; if (state.view === "radio") renderChat(); break;
     case "identityChanged":
       state.me = ev.addr; $("me").textContent = ev.addr;
@@ -2312,6 +2339,7 @@ function onEvent(ev) {
       if (i.type === "stats") state.remoteStats = state.remoteStats.concat(i.items);
       else if (i.type === "radio") { state.remoteRadio = i.cfg; rtReply(ev.from, i.cfg); }
       else if (i.type === "neighbors") state.remoteNeighbors = i.items;
+      else if (i.type === "blePin") { state.remoteBle = { from: ev.from, own: i.own }; log(`${label(ev.from)}: ${i.own ? "Bluetooth code saved" : "The node still has the factory Bluetooth code"}`); }
       else if (i.type === "error") log(`${label(ev.from)}: ${i.text}`);
       else if (i.type === "ota" && ev.from === ota.target) { otaOnState(i); break; }
       renderChat();
@@ -2528,12 +2556,16 @@ async function connect(kind, quiet = false) {
         transport = new BleTransport(); await transport.open(onBytes, onClose);
       }
     }
+    // Another node, another Bluetooth code (a host has none).
+    state.ble = null; state.remoteBle = null; state.codeAsked = false; state.awaitingCode = false; closeOwnCode();
     setConnected(true, transport.name);
     log("Connected via " + transport.name);
     if (state.view === "remote") { setView("chat"); mobileSide(true); }
     await transport.send(Cmd.getInfo());
     transport.send(Cmd.getName());
     await transport.send(Cmd.setTime());
+    // A node attached directly says whether it still has the factory Bluetooth code.
+    if (kind !== "ws") await transport.send(Cmd.getBlePin());
   } catch (e) {
     transport = null; setConnected(false);
     if (!quiet) log("Could not connect: " + e.message);
@@ -3100,8 +3132,10 @@ function renderRadio(box) {
     // A host: its radios (USB modem etc.) and their port, from settings.txt.
     if (transport instanceof WsTransport) { if (!hs.data && !hs.loading) { hs.loading = true; hsLoad().finally(() => { hs.loading = false; }); } renderSettings(box, "radio"); }
     renderAdmins(box); renderRegions(box);
+    // Only a node that answered has Bluetooth codes (a host has none).
+    if (state.ble) renderBleCode(box);
   }
-  if (state.target) rtBanner(box);
+  if (state.target) { rtBanner(box); renderBleCode(box); }
   const c = state.target ? state.remoteRadio : state.radio;
   if (!c) { box.append(state.target ? "Waiting for a reply… (you must be an administrator of the node)"
                                     : transport instanceof WsTransport ? "No radio is connected to this host yet: choose its port under Connected radios above."
@@ -3189,7 +3223,18 @@ function renderWifi(box) {
   const peer = row("Host (host:port)", document.createElement("input")); peer.value = wf.peer; peer.maxLength = 64;
   peer.placeholder = "10.8.0.2:4242";
   const mkey = row("Modem key", document.createElement("input")); mkey.type = "password"; mkey.maxLength = 64;
-  mkey.placeholder = "modem mode: the host's --modem-key (empty = unchanged)";
+  mkey.placeholder = "modem mode: the host's modem key (empty = unchanged)";
+  const make = document.createElement("button"); make.type = "button"; make.textContent = "Make a random key";
+  const made = el("p", { className: "hint", hidden: true, textContent: "Copy this key to the host's settings (--modem-key) before you save." });
+  // A passphrase someone made up can be guessed from a recording; 20 random characters cannot.
+  make.onclick = () => {
+    const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+    const limit = 256 - (256 % alphabet.length);
+    let key = "";
+    while (key.length < 20) for (const b of crypto.getRandomValues(new Uint8Array(32))) if (b < limit && key.length < 20) key += alphabet[b % alphabet.length];
+    mkey.type = "text"; mkey.value = key; made.hidden = false;
+  };
+  f.append(document.createElement("span"), make, document.createElement("span"), made);
   const save = document.createElement("button"); save.textContent = "Save and restart";
   save.onclick = () => {
     if (on.checked && (!ssid.value.trim() || !peer.value.trim())) { log("Wi-Fi needs a network name and a host"); return; }
@@ -3201,6 +3246,69 @@ function renderWifi(box) {
   };
   f.append(document.createElement("span"), save);
   w.append(site, f);
+  box.appendChild(w);
+}
+
+// Two fields for a new Bluetooth code. `value()` gives the code, or null after showing what is wrong.
+function bleCodeFields() {
+  const f = document.createElement("div"); f.className = "form";
+  const field = label => {
+    const l = document.createElement("label"); l.textContent = label;
+    const i = document.createElement("input"); i.type = "password"; i.inputMode = "numeric"; i.maxLength = 6; i.autocomplete = "new-password";
+    f.append(l, i); return i;
+  };
+  const one = field("New code (6 digits)"), two = field("The same code again");
+  const refused = el("p", { className: "hint", hidden: true });
+  const value = () => {
+    const bad = !/^[0-9]{6}$/.test(one.value) ? "The code must be 6 digits."
+      : one.value === "123456" ? "Choose a code other than 123456."
+      : one.value !== two.value ? "The two codes are not the same." : "";
+    refused.textContent = bad; refused.hidden = !bad;
+    return bad ? null : Number(one.value);
+  };
+  return { f, refused, value, first: one, clear: () => { one.value = two.value = ""; } };
+}
+
+// A node attached directly that still has the factory code: the person chooses their own now. Over Bluetooth the
+// node does nothing else until then.
+function openOwnCode() {
+  closeOwnCode();
+  const bluetooth = !(transport instanceof SerialTransport);
+  const sc = el("div", { className: "scrim", id: "own-code", style: "z-index:94", role: "presentation" }), d = el("div", { className: "dlg", role: "dialog", "aria-modal": "true" });
+  const c = bleCodeFields();
+  const later = el("button", { type: "button", textContent: bluetooth ? "Disconnect" : "Later" });
+  later.onclick = () => { closeOwnCode(); if (bluetooth) $("btn-disconnect").click(); };
+  const save = el("button", { type: "button", className: "primary", textContent: "Save code" });
+  save.onclick = () => { const pin = c.value(); if (pin !== null) transport?.send(Cmd.setBlePin(pin)); };
+  d.append(el("h3", { textContent: "Choose your own Bluetooth code" }),
+    el("p", { style: "margin:0", textContent: "This node still has the factory code 123456, which everyone knows. Choose your own 6-digit code and write it down: the node never shows it." }),
+    c.f, c.refused, el("div", { className: "foot", style: "gap:8px" }, later, save));
+  sc.append(d); document.body.append(sc); c.first.focus();
+}
+function closeOwnCode() { document.getElementById("own-code")?.remove(); }
+
+// The code a phone or computer must type to use the node over Bluetooth. Changed while connected to the node, or from
+// afar by an administrator (the reply says whether the node has its own code; the node never sends the code).
+function renderBleCode(box) {
+  const target = state.target;
+  const known = target ? (state.remoteBle?.from === target ? state.remoteBle : null) : state.ble;
+  const w = document.createElement("div"); w.className = "warn";
+  w.innerHTML = "<b>Bluetooth code</b><p class=\"hint\">A phone or computer must type this code to use the node over Bluetooth. Write it down: the node never shows it. A forgotten code is replaced over USB, or over the network by an administrator.</p>";
+  const status = el("p", { className: "hint", textContent: !known ? "Whether the node has its own code is not known yet." : known.own ? "The node has its own code." : "The node still has the factory code 123456." });
+  const c = bleCodeFields();
+  const save = el("button", { textContent: "Save code" });
+  save.onclick = async () => {
+    const pin = c.value();
+    if (pin === null) return;
+    if (!await askConfirm("Save this Bluetooth code on the node? Other paired phones are forgotten and must type the new code.")) return;
+    const cmd = Cmd.setBlePin(pin);
+    transport?.send(target ? Cmd.remote(state.nextReq++ & 0xffff, target, cmd) : cmd);
+    log("Bluetooth code sent");
+    c.clear();
+  };
+  const buttons = el("div", { className: "row" }); buttons.append(save);
+  c.f.append(document.createElement("span"), buttons);
+  w.append(status, c.f, c.refused);
   box.appendChild(w);
 }
 
@@ -4122,7 +4230,7 @@ function setView(v) {
     }
     if (v === "radio") {
       transport.send(Cmd.getRadio()); transport.send(Cmd.getAdmins()); transport.send(Cmd.getRegions()); transport.send(Cmd.getStats());
-      if (!(transport instanceof WsTransport)) transport.send(Cmd.getWifi());
+      if (!(transport instanceof WsTransport)) { transport.send(Cmd.getWifi()); transport.send(Cmd.getBlePin()); }
     }
     if (v === "diag") {
       const poll = () => { transport?.send(Cmd.getNeighbors()); transport?.send(Cmd.getStats()); };

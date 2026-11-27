@@ -98,9 +98,28 @@ object ModemBridge {
             // Radio data arrives on the main thread, where Android forbids socket writes.
             val writer = java.util.concurrent.Executors.newSingleThreadExecutor()
             var link: BleLink? = null
+            // Only watched for the radio's answer about its Bluetooth code.
+            val frames = FrameDecoder()
+            var asked = false
             val listener = object : LinkListener {
-                override fun onOpen(link: Link) { Node.note("Radio connected as the phone node's LoRa modem") }
+                override fun onOpen(link: Link) {
+                    Node.note("Radio connected as the phone node's LoRa modem")
+                    link.send(Cmd.getBlePin())
+                }
                 override fun onFrame(link: Link, frame: ByteArray) {
+                    for (ev in frames.push(frame).map(::decodeEvent).filterIsInstance<Ev.BlePin>()) {
+                        if (!ev.own) {
+                            // With the factory code the radio is no modem.
+                            asked = true
+                            Node.note("The radio still has the factory Bluetooth code: choose your own")
+                            Node.codeNeeded.value = { pin -> link.send(Cmd.setBlePin(pin)) }
+                        } else if (asked) {
+                            asked = false
+                            Node.codeNeeded.value = null
+                            // The host connects again and sets the radio up as its modem.
+                            done.countDown()
+                        }
+                    }
                     writer.execute { runCatching { out.write(frame); out.flush() }.onFailure { done.countDown() } }
                 }
                 override fun onClosed(link: Link, why: String) {

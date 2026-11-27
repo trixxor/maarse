@@ -36,11 +36,14 @@ pub type Text = heapless::Vec<u8, MAX_TEXT>;
 /// host over the backbone. `modem = true`: the node is the host's LoRa modem
 /// over Wi-Fi (like `--serial` over USB); the host does all routing.
 ///
-/// On the wire the first byte holds flags: bit 0 enabled, bit 1 modem.
+/// On the wire the first byte holds flags: bit 0 enabled, bit 1 modem, bit 2 hotspot (the node opens its own Wi-Fi
+/// network for phones, see [`crate::hotspot`]; then `ssid` and `password` are the network's name and its WPA2
+/// passphrase of 8 to 63 characters, and `peer` is not used).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WifiSettings {
     pub enabled: bool,
     pub modem: bool,
+    pub hotspot: bool,
     pub ssid: heapless::Vec<u8, 32>,
     pub password: heapless::Vec<u8, 64>,
     pub peer: heapless::Vec<u8, 64>,
@@ -64,6 +67,10 @@ pub mod wifi_state {
     pub const BAD_SETTINGS: u8 = 11;
     /// Not started: the Wi-Fi driver could not be initialised.
     pub const DRIVER_FAILED: u8 = 12;
+    /// Hotspot: the network is open for phones (the node has the address 192.168.4.1) and no phone is connected.
+    pub const HOTSPOT_OPEN: u8 = 4;
+    /// Hotspot: at least one phone is connected.
+    pub const HOTSPOT_CLIENTS: u8 = 5;
 }
 pub type FrameBuf = heapless::Vec<u8, { MAX_FRAME + 2 }>;
 
@@ -164,6 +171,15 @@ pub enum Command {
     SweepRecStop,
     /// 0x43: ask how a recording is going. Answered with `SweepRecState`.
     SweepRecStatus,
+    /// 0x46: a new Bluetooth code for the node (see [`crate::blepair`]):
+    /// u32 LE, 0..=999999 and not the factory code. Locally (USB, or
+    /// Bluetooth once paired) or through `Remote` from an administrator.
+    /// Changing it forgets the paired phones, except the one that changes it.
+    /// The reply is `BlePin`.
+    SetBlePin { pin: u32 },
+    /// 0x47: has the node its own Bluetooth code? The reply is `BlePin`; the
+    /// code itself is never sent.
+    GetBlePin,
     /// 0x45: check the backbone DHT from this host's point of view (contacts, records, a lookup). Answered with
     /// one `DhtLine` per line of the report, the last one marked. Only a host has a DHT; a radio node ignores it.
     DhtCheck { req: u16 },
@@ -605,6 +621,9 @@ pub enum Event {
         last: bool,
         items: heapless::Vec<NeighborInfo, NEIGHBORS_PER_FRAME>,
     },
+    /// 0xc1: whether the node has its own Bluetooth code, or still the factory
+    /// code (reply to `SetBlePin` and `GetBlePin`).
+    BlePin { own: bool },
     /// 0xc0: one line of a DHT check (`DhtCheck`): level 0 information, 1 good, 2 warning, 3 problem.
     DhtLine { req: u16, level: u8, last: bool, text: Text },
     /// 0xbe: GPS details, in the layout of [`crate::gpsinfo`].
@@ -629,6 +648,8 @@ pub enum Event {
         enabled: bool,
         /// The node is the host's LoRa modem over Wi-Fi (see [`WifiSettings`]).
         modem: bool,
+        /// The node runs its own hotspot for phones (see [`WifiSettings`]).
+        hotspot: bool,
         state: u8,
         ip: [u8; 4],
         ssid: heapless::Vec<u8, 32>,
@@ -1252,6 +1273,8 @@ impl Command {
             Command::SetRadio(c) => w.start(0x0a).b(&c.to_bytes()),
             Command::SetRadioTrial { cfg, minutes } => w.start(0x0a).b(&cfg.to_bytes()).b(&[*minutes]),
             Command::ConfirmRadio => w.start(0x44),
+            Command::SetBlePin { pin } => w.start(0x46).b(&pin.to_le_bytes()),
+            Command::GetBlePin => w.start(0x47),
             Command::GetRadio => w.start(0x0b),
             Command::Remote { req, dest, frame } => w.start(0x0c).b(&req.to_le_bytes()).b(&dest.0).b(frame),
             Command::SetAdmins { admins } => {
@@ -1287,7 +1310,7 @@ impl Command {
             Command::SetName { name } => w.start(0x24).b(name),
             Command::SetWifi(cfg) => w
                 .start(0x28)
-                .b(&[cfg.enabled as u8 | (cfg.modem as u8) << 1, cfg.ssid.len() as u8])
+                .b(&[cfg.enabled as u8 | (cfg.modem as u8) << 1 | (cfg.hotspot as u8) << 2, cfg.ssid.len() as u8])
                 .b(&cfg.ssid)
                 .b(&[cfg.password.len() as u8])
                 .b(&cfg.password)
@@ -1386,6 +1409,14 @@ impl Command {
             0x3f => Command::SweepRecStop,
             0x43 => Command::SweepRecStatus,
             0x45 => Command::DhtCheck { req: r.u16()? },
+            0x46 => {
+                let pin = r.u32()?;
+                if pin > crate::blepair::MAX_PIN || !r.0.is_empty() {
+                    return Err(FrameError::TooShort);
+                }
+                Command::SetBlePin { pin }
+            }
+            0x47 => Command::GetBlePin,
             0x22 => Command::SetSharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
             0x23 => Command::GetSharing,
             0x24 => Command::SetName { name: r.text()? },
@@ -1394,7 +1425,7 @@ impl Command {
                 let ssid = r.short()?;
                 let password = r.short()?;
                 let peer = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
-                Command::SetWifi(WifiSettings { enabled: flags & 1 != 0, modem: flags & 2 != 0, ssid, password, peer, modem_key: None })
+                Command::SetWifi(WifiSettings { enabled: flags & 1 != 0, modem: flags & 2 != 0, hotspot: flags & 4 != 0, ssid, password, peer, modem_key: None })
             }
             0x29 => Command::GetWifi,
             0x2d => Command::SetModemKey { passphrase: r.text()? },
@@ -1607,6 +1638,7 @@ impl Event {
             }
             Event::Gps { data } => w.start(0xbe).b(data),
             Event::DhtLine { req, level, last, text } => w.start(0xc0).b(&req.to_le_bytes()).b(&[*level, *last as u8]).b(text),
+            Event::BlePin { own } => w.start(0xc1).b(&[*own as u8]),
             Event::Sweep { seq, start_khz, step_khz, rssi } => {
                 w.start(0xbf).b(&seq.to_le_bytes()).b(&start_khz.to_le_bytes()).b(&step_khz.to_le_bytes()).b(rssi)
             }
@@ -1622,8 +1654,8 @@ impl Event {
             Event::Name { name } => w.start(0xa4).b(name),
             Event::Call { from, data } => w.start(0xa5).b(&from.0).b(data),
             Event::CarryAcked { msg_id } => w.start(0xa7).b(&msg_id.to_le_bytes()),
-            Event::Wifi { enabled, modem, state, ip, ssid, peer } => w.start(0xa6)
-                .b(&[*enabled as u8 | (*modem as u8) << 1, *state])
+            Event::Wifi { enabled, modem, hotspot, state, ip, ssid, peer } => w.start(0xa6)
+                .b(&[*enabled as u8 | (*modem as u8) << 1 | (*hotspot as u8) << 2, *state])
                 .b(ip)
                 .b(&[ssid.len() as u8])
                 .b(ssid)
@@ -1886,6 +1918,7 @@ impl Event {
             }
             0xbe => Event::Gps { data: r.text()? },
             0xc0 => Event::DhtLine { req: r.u16()?, level: r.u8()?, last: r.u8()? != 0, text: r.text()? },
+            0xc1 => Event::BlePin { own: r.u8()? != 0 },
             0xbf => Event::Sweep { seq: r.u16()?, start_khz: r.u32()?, step_khz: r.u16()?, rssi: r.text()? },
             0xb9 => Event::SweepRecState { state: r.u8()?, elapsed_s: r.u16()?, duration_s: r.u16()?, sweeps: r.u16()?, bytes: r.u16()? },
             0xbb => Event::Site(crate::appdata::Site::from_bytes(r.text()?.as_slice()).ok_or(FrameError::TooShort)?),
@@ -1900,13 +1933,13 @@ impl Event {
             0xa7 => Event::CarryAcked { msg_id: r.u64()? },
             0xa6 => {
                 let flags = r.u8()?;
-                let (enabled, modem) = (flags & 1 != 0, flags & 2 != 0);
+                let (enabled, modem, hotspot) = (flags & 1 != 0, flags & 2 != 0, flags & 4 != 0);
                 let state = r.u8()?;
                 let mut ip = [0u8; 4];
                 ip.copy_from_slice(r.take(4)?);
                 let ssid = r.short()?;
                 let peer = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
-                Event::Wifi { enabled, modem, state, ip, ssid, peer }
+                Event::Wifi { enabled, modem, hotspot, state, ip, ssid, peer }
             }
             0xb5 => Event::DeviceLinked {
                 device: r.addr()?,
@@ -2073,6 +2106,21 @@ mod tests {
     fn roundtrip_ev(e: Event) {
         let f = e.encode();
         assert_eq!(Event::decode(&f[2..]).unwrap(), e);
+    }
+
+    #[test]
+    fn the_bluetooth_code_is_set_but_never_read_back() {
+        roundtrip_cmd(Command::SetBlePin { pin: 42 });
+        roundtrip_cmd(Command::GetBlePin);
+        let frame = Event::BlePin { own: true }.encode();
+        assert_eq!(&frame[2..], &[0xc1, 1]);
+        assert_eq!(Event::decode(&frame[2..]), Ok(Event::BlePin { own: true }));
+        assert_eq!(Command::SetBlePin { pin: 123_456 }.encode()[2..], [0x46, 0x40, 0xe2, 0x01, 0x00]);
+        // A code cannot be removed.
+        assert!(Command::decode(&[0x46]).is_err());
+        // Only six digits.
+        assert!(Command::decode(&[0x46, 0x40, 0x42, 0x0f, 0x00]).is_err(), "1000000");
+        assert!(Command::decode(&[0x46, 1, 2]).is_err());
     }
 
     #[test]
@@ -2414,6 +2462,7 @@ mod tests {
         roundtrip_cmd(Command::SetWifi(WifiSettings {
             enabled: true,
             modem: true,
+            hotspot: false,
             ssid: heapless::Vec::from_slice(b"Telefon").unwrap(),
             password: heapless::Vec::from_slice(b"hemmelig kode").unwrap(),
             peer: heapless::Vec::from_slice(b"example.org:4242").unwrap(),
@@ -2421,10 +2470,20 @@ mod tests {
         }));
         roundtrip_cmd(Command::SetModemKey { passphrase: Text::from_slice(b"mast modem key").unwrap() });
         roundtrip_cmd(Command::SetWifi(WifiSettings::default()));
+        roundtrip_cmd(Command::SetWifi(WifiSettings {
+            enabled: true,
+            modem: false,
+            hotspot: true,
+            ssid: heapless::Vec::from_slice(b"Maarse repeater").unwrap(),
+            password: heapless::Vec::from_slice(b"correct horse").unwrap(),
+            peer: heapless::Vec::new(),
+            modem_key: None,
+        }));
         roundtrip_cmd(Command::GetWifi);
         roundtrip_ev(Event::Wifi {
             enabled: true,
             modem: false,
+            hotspot: false,
             state: wifi_state::LINKED,
             ip: [192, 168, 43, 17],
             ssid: heapless::Vec::from_slice(b"Telefon").unwrap(),

@@ -123,6 +123,9 @@ fun ManageNodeScreen(addr: String, onBack: () -> Unit) {
 
         GroupTitle("Radio")
         RadioPart(addr)
+
+        val blePin by RemoteAdmin.blePin.collectAsState()
+        BleCodeCard(blePin) { RemoteAdmin.setBlePin(it) }
     }
 }
 

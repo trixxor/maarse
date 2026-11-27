@@ -14,7 +14,7 @@ use crate::bus::{
     Frame, Pkt, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_TX, RSTATS, TxReq, USB_IN, USB_OUT,
 };
 use core::sync::atomic::Ordering::Relaxed;
-use embassy_futures::select::{Either4, Either5, select4, select5};
+use embassy_futures::select::{Either, Either4, Either5, select, select4, select5};
 use embassy_futures::yield_now;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::{FnvIndexMap, FnvIndexSet};
@@ -24,6 +24,7 @@ use maarse_core::companion::{RadioConfig, Stats, stat};
 use maarse_core::appdata;
 use maarse_core::content::{self, Content};
 use maarse_core::packet::{Header, encode};
+use maarse_core::router::Proof;
 use maarse_core::stamp::StampSearch;
 use maarse_core::{Action, Address, PacketType, Role, Router};
 use maarse_crypto::ratchet::{self, FixedStore, Format, MAX_FS_TEXT};
@@ -143,6 +144,16 @@ pub trait Settings {
     fn save_wifi(&mut self, _w: &maarse_core::companion::WifiSettings) {}
     /// Stores the Wi-Fi modem key (`None` = none). Default: not stored.
     fn save_modem_key(&mut self, _key: Option<[u8; 32]>) {}
+    /// The Bluetooth code (`None` removes it).
+    fn save_ble_pin(&mut self, _pin: Option<u32>) {}
+    fn load_ble_pin(&mut self) -> Option<u32> {
+        None
+    }
+    /// The phones paired with the code.
+    fn save_ble_bonds(&mut self, _bonds: &maarse_core::blepair::Bonds) {}
+    fn load_ble_bonds(&mut self) -> maarse_core::blepair::Bonds {
+        maarse_core::blepair::Bonds::new()
+    }
     /// The stored Wi-Fi modem key.
     fn load_modem_key(&mut self) -> Option<[u8; 32]> {
         None
@@ -467,6 +478,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         // Trickle timer: neighbors know within seconds what announces 12 h
         // apart would tell them only much later.
         n.router.hello = true;
+        // A message is acknowledged when it has been opened (see `on_data`).
+        n.router.app_acks = true;
         if n.wifi_modem {
             // The host's antenna: the host routes and says hello, not us.
             n.router.hello = false;
@@ -585,14 +598,15 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             crate::gps::WANTED.store(self.ext.sharing.precision != 0, core::sync::atomic::Ordering::Relaxed);
             if self.stamping.is_some() {
                 self.stamp_step();
-                match select4(RADIO_RX.receive(), USB_IN.receive(), select5(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive(), crate::bus::PIN_WAKE.wait()), yield_now()).await {
+                match select4(RADIO_RX.receive(), USB_IN.receive(), select5(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive(), select(crate::bus::PIN_WAKE.wait(), crate::bus::BLE_BOND.wait())), yield_now()).await {
                     Either4::First((pkt, snr)) => self.on_radio(pkt, snr),
                     Either4::Second(frame) => self.on_frame(frame),
                     Either4::Third(Either5::First(pkt)) => self.on_net(pkt),
                     Either4::Third(Either5::Second(())) => self.toggle_radio(),
                     Either4::Third(Either5::Third(c)) => self.on_display_cmd(c),
                     Either4::Third(Either5::Fourth(values)) => self.sensor_samples(values),
-                    Either4::Third(Either5::Fifth(pin)) => self.sensor_pin_wake(pin),
+                    Either4::Third(Either5::Fifth(Either::First(pin))) => self.sensor_pin_wake(pin),
+                    Either4::Third(Either5::Fifth(Either::Second(bond))) => self.keep_bond(bond),
                     Either4::Fourth(()) => {
                         if Instant::now() >= self.next_deadline() {
                             self.on_timer();
@@ -602,14 +616,15 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 continue;
             }
             let deadline = self.next_deadline();
-            match select4(RADIO_RX.receive(), USB_IN.receive(), select5(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive(), crate::bus::PIN_WAKE.wait()), Timer::at(deadline)).await {
+            match select4(RADIO_RX.receive(), USB_IN.receive(), select5(crate::bus::NET_RX.receive(), crate::bus::TOGGLE_RADIO.wait(), crate::bus::DISPLAY_CMD.receive(), crate::bus::SENSE_DONE.receive(), select(crate::bus::PIN_WAKE.wait(), crate::bus::BLE_BOND.wait())), Timer::at(deadline)).await {
                 Either4::First((pkt, snr)) => self.on_radio(pkt, snr),
                 Either4::Second(frame) => self.on_frame(frame),
                 Either4::Third(Either5::First(pkt)) => self.on_net(pkt),
                 Either4::Third(Either5::Second(())) => self.toggle_radio(),
                 Either4::Third(Either5::Third(c)) => self.on_display_cmd(c),
                     Either4::Third(Either5::Fourth(values)) => self.sensor_samples(values),
-                    Either4::Third(Either5::Fifth(pin)) => self.sensor_pin_wake(pin),
+                    Either4::Third(Either5::Fifth(Either::First(pin))) => self.sensor_pin_wake(pin),
+                    Either4::Third(Either5::Fifth(Either::Second(bond))) => self.keep_bond(bond),
                 Either4::Fourth(()) => self.on_timer(),
             }
         }
@@ -851,8 +866,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     fn transmit(&self, packet: Pkt, delay_ms: u32, id: u64) {
         // The backbone link gets every packet at once; flood delays and
         // cancellation only matter on the shared radio channel.
+        // (A hotspot with phones connected gets them too: see esp/src/hotspot.rs.)
+        let net = crate::bus::WIFI_STATE.load(Relaxed);
         if !self.wifi_modem
-            && crate::bus::WIFI_STATE.load(Relaxed) == maarse_core::companion::wifi_state::LINKED as u32
+            && (net == maarse_core::companion::wifi_state::LINKED as u32 || net == maarse_core::companion::wifi_state::HOTSPOT_CLIENTS as u32)
         {
             let _ = crate::bus::NET_TX.try_send((packet.clone(), 0));
         }
@@ -968,6 +985,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         Event::Wifi {
             enabled: w.enabled,
             modem: w.modem,
+            hotspot: w.hotspot,
             state: crate::bus::WIFI_STATE.load(Relaxed) as u8,
             ip,
             ssid: w.ssid,
@@ -1114,12 +1132,15 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     }
                     // A recipient says it got mail we deposited: the same as an ack.
                     Some(d) if d.op == mail::OP_RECEIPT && d.recipient == self.addr => {
-                        let ids: heapless::Vec<u64, 4> = d.receipts().take(4).collect();
-                        for id in ids {
+                        // A receipt is the message's ID, followed by the
+                        // proof from a recipient that has one.
+                        let words: heapless::Vec<u64, 8> = d.receipts().take(8).collect();
+                        for (i, id) in words.iter().enumerate() {
                             let found = self
                                 .outbox
                                 .iter()
-                                .find(|e| mail::receipt_id(&e.1, &e.2) == id)
+                                .find(|e| mail::receipt_id(&e.1, &e.2) == *id)
+                                .filter(|e| self.proof_from(&e.1, &e.2).is_none_or(|p| words.get(i + 1) == Some(&u64::from_le_bytes(p))))
                                 .map(|e| e.0);
                             if let Some(msg_id) = found {
                                 self.outbox.retain(|e| e.0 != msg_id);
@@ -1363,6 +1384,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         | Command::SetRadio(_)
                         | Command::SetRadioTrial { .. }
                         | Command::ConfirmRadio
+                        | Command::SetBlePin { .. }
+                        | Command::GetBlePin
                         | Command::GetNeighbors
                         | Command::SetRole { .. }
                         | Command::OtaBegin { .. }
@@ -1374,7 +1397,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         | Command::SweepRecStop
                         | Command::SweepRecStatus)
                 ) {
-                    return err(req, error_code::BAD_FRAME, "Only status, radio, neighbours, role, firmware, sensors and spectrum recordings can be controlled remotely");
+                    return err(req, error_code::BAD_FRAME, "Only status, radio, neighbours, role, Bluetooth code, firmware, sensors and spectrum recordings can be controlled remotely");
                 }
                 let Some(now) = self.unix_now() else {
                     return err(req, error_code::BAD_FRAME, "The clock is not set (connect again)");
@@ -1392,6 +1415,13 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 self.admins = admins;
                 self.settings.save_admins(&self.admins);
                 self.control_limits.retain(|(admin, _)| self.admins.contains(admin) || self.sensor.is_owner_person(admin));
+                // Counters that cannot be read (left over from another firmware) block remote changes. Whoever sets
+                // the administrators here at the node may start them afresh.
+                if !self.control_counters_ready && self.settings.save_control_limits(&[]) {
+                    self.control_limits.clear();
+                    self.control_counters_ready = true;
+                    log("Unreadable remote command counters were cleared");
+                }
                 let mut i = self.control_seen.len();
                 while i > 0 {
                     i -= 1;
@@ -1417,6 +1447,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 let ev = self.wifi_event();
                 emit(&ev);
             }
+            Command::SetBlePin { pin } => match self.set_ble_code(pin) {
+                Ok(()) => emit(&Event::BlePin { own: true }),
+                Err(e) => err(0, error_code::BAD_FRAME, e),
+            },
+            Command::GetBlePin => emit(&Event::BlePin { own: crate::bus::ble_pin_is_own() }),
             Command::SetModemKey { passphrase } => {
                 if !crate::bus::WIFI_SUPPORTED.load(Relaxed) {
                     return err(0, error_code::BAD_FRAME, "This board has no Wi-Fi");
@@ -1428,6 +1463,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::SetWifi(w) => {
                 if !crate::bus::WIFI_SUPPORTED.load(Relaxed) {
                     return err(0, error_code::BAD_FRAME, "This board has no Wi-Fi");
+                }
+                if w.hotspot && !crate::bus::HOTSPOT_SUPPORTED.load(Relaxed) {
+                    return err(0, error_code::BAD_FRAME, "This firmware build has no Wi-Fi hotspot yet");
                 }
                 // An empty password for the same network keeps the saved one,
                 // so the host can be changed without typing it again.
@@ -1490,6 +1528,52 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             Command::FileEnd { req } => self.file_end(req),
             Command::SetIdentity { confirm, secret } => self.set_identity(confirm, &secret),
         }
+    }
+
+    /// The proof `dest` must give for the sealed message `sealed`, if it is
+    /// a node that proves delivery. Not inlined: a key exchange takes stack.
+    #[inline(never)]
+    fn proof_from(&self, dest: &Address, sealed: &[u8]) -> Option<Proof> {
+        if self.caps.get(dest).is_none_or(|c| c & appdata::CAP_PROOF == 0) {
+            return None;
+        }
+        self.identity.receipt_proof(&self.known.get(dest)?.0, dest, sealed)
+    }
+
+    /// Our proof to `sender` that we opened its message `sealed`.
+    #[inline(never)]
+    fn proof_to(&self, sender: &Address, sealed: &[u8]) -> Option<Proof> {
+        self.identity.receipt_proof(&self.known.get(sender)?.0, &self.addr, sealed)
+    }
+
+    /// The message with packet ID `id` has been dealt with: the router may
+    /// acknowledge it.
+    fn acknowledge(&mut self, id: u64, proof: Option<Proof>) {
+        let actions = self.router.acknowledge(id, proof, now_ms());
+        self.apply(actions);
+    }
+
+    /// A new Bluetooth code: saved, and the paired phones are forgotten (the
+    /// Bluetooth task keeps the one that changed it). Refuses the factory
+    /// code. The code is never logged or sent back.
+    fn set_ble_code(&mut self, pin: u32) -> Result<(), &'static str> {
+        if !maarse_core::blepair::is_own_pin(pin) {
+            return Err("Choose a Bluetooth code other than 123456");
+        }
+        self.settings.save_ble_pin(Some(pin));
+        self.settings.save_ble_bonds(&Default::default());
+        crate::bus::set_ble_pin(Some(pin));
+        crate::bus::BLE_PIN_CHANGED.signal(());
+        log("Bluetooth code saved; other phones must pair again");
+        Ok(())
+    }
+
+    /// A phone paired with the code: remembered across restarts.
+    fn keep_bond(&mut self, bond: maarse_core::blepair::Bond) {
+        let mut bonds = self.settings.load_ble_bonds();
+        bonds.add(bond);
+        self.settings.save_ble_bonds(&bonds);
+        log("Bluetooth: a phone is paired");
     }
 
     /// Tries to deliver mail to `recipient` (if we have any).
@@ -1560,6 +1644,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         self.rng.fill_bytes(&mut token);
         match self.router.send_direct(dest, &ct[..n], token, now_ms()) {
             Ok((msg_id, actions)) => {
+                if let Some(p) = self.proof_from(&dest, &ct[..n]) {
+                    self.router.expect_proof(msg_id, p);
+                }
                 emit(&Event::Sent { req, msg_id });
                 self.apply(actions);
                 // A copy for a post office, sealed without forward secrecy
@@ -1658,6 +1745,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             .router
             .send_direct(dest, &ct[..n], token, now_ms())
             .map_err(|_| "The queue is full")?;
+        if let Some(p) = self.proof_from(&dest, &ct[..n]) {
+            self.router.expect_proof(msg_id, p);
+        }
         self.apply(actions);
         Ok(msg_id)
     }
@@ -1711,12 +1801,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
         let command = Command::decode(frame);
         let updates_node = matches!(&command,
-            Ok(Command::SetRadio(_) | Command::SetRadioTrial { .. } | Command::ConfirmRadio | Command::SetRole { .. } | Command::OtaBegin { .. }
+            Ok(Command::SetRadio(_) | Command::SetRadioTrial { .. } | Command::ConfirmRadio | Command::SetRole { .. } | Command::SetBlePin { .. } | Command::OtaBegin { .. }
                 | Command::OtaChunk { .. } | Command::OtaEnd { .. }))
             || matches!(&command, Ok(Command::Sensor { op, .. })
                 if matches!(*op, maarse_core::sensor::op::WRITE_RECIPE | maarse_core::sensor::op::ADD_OWNER | maarse_core::sensor::op::REMOVE_OWNER));
         if updates_node && !self.reserve_control_counter(key, counter) {
-            return reply(self, deny("Could not reserve a persistent remote command counter"));
+            return reply(self, deny("Could not reserve a persistent remote command counter: save the administrators again at the node"));
         }
         let _ = self.control_seen.insert(key, counter);
         match command {
@@ -1758,6 +1848,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 self.confirm_radio();
                 reply(self, Event::Radio(self.radio));
             }
+            Ok(Command::SetBlePin { pin }) => match self.set_ble_code(pin) {
+                Ok(()) => reply(self, Event::BlePin { own: true }),
+                Err(e) => reply(self, deny(e)),
+            },
+            Ok(Command::GetBlePin) => reply(self, Event::BlePin { own: crate::bus::ble_pin_is_own() }),
             Ok(Command::SetRole { role }) => match self.set_role(role) {
                 Ok(_) => {
                     let items = self.stats();
@@ -1855,11 +1950,18 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 {
                     self.mark_fs(o.from);
                 }
+                let rid = maarse_core::mail::receipt_id(&self.addr, payload);
                 if let Ok(o) = &res {
-                    let rid = maarse_core::mail::receipt_id(&self.addr, payload);
+                    // Opened: now the sender may hear that it arrived.
+                    let proof = self.proof_to(&o.from, payload);
+                    self.acknowledge(rid, proof);
                     if let Some(i) = self.receipt_wanted.iter().position(|r| *r == rid) {
                         self.receipt_wanted.swap_remove(i);
-                        self.send_deposit(o.from, o.from, maarse_core::mail::OP_RECEIPT, &rid.to_le_bytes());
+                        // The receipt: the message's ID and the proof.
+                        let mut body: heapless::Vec<u8, 16> = heapless::Vec::new();
+                        let _ = body.extend_from_slice(&rid.to_le_bytes());
+                        let _ = body.extend_from_slice(proof.as_ref().map_or(&[], |p| &p[..]));
+                        self.send_deposit(o.from, o.from, maarse_core::mail::OP_RECEIPT, &body);
                     }
                 }
                 if res.is_ok() {
@@ -1907,8 +2009,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         _ => {}
                     },
                     Err(CryptoError::UnknownSender(sender)) => {
-                        // Keep it until the sender's announce arrives (the
-                        // router has already acknowledged it), and ask for it.
+                        // Keep it until the sender's announce arrives, and
+                        // ask for it. The route may confirm it now (a sender
+                        // that expects a proof goes on waiting).
+                        self.acknowledge(rid, None);
                         if self.pending_rx.is_full() {
                             self.pending_rx.remove(0);
                         }

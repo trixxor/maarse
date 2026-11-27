@@ -24,7 +24,7 @@ pub mod ratchet;
 pub mod recovery;
 pub mod seal;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand_core::CryptoRngCore;
 use sha2::{Digest, Sha256};
 use maarse_core::Address;
@@ -162,6 +162,29 @@ impl Identity {
         self.sign.sign(&dht_route_digest(route)).to_bytes()
     }
 
+    /// The proof that a direct message reached its recipient (see
+    /// `maarse_core::router`, "Delivery proof"). `payload` is the sealed
+    /// message as sent to `recipient`; `peer` is the other party. Only the
+    /// two of them can compute it, from the secret their long-term keys
+    /// share. `None` for a peer whose key makes that secret public.
+    ///
+    /// ```text
+    /// HKDF-SHA256(salt "maarse/receipt/v1", DH(me, peer),
+    ///             info recipient || SHA-256(payload)), 8 bytes
+    /// ```
+    pub fn receipt_proof(&self, peer: &PublicIdentity, recipient: &Address, payload: &[u8]) -> Option<maarse_core::router::Proof> {
+        let shared = self.dh.diffie_hellman(&XPublic::from(peer.dh));
+        if !shared.was_contributory() {
+            return None;
+        }
+        let mut info = [0u8; 48];
+        info[..16].copy_from_slice(&recipient.0);
+        info[16..].copy_from_slice(&Sha256::digest(payload));
+        let mut proof = [0u8; maarse_core::router::PROOF_LEN];
+        hkdf::Hkdf::<Sha256>::new(Some(b"maarse/receipt/v1"), shared.as_bytes()).expand(&info, &mut proof).ok()?;
+        Some(proof)
+    }
+
     pub(crate) fn signing_key(&self) -> &SigningKey {
         &self.sign
     }
@@ -241,7 +264,7 @@ pub fn verify_announce<'a>(
         .map_err(|_| AnnounceError::Malformed)?;
     let key = VerifyingKey::from_bytes(&identity.sign).map_err(|_| AnnounceError::BadSignature)?;
     let msg = signed_message(dest, &payload[..body_len]).ok_or(AnnounceError::Malformed)?;
-    key.verify(&msg, &Signature::from_bytes(&sig_bytes))
+    key.verify_strict(&msg, &Signature::from_bytes(&sig_bytes))
         .map_err(|_| AnnounceError::BadSignature)?;
     Ok(Announce {
         identity,
@@ -336,6 +359,37 @@ pub fn safety_number(a: &PublicIdentity, b: &PublicIdentity) -> [u8; 60] {
 mod tests {
     use super::*;
     use rand_core::OsRng;
+
+    /// A signing key of small order accepts one signature for any message:
+    /// it must not pass as an identity.
+    #[test]
+    fn announce_with_a_weak_signing_key_is_rejected() {
+        let mut weak = [0u8; 32];
+        weak[0] = 1; // The identity point.
+        let id = PublicIdentity { sign: weak, dh: [9; 32] };
+        let mut p = id.to_bytes().to_vec();
+        p.extend_from_slice(&1_000u32.to_be_bytes());
+        p.push(0);
+        p.extend_from_slice(&weak); // R
+        p.extend_from_slice(&[0; 32]); // s
+        assert_eq!(verify_announce(&id.address(), &p), Err(AnnounceError::BadSignature));
+    }
+
+    #[test]
+    fn only_sender_and_recipient_compute_the_delivery_proof() {
+        let (a, b, c) = (Identity::generate(&mut OsRng), Identity::generate(&mut OsRng), Identity::generate(&mut OsRng));
+        let to = b.address();
+        let sender = a.receipt_proof(&b.public(), &to, b"sealed").unwrap();
+        assert_eq!(b.receipt_proof(&a.public(), &to, b"sealed"), Some(sender));
+        // Bound to the message and to its direction.
+        assert_ne!(a.receipt_proof(&b.public(), &to, b"sealeD"), Some(sender));
+        assert_ne!(a.receipt_proof(&b.public(), &a.address(), b"sealed"), Some(sender));
+        // Somebody else, who knows both public keys.
+        assert_ne!(c.receipt_proof(&b.public(), &to, b"sealed"), Some(sender));
+        assert_ne!(c.receipt_proof(&a.public(), &to, b"sealed"), Some(sender));
+        let weak = PublicIdentity { sign: [7; 32], dh: [0; 32] };
+        assert_eq!(a.receipt_proof(&weak, &to, b"sealed"), None);
+    }
 
     #[test]
     fn address_is_stable_and_restorable() {

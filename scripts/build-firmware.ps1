@@ -6,6 +6,8 @@
 param(
     [Parameter(Mandatory = $true)][ValidateSet("wismesh-tag", "xiao-nrf52840", "heltec-v4", "xiao-esp32s3")][string]$Board,
     [switch]$Flash,
+    # ESP32 only: a firmware that can open a Wi-Fi hotspot for phones (see docs/maybe/later-features.md).
+    [switch]$Hotspot,
     [string]$Port
 )
 $ErrorActionPreference = "Stop"
@@ -62,7 +64,9 @@ $exp = Join-Path $HOME "export-esp.ps1"
 if (Test-Path $exp) { . $exp }
 if (-not (Get-Command espflash -ErrorAction SilentlyContinue)) { cargo install espflash --locked }
 Push-Location firmware\esp
-cargo +esp build --release --features "board-$Board"
+$features = "board-$Board"
+if ($Hotspot) { $features += ",hotspot" }
+cargo +esp build --release --features $features
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit 1 }
 Pop-Location
 $elf = "firmware\esp\target\xtensa-esp32s3-none-elf\release\maarse-fw-esp"

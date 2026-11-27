@@ -67,6 +67,10 @@ object Node : LinkListener {
     val regions = MutableStateFlow<Ev.Regions?>(null)
     /** The connected node's administrators; null until it has answered, so another node's list is never saved to it. */
     val admins = MutableStateFlow<List<String>?>(null)
+    /** Whether the connected radio has its own Bluetooth code (false: the factory code); null until it has answered. */
+    val blePin = MutableStateFlow<Boolean?>(null)
+    /** Set while a radio over Bluetooth still has the factory code: call it with the code the person chooses. */
+    val codeNeeded = MutableStateFlow<((Int) -> Unit)?>(null)
     val sharing = MutableStateFlow<Ev.Sharing?>(null)
     /** Site of the node (fixed nodes: antenna height, gain, owner). */
     val site = MutableStateFlow<Ev.Site?>(null)
@@ -183,9 +187,14 @@ object Node : LinkListener {
         link?.let { link = null; it.close() }
         me.value = null
         admins.value = null
+        blePin.value = null
+        if (prefs.mode == Mode.BLE) codeNeeded.value = null
     }
 
     private val retry = Runnable { connect() }
+
+    /** When the latest connection attempt began (time since boot). */
+    private var attemptAt = 0L
 
     /**
      * The app came to the front. While it was away, Android may have slowed the retry timer (backoff up to 30 s,
@@ -195,6 +204,8 @@ object Node : LinkListener {
         if (!prefs.running || prefs.mode == Mode.SERVER) return
         mcNextPoll = 0
         if (link != null && conn.value.state == Conn.State.ONLINE) { send(Cmd.getStats()); return }
+        val sinceMs = android.os.SystemClock.elapsedRealtime() - attemptAt
+        if (link != null && attemptStillFresh(conn.value.state == Conn.State.CONNECTING, sinceMs)) return
         main.removeCallbacks(retry)
         retryMs = 2000
         link?.let { link = null; it.close() }
@@ -206,6 +217,7 @@ object Node : LinkListener {
         val mode = prefs.mode
         HostFiles.takeServerStop(app)?.let { note(it); _status.value = it }
         conn.value = Conn(mode, Conn.State.CONNECTING, "Connecting…")
+        attemptAt = android.os.SystemClock.elapsedRealtime()
         link = when (mode) {
             Mode.BLE -> {
                 val a = prefs.bleAddress
@@ -265,6 +277,8 @@ object Node : LinkListener {
         link.send(Cmd.getSite())
         // Only a radio has radio settings (a host answers with an error).
         if (prefs.mode == Mode.BLE) link.send(Cmd.getRadio())
+        // A radio says whether it still has the factory Bluetooth code.
+        if (prefs.mode == Mode.BLE) link.send(Cmd.getBlePin())
         person.value = null
         if (prefs.mode != Mode.BLE) link.send(Cmd.getPerson())
         // The radio bridge may have stopped (e.g. app process restarted): bring it back.
@@ -282,6 +296,8 @@ object Node : LinkListener {
         this.link = null
         me.value = null
         admins.value = null
+        blePin.value = null
+        if (prefs.mode == Mode.BLE) codeNeeded.value = null
         note("Connection closed: $why")
         conn.value = Conn(prefs.mode, if (prefs.running) Conn.State.CONNECTING else Conn.State.OFF, why)
         // The phone's host exits on a settings restart: start it again.
@@ -1153,6 +1169,17 @@ object Node : LinkListener {
             is Ev.Radio -> radio.value = ev.cfg
             is Ev.Regions -> regions.value = ev
             is Ev.Admins -> admins.value = ev.list
+            is Ev.BlePin -> {
+                blePin.value = ev.own
+                if (conn.value.mode == Mode.BLE) {
+                    if (!ev.own) codeNeeded.value = { pin -> send(Cmd.setBlePin(pin)) }
+                    else if (codeNeeded.value != null) {
+                        codeNeeded.value = null
+                        // Until now the radio answered little: ask for everything again.
+                        onOpen(link)
+                    }
+                }
+            }
             is Ev.Sharing -> {
                 val previous = sharing.value
                 sharing.value = ev

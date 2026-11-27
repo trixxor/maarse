@@ -27,6 +27,54 @@ pub struct TxReq {
 /// Set by the radio loop for jobs tagged with `rangetest::TX_ID_TAG`.
 pub static BEACON_SENT: AtomicU32 = AtomicU32::new(0);
 
+/// The radio settings in use, for whoever shares the airtime (the Wi-Fi
+/// hotspot): bandwidth; SF | coding rate << 8 | preamble << 16; duty permille.
+static RADIO_AIR: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+
+pub fn set_radio_air(cfg: &RadioConfig) {
+    let a = cfg.airtime();
+    RADIO_AIR[0].store(a.bw_hz, core::sync::atomic::Ordering::Relaxed);
+    RADIO_AIR[1].store(a.sf as u32 | (a.cr as u32) << 8 | (a.preamble as u32) << 16, core::sync::atomic::Ordering::Relaxed);
+    RADIO_AIR[2].store(cfg.duty_permille as u32, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Airtime parameters and duty cycle in permille (the EU default until the
+/// radio has started).
+pub fn radio_air() -> (maarse_core::airtime::LoraParams, u16) {
+    let [bw, packed, duty] = core::array::from_fn(|i| RADIO_AIR[i].load(core::sync::atomic::Ordering::Relaxed));
+    if bw == 0 {
+        let d = RadioConfig::EU_DEFAULT;
+        return (d.airtime(), d.duty_permille);
+    }
+    let params = maarse_core::airtime::LoraParams { sf: packed as u8, bw_hz: bw, cr: (packed >> 8) as u8, preamble: (packed >> 16) as u16 };
+    (params, duty as u16)
+}
+
+/// The node's own Bluetooth code ([`NO_BLE_PIN`] = it still has the factory
+/// code; see `maarse_core::blepair`).
+pub static BLE_PIN: AtomicU32 = AtomicU32::new(NO_BLE_PIN);
+pub const NO_BLE_PIN: u32 = u32::MAX;
+/// The code was changed: the Bluetooth task forgets the paired phones.
+pub static BLE_PIN_CHANGED: Signal<M, ()> = Signal::new();
+/// A phone has just paired with the code: the node saves it.
+pub static BLE_BOND: Signal<M, maarse_core::blepair::Bond> = Signal::new();
+
+/// Has the person who set the node up chosen a code?
+pub fn ble_pin_is_own() -> bool {
+    BLE_PIN.load(core::sync::atomic::Ordering::Relaxed) != NO_BLE_PIN
+}
+
+/// The code new pairings must use.
+pub fn ble_pin() -> u32 {
+    let pin = BLE_PIN.load(core::sync::atomic::Ordering::Relaxed);
+    if pin == NO_BLE_PIN { maarse_core::blepair::DEFAULT_PIN } else { pin }
+}
+
+/// The saved code (`None`: the factory code).
+pub fn set_ble_pin(pin: Option<u32>) {
+    BLE_PIN.store(pin.unwrap_or(NO_BLE_PIN), core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Received over LoRa: packet and SNR.
 pub static RADIO_RX: Channel<M, (Pkt, i8), 4> = Channel::new();
 /// To be sent over LoRa.
@@ -62,6 +110,8 @@ pub static MODEM_FALLBACK: AtomicBool = AtomicBool::new(false);
 pub static WIFI_MODEM: AtomicBool = AtomicBool::new(false);
 /// Set by board code that has Wi-Fi (ESP32-S3).
 pub static WIFI_SUPPORTED: AtomicBool = AtomicBool::new(false);
+/// This firmware build can open a Wi-Fi hotspot for phones (esp `hotspot` feature).
+pub static HOTSPOT_SUPPORTED: AtomicBool = AtomicBool::new(false);
 /// Wi-Fi state (`companion::wifi_state`), kept up to date by the Wi-Fi task.
 pub static WIFI_STATE: AtomicU32 = AtomicU32::new(0);
 /// IPv4 address (big-endian octets in a u32), 0 = none.

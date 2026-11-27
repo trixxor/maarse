@@ -25,7 +25,7 @@
 //! 4 KB block on a meta page, so an interrupted transfer can be resumed - even
 //! after a restart - from the first unfinished block.
 
-use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, VerifyingKey};
 pub use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256};
 
@@ -106,7 +106,7 @@ pub fn sign_release(key: &SigningKey, sums: &[u8]) -> [u8; 64] {
 /// Checks a release signature.
 pub fn verify_release(public_key: &[u8; 32], sums: &[u8], sig: &[u8; 64]) -> bool {
     let Ok(pk) = VerifyingKey::from_bytes(public_key) else { return false };
-    pk.verify(&release_message(sums), &Signature::from_bytes(sig)).is_ok()
+    pk.verify_strict(&release_message(sums), &Signature::from_bytes(sig)).is_ok()
 }
 
 pub fn sha256(data: &[u8]) -> [u8; 32] {
@@ -252,7 +252,7 @@ impl Manifest {
 
     pub fn verify_signature(&self, public_key: &[u8; 32]) -> Result<(), OtaError> {
         let key = VerifyingKey::from_bytes(public_key).map_err(|_| OtaError::BadSignature)?;
-        key.verify(&self.message(), &Signature::from_bytes(&self.signature))
+        key.verify_strict(&self.message(), &Signature::from_bytes(&self.signature))
             .map_err(|_| OtaError::BadSignature)
     }
 

@@ -73,6 +73,7 @@
       <li>Close the Må:rse host, the web client and any other program that uses the board's port.</li>
       <li>Plug in the board and press <b>Flash</b>. Pick its port in the list.</li>
       <li>No port, or it fails to connect: hold <b>BOOT</b> (PRG), press and release <b>RST</b>, release <b>BOOT</b>, and try again.</li>
+      <li>Connect with the web client over USB and choose your own Bluetooth code. Every new node has the code <b>123456</b>.</li>
     </ol>
     <label><input type="checkbox" id="erase"> Erase the whole flash first (removes the node's identity, contacts and settings)</label><br>
     <button id="esp-go">Flash</button>
@@ -85,6 +86,7 @@
       <li><b>Start the bootloader.</b> Press the button and pick the board's port. The board restarts as a USB drive (e.g. <code>XIAO-SENSOR</code>).
         No port, or the drive does not appear: press reset twice quickly instead.</li>
       <li><b>Flash over USB.</b> Press the button and pick the port again (the bootloader's port; it may have a new name). The firmware is sent over serial DFU, the same way the MeshCore and RNode flashers do it, and the board restarts by itself.</li>
+      <li>Connect with the web client over USB and choose your own Bluetooth code. Every new node has the code <b>123456</b>.</li>
     </ol>
     <button id="nrf-boot">Start bootloader</button>
     <button id="nrf-dfu">Flash over USB</button>

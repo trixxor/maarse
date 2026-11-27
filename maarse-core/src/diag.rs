@@ -251,7 +251,7 @@ impl<const N: usize> NeighborTable<N> {
     /// Sorted by most recently heard first.
     pub fn sorted(&self) -> heapless::Vec<Neighbor, N> {
         let mut v = self.items.clone();
-        v.sort_unstable_by_key(|n| core::cmp::Reverse(n.last_ms));
+        crate::sort::sort_by(&mut v, |a, b| a.last_ms > b.last_ms);
         v
     }
 

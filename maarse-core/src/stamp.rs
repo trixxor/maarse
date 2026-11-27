@@ -38,11 +38,11 @@
 //! cycles, i.e. about 13,000–16,000 attempts/s.
 //!
 //! * `Announce`: 12 bits = 4,096 attempts on average ≈ 0.3 s on an nRF52840
-//!   (an ESP32-S3 at 240 MHz is faster). Announces are sent every 15–30
-//!   minutes, so it is free for an honest node, but an attacker on the same
+//!   (an ESP32-S3 at 240 MHz is faster). Announces are sent every 10–15
+//!   minutes (600 s on the host, 900 s on the firmware), so it is free for an honest node, but an attacker on the same
 //!   hardware can make at most about 3 fake identities per second.
 //! * `PathRequest`: 8 bits = 256 attempts on average ≈ 20 ms on an nRF52840. They
-//!   are made more often (every new recipient, repeats after 15 s) and computed in
+//!   are made more often (every new recipient, repeats after 20 s) and computed in
 //!   the router without yielding the executor, so they must be cheap.
 //!   The probability of more than 4,096 attempts is e^-16, so the worst
 //!   wait is in practice below about 0.3 s.

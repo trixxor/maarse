@@ -274,7 +274,8 @@ Source: `maarse-core/src/appdata.rs`.
 Capabilities (`APP_CAPS`): bit 6 `CAP_COMPACT` (reads compact forward-secrecy
 messages, section 6.3), bit 0 `CAP_TEXTZ` (reads compressed text, content
 type `TEXT_Z`, section 7.1), bit 1 `CAP_BUNDLE` (reads mail bundles,
-`OP_BUNDLE`, section 8.1). A sender compresses text and bundles mail only for
+`OP_BUNDLE`, section 8.1), bit 7 `CAP_PROOF` (proves delivery, section 5.5;
+working copy 2026-11-27). A sender compresses text and bundles mail only for
 a recipient whose announce has the bit; older nodes skip the field by its
 length.
 
@@ -489,14 +490,51 @@ ack_token(msg_id) = msg_id (u64 LE) | !msg_id (u64 LE)          -- 16 bytes
 The destination answers every `Data`, `Fragment` and `Deposit` packet that
 reaches it (also repeats, because the first ack may have been lost) with an
 `Ack`: destination = `ack_token(packet_id)`, path = reverse of the received
-path, empty payload. `Datagram` is never acknowledged end to end.
+path. `Datagram` is never acknowledged end to end.
+
+**Delivery proof** (working copy 2026-11-27). The token above can be computed
+by anyone who heard the message, so it proves nothing. A recipient therefore
+acknowledges a `Data` message only after it has opened it, and adds a proof:
+
+```text
+proof = HKDF-SHA256(salt "maarse/receipt/v1",
+                    ikm X25519(own static key, other party's static key),
+                    info recipient address (16) | SHA-256(sealed message))  -- 8 bytes
+```
+
+Only the sender and the recipient can compute it. It is carried as
+
+* the payload of the `Ack`;
+* the 8 bytes after the path in a `PathResponse` that answers a request
+  carrying the message (an anchor copies what follows the path);
+* the payload of the delivered notice (section 5.10);
+* the 8 bytes after the receipt ID in a `RECEIPT` deposit (section 8.1).
+
+A sender whose recipient announces `CAP_PROOF` counts nothing else as
+delivered: an acknowledgement without the right proof is ignored, so the
+retries and the post office go on. For other recipients nothing changes.
+Repeaters pass the bytes on unread. A repeated copy of an opened message gets
+the same answer. A message the recipient cannot open is not acknowledged and
+gets no path reply, also for senders without proofs; a message from a sender
+whose key is unknown gets a plain acknowledgement, and the proof when it has
+been opened.
+
+Mixed networks: an anchor from before proofs drops the bytes after the path in
+a reply; the sender then sends the message once more along the route and gets
+the proof in the `Ack`. A carrier from before proofs ignores a notice with a
+payload, so the destination sends an empty notice after it.
+
+**Not covered:** the acknowledgements of `Deposit` and `Fragment` packets have
+no proof. A forged one can still make a sender believe a post office has its
+message, or make a post office delete mail it delivers in a bundle. The sender
+is not told "delivered" without the recipient's proof.
 
 ### 5.6 Route repair
 
 Without an acknowledgement within `ack_timeout_ms`
 (`DEFAULT_ACK_TIMEOUT_MS` = 20 000 ms) the sender forgets the route and sends
 the message again with a new path request, up to `E2E_RETRIES` = 2 times.
-A node marked `mobile` ignores routes older than `MOBILE_ROUTE_MS` = 30 000 ms.
+A node marked `mobile` ignores routes older than `MOBILE_ROUTE_MS` = 300 000 ms.
 
 ### 5.7 Local repair
 
@@ -579,8 +617,11 @@ The destination delivers the message as an ordinary `Data` message (it is
 still end-to-end encrypted).
 
 **Delivered notice** (type 11, **no path**, destination =
-`ack_token(packet_id(Data, dest, message))`, empty payload; 18 bytes on air).
-The destination sends it for every carried copy it receives. A carrier that
+`ack_token(packet_id(Data, dest, message))`, payload empty (18 bytes on air)
+or the 8-byte delivery proof of section 5.5). The destination sends it for
+every carried copy it receives, once it has opened the message (with a proof:
+first with it, then empty for older carriers). The message's sender, if it
+expects a proof, stops only for the proof. A carrier that
 hears it deletes its copy, remembers the notice for the rest of the copy's
 lifetime (at most 16 notices), passes it on once if it gave copies away, and
 repeats it when it meets a neighbour it exchanged a copy with. It also
@@ -589,7 +630,7 @@ reaches the original sender, the router reports `CarryAcked` (companion event
 `0xa7`). A sender that gets an ordinary `Ack` for a message it still carries
 stops its carriers the same way. A receiver checks that the destination's
 second half equals the bitwise NOT of the first, and that the payload is
-empty, before treating it as a notice.
+empty or 8 bytes, before treating it as a notice.
 
 Notices are not entered in the duplicate filter, so they can be repeated.
 
@@ -772,9 +813,23 @@ Rules:
 * Simultaneous start: the init from the numerically lower address wins.
 * A recipient that cannot open a ratchet message (no or broken session)
   starts a new session and sends content type `RESYNC` (0x04, section 7).
+* **Saved before sending** (hosts, working copy 2026-11-27): a ratchet message
+  leaves only after `sessions.bin` has been synced to disk with its sending
+  chain at a later message number (saved up to 32 ahead, so one message in 32
+  waits for the disk). After a restart the chain goes on from there; the
+  recipient skips the unused keys. If the file cannot be written the message
+  is not sent. Restoring an old copy of the file is not covered.
+* **Replays** (hosts, working copy 2026-11-27): the last 20 000 accepted direct
+  and channel messages are remembered by packet ID (`seen.bin`); the same
+  sealed bytes are not shown again and do not reach the session. Radio nodes do
+  not keep this list.
+* A static, init or inbox message whose sender's X25519 key gives a
+  non-contributory shared secret is rejected; signatures are verified strictly.
 * Known gaps (from the source): init messages have no forward secrecy against
-  the recipient's static key; a replayed init can reset a session (denial of
-  service); headers (`n`, `pn`, ratchet key) are not encrypted.
+  the recipient's static key; a replayed init that the node has not seen before
+  or has forgotten can reset a session (denial of service); a forged packet can
+  make a node start a new session; headers (`n`, `pn`, ratchet key) are not
+  encrypted.
 
 ### 6.4 Channels
 
@@ -1026,7 +1081,7 @@ Deposit payload = recipient (16) | op (1) | body
 | 2 `FETCH` | asker (16) \| have IDs | send the rest to the asker as `STORE` |
 | 3 `DELIVERED` | IDs | delete them |
 | 4 `BUNDLE` | n × (length (1) \| sealed message) | one or more stored messages, sent to the recipient itself |
-| 5 `RECEIPT` | n × receipt ID (u64 LE) | recipient to the original sender: the mail arrived |
+| 5 `RECEIPT` | receipt ID (u64 LE) \| delivery proof (8, section 5.5; absent from older nodes) | recipient to the original sender: the mail arrived |
 
 `BUNDLE` goes only to a recipient announcing `CAP_BUNDLE`: a host packs as
 many waiting messages as fit in one packet (a single message of up to 255
@@ -1227,10 +1282,13 @@ str    = length (1) | UTF-8 (at most 255; endpoints at most MAX_EP = 100)
 
 A record is valid if the endpoint is non-empty and at most 100 bytes, the
 announce is at most 255 bytes, `age < RECORD_TTL` and the announce verifies
-against `dest`. A store keeps the new record if it has fewer hops, the same
-hops and is not older, or the old one is older than `2 × REPUBLISH`. The
-gateway part is not signed by `dest`; a lying gateway can at most drop
-(end-to-end encrypted) traffic.
+against `dest`. A store never replaces a record with one carrying an older
+announce. It keeps the new record if its announce is *clearly newer* (both
+announces dated, more than `MOVED_AFTER` apart), if it has fewer hops, if it
+has the same hops and is not older, or if the old one is older than
+`2 × REPUBLISH`; the gateway proof rules below come first. The gateway part is
+not signed by `dest`; a lying gateway can at most drop (end-to-end encrypted)
+traffic.
 
 | Constant | Value |
 | --- | --- |
@@ -1240,6 +1298,33 @@ gateway part is not signed by `dest`; a lying gateway can at most drop
 | `REPUBLISH` | 30 min |
 | `RPC_TIMEOUT` | 3 s |
 | `FULL_REPLICA_MAX` | 64 |
+| `MOVED_AFTER` | 1 h (`2 × REPUBLISH`) |
+| `RADIO_LIFETIME` | 30 h (`maarse-host/src/node/reach.rs`) |
+| `HOST_LIFETIME` | 45 min (same file) |
+
+**What a host publishes (working copy, not field-tested).** A public host
+publishes its own address and the addresses whose announce arrived on one of
+its links. An announce it obtained through a DHT lookup is not published as its
+own. An address stays published for `RADIO_LIFETIME` after the latest new
+announce, which covers one lost announce at the radio default of 12 h ±10 %. A
+host connected directly to the publisher (0 hops, and it sent capabilities in
+its link greeting) gets `HOST_LIFETIME`, as does the publisher's own address.
+A repeated copy of a dated announce does not extend the lifetime; a node
+without a clock sends no date, so each of its announces counts. After the
+lifetime the host stops publishing the address and looks it up again when it is
+needed, ignoring its own earlier record. A radio node set to announce less often
+than about every 27 h is missing from the DHT between its announces; above about
+13 h one lost announce has the same effect.
+
+**A node that has moved.** A host that has heard a node on its radio (any link
+that is not TCP) drops that observation, the route and its publication when it
+receives, in a `Store` request or a lookup, another gateway's record whose
+announce is clearly newer than the last one it heard on radio. The record needs
+a valid gateway proof or a configured endpoint. Nodes without a clock are not
+detected this way, and above `FULL_REPLICA_MAX` contacts a host may only learn
+of the newer record through a lookup. Trust boundary: any identity can sign a
+gateway record, so someone who holds a clearly newer announce from the node can
+make the old host drop the radio path until it hears the node again.
 
 Gateway route proofs bind the destination, gateway, endpoint, hop count, issue
 time and complete node announce with an Ed25519 signature under the gateway's
@@ -1379,7 +1464,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x25 | GetName | – | |
 | 0x26 | RequestPage | req (2) \| dest (16) \| path (text) | reply `Sent` |
 | 0x27 | SendCall | dest (16) \| data (text) | TCP only, else `Error` code 9 |
-| 0x28 | SetWifi | flags (1: bit 0 enabled, bit 1 modem) \| ssid (str8) \| password (str8) \| peer (text) | local only |
+| 0x28 | SetWifi | flags (1: bit 0 enabled, bit 1 modem, bit 2 hotspot) \| ssid (str8) \| password (str8) \| peer (text) | local only; with the hotspot bit the node opens its own WPA2 network (ssid, password of 8 to 63 characters, `peer` unused); a firmware build without the hotspot answers `Error` |
 | 0x29 | GetWifi | – | reply `Wifi` |
 | 0x2a | SetRangeTest | range test config (15) | local only; reply `RangeState` |
 | 0x2b | GetRangeTest | – | reply `RangeState` then `Power` |
@@ -1392,6 +1477,8 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x34 | SetIdentity | flags (1: bit 0 confirm) \| secret (64) | local only; reply `IdentityChanged` |
 | 0x35–0x37 | – | reserved (linked devices) |
 | 0x39 | Sensor | req (2) \| dest (16, all zeros = the connected node or the host) \| op (1) \| data | sensor nodes: recipe, owners, status, host operations (history, simulation); a command for another node goes to it as a control command; see `docs/sensors.md` | |
+| 0x46 | SetBlePin | code (u32, 0..999999, not 123456) | radio nodes (working copy 2026-11-27): a new Bluetooth code (section 9.8); locally or through `Remote` from an administrator. Other paired devices are forgotten. Reply `BlePin` |
+| 0x47 | GetBlePin | – | reply `BlePin`; the code is never sent |
 | 0x44 | ConfirmRadio | – | keep the radio settings on trial (allowed through `Remote`); reply `Radio` with the settings in use. Without a trial it only answers that, so a repeated confirmation is harmless |
 
 ### 9.3 Events
@@ -1424,12 +1511,13 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x9b | OtaInfo | board (u16 LE, `maarse_crypto::ota::board`); sent after `OtaState` as the answer to `OtaStatus` by firmware that can be updated, so a host picks the matching image. Older firmware never sends it (the host then says "update once over USB"). A frame of its own because `OtaState` ends in free text. |
 | 0xa0 | TraceResult | req (2) \| dest (16) \| k (1) \| k × PathId (u16 LE) \| m (1) \| m × SNR out (i8) \| SNR back (rest) |
 | 0xa1 | Neighbors | part (1) \| last (1) \| n × neighbour (15) |
+| 0xc1 | BlePin | own (1) | 1: the node has its own Bluetooth code; 0: the factory code |
 | 0xc0 | DhtLine | req (2) \| level (1: 0 info, 1 good, 2 check, 3 problem) \| last (1) \| text (UTF-8, rest of the frame) |
 | 0xa2 | Sharing | sharing (10) |
 | 0xa3 | NodeInfo | addr (16) \| hops (1) \| app-data TLVs `0x03`/`0x04`/`0x05`, `0x06` role, `0x07` capabilities and `0x08` person claim (section 4.2). Role and person are forwarded since 2026-11-27; older hosts and radios leave them out, so a client shows such nodes as unknown kind. The role flags are sent as 0 |
 | 0xa4 | Name | name (text) |
 | 0xa5 | Call | from (16) \| data |
-| 0xa6 | Wifi | flags (1: bit 0 enabled, bit 1 modem) \| state (1) \| ip (4) \| ssid (str8) \| peer (text) |
+| 0xa6 | Wifi | flags (1: bit 0 enabled, bit 1 modem, bit 2 hotspot) \| state (1: 0 off, 1 joining, 2 online, 3 linked, 4 hotspot open, 5 hotspot with phones, 10 skipped after crash, 11 bad settings, 12 driver failed) \| ip (4) \| ssid (str8) \| peer (text) |
 | 0xa7 | CarryAcked | msg_id (u64) |
 | 0xa8 | RangeState | config (15) \| sf (1) \| synced (1) \| count (u32) \| missed (u32) \| seq (u32) \| n × per-SF (12) |
 | 0xa9 | RangeRx | see `RangeRx` in `companion.rs` |
@@ -1613,12 +1701,16 @@ restricted to the administrator list. The receiver persists a per-administrator
 reserved counter ceiling before applying a change. On restart it rejects
 counters at or below that ceiling. The reservation covers 60 additional counter
 values to limit flash writes during a burst. Read-only commands do not reserve
-flash. This policy preserves the existing control wire format.
+flash. This policy preserves the existing control wire format. A radio whose
+stored counters cannot be read (for example because another firmware ran on the
+board before) refuses state-changing remote commands until the administrators
+are set again locally (`SetAdmins`), which starts the counters afresh.
 
 `SetAdmins`, `SetWifi`, `SetIdentity` and `SetRangeTest` are refused when they
 arrive through `Remote`. Through `Remote`, firmware accepts `GetStats` (with or without a key list),
 `GetRadio`, `SetRadio`, `ConfirmRadio`, `GetNeighbors` (the first 8 neighbours in one frame), `SetRole`, the OTA commands (downgrade flag
-ignored) and the three spectrum recording commands (`SweepRecStart`, `SweepRecStop`, `SweepRecStatus`).
+ignored) and the three spectrum recording commands (`SweepRecStart`, `SweepRecStop`, `SweepRecStatus`),
+and `SetBlePin` and `GetBlePin` (section 9.8).
 
 **Radio change on trial** (`maarse-core/src/radiotrial.rs`). A `SetRadio` through `Remote` applies the settings but leaves
 flash alone and starts a timer (default 5 minutes, at most 30). `ConfirmRadio` from an administrator saves what is in use. If the timer
@@ -1626,6 +1718,22 @@ runs out first, the node returns to the settings in flash (a reboot during the t
 `SetRadio` during a trial restarts the timer but still returns to the settings that were in flash before the first one. The reply to
 `SetRadio` is sent before the switch; the administrator's own radio must hear the node on the new settings for `ConfirmRadio` to arrive.
 Stats key 118 shows the seconds left (second stats frame).
+
+### 9.8 The Bluetooth code (working copy 2026-11-27)
+
+A radio node has a 6-digit code (`maarse_core::blepair`) and uses Bluetooth LE
+Secure Connections pairing with it as passkey: it asks a connecting client to
+pair, answers every write with *insufficient authentication* until the link is
+encrypted and authenticated, and sends no notifications before that. Every node
+starts with the factory code 123456 (`DEFAULT_PIN`). While it has that code, it
+takes only `GetInfo`, `GetBlePin` and `SetBlePin` over Bluetooth (other
+commands are dropped, with one `Error`) and sends only `Info`, `Error` and
+`BlePin`. The factory code cannot be set again and a code cannot be removed.
+Up to 4 paired devices are saved in flash. After 3 failed pairings new pairings
+are refused for 10 s, doubling up to 1 h (a fixed passkey leaks about one bit
+per failed pairing). A code is set over USB, over Bluetooth, or through
+`Remote` by an administrator. Changing it forgets the paired devices and drops
+the connection, except for the Bluetooth client that sent the change.
 
 ---
 
@@ -1637,6 +1745,7 @@ Stats key 118 shows the seconds left (second stats frame).
 | New packet types | Rejected as unknown (type 15 is free; 14 is `MailSync`). Types 11 (`Carry`), 12 (`Hello`) and 13 (`KeyRequest`) are rejected by nodes from before they existed: older nodes simply do not learn from hellos and do not answer key requests. |
 | Region flag (bit 0) | Nodes from before regions reject the packet, so region floods are not forwarded through them; floods without a region are bit-for-bit unchanged. |
 | Delivered notice (`Carry` without path) | Nodes without the notice drop `Carry` packets without a path. |
+| Delivery proof (`CAP_PROOF`) | Older senders ignore the bytes; older anchors drop those after a path reply and older carriers ignore a notice with a payload (see 5.5). An older recipient is acknowledged as before. |
 | App-data TLVs (type ≥ 0x03) | Skipped by length; receivers read only the bytes they know inside a field. New fields must come after `0x02`. Nodes that predate TLVs stop at the first unknown byte, which is harmless because `0x01`/`0x02` come first. |
 | Stamp version | The version is inside the stamp; difficulty can be raised with a new version, and old versions removed from `difficulty()`. Nodes from before stamps reject stamped announces (length check) and new nodes drop unstamped ones: this was a breaking change. |
 | Ratchet vs. static seal | New nodes read both formats. FS is only used towards contacts that announce `APP_FS` or have sent an FS message. |
@@ -1659,34 +1768,34 @@ Rules for future changes:
 ## Notes for maintainers
 
 Discrepancies found while writing this document. The spec follows the code.
+Status as of the documentation review of 2026-11-27.
 
-1. **Roles in GUIDE.** `docs/GUIDE.md` ("Routing") lists the roles as
-   `Client`, `Repeater` and `Relay`; the code also has `Anchor` (3)
-   (`Role` in `router.rs`). The doc comment of companion command `0x10 SetRole`
-   also lists only 0–2.
-2. **Position size in GUIDE.** GUIDE ("Position and telemetry") says the
-   app-data fields take "at most 41 of 99 bytes"; with the name (`0x05`) and
-   role (`0x06`) fields the maximum is 67 bytes, as `appdata.rs` states.
-3. **Announce interval in `stamp.rs`.** The module doc says announces are sent
-   every 15–30 minutes; the code sends every 600 s (host) and 900 s (firmware).
-4. **Path request retry in `stamp.rs`.** The module doc says path requests
-   repeat after 15 s; `PATH_RETRY_MS` is 20 000 ms (45 000 ms until 2026-11-26).
-5. **Packet type 5 `Control`.** Defined in `packet.rs` ("Remote control of
-   repeaters") but never sent; remote control uses content type `0x02` inside
-   an encrypted `Data` message.
-6. **Packet type 7 `Probe`.** Documented in `packet.rs` as "coverage
-   measurement for the map"; the code uses it only for trace route.
+1. **Roles in GUIDE.** *Fixed in GUIDE* (it lists `Client`, `Repeater`, `Relay`
+   and `Anchor`). *Still open:* the doc comment of companion command
+   `0x10 SetRole` in `maarse-core/src/companion.rs` lists only 0-2 (it also has
+   3 = anchor and 4 = auto).
+2. **Position size in GUIDE.** *Fixed:* GUIDE now says at most 67 of 99 bytes
+   with the name (`0x05`) and role (`0x06`) fields, as `appdata.rs` states.
+3. **Announce interval in `stamp.rs`.** *Fixed:* the module doc now says 600 s
+   (host) and 900 s (firmware).
+4. **Path request retry in `stamp.rs`.** *Fixed:* the module doc now says 20 s
+   (`PATH_RETRY_MS` is 20 000 ms; it was 45 000 ms until 2026-11-26).
+5. **Packet type 5 `Control`.** *Documented:* the doc comment in `packet.rs`
+   now says it is reserved and never sent; remote control uses content type
+   `0x02` inside an encrypted `Data` message.
+6. **Packet type 7 `Probe`.** *Fixed:* the doc comment in `packet.rs` now says
+   it is used for trace route only.
 7. **`RadioConfig` byte 15** was always 0 (reserved); since 2026-11-15 it is
    the announce interval in quarter hours, where 0 keeps the default (12 h),
    so older clients and nodes stay compatible.
-8. **GUIDE Wi-Fi formats.** GUIDE ("Wi-Fi backbone") describes the first
-   byte of `SetWifi` and `Wifi` as `enabled`; in the code it is a flags byte
-   (bit 0 enabled, bit 1 modem). GUIDE does mention bit 1 elsewhere.
+8. **GUIDE Wi-Fi formats.** *Fixed:* GUIDE now describes the first byte of
+   `SetWifi` and `Wifi` as a flags byte (bit 0 enabled, bit 1 modem).
 9. **`ratchet::announces_fs`** stops at the first field that is not `0x01` or
    `0x02`. That is correct only as long as `0x02` stays before every TLV
    field, which `appdata::build` guarantees.
 10. **`maarse-core/src/lib.rs`** refers to "Må:rse – protocol specification
-    v0.1"; this document replaces that reference.
+    v0.1"; *fixed:* it now just points to this document.
+
 
 
 ### MeshCore service enrollment (working copy)

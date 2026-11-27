@@ -69,6 +69,22 @@
 //! tree to the sender, which reports [`Action::CarryAcked`] ("delivered
 //! (carried)"). A sender that gets an ordinary acknowledgement for a
 //! message it carries does the same, so its carriers stop too.
+//!
+//! ## Delivery proof
+//!
+//! An acknowledgement is addressed to [`ack_token`], which anyone who heard
+//! the message can compute. So the recipient adds a proof of [`PROOF_LEN`]
+//! bytes that only the sender and the recipient can compute (see
+//! `maarse_crypto::receipt_proof`): as the payload of the `Ack`, after the
+//! path in a `PathResponse` that answers a request carrying the message, and
+//! as the payload of the delivered notice. A sender that has said what to
+//! expect ([`Router::expect_proof`]) counts nothing else as delivered.
+//! Repeaters and anchors pass the bytes on without reading them.
+//!
+//! With [`Router::app_acks`] the recipient's router does not acknowledge a
+//! direct message by itself: the app calls [`Router::acknowledge`] once it
+//! has opened it. A message nobody could open is then not reported as
+//! delivered, also not to senders that expect no proof.
 
 use crate::addr::{Address, PathId};
 use crate::dedup::{DedupCache, packet_id};
@@ -191,6 +207,8 @@ struct CarryDone {
     holders: heapless::Vec<PathId, 8>,
     /// Last time we sent the notice.
     sent_ms: u64,
+    /// The recipient's proof, passed on with the notice.
+    proof: Option<Proof>,
 }
 
 /// A message we carry for someone else (or for ourselves, as its sender).
@@ -379,6 +397,8 @@ struct PendingReply {
     /// Hops of the best copy (with weak-hop penalties).
     best_hops: u8,
     reply_at_ms: u64,
+    /// The message in the request that the app must open before the reply.
+    message: Option<u64>,
 }
 
 /// A leg an anchor remembers: replies to `key` (reply token or
@@ -392,6 +412,17 @@ struct Anchored {
     /// A message we forwarded along our own route (not a request leg): if
     /// no ack comes back before `until_ms`, that route is dropped.
     forward: bool,
+}
+
+struct Owed {
+    id: u64,
+    /// The way back, for a message that came along a source route.
+    back: Option<Path>,
+    /// It was handed over by a carrier, which waits for the delivered notice.
+    carried: bool,
+    /// The app has opened it (or asked for a plain acknowledgement).
+    answered: bool,
+    proof: Option<Proof>,
 }
 
 struct AwaitAck {
@@ -428,6 +459,15 @@ pub fn weak_snr_for_sf(sf: u8) -> i8 {
     };
     floor + 5
 }
+
+/// Length of a delivery proof (see "Delivery proof").
+pub const PROOF_LEN: usize = 8;
+/// A delivery proof.
+pub type Proof = [u8; PROOF_LEN];
+/// Messages we know the proof for and still wait for.
+const MAX_EXPECT: usize = 16;
+/// Messages to us that the app has not answered, or may be asked about again.
+const MAX_OWED: usize = 8;
 
 /// The token the recipient sends the acknowledgement to.
 pub fn ack_token(msg_id: u64) -> Address {
@@ -506,6 +546,12 @@ pub struct Router<const R: usize, const D: usize> {
     pending: heapless::Vec<PendingRequest, MAX_PENDING>,
     queue: heapless::Vec<Queued, MAX_QUEUE>,
     awaiting: heapless::Vec<AwaitAck, MAX_AWAIT>,
+    /// Proofs expected for messages we sent (oldest first).
+    expected: heapless::Vec<(u64, Proof), MAX_EXPECT>,
+    /// Messages to us waiting for the app (see [`Router::app_acks`]).
+    owed: heapless::Vec<Owed, MAX_OWED>,
+    /// The app acknowledges direct messages with [`Router::acknowledge`].
+    pub app_acks: bool,
     channels: heapless::Vec<Address, MAX_CHANNELS>,
     forwards: heapless::Vec<Forward, MAX_FORWARDS>,
     replies: heapless::Vec<PendingReply, 4>,
@@ -690,6 +736,9 @@ impl<const R: usize, const D: usize> Router<R, D> {
             pending: heapless::Vec::new(),
             queue: heapless::Vec::new(),
             awaiting: heapless::Vec::new(),
+            expected: heapless::Vec::new(),
+            owed: heapless::Vec::new(),
+            app_acks: false,
             channels: heapless::Vec::new(),
             forwards: heapless::Vec::new(),
             replies: heapless::Vec::new(),
@@ -1402,10 +1451,20 @@ impl<const R: usize, const D: usize> Router<R, D> {
         // Answer path requests along the best trail we have heard.
         while let Some(i) = self.replies.iter().position(|r| r.reply_at_ms <= now_ms) {
             let r = self.replies.swap_remove(i);
+            let owed = r.message.and_then(|id| self.owed.iter().find(|o| o.id == id));
+            if owed.is_some_and(|o| !o.answered) {
+                // The app could not open the message in the request: a reply
+                // would tell an older sender that it was delivered.
+                continue;
+            }
+            let proof = owed.and_then(|o| o.proof);
             let mut payload = Buf::new();
             let _ = payload.push(r.best.len() as u8);
             for id in &r.best {
                 let _ = payload.extend_from_slice(&id.to_be_bytes());
+            }
+            if let Some(p) = proof {
+                let _ = payload.extend_from_slice(&p);
             }
             let header = Header::new(PacketType::PathResponse, r.token).with_path(reversed(&r.best));
             self.emit_routed(&header, &payload, 0, now_ms, &mut out);
@@ -1815,7 +1874,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
             }
             if fresh.iter().any(|n| d.holders.contains(n)) {
                 let id = d.id;
-                self.emit_carry_notice(id, now_ms, out);
+                self.emit_carry_notice(id, None, now_ms, out);
                 sent += 1;
             }
         }
@@ -1887,7 +1946,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
             return;
         }
         if h.dest == self.addr {
-            if self.dedup.insert(id) {
+            let new = self.dedup.insert(id);
+            if new {
                 self.stats.carry_delivered += 1;
                 let _ = out.push(Action::Deliver {
                     ptype: PacketType::Data,
@@ -1896,8 +1956,19 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     hops: 0,
                 });
             }
-            // Delivered (again): tell the carrier, so it stops.
-            self.emit_carry_notice(id, now_ms, out);
+            // Delivered (again): tell the carrier, so it stops. With app acks
+            // only once the app has opened it.
+            if let Some(o) = self.owed.iter_mut().find(|o| o.id == id) {
+                o.carried = true;
+                let (answered, proof) = (o.answered, o.proof);
+                if answered {
+                    self.emit_delivered(id, proof, now_ms, out);
+                }
+            } else if self.app_acks && new {
+                self.owe(id, None, true);
+            } else {
+                self.emit_carry_notice(id, None, now_ms, out);
+            }
             return;
         }
         if self.carry_copies == 0 {
@@ -1905,7 +1976,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
         }
         if self.carry_done.iter().any(|d| d.id == id) {
             // Already delivered: answer with the notice instead of storing it.
-            self.emit_carry_notice(id, now_ms, out);
+            self.emit_carry_notice(id, None, now_ms, out);
             return;
         }
         if self.dedup.contains(id) {
@@ -1915,17 +1986,21 @@ impl<const R: usize, const D: usize> Router<R, D> {
     }
 
     /// Sends the delivered notice for carried message `id` (see "Delivered
-    /// notice"): a Carry packet without a path, addressed to `ack_token(id)`.
-    fn emit_carry_notice(&mut self, id: u64, now_ms: u64, out: &mut Actions) {
+    /// notice"): a Carry packet without a path, addressed to `ack_token(id)`,
+    /// with the delivery proof as payload if we have it.
+    fn emit_carry_notice(&mut self, id: u64, proof: Option<Proof>, now_ms: u64, out: &mut Actions) {
+        let mut proof = proof;
         if let Some(d) = self.carry_done.iter_mut().find(|d| d.id == id) {
             d.sent_ms = now_ms;
+            proof = proof.or(d.proof);
         }
         let header = Header::new(PacketType::Carry, ack_token(id));
-        let Ok(packet) = encode(&header, &[]) else { return };
+        let payload = proof.as_ref().map_or(&[][..], |p| &p[..]);
+        let Ok(packet) = encode(&header, payload) else { return };
         self.stats.carry_notices += 1;
         // Not through `emit`: the notice is repeated on purpose, so it is
         // kept out of the duplicate filter.
-        let tx_id = packet_id(PacketType::Carry, &header.dest, &[]) ^ now_ms;
+        let tx_id = packet_id(PacketType::Carry, &header.dest, payload) ^ now_ms;
         let _ = out.push(Action::Transmit { packet, delay_ms: SOURCE_ROUTE_DELAY_MS, id: tx_id });
     }
 
@@ -1937,23 +2012,36 @@ impl<const R: usize, const D: usize> Router<R, D> {
         lo.copy_from_slice(&b[..8]);
         hi.copy_from_slice(&b[8..]);
         let id = u64::from_le_bytes(lo);
-        if u64::from_le_bytes(hi) != !id || !pkt.payload.is_empty() {
+        if u64::from_le_bytes(hi) != !id || !matches!(pkt.payload.len(), 0 | PROOF_LEN) {
             return; // not a notice
         }
-        self.carry_delivered_notice(id, true, now_ms, out);
+        self.carry_delivered_notice(id, true, Some(pkt.payload), now_ms, out);
     }
 
     /// Carried message `id` is known to be delivered: drop our copy, tell
     /// the app if it is ours, and pass the notice on once. `relay` is false
     /// when the sender learned it from an ordinary acknowledgement (the app
     /// already got `Acked`).
-    fn carry_delivered_notice(&mut self, id: u64, relay: bool, now_ms: u64, out: &mut Actions) {
-        if self.carry_done.iter().any(|d| d.id == id) {
+    fn carry_delivered_notice(&mut self, id: u64, relay: bool, proof: Option<&[u8]>, now_ms: u64, out: &mut Actions) {
+        let got = proof.unwrap_or_default();
+        let proof: Option<Proof> = got.try_into().ok();
+        if let Some(d) = self.carry_done.iter_mut().find(|d| d.id == id) {
+            // The proof after a notice without it: pass it on too.
+            if d.proof.is_none() && proof.is_some() {
+                d.proof = proof;
+                if !d.holders.is_empty() {
+                    self.emit_carry_notice(id, proof, now_ms, out);
+                }
+            }
             return;
         }
         let Some(i) = self.carried.iter().position(|c| c.id == id) else {
             return; // we never carried it: nothing to stop
         };
+        // Our own message: only the expected proof stops it.
+        if self.carried[i].own && relay && !self.proven(id, got) {
+            return;
+        }
         let c = self.carried.swap_remove(i);
         if c.own && relay {
             let _ = out.push(Action::CarryAcked { msg_id: id });
@@ -1961,11 +2049,80 @@ impl<const R: usize, const D: usize> Router<R, D> {
         if self.carry_done.is_full() {
             self.carry_done.remove(0);
         }
-        let _ = self.carry_done.push(CarryDone { id, until_ms: c.until_ms, holders: c.given.clone(), sent_ms: 0 });
+        let _ = self.carry_done.push(CarryDone { id, until_ms: c.until_ms, holders: c.given.clone(), sent_ms: 0, proof });
         // Pass it on only if someone else may hold a copy.
         if !c.given.is_empty() {
-            self.emit_carry_notice(id, now_ms, out);
+            self.emit_carry_notice(id, proof, now_ms, out);
         }
+    }
+
+    /// Message `msg_id` (from [`Router::send_direct`]) counts as delivered
+    /// only with `proof`. Call it right after sending.
+    pub fn expect_proof(&mut self, msg_id: u64, proof: Proof) {
+        self.expected.retain(|(id, _)| *id != msg_id);
+        if self.expected.is_full() {
+            self.expected.remove(0);
+        }
+        let _ = self.expected.push((msg_id, proof));
+    }
+
+    /// Does an acknowledgement of `msg_id` with the bytes `got` count?
+    fn proven(&mut self, msg_id: u64, got: &[u8]) -> bool {
+        let Some(i) = self.expected.iter().position(|(id, _)| *id == msg_id) else {
+            return true;
+        };
+        if self.expected[i].1 != got {
+            return false;
+        }
+        self.expected.remove(i);
+        true
+    }
+
+    /// The app has opened the direct message `id` (its packet ID): tell the
+    /// sender, with `proof` if the app can make one. Does nothing without
+    /// [`Router::app_acks`] or for an unknown message.
+    pub fn acknowledge(&mut self, id: u64, proof: Option<Proof>, now_ms: u64) -> Actions {
+        let mut out = Actions::new();
+        let Some(o) = self.owed.iter_mut().find(|o| o.id == id) else {
+            return out;
+        };
+        o.answered = true;
+        o.proof = proof.or(o.proof);
+        let (back, carried, proof) = (o.back.clone(), o.carried, o.proof);
+        if carried {
+            self.emit_delivered(id, proof, now_ms, &mut out);
+        }
+        if let Some(back) = back {
+            self.send_ack(id, back, proof, now_ms, &mut out);
+        }
+        out
+    }
+
+    /// Our own delivered notice: with the proof, and then without it for
+    /// carriers from before proofs (they drop a notice with a payload).
+    fn emit_delivered(&mut self, id: u64, proof: Option<Proof>, now_ms: u64, out: &mut Actions) {
+        self.emit_carry_notice(id, proof, now_ms, out);
+        if proof.is_some() {
+            self.emit_carry_notice(id, None, now_ms, out);
+        }
+    }
+
+    fn owe(&mut self, id: u64, back: Option<Path>, carried: bool) {
+        if self.owed.iter().any(|o| o.id == id) {
+            return;
+        }
+        if self.owed.is_full() {
+            // An answered one goes first.
+            let i = self.owed.iter().position(|o| o.answered).unwrap_or(0);
+            self.owed.remove(i);
+        }
+        let _ = self.owed.push(Owed { id, back, carried, answered: false, proof: None });
+    }
+
+    fn send_ack(&mut self, id: u64, back: Path, proof: Option<Proof>, now_ms: u64, out: &mut Actions) {
+        let header = Header::new(PacketType::Ack, ack_token(id)).with_path(back);
+        let payload = proof.as_ref().map_or(&[][..], |p| &p[..]);
+        self.emit_routed(&header, payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
     }
 
     /// Do we know a route to `dest`?
@@ -2233,11 +2390,15 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 self.stats.held_direct += 1;
                 return;
             }
+            let message = (!data.is_empty() && self.app_acks).then(|| packet_id(PacketType::Data, &self.addr, data));
             if !data.is_empty()
                 && self
                     .dedup
                     .insert(packet_id(PacketType::Data, &self.addr, data))
             {
+                if let Some(id) = message {
+                    self.owe(id, None, false);
+                }
                 let _ = out.push(Action::Deliver {
                     ptype: PacketType::Data,
                     dest: self.addr,
@@ -2259,6 +2420,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 best_snr: snr_db,
                 best_hops: h.hops,
                 reply_at_ms: now_ms + (RESPONSE_WAIT_SLOTS * self.slot_ms) as u64,
+                message,
             });
             return;
         }
@@ -2410,14 +2572,18 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     return;
                 };
                 let req = self.pending.swap_remove(i);
-                if let Some(msg_id) = req.carried {
+                // Without the expected proof the message stays queued and goes
+                // along the route just learned.
+                if let Some(msg_id) = req.carried
+                    && self.proven(msg_id, pkt.payload.get(1 + 2 * forward.len()..).unwrap_or_default())
+                {
                     self.awaiting.retain(|a| a.msg_id != msg_id);
                     // The message arrived with the request: remove it from the queue.
                     let target = req.target;
                     self.queue
                         .retain(|q| packet_id(q.ptype, &target, &q.payload) != msg_id);
                     let _ = out.push(Action::Acked { msg_id });
-                    self.carry_delivered_notice(msg_id, false, now_ms, out);
+                    self.carry_delivered_notice(msg_id, false, pkt.payload.get(1 + 2 * forward.len()..), now_ms, out);
                 }
                 self.learn_route(req.target, forward, now_ms, out);
             }
@@ -2426,14 +2592,15 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     self.anchor_relay_back(pkt, id, now_ms, out);
                     return;
                 };
-                if !self.dedup.insert(id) {
+                let msg_id = self.awaiting[i].msg_id;
+                if self.dedup.contains(id) || !self.proven(msg_id, pkt.payload) {
                     return;
                 }
+                self.dedup.insert(id);
                 let a = self.awaiting.remove(i);
-                let msg_id = a.msg_id;
                 self.routes.confirm(&a.dest, now_ms);
                 let _ = out.push(Action::Acked { msg_id });
-                self.carry_delivered_notice(msg_id, false, now_ms, out);
+                self.carry_delivered_notice(msg_id, false, Some(pkt.payload), now_ms, out);
             }
             PacketType::Probe if h.dest == self.addr => {
                 // Trace to us: answer along the reverse path to the token.
@@ -2471,16 +2638,31 @@ impl<const R: usize, const D: usize> Router<R, D> {
             _ if h.dest == self.addr => {
                 // A repeated message is not delivered again, but acknowledged again,
                 // because the first acknowledgement may have been lost.
-                if self.dedup.insert(id) {
+                let new = self.dedup.insert(id);
+                if new {
                     deliver(pkt, out);
                 }
-                if matches!(
+                if !matches!(
                     h.ptype,
                     PacketType::Data | PacketType::Fragment | PacketType::Deposit
                 ) {
-                    let header =
-                        Header::new(PacketType::Ack, ack_token(id)).with_path(reversed(path));
-                    self.emit_routed(&header, &[], SOURCE_ROUTE_DELAY_MS, now_ms, out);
+                    return;
+                }
+                let back = reversed(path);
+                if !(self.app_acks && h.ptype == PacketType::Data) {
+                    self.send_ack(id, back, None, now_ms, out);
+                } else if let Some(o) = self.owed.iter_mut().find(|o| o.id == id) {
+                    // A copy: the way back may have changed.
+                    o.back = Some(back.clone());
+                    let (answered, proof) = (o.answered, o.proof);
+                    if answered {
+                        self.send_ack(id, back, proof, now_ms, out);
+                    }
+                } else if new {
+                    // The app answers (see `acknowledge`).
+                    self.owe(id, Some(back), false);
+                } else {
+                    self.send_ack(id, back, None, now_ms, out);
                 }
             }
             PacketType::Data | PacketType::Fragment | PacketType::Deposit | PacketType::Datagram
@@ -2540,6 +2722,8 @@ impl<const R: usize, const D: usize> Router<R, D> {
         for pid in &first {
             let _ = payload.extend_from_slice(&pid.to_be_bytes());
         }
+        // What follows the path (a delivery proof) goes on unchanged.
+        let _ = payload.extend_from_slice(pkt.payload.get(1 + 2 * usize::from(pkt.payload[0])..).unwrap_or_default());
         let header = Header::new(PacketType::PathResponse, a.key).with_path(a.back);
         self.stats.forwarded += 1;
         self.emit_routed(&header, &payload, SOURCE_ROUTE_DELAY_MS, now_ms, out);
@@ -3801,6 +3985,181 @@ mod tests {
         // One that says it does not: edge, even before it forwards anything.
         relay.note_role(0x0808, Role::Client, Some(false), 0, 5, 20);
         assert!(relay.is_edge_bridge(20));
+    }
+
+    // ----- delivery proof -----
+
+    const PROOF: Proof = [7, 1, 8, 2, 8, 1, 8, 2];
+
+    fn acked(events: &[(usize, Action)], msg_id: u64) -> bool {
+        events.iter().any(|(i, a)| *i == 0 && *a == Action::Acked { msg_id })
+    }
+
+    /// As `run_line`, with an app on the last node that answers every message
+    /// at once with `proof` (`None`: it cannot open it and says nothing).
+    fn run_with_app(nodes: &mut [R], start: Vec<(usize, Buf)>, now: &mut u64, proof: Option<Proof>) -> Vec<(usize, Action)> {
+        let last = nodes.len() - 1;
+        let mut queue: std::collections::VecDeque<(usize, Buf)> = start.into();
+        let mut events = Vec::new();
+        for _ in 0..20_000 {
+            let actions: Vec<(usize, Action)> = if let Some((from, pkt)) = queue.pop_front() {
+                let mut got = Vec::new();
+                for j in [from.wrapping_sub(1), from + 1] {
+                    if j < nodes.len() {
+                        got.extend(nodes[j].on_receive(&pkt, 5, *now).into_iter().map(|a| (j, a)));
+                    }
+                }
+                got
+            } else {
+                let Some(next) = nodes.iter().filter_map(|n| n.next_deadline()).min() else { break };
+                if next > *now + 300_000 {
+                    break;
+                }
+                *now = next.max(*now);
+                let mut got = Vec::new();
+                for (i, n) in nodes.iter_mut().enumerate() {
+                    got.extend(n.tick(*now).into_iter().map(|a| (i, a)));
+                }
+                got
+            };
+            for (j, a) in actions {
+                match a {
+                    Action::Transmit { packet, .. } => queue.push_back((j, packet)),
+                    other => {
+                        if j == last
+                            && let Action::Deliver { ptype: PacketType::Data, payload, .. } = &other
+                            && let Some(p) = proof
+                        {
+                            let id = packet_id(PacketType::Data, &nodes[last].addr, payload);
+                            let out = nodes[last].acknowledge(id, Some(p), *now);
+                            queue.extend(transmits(&out).into_iter().map(|p| (last, p)));
+                        }
+                        events.push((j, other));
+                    }
+                }
+            }
+        }
+        events
+    }
+
+    fn proving_line(len: u8, anchors: &[u8]) -> Vec<R> {
+        let mut nodes = line(len, anchors);
+        nodes.last_mut().unwrap().app_acks = true;
+        nodes
+    }
+
+    /// Sends one message over the line, with the sender expecting `PROOF`.
+    fn send_expecting(nodes: &mut [R], text: &[u8], token: u8, now: &mut u64, app: Option<Proof>) -> (u64, Vec<(usize, Action)>) {
+        let dest = nodes.last().unwrap().addr;
+        let (msg, out) = nodes[0].send_direct(dest, text, [token; 16], *now).unwrap();
+        nodes[0].expect_proof(msg, PROOF);
+        let ev = run_with_app(nodes, transmits(&out).into_iter().map(|p| (0, p)).collect(), now, app);
+        (msg, ev)
+    }
+
+    #[test]
+    fn a_message_with_proof_is_acknowledged_on_the_first_and_later_sends() {
+        let mut nodes = proving_line(3, &[]);
+        let mut now = 0;
+        // The first message travels in the path request; the proof comes back in the reply.
+        let (first, ev) = send_expecting(&mut nodes, b"one", 1, &mut now, Some(PROOF));
+        assert!(acked(&ev, first), "{ev:?}");
+        assert_eq!(nodes[0].stats.originated, 1, "one message, not sent again");
+        // The next goes along the route; the proof comes back in the ack.
+        let (second, ev) = send_expecting(&mut nodes, b"two", 2, &mut now, Some(PROOF));
+        assert!(acked(&ev, second), "{ev:?}");
+    }
+
+    #[test]
+    fn nothing_but_the_proof_counts_as_delivered() {
+        let mut nodes = proving_line(2, &[]);
+        let mut now = 0;
+        send_expecting(&mut nodes, b"hello", 1, &mut now, Some(PROOF));
+        let dest = nodes[2].addr;
+        let (msg, _) = nodes[0].send_direct(dest, b"secret", [2; 16], now).unwrap();
+        nodes[0].expect_proof(msg, PROOF);
+        for forged in [&[][..], &[0; PROOF_LEN], &PROOF[..4]] {
+            let header = Header::new(PacketType::Ack, ack_token(msg)).with_path(Path::new());
+            let packet = encode(&header, forged).unwrap();
+            assert!(!nodes[0].on_receive(&packet, 5, now + 1).contains(&Action::Acked { msg_id: msg }), "{forged:?}");
+        }
+        let header = Header::new(PacketType::Ack, ack_token(msg)).with_path(Path::new());
+        let packet = encode(&header, &PROOF).unwrap();
+        assert!(nodes[0].on_receive(&packet, 5, now + 2).contains(&Action::Acked { msg_id: msg }));
+    }
+
+    #[test]
+    fn a_message_the_app_cannot_open_is_never_acknowledged() {
+        let mut nodes = proving_line(2, &[]);
+        let mut now = 0;
+        let (msg, ev) = send_expecting(&mut nodes, b"unreadable", 1, &mut now, None);
+        assert!(!acked(&ev, msg), "path reply: {ev:?}");
+        // Also for a sender from before proofs, once the route is there.
+        let dest = nodes[2].addr;
+        let (old, out) = nodes[0].send_direct(dest, b"unreadable too", [2; 16], now).unwrap();
+        let ev = run_with_app(&mut nodes, transmits(&out).into_iter().map(|p| (0, p)).collect(), &mut now, None);
+        assert!(!acked(&ev, old), "{ev:?}");
+    }
+
+    #[test]
+    fn an_old_sender_is_acknowledged_by_a_recipient_with_app_acks() {
+        let mut nodes = proving_line(2, &[]);
+        let mut now = 0;
+        send_expecting(&mut nodes, b"route", 1, &mut now, Some(PROOF));
+        let dest = nodes[2].addr;
+        let (msg, out) = nodes[0].send_direct(dest, b"no proof expected", [2; 16], now).unwrap();
+        let ev = run_with_app(&mut nodes, transmits(&out).into_iter().map(|p| (0, p)).collect(), &mut now, Some(PROOF));
+        assert!(acked(&ev, msg), "{ev:?}");
+    }
+
+    #[test]
+    fn the_proof_comes_through_anchors() {
+        let mut nodes = proving_line(23, &[8, 16]);
+        let mut now = 0;
+        let (first, ev) = send_expecting(&mut nodes, b"far away", 7, &mut now, Some(PROOF));
+        assert!(acked(&ev, first), "reply through anchors");
+        let (second, ev) = send_expecting(&mut nodes, b"again", 8, &mut now, Some(PROOF));
+        assert!(acked(&ev, second), "ack through anchors");
+    }
+
+    #[test]
+    fn a_late_copy_gets_the_same_answer_after_the_duplicate_filter_forgot_it() {
+        let mut dest = node(5, Role::Client);
+        dest.app_acks = true;
+        let header = Header::new(PacketType::Data, dest.addr).with_path(Path::new());
+        let packet = encode(&header, b"sealed").unwrap();
+        let id = packet_id(PacketType::Data, &dest.addr, b"sealed");
+        dest.on_receive(&packet, 5, 100);
+        dest.acknowledge(id, Some(PROOF), 100);
+        dest.dedup = DedupCache::new();
+        let again = transmits(&dest.on_receive(&packet, 5, 200_000));
+        assert_eq!(again.len(), 1, "the answer is repeated");
+        assert_eq!(Packet::decode(&again[0]).unwrap().payload, &PROOF);
+    }
+
+    #[test]
+    fn a_forged_delivered_notice_does_not_stop_the_sender() {
+        let mut a = node(1, Role::Relay);
+        let mut dest = node(5, Role::Client);
+        a.carry_copies = 4;
+        dest.app_acks = true;
+        let msg_id = packet_id(PacketType::Data, &dest.addr, b"sealed");
+        a.expect_proof(msg_id, PROOF);
+        a.start_carry(dest.addr, b"sealed", 0);
+        let forged = encode(&Header::new(PacketType::Carry, ack_token(msg_id)), &[]).unwrap();
+        assert!(!a.on_receive(&forged, 5, 100).contains(&Action::CarryAcked { msg_id }));
+        assert_eq!(a.carried_count(), 1, "still carried");
+        // The destination gets it and answers only when its app has opened it.
+        a.neighbors.heard(dest.id, None, 5, 0, 10_000);
+        let handoff = transmits(&a.tick(10_000))[0].clone();
+        let got = dest.on_receive(&handoff, 5, 10_100);
+        assert!(transmits(&got).is_empty(), "no notice before the app has opened it");
+        let notices = transmits(&dest.acknowledge(msg_id, Some(PROOF), 10_200));
+        // With the proof, and an empty one for carriers from before proofs.
+        assert_eq!(notices.iter().map(|n| Packet::decode(n).unwrap().payload.len()).collect::<Vec<_>>(), [PROOF_LEN, 0]);
+        let notice = notices[0].clone();
+        assert!(a.on_receive(&notice, 5, 10_300).contains(&Action::CarryAcked { msg_id }));
+        assert_eq!(a.carried_count(), 0);
     }
 
     #[test]

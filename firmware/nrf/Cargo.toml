@@ -40,7 +40,7 @@ maarse-crypto = { path = "../../maarse-crypto", default-features = false }
 # Compact SHA-512/256 rounds: about 25 KB less flash than the unrolled ones.
 sha2 = { version = "0.10", default-features = false, features = ["force-soft-compact"] }
 maarse-fw-common = { version = "0.1.0", path = "../common" }
-trouble-host = { version = "0.8", default-features = false, features = ["derive", "gatt", "peripheral", "default-packet-pool"] }
+trouble-host = { version = "0.8", default-features = false, features = ["derive", "gatt", "peripheral", "default-packet-pool", "security"] }
 
 [profile.release]
 opt-level = "z"

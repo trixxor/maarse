@@ -28,7 +28,7 @@
 //! paper as the 24 words, see [`crate::recovery`]).
 
 use crate::{Identity, PublicIdentity, PUBLIC_IDENTITY_LEN, SIGNATURE_LEN};
-use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use maarse_core::Address;
 
 const CERT_CONTEXT: &[u8] = b"maarse/device/v1";
@@ -96,7 +96,7 @@ impl DeviceCert {
         let index = b[64];
         let signature: [u8; 64] = b[65..CERT_LEN].try_into().map_err(|_| PersonError::Malformed)?;
         let vk = VerifyingKey::from_bytes(&master.sign).map_err(|_| PersonError::Malformed)?;
-        vk.verify(&cert_message(&master.address(), device, index), &Signature::from_bytes(&signature))
+        vk.verify_strict(&cert_message(&master.address(), device, index), &Signature::from_bytes(&signature))
             .map_err(|_| PersonError::WrongDevice)?;
         Ok(DeviceCert { master, device: *device, index, signature })
     }
@@ -179,7 +179,7 @@ impl DeviceList {
         }
         let signature: [u8; 64] = b[end..end + SIGNATURE_LEN].try_into().map_err(|_| PersonError::Malformed)?;
         let vk = VerifyingKey::from_bytes(&master.sign).map_err(|_| PersonError::Malformed)?;
-        vk.verify(&Self::signed(&master.address(), &b[..end]), &Signature::from_bytes(&signature))
+        vk.verify_strict(&Self::signed(&master.address(), &b[..end]), &Signature::from_bytes(&signature))
             .map_err(|_| PersonError::BadSignature)?;
         Ok(DeviceList { version, devices, signature })
     }
@@ -405,6 +405,9 @@ pub fn open_inbox(
         return Err(CryptoError::Decrypt);
     }
     let ss = secret.diffie_hellman(&x25519_dalek::PublicKey::from(sender.dh));
+    if !ss.was_contributory() {
+        return Err(CryptoError::Decrypt);
+    }
     let (_, key) = inbox_keys(es.as_bytes(), ss.as_bytes(), &payload[..36], person, &s_addr);
     out[..n].copy_from_slice(&payload[INBOX_HEADER..INBOX_HEADER + n]);
     ChaCha20Poly1305::new(Key::from_slice(&key))

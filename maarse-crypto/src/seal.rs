@@ -159,6 +159,10 @@ pub fn open_direct(
         return Err(CryptoError::Decrypt);
     }
     let ss = me.dh.diffie_hellman(&XPublic::from(sender.dh));
+    // A sender key of small order makes `ss` public: it would prove nothing.
+    if !ss.was_contributory() {
+        return Err(CryptoError::Decrypt);
+    }
     let key = message_key(es.as_bytes(), ss.as_bytes(), &e_pub, &my_addr, &s_addr);
     out[..n].copy_from_slice(&payload[48..48 + n]);
     let tag = Tag::from_slice(&payload[48 + n..]);
@@ -329,6 +333,33 @@ mod tests {
             open_direct(&b, &ct[..n], look, &mut pt),
             Err(CryptoError::Decrypt)
         );
+    }
+
+    /// A sender key of small order makes the shared secret public: such a
+    /// message proves nothing about the sender.
+    #[test]
+    fn sender_key_of_small_order_is_rejected() {
+        let me = Identity::generate(&mut OsRng);
+        let weak = PublicIdentity { sign: [7; 32], dh: [0; 32] };
+        let (from, to) = (weak.address(), me.address());
+        let e = x25519_dalek::StaticSecret::from([5; 32]);
+        let e_pub = XPublic::from(&e).to_bytes();
+        let es = e.diffie_hellman(&XPublic::from(me.public().dh));
+        let mut ct = [0u8; DM_OVERHEAD + 2];
+        ct[..32].copy_from_slice(&e_pub);
+        let mask = mask_key(es.as_bytes(), &e_pub, &to);
+        for i in 0..16 {
+            ct[32 + i] = from.0[i] ^ mask[i];
+        }
+        let key = message_key(es.as_bytes(), &[0; 32], &e_pub, &to, &from);
+        let (head, rest) = ct.split_at_mut(48);
+        rest[..2].copy_from_slice(b"hi");
+        let tag = ChaCha20Poly1305::new(Key::from_slice(&key))
+            .encrypt_in_place_detached(Nonce::from_slice(&[0u8; 12]), head, &mut rest[..2])
+            .unwrap();
+        rest[2..].copy_from_slice(&tag);
+        let mut out = [0u8; 8];
+        assert_eq!(open_direct(&me, &ct, |a| (*a == from).then_some(weak), &mut out), Err(CryptoError::Decrypt));
     }
 
     #[test]

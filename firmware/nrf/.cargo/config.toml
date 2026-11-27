@@ -1,2 +1,7 @@
 [build]
 target = "thumbv7em-none-eabihf"
+
+# The app area is 388 KB and Bluetooth pairing needs about 50 KB of it: fold
+# identical functions and use the small AES.
+[target.thumbv7em-none-eabihf]
+rustflags = ["-Clink-arg=--icf=all", "--cfg", "aes_compact"]

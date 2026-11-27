@@ -43,6 +43,10 @@ pub const ALPHA: usize = 3;
 pub const RECORD_TTL: Duration = Duration::from_secs(2 * 3600);
 /// How often a gateway republishes its records.
 pub const REPUBLISH: Duration = Duration::from_secs(30 * 60);
+/// A node's announce this much newer than another shows that the node has
+/// since been heard elsewhere. Gateways that both hear a node publish
+/// announces closer together than this.
+pub const MOVED_AFTER: Duration = Duration::from_secs(2 * REPUBLISH.as_secs());
 /// First two bytes on a DHT connection.
 pub const MAGIC: [u8; 2] = [0xD7, 0xD7];
 pub const AUTH_MAGIC: [u8; 2] = [0xD7, 0xD8];
@@ -198,6 +202,13 @@ impl Record {
             && verify_announce(&self.dest, &self.announce).is_ok()
             && (self.proof.is_none() || self.verified_gateway())
     }
+}
+
+/// Is the announce time `new` more than [`MOVED_AFTER`] after `old`? Never
+/// for a node without a clock (time 0).
+pub fn clearly_newer(new: Option<u32>, old: Option<u32>) -> bool {
+    matches!((new, old), (Some(new), Some(old))
+        if old != 0 && u64::from(new.saturating_sub(old)) > MOVED_AFTER.as_secs())
 }
 
 pub fn distance(a: &Address, b: &Address) -> [u8; 16] {
@@ -381,7 +392,8 @@ impl Store {
     }
 
     /// Stores the record if it is valid and at least as good as the old one
-    /// (fewer hops, or the old one is about to go stale).
+    /// (fewer hops, a clearly newer announce, or the old one is about to go
+    /// stale).
     pub fn put(&mut self, r: Record) -> bool {
         if !r.valid() {
             return false;
@@ -405,7 +417,8 @@ impl Store {
                 return false;
             }
             let old_age = Self::age(old, at);
-            let better = r.hops < old.hops
+            let better = clearly_newer(timestamp, old_timestamp)
+                || r.hops < old.hops
                 || (r.hops == old.hops && r.age_s as u64 <= old_age)
                 || old_age > 2 * REPUBLISH.as_secs();
             if !better {
@@ -1307,6 +1320,37 @@ mod tests {
         assert!(s.put(record(&id, a(2), 1)));
         assert!(!s.put(record(&id, a(3), 2)));
         assert_eq!(s.get(&id.address()).unwrap().gw, a(2));
+    }
+
+    #[test]
+    fn a_clearly_newer_announce_beats_fewer_hops() {
+        // The node moved: the old gateway stopped hearing it, a farther one hears it now.
+        let id = Identity::generate(&mut OsRng);
+        let then = 2_000_000_000;
+        let mut old = record(&id, a(1), 0);
+        old.announce = id.announce(then, &[]).unwrap().to_vec();
+        let mut new = record(&id, a(2), 3);
+        new.announce = id.announce(then + 3601, &[]).unwrap().to_vec();
+        let mut s = Store::new();
+        assert!(s.put(old.clone()));
+        assert!(s.put(new));
+        assert_eq!(s.get(&id.address()).unwrap().gw, a(2));
+        assert!(!s.put(old), "the old gateway cannot take it back");
+    }
+
+    #[test]
+    fn a_slightly_newer_or_undated_announce_does_not_beat_fewer_hops() {
+        // Two gateways that both hear a node must not take turns.
+        for (then, later) in [(2_000_000_000, 2_000_000_000 + 3600), (0, 2_000_000_000)] {
+            let id = Identity::generate(&mut OsRng);
+            let mut near = record(&id, a(1), 0);
+            near.announce = id.announce(then, &[]).unwrap().to_vec();
+            let mut far = record(&id, a(2), 3);
+            far.announce = id.announce(later, &[]).unwrap().to_vec();
+            let mut s = Store::new();
+            assert!(s.put(near));
+            assert!(!s.put(far), "announce times {then} and {later}");
+        }
     }
 
     #[test]

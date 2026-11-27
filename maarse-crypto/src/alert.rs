@@ -27,7 +27,7 @@
 //! newest verified issue time as a lower bound on "now".
 
 use crate::{Identity, PublicIdentity};
-use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use maarse_core::Address;
 use sha2::{Digest, Sha256};
 
@@ -247,7 +247,7 @@ pub fn verify_cert(plain: &[u8], roots: &[PublicIdentity]) -> Option<Cert> {
     let signed = plain.get(..n)?;
     let sig = Signature::from_bytes(plain.get(n..n + SIG)?.try_into().ok()?);
     let d = digest(CERT_CONTEXT, None, signed);
-    roots.iter().find(|r| VerifyingKey::from_bytes(&r.sign).is_ok_and(|k| k.verify(&d, &sig).is_ok()))?;
+    roots.iter().find(|r| VerifyingKey::from_bytes(&r.sign).is_ok_and(|k| k.verify_strict(&d, &sig).is_ok()))?;
     Some(Cert {
         issuer: PublicIdentity::from_bytes(&plain[1..65])?,
         not_after: u32::from_be_bytes(plain[65..69].try_into().ok()?),
@@ -296,7 +296,7 @@ pub fn verify<'a>(issuer: &Address, plain: &'a [u8], keys: &[PublicIdentity], ce
     let sig = Signature::from_bytes(sig.try_into().map_err(|_| Reject::Malformed)?);
     VerifyingKey::from_bytes(&key)
         .map_err(|_| Reject::BadSignature)?
-        .verify(&digest(CONTEXT, Some(issuer), signed), &sig)
+        .verify_strict(&digest(CONTEXT, Some(issuer), signed), &sig)
         .map_err(|_| Reject::BadSignature)?;
     Ok((a, via))
 }

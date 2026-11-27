@@ -26,6 +26,11 @@ use maarse_core::companion::{WifiSettings, wifi_state};
 use maarse_fw_common::bus::{Frame, NET_EVT, NET_RX, NET_STATS, NET_TX, Pkt, USB_IN, WIFI_IP, WIFI_STATE};
 use static_cell::StaticCell;
 
+/// The network stack's sockets (one static for the Wi-Fi link and the hotspot alike: the main stack is what is left of RAM
+/// after the statics, and the Wi-Fi driver needs nearly all of it when it starts).
+const NET_SOCKETS: usize = if cfg!(feature = "hotspot") { 6 } else { 3 };
+pub(crate) static NET_RESOURCES: StaticCell<StackResources<NET_SOCKETS>> = StaticCell::new();
+
 /// Port used when `peer` has none (maarse-host's default `--listen`).
 const DEFAULT_PORT: u16 = 4242;
 /// Pause before trying again after a failed join or a lost link.
@@ -65,6 +70,17 @@ fn set_state(s: u8) {
 /// off or could not be started (the node then runs on LoRa only).
 pub fn start(spawner: &Spawner, wifi: esp_hal::peripherals::WIFI<'static>, settings: WifiSettings, seed: u64) -> bool {
     set_state(wifi_state::OFF);
+    if settings.enabled && settings.hotspot {
+        // The node's own Wi-Fi network for phones (see hotspot.rs).
+        #[cfg(feature = "hotspot")]
+        return crate::hotspot::start(spawner, wifi, &settings, seed);
+        #[cfg(not(feature = "hotspot"))]
+        {
+            let _ = wifi;
+            set_state(wifi_state::BAD_SETTINGS);
+            return false;
+        }
+    }
     if !settings.enabled || settings.ssid.is_empty() || settings.peer.is_empty() {
         return false;
     }
@@ -86,11 +102,10 @@ pub fn start(spawner: &Spawner, wifi: esp_hal::peripherals::WIFI<'static>, setti
         return false;
     };
     let iface = Interface::station();
-    static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
     let (stack, runner) = embassy_net::new(
         iface,
         embassy_net::Config::dhcpv4(Default::default()),
-        RESOURCES.init(StackResources::new()),
+        NET_RESOURCES.init(StackResources::new()),
         seed,
     );
     spawner.spawn(net_task(runner).unwrap());

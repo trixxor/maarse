@@ -12,3 +12,5 @@ pub mod power;
 pub mod ota;
 pub mod radio;
 pub mod storage;
+#[cfg(test)]
+mod test_stubs;

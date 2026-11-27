@@ -923,3 +923,31 @@ fn force_full_survives_serialization() {
     let back = Session::from_bytes(&bytes).unwrap();
     assert_eq!(back.to_bytes()[..], bytes[..]);
 }
+
+#[test]
+fn init_from_a_sender_key_of_small_order_is_rejected() {
+    let me = Identity::generate(&mut OsRng);
+    let weak = PublicIdentity { sign: [7; 32], dh: [0; 32] };
+    let (from, to) = (weak.address(), me.address());
+    let a1 = [5u8; 32];
+    let a1_pub = public_of(&a1);
+    let es = dh(&a1, &me.public().dh).unwrap();
+    let (_, ck) = kdf_init(&es, &[0; 32], &a1_pub, &to, &from);
+    let (_, mk) = kdf_ck(&ck);
+    let mut m = [0u8; FS_OVERHEAD + 2];
+    m[0] = INIT;
+    m[1..33].copy_from_slice(&a1_pub);
+    let mask = mask_key(&es, &a1_pub, &to);
+    for i in 0..16 {
+        m[33 + i] = from.0[i] ^ mask[i];
+    }
+    let (head, rest) = m.split_at_mut(HEADER_LEN);
+    rest[..2].copy_from_slice(b"hi");
+    let tag = aead(&mk).encrypt_in_place_detached(Nonce::from_slice(&[0u8; 12]), head, &mut rest[..2]).unwrap();
+    rest[2..].copy_from_slice(&tag);
+    let mut out = [0u8; 8];
+    let mut store = Map::default();
+    let r = open(&me, &m, &mut store, |a| (*a == from).then_some(weak), &mut out);
+    assert!(r.is_err(), "{r:?}");
+    assert!(store.0.is_empty());
+}

@@ -32,6 +32,8 @@ object RemoteAdmin {
     val neighbors = MutableStateFlow<List<Neighbor>?>(null)
     val radio = MutableStateFlow<RadioCfg?>(null)
     val trial = MutableStateFlow<Trial?>(null)
+    /** Whether the node has its own Bluetooth code; known once it has answered a change. */
+    val blePin = MutableStateFlow<Boolean?>(null)
     val message = MutableStateFlow("")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var expiry: Job? = null
@@ -42,7 +44,7 @@ object RemoteAdmin {
     /** Starts managing `addr`: forget what we knew of another node and ask for its short status and radio settings. */
     fun open(addr: String) {
         if (target.value != addr) {
-            target.value = addr; stats.value = emptyMap(); neighbors.value = null; radio.value = null; message.value = ""
+            target.value = addr; stats.value = emptyMap(); neighbors.value = null; radio.value = null; message.value = ""; blePin.value = null
             if (trial.value?.target != addr) trial.value = null
         }
         fetch()
@@ -57,6 +59,8 @@ object RemoteAdmin {
     fun setFull(on: Boolean) { full.value = on; fetch() }
 
     fun askNeighbors() { neighbors.value = null; send(Cmd.getNeighbors()) }
+
+    fun setBlePin(pin: Int) { blePin.value = null; send(Cmd.setBlePin(pin)) }
 
     /** Tries new radio settings on the node for [TRIAL_MINUTES] minutes. */
     fun tryRadio(cfg: RadioCfg) {
@@ -109,6 +113,10 @@ object RemoteAdmin {
                     trial.value = t.copy(phase = "saved"); stopTimers()
                     message.value = "Saved. The node confirmed the new radio settings."
                 }
+            }
+            is Ev.BlePin -> {
+                blePin.value = inner.own
+                message.value = if (inner.own) "Bluetooth code saved" else "The node still has the factory Bluetooth code"
             }
             is Ev.Error -> message.value = inner.text
             else -> {}

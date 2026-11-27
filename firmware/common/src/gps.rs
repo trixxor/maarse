@@ -137,7 +137,7 @@ pub fn info(now_s: u32) -> Info {
         let used_fresh = now_s.saturating_sub(t.used_seen_s) <= SAT_MAX_AGE_S;
         // The strongest first, so a full list drops the weakest.
         let mut rows: heapless::Vec<Row, 40> = t.rows.iter().copied().filter(|r| now_s.saturating_sub(r.seen_s) <= SAT_MAX_AGE_S).collect();
-        rows.sort_unstable_by(|a, b| b.sat.snr.cmp(&a.sat.snr));
+        maarse_core::sort::sort_by(&mut rows[..], |a, b| a.sat.snr > b.sat.snr);
         for r in rows {
             let mut sat = r.sat;
             sat.used = used_fresh && t.used[..t.used_n as usize].contains(&sat.prn);

@@ -142,8 +142,12 @@ pub const CAP_BUNDLE: u8 = 0x02;
 /// Reads compact forward-secrecy messages (`ratchet::COMPACT`, 22 bytes
 /// overhead instead of 69).
 pub const CAP_COMPACT: u8 = 0x40;
+/// Proves delivery: acknowledges a direct message only after opening it,
+/// with a proof only the sender and recipient can compute (see `router`,
+/// "Delivery proof"). A sender then counts only that as delivered.
+pub const CAP_PROOF: u8 = 0x80;
 /// What this firmware/host can do.
-pub const MY_CAPS: u8 = CAP_TEXTZ | CAP_BUNDLE | CAP_COMPACT;
+pub const MY_CAPS: u8 = CAP_TEXTZ | CAP_BUNDLE | CAP_COMPACT | CAP_PROOF;
 /// Reads sequence-numbered content (`content::SEQ`); maarse-host only.
 pub const CAP_SEQ: u8 = 0x04;
 /// Takes call audio as datagrams (no end-to-end acknowledgement, see

@@ -304,7 +304,7 @@ pub struct Recorder {
 fn median64(v: &[u8]) -> u8 {
     let mut s = [0u8; BINS];
     s.copy_from_slice(&v[..BINS]);
-    s.sort_unstable();
+    crate::sort::sort_by(&mut s[..], |a, b| a < b);
     s[BINS / 2]
 }
 
@@ -426,7 +426,7 @@ impl Recorder {
                 }
             }
             if m > 0 {
-                tmp[..m].sort_unstable();
+                crate::sort::sort_by(&mut tmp[..m], |a, b| a < b);
                 t.work[W_FLOOR + b] = tmp[m / 2];
             }
         }
@@ -517,7 +517,7 @@ impl Recorder {
             dbm[b] = -((f[b] >> 1) as i16) as i8;
         }
         let mut sorted = dbm;
-        sorted.sort_unstable();
+        crate::sort::sort_by(&mut sorted[..], |a, b| a < b);
         let base = sorted[BINS / 2];
         let any_none = (0..nb).any(|k| (t.work[W_NONE + (k >> 3)] >> (k & 7)) & 1 == 1);
         h[..4].copy_from_slice(&MAGIC2);
@@ -860,7 +860,7 @@ impl Recording {
     /// Sorted by time on the air, the longest first.
     pub fn groups(&self) -> Vec<Group, MAX_GROUPS> {
         let mut order: Vec<Event, MAX_EVENTS> = self.events.clone();
-        order.sort_unstable_by_key(|e| (e.b0 as u16 + e.b1 as u16, e.k0, e.b0));
+        crate::sort::sort_by(&mut order[..], |a, b| (a.b0 as u16 + a.b1 as u16, a.k0, a.b0) < (b.b0 as u16 + b.b1 as u16, b.k0, b.b0));
         // Members of each group (indexes into `order`) are found by a second pass over the same order.
         let mut gid = [0u8; MAX_EVENTS];
         let mut gs: Vec<(i32, i32, i32), MAX_GROUPS> = Vec::new(); // sum of 2 x centre, count, width of the first event
@@ -892,7 +892,7 @@ impl Recording {
                     let _ = members.push(*e);
                 }
             }
-            members.sort_unstable_by_key(|e| (e.k0, e.b0));
+            crate::sort::sort_by(&mut members[..], |a, b| (a.k0, a.b0) < (b.k0, b.b0));
             let count = members.len() as u16;
             let mut air = 0i64;
             let (mut b0, mut b1, mut peak) = (u8::MAX, 0u8, 0u8);
@@ -964,7 +964,7 @@ impl Recording {
                 interval_ms: mean as u32,
             });
         }
-        out.sort_unstable_by_key(|g| (core::cmp::Reverse(g.air_ms), g.first_ms, g.b0));
+        crate::sort::sort_by(&mut out[..], |a, b| (b.air_ms, a.first_ms, a.b0) < (a.air_ms, b.first_ms, b.b0));
         out
     }
 }

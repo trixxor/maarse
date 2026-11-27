@@ -86,6 +86,9 @@ object Cmd {
     /** Who may manage this node from a distance (at most 4). Only accepted over USB, Bluetooth or a client's own link. */
     fun setAdmins(list: List<String>) = frame(0x0d) { list.forEach { addr(it) } }
     fun getAdmins() = frame(0x0e)
+    /** A new Bluetooth code for the node (6 digits, not the factory code 123456). The code is never sent back. */
+    fun setBlePin(pin: Int) = frame(0x46) { u32(pin.toLong()) }
+    fun getBlePin() = frame(0x47)
     fun setTime() = frame(0x0f) { u32(System.currentTimeMillis() / 1000) }
     fun setRole(r: Int) = frame(0x10) { u8(r) }
     fun setRegions(strict: Boolean, names: String) = frame(0x11) { u8(if (strict) 1 else 0); text(names) }
@@ -180,6 +183,8 @@ sealed class Ev {
     data class Regions(val strict: Boolean, val names: String) : Ev()
     /** The node's administrators. */
     data class Admins(val list: List<String>) : Ev()
+    /** `own`: the node has its own Bluetooth code, not the factory code. */
+    data class BlePin(val own: Boolean) : Ev()
     data class RemoteReply(val from: String, val inner: Ev?) : Ev()
     data class Trace(val req: Int, val dest: String, val path: List<Int>, val out: List<Int>, val back: List<Int>) : Ev()
     data class Neighbors(val part: Int, val last: Boolean, val items: List<Neighbor>) : Ev()
@@ -261,6 +266,7 @@ fun decodeEvent(f: ByteArray): Ev {
         0x91 -> Ev.Stats((1 until f.size - 4 step 5).map { r.u8(it) to r.i32(it + 1) })
         0x92 -> Ev.Radio(RadioCfg(r.u32(1), r.u32(5), r.u8(9), r.u8(10), r.s8(11), r.u16(12), r.u16(14), r.u8(16)))
         0x93 -> Ev.RemoteReply(r.addr(1), if (f.size > 17) decodeEvent(f.copyOfRange(17, f.size)) else null)
+        0xc1 -> Ev.BlePin(r.u8(1) != 0)
         0x94 -> Ev.Admins((1..f.size - 16 step 16).map { r.addr(it) })
         0x95 -> Ev.Regions(r.u8(1) != 0, r.txt(2))
         0xa0 -> {

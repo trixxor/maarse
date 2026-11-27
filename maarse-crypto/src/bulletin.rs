@@ -17,7 +17,7 @@
 //! unverified message on the channel must not be shown as a bulletin.
 
 use crate::{Identity, PublicIdentity, channel_address, hashtag_key};
-use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use maarse_core::Address;
 use sha2::{Digest, Sha256};
 
@@ -88,7 +88,7 @@ pub fn verify<'a>(sender: &Address, plain: &'a [u8], trusted: &[PublicIdentity])
     let sig = Signature::from_bytes(&plain[5..69].try_into().ok()?);
     let text = &plain[69..];
     let key = VerifyingKey::from_bytes(&id.sign).ok()?;
-    key.verify(&digest(&channel(), timestamp, text), &sig).ok()?;
+    key.verify_strict(&digest(&channel(), timestamp, text), &sig).ok()?;
     Some(Verified { signer: *sender, timestamp, text })
 }
 

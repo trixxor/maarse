@@ -193,6 +193,9 @@ async fn main(spawner: Spawner) {
     let identity = flash.load_or_create_identity(&mut rng);
     let radio_cfg = flash.load_radio(maarse_core::companion::RadioConfig::EU_DEFAULT);
     let addr = identity.address();
+    // The Bluetooth code and the phones paired with it.
+    maarse_fw_common::bus::set_ble_pin(maarse_fw_common::node::Settings::load_ble_pin(&mut flash));
+    let ble_bonds = maarse_fw_common::node::Settings::load_ble_bonds(&mut flash);
 
     // ----- sensor node: what the stored recipe needs, and whether to sleep -----
     // On battery with a recipe that sleeps, Bluetooth, USB and the 32 MHz
@@ -321,7 +324,7 @@ async fn main(spawner: Spawner) {
             }
             n
         });
-        spawner.spawn(ble::ble_task(controller, mac, name.as_str()).unwrap());
+        spawner.spawn(ble::ble_task(controller, mac, name.as_str(), ble_bonds).unwrap());
     }
 
     // ----- USB -----

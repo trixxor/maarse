@@ -181,7 +181,7 @@ pub fn replicas<const K: usize>(recipient: &Address, offices: &[Address]) -> hea
         }
         let _ = best.push((s, *o));
     }
-    best.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    crate::sort::sort_by(&mut best, |a, b| a.0 > b.0);
     best.into_iter().map(|(_, a)| a).collect()
 }
 

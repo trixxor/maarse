@@ -49,11 +49,12 @@ pub enum PacketType {
     PathRequest = 3,
     /// Reply with the route found.
     PathResponse = 4,
-    /// Remote control of repeaters.
+    /// Reserved: defined but never sent. Remote control of repeaters uses content
+    /// type `0x02` inside an encrypted `Data` message.
     Control = 5,
     /// Fragment of a larger message or resource.
     Fragment = 6,
-    /// Coverage measurement for the map.
+    /// Trace route: collects the hops and their SNR (not used for map coverage).
     Probe = 7,
     /// Channel message (flooded locally).
     Channel = 8,

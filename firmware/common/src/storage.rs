@@ -15,6 +15,8 @@
 //!   0x400: "RNG1" + range test setting (15, see `rangetest::Config`), only when it should persist
 //!   0x420: "MKY1" + Wi-Fi modem key (32, see `maarse_core::modemauth`)
 //!   0x500: "CTL1" + count (1) + per-administrator remote counter ceilings (up to 4)
+//!   0x560: "BPN1" + own Bluetooth code (u32 LE), only when one has been chosen
+//!   0x568: "BBD1" + paired phones (180, see `maarse_core::blepair`)
 //!   ```
 //!   Without "SHR1" neither position nor telemetry is shared (the default).
 //!   Only written the first time and when radio/administrators/role/regions change.
@@ -44,6 +46,7 @@
 use embedded_storage::nor_flash::NorFlash;
 use rand_core::{CryptoRng, RngCore};
 use maarse_core::Address;
+use maarse_core::blepair::{BONDS_LEN, Bonds, is_own_pin};
 use maarse_core::router::Role;
 use maarse_core::companion::RadioConfig;
 use maarse_crypto::Identity;
@@ -84,8 +87,13 @@ const _: () = assert!(WIFI_OFF + WIFI_LEN <= RANGE_OFF);
 const CONTROL_OFF: usize = 0x500;
 const CONTROL_MAGIC: &[u8; 4] = b"CTL1";
 const CONTROL_LEN: usize = 5 + 4 * 20;
-const USED: usize = (CONTROL_OFF + CONTROL_LEN).div_ceil(4) * 4;
+const BLE_PIN_MAGIC: &[u8; 4] = b"BPN1";
+const BLE_PIN_OFF: usize = 0x560;
+const BLE_BONDS_MAGIC: &[u8; 4] = b"BBD1";
+const BLE_BONDS_OFF: usize = 0x568;
+const USED: usize = (BLE_BONDS_OFF + 4 + BONDS_LEN).div_ceil(4) * 4;
 const _: () = assert!(SITE_OFF + SITE_LEN <= CONTROL_OFF && USED <= PAGE as usize);
+const _: () = assert!(CONTROL_OFF + CONTROL_LEN <= BLE_PIN_OFF && BLE_PIN_OFF + 8 <= BLE_BONDS_OFF);
 const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
 
 /// The sensor sector: "SEN1" + length (u16) + recipe (at most 256) at 0x000,
@@ -254,6 +262,9 @@ impl<F: NorFlash> FlashSettings<F> {
             return Identity::from_secret_bytes(&key);
         }
         let id = Identity::generate(rng);
+        // Without an identity nothing in the page is ours. What another firmware left there is not kept: in the
+        // place of the remote command counters it would block every remote change.
+        buf.fill(0xFF);
         buf[..4].copy_from_slice(ID_MAGIC);
         buf[4..68].copy_from_slice(&id.to_secret_bytes());
         self.write_page(&buf);
@@ -489,7 +500,7 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         let b = &mut buf[WIFI_OFF..WIFI_OFF + WIFI_LEN];
         b.fill(0);
         b[..4].copy_from_slice(WIFI_MAGIC);
-        b[4] = w.enabled as u8 | (w.modem as u8) << 1;
+        b[4] = w.enabled as u8 | (w.modem as u8) << 1 | (w.hotspot as u8) << 2;
         let mut put = |at: usize, s: &[u8]| {
             b[at] = s.len() as u8;
             b[at + 1..at + 1 + s.len()].copy_from_slice(s);
@@ -512,11 +523,40 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         maarse_core::companion::WifiSettings {
             enabled: b[4] & 1 != 0,
             modem: b[4] & 2 != 0,
+            hotspot: b[4] & 4 != 0,
             ssid: get(b, 5),
             password: get(b, 5 + 33),
             peer: get(b, 5 + 33 + 65),
             modem_key: self.load_modem_key(),
         }
+    }
+    fn save_ble_pin(&mut self, pin: Option<u32>) {
+        let mut buf = self.read_page();
+        let b = &mut buf[BLE_PIN_OFF..BLE_PIN_OFF + 8];
+        b.fill(0xFF);
+        if let Some(p) = pin {
+            b[..4].copy_from_slice(BLE_PIN_MAGIC);
+            b[4..].copy_from_slice(&p.to_le_bytes());
+        }
+        self.write_page(&buf);
+    }
+    fn load_ble_pin(&mut self) -> Option<u32> {
+        let buf = self.read_page();
+        let b = &buf[BLE_PIN_OFF..BLE_PIN_OFF + 8];
+        (&b[..4] == BLE_PIN_MAGIC).then(|| u32::from_le_bytes([b[4], b[5], b[6], b[7]])).filter(|p| is_own_pin(*p))
+    }
+    fn save_ble_bonds(&mut self, bonds: &Bonds) {
+        let mut buf = self.read_page();
+        buf[BLE_BONDS_OFF..BLE_BONDS_OFF + 4].copy_from_slice(BLE_BONDS_MAGIC);
+        buf[BLE_BONDS_OFF + 4..BLE_BONDS_OFF + 4 + BONDS_LEN].copy_from_slice(&bonds.to_bytes());
+        self.write_page(&buf);
+    }
+    fn load_ble_bonds(&mut self) -> Bonds {
+        let buf = self.read_page();
+        if &buf[BLE_BONDS_OFF..BLE_BONDS_OFF + 4] != BLE_BONDS_MAGIC {
+            return Bonds::new();
+        }
+        Bonds::from_bytes(&buf[BLE_BONDS_OFF + 4..BLE_BONDS_OFF + 4 + BONDS_LEN])
     }
     fn save_modem_key(&mut self, key: Option<[u8; 32]>) {
         let mut buf = self.read_page();
@@ -750,5 +790,104 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
             }
         });
         (seen.len() as u32, msgs)
+    }
+}
+
+// Run on a PC (the radio driver patch is the one the firmware builds use):
+//   cargo test --lib --config 'patch.crates-io.lora-phy.path="../vendor/lora-phy"'
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+    use crate::node::Settings as _;
+    use embedded_storage::nor_flash::{ErrorType, NorFlashError, NorFlashErrorKind, ReadNorFlash};
+
+    const SIZE: usize = PAGE as usize + MAIL_AREA;
+
+    struct Ram(std::boxed::Box<[u8; SIZE]>);
+
+    #[derive(Debug)]
+    struct Refused;
+    impl NorFlashError for Refused {
+        fn kind(&self) -> NorFlashErrorKind {
+            NorFlashErrorKind::Other
+        }
+    }
+    impl ErrorType for Ram {
+        type Error = Refused;
+    }
+    impl ReadNorFlash for Ram {
+        const READ_SIZE: usize = 1;
+        fn read(&mut self, at: u32, out: &mut [u8]) -> Result<(), Refused> {
+            out.copy_from_slice(&self.0[at as usize..at as usize + out.len()]);
+            Ok(())
+        }
+        fn capacity(&self) -> usize {
+            SIZE
+        }
+    }
+    impl NorFlash for Ram {
+        const WRITE_SIZE: usize = 4;
+        const ERASE_SIZE: usize = PAGE as usize;
+        fn erase(&mut self, from: u32, to: u32) -> Result<(), Refused> {
+            self.0[from as usize..to as usize].fill(0xFF);
+            Ok(())
+        }
+        fn write(&mut self, at: u32, data: &[u8]) -> Result<(), Refused> {
+            for (cell, byte) in self.0[at as usize..].iter_mut().zip(data) {
+                *cell &= byte;
+            }
+            Ok(())
+        }
+    }
+
+    struct Counting(u8);
+    impl RngCore for Counting {
+        fn next_u32(&mut self) -> u32 {
+            rand_core::impls::next_u32_via_fill(self)
+        }
+        fn next_u64(&mut self) -> u64 {
+            rand_core::impls::next_u64_via_fill(self)
+        }
+        fn fill_bytes(&mut self, out: &mut [u8]) {
+            for b in out {
+                self.0 = self.0.wrapping_add(1);
+                *b = self.0;
+            }
+        }
+        fn try_fill_bytes(&mut self, out: &mut [u8]) -> Result<(), rand_core::Error> {
+            self.fill_bytes(out);
+            Ok(())
+        }
+    }
+    impl CryptoRng for Counting {}
+
+    /// A board whose settings page holds `leftover` everywhere, as after another firmware.
+    fn board_after_other_firmware(leftover: u8) -> FlashSettings<Ram> {
+        let mut ram = Ram(std::boxed::Box::new([0xFF; SIZE]));
+        ram.0[..PAGE as usize].fill(leftover);
+        FlashSettings::new(ram, 0, PAGE, std::boxed::Box::leak(std::boxed::Box::new([0xFF; MAIL_AREA])))
+    }
+
+    #[test]
+    fn a_new_identity_does_not_keep_what_another_firmware_left_in_the_page() {
+        let mut flash = board_after_other_firmware(0x5A);
+        let id = flash.load_or_create_identity(&mut Counting(0));
+        assert_eq!(flash.load_control_limits().map(|l| l.len()), Some(0), "remote commands can be used");
+        assert!(flash.flash.0[68..PAGE as usize].iter().all(|&b| b == 0xFF));
+        assert_eq!(flash.load_or_create_identity(&mut Counting(9)).address(), id.address(), "kept after a restart");
+    }
+
+    #[test]
+    fn leftover_remote_counters_can_be_replaced_and_nothing_else_is_lost() {
+        // A board that already has its identity, with leftovers where the counters belong.
+        let mut flash = board_after_other_firmware(0xFF);
+        let id = flash.load_or_create_identity(&mut Counting(0));
+        flash.flash.0[CONTROL_OFF..CONTROL_OFF + CONTROL_LEN].fill(0x5A);
+        assert!(flash.load_control_limits().is_none(), "unreadable counters are not trusted");
+        assert!(flash.save_control_limits(&[]));
+        assert_eq!(flash.load_control_limits().map(|l| l.len()), Some(0));
+        assert_eq!(flash.load_or_create_identity(&mut Counting(9)).address(), id.address());
     }
 }

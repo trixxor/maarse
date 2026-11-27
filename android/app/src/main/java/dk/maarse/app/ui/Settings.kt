@@ -253,6 +253,7 @@ internal fun NodeSection(radioPart: Boolean = false) {
 
     if (radioPart) {
     AdminSection()
+    BleSection()
     GroupTitle("Regions")
     Card2 {
         var reg by remember(regions) { mutableStateOf(regions?.names ?: "") }
@@ -280,6 +281,89 @@ internal fun NodeSection(radioPart: Boolean = false) {
         }
         Hint("Address: " + (me?.addr ?: ""))
     }
+}
+
+/** The Bluetooth code of the radio the phone is connected to. */
+@Composable
+private fun BleSection() {
+    val conn by Node.conn.collectAsState()
+    // A host (on this phone or a computer) has no Bluetooth code of its own.
+    if (conn.mode != Mode.BLE) return
+    val known by Node.blePin.collectAsState()
+    LaunchedEffect(conn.state) { Node.send(Cmd.getBlePin()) }
+    BleCodeCard(known) { pin -> Node.blePin.value = null; Node.send(Cmd.setBlePin(pin)) }
+}
+
+/** Two fields for a new Bluetooth code; `save` is called when both hold the same acceptable code. */
+private class CodeInput {
+    var one by mutableStateOf("")
+    var two by mutableStateOf("")
+    var refused by mutableStateOf("")
+
+    /** The code, or null after saying what is wrong. */
+    fun value(): Int? {
+        refused = when {
+            one.length != 6 || !one.all { it in '0'..'9' } -> "The code must be 6 digits."
+            one == "123456" -> "Choose a code other than 123456."
+            one != two -> "The two codes are not the same."
+            else -> ""
+        }
+        return if (refused.isEmpty()) one.toInt() else null
+    }
+}
+
+@Composable
+private fun CodeFields(input: CodeInput) {
+    val keys = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword)
+    val hidden = androidx.compose.ui.text.input.PasswordVisualTransformation()
+    OutlinedTextField(input.one, { input.one = it.take(6); input.refused = "" }, Modifier.fillMaxWidth(), label = { Text("New code (6 digits)") }, singleLine = true,
+        keyboardOptions = keys, visualTransformation = hidden)
+    OutlinedTextField(input.two, { input.two = it.take(6); input.refused = "" }, Modifier.fillMaxWidth(), label = { Text("The same code again") }, singleLine = true,
+        keyboardOptions = keys, visualTransformation = hidden)
+    if (input.refused.isNotEmpty()) Text(input.refused, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+}
+
+/** Changes a node's Bluetooth code: the connected radio, or one managed from a distance. The same card as in the PC
+ *  client. The node never sends the code, only whether it has its own. */
+@Composable
+internal fun BleCodeCard(own: Boolean?, send: (Int) -> Unit) {
+    val input = remember { CodeInput() }
+    var ask by remember { mutableStateOf<Int?>(null) }
+    GroupTitle("Bluetooth code")
+    Card2 {
+        Text("A phone or computer must type this code to use the node over Bluetooth. Write it down: the node never shows it. A forgotten code is replaced over USB, or over the network by an administrator.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(when (own) { null -> "Whether the node has its own code is not known yet."; true -> "The node has its own code."; false -> "The node still has the factory code 123456." },
+            style = MaterialTheme.typography.bodySmall)
+        CodeFields(input)
+        TextButton(onClick = { ask = input.value() }) { Text("Save code") }
+    }
+    ask?.let { pin ->
+        androidx.compose.material3.AlertDialog(onDismissRequest = { ask = null },
+            title = { Text("Save code") },
+            text = { Text("Save this Bluetooth code on the node? Other paired phones are forgotten and must type the new code.") },
+            confirmButton = { TextButton(onClick = { ask = null; send(pin); input.one = ""; input.two = "" }) { Text("OK") } },
+            dismissButton = { TextButton(onClick = { ask = null }) { Text("Cancel") } })
+    }
+}
+
+/** A radio over Bluetooth still has the factory code: the person chooses their own now. The radio does nothing else
+ *  until then. Shown over whatever screen is open. */
+@Composable
+internal fun OwnCodeDialog() {
+    val needed by Node.codeNeeded.collectAsState()
+    val send = needed ?: return
+    val input = remember(send) { CodeInput() }
+    androidx.compose.material3.AlertDialog(onDismissRequest = {},
+        title = { Text("Choose your own Bluetooth code") },
+        text = {
+            androidx.compose.foundation.layout.Column {
+                Text("This node still has the factory code 123456, which everyone knows. Choose your own 6-digit code and write it down: the node never shows it.")
+                CodeFields(input)
+            }
+        },
+        confirmButton = { TextButton(onClick = { input.value()?.let(send) }) { Text("Save code") } },
+        dismissButton = { TextButton(onClick = { Node.codeNeeded.value = null }) { Text("Later") } })
 }
 
 /** Who may manage the connected node from a distance. */

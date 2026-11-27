@@ -9,8 +9,13 @@ use embassy_futures::select::{Either, select};
 use bt_hci::controller::ExternalController;
 use esp_radio::ble::controller::BleConnector;
 use maarse_core::companion::FrameDecoder;
-use maarse_fw_common::bus::{BLE_OUT, USB_IN};
+use maarse_fw_common::bus::{BLE_OUT, BLE_PIN_CHANGED, USB_IN};
 use trouble_host::prelude::*;
+
+/// Pairing with the node's Bluetooth code (shared with the other firmware).
+#[path = "../../common/ble_security.rs"]
+mod security;
+use security::Security;
 
 /// Chunks of 20 bytes always fit (default ATT MTU 23).
 const CHUNK: usize = 20;
@@ -34,12 +39,14 @@ struct NordicUart {
 pub type Ble = ExternalController<BleConnector<'static>, 20>;
 
 #[embassy_executor::task]
-pub async fn ble_task(sdc: Ble, mac: [u8; 6], name: &'static str) {
+pub async fn ble_task(sdc: Ble, mac: [u8; 6], name: &'static str, bonds: maarse_core::blepair::Bonds) {
     maarse_fw_common::bus::BLE_ACTIVE.store(true, core::sync::atomic::Ordering::Relaxed);
     let mut resources: HostResources<DefaultPacketPool, 1, 2> = HostResources::new();
     let stack = trouble_host::new(sdc, &mut resources)
         .set_random_address(Address::random(mac))
+        .set_io_capabilities(IoCapabilities::DisplayOnly)
         .build();
+    security::restore(&stack, &bonds);
     let mut runner = stack.runner();
     let mut peripheral = stack.peripheral();
     let Ok(server) = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
@@ -56,15 +63,25 @@ pub async fn ble_task(sdc: Ble, mac: [u8; 6], name: &'static str) {
             }
         },
         async {
+            let mut pairing = Security::default();
             loop {
-                let Ok(conn) = advertise(name, &mut peripheral, &server).await else {
-                    embassy_time::Timer::after_secs(1).await;
-                    continue;
+                pairing.apply(&stack);
+                let conn = match select(advertise(name, &mut peripheral, &server), BLE_PIN_CHANGED.wait()).await {
+                    Either::First(Ok(conn)) => conn,
+                    Either::First(Err(_)) => {
+                        embassy_time::Timer::after_secs(1).await;
+                        continue;
+                    }
+                    Either::Second(()) => {
+                        pairing.code_changed_idle(&stack);
+                        continue;
+                    }
                 };
                 // Old frames from before the connection are thrown away.
                 while BLE_OUT.try_receive().is_ok() {}
                 maarse_fw_common::bus::BLE_CONNECTED.store(true, core::sync::atomic::Ordering::Relaxed);
-                select(rx_task(&server, &conn), tx_task(&server, &conn)).await;
+                pairing.connected(&stack, conn.raw());
+                select(rx_task(&server, &conn, &stack, &mut pairing), tx_task(&server, &conn)).await;
                 // The client is gone: no longer anyone's modem.
                 maarse_fw_common::bus::BLE_LOST.store(true, core::sync::atomic::Ordering::Relaxed);
                 maarse_fw_common::bus::BLE_CONNECTED.store(false, core::sync::atomic::Ordering::Relaxed);
@@ -104,13 +121,40 @@ async fn advertise<'v, 's, C: Controller>(
 }
 
 /// Data from the client: collect frames and send them to the node.
-async fn rx_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '_, P>) {
+async fn rx_task<C: Controller>(
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    stack: &Stack<'_, C, DefaultPacketPool>,
+    pairing: &mut Security,
+) {
     let rx_handle = server.nus.rx.handle;
     let mut dec = FrameDecoder::new();
     loop {
-        match conn.next().await {
+        let event = match select(conn.next(), BLE_PIN_CHANGED.wait()).await {
+            Either::First(event) => event,
+            Either::Second(()) => {
+                if pairing.code_changed(stack, conn.raw()) {
+                    continue;
+                }
+                // Changed from elsewhere: let the replies go out, then the
+                // client starts over with the new code.
+                embassy_time::Timer::after_millis(600).await;
+                conn.raw().disconnect();
+                return;
+            }
+        };
+        pairing.event(stack, &event);
+        match event {
             GattConnectionEvent::Disconnected { .. } => return,
             GattConnectionEvent::Gatt { event } => {
+                // Nothing is written before pairing with the code: the error
+                // makes the phone pair and try again.
+                if matches!(event, GattEvent::Write(_)) && !security::allowed(conn.raw()) {
+                    if let Ok(reply) = event.reject(AttErrorCode::INSUFFICIENT_AUTHENTICATION) {
+                        reply.send().await;
+                    }
+                    continue;
+                }
                 if let GattEvent::Write(w) = &event
                     && w.handle() == rx_handle
                 {
@@ -119,7 +163,9 @@ async fn rx_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '
                         dec.push(data)
                     });
                     while let Some(f) = dec.next_frame() {
-                        USB_IN.send(f).await;
+                        if pairing.accept(&f) {
+                            USB_IN.send(f).await;
+                        }
                     }
                 }
                 if let Ok(reply) = event.accept() {
@@ -132,10 +178,15 @@ async fn rx_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '
 }
 
 /// Events from the node: send them as notifications in small chunks.
-async fn tx_task<P: PacketPool>(server: &Server<'_>, conn: &GattConnection<'_, '_, P>) {
+async fn tx_task(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) {
     let tx = &server.nus.tx;
     loop {
         let frame = BLE_OUT.receive().await;
+        // Nothing reaches a client that has not paired, and with the factory
+        // code no messages or settings.
+        if !security::allowed(conn.raw()) || !security::may_send(&frame) {
+            continue;
+        }
         maarse_fw_common::bus::BLE_BYTES_OUT.fetch_add(frame.len() as u32, core::sync::atomic::Ordering::Relaxed);
         for chunk in frame.chunks(CHUNK) {
             let mut v: heapless09::Vec<u8, 244> = heapless09::Vec::new();

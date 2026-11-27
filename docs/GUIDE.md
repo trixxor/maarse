@@ -1,4 +1,7 @@
-# Må:rse – technical guide (v0.5)
+# Må:rse – technical guide (v0.9)
+
+> **Documentation map.** This long page mixes tutorial, how-to, reference and explanation. The documentation is being split by type: start at the [documentation index](index.md). New material goes to [tutorials](tutorials/first-node.md), [how-to guides](guides/README.md), [reference](reference/README.md) and [concepts](concepts/README.md); this page keeps the older, longer text until it has been moved.
+
 
 Må:rse is an encrypted mesh network for LoRa that can reach out into the world via TCP and the internet.
 
@@ -15,6 +18,8 @@ The first start takes a few minutes, because the program is built. After that it
 **Two computers:** start one as above. Start the other with `--peer <first computer's IP>:4242`.
 
 **Backbone with DHT:** a host with a public address is started with `--public-addr <host:port>` (and `--dht <another backbone host>`). It publishes the addresses it can reach in the DHT. Other hosts look up unknown addresses and connect directly to the right gateway. The DHT only exists over TCP, never over LoRa.
+
+In the working copy a host stops publishing an address that has gone quiet: after 30 hours without a new announce (45 minutes for a host connected directly to it). A record already in the DHT lasts up to 2 hours more. When a node turns up behind another gateway with an announce more than an hour newer, the old host stops treating it as being on its own radio. A radio node set to announce less often than about every 27 hours is missing from the DHT between its announces (above about 13 hours, one lost announce is enough); nodes without a clock are not detected as moved. Details in [protocol-spec 8.3](protocol-spec.md#83-dht-purpose-and-records).
 
 **Firmware for a radio:**
 
@@ -216,12 +221,12 @@ A Heltec V4 or XIAO ESP32-S3 can join a Wi-Fi network (for example a phone hotsp
 - **The host side:** a maarse-host listening on an address reachable by the modem, set with `--listen <bind address>:4242`. The node connects *out*, so it works behind a hotspot's NAT, but the host must be reachable from that network: a public address, a forwarded port or a VPN.
 - **How it works** (`firmware/esp/src/wifi.rs`): esp-radio's Wi-Fi driver with embassy-net (DHCP, DNS, TCP). Frames are the backbone's `length (u16 LE) | packet`; a host's region greeting is skipped. The node sends every packet over both LoRa and the link and treats packets from the link as a perfect radio link (SNR 10), like maarse-host does with TCP. The router's duplicate filter stops loops. The link reconnects every 5 s after a failure; joining is retried the same way.
 - **Edge bridge:** the host's announce carries the role *repeater*, so the node hears a repeater over the link. A node with the role *relay* then becomes an edge bridge for its LoRa group automatically (see "Edge bridge").
-- **Protocol:** command `0x28 SetWifi` (`enabled | ssid_len ssid | pass_len pass | peer`, local only: it is refused through `Remote`, as it carries the password), `0x29 GetWifi`, and event `0xa6 Wifi` (`enabled | state | ip (4) | ssid_len ssid | peer`; state 0 off, 1 joining, 2 online, 3 linked). The password is never sent back. Flash: `WIF1` at offset `0x340` of the settings page. nRF52840 boards and maarse-host answer `SetWifi` with an error.
+- **Protocol:** command `0x28 SetWifi` (`flags | ssid_len ssid | pass_len pass | peer`; flags bit 0 = enabled, bit 1 = LoRa modem mode; local only: it is refused through `Remote`, as it carries the password), `0x29 GetWifi`, and event `0xa6 Wifi` (`flags | state | ip (4) | ssid_len ssid | peer`; state 0 off, 1 joining, 2 online, 3 linked). The password is never sent back. Flash: `WIF1` at offset `0x340` of the settings page. nRF52840 boards and maarse-host answer `SetWifi` with an error.
 - **Two modes** (*Mode* in the Wi-Fi form; bit 1 of the flags byte in `SetWifi`): *mesh node* (default) is a node of its own that peers with the host over the backbone and keeps working if the host goes away. *LoRa modem for the host* makes the node the host's antenna over Wi-Fi, like `--serial` over USB: it sends `MM`, then forwards raw LoRa packets with their SNR to the host and sends what the host asks for; it does not route or announce. The host names the link `wifi-modem <address>` and treats it as LoRa (8 KB file limit, no calls). The display shows `<ip> modem`. In both modes the node greets the host at once, so it shows up before it has anything to send.
 - **When the link is lost:** as the host's modem the node does not route, announce or send hellos (the host does). If its Wi-Fi or internet link has been down for 60 s, it works as an **ordinary node** with its own identity and saved role: it routes, forwards, announces and sends hellos, so the LoRa group around it keeps working and messages are carried and kept until the link is back. The display shows `no host: node`, and stat 102 is 1. When the link is up again, it is the host's modem again within 5 s. Meanwhile the server keeps mail for the nodes behind the modem in its post office (no receipt within 45 s) and delivers it when they are heard again.
 - **Modem at a fixed address:** set the node's Wi-Fi host to `listen:<port>` (e.g. `listen:4243`): the modem then waits for the host instead of connecting out, and the host connects with `--modem-ip <address>:<port>` (again every 10 s if the link drops). Handy for a radio in a mast on the LAN. The modem key applies the same way.
 - **Telemetry over Wi-Fi:** a Wi-Fi modem sends its own counters (both `Stats` frames and its radio settings) to the host every 30 s (marker `0x7E` in the snr byte), so the server's *Radio & modem* tab shows the same as for a USB modem.
-- **Modem key:** anyone who reaches the backbone port could otherwise send `MM` and be taken for the host's own radio. With `--modem-key <passphrase>` on the host (or *Wi-Fi modem key* in the server's Settings tab) a Wi-Fi modem must prove the same passphrase, set in the node's Wi-Fi form under *Modem key*: the host sends a random challenge and the modem answers with a hash of key and challenge, so the passphrase never crosses the network (`maarse_core::modemauth`). A modem with the wrong key, no key or older firmware is refused and logged. **maarse-server accepts no Wi-Fi modem without a key**; an ordinary maarse-host without `--modem-key` accepts them as before (a LAN). The node keeps the derived key in flash (`MKY1` at offset `0x420`); it is set with the local-only command `0x2d SetModemKey` and never sent back.
+- **Modem key:** anyone who reaches the backbone port could otherwise send `MM` and be taken for the host's own radio. With `--modem-key <passphrase>` on the host (or *Wi-Fi modem key* in the server's Settings tab) a Wi-Fi modem must prove the same passphrase, set in the node's Wi-Fi form under *Modem key* (the form can **make a random key**; use that, since a recording of the handshake lets a made-up passphrase be guessed offline): the host sends a random challenge and the modem answers with a hash of key and challenge, so the passphrase never crosses the network (`maarse_core::modemauth`). A modem with the wrong key, no key or older firmware is refused and logged. **maarse-server accepts no Wi-Fi modem without a key**; an ordinary maarse-host without `--modem-key` accepts them as before (a LAN). The node keeps the derived key in flash (`MKY1` at offset `0x420`); it is set with the local-only command `0x2d SetModemKey` and never sent back.
 - **Devices in the host:** `GET /api/devices` (and *Devices* under host settings in the web client) lists every link: backbone peers, USB modems and Wi-Fi modems, with uptime, packets in and out, last heard and the last SNR from a modem.
 - **One radio at a time:** the firmware contains both Bluetooth and Wi-Fi, but runs only one. With Wi-Fi enabled, Bluetooth is not started (the phone app then reaches the node through the host instead). **Hold the PRG button for 3 s** to switch between them (the node saves the choice and restarts), or use `SetWifi` over USB. The heap then only holds one driver (Bluetooth about 34 KB, Wi-Fi about 37 KB), so `coex` is not needed. `--no-default-features --features board-heltec-v4,ble` (or `,wifi`) builds a firmware with just one of them.
 - **Display (Heltec V4):** a line with the links in use (`USB`, `BT` connected or `(BT)` advertising, `WiFi`), the IP address in Wi-Fi mode (or `WiFi joining...`, `no host`), and a short note after a long press.
@@ -360,7 +365,8 @@ A relay that can reach a repeater (say, someone who climbs a hill) is often the 
 With `carry_copies > 0` (on in firmware for the relay role with 4 copies; off for repeaters, clients and the host; `maarse-sim --carry N` to try it), a direct message the router gives up on is carried instead of dropped: the node keeps it with N tokens and hands half of them to new encounters ("binary spray and wait"), and to the destination when it is heard. Copies live 30 minutes. Details are in `maarse-core/src/router.rs` ("Carry").
 
 - **Carry packet** (type 11): a one-element path naming the receiving neighbour, payload `tokens (1) | ttl left in s (u16 BE) | from (PathId, u16 BE) | message`. The message stays end-to-end encrypted.
-- **Delivered notice:** when the destination gets a carried message (also a repeated copy), it sends a type 11 packet *without* a path, addressed to `ack_token(message id)` (the same 16-byte token as an ordinary acknowledgement), with no payload: 18 bytes on the air. Nodes without the notice drop Carry packets without a path, so it is backward tolerant.
+- **Delivery proof** (working copy 2026-11-27): "delivered" now means the recipient opened the message. Its acknowledgement carries 8 bytes that only sender and recipient can compute, so a stranger cannot fake it (protocol-spec 5.5). A host sends nothing whose encryption state it cannot save to disk, and ignores a message it has already received.
+- **Delivered notice:** when the destination gets a carried message (also a repeated copy), it sends a type 11 packet *without* a path, addressed to `ack_token(message id)` (the same 16-byte token as an ordinary acknowledgement), with the proof as payload and once more without (18 bytes on the air; older nodes send only the empty one). Nodes without the notice drop Carry packets without a path, so it is backward tolerant.
 - A carrier that hears the notice deletes its copy, stops handing out copies, passes the notice on once and remembers it for the rest of the copy's lifetime. It repeats it when it meets a neighbour it gave a copy to (or got its copy from), and answers a handoff of a delivered message with the notice instead of storing it. The notice thus walks back along the spray tree to the sender.
 - **Sender:** the router reports `Action::CarryAcked { msg_id }`; the host and firmware send companion event `0xa7 CarryAcked` (`msg_id` u64 LE), and the web client shows "delivered (carried)" (history state 4). A sender that gets an ordinary acknowledgement for a message it still carries (the outbox retried it near a repeater) also stops and tells its carriers.
 - **Simulation** (10 seeds, 18 people in relay mode, 60 direct messages in 30 min): forest 8 km, delivered 60 → 76 % (4 copies) / 78 % (8 copies) at +9 % / +13 % airtime (+24 % / +29 % without the notice), and acks now follow delivery (74 / 77 % instead of 58 %). Forest 10 km: 30 → 44 / 45 % at +11 % / +15 %. E45, low repeaters every 15 km: 85 → 94 % at +27 % airtime (+150 % without the notice). E45 with a 100 km gap: no gain, +19–36 % airtime.
@@ -506,7 +512,7 @@ The web client has a **Diagnostics** page (the button next to Status/Radio):
 
 ## Managing a repeater in the field (2026-11-26, working copy)
 
-An administrator of a node can manage it over LoRa or the internet without a login: every command is signed by the administrator.
+An administrator of a node can manage it over LoRa or the internet without a login: every command travels end-to-end encrypted, and the encryption proves which address sent it (the commands carry no separate signature).
 Web client: Nodes > the node > Manage. Android: contact page > **Manage this node**.
 
 **Setting the administrators** (at most 4) is done while connected to the node itself (USB or Bluetooth), never over the mesh:
@@ -515,8 +521,7 @@ web client: Settings > **Radios, role and regions**; Android: Settings > **Role 
 and nothing is saved if a line is not a 32-character address. Use the address of the device you will manage the node *from*
 (its address in Settings, or **Copy address** on its node page), not the node's own, and for linked devices each device's
 address, not the account's. A phone that uses the node as its Bluetooth radio *is* that node, so it cannot administer it
-from a distance in that mode. The firmware sets no Bluetooth pairing or PIN, so anyone within Bluetooth range who can
-connect to the node can change this list. The Android part is unit-tested and built; it has not been tried against a repeater yet.
+from a distance in that mode. Over Bluetooth this needs the node's **Bluetooth code** (next section). The Android part is unit-tested and built; it has not been tried against a repeater yet.
 
 - **Short status** (the default) asks for about 20 stat keys in one small reply: uptime, role, traffic, errors, queue, signal, noise
   floor, battery, temperature, crashes. **Full status** asks for everything (several replies). **Neighbours** asks for the 8 heard most recently
@@ -527,6 +532,37 @@ connect to the node can change this list. The Android part is unit-tested and bu
   its old settings, also after a reboot. Your own radio must hear the node on the new settings: **Switch my radio to these settings too**
   saves them on your radio. An older node saves a remote change at once. Specification: `docs/remote-repeater-info.md` and protocol spec 9.7.
 - Not built: a repeater that pushes its status to a TCP host by itself (to be looked at later).
+
+## Bluetooth code (2026-11-27, working copy)
+
+Tried on a Heltec V4 with an Android 16 phone: pairing with the factory code, choosing a code, reconnecting after a
+restart of the radio, using the radio as the phone's modem, and a code changed over USB. Between a Heltec and a WisMesh
+Tag over LoRa: reading the state and refusing the factory code. **Not yet tried on hardware:** setting a new code over
+LoRa, an nRF52840 board over Bluetooth, and the web client over Bluetooth.
+
+Every radio node requires a 6-digit code over Bluetooth. A new node, and a node that has just been updated to this
+version, has the factory code **123456**, the same on every board. While it has the factory code, a Bluetooth client can
+only choose a new one: no messages, settings or administrators. USB works as before.
+
+- **First use:** the web client (USB or Bluetooth) and the Android app ask for your own code as soon as they connect to
+  a node with the factory code. 123456 cannot be chosen again. The device that sets the code over Bluetooth stays paired.
+- **Choose it right after flashing, preferably over USB:** until then anyone within Bluetooth range can use 123456 to
+  choose the code first. If that happens, set a new one over USB.
+- **Change it** while connected to the node: web client Settings > **Radios, role and regions** > **Bluetooth code**;
+  Android: Settings > **Role and regions** > **Bluetooth code**. The node never shows or sends the code.
+- **Change it from afar** as administrator: Nodes > the node > **Manage** (web), **Manage this node** (Android). The
+  command travels end-to-end encrypted.
+- **Pairing:** the phone or computer asks for the code when it connects. Up to 4 devices are remembered. If a computer
+  does not ask by itself, pair the node in its Bluetooth settings first.
+- **After a change** the other paired devices are forgotten. On such a device you have to remove ("forget") the old
+  pairing in its Bluetooth settings before it connects again; the Android app says so.
+- **Forgotten code:** set a new one over USB, or remotely as administrator.
+- **Older apps** can pair with the code but cannot choose one: update the web client and the app together with the
+  firmware.
+- **Guessing:** after 3 failed pairings new pairings are refused for 10 s, then twice as long each time, up to 1 hour.
+  Paired devices still connect. A 6-digit code is not a strong secret against someone who records or interferes with the
+  pairing itself; set the code where no stranger is nearby.
+- **Cost:** about 50 KB of firmware. On the nRF52840 boards only a few KB of the app area are left.
 
 ## Plain status, node types and MeshCore in the node list (2026-11-27, working copy)
 
@@ -576,7 +612,7 @@ The firmware has a range test mode for measuring real range, loss and power use 
 
 ## Position and telemetry
 
-Position is **not** shared by default. Under Diagnostics you can choose the precision (off / about 10 km / about 1 km / precise) and telemetry (battery, uptime, energy status); command `0x22`/`0x23`, reply `0xA2`. The node stores the position, but sends it rounded to the centre of a grid cell (0.1° or 0.01°); only "precise" sends the exact position (the client asks first). The fields are in the announce's app data after the FS field (`0x03` position, `0x04` telemetry, type | length | data, at most 41 of 99 bytes in total), so older nodes ignore them. Received positions and telemetry are shown as a list (event `0xA3`), without maps from outside. Temperature is part of the format, but the nRF52840's TEMP peripheral is owned by Bluetooth (MPSL), so it is not sent yet.
+Position is **not** shared by default. Under Diagnostics you can choose the precision (off / about 10 km / about 1 km / precise) and telemetry (battery, uptime, energy status); command `0x22`/`0x23`, reply `0xA2`. The node stores the position, but sends it rounded to the centre of a grid cell (0.1° or 0.01°); only "precise" sends the exact position (the client asks first). The fields are in the announce's app data after the FS field (`0x03` position, `0x04` telemetry, type | length | data, at most 67 of 99 bytes in total, counting the name and role fields), so older nodes ignore them. Received positions and telemetry are shown as a list (event `0xA3`), without maps from outside. Temperature is part of the format, but the nRF52840's TEMP peripheral is owned by Bluetooth (MPSL), so it is not sent yet.
 
 ## Alerts (signed public warnings)
 
@@ -1106,7 +1142,7 @@ feed is disabled.
 
 ## Firmware: status and what is missing
 
-- **Nothing has been tried on hardware yet.**
+- **Hardware status:** bench-tested on two boards on a desk (Heltec V4 and XIAO nRF52840); not field-tested. Per-feature status is in [Verification](verification/README.md).
 - **nRF52840:** compiled for both boards (about 270 KB flash, 95 KB RAM). Bluetooth (Nordic UART) is included.
   - WisMesh Tag: app at 0x26000 (S140 v6).
   - XIAO: app at 0x27000 (S140 v7).
@@ -1129,8 +1165,11 @@ State-changing radio administrator commands reserve a monotonically increasing
 counter range in flash. After a reboot the radio rejects commands inside the
 previously reserved range. If this happens immediately after maintenance, retry
 after the remaining counter interval has passed (up to 60 counter values after
-the last reservation). A flash write error prevents the change. Local USB and
-Bluetooth administration use the existing companion session.
+the last reservation). A flash write error prevents the change. If a radio
+answers "Could not reserve a persistent remote command counter", connect to it
+over USB or Bluetooth and save its administrator list again; this clears data
+that another firmware left on the board. Local USB and Bluetooth administration
+use the existing companion session.
 
 So solar repeaters in the field can be updated without being brought in. **Not tried on hardware yet** (see the checklist below).
 

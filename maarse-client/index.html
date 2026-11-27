@@ -2301,6 +2301,7 @@ function onEvent(ev) {
     case "remoteReply": {
       const i = ev.inner;
       if (i.type === "sweepRecState") { xpRecState(ev.from, i); break; }
+      if (crawlOnReply(ev.from, i)) break;
       if (ev.from !== state.target) break;
       if (i.type === "stats") state.remoteStats = state.remoteStats.concat(i.items);
       else if (i.type === "radio") { state.remoteRadio = i.cfg; rtReply(ev.from, i.cfg); }
@@ -3208,6 +3209,167 @@ function idName(id) {
 }
 function snrText(v) { return v === undefined ? "–" : (v > 0 ? "+" : "") + v + " dB"; }
 
+// ---------- topology crawl: who hears whom, asked of the repeaters one at a time ----------
+// Starts at one repeater you administer, asks it for its neighbour list over remote control (one small
+// reply), then asks each neighbour you also administer, and so on. One question at a time with a pause
+// between them, so the crawl costs little airtime. A node that does not answer (not an administrator, out
+// of reach) is listed as such. The result is every link with the SNR as each side hears it.
+
+const CRAWL_TIMEOUT_MS = 40000;
+const CRAWL_ASYMMETRY_DB = 6;
+const crawl = { run: null, form: { start: "", max: 8, depth: 3, interval: 15 } };
+
+function crawlResolve(prefix) {
+  for (const a of [...state.contacts.keys(), state.me || ""]) if (a && a.startsWith(prefix)) return a;
+  return "";
+}
+
+function crawlStart(start, max, depth, interval) {
+  crawlStop();
+  const run = { start, max, depth, interval, nodes: new Map(), queue: [{ addr: start, depth: 0 }], seen: new Set([start]), edges: [],
+    unknown: new Set(), current: null, finished: false, started: new Date() };
+  crawl.run = run;
+  log(`Network crawl from ${label(start)}: at most ${max} nodes, ${depth} hops deep, one question every ${interval} s`);
+  crawlNext(run);
+  renderChat();
+}
+
+function crawlStop() {
+  const run = crawl.run;
+  if (!run || run.finished) return;
+  if (run.current) { clearTimeout(run.current.timer); run.nodes.get(run.current.addr).state = "stopped"; run.current = null; }
+  crawlFinish(run);
+}
+
+function crawlFinish(run) {
+  clearTimeout(run.wait);
+  run.finished = true; run.current = null;
+  if (state.view === "diag") renderChat();
+}
+
+function crawlNext(run) {
+  if (crawl.run !== run || run.finished) return;
+  if (!run.queue.length || run.nodes.size >= run.max) return crawlFinish(run);
+  const { addr, depth } = run.queue.shift();
+  const req = state.nextReq++ & 0xffff;
+  const node = { addr, depth, state: "waiting", items: [] };
+  run.nodes.set(addr, node);
+  run.current = { addr, req, timer: setTimeout(() => {
+    node.state = "silent";
+    run.current = null;
+    crawlSchedule(run);
+  }, CRAWL_TIMEOUT_MS) };
+  transport?.send(Cmd.remote(req, addr, Cmd.getNeighbors()));
+  if (state.view === "diag") renderChat();
+}
+
+function crawlSchedule(run) {
+  if (state.view === "diag") renderChat();
+  run.wait = setTimeout(() => crawlNext(run), run.interval * 1000);
+}
+
+/** A reply from a node over remote control; true if the crawl was waiting for it. */
+function crawlOnReply(from, inner) {
+  const run = crawl.run, cur = run && run.current;
+  if (!cur || cur.addr !== from) return false;
+  const node = run.nodes.get(from);
+  if (inner.type === "error") {
+    node.state = "refused"; node.text = inner.text;
+  } else if (inner.type === "neighbors") {
+    node.items = inner.part === 0 ? inner.items : node.items.concat(inner.items);
+    if (!inner.last) return true;
+    node.state = "ok";
+    for (const n of node.items) {
+      const to = crawlResolve(n.prefix);
+      run.edges.push({ from, to, prefix: n.prefix, snr: n.snr, rssi: n.rssi, age: n.age, count: n.count });
+      if (!to) { run.unknown.add(n.prefix); continue; }
+      if (!run.seen.has(to) && node.depth < run.depth) { run.seen.add(to); run.queue.push({ addr: to, depth: node.depth + 1 }); }
+    }
+  } else return false;
+  clearTimeout(cur.timer);
+  run.current = null;
+  crawlSchedule(run);
+  return true;
+}
+
+/**
+ * The links found: one row per pair of nodes. `ab` is how well a hears b, `ba` how well b hears a (undefined if
+ * b was not asked or does not list a). A large difference, or a link heard only one way, is worth a look.
+ */
+function crawlLinks(run) {
+  const asked = new Set([...run.nodes.values()].filter(n => n.state === "ok").map(n => n.addr));
+  const heard = new Map();
+  for (const e of run.edges) if (e.to) heard.set(e.from + ">" + e.to, e);
+  const rows = [], done = new Set();
+  for (const e of run.edges) {
+    const a = e.from, b = e.to || e.prefix;
+    const key = [a, b].sort().join("|");
+    if (done.has(key)) continue;
+    done.add(key);
+    const ab = e, ba = e.to ? heard.get(b + ">" + a) : undefined;
+    const row = { a, b, ab: ab.snr, ba: ba ? ba.snr : undefined, aName: label(a), bName: e.to ? label(b) : nodeName(b) || b };
+    row.note = !e.to ? "node not known here"
+      : ba ? (Math.abs(ab.snr - ba.snr) >= CRAWL_ASYMMETRY_DB ? "uneven: one side hears it much better" : "")
+      : asked.has(b) ? "heard one way only" : "";
+    rows.push(row);
+  }
+  return rows.sort((x, y) => (y.note ? 1 : 0) - (x.note ? 1 : 0) || x.aName.localeCompare(y.aName));
+}
+
+function crawlSummary(run) {
+  const ns = [...run.nodes.values()];
+  const links = crawlLinks(run);
+  return { asked: ns.length, answered: ns.filter(n => n.state === "ok").length, silent: ns.filter(n => n.state === "silent" || n.state === "refused").length,
+    links: links.length, odd: links.filter(l => l.note && l.note !== "node not known here").length, unknown: run.unknown.size };
+}
+
+function crawlCsv() {
+  const run = crawl.run;
+  return { name: "network-crawl", text: rtCsv(["node_a", "node_b", "a_hears_b_snr_db", "b_hears_a_snr_db", "note"],
+    crawlLinks(run).map(l => [l.a, l.b, l.ab ?? "", l.ba ?? "", l.note])) };
+}
+
+function crawlPanel(w, table) {
+  const f = crawl.form, run = crawl.run;
+  const busy = !!(run && !run.finished);
+  const row = el("div", { className: "row" }); row.style.marginTop = "8px";
+  const sel = el("select"); sel.style.flex = "1";
+  for (const a of state.contacts.keys()) sel.append(new Option(label(a), a));
+  if (!f.start) f.start = sel.value || ""; else if ([...state.contacts.keys()].includes(f.start)) sel.value = f.start;
+  sel.onchange = () => { f.start = sel.value; };
+  const mx = el("input", { type: "number", min: 1, max: 40, value: f.max, title: "Most nodes to ask" }); mx.style.width = "70px";
+  mx.oninput = () => { f.max = Math.max(1, Math.min(40, +mx.value || 1)); };
+  const dp = el("input", { type: "number", min: 1, max: 8, value: f.depth, title: "How many hops away from the first node to go" }); dp.style.width = "60px";
+  dp.oninput = () => { f.depth = Math.max(1, Math.min(8, +dp.value || 1)); };
+  const iv = el("input", { type: "number", min: 5, max: 300, value: f.interval, title: "Seconds between questions" }); iv.style.width = "70px";
+  iv.oninput = () => { f.interval = Math.max(5, Math.min(300, +iv.value || 15)); };
+  const go = el("button", { textContent: busy ? "Stop" : "Start", className: "primary" });
+  go.onclick = () => {
+    if (busy) return crawlStop();
+    if (!/^[0-9a-f]{32}$/.test(f.start || "")) return log("Choose a node to start from");
+    crawlStart(f.start, f.max, f.depth, f.interval);
+  };
+  const exp = el("button", { textContent: "Export CSV" });
+  exp.disabled = !run || !run.edges.length; exp.onclick = () => rtExport(crawlCsv());
+  row.append(sel); w.append(row);
+  const r2 = el("div", { className: "row" }); r2.style.marginTop = "6px";
+  r2.append("At most", mx, "nodes,", dp, "hops, one question every", iv, "s", go, exp); w.append(r2);
+  if (!run) return;
+  const s = crawlSummary(run);
+  const sum = el("div"); sum.style.marginTop = "10px";
+  sum.append(el("b", {}, `${s.asked} nodes asked, ${s.answered} answered, ${s.links} links found${busy ? " (still going)" : ""}`));
+  if (s.silent) sum.append(el("div", { className: "muted" }, `${s.silent} did not answer: you must be an administrator of a node, and it must be in reach.`));
+  if (s.odd) sum.append(el("div", { className: "muted" }, `${s.odd} links look uneven or one-way: check the antennas or the settings at that end.`));
+  if (s.unknown) sum.append(el("div", { className: "muted" }, `${s.unknown} neighbours are not known here (no announce heard), so they were not asked.`));
+  w.append(sum);
+  w.append(table(["Node", "Answer", "Neighbours"], [...run.nodes.values()].map(n => [
+    label(n.addr), n.state === "ok" ? "answered" : n.state === "waiting" ? "waiting…" : n.state === "refused" ? "refused: " + n.text : n.state === "stopped" ? "stopped" : "no answer",
+    n.state === "ok" ? n.items.length : "–"])));
+  const links = crawlLinks(run);
+  if (links.length) w.append(table(["Node", "Node", "First hears second", "Second hears first", "Note"], links.map(l => [
+    l.aName, l.bName, snrText(l.ab), l.ba === undefined ? "–" : snrText(l.ba), l.note])));
+}
+
 // ---------- ping test: repeated trace routes with statistics (range and route check) ----------
 // Each ping is one trace route (command 0x20): the answer says which repeaters carry it and the SNR for
 // every hop both ways, and the time to the answer is the round trip. Nothing new goes over the air.
@@ -3475,6 +3637,11 @@ function renderDiag(box) {
   const pw = sec("Ping test", "Sends a trace route again and again and counts the answers: loss, round trip, hops and the worst SNR on the way, for range tests on a walk or a drive " +
     "(tick the position box) and to check a route over time. A ping costs airtime, so keep the interval at 10 seconds or more.");
   pingPanel(pw, table);
+
+  // Network crawl
+  const cw = sec("Network crawl", "Maps who hears whom: asks a repeater you administer for its neighbours, then the neighbours you also administer, and so on, " +
+    "one small question at a time. Shows every link with the signal as each side hears it, and flags links that are uneven or one-way.");
+  crawlPanel(cw, table);
 
   // Neighbours
   const nw = sec("Direct neighbours", "Nodes heard without intermediate hops (announces and forwarded packets). Updated every 10 seconds.");

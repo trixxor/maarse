@@ -390,6 +390,7 @@ fun MePageContent(p: MePage, go: (MePage) -> Unit = {}) {
             MePage.X_NEIGHBOURS -> NeighbourSignalPage()
             MePage.X_GPS -> GpsPage()
             MePage.X_PING -> PingPage()
+            MePage.X_CRAWL -> CrawlPage()
             MePage.X_SPECTRUM -> SpectrumPage(go)
             MePage.X_RECORDINGS -> RecordingsPage()
             MePage.HOST -> when (conn.mode) {

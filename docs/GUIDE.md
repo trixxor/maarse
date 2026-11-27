@@ -45,6 +45,7 @@ Then connect with the web client via **USB / serial** (needs Chrome or Edge) or 
 | Battery measurement and energy-driven routing | – (always full) | yes, both boards, + USB power | Heltec V4 yes; XIAO ESP32-S3: unknown (no divider) |
 | Diagnostics: trace route, neighbour list, noise floor | trace and neighbours | yes | yes |
 | Ping test (repeated trace routes with loss, round trip, hops, SNR, optional positions, CSV) | yes (Diagnostics) | yes | yes (Experimental > Ping test) |
+| Network crawl (who hears whom: remote neighbour lists of the repeaters you administer, one by one, with uneven and one-way links flagged, CSV) | yes (Diagnostics) | yes | yes (Experimental > Network crawl) |
 | Position (opt-in, rounded) and telemetry in announces | yes | yes, stored in flash | yes, stored in flash |
 | MQTT bridge with Home Assistant discovery | yes (`--mqtt`) | – | – |
 | Display name in announces | yes (`name.txt`) | yes, stored in flash (not tried on hardware) | yes, stored in flash (not tried on hardware) |
@@ -499,6 +500,7 @@ The web client has a **Diagnostics** page (the button next to Status/Radio):
 - **Trace route** (command `0x20`, reply `0xA0`): a `Probe` packet follows the known route (or finds one first), and every repeater appends the SNR it heard the packet with. The target answers along the reverse way, and the repeaters again append their SNR. The result is the SNR for every hop both ways. The packet ID is computed over the fixed part only, so implicit per-hop acknowledgements work as for other packets. Older nodes forward the packet unchanged. Format in `maarse-core/src/diag.rs`.
 - **Neighbour list** (`0x21`, reply `0xA1`): nodes heard directly (announces without hops and the previous hop in source paths and path requests) with SNR, RSSI, time and packet count.
 - **Noise floor** (status key 80): lora-phy does not give the instantaneous RSSI, so the noise floor is estimated from received packets: N = RSSI − 10·log10(1 + 10^(SNR/10)), moving average.
+- **Network crawl** (web client: Diagnostics > Network crawl; Android: Experimental > Network crawl): maps who hears whom. It asks a repeater you administer for its neighbour list over remote control (one small reply), then each neighbour you also administer, and so on, one question at a time with a pause (default 15 s) between them, at most 8 nodes and 3 hops by default. The result lists every link with the SNR as each side hears it and flags links that are uneven (6 dB or more apart) or heard one way only, which usually points at an antenna or a settings problem at one end. Nodes that do not answer (you are not their administrator, or they are out of reach) are listed as such. CSV export.
 
 ## Managing a repeater in the field (2026-11-26, working copy)
 

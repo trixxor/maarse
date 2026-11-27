@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backbone and trunks · Må:rse handbook</title>
+<meta name="description" content="How radio areas become one network over the internet and across water.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>Backbone and trunks</h1>
+    <p class="lede">How radio areas become one network over the internet and across water.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> The <strong>backbone</strong> is how Må:rse hosts reach each other over the internet: TCP and UDP links, a lookup table (the DHT) that finds who can reach an address, and optional long-distance LoRa <strong>trunks</strong> as a backup. A radio area, a link and the internet are all just links to the router.</p>
+    <p><strong>Why:</strong> LoRa reaches kilometres, not countries. The internet joins radio areas, and only the area where the recipient is hears the traffic, instead of every area repeating everything.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>No central server: the DHT lets any host find the right gateway</li><li>Same address and encryption over radio and internet</li><li>Per-link and per-address rate limits and bans protect a public host</li><li>An ESP32 board can join over Wi-Fi, a phone hotspot is enough</li><li>LoRa trunks give a backup path across water when the internet is down</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Needs at least one reachable host: a server or a host with an open port</li><li>Trunks are a backup: crossing the water with the internet down rose from 2.5 % to 11 to 15 % in the simulator, not to normal</li><li>A single operator with many networks is not stopped by the DHT limit of 4 contacts per network</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-tested">tested</span> <code>tools/dht_test.py</code>. <span class="badge b-simulated">simulated</span> trunks. <span class="badge b-bench">bench-tested</span> Wi-Fi link on a Heltec V4.3.</p>
+  </div>
+
+  <h2 id="links">The kinds of link</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Link</th><th>What it is</th><th>Used for</th></tr>
+    <tr><td><strong>TCP</strong></td><td>A TCP connection carrying frames of <code>length | packet</code>. Treated as heard with a good signal.</td><td>Host to host over the internet; Wi-Fi radios</td></tr>
+    <tr><td><strong>UDP</strong></td><td>A UDP socket; senders become peers and are forgotten after 3 minutes of silence. Can also broadcast to find peers on a LAN.</td><td>Hosts on one network</td></tr>
+    <tr><td><strong>Serial and KISS</strong></td><td>A LoRa modem over USB serial, or a KISS TNC (serial or TCP), for example Direwolf.</td><td>Attaching radios and ham-radio gear to a host</td></tr>
+    <tr><td><strong>Wi-Fi modem</strong></td><td>An ESP32 board as the host's antenna over Wi-Fi, or as a node of its own.</td><td>A radio on a hilltop with only a hotspot</td></tr>
+    <tr><td><strong>LoRa trunk</strong></td><td>A LoRa modem with a directional antenna as a long-distance link, on the same frequency and settings as every other node.</td><td>Backup across water: Aarhus to Zealand, Zealand to Bornholm</td></tr>
+  </table></div>
+
+  <h2 id="dht">Finding who can reach an address</h2>
+  <p>The DHT is a lookup table spread across the hosts, Kademlia-like, over TCP only and never over LoRa. A host's ID is its Må:rse address, and distance is XOR. To reach someone far away, a host looks the recipient up in the DHT and sends straight to the host near them. A host that cannot open a port connects out to a server, which publishes the addresses it reaches through it.</p>
+  <h2 id="trunks">Trunks: a backup path across water</h2>
+  <p>A trunk is a LoRa radio with a directional antenna between two hosts. It uses the <em>same</em> frequency, spreading factor and settings as everyone else (decision 0003), so every node can always hear every other. It is a backup: routed packets cross only when the trunk is their next hop, alerts always, hellos and announces, and path or key requests only when TCP cannot reach the other end. Every 10 minutes each end sends a small summary of who is behind it, so requests cross only for nodes on the far side.</p>
+  <div class="viz">
+    <h3>What a trunk gives</h3>
+    <p class="viz-sub">Percent of messages across the water that arrived.</p>
+    <div id="c-trunks"></div>
+    <p class="takeaway">With the internet up, trunks as a backup add about 9 points (39 to 48 %). With the internet down they take crossing from 2.5 % to 11 to 15 %.</p>
+    <p class="src">Source: <code>tools/sim-experiments/trunks.mjs</code>, 2026-11-27, national preset, 30 % of messages to random users anywhere in the country.</p>
+  </div>
+
+  <h2 id="protect">How a public host protects itself</h2>
+  <ul>
+    <li>At most 4 DHT contacts from one network (IPv4 /24, IPv6 /48).</li>
+    <li>At most 8 incoming connections per address and 256 in all; 120 DHT requests a minute per address; each link rate limited to 100 packets a second.</li>
+    <li>A link that keeps going over the limit is closed and its address banned for 10 minutes; one sending more than 20 packets that do not decode, for 15 minutes. A block list can be edited in the dashboard.</li>
+    <li>A Wi-Fi modem must prove a shared passphrase, so that nobody who reaches the port can pass for the host's own radio.</li>
+  </ul>
+  <section class="deep" id="details">
+    <h2>Technical details</h2>
+    <ul>
+      <li><strong>Frame:</strong> <code>length (u16 little endian, 1..255) | packet</code>. A zero length or more than 255 closes the link. TCP keepalive is 30 s idle then every 10 s. Outgoing peers are reconnected every 5 s.</li>
+      <li><strong>First bytes of an incoming connection:</strong> <code>D7 D7</code> a DHT request; <code>4D 4D</code> a Wi-Fi modem; anything else is the length of the first backbone frame.</li>
+      <li><strong>Region hello:</strong> right after connecting, each side may send its regions, and then only regional messages that match are sent.</li>
+      <li><strong>Packets to one link:</strong> a packet with a fixed route goes only to the link of its next hop, learned from traffic; a retry within 10 s goes to every link.</li>
+      <li><strong>DHT replicas for mail:</strong> the three highest rendezvous scores over the hosts in the DHT table; every host computes the same three for a recipient.</li>
+      <li><strong>Finding seeds:</strong> <code>--peer</code>, <code>--seed-dns</code> (a DNS name with several servers behind it) or <code>--public</code>; contacts are saved in <code>dht-contacts.txt</code>. All of these are set in Settings in the web client.</li>
+      <li><strong>Trunk summary:</strong> a Bloom filter of 1024 bits with 3 hashes of the nodes heard by radio on that side, about 2 % false positives at 100 addresses; a false positive only lets one request cross. Ignored when older than 30 minutes.</li>
+      <li><strong>Wi-Fi modem key:</strong> a challenge-response with SHA-256, so the passphrase never crosses the network.</li>
+    </ul>
+  </section>
+</article>
+<footer class="site">Source: spec section 8, the technical guide, and <code>tools/sim-experiments/trunks.mjs</code>.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+(function(){
+  var T = SIM.trunks, tn = {'internet up, no trunks':'Internet up, no trunks','internet up, trunks (backup)':'Internet up, trunks as backup','internet up, trunks (always)':'Internet up, trunks always','internet down, no trunks':'Internet down, no trunks','internet down, trunks (all floods)':'Internet down, trunks pass all floods','internet down, trunks (all requests)':'Internet down, trunks pass all requests','internet down, trunks (backup)':'Internet down, trunks as backup'};
+  Viz.bars(document.getElementById('c-trunks'), {title:'Across the water', unit:' %', max:60, groups:[{label:'Delivered across the water', bars: T.map(function(r){ return {label:tn[r.name]||r.name, value:r.water, series: r.name.indexOf('no trunks')>=0?2:0}; })}]});
+})();
+</script>
+</body>
+</html>

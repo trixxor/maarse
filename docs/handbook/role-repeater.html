@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repeater · Må:rse handbook</title>
+<meta name="description" content="The fixed node that turns one hilltop into kilometres of coverage.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Roles · Explanation</p>
+    <h1>Repeater</h1>
+    <p class="lede">The fixed node that turns one hilltop into kilometres of coverage.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>repeater</strong> is a fixed node, on a roof, a mast or a hill, that passes other people's messages on. It is the backbone of the radio network: one well-placed repeater turns a few hundred metres into kilometres.</p>
+    <p><strong>Why:</strong> Radio range is limited by line of sight and power. Height beats everything. A repeater on a hill hears and is heard by everyone below it.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Always on and on mains or solar, so routes through it are stable</li><li>Hears many nodes, so most traffic in an area runs through a few repeaters, not through everyone's handhelds</li><li>Remote management by signed administrators, over LoRa or the internet</li><li>Adapts to a low battery: forwards less, then nothing, instead of dying mid-message</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Only as good as its placement and antenna</li><li>Region lists: a repeater with regions forwards only matching channel traffic</li><li>Does not act as a post office: it carries mail but keeps none for others</li><li>The ESP32 boards have almost no stack to spare: new features are checked before flashing</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-bench">bench-tested</span> forwarding and management on two boards. <span class="badge b-simulated">simulated</span> for network behaviour. Nothing is field-tested yet.</p>
+  </div>
+  <div class="facts"><div class="fact"><span>Forwards for others</span><strong>Yes</strong></div><div class="fact"><span>Hello interval</span><strong>up to 4 min</strong></div><div class="fact"><span>Administrators</span><strong>up to 4</strong></div><div class="fact"><span>Regions</span><strong>up to 8</strong></div><div class="fact"><span>Stored role value</span><strong>1</strong></div></div>
+
+  <div class="simple" data-role="repeater"></div>
+
+  <h2 id="what">What a repeater is</h2>
+  <p>A repeater is a node with the role <em>repeater</em>. It receives every packet it can hear and decides whether to pass it on: floods (path requests, announces, channel messages) after a short wait, and routed packets when its address is next on the path. It confirms each hop implicitly, because the previous node hears it forward.</p>
+  <div class="can">
+    <div class="yes"><h4>What a repeater does</h4><ul><li>Forward floods and routed packets</li><li>Wait longer when the signal from the sender is strong, so distant repeaters go first and routes get fewer hops</li><li>Cancel a flood it has scheduled when a nearby neighbour already sent it</li><li>Repair a broken route locally: skip a dead next hop and send to a node further along</li><li>Be managed remotely: short status, neighbour list, radio changes on trial</li><li>Forward only channel messages for its regions, if it has any</li></ul></div>
+    <div class="no"><h4>What a repeater leaves to others</h4><ul><li>Split paths longer than 12 hops (that is the anchor)</li><li>Keep mail for others (the post office is a host)</li><li>Verify alerts before boosting them (repeaters have no trust anchors yet)</li></ul></div>
+  </div>
+
+  <h2 id="why-repeaters">Why repeaters matter: the edge test</h2>
+  <p>The simulator makes it concrete. A group of walkers is out of reach of a repeater, and one person stands on a hill that reaches it. Two network designs run on the same terrain.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Network design</th><th>Delivery to the base</th></tr>
+    <tr><td>Old rule: the person on the hill is silenced by the group's own copies</td><td>55 to 82 %</td></tr>
+    <tr><td>Edge-bridge rule: the person on the hill relays for the group</td><td>96 to 100 %</td></tr>
+  </table></div>
+
+  <p>Source: <code>maarse-sim --hill</code>, 10 seeds per setting, 10 to 40 people on 3 to 8 km (technical guide, "Edge bridge"). The ranges come from the different group sizes and distances. The repeater's reach is what ties the group to the rest of the network, and the person on the hill is the bridge.</p>
+
+  <h2 id="energy">What happens when the battery runs low</h2>
+  <p>The firmware measures the battery every 60 seconds and changes what the repeater forwards. A solar repeater in a dark week degrades gracefully instead of vanishing.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Battery</th><th>State</th><th>What it forwards</th></tr>
+    <tr><td>3.90 V or more, or USB</td><td>full</td><td>Everything</td></tr>
+    <tr><td>3.60 – 3.90 V</td><td>ok</td><td>Everything, slightly later in floods</td></tr>
+    <tr><td>3.40 – 3.60 V</td><td>low</td><td>Direct messages and path requests only</td></tr>
+    <tr><td>below 3.40 V</td><td>critical</td><td>Nothing</td></tr>
+  </table></div>
+
+  <h2 id="manage">Managing a repeater in the field</h2>
+  <p>Up to four <strong>administrators</strong> can manage a repeater over LoRa or the internet. Every command is signed, so there is no login. In the web client use <em>Nodes → the node → Manage</em>, in the Android app the contact page <em>Manage this node</em>.</p>
+  <ul>
+    <li><strong>Short status</strong> asks for about 20 values in one small reply: uptime, role, traffic, errors, queue, signal, noise floor, battery, temperature and crashes. Over LoRa each byte costs airtime, so heavy items are asked for only when you press their buttons.</li>
+    <li><strong>Radio change on trial:</strong> a radio change sent to another node is only tried for 5 minutes. Press <em>Confirm and save</em> and it is kept. If nothing arrives in time the node goes back to its old settings, also after a reboot. This protects you from locking yourself out of a repeater that is out of reach.</li>
+    <li><strong>Setting the administrators</strong> happens only while connected to the node itself (USB or Bluetooth), never over the mesh.</li>
+  </ul>
+  <div class="callout warn"><strong>A security boundary to know</strong><p>The firmware sets no Bluetooth pairing or PIN. Anyone within Bluetooth range who can connect to a node can change its administrator list. The Android management part is unit-tested and built, but has not been tried against a repeater yet.</p></div>
+
+  <h2 id="place">Placing a repeater</h2>
+  <ul>
+    <li>Height first, antenna second, power third. Many short links are weaker than a few good ones.</li>
+    <li>Give it mains or solar. A repeater only on a battery is a client with delusions of grandeur.</li>
+    <li>Give it the same radio settings as everybody else. A Må:rse network uses one frequency, spreading factor and setting.</li>
+    <li>For a region, set a region list so local channel traffic stays local, for example <code>dk, nordjylland</code>.</li>
+  </ul>
+  <section class="deep" id="details">
+    <h2>Technical details</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Item</th><th>Value</th><th>Source</th></tr>
+    <tr><td>Hello interval</td><td>10 s after a change, then doubling up to 4 min for repeaters and anchors</td><td>spec 3.2</td></tr>
+    <tr><td>Forward delay in floods</td><td>bucket(SNR) × 200 ms + energy penalty (+ jitter); a strong signal waits longer</td><td>spec 5.3.1</td></tr>
+    <tr><td>Flood suppression</td><td>cancels its own send if it hears a strong copy of the same flood (suppress_after = 1)</td><td>spec 5.3.2</td></tr>
+    <tr><td>Path request forwarding</td><td>80 % when it has at least 3 neighbours, all of them otherwise</td><td>spec 5.3</td></tr>
+    <tr><td>Local repair</td><td>no forward after 4 tries → send straight to a node further along (heard within 2 min), the dead hop is remembered 5 minutes</td><td>technical guide</td></tr>
+    <tr><td>Source-route delay</td><td>50 ms before forwarding a routed packet</td><td>spec 5.4</td></tr>
+    <tr><td>Hop timeout and retries</td><td>3 s, up to 4 resends, then local repair</td><td>spec 5.4</td></tr>
+    <tr><td>Regions</td><td>list of up to 8 names; a 16-bit hash goes on the air; without regions everything is forwarded, with <em>strict</em> only packets without a region</td><td>technical guide, Regions</td></tr>
+    <tr><td>Default transmit power on Heltec V4</td><td>10 dBm (the amplifier adds about 7 to 10 dB)</td><td>technical guide, firmware status</td></tr>
+  </table></div>
+
+  </section>
+</article>
+<footer class="site">Source: <code>maarse-core/src/router.rs</code> (roles), <code>docs/GUIDE.md</code> (routing, roles of a host, battery), and the simulator runs named under each chart.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simple.js"></script>
+</body>
+</html>

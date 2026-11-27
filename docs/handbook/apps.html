@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Apps and clients · Må:rse handbook</title>
+<meta name="description" content="Android, the web client and the Windows app.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>Apps and clients</h1>
+    <p class="lede">Android, the web client and the Windows app.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> Må:rse has three ways to use it: the <strong>Android app</strong> (a native app with the host built in), the <strong>web client</strong> (served by a host, installable as an app), and the <strong>Windows app</strong> (a service with a tray icon). They show the same things in the same words, in English or Dansk.</p>
+    <p><strong>Why:</strong> People use phones, laptops and desktops. The same features should be where you expect them on each, and one device should not be better than another.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>The same feature set and wording on Android and the web client, built together</li><li>The Android app has four connection modes: Bluetooth radio, phone as node, host elsewhere, server on this phone</li><li>The web client installs as an app and works offline once opened</li><li>Notification sounds you choose per kind of message</li><li>The Windows service installs signed updates</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>The Android app is verified in an emulator: <strong>Bluetooth on a real phone has not been tested</strong></li><li>Not in the Android app yet: the map, the range test and the alert issuing form</li><li>iPhone: Safari has neither Web Bluetooth nor Web Serial, so only a WebSocket to a host works</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-tested">tested</span> web client on Windows. Android emulator-verified. Windows installer working copy.</p>
+  </div>
+
+  <h2 id="android">The Android app</h2>
+  <p>A native Kotlin app. It runs the whole host inside the phone, in a foreground service in a process of its own, so a fatal error ends only that process.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Mode</th><th>What it means</th></tr>
+    <tr><td>Radio over Bluetooth</td><td>The app is a companion to a Må:rse radio.</td></tr>
+    <tr><td>Phone as node</td><td>The phone is a Må:rse node with its own identity, on the open backbone. The default role of the phone's node is client.</td></tr>
+    <tr><td>Host elsewhere</td><td>Follow a host on another machine (your home PC, over VPN) with its access key.</td></tr>
+    <tr><td>Server on this phone</td><td><code>maarse-server</code> for an old phone on Wi-Fi and a charger. It stops by itself when the phone leaves Wi-Fi or the charger, because mobile networks cannot be reached from outside.</td></tr>
+  </table></div>
+
+  <p>Pictures, voice messages and calls work in the app. Remote administration of another Må:rse node is on the contact page under <strong>Manage this node</strong>. Not in the app yet: the map, the range test and the alert issuing form.</p>
+  <h2 id="web">The web client</h2>
+  <p>Served by a host at <code>http://127.0.0.1:8080</code>, and installable as a progressive web app: <em>Install app</em> in Chrome or Edge, or <em>Add to home screen</em> on Android. Over Bluetooth or USB it can use a radio directly, without a PC running a host. Once opened, it works offline.</p>
+  <ul>
+    <li><strong>Notifications</strong> when a message arrives in the background, and an unread count in the tab title.</li>
+    <li><strong>Notification sounds</strong> for direct messages, channels and mentions: Default, Silent, six built-in tones, or your own file (up to 400 KB). Direct messages and mentions have a sound by default; channels are silent until you pick one.</li>
+    <li><strong>One inbox on several screens:</strong> a host at home keeps the message history, so the phone, laptop and desktop follow the same conversations. A sent message shows on the others at once, and reading a conversation on one clears the unread counter on the others. File content is not stored.</li>
+  </ul>
+  <h2 id="windows">The Windows app</h2>
+  <p>A service plus a tray app, installed together. The service runs the host and installs signed updates from GitHub releases. The tray icon shows status and opens the web client. The service starts the tray app in the signed-in user's session when none is running. <span class="badge b-working">working copy</span> SmartScreen shows a warning for the installer, which is accepted.</p>
+  <h2 id="languages">Languages</h2>
+  <p>The Android app, the web client, the server pages, the web flasher, the Windows tray app and the installer can be shown in English or Dansk. It follows the device, and <em>Settings → Language</em> chooses by hand. A text without a translation is shown in English. A language is one file, <code>i18n/&lt;code&gt;.json</code>, and a new one can be added without rebuilding by putting the file in the data folder.</p>
+  <section class="deep" id="details">
+    <h2>Technical details</h2>
+    <ul>
+      <li>The Android UI talks to the embedded host like the web client does: the companion protocol over WebSocket on <code>127.0.0.1:47080</code>, with an access key, because every app on a phone can reach loopback.</li>
+      <li>The app is built with <code>python tools/build_apk.py</code>, which runs Gradle and builds the native library with cargo-ndk. It needs the Android SDK (platform 35, NDK 27), JDK 17 and Rust Android targets.</li>
+      <li>Hosting the web client yourself: put the files in <code>maarse-client/</code> on any https static host and bump <code>VERSION</code> in <code>sw.js</code>.</li>
+      <li>A radio over Bluetooth needs Chrome or Edge on a computer or an Android phone. On iPhone only a WebSocket to a host works.</li>
+      <li>Android language switch is unit-tested but not tried on a device. The Windows installer script is not compiled.</li>
+    </ul>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/GUIDE.md</code> sections on the Android app, the PWA, languages and history.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

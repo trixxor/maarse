@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sensor nodes · Må:rse handbook</title>
+<meta name="description" content="A board that watches something and tells you when it matters.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>Sensor nodes</h1>
+    <p class="lede">A board that watches something and tells you when it matters.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>sensor node</strong> is a Må:rse board that reads things (temperature, a door, a soil probe), sends readings and alarms to its owners, and sleeps in between. You set it up in a designer, in sentences like "when Temperature is below 10 °C for 2 readings, send an alarm". The designer turns that into a small <em>recipe</em> that the node runs by itself.</p>
+    <p><strong>Why:</strong> A cabin, a greenhouse or a mailbox far from Wi-Fi can send an alarm over the mesh and run for a long time on a battery. The alarm works even when your phone or PC is off, because the recipe lives on the node.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Plain-language designer in the web client and the Android app</li><li>Starting points: frost alarm, room climate, air quality, motion alarm, mailbox</li><li>Owners are people, up to four, each with the readings they choose</li><li>About 55 seconds of radio time a day, 0.06 %</li><li>A recipe cannot hang or damage the node: no loops, no free-form code</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>The firmware compiles for XIAO nRF52840 and Heltec V4, but sleep current, the BME280 on a real board and ESP32 deep-sleep wake have <strong>not been measured or run</strong></li><li>First setup is over USB from a computer; later changes go over the radio</li><li>Not supported yet: DHT11/22, ultrasonic, 1-Wire, serial sensors (GPS), 5 V modules</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-working">working copy</span> Core, host and both user interfaces are built and tested with unit tests and screenshots. <strong>Not verified on hardware.</strong></p>
+  </div>
+
+  <h2 id="day">A day in the life of a sensor</h2>
+  <div class="viz">
+    <h3>One wake-up</h3>
+    <p class="viz-sub">Press Play. The node sleeps between cycles; a wake pin can wake it early.</p>
+    <div id="tl"></div>
+    <p class="src">Source: <code>docs/sensors.md</code>.</p>
+  </div>
+
+  <h2 id="designer">The designer</h2>
+  <p>In <em>Nodes → Sensors</em> you see your sensors with their last values, alarms in red, quiet sensors in amber, favourites first. To set one up, choose a starting point, adjust the sentences, watch a simulated day, and send it to the node. The designer shows how much of the 256-byte recipe is used and how much radio time a day it costs.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Building block</th><th>Choices</th></tr>
+    <tr><td>Inputs</td><td>a sensor from the catalogue, a sensor you describe yourself, battery voltage, chip temperature, a digital pin, an analogue input</td></tr>
+    <tr><td>When</td><td>every N minutes · a value passes a limit for N readings in a row, with a separate "back to normal" level so it does not flap · a value changes by more than X · a pin changes</td></tr>
+    <tr><td>Then</td><td>send readings · send an alarm with your own text (at most 40 bytes) · set an output (it goes back when the rule clears) · change the wake interval while the rule lasts</td></tr>
+    <tr><td>Limits</td><td>8 inputs and outputs, 8 rules, 3 steps per rule, 64 bytes of alarm text, 256 bytes in all, at least 30 s between cycles</td></tr>
+  </table></div>
+
+  <h2 id="catalogue">What you can connect</h2>
+  <ul>
+    <li><strong>I2C chips:</strong> BME280/BMP280, SHT30/31/35, SHT40/41/45, AHT20/21/DHT20, BH1750 (light), MCP9808, TMP117, MCP9600 (thermocouple), SCD41 (CO2), ADS1115 (four analogue inputs), ADXL345 (motion), MLX90614 (infrared thermometer).</li>
+    <li><strong>Grove modules on one pin:</strong> PIR, button, touch, reed switch, tilt, vibration, flame, Hall, infrared obstacle, relay, LED, buzzer, and analogue ones that work at 3.3 V: soil moisture, water, light, sound, rotary knob, UV.</li>
+    <li><strong>Your own I2C sensor</strong> by describing its address, set-up bytes and how to read the number. The designer cannot try the chip, so check the numbers against the data sheet.</li>
+  </ul>
+  <p>The catalogue is data, not code. It is a set of files in the repository, signed with the release key and published on GitHub, and a host checks for updates about once a day. A node needs no update for a new I2C chip, because the recipe carries the description of how to read it.</p>
+  <section class="deep" id="details">
+    <h2>Mailbox and wake-by-pin</h2>
+    <p>A pin is normally read once per cycle, so an opening shorter than the cycle is missed. For doors, buttons and mailboxes, turn on <em>Wake the sensor when this pin changes</em>: the pin wakes the node from sleep the moment it changes, and an edge rule then fires at once.</p>
+    <ul>
+      <li><strong>Wiring:</strong> a normally open reed switch that <em>closes</em> when the flap opens, between the pin and GND, with a pull-up. A switch that is closed while nothing happens would lose about 70 µA.</li>
+      <li><strong>nRF52840:</strong> any free pin (D0, D6, D7), woken by the pin's PORT event.</li>
+      <li><strong>ESP32-S3 (Heltec V4):</strong> only the RTC pins GPIO 3, 4 and 6; the pin is armed before deep sleep.</li>
+      <li>A pin still at its wake level when the node goes to sleep is not armed, because it would wake the node at once.</li>
+    </ul>
+    <p>The sensor catalogue entry for a sensor needing a firmware driver (today only the BME280) works only when the firmware has it. Any entry must carry tests with numbers from the data sheet, and CI refuses an entry whose test fails.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/sensors.md</code> and the sensor catalogue in <code>sensors/</code>.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+Viz.timeline(document.getElementById('tl'), [
+  {t:'wake', title:'The node wakes', text:'The timer fires at the recipe\'s interval (at least 30 s). A wake pin can wake it earlier, the moment a door opens.'},
+  {t:'read', title:'It reads its inputs', text:'Sensors, battery, chip temperature and pins are read. A sensor like the SCD41 stays awake about 5 s per reading.'},
+  {t:'decide', title:'The rules run', text:'Each rule compares values with its limit, for N readings in a row, with a separate back-to-normal level so an alarm does not flap.'},
+  {t:'send', title:'Readings or an alarm go out', text:'Over LoRa to each owner (up to four people). Typically about 55 seconds of radio time a day, 0.06 %.', pkt:'direct message'},
+  {t:'sleep', title:'It sleeps', text:'Until the next interval. The alarm works even if the phone and PC are off, because the recipe lives on the node.'}
+]);
+</script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roles and devices · Må:rse handbook</title>
+<meta name="description" content="Who forwards, who listens, and how to choose.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article class="wide">
+  <header>
+    <p class="kicker">Roles · Explanation</p>
+    <h1>Roles and devices</h1>
+    <p class="lede">Who forwards, who listens, and how to choose.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> Every Må:rse device has one <em>role</em> that decides whether it forwards messages for other people: <strong>client</strong> (never), <strong>relay</strong> (a little, for a few hops), <strong>repeater</strong> (yes, always on) and <strong>anchor</strong> (yes, and it links long routes). On top of the radio roles, a <strong>host</strong> and a <strong>server</strong> are programs that connect radios to the internet backbone.</p>
+    <p><strong>Why:</strong> A mesh only works if the right devices forward and the others stay quiet. If everybody forwards, the channel drowns. If nobody forwards, nobody reaches further than they can hear.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>A phone never drains its battery for strangers</li><li>A handheld can become a relay by itself when there are no repeaters</li><li>A fixed repeater turns one hilltop into kilometres of coverage</li><li>One role setting, changed in the app, no flags</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>The right role is a choice: a client cannot help a group, a town full of relays cannot breathe</li><li>Roles are about forwarding, not about who may talk: every role can send and receive</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-simulated">simulated</span> The charts on this page come from <code>maarse-sim</code>. Roles on real boards are <span class="badge b-bench">bench-tested</span> on two boards. Nothing is field-tested yet.</p>
+  </div>
+
+  <h2 id="pictures">The four roles in one picture each</h2>
+  <p>The story is the same four times. You send a message to a friend who is too far away, and one device stands in the middle. Watch what it does.</p>
+  <div class="simple-grid">
+    <div class="simple" data-role="client"></div>
+    <div class="simple" data-role="relay"></div>
+    <div class="simple" data-role="repeater"></div>
+    <div class="simple" data-role="anchor"></div>
+  </div>
+  <h2 id="who">Who is who</h2>
+  <ul class="cards">
+    <li><a class="card" href="role-client.html"><strong>Client node</strong><span>Your phone or handheld. Sends and receives, never forwards.</span></a></li>
+    <li><a class="card" href="role-relay.html"><strong>Relay</strong><span>A handheld that forwards for a few hops when there are no repeaters.</span></a></li>
+    <li><a class="card" href="role-repeater.html"><strong>Repeater</strong><span>The fixed node on a roof or a hill that passes messages on.</span></a></li>
+    <li><a class="card" href="role-anchor.html"><strong>Anchor</strong><span>A repeater that links long routes, normally one on the internet.</span></a></li>
+    <li><a class="card" href="role-host.html"><strong>Host</strong><span>The program on a PC or phone that joins radios to the backbone.</span></a></li>
+    <li><a class="card" href="role-server.html"><strong>Server</strong><span>A dedicated host for the internet: finds, relays and keeps mail.</span></a></li>
+  </ul>
+  <div class="table-wrap"><table>
+    <tr><th></th><th>Forwards for others</th><th>Typical device</th><th>Power</th><th>Default for</th></tr>
+    <tr><td><strong>Client</strong></td><td>Never</td><td>Phone with a radio, handheld</td><td>Battery</td><td>The Android app's own node</td></tr>
+    <tr><td><strong>Relay</strong></td><td>Yes, for packets that have gone fewer than 4 hops; waits two slots longer than a repeater</td><td>Handheld in a group</td><td>Battery</td><td>Handhelds in role <em>auto</em>, when no repeater is heard</td></tr>
+    <tr><td><strong>Repeater</strong></td><td>Yes (unless the battery is critical)</td><td>Board on a roof, mast or hill</td><td>Mains or solar</td><td>A chosen role</td></tr>
+    <tr><td><strong>Anchor</strong></td><td>Yes, and it starts a new leg when a route is too long</td><td>A host or server that is always online</td><td>Mains</td><td>Desktop hosts and servers</td></tr>
+  </table></div>
+
+  <h2 id="auto">The fifth setting: auto</h2>
+  <p>Handhelds can be set to <strong>auto</strong>. A handheld in auto is a client while it hears a repeater or an anchor, and turns into a relay when it has heard none for 2 minutes. When it hears one again for 2 minutes it goes back to being a client. Nobody has to decide anything on the trail, and in a city, where repeaters are everywhere, the handheld stays quiet.</p>
+  <h2 id="evidence">What the simulator says about roles</h2>
+  <p>Two scenarios from <code>forest_mode.mjs</code>, run on the real router code of the current engine, 45 minutes each, mean of five seeds. In the <strong>forest</strong>, 10 walkers in Rold Skov have no repeater at all. In the <strong>town</strong>, 300 handhelds in Aarhus have repeaters only in the western half.</p>
+  <div class="viz">
+    <h3>Forest: 10 walkers, no repeater</h3>
+    <p class="viz-sub">Share of messages that arrived. Higher is better.</p>
+    <div id="c-forest"></div>
+    <p class="takeaway">With no repeater at all, a group of clients already gets about 95 % through. Relays do not add much on their own, but auto, which also builds edge bridges, reaches 99.7 %.</p>
+    <p class="src">Source: <code>tools/sim-experiments/forest_mode.mjs both 2700 1,2,3,4,5</code>, mean of 5 seeds.</p>
+  </div>
+  <div class="viz">
+    <h3>Town: 300 handhelds, repeaters in the west only</h3>
+    <p class="viz-sub">Share of messages that arrived and share acknowledged.</p>
+    <div id="c-city-del"></div>
+    <p class="takeaway">All relays in a town is the worst choice by far: copies collide and most acknowledgements are lost. Auto stays close to plain clients, because only the 26 to 30 handhelds outside repeater coverage become relays.</p>
+    <p class="src">Same run. Acknowledged means the sender saw the delivery confirmation.</p>
+  </div>
+  <div class="viz">
+    <h3>Town: airtime used</h3>
+    <p class="viz-sub">Seconds of radio time summed over all nodes. Lower is better.</p>
+    <div id="c-city-air"></div>
+    <p class="takeaway">Making every handheld a relay costs about eight times the airtime of keeping them clients. Auto costs about two and a half times, in return for about two points more delivered and a few points fewer acknowledged.</p>
+    <p class="src">Same run.</p>
+  </div>
+
+  <section class="deep" id="rules">
+    <h2>The forwarding rules in detail</h2>
+    <p>Source: spec section 5.1 and 5.3, <code>maarse-core/src/router.rs</code>.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Role</th><th>Stored value</th><th>Forwards?</th></tr>
+    <tr><td>Client</td><td>0</td><td>Never</td></tr>
+    <tr><td>Repeater</td><td>1</td><td>Yes, unless the battery is critical</td></tr>
+    <tr><td>Relay</td><td>2</td><td>Yes, unless critical, and only while <code>hops &lt; min(relay_hops, 7)</code>; <code>DEFAULT_RELAY_HOPS</code> = 4</td></tr>
+    <tr><td>Anchor</td><td>3</td><td>Yes, like a repeater, and splits paths longer than 12 hops (spec 5.8)</td></tr>
+    <tr><td>Auto</td><td>4</td><td>A handheld setting: client or relay depending on coverage</td></tr>
+  </table></div>
+
+    <h3>Energy changes what a node forwards</h3>
+  <div class="table-wrap"><table>
+    <tr><th>Voltage</th><th>State</th><th>Forwards</th></tr>
+    <tr><td>3.90 V or more, or USB power</td><td>full</td><td>Everything</td></tr>
+    <tr><td>3.60 to 3.90 V</td><td>ok</td><td>Everything, a little later in floods (150 ms extra)</td></tr>
+    <tr><td>3.40 to 3.60 V</td><td>low</td><td>Only direct messages and path requests (800 ms extra)</td></tr>
+    <tr><td>below 3.40 V</td><td>critical</td><td>Nothing</td></tr>
+  </table></div>
+
+    <p>To go one step up, the voltage must be 50 mV above the threshold, so a node does not flip back and forth. The thresholds follow the Li-ion curve: 3.9 V is about 75 %, 3.6 V is the knee at about 10 to 15 %.</p>
+    <h3>How auto decides</h3>
+    <p>A handheld in auto becomes a relay when no repeater or anchor has been heard for 2 minutes. A repeater counts as in range for 5 minutes after it was last heard. After 2 minutes of hearing one again, it is a client again. The node logs each switch. Changing the role of a phone node asks first, because the node restarts.</p>
+    <p>An <em>edge bridge</em> is a relay that hears a repeater while a neighbour does not. It is the group's way into the repeater network, typically the person on the hill. See <a href="role-relay.html#bridge">Relay</a>.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>maarse-core/src/router.rs</code> (roles), <code>docs/GUIDE.md</code> (routing, roles of a host, battery), and the simulator runs named under each chart.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simple.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+(function(){
+  var F = SIM.rolesForest, T = SIM.rolesCity;
+  function mk(list, key, unit){ return list.map(function(r,i){ return {label:r.name, value:r[key], series: r.auto?0:(r.relay?1:2)}; }); }
+  Viz.bars(document.getElementById('c-forest'), {title:'Forest delivered', unit:' %', max:100, groups:[{label:'Delivered', bars: SIM.rolesForest.map(function(r){return {label:r.name, value:r.delivered, series:r.series};})}], series:['Auto','Relays','Clients']});
+  Viz.bars(document.getElementById('c-city-del'), {title:'Town delivered and acked', unit:' %', max:100, groups:[{label:'Delivered', bars: SIM.rolesCity.map(function(r){return {label:r.name, value:r.delivered, series:r.series};})},{label:'Acknowledged', bars: SIM.rolesCity.map(function(r){return {label:r.name, value:r.acked, series:r.series};})}], series:['Auto','Relays','Clients']});
+  Viz.bars(document.getElementById('c-city-air'), {title:'Town airtime', unit:' s', groups:[{label:'Airtime (all nodes)', bars: SIM.rolesCity.map(function(r){return {label:r.name, value:r.airtime, series:r.series};})}], series:['Auto','Relays','Clients']});
+})();
+</script>
+</body>
+</html>

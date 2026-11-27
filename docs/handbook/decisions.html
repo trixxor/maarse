@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decisions · Må:rse handbook</title>
+<meta name="description" content="What was decided, what was rejected, and the numbers behind it.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Evidence · Explanation</p>
+    <h1>Decisions</h1>
+    <p class="lede">What was decided, what was rejected, and the numbers behind it.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> The <strong>decision log</strong> records the choices that shaped Må:rse, including the ideas that were tried or parked, with the numbers behind them. Nothing is deleted: a decision that is replaced is marked as superseded.</p>
+    <p><strong>Why:</strong> A design is only trustworthy if you can see what was <em>not</em> done and why. A rejected idea with numbers stops the same idea being proposed again without new evidence.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Every decision has context, options, decision, consequences and evidence</li><li>Rejected ideas keep their measurements</li><li>Parked ideas say how to resume</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Some decisions rest on simulation only</li><li>A few are decided by the project owner without a measurement, for example one radio setting for everybody</li></ul></div>
+    </div>
+    <p class="meta">Source: <code>docs/decisions/</code> in the repository.</p>
+  </div>
+  <div class="table-wrap"><table>
+    <tr><th>No.</th><th>Decision</th><th>Status</th><th>In one line</th></tr>
+    <tr><td>0002</td><td>No firmware updates over LoRa</td><td><span class="badge b-shelved">shelved</span></td><td>323 KB takes about 1.6 hours per hop at SF7 and days at SF9. USB, Bluetooth, Wi-Fi and the network stay.</td></tr>
+    <tr><td>0003</td><td>One radio setting for every node and link</td><td>accepted</td><td>Any device must be able to talk to any other, as an emergency net. Links are improved by antennas and smarter software, not by other channels.</td></tr>
+    <tr><td>0004</td><td>Priorities yes; path request quota no</td><td><span class="badge b-rejected">rejected (measured)</span> (quota)</td><td>The quota saved airtime (national −13 %, town −23 %) but cost delivery (busy −11.8 points). Priorities and the SF slot with scaled timeouts stay.</td></tr>
+    <tr><td>0005</td><td>Optional network key for closed nets</td><td><span class="badge b-designed">designed, not built</span></td><td>Access control and less metadata, at 2 to 4 % more airtime and a split network that cuts against 0003.</td></tr>
+    <tr><td>0006</td><td>Regional routing with custody transfer and home mailbox</td><td><span class="badge b-shelved">shelved</span></td><td>Not needed for Denmark today (20 to 40 hops, internet usually there). Start with a corridor simulation if resumed.</td></tr>
+    <tr><td>0007</td><td>MeshCore chats over the Må:rse message loop</td><td><span class="badge b-shelved">shelved</span></td><td>A bridge identity sending MeshCore chats as Må:rse messages, files only for catch-up. Waiting for a go.</td></tr>
+    <tr><td>0008</td><td>Signing the sender of channel messages</td><td><span class="badge b-designed">designed, not built</span></td><td>A 64-byte signature costs airtime on a 212-byte frame and needs a rollout. Known weakness in the threat model.</td></tr>
+    <tr><td>0009</td><td>Native Android app with the host embedded</td><td>accepted</td><td>No web view: a native Kotlin app with the host built in through JNI.</td></tr>
+    <tr><td>0010</td><td>Every option in the web interface and <code>settings.txt</code></td><td>accepted</td><td>Flags are easy to forget after a reboot. A new feature gets its setting in the interface first.</td></tr>
+    <tr><td>0011</td><td>Airtime round: compact frame on</td><td>accepted / parked</td><td>Compact frame −17 % forest, −30 % car, simulated. Lean header, preamble 8 and announce policies not built.</td></tr>
+  </table></div>
+
+  <h2 id="why">Why some ideas were rejected</h2>
+  <h3>Load control and path request quotas <span class="badge b-rejected">rejected (measured)</span></h3>
+  <p>A node over 25 % channel load would send at most 6 path requests a minute and double its flood delay. It helped under stress at SF11 (200 messages: 64 to 75 % delivered), but not at SF12 (43 to 39 %), and at normal load it cost deliveries (SF11, 120 nodes: 90 to 85 %) for 10 to 20 % less airtime. A 40 % threshold was no better. The project prefers delivery and stability over airtime savings, so the firmware does not use it.</p>
+  <h3>Announce policies <span class="badge b-rejected">rejected (measured)</span></h3>
+  <p>Jitter, 70 % forwarding and scope 2 moved airtime by −7 to +11 % in both directions with no pattern, and 70 % forwarding cost 3 points in the forest. Removed again.</p>
+  <h3>A separate faster channel for trunks <span class="badge b-shelved">not chosen</span></h3>
+  <p>A faster second band would give more capacity, but then not every device could hear every other. Decision 0003 keeps one setting and spends the shared channel better instead.</p>
+  <h3>Firmware updates over LoRa <span class="badge b-shelved">shelved</span></h3>
+  <p>The OTA code over LoRa is kept in the repository but not pursued. It is not to be proposed with compression, delta updates or hardware tests unless the decision is reopened.</p>
+</article>
+<footer class="site">Source: <code>docs/decisions/</code>, <code>docs/GUIDE.md</code> (Routing) and <code>docs/maybe/airtime-optimisation.md</code>.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

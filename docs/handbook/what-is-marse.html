@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What is Må:rse? · Må:rse handbook</title>
+<meta name="description" content="What Må:rse is, why it exists, and its advantages and drawbacks.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Start · Explanation</p>
+    <h1>What is Må:rse?</h1>
+    <p class="lede">An encrypted mesh network for cheap LoRa radios that can also reach around the world over the internet.</p>
+  </header>
+
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> a €20–40 radio board in your pocket talks to your phone over Bluetooth and to other boards over several kilometres. No SIM card, no subscription, no central server.</p>
+    <p><strong>Why:</strong> the existing LoRa meshes each give something up: Meshtastic wastes airtime on floods, MeshCore has no internet link, Reticulum needs a computer. Må:rse tries to combine efficient routing, mailboxes for offline people, and one network over radio and internet.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Advantages</h4>
+        <ul>
+          <li>Works with no infrastructure at all</li>
+          <li>End-to-end encrypted, sender never in the header</li>
+          <li>Every hop confirms, so losses are repaired locally</li>
+          <li>Messages wait in mailboxes for offline people</li>
+          <li>Radio and internet are one network with one address</li>
+        </ul>
+      </div>
+      <div class="cons"><h4>Good to know</h4>
+        <ul>
+          <li>New: no users, no field measurements</li>
+          <li>Cryptography not reviewed by outsiders</li>
+          <li>Cannot talk to Meshtastic or MeshCore radios</li>
+          <li>LoRa is slow: short text, small files</li>
+          <li>Needs a few fixed repeaters for the best results</li>
+        </ul>
+      </div>
+    </div>
+    <p class="meta"><span class="badge b-working">working copy</span> Prototype, version 0.9. See <a href="status.html">what works today</a>.</p>
+  </div>
+
+  <h2 id="problem">The problem</h2>
+  <p>LoRa is a radio technique that is slow, a few hundred bytes per second, but reaches kilometres on a battery and needs no infrastructure. That makes it good for hikers, farms, festivals and blackouts. The hard part is the network built on top of it: every packet costs airtime, and airtime is shared and legally limited.</p>
+
+  <h2 id="idea">The idea in five lines</h2>
+  <ol>
+    <li><strong>A radio in your pocket.</strong> Board plus phone, nothing else needed.</li>
+    <li><strong>Messages find their own way.</strong> A small request finds a route chosen for signal quality; after that only the repeaters on the route transmit.</li>
+    <li><strong>Every hop signs for the handover,</strong> so a lost packet is resent where it was lost.</li>
+    <li><strong>Nobody has to be online at the same time.</strong> A mailbox holds the message until the recipient returns.</li>
+    <li><strong>Radio where there is no coverage, internet where there is.</strong> Your address and encryption stay the same on both.</li>
+  </ol>
+  <p>The next page, <a href="how-it-works.html">how messages travel</a>, shows the first three in pictures.</p>
+
+  <h2 id="compare">How it differs from the others</h2>
+  <p>Three good open LoRa mesh projects exist. Each made a different trade-off.</p>
+  <div class="table-wrap"><table>
+    <tr><th></th><th>The idea</th><th>Great at</th><th>Trade-off</th></tr>
+    <tr><td><strong>Meshtastic</strong></td><td>Everyone who hears a message repeats it, like a town crier.</td><td>No planning; works while everyone moves.</td><td>Airtime and batteries in large or busy meshes; at most 7 hops.</td></tr>
+    <tr><td><strong>MeshCore</strong></td><td>Only repeaters pass messages on, along a learned route.</td><td>Efficient, long chains of repeaters.</td><td>Places with no repeaters; no built-in internet link.</td></tr>
+    <tr><td><strong>Reticulum</strong></td><td>A full postal network with addresses, over any medium.</td><td>Cryptography, identity, global reach.</td><td>Needs a computer or phone; announces use a lot of slow LoRa airtime.</td></tr>
+    <tr><td><strong>Må:rse</strong></td><td>Relay runners who sign for every handover, with mailboxes and an internet express train.</td><td>Combining the three.</td><td>Young: no field data yet.</td></tr>
+  </table></div>
+  <div class="callout note">
+    <strong>In a city</strong>
+    <p>On radio alone, the simulator shows MeshCore and Må:rse delivering about equally well in a dense city. Må:rse adds what a city needs on top: <em>regions</em> that keep local chats local, proof-of-work stamps that make spam expensive, mailboxes, and the internet backbone. Where cities are linked over TCP, only the recipient's area is woken, while other designs repeat traffic into every city's radios. The forest case is covered in <a href="mailboxes-and-carry.html">mailboxes and carry</a>.</p>
+  </div>
+
+  <h2 id="for-whom">Who it is for</h2>
+  <ul>
+    <li><strong>Good fit:</strong> groups and communities who want messaging without a mobile network: outdoor groups, farms and villages, events, emergency preparedness, and hobbyists who like radio.</li>
+    <li><strong>Not ready for:</strong> life-critical use, until field measurements and an outside security review exist. Reaching Meshtastic or MeshCore users directly is not possible either, because the radio protocols differ.</li>
+  </ul>
+
+  <h2 id="legal">Is it legal?</h2>
+  <p>Må:rse uses 869.525 MHz inside the EU band 869.4–869.65 MHz, where a device may transmit up to 10 % of the time. The firmware enforces the duty cycle and listens before it talks. Check the rules of your own country before use.</p>
+
+  <section class="deep" id="constraints">
+    <h2>Design constraints that shape everything</h2>
+    <p>These are the fixed points behind many decisions. Each has an entry in the decision log in the repository (<code>docs/decisions/</code>).</p>
+    <div class="table-wrap"><table>
+      <tr><th>Constraint</th><th>What it means</th></tr>
+      <tr><td>One radio setting for the whole network</td><td>Every node and every long-distance link uses the same frequency, spreading factor and settings, so any device can talk to any other. Links are improved with antennas and smarter software, never with a different setting.</td></tr>
+      <tr><td>No heap on the radios</td><td><code>maarse-core</code> is <code>no_std</code> without allocation. The ESP32 firmware has under 100 bytes of stack to spare with a host attached, so anything added to the core must pass a stack check (<code>tools/stack_probe.py</code>).</td></tr>
+      <tr><td>Airtime is the budget</td><td>A short direct message is mostly overhead (64-byte seal plus an 18-byte header). Formats are chosen to save airtime: short chat messages are compressed (about 40 % smaller) and a conversation past its first ratchet step sends a compact form.</td></tr>
+      <tr><td>Same code in radio, host and simulator</td><td><code>maarse-hostrules</code> has no I/O and no clock, so the Denmark simulator runs the host's real decisions.</td></tr>
+    </table></div>
+  </section>
+
+  <section class="deep" id="numbers">
+    <h2>The simulator numbers, with their limits</h2>
+    <p>These come from <code>maarse-sim</code>, which runs the actual router code on virtual nodes with a radio model, run again on 2026-11-27. They show how design choices compare. They are not range measurements. The full set, with charts, is on the <a href="simulation.html">simulation results</a> page.</p>
+    <div class="table-wrap"><table>
+      <tr><th>Scenario</th><th>Result</th><th>Label</th></tr>
+      <tr><td>Forest, 10 walkers, no repeater</td><td>95.4 % delivered as plain clients, 99.7 % with the auto role</td><td><span class="badge b-simulated">simulated</span></td></tr>
+      <tr><td>Town, 300 handhelds, repeaters in the west only</td><td>88.1 % clients, 90.2 % auto, 72.8 % if every handheld is a relay</td><td><span class="badge b-simulated">simulated</span></td></tr>
+      <tr><td>Car on the E45, repeaters every 15 km</td><td>96.9 % delivered with today's defaults</td><td><span class="badge b-simulated">simulated</span></td></tr>
+      <tr><td>National network, about 800 nodes</td><td>86.2 % delivered</td><td><span class="badge b-simulated">simulated</span></td></tr>
+      <tr><td>Mail to a traveller whose phone is off, internet up</td><td>4 % with no mail design, 76 % with post offices</td><td><span class="badge b-simulated">simulated</span></td></tr>
+      <tr><td>Carry in a crisis, 25 to 100 km</td><td>66 % without carry, 76 % with carry</td><td><span class="badge b-simulated">simulated</span></td></tr>
+    </table></div>
+    <div class="callout warn"><strong>Older numbers have moved</strong><p>Earlier documents quote 96 % for the national scenario and 98 % for the traveller's mail to Bornholm with the internet down. Today's engine gives about 86 % and about 36 to 39 %. The simulator was also optimistic about packet sizes in the past. See <a href="simulation.html#stale">what moved and why</a>.</p></div>
+    <p>These are four to seven seeds each. Real terrain, interference and moving people will differ. A range-test mode and a field test are the next planned steps.</p>
+  </section>
+</article>
+<footer class="site">Source: README, <code>maarse-sim</code> results quoted in it, and the decision log.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

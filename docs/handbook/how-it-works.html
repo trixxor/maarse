@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How messages travel · Må:rse handbook</title>
+<meta name="description" content="Route discovery, per-hop confirmation and the link between radio and internet in Må:rse.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Understand · Explanation</p>
+    <h1>How messages travel</h1>
+    <p class="lede">Find the route once, confirm every hop, and treat radio and internet as one network.</p>
+  </header>
+
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> the sender floods one small <em>path request</em>. Repeaters add themselves to it, the recipient picks the best of the routes it heard, and later messages follow that route. Every hop confirms the handover. Over the internet, a host looks the recipient up in a shared table and sends straight to the right area.</p>
+    <p><strong>Why:</strong> a flood makes every node transmit for every message. A route makes only the nodes on it transmit, which saves the scarce resource of a LoRa mesh: airtime.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Advantages</h4>
+        <ul>
+          <li>Only a few nodes transmit per message</li>
+          <li>A lost packet is resent on the hop where it was lost</li>
+          <li>A broken repeater is noticed at once</li>
+          <li>Far-away areas stay quiet: only the recipient's area is woken</li>
+        </ul>
+      </div>
+      <div class="cons"><h4>Good to know</h4>
+        <ul>
+          <li>The first message to a new destination is slower (route discovery)</li>
+          <li>Routes can go stale when a node moves</li>
+          <li>A route is at most 12 hops without anchors</li>
+          <li>The internet part needs at least one connected host</li>
+        </ul>
+      </div>
+    </div>
+    <p class="meta"><span class="badge b-working">working copy</span> <span class="badge b-simulated">simulated</span> Routing results come from <code>maarse-sim</code>, not from field measurements.</p>
+  </div>
+
+  <h2 id="route-once">1. Find the route once, then follow it</h2>
+  <div class="viz">
+    <h3>Try it: flood against route</h3>
+    <p class="viz-sub">Fifteen nodes between a sender S and a receiver R. Press the buttons in order and watch the airtime add up.</p>
+    <div id="mesh"></div>
+    <p class="takeaway">Flooding costs the same every time, because every node repeats every message. A route costs more for the first message, because a path request is flooded first, and much less for every message after it. In this layout the route has paid for itself after about three messages.</p>
+    <p class="src">Airtimes are computed with the project's formula (<code>maarse-core/src/airtime.rs</code>) at SF9, 125 kHz, coding rate 4/5, preamble 16, for a 22-byte text message. The 15-node layout is an illustration, not a measurement.</p>
+  </div>
+  <p>A <strong>flood</strong> makes every node that hears a message repeat it. It is simple and robust, but each message costs airtime on every node, and in a busy area the copies start colliding.</p>
+  <p>Må:rse floods only a small <strong>path request</strong>. Every repeater it passes adds itself to it. The recipient waits briefly to collect several copies and picks the <strong>best</strong> one, not simply the first to arrive: it avoids a route whose last hop is weak, then prefers fewer hops, then a stronger signal. It sends that route back, and from then on messages follow the route.</p>
+  <p>If the sender has a message queued, it rides inside the first path request, so the first message is not delayed by the discovery.</p>
+
+  <h2 id="every-hop">2. Confirm every hop, not just the end</h2>
+  <p>Press <em>Lose a packet on hop 3</em> in the player above to see this happen.</p>
+  <p>On a long route some packets get lost: a truck drives past, or two radios talk at once. In Må:rse each node listens for the next node to pass the packet on, and takes that as the confirmation. If it does not hear it, it sends again. The recipient also sends an <strong>end-to-end acknowledgement</strong>, which is what shows as <em>delivered</em> in the app.</p>
+  <p>If even that does not arrive, the sender forgets the route and discovers a new one.</p>
+
+  <h2 id="radio-and-internet">3. Radio and internet are one network</h2>
+  <div class="viz">
+    <h3>Try it: from one radio area to another</h3>
+    <p class="viz-sub">Three radio areas, each with a host, joined by the internet backbone.</p>
+    <div id="bb"></div>
+    <p class="takeaway">The host looks the recipient up in a shared table and sends straight to the host that can reach them. Only the recipient's area is woken. The third area does not hear a thing.</p>
+    <p class="src">Illustration of the design in spec section 8. The transmission counts are simplified to show the principle.</p>
+  </div>
+  <p>LoRa is slow but reaches kilometres without infrastructure. The internet is fast but only exists where there is a connection. In Må:rse both are just <em>links</em>. A <strong>host</strong> (a PC or Raspberry Pi running <code>maarse-host</code>) or an ESP32 board on Wi-Fi joins its radio area to the backbone.</p>
+  <p>To reach someone far away, the host looks the recipient up in a <strong>distributed hash table (DHT)</strong> and sends straight to the host near them. There is no central server, and only the recipient's area hears the traffic.</p>
+
+  <div class="viz">
+    <h3>What each packet costs on the air</h3>
+    <p class="viz-sub">Every transmission occupies the channel for everybody in range. Even a bare acknowledgement costs a quarter of a second.</p>
+    <div id="c-cost"></div>
+    <p class="takeaway">For short packets, the fixed cost (preamble and header) is a third to a half of the airtime. That is why Må:rse works so hard to send fewer packets, and not only smaller ones.</p>
+    <p class="src">Computed with <code>maarse-core/src/airtime.rs</code>; packet sizes from the airtime report (<code>docs/maybe/airtime-optimisation.md</code>, section 1).</p>
+  </div>
+
+  <h2 id="when-it-breaks">When something breaks</h2>
+  <ul>
+    <li><strong>A packet is lost:</strong> the hop that sent it resends, up to four times.</li>
+    <li><strong>A repeater is gone:</strong> the hop tries a local repair, and if that fails the sender discovers a new route.</li>
+    <li><strong>The recipient is offline:</strong> a mailbox keeps the message; see <a href="mailboxes-and-carry.html">mailboxes and carry</a>.</li>
+    <li><strong>The route is longer than 12 hops:</strong> an <em>anchor</em> repeater splits it into legs, each up to 12 hops.</li>
+  </ul>
+
+  <section class="deep" id="packet-layout">
+    <h2>Packet layout</h2>
+    <p>Source: <code>maarse-core/src/packet.rs</code>. A packet is at most 255 bytes, the largest LoRa packet. <span class="badge b-working">working copy</span></p>
+<pre><code>+-------+------+-------------+----------------------------+-------------+---------+
+| flags | hops | destination | path (optional)            | region (opt)| payload |
+| 1     | 1    | 16          | count (1) + 2 x count (BE) | 2 (BE)      | rest    |
++-------+------+-------------+----------------------------+-------------+---------+</code></pre>
+    <p>The sender is <strong>never</strong> in the header. The fixed header is 18 bytes.</p>
+    <div class="table-wrap"><table>
+      <tr><th>Flags bits</th><th>Field</th><th>Value</th></tr>
+      <tr><td>7–6</td><td>version</td><td><code>0</code></td></tr>
+      <tr><td>5–2</td><td>packet type</td><td>0–15</td></tr>
+      <tr><td>1</td><td>path present</td><td><code>0b10</code></td></tr>
+      <tr><td>0</td><td>region present</td><td><code>0b01</code></td></tr>
+    </table></div>
+    <div class="table-wrap"><table>
+      <tr><th>Limit</th><th>Value</th><th>Meaning</th></tr>
+      <tr><td><code>MAX_PACKET</code></td><td>255 bytes</td><td>The largest LoRa packet</td></tr>
+      <tr><td><code>MAX_HOPS</code></td><td>64</td><td>A decoder rejects more</td></tr>
+      <tr><td><code>MAX_PATH</code></td><td>12 hops</td><td>24 bytes of path</td></tr>
+      <tr><td><code>LOCAL_SCOPE</code></td><td>8 hops</td><td>Flooded channels, announces and probes</td></tr>
+      <tr><td><code>MAX_DIRECT_PAYLOAD</code></td><td>212 bytes</td><td>255 − 18 − 1 − 24, so a message still fits when the path is full</td></tr>
+    </table></div>
+    <p>An address is 16 bytes: the first 16 bytes of <code>SHA-256</code> over the Ed25519 and X25519 public keys. A <em>path ID</em> is the first two bytes of an address. It only has to be unique among a node's neighbours, not globally.</p>
+    <h3>Packet types</h3>
+    <div class="table-wrap"><table>
+      <tr><th>Type</th><th>Name</th><th>Purpose</th></tr>
+      <tr><td>0</td><td><code>Data</code></td><td>Sealed direct message, acknowledged end to end</td></tr>
+      <tr><td>1</td><td><code>Ack</code></td><td>End-to-end acknowledgement, sent back along the reverse path</td></tr>
+      <tr><td>2</td><td><code>Announce</code></td><td>A signed "I exist", with a proof-of-work stamp; flooded</td></tr>
+      <tr><td>3</td><td><code>PathRequest</code></td><td>Route discovery; flooded; may carry the first message</td></tr>
+      <tr><td>4</td><td><code>PathResponse</code></td><td>The chosen route, sent back to the requester</td></tr>
+      <tr><td>5</td><td><code>Control</code></td><td>Defined, not sent by current code</td></tr>
+      <tr><td>6</td><td><code>Fragment</code></td><td>A file chunk</td></tr>
+      <tr><td>7</td><td><code>Probe</code></td><td>Trace route</td></tr>
+      <tr><td>8</td><td><code>Channel</code></td><td>A sealed channel message; flooded</td></tr>
+      <tr><td>9</td><td><code>Deposit</code></td><td>Hand a message to a mailbox</td></tr>
+      <tr><td>10</td><td><code>Datagram</code></td><td>IP tunnel datagram, per-hop acknowledgement only</td></tr>
+      <tr><td>11</td><td><code>Carry</code></td><td>Carry handoff or "delivered" notice</td></tr>
+      <tr><td>12</td><td><code>Hello</code></td><td>Role and coverage to neighbours; never forwarded</td></tr>
+      <tr><td>13</td><td><code>KeyRequest</code></td><td>"Who is this address?" local flood</td></tr>
+      <tr><td>14</td><td><code>MailSync</code></td><td>"Do you hold mail for me?"</td></tr>
+      <tr><td>15</td><td><code>Summary</code></td><td>Bloom filter of nodes heard on a LoRa trunk</td></tr>
+    </table></div>
+    <p>The complete layout of each payload is in the protocol specification, <code>docs/protocol-spec.md</code>, section 3.</p>
+  </section>
+
+  <section class="deep" id="path-discovery">
+    <h2>Path discovery step by step</h2>
+    <p>Source: <code>maarse-core/src/router.rs</code>, spec section 5.2. <span class="badge b-working">working copy</span></p>
+    <ol>
+      <li>The sender floods a <code>PathRequest</code> with an empty path. The payload is a random 16-byte <em>reply token</em>, optionally the first queued <code>Data</code> payload, and a small proof-of-work stamp. The message is included only if <code>16 + len + 5 ≤ 212</code>.</li>
+      <li>Each forwarder that may forward appends its own path ID, increments <code>hops</code> and re-floods after a delay. A forwarder that is not an anchor drops a request whose path is already 12 long.</li>
+      <li>The target delivers any included message at once, then waits 10 time slots to collect more copies and picks the best trail (see "Choosing the best route" below).</li>
+      <li>The target sends a <code>PathResponse</code> to the reply token. Its header path is the reverse of the chosen trail and its payload is the forward path.</li>
+      <li>The sender recognises the token, stores the forward path as the route, acknowledges any included message and sends the queue along the route.</li>
+    </ol>
+    <div class="table-wrap"><table>
+      <tr><th>Constant</th><th>Value</th><th>Meaning</th></tr>
+      <tr><td><code>PATH_RETRY_MS</code></td><td>20 000 ms</td><td>An unanswered request is repeated with a new token</td></tr>
+      <tr><td><code>PATH_RETRIES</code></td><td>2</td><td>After the last retry, queued messages are dropped, or carried if carry is on</td></tr>
+    </table></div>
+    <h3 id="best-route">Choosing the best route</h3>
+    <p>Among the copies heard during the wait, the target picks the trail with the smallest score, compared in this order: first avoid a <em>weak last hop</em>, then the fewest hops, then the best signal-to-noise ratio (SNR). Spec section 5.3.3.</p>
+    <h3 id="flood-delay">How floods are spread out</h3>
+    <p>A node that may forward a flood waits before sending: <code>delay = bucket × slot + energy penalty</code>. The bucket (0 to 7) grows with the SNR it heard the packet with. A <em>near</em> neighbour with a high SNR therefore waits longest, so distant forwarders go first and routes get fewer hops. A relay waits two extra slots so a real repeater wins. The slot is 200 ms by default, and the radio layer adds a random 0 to 1 slot.</p>
+    <div class="table-wrap"><table>
+      <tr><th>Battery state</th><th>Extra wait</th></tr>
+      <tr><td>Full</td><td>0 ms</td></tr>
+      <tr><td>Ok</td><td>150 ms</td></tr>
+      <tr><td>Low</td><td>800 ms</td></tr>
+      <tr><td>Critical</td><td>3 000 ms (and nothing is forwarded)</td></tr>
+    </table></div>
+    <p><strong>Suppression:</strong> if a node hears another strong copy of a flood it has scheduled, it cancels its own transmission. Weak copies do not count, because they come from far away and cover a different area. A node with at least 3 neighbours also passes on only 80 % of path requests; a node with fewer neighbours may be the only way through and forwards all of them.</p>
+    <p><span class="badge b-simulated">simulated</span> In <code>maarse-sim</code> the 80 % rule together with the 20 s retry changed airtime by −9 % (forest), −24 % (car), −4 % (town), −13 % (national) and −16 % (outage). Not yet tested on boards.</p>
+  </section>
+
+  <section class="deep" id="source-routing">
+    <h2>Source routing and the per-hop confirmation</h2>
+    <p>Spec sections 5.4 to 5.7. <span class="badge b-working">working copy</span></p>
+    <p>For packets with a path, <code>hops</code> is the index of the next forwarder. A node whose path ID is at that index increments <code>hops</code> and retransmits after 50 ms (<code>SOURCE_ROUTE_DELAY_MS</code>).</p>
+    <p>The per-hop confirmation is <em>implicit</em>: after sending, the node listens for the same packet ID with a higher <code>hops</code>. No separate acknowledgement packet is sent for a hop, which saves airtime.</p>
+    <div class="table-wrap"><table>
+      <tr><th>Constant</th><th>Value</th><th>Meaning</th></tr>
+      <tr><td><code>DEFAULT_HOP_TIMEOUT_MS</code></td><td>3 000 ms</td><td>Wait before resending, plus jitter from the packet ID on retries</td></tr>
+      <tr><td><code>HOP_RETRIES</code></td><td>4</td><td>Resends per hop, then local repair</td></tr>
+      <tr><td><code>DEFAULT_ACK_TIMEOUT_MS</code></td><td>20 000 ms</td><td>Wait for the end-to-end acknowledgement before forgetting the route</td></tr>
+      <tr><td><code>E2E_RETRIES</code></td><td>2</td><td>New path requests for the same message</td></tr>
+      <tr><td><code>MOBILE_ROUTE_MS</code></td><td>30 000 ms</td><td>A node marked <em>mobile</em> ignores older routes</td></tr>
+    </table></div>
+    <p>The end-to-end acknowledgement is addressed to a <em>token</em> made from the message ID, <code>ack_token(id) = id | !id</code>, so the acknowledgement does not name either party. The last hop has no implicit confirmation, so the end-to-end acknowledgement covers it.</p>
+  </section>
+
+  <section class="deep" id="anchors">
+    <h2>Anchors: routes beyond 12 hops</h2>
+    <p>Spec section 5.8. <span class="badge b-working">working copy</span> <span class="badge b-simulated">simulated</span> on a 210 km motorway.</p>
+    <p>An anchor is a fixed repeater that splits a long route into legs. When it receives a path request with a non-empty trail it remembers the reply token and the trail so far (for 120 s, at most 16 legs) and forwards the request with an <em>empty</em> trail. When the response comes back, it stores its own route to the target and sends the first leg to the sender. The sender's route therefore ends at the anchor, and the anchor continues along its own route. Several anchors in a row work the same way, up to 64 hops in total.</p>
+  </section>
+
+  <section class="deep" id="backbone">
+    <h2>The backbone and the DHT</h2>
+    <p>Source: <code>maarse-host/src/links.rs</code> and <code>dht.rs</code>, spec sections 8.2 and 8.3. <span class="badge b-working">working copy</span></p>
+    <p>A backbone link is a TCP connection carrying frames of <code>length (u16, little endian, 1..255) | Må:rse packet</code>. Packets that arrive over TCP are treated as heard with a good signal (SNR 10), so the router can use them like any link. Links use TCP keepalive, and outgoing peers are reconnected every 5 seconds.</p>
+    <p>The DHT is Kademlia-like, uses TCP only and never runs over LoRa. A node's ID is its Må:rse address and distance is XOR. To limit one machine filling the table with made-up identities, at most 4 contacts may come from the same IPv4 /24 or IPv6 /48. Contacts are saved to <code>dht-contacts.txt</code> and used as seeds at the next start.</p>
+    <p>The first two bytes of an incoming connection select the protocol: <code>D7 D7</code> is a DHT request, <code>4D 4D</code> ("MM") is an ESP32 LoRa modem over Wi-Fi, and anything else is the length of the first backbone frame.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/protocol-spec.md</code> sections 2, 3, 5 and 8, and the code it names.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+Viz.mesh(document.getElementById('mesh'));
+Viz.backbone(document.getElementById('bb'));
+Viz.bars(document.getElementById('c-cost'), {title:'Airtime per packet', unit:' ms', groups:[{label:'One packet on the air, SF9, 125 kHz, preamble 16', bars:[
+ {label:'Hello (22 B)', value:Viz.toa(22), series:5},
+ {label:'Acknowledgement, 3 hops (25 B)', value:Viz.toa(25), series:3},
+ {label:'Path request (40 B)', value:Viz.toa(40), series:2},
+ {label:'Message, 22-byte text, 3 hops (112 B)', value:Viz.toa(112), series:0},
+ {label:'Announce (180 B)', value:Viz.toa(180), series:1},
+ {label:'File chunk (237 B)', value:Viz.toa(237), series:4}]}]});
+</script>
+</body>
+</html>

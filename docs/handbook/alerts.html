@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Public alerts · Må:rse handbook</title>
+<meta name="description" content="Signed warnings that can be trusted without a server.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>Public alerts</h1>
+    <p class="lede">Signed warnings that can be trusted without a server.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>public alert</strong> is a warning signed by a trusted issuer, like a cell-broadcast alert but over the mesh. Anyone can check it offline. It appears as a banner that no chat message can imitate.</p>
+    <p><strong>Why:</strong> In a crisis the mobile network may be down, and a warning is only useful if people can trust it. A signed alert can be checked without any server, and cannot be faked by someone typing in a chat.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Unforgeable: signed with an issuer key that is separate from any node identity</li><li>Cannot be replayed: serial number, issue time and expiry</li><li>Cannot be faked as text: shown as a separate banner, and typing on the alert channel is refused</li><li>A certificate from a root key limits what an issuer may send</li><li>Exercise and test alerts are clearly marked and quiet</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Trust is whoever holds the root key: protect it and keep it offline</li><li>Repeaters cannot yet verify alerts, so they do not boost them</li><li>Checking in the firmware and the Android app without a host is not built</li><li>Revocation lists and cryptographic two-person signatures are not built</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-tested">tested</span> signing and verification. Not run on hardware. Alerts v2 are in the repository; the review is in <code>docs/maybe/alerting-review.html</code>.</p>
+  </div>
+
+  <h2 id="how">How an alert is checked</h2>
+  <div class="viz">
+    <h3>Life of an alert</h3>
+    <p class="viz-sub">Press Play.</p>
+    <div id="tl"></div>
+    <p class="src">Spec section 6.6 and technical guide, Alerts.</p>
+  </div>
+
+  <h2 id="status">Actual, exercise and test</h2>
+  <p>Only an <strong>actual</strong> alert that is <strong>severe or extreme</strong> and still valid becomes a banner. Exercises and tests are striped and quiet. An update or a cancel refers to the alert's number and can only come from the same issuer. Issuing an actual alert needs a tick that a second person has checked it (the lesson from the false missile alert in Hawaii).</p>
+  <h2 id="issuing">Who can issue one</h2>
+  <p>A receiving host shows an alert only if the issuer key is trusted directly, or has a certificate signed by a trusted root key. A certificate names the issuer (for example "Beredskab Nord") and limits which events it may send, its highest severity and how long it is valid. The certificate is sent before the first alert and at most hourly after that, and receivers cache it. Issuing is done in the dashboard form under Network → Alerts on a host that has an issuer key.</p>
+  <section class="deep" id="details">
+    <h2>Format and flood control</h2>
+    <ul>
+      <li>An alert is a channel message on the hashtag channel <code>#bulletin</code>, signed with an Ed25519 issuer key. The old v1 bulletin (<code>0xB1</code>, 69 bytes of overhead) is still accepted from trusted senders, valid for 24 hours and shown once.</li>
+      <li>Alert packets go before other channel traffic, but at most 8 per minute per node, because the channel key is public and junk must not crowd out other traffic.</li>
+      <li>A node without a clock uses the newest verified alert's time as a lower bound. An alert issued far in the future is dropped.</li>
+      <li>Each alert is shown once. An old alert sent again after its expiry is dropped.</li>
+    </ul>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/GUIDE.md</code>, <code>docs/protocol-spec.md</code> and the code they name.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+Viz.timeline(document.getElementById('tl'), [
+  {t:'1', title:'The issuer signs', text:'An authority signs an alert with its issuer key: event, severity, area text, serial, issue time and expiry.', pkt:'signed bulletin'},
+  {t:'2', title:'The certificate travels first', text:'The issuer\'s certificate from the root key is sent before the first alert, so receivers can check who may send what.', pkt:'certificate'},
+  {t:'3', title:'It floods the mesh', text:'The alert goes out on the alert channel before other channel traffic, at most 8 a minute per node.', pkt:'Channel #bulletin'},
+  {t:'4', title:'A host checks it', text:'The host verifies the signature, the certificate, the validity, and that the serial is new. A fake or an old alert is dropped.', pkt:'verified'},
+  {t:'5', title:'A banner, not a chat', text:'The client draws a banner and a list entry, separate from all chat. Nothing typed in a chat can look like it.', pkt:'alert event'}
+]);
+</script>
+</body>
+</html>

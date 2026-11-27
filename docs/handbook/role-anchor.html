@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anchor · Må:rse handbook</title>
+<meta name="description" content="The repeater that links long routes together.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Roles · Explanation</p>
+    <h1>Anchor</h1>
+    <p class="lede">The repeater that links long routes together.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> An <strong>anchor</strong> is a repeater that also splits a long route into legs. A route may be 12 hops long. An anchor lets it be 12 hops on each side of itself, and several anchors can be chained. Desktop hosts and servers are anchors by default.</p>
+    <p><strong>Why:</strong> A path request records every repeater it passes, and the record is limited to 12 hops. Without anchors, motorways and countries would be out of reach. With anchors, a route crosses the backbone and continues on the other side.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Routes of any length, up to 64 hops in total</li><li>Works across the internet backbone: radio area, TCP, radio area</li><li>Needs no extra setup: the host's role is anchor by default</li><li>The sender's route simply ends at the anchor, which continues on its own</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>An anchor remembers a leg for only 120 seconds, at most 16 at a time</li><li>It must be on and reachable, so a phone is a poor anchor</li><li>A gap in coverage cannot be bridged by an anchor: a 100 km gap gave no gain in the simulator</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-simulated">simulated</span> Motorway and national scenarios. <span class="badge b-bench">bench-tested</span> basic behaviour on two boards. Nothing is field-tested yet.</p>
+  </div>
+  <div class="facts"><div class="fact"><span>Forwards for others</span><strong>Yes</strong></div><div class="fact"><span>Leg memory</span><strong>120 s, 16 legs</strong></div><div class="fact"><span>Longest route</span><strong>64 hops (12 per leg)</strong></div><div class="fact"><span>Stored role value</span><strong>3</strong></div></div>
+
+  <div class="simple" data-role="anchor"></div>
+
+  <h2 id="what">What an anchor does</h2>
+  <p>A normal path request collects the path IDs of the repeaters it passes. At 12 entries it is full, and a plain repeater drops it. An anchor does something else. When it receives a request with a non-empty trail it remembers the reply token and the trail so far, then forwards the request with an <strong>empty</strong> trail. When the response comes back, the anchor stores its own route to the target and sends the sender a response that ends at the anchor.</p>
+  <p>The result: the sender's route is "12 hops to the anchor". The anchor carries the message the rest of the way along its own route, and relays the acknowledgement back. Chain several anchors and the route can be as long as the packet header allows, 64 hops in total.</p>
+  <div class="viz">
+    <h3>A route in three legs</h3>
+    <p class="viz-sub">The sender's route ends at the first anchor. Each anchor continues on its own route.</p>
+    <div id="legs"></div>
+    <p class="src">Illustration of spec section 5.8. The numbers of hops are examples within the 12-hop limit of each leg.</p>
+  </div>
+  <div class="can">
+    <div class="yes"><h4>What an anchor does</h4><ul><li>Forward like a repeater</li><li>Split a long route into legs of up to 12 hops each</li><li>Remember where to send a response for 120 seconds</li><li>Re-send data, files, deposits and datagrams along its own route and relay the acknowledgement back</li></ul></div>
+    <div class="no"><h4>What it does not do</h4><ul><li>Make a gap in radio coverage shorter</li><li>Keep a route alive when it is switched off</li><li>Remember legs for long: after 2 minutes the leg is forgotten and discovered again</li></ul></div>
+  </div>
+
+  <h2 id="where">Where anchors go</h2>
+  <ul>
+    <li><strong>On the backbone.</strong> A host or server on the internet is an anchor. A route from your radio area to another one through the backbone is radio hops, one backbone link, then radio hops again, each side up to 12.</li>
+    <li><strong>Along a motorway or a long coastline.</strong> A fixed repeater set to anchor, so the chain of repeaters may be longer than 12.</li>
+    <li><strong>Not on a phone</strong> unless you mean it. The app's own node is a client by default, because a phone comes and goes.</li>
+  </ul>
+  <h2 id="evidence">What the simulator says</h2>
+  <p>The motorway scenario runs a car on the E45 with repeaters every 15 km. In the national scenario, hosts as anchors was one of several chain fixes made together, so its share cannot be read off alone.</p>
+  <p>See the full set of numbers on the <a href="simulation.html#chain">simulation results</a> page. One result limits the claim: an E45 scenario with a 100 km gap in repeaters showed no gain at all, with 19–36 % more airtime. An anchor links routes, it does not create coverage.</p>
+  <section class="deep" id="details">
+    <h2>The anchor protocol in detail</h2>
+    <p>Spec section 5.8. Constants: <code>ANCHOR_TTL_MS</code> = 120 000 ms, <code>MAX_ANCHORED</code> = 16 legs, <code>MAX_HOPS</code> = 64.</p>
+    <ol>
+      <li>A path request arrives at the anchor with a non-empty trail.</li>
+      <li>The anchor remembers <code>(reply token, target, reverse trail)</code> and forwards the request with an empty trail and <code>hops + 1</code>.</li>
+      <li>When the <code>PathResponse</code> for that token reaches the anchor, it stores the response's forward path as its own route to the target.</li>
+      <li>It sends a new <code>PathResponse</code> back along the first leg, with the first leg as payload. The sender's route therefore ends at the anchor.</li>
+      <li>A <code>Data</code>, <code>Fragment</code>, <code>Deposit</code> or <code>Datagram</code> packet whose path ends at the anchor but whose destination is another node is re-sent along the anchor's own route. The anchor remembers <code>(ack_token(id), reverse of the received path)</code> and relays the <code>Ack</code> back.</li>
+    </ol>
+    <p>Hosts also use <strong>bordercast</strong> (after ZRP): a path or key request that arrives over TCP goes out on the host's radio only when the destination was heard over that radio, or on a second request within 2 minutes. That keeps requests for far-away nodes off the local radio channel.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>maarse-core/src/router.rs</code>, <code>maarse-host/src/*</code>, <code>docs/GUIDE.md</code> and the protocol specification.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simple.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+(function(){
+  var el = document.getElementById('legs'); var NS='http://www.w3.org/2000/svg';
+  function s(t,a,x){var e=document.createElementNS(NS,t);for(var k in a)e.setAttribute(k,a[k]);if(x!=null)e.textContent=x;return e;}
+  var svg = s('svg',{viewBox:'0 0 760 200','class':'viz-svg',role:'img','aria-label':'A route made of three legs joined by two anchors'});
+  var pts=[[40,100,'S','sender'],[130,100],[210,100],[290,100,'A1','anchor'],[380,100],[460,100],[540,100,'A2','anchor'],[630,100],[720,100,'R','receiver']];
+  for(var i=0;i<pts.length-1;i++) svg.appendChild(s('line',{x1:pts[i][0],y1:pts[i][1],x2:pts[i+1][0],y2:pts[i+1][1],'class':'m-link on'}));
+  var legs=[[40,290,'Leg 1: sender to anchor 1',70],[290,540,'Leg 2: anchor 1 to anchor 2',150],[540,720,'Leg 3: anchor 2 to receiver',150]];
+  legs.forEach(function(l,i){svg.appendChild(s('path',{d:'M '+l[0]+' 130 v 10 H '+l[1]+' v -10',fill:'none',stroke:'var(--c'+(i+1)+')','stroke-width':3}));svg.appendChild(s('text',{x:(l[0]+l[1])/2,y:162,'text-anchor':'middle','class':'v-note'},l[2]));});
+  pts.forEach(function(p){var g=s('g',{'class':'m-node '+(p[3]||''),transform:'translate('+p[0]+','+p[1]+')'});g.appendChild(s('circle',{r:p[3]?17:10}));if(p[2])g.appendChild(s('text',{y:4,'text-anchor':'middle'},p[2]));svg.appendChild(g);});
+  svg.appendChild(s('text',{x:380,y:45,'text-anchor':'middle','class':'v-group'},'Each leg is at most 12 hops. The packet header never holds more than 12 path IDs.'));
+  el.appendChild(svg);
+})();
+</script>
+</body>
+</html>

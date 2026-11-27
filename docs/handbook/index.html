@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Må:rse handbook</title>
+<meta name="description" content="Plain-language documentation for Må:rse, an encrypted LoRa mesh network that reaches around the world over the internet, with deep dives for those who want the details.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Handbook</p>
+    <h1>Må:rse handbook</h1>
+    <p class="lede">Text, pictures and voice between cheap radios, with no mobile network and no central server.</p>
+  </header>
+
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>Må:rse is a mesh network.</strong> Small LoRa radios pass messages to each other over several kilometres. Where there is internet, hosts join the radio areas into one network, so the same address and encryption work everywhere.</p>
+    <p class="meta">Status: working prototype, version 0.9. Latest release <code>v0.9.10</code>. Not measured in the field yet, and the cryptography has not been reviewed by outsiders. <a href="status.html">What works today →</a></p>
+  </div>
+
+  <h2 id="paths">Where do you want to start?</h2>
+  <ul class="cards">
+    <li><a class="card" href="what-is-marse.html"><strong>I am new here</strong><span>What it is, why it exists, what it is good at. Two minutes.</span></a></li>
+    <li><a class="card" href="get-started.html"><strong>I want to try it</strong><span>Run a host on your PC, flash a board, or install the Android app.</span></a></li>
+    <li><a class="card" href="roles.html"><strong>What is a client, a repeater, a relay?</strong><span>Every role explained, with an interactive lab and simulator results.</span></a></li>
+    <li><a class="card" href="how-it-works.html"><strong>How does a message travel?</strong><span>Play with flood against route, and radio against internet.</span></a></li>
+    <li><a class="card" href="mailboxes-and-carry.html"><strong>What if they are offline?</strong><span>Post offices, mailboxes and messages carried by people on the move.</span></a></li>
+    <li><a class="card" href="privacy-and-security.html"><strong>Can I trust it?</strong><span>What is encrypted, what a listener can see, and what is not guaranteed.</span></a></li>
+    <li><a class="card" href="messages.html"><strong>What can it do?</strong><span>Messages, channels, files and voice, pages, alerts, sensors and more.</span></a></li>
+    <li><a class="card" href="simulation.html"><strong>Show me the numbers</strong><span>Simulator results with charts, and what they do and do not prove.</span></a></li>
+    <li><a class="card" href="architecture.html"><strong>I want to build on it</strong><span>The parts, the layers and where the code lives.</span></a></li>
+  </ul>
+
+  <h2 id="how-to-read">How to read this handbook</h2>
+  <p>Every page starts with a <strong>TL;DR</strong> box: what the thing is, why it exists, and its advantages and drawbacks. If that is enough, stop there.</p>
+  <p>Below it, the page explains the idea in plain words, with interactive figures you can play with. Marked sections called <strong>Deep dive</strong> go into byte layouts, constants, timers and the reasons behind each choice. They are hidden by default so the first read stays simple. Use <em>Deep dives: hidden</em> in the top bar to show them everywhere, or the link on each page to show them there.</p>
+
+  <h2 id="status-legend">Status labels</h2>
+  <p>Claims in this handbook carry a label that says how far they have been proven. A feature that only works in a simulator is never described as working on hardware.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Label</th><th>Meaning</th></tr>
+    <tr><td><span class="badge b-released">released</span></td><td>In a published release, <code>v0.9.10</code> or earlier.</td></tr>
+    <tr><td><span class="badge b-working">working copy</span></td><td>Built and tested in the repository, but not in a release yet.</td></tr>
+    <tr><td><span class="badge b-simulated">simulated</span></td><td>Measured in <code>maarse-sim</code>, which runs the real router code on virtual nodes. Not measured in the air.</td></tr>
+    <tr><td><span class="badge b-bench">bench-tested</span></td><td>Run on real boards on a desk.</td></tr>
+    <tr><td><span class="badge b-field">field-tested</span></td><td>Measured outdoors with real distances. Nothing carries this label yet.</td></tr>
+    <tr><td><span class="badge b-designed">designed, not built</span></td><td>Written down, no code.</td></tr>
+    <tr><td><span class="badge b-shelved">shelved</span></td><td>Considered and parked on purpose.</td></tr>
+    <tr><td><span class="badge b-rejected">rejected (measured)</span></td><td>Tried and found not worth it. The numbers are kept.</td></tr>
+  </table></div>
+
+  <div class="callout honest">
+    <strong>Honest status</strong>
+    <p>Må:rse runs on two boards on a desk, a PC host, a web client and an Android app. Meshtastic, MeshCore and Reticulum are mature projects with real users. Må:rse is an attempt to combine their best ideas, and it has no field data yet.</p>
+  </div>
+
+  <h2 id="more">Other places to look</h2>
+  <ul>
+    <li><a href="https://trixxor.github.io/maarse/simulator/">Mesh Lab</a>: race Må:rse against Meshtastic, MeshCore and Reticulum in your browser.</li>
+    <li><a href="https://trixxor.github.io/maarse/denmark/">Denmark simulator</a>: build and break a national network with the real router code.</li>
+    <li>The complete wire-level specification is <code>docs/protocol-spec.md</code> in the repository. This handbook explains it; the specification is the reference.</li>
+  </ul>
+</article>
+<footer class="site">Må:rse handbook · written for the working copy of the repository · code under MIT or Apache-2.0, protocol specification under CC-BY 4.0</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

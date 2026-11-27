@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Client node · Må:rse handbook</title>
+<meta name="description" content="Your phone or handheld: sends and receives, never forwards.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Roles · Explanation</p>
+    <h1>Client node</h1>
+    <p class="lede">Your phone or handheld: sends and receives, never forwards.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>client node</strong> is a Må:rse device that sends and receives its own messages and never forwards anything for others. Your phone with a radio, a handheld, or the Android app's own node is normally a client.</p>
+    <p><strong>Why:</strong> Forwarding costs battery and airtime. A phone comes and goes, so nobody can depend on it, and it should not spend your battery on strangers' traffic.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Quiet: it transmits only what you send, plus a small hello and an announce now and then</li><li>Everything a user does works: messages, channels, files, voice, pages, alerts</li><li>Receives mail that waited for you in a post office</li><li>Cheapest role in battery and airtime</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Cannot extend coverage for anyone</li><li>In a group with no repeater, clients alone got <strong>about 95 % through in the simulated forest</strong>, against 99.7 % with auto</li><li>Make a handheld <em>auto</em> if it should help out when no repeater is near</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-bench">bench-tested</span> on Heltec V4 and XIAO nRF52840. <span class="badge b-simulated">simulated</span> for group results.</p>
+  </div>
+  <div class="facts"><div class="fact"><span>Forwards for others</span><strong>Never</strong></div><div class="fact"><span>Typical device</span><strong>Phone, handheld</strong></div><div class="fact"><span>Power</span><strong>Battery</strong></div><div class="fact"><span>Stored role value</span><strong>0</strong></div></div>
+
+  <div class="simple" data-role="client"></div>
+
+  <h2 id="what">What a client is</h2>
+  <p>It is a full node with its own identity and address. It is the role most people use. It talks to other nodes through repeaters and, when there is a host nearby, through the internet backbone. It is called a client because it does not carry other people's traffic.</p>
+  <p>The Android app's own node is a client by default. When the app runs the whole host inside the phone, the phone is a Må:rse node on the backbone with its own identity, and still only a client on the radio side.</p>
+  <div class="can">
+    <div class="yes"><h4>What a client can do</h4><ul><li>Send and receive encrypted direct messages with a delivered mark</li><li>Join channels (at most 4 on firmware nodes)</li><li>Send and receive pictures and files, up to 8 KB over LoRa</li><li>Send and receive voice messages and fetch <code>maarse://</code> pages</li><li>Share an opt-in, rounded position and telemetry</li><li>Ask its home post office for mail, and drop mail there when the recipient is away</li><li>Keep up to 128 contacts in memory, with up to 32 pinned ones saved in flash</li></ul></div>
+    <div class="no"><h4>What a client leaves to others</h4><ul><li>Forward floods or routed packets for others</li><li>Act as a post office (radio nodes keep mail only for themselves, in 8 KB of flash)</li><li>Serve <code>maarse://</code> pages (firmware nodes fetch pages but do not serve them)</li><li>Be relied on as part of someone else's route</li></ul></div>
+  </div>
+
+  <h2 id="airtime">What it costs in airtime</h2>
+  <p>A client is the quietest role. After it hears a repeater it announces itself every 12 hours by default, and sends a small hello (22 bytes, never forwarded) at growing intervals up to 30 minutes when it has coverage. Before it hears a repeater it announces every 15 minutes, so a new device is found quickly. Everything else is traffic you create yourself.</p>
+  <div class="viz">
+    <h3>Airtime of one 22-byte message over 3 hops</h3>
+    <p class="viz-sub">What your client causes when it sends one short message along a known route. Airtime computed with the project's formula at SF9, 125 kHz.</p>
+    <div id="c-airtime"></div>
+    <p class="takeaway">The data packet is forwarded three times and acknowledged three times. A flood of the same message would be repeated by every node in range.</p>
+    <p class="src">Formula: <code>maarse-core/src/airtime.rs</code> (Semtech AN1200.13). Sizes from the airtime report, section 1.</p>
+  </div>
+
+  <h2 id="choose">When a client is the right choice</h2>
+  <ul>
+    <li>A phone or a handheld in or near a town. Repeaters will carry the traffic.</li>
+    <li>A device that is often off, in a pocket, or on a small battery.</li>
+    <li>You are not sure. A client never causes harm to the network.</li>
+  </ul>
+  <p>Choose <a href="role-relay.html">auto</a> instead for a handheld you take into a forest or out of coverage with a group.</p>
+  <section class="deep" id="details">
+    <h2>Timers and limits a client lives by</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Item</th><th>Value</th><th>Meaning</th></tr>
+    <tr><td>First announce after start</td><td>5 to 35 s at random</td><td>Many nodes starting after a power cut do not collide</td></tr>
+    <tr><td>Announces before a repeater is heard</td><td>every 15 min</td><td>A new or moved node is found quickly</td></tr>
+    <tr><td>Announces once a repeater is heard</td><td>every 12 h (setting, up to about 64 h), ±10 %</td><td>Why so rarely: 15 min announces cost more airtime than all path requests and delivery fell from 99 % to 79 % in the simulator</td></tr>
+    <tr><td>Hello (Trickle timer)</td><td>10 s after a change, then doubling up to 30 min when covered</td><td>Neighbours learn roles in seconds</td></tr>
+    <tr><td>Contacts</td><td>128 in RAM, 32 pinned in flash</td><td>Everyone you write to or hear from is pinned; strangers are evicted first</td></tr>
+    <tr><td>Ratchet sessions</td><td>8 in RAM on firmware</td><td>Forward-secrecy conversations</td></tr>
+    <tr><td>Mobile mode</td><td>on after 3 repeater changes in 10 minutes, off after 15 minutes without</td><td>A car passing repeaters: routes to it are looked up afresh after 5 minutes</td></tr>
+    <tr><td>Route to a mobile node</td><td>not trusted when older than 30 s</td><td></td></tr>
+  </table></div>
+
+    <p>A client with a Wi-Fi link to a host (an ESP32 board on a phone hotspot) joins the backbone as well. See <a href="role-host.html#wifi">Host</a>.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>maarse-core/src/router.rs</code> (roles), <code>docs/GUIDE.md</code> (routing, roles of a host, battery), and the simulator runs named under each chart.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simple.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+(function(){
+  var T = Viz.toa, hops=3;
+  var data = 18+1+2*hops+64+1+22, ack = 18+1+2*hops;
+  var rows = [{label:'Data, forwarded 3 times', parts:[{label:'header',bytes:18,short:'18',c:6},{label:'path',bytes:7,short:'7',c:5},{label:'seal',bytes:64,short:'seal 64',c:3},{label:'type',bytes:1,c:6},{label:'text',bytes:22,short:'text 22',c:1,data:true}]},
+              {label:'Acknowledgement, 3 hops', parts:[{label:'header',bytes:18,short:'18',c:6},{label:'path',bytes:7,short:'7',c:5}]}];
+  Viz.frames(document.getElementById('c-airtime'), {rows: rows, scale: 120, legend:[[6,'Header'],[5,'Route'],[3,'Encryption seal'],[1,'Your text']], caption:'Drawn to one scale. Seconds are airtime at SF9: 0.65 s for the message, 0.24 s for the acknowledgement.'});
+})();
+</script>
+</body>
+</html>

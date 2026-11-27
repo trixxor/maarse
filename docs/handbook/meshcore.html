@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeshCore · Må:rse handbook</title>
+<meta name="description" content="Reading and writing on MeshCore from the Må:rse app.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>MeshCore</h1>
+    <p class="lede">Reading and writing on MeshCore from the Må:rse app.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>MeshCore gateway</strong> lets a Må:rse person read and write on the MeshCore network from the Må:rse app, through a radio gateway that is reached over the internet backbone. The two radio protocols differ, so a Må:rse board does not talk to a MeshCore board directly. The gateway is how they meet.</p>
+    <p><strong>Why:</strong> MeshCore has a large community. A person who lives in both worlds should not need two apps and two identities.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>MeshCore chats, nodes and repeaters appear next to Må:rse in the same app, behind a switch</li><li>A MeshCore identity is created for the person, and linked devices share it</li><li>Log in to MeshCore repeaters, rooms and sensors, and see status and telemetry</li><li>Access is granted per person by the server's operator</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>The gateway needs the internet to reach the backbone: it is not carried over a LoRa-only link</li><li>MeshCore message size limits apply: 90 bytes in channels, 60 in direct messages</li><li>Only some repeater commands were checked on a real repeater</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-working">working copy</span> Checked on a physical repeater: login, <code>ver</code>, status, telemetry, <code>get name</code>, <code>get radio</code>, <code>get tx</code>, <code>get flood.max</code>, <code>neighbors</code>, <code>region</code>. <strong>Not checked:</strong> the <code>set</code> commands, reboot, setperm, region changes and changing the radio settings.</p>
+  </div>
+
+  <h2 id="how">How it fits together</h2>
+  <ol>
+    <li>An operator runs a <strong>radio gateway</strong>: a Heltec V4 with the MeshCore gateway firmware that reaches a backbone server over Wi-Fi.</li>
+    <li>On the server's dashboard, under <em>Connections → MeshCore gateway</em>, the operator sees whether the gateway and the radio worker are connected, and grants or revokes access by Må:rse person address.</li>
+    <li>On Android or in the web client, open <em>Account → MeshCore</em>, enter the backbone's HTTPS address (the open backbone is used when none is entered), and choose <em>Check access</em>. Once granted, choose <em>Create MeshCore identity</em>.</li>
+    <li>A <strong>Må:rse | MeshCore</strong> switch appears in Chats and in Nodes.</li>
+  </ol>
+  <h2 id="use">What you can do</h2>
+  <ul>
+    <li><strong>Chats:</strong> Public, joined channels and direct messages, newest first. A channel message shows <em>Heard by N repeaters</em> with the best SNR; a direct message shows <em>Delivered</em> once acknowledged. A <code>#local</code>-style hashtag uses MeshCore's hashtag key.</li>
+    <li><strong>Nodes:</strong> scan for nodes in direct range, send a flood advert (repeaters pass it on) or a zero-hop advert (only direct range), filter by repeaters, chat, rooms and sensors, and star favourites. Favourites are stored per person on the backbone.</li>
+    <li><strong>Repeaters, rooms and sensors:</strong> log in with the node's own password, which is not stored. The admin password opens Status, a Command Line and Settings. The guest password gives Status and Telemetry.</li>
+    <li><strong>Name:</strong> your Må:rse name is also the MeshCore node's name, sent with the next advert.</li>
+  </ul>
+  <h2 id="limits">Limits to know</h2>
+  <ul>
+    <li>When MeshCore is not reachable the switch is grey and says why: the node is not connected, the backbone cannot be reached, the account has no access, or the gateway is not connected.</li>
+    <li>Two people on the same gateway hear each other. A direct message needs the other's advert first.</li>
+    <li>Passwords pass through the HTTPS backbone and the worker queue. Keep that data directory private.</li>
+  </ul>
+  <section class="deep" id="details">
+    <h2>Details</h2>
+    <ul>
+      <li>The gateway worker supports seven named channels in addition to Public. A private channel takes its 16-byte key as 32 hex digits.</li>
+      <li>An administrator session expires after ten minutes. Change Identity Key is only possible over the repeater's USB serial port.</li>
+      <li>Both clients remember the name last seen for each MeshCore public key (500 keys) and show it in later lists. A node that never advertised stays unnamed; MeshCore has no name request.</li>
+      <li>The gateway address is stored per device, not synced between linked devices, but the account's identity is.</li>
+      <li>The earlier MeshCore USB bridge and its <code>/mc</code> socket were removed in the working copy.</li>
+      <li>Sending MeshCore chats as Må:rse messages over LoRa is parked (decision 0007).</li>
+    </ul>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/GUIDE.md</code>, section on MeshCore access, and decision 0007.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

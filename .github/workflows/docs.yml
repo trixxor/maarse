@@ -1,0 +1,21 @@
+name: Documentation
+
+# Checks links and anchors in docs/ and the root pages, and the page headers of the
+# documentation structure. See docs/verification/README.md#documentation-checks.
+# The generated settings reference is checked locally (it needs a built maarse-host):
+#   python tools/gen_settings_reference.py --check
+on:
+  push:
+    paths: ["docs/**", "README.md", "compare.md", "AGENTS.md", "tools/docs_check.py", "tools/gen_settings_reference.py"]
+  pull_request:
+    paths: ["docs/**", "README.md", "compare.md", "AGENTS.md", "tools/docs_check.py", "tools/gen_settings_reference.py"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tools/docs_check.py --no-settings

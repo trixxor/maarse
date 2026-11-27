@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radio boards · Må:rse handbook</title>
+<meta name="description" content="The four boards Må:rse runs on, and what each can do.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Roles · Reference</p>
+    <h1>Radio boards</h1>
+    <p class="lede">The four boards Må:rse runs on, and what each can do.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> Må:rse runs on four LoRa boards with an SX1262 radio: <strong>Heltec V4</strong> (ESP32-S3 with a display), <strong>Seeed XIAO nRF52840</strong> with a Wio-SX1262, <strong>Seeed XIAO ESP32-S3</strong> and the <strong>RAK WisMesh Tag</strong>. They cost roughly €20–40 and connect to a phone over Bluetooth or USB.</p>
+    <p><strong>Why:</strong> Choosing the board is choosing a connection. Heltec V4 gives a display and Wi-Fi. The nRF52840 boards are the low-power choice with Bluetooth and USB.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Same firmware logic on all boards, written once in Rust</li><li>Signed firmware updates over USB, Bluetooth and Wi-Fi</li><li>Battery measurement and energy-aware forwarding on the boards that have a divider</li><li>A web flasher: no tools to install</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Only the Heltec V4 and the XIAO nRF52840 have been run on a desk bench; the other two build but are not flashed</li><li>ESP32 boards have almost no stack to spare when a host is attached</li><li>Bluetooth on ESP32 boards is built in but not tried on hardware</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-bench">bench-tested</span> Heltec V4 and XIAO nRF52840. Others build only. Not field-tested.</p>
+  </div>
+  <div class="table-wrap"><table>
+    <tr><th>Board</th><th>Chip</th><th>Connects by</th><th>Special</th><th>Status</th></tr>
+    <tr><td><strong>Heltec V4</strong></td><td>ESP32-S3 + SX1262</td><td>USB, Bluetooth or Wi-Fi (one at a time)</td><td>Display with several pages and button settings; battery measurement; default transmit power 10 dBm</td><td><span class="badge b-bench">bench-tested</span></td></tr>
+    <tr><td><strong>XIAO nRF52840</strong> + Wio-SX1262</td><td>nRF52840 + SX1262</td><td>USB and Bluetooth</td><td>Low power; UF2 bootloader; battery measurement</td><td><span class="badge b-bench">bench-tested</span></td></tr>
+    <tr><td><strong>XIAO ESP32-S3</strong> + Wio</td><td>ESP32-S3 + SX1262</td><td>USB, Bluetooth or Wi-Fi</td><td>No battery divider: battery shows unknown</td><td>builds, not flashed</td></tr>
+    <tr><td><strong>RAK WisMesh Tag</strong></td><td>nRF52840 (RAK4630)</td><td>USB and Bluetooth</td><td>Tag form factor</td><td>builds, not flashed</td></tr>
+  </table></div>
+
+  <h2 id="flash">Putting Må:rse on a board</h2>
+  <p>Use the web flasher in Chrome or Edge: nothing to install. The steps are on <a href="get-started.html#board">Get started</a>.</p>
+  <h2 id="can">What a board can do</h2>
+  <p>A board is a node, not a host. The table shows what runs on the radio itself, and what needs a host.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Feature</th><th>On a board (nRF52840 / ESP32-S3)</th><th>Needs a host?</th></tr>
+    <tr><td>Direct messages with a delivered mark</td><td>yes</td><td>no</td></tr>
+    <tr><td>Forward-secrecy ratchet</td><td>yes, 8 sessions in RAM</td><td>no</td></tr>
+    <tr><td>Channels</td><td>yes, at most 4</td><td>no</td></tr>
+    <tr><td>Pictures and files</td><td>up to 8 KB over LoRa, one file at a time in each direction</td><td>1 MB only over the internet through a host</td></tr>
+    <tr><td>Post office</td><td>uses one; keeps mail only for itself (8 KB of flash)</td><td>a host keeps mail</td></tr>
+    <tr><td>Remote administration</td><td>yes</td><td>no</td></tr>
+    <tr><td>Battery and energy-aware forwarding</td><td>yes, on boards with a divider</td><td>no</td></tr>
+    <tr><td>Position and telemetry</td><td>yes, opt-in and rounded</td><td>no</td></tr>
+    <tr><td>Voice messages</td><td>as a file</td><td>the client encodes them</td></tr>
+    <tr><td>Pages</td><td>fetches pages, does not serve them</td><td>a host serves pages</td></tr>
+    <tr><td>Wi-Fi backbone</td><td>ESP32-S3 only</td><td>a host to peer with</td></tr>
+    <tr><td>MQTT and Home Assistant</td><td>no</td><td>yes, on the host</td></tr>
+  </table></div>
+
+  <h2 id="battery">Battery and measuring it</h2>
+  <p>The firmware measures the battery voltage every 60 seconds (the average of eight measurements) and uses it for energy-aware forwarding. The nRF52840 also sees USB power. The ESP32 boards report USB power as unknown.</p>
+  <section class="deep" id="details">
+    <h2>Technical detail</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Board</th><th>Battery measurement</th><th>Memory</th></tr>
+    <tr><td>XIAO nRF52840</td><td>P0.31 (AIN7), divider 1 MΩ/510 kΩ (× 2.961), switched with P0.14 low, 3.0 V reference, 12 bits</td><td>about 270 KB flash and 95 KB RAM; app at 0x27000 (S140 v7)</td></tr>
+    <tr><td>WisMesh Tag (RAK4630)</td><td>P0.05 (AIN3), divider 1 MΩ/1.5 MΩ (× 1.73)</td><td>app at 0x26000 (S140 v6)</td></tr>
+    <tr><td>Heltec V4</td><td>GPIO1 (ADC1), divider switched on with GPIO37 high, × 5.12, 2.5 dB attenuation</td><td>about 550 KB app of a 2 MB partition; no PSRAM; the router has its own static of about 53 KB</td></tr>
+    <tr><td>XIAO ESP32-S3 + Wio</td><td>no divider: unknown</td><td>same as Heltec</td></tr>
+  </table></div>
+
+    <p>The pin assignments are taken from Meshtastic's board files. If your Heltec V4 has the KCT8103L amplifier (a newer revision), the amplifier control may need adjusting.</p>
+    <div class="callout warn"><strong>The ESP32 stack is tight</strong><p>With a host attached the Heltec firmware has under 100 bytes of stack to spare. After adding a static or deeper calls, run <code>tools/stack_probe.py</code> before flashing.</p></div>
+    <p>If Wi-Fi starting crashes the board twice in a row, it is skipped until the board has run stably for 60 s. Wi-Fi starts 10 s after boot so USB is always reachable first.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/GUIDE.md</code> (what it can do, firmware status, battery) and <code>firmware/</code>.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

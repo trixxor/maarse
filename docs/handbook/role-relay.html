@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relay · Må:rse handbook</title>
+<meta name="description" content="The handheld that keeps a group connected when there are no repeaters.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Roles · Explanation</p>
+    <h1>Relay</h1>
+    <p class="lede">The handheld that keeps a group connected when there are no repeaters.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>relay</strong> is a handheld that forwards for others, but only for a few hops and only when there is no repeater around. It is the "forest mode": a group of people on foot becomes its own small mesh. A handheld set to <em>auto</em> turns into a relay by itself when it stops hearing a repeater.</p>
+    <p><strong>Why:</strong> In a forest or on a mountain there are no repeaters. Without relays, each person reaches only those they hear directly. With relays, the group reaches across the whole walk.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>No setup on the trail: auto switches after 2 minutes</li><li>Waits two slots before sending, so a real repeater always wins</li><li>Carries messages it cannot deliver and hands them on when people meet (carry)</li><li>A person on a hill becomes the group's edge bridge to the repeater network</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Uses battery: this is what the radio is for, but it is not free</li><li>Forwards for at most 4 hops, so a long chain of walkers is not a network</li><li>In a town, <strong>all-relay is harmful</strong> (72.8 % delivered, 18.7 % acknowledged): use auto, not a fixed relay role</li><li>Carry helps only when people actually meet</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-simulated">simulated</span> Forest, town and carry results are from <code>maarse-sim</code>. <span class="badge b-bench">bench-tested</span> roles on two boards. Not field-tested.</p>
+  </div>
+  <div class="facts"><div class="fact"><span>Forwards for others</span><strong>Yes, up to 4 hops</strong></div><div class="fact"><span>Extra wait</span><strong>2 slots (400 ms at SF9)</strong></div><div class="fact"><span>Carry</span><strong>4 copies, 30 min, 8 messages</strong></div><div class="fact"><span>Stored role value</span><strong>2 (auto = 4)</strong></div></div>
+
+  <div class="simple" data-role="relay"></div>
+
+  <h2 id="what">What a relay is</h2>
+  <p>A relay behaves like a repeater with three differences. It forwards only while the packet has gone fewer than <code>relay_hops</code> hops (4 by default). It waits two slots longer before it sends, so if a real repeater is in range the repeater goes first and the relay stays quiet. And it carries what it cannot deliver.</p>
+  <div class="can">
+    <div class="yes"><h4>What a relay does</h4><ul><li>Forward floods and routed packets for up to 4 hops</li><li>Wait longer than repeaters, so repeaters win</li><li>Carry a message it cannot deliver, with 4 copies for up to 30 minutes</li><li>Become the group's edge bridge when it hears a repeater and a neighbour does not</li></ul></div>
+    <div class="no"><h4>What a relay does not do</h4><ul><li>Forward beyond 4 hops</li><li>Keep mail like a post office</li><li>Split long paths (that is the anchor's job)</li></ul></div>
+  </div>
+
+  <h2 id="forest">The forest result</h2>
+  <p>Ten walkers in Rold Skov, no repeater, 45 minutes of traffic in the real router code, mean of five seeds.</p>
+  <div class="viz">
+    <h3>Forest: clients, relays and auto</h3>
+    <p class="viz-sub">Share of messages that arrived.</p>
+    <div id="c-forest"></div>
+    <p class="takeaway">Auto reached 99.7 % against 95.4 % for plain clients, for about 77 % more airtime. A fixed relay role alone did not beat clients in this run: it is the switching and the edge bridges that help.</p>
+    <p class="src">Source: <code>forest_mode.mjs</code>, mean of 5 seeds.</p>
+  </div>
+
+  <h2 id="town">The town result: why not make everyone a relay?</h2>
+  <div class="viz">
+    <h3>Town: 300 handhelds, repeaters in the western half</h3>
+    <p class="viz-sub">Share of messages acknowledged by the receiver.</p>
+    <div id="c-city"></div>
+    <p class="takeaway">With every handheld a relay the town drowns in copies, and only 18.7 % of acknowledgements get back. Auto makes relays of just the 26 to 30 handhelds with no repeater in range and stays near the clients.</p>
+    <p class="src">Same run.</p>
+  </div>
+
+  <h2 id="bridge">The edge bridge</h2>
+  <p>A relay that can reach a repeater (someone who climbs a hill) is often the group's only way into the repeater network. A relay is an <strong>edge bridge</strong> when it hears a repeater and has a recent neighbour that does not. It ignores duplicate floods from other non-repeaters, so it stays useful instead of being silenced. Nodes without coverage pick the nearest bridge they hear and name it in their announce, and a bridge steps back two minutes after nobody names it.</p>
+  <p><span class="badge b-simulated">simulated</span> With 10 to 40 people on 3 to 8 km and one person on a hill that reaches a repeater 12 km away, delivery to the base rose from 55–82 % to 96–100 %, with less airtime (<code>maarse-sim --hill</code>, 10 seeds).</p>
+  <h2 id="carry">Carry: when nobody can hear anyone</h2>
+  <p>If a relay cannot deliver a message, it keeps it and hands half of its copies to new people it meets, or to the recipient when it is heard. When the recipient gets a copy, it sends a tiny delivered notice and the carriers delete theirs. Read more under <a href="mailboxes-and-carry.html">mailboxes and carry</a>.</p>
+  <p><span class="badge b-simulated">simulated</span> Forest at 8 km: delivery 60 → 76 % at +9 % airtime. At 10 km: 30 → 44 % at +11 %. See <a href="simulation.html#carry">simulation results</a>.</p>
+  <section class="deep" id="details">
+    <h2>How auto and the bridge decide</h2>
+    <ul>
+      <li><strong>Auto:</strong> client while a repeater or anchor is in range; relay after 2 minutes with none; a repeater counts as in range for 5 minutes after it was last heard; back to client after 2 minutes of hearing one again. The node logs each switch and reports role 4.</li>
+      <li><strong>Bridge selection:</strong> a node that hears a repeater while a neighbour without coverage has no bridge yet becomes a relay for it, after 2 minutes of steady coverage, with a chance of max(1 / (1 + neighbours that hear a repeater too), 1/4) per 15 s check. A person on a hill takes the job at once; nodes along a town's edge do not all do it.</li>
+      <li><strong>Hello role flag:</strong> a flag bit says "I hear a repeater or anchor directly", so neighbours know who has coverage within seconds. Observations expire after 5 minutes.</li>
+      <li><strong>Boundary forwarding:</strong> a bridge does not forward a path request from a covered neighbour, and forwards one from a repeater only when the destination is known to have no coverage.</li>
+      <li><strong>Hop limit:</strong> 12 hops instead of 4 added about one point in the forest and nothing in the town, and with many relays it does harm, so 4 stays the default.</li>
+    </ul>
+    <p>Cost note from the simulator: where repeaters stand inside a forest, the bridge rule costs 0–3 points of acknowledgements and up to about 30 % more airtime with partial coverage. With dense coverage it is close to unchanged.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>maarse-core/src/router.rs</code> (roles), <code>docs/GUIDE.md</code> (routing, roles of a host, battery), and the simulator runs named under each chart.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simple.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+(function(){
+  Viz.bars(document.getElementById('c-forest'), {title:'Forest delivered', unit:' %', max:100, groups:[{label:'Delivered', bars: SIM.rolesForest.map(function(r){return {label:r.name, value:r.delivered, series:r.series};})}], series:['Auto','Relays','Clients']});
+  Viz.bars(document.getElementById('c-city'), {title:'Town acked', unit:' %', max:100, groups:[{label:'Acknowledged', bars: SIM.rolesCity.map(function(r){return {label:r.name, value:r.acked, series:r.series};})}], series:['Auto','Relays','Clients']});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server · Må:rse handbook</title>
+<meta name="description" content="The always-on host that lets other hosts find each other.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Roles · Explanation</p>
+    <h1>Server</h1>
+    <p class="lede">The always-on host that lets other hosts find each other.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>server</strong> (<code>maarse-server</code>) is a host built for the internet: a VPS, a rack machine or a Raspberry Pi with an open port. Other hosts find each other through it, hosts behind NAT are relayed, it keeps copies of mail, and an admin dashboard shows what passes through.</p>
+    <p><strong>Why:</strong> A backbone needs a few always-on, reachable machines to begin with. Without them, two hosts behind home routers cannot find each other.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Hosts find each other through it: it is a DHT node</li><li>Relays hosts that cannot open a port, still end-to-end encrypted</li><li>Keeps mail copies for offline people</li><li>Admin dashboard with node census and map, destinations, routes, delivery times and live traffic</li><li>Debian/Ubuntu installer that sets it up as a service</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>The open backbone is <strong>shared public infrastructure</strong>, not anyone's personal inbox</li><li>The dashboard is plain HTTP unless you put HTTPS in front</li><li>It sees destinations and routes of the traffic it relays, though not message contents</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-tested">tested</span> with <code>tools/dht_test.py</code> and the end-to-end test. Dashboard and installer are in the repository.</p>
+  </div>
+  <div class="facts"><div class="fact"><span>Min backbone links</span><strong>6</strong></div><div class="fact"><span>DHT contacts per network</span><strong>max 4</strong></div><div class="fact"><span>Per IP</span><strong>8 connections</strong></div><div class="fact"><span>Admin lockout</span><strong>5 tries, 15 min</strong></div></div>
+
+  <h2 id="what">What a server does on the network</h2>
+  <ul>
+    <li><strong>Hosts find each other through it.</strong> It is a DHT node. A host that points at it finds other hosts wherever they are.</li>
+    <li><strong>Relay for hosts behind NAT.</strong> A host that cannot open a port connects out to the server, which publishes the addresses it reaches through it. Messages stay end-to-end encrypted.</li>
+    <li><strong>Mail copies.</strong> As a public DHT node it is one of the replica hosts that keep mail for offline nodes.</li>
+    <li><strong>Stays connected.</strong> It keeps at least 6 backbone links, spread over the DHT, and saves the nodes it has seen, so after a restart it finds the network again even if every seed is gone.</li>
+    <li><strong>Says what it offers.</strong> Every host tells the backbone whether it keeps mail, how much room is left, whether it relays, its regions and its version. Replica post offices are only picked among hosts that keep mail.</li>
+  </ul>
+  <h2 id="dashboard">The dashboard</h2>
+  <p>At <code>http://&lt;server&gt;:8080/</code> an admin password is needed. At first start a random password is written to <code>admin-password.txt</code> in the data folder, and the log shows only the file path. The dashboard has a <strong>Connections</strong> tab with every link, its uptime and traffic, <em>Close</em> and <em>Block</em> buttons, the block list and temporary bans. Other tabs show the node census with a map, destinations, routes, delivery times, modem counters and live traffic. A <strong>Pages</strong> tab and a <strong>Settings</strong> tab sit alongside, and a <em>Share live traffic</em> option feeds the real-network view of the Denmark simulator.</p>
+  <h2 id="protect">How it protects itself</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Protection</th><th>Value</th></tr>
+    <tr><td>DHT contacts from one network (IPv4 /24, IPv6 /48)</td><td>at most 4</td></tr>
+    <tr><td>Incoming backbone connections</td><td>8 per IP, 256 in all</td></tr>
+    <tr><td>DHT requests</td><td>120 per minute per address</td></tr>
+    <tr><td>Rate per link</td><td>100 packets/s (bursts 300), 64 KB/s</td></tr>
+    <tr><td>A link that keeps going over</td><td>closed, address banned 10 minutes</td></tr>
+    <tr><td>More than 20 packets that do not decode</td><td>address banned 15 minutes</td></tr>
+    <tr><td>Admin password</td><td>5 wrong tries lock that address for 15 minutes; changing the password revokes sessions</td></tr>
+  </table></div>
+  <div class="callout note"><strong>Shared infrastructure</strong><p>The default backbone node (nj01) is public infrastructure that everyone shares. Do not treat it as your own mail server. If you want a private inbox, run your own server or your own host.</p></div>
+
+  <h2 id="install">Run your own</h2>
+<pre><code>sudo bash scripts/install-server.sh</code></pre>
+  <p>On Debian or Ubuntu this installs the server as a service and asks for the settings. For public access put HTTPS in front with a reverse proxy such as Caddy and Let's Encrypt, and require the access key. An old phone on Wi-Fi and a charger can also be a server (Android app, <em>Server on this phone</em>), but mobile networks cannot be reached from outside, so it stops by itself when the phone leaves Wi-Fi or the charger.</p>
+  <section class="deep" id="details">
+    <h2>Choices and technical detail</h2>
+    <ul>
+      <li><code>--no-post-office</code>: keeps no mail for others. Mail from its own side still goes to the recipient's replica post offices.</li>
+      <li><code>--mail-quota-mb N</code>: at most N MB of mail for others. When full, new mail is refused and the sender is told.</li>
+      <li><code>--no-relay</code>: publishes only the addresses it reaches over its own radio.</li>
+      <li><code>--min-peers</code>: keeps at least that many backbone links (server default 6).</li>
+      <li>A packet with a fixed route goes only to the link of its next hop (learned from traffic). A retry of the same packet within 10 seconds goes to every link, so a wrong guess never costs a message.</li>
+      <li>A Wi-Fi modem needs a key on a server: the host sends a random challenge and the modem answers with a hash of key and challenge, so the passphrase never crosses the network. No valid answer within 10 s closes the link.</li>
+    </ul>
+    <p>Note: the options above are for server operators and appear here because a server has no person at a keyboard. For an ordinary host, everything is set in the web client.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>maarse-core/src/router.rs</code>, <code>maarse-host/src/*</code>, <code>docs/GUIDE.md</code> and the protocol specification.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

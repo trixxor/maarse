@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Channels and regions · Må:rse handbook</title>
+<meta name="description" content="Group conversations, and how to keep them local.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>Channels and regions</h1>
+    <p class="lede">Group conversations, and how to keep them local.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>channel</strong> is a group conversation. Everyone who knows the channel's name or key reads and writes in it. <code>public</code> and <code>#hashtag</code> channels are open to anyone; a private channel needs its key shared. A <strong>region</strong> keeps a channel local, such as <code>#trip@nordjylland</code>.</p>
+    <p><strong>Why:</strong> Not every message is for one person. Channels are for groups, a village, a trip, a hobby. Regions stop a local chat from being repeated across the whole country.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Open channels need no setup: type a hashtag and you are in</li><li>Private channels with a shared key</li><li>Regions keep local chats local and save everyone's airtime</li><li>Flooded locally (up to 8 hops), so it works with no routes</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Open channel keys come from the name, so <strong>anyone can read them</strong></li><li>The sender of a channel message is <strong>not authenticated</strong>: whoever holds the key can write as anyone</li><li>Channels flood, so they cost more airtime than a direct message</li><li>At most 4 channels on a radio board</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-bench">bench-tested</span> basic channels on two boards. <span class="badge b-simulated">simulated</span> Regions in the simulator. Sender signing is <span class="badge b-designed">designed, not built</span>.</p>
+  </div>
+  <div class="table-wrap"><table>
+    <tr><th>Channel</th><th>Key</th><th>Who can read it</th></tr>
+    <tr><td><code>public</code></td><td>SHA-256 of a fixed string</td><td>Everyone</td></tr>
+    <tr><td><code>#name</code> (hashtag)</td><td>SHA-256 of a fixed prefix and the name</td><td>Everyone who knows the name</td></tr>
+    <tr><td>Private</td><td>32 random bytes, shared by invitation</td><td>Only people you gave the key to</td></tr>
+  </table></div>
+
+  <h2 id="regions">Regions</h2>
+  <p>A channel with a region is written <code>name@region</code>, for example <code>public@dk</code> or <code>#trip@nordjylland</code>. A repeater has a list of up to 8 regions it forwards for. A repeater in Aalborg might have <code>dk, nordjylland</code> and one in Aarhus <code>dk, østjylland</code>. A message in <code>#trip@nordjylland</code> then reaches all of North Jutland but stops at the Aarhus repeater, while a message in <code>public@dk</code> passes both.</p>
+  <ul>
+    <li><code>#trip</code> and <code>#trip@nordjylland</code> are the same conversation: the key depends only on the name.</li>
+    <li>Only <strong>forwarding</strong> is filtered. Messages to your own node are always delivered, and direct messages are unaffected.</li>
+    <li>A node without regions forwards everything, so the network works before anyone sets them up. With <em>strict</em>, a node without regions forwards only messages with no region.</li>
+    <li>On the backbone, gateways exchange their regions and send a regional message only to peers that serve the region.</li>
+  </ul>
+  <h2 id="trust">What you can trust in a channel</h2>
+  <div class="callout warn"><strong>The sender is only claimed</strong><p>A channel message carries the sender's address inside the encrypted text, but nothing proves it. Anyone who holds the channel key can write as anyone. For anything where it matters who wrote, use a direct message, whose sender is authenticated. Signing channel senders is a known later improvement (decision 0008).</p></div>
+
+  <section class="deep" id="details">
+    <h2>Format and limits</h2>
+<pre><code>nonce (8, random) | ChaCha20-Poly1305(k, sender address (16) | message) | tag (16)
+k     = HKDF(salt "maarse/channel/v0", ikm channel key, info "message")
+nonce = the 8 bytes followed by 4 zero bytes;  AAD = the 8 nonce bytes</code></pre>
+    <p>The overhead is 40 bytes. A channel message without a region carries up to 237 bytes of payload, and 235 with a region. A region on the air is a 16-bit hash of the name placed after the path, flagged by one bit in the flags byte. Older firmware does not forward packets that carry a region. Channel, announce and probe floods stop at 8 hops (<code>LOCAL_SCOPE</code>).</p>
+    <p>On a host, a message from a device on your own signed device list is shown as sent by you, on all your devices. Someone holding the key can make a message appear as your own on your devices: the same trust boundary as writing as anyone.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/GUIDE.md</code>, <code>docs/protocol-spec.md</code> and the code they name.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

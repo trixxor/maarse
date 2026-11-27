@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get started · Må:rse handbook</title>
+<meta name="description" content="Run a Må:rse host on your PC, flash a radio board, or install the Android app.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Start · Tutorial and how-to</p>
+    <h1>Get started</h1>
+    <p class="lede">Three ways in. You do not need a radio for the first one.</p>
+  </header>
+
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>Fastest:</strong> start a host on your PC and use its web client in the browser. It takes about 15 minutes, most of it the first build. <strong>With a radio:</strong> flash a board with the web flasher, then connect to it from the web client or the phone app.</p>
+    <p class="meta"><span class="badge b-working">working copy</span> <span class="badge b-bench">bench-tested</span> on Heltec V4 and XIAO nRF52840. The steps below have not been re-run from a clean machine since they were written, so if one does not give the result described, that is a bug in this page.</p>
+  </div>
+
+  <h2 id="choose">Which way is yours?</h2>
+  <ul class="cards">
+    <li><a class="card" href="#pc"><strong>A. PC host</strong><span>No hardware. Windows or Linux.</span></a></li>
+    <li><a class="card" href="#board"><strong>B. Flash a radio board</strong><span>Heltec V4, XIAO nRF52840 and others.</span></a></li>
+    <li><a class="card" href="#phone"><strong>C. Android phone</strong><span>The native app, with the host built in.</span></a></li>
+    <li><a class="card" href="#server"><strong>D. Run a server</strong><span>Debian or Ubuntu, for others to connect to.</span></a></li>
+  </ul>
+
+  <h2 id="pc">A. Run a host on your PC</h2>
+  <p><strong>You need:</strong> Windows or Linux, internet access, about 2 GB of free disk space for the build, and a recent Chrome or Edge.</p>
+  <ol>
+    <li><strong>Install Rust</strong> from <a href="https://rustup.rs">rustup.rs</a> with the defaults. In a new terminal, <code>cargo --version</code> should print a version number.</li>
+    <li><strong>Get the code:</strong>
+<pre><code>git clone https://github.com/trixxor/maarse.git
+cd maarse</code></pre></li>
+    <li><strong>Start the host.</strong> On Windows double-click <code>scripts\start-host.bat</code>. On Linux run <code>./scripts/start-host.sh</code>. The first start builds the program, which takes a few minutes.</li>
+    <li><strong>Check:</strong> a console window shows log lines, and your browser opens <code>http://127.0.0.1:8080</code> and connects by itself.</li>
+    <li><strong>Find your address.</strong> The web client shows a 16-byte address as 32 hexadecimal digits. Your host made it the first time it started and keeps it in the <code>maarse-data</code> folder.</li>
+  </ol>
+  <div class="callout note">
+    <strong>You join the open backbone by default</strong>
+    <p>A fresh host connects to the open backbone, a shared public server, so you can reach other people at once. Remove it under <strong>Settings</strong> if you want to stay off it. Treat it as public infrastructure: it is not your own mail server.</p>
+  </div>
+  <p>Settings for a host are changed in the web client under <strong>Settings</strong> and are stored in <code>settings.txt</code>.</p>
+
+  <h2 id="board">B. Flash a radio board</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Board</th><th>Name in scripts</th><th>Status</th></tr>
+    <tr><td>Heltec V4 (ESP32-S3)</td><td><code>heltec-v4</code></td><td><span class="badge b-bench">bench-tested</span></td></tr>
+    <tr><td>Seeed XIAO nRF52840 with Wio-SX1262</td><td><code>xiao-nrf52840</code></td><td><span class="badge b-bench">bench-tested</span></td></tr>
+    <tr><td>Seeed XIAO ESP32-S3</td><td><code>xiao-esp32s3</code></td><td>builds; not flashed</td></tr>
+    <tr><td>RAK WisMesh Tag</td><td><code>wismesh-tag</code></td><td>builds; not flashed</td></tr>
+  </table></div>
+  <p>More about each board on <a href="hardware.html">radio boards</a>.</p>
+  <h3>The web flasher (nothing to install)</h3>
+  <ol>
+    <li>Use Chrome or Edge on a computer and open <code>flash.html</code>: from your running host at <code>http://127.0.0.1:8080/flash.html</code>, or from the project's site.</li>
+    <li>Choose your board and follow the page.</li>
+    <li><strong>ESP32-S3:</strong> connect by USB. If it will not connect, hold BOOT and press RST. Your identity, contacts and mailbox are kept unless you tick <em>erase the whole flash</em>.</li>
+    <li><strong>nRF52840:</strong> press <em>Start bootloader</em>, then <em>Flash over USB</em>. If that fails, double-press reset so a USB drive appears, and copy the <code>.uf2</code> file onto it.</li>
+  </ol>
+  <p><strong>Check:</strong> the board reconnects and shows up in the web client over USB or Bluetooth, and the status page shows the firmware version.</p>
+  <h3>Troubleshooting</h3>
+  <div class="table-wrap"><table>
+    <tr><th>Symptom</th><th>Try</th></tr>
+    <tr><td>ESP32 will not connect</td><td>Hold BOOT, press RST, and retry</td></tr>
+    <tr><td>nRF52840 shows no USB drive</td><td>Double-press reset quickly. Try another cable: some are charge-only.</td></tr>
+    <tr><td>COM port is busy</td><td>Stop the host or any serial monitor that uses the board</td></tr>
+  </table></div>
+  <p>To update a board that already runs Må:rse, use the <strong>Firmware</strong> page in the web client or the app (USB, Bluetooth or the network). Updates are signed: a board installs only an image for its own board, with a newer version, signed with its built-in release key. Updates over LoRa are <span class="badge b-shelved">shelved</span>, because LoRa is too slow.</p>
+
+  <h2 id="phone">C. Android phone</h2>
+  <p>The native app has the host built in, so it needs no PC. It connects to a radio over Bluetooth or USB, and to the open backbone over the internet by default.</p>
+  <div class="callout honest"><strong>Honest status</strong>
+    <p>The app is verified in an emulator. Bluetooth mode on a real phone has not been tested, and some features are missing compared with the web client.</p></div>
+  <p>The web client and the Android app are kept level: every user-facing change is made in both. More on the <a href="apps.html">apps and clients</a> page.</p>
+
+  <h2 id="server">D. Run a server</h2>
+  <p>A <code>maarse-server</code> is a dedicated host for a VPS or any machine with an open port. Other hosts find each other through it, hosts behind NAT are relayed, it keeps mail copies, and an admin dashboard shows telemetry.</p>
+<pre><code>sudo bash scripts/install-server.sh</code></pre>
+  <p>On Debian or Ubuntu this installs the server as a service and asks for the settings. Put HTTPS in front of the dashboard for public access.</p>
+
+  <section class="deep" id="second-node">
+    <h2>Try two nodes on one computer</h2>
+    <p>This is the one place where command-line options are the right tool: two hosts on one computer need different folders and ports. In a second terminal in the <code>maarse</code> folder:</p>
+<pre><code>cargo run --release -p maarse-host --bin maarse-host -- --data maarse-data-b --http 127.0.0.1:8081 --listen 127.0.0.1:4243 --peer 127.0.0.1:4242</code></pre>
+    <p><strong>Check:</strong> a second browser tab at <code>http://127.0.0.1:8081</code> shows a different address, and within seconds the first node appears there as a contact. Send <code>hello</code> from the second to the first. It appears in the first client, and a <em>delivered</em> mark appears in the second. That mark is the end-to-end acknowledgement: the other node decrypted the message.</p>
+  </section>
+
+  <section class="deep" id="build-firmware">
+    <h2>Build the firmware yourself</h2>
+    <p>Windows:</p>
+<pre><code>.\scripts\build-firmware.ps1 &lt;board&gt; -Flash</code></pre>
+    <p>Linux:</p>
+<pre><code>./scripts/build-firmware.sh &lt;board&gt; flash</code></pre>
+    <ul>
+      <li><strong>nRF52840:</strong> the script makes <code>dist/maarse-&lt;board&gt;.uf2</code>. Double-click the board's reset button, drag the file onto the USB drive that appears, then press reset once so USB comes back.</li>
+      <li><strong>ESP32-S3:</strong> the first run installs Espressif's toolchain (<code>espup</code>) and <code>espflash</code>, which takes several minutes. The port must be free, so stop any host that uses the board as its modem first.</li>
+    </ul>
+  </section>
+
+  <section class="deep" id="legal-hardware">
+    <h2>Radio settings and limits</h2>
+    <p>Every Må:rse node uses 869.525 MHz in the EU band 869.4–869.65 MHz, with the same spreading factor and settings across the whole network. The firmware enforces the duty cycle (at most 10 % of the time) and listens before it talks. A node on another band or setting cannot talk to the rest of the network.</p>
+  </section>
+</article>
+<footer class="site">Source: README, <code>scripts/</code>, and the first-node tutorial and flashing guide in <code>docs/</code>.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Host · Må:rse handbook</title>
+<meta name="description" content="The program that joins your radio to the rest of the network.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Roles · Explanation</p>
+    <h1>Host</h1>
+    <p class="lede">The program that joins your radio to the rest of the network.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>host</strong> is the Må:rse program that runs on a PC, a server or inside the phone app. It is a node itself, and it is also a gateway: it attaches radios, joins the internet backbone, keeps your history and a post office, and serves the web client in your browser.</p>
+    <p><strong>Why:</strong> A radio alone has little memory and a small display. A host adds storage, a screen and the internet, and joins radio areas into one network.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>The web client, the Android app and the Windows tray all talk to a host</li><li>Keeps your messages, files and mail for days, even when your phone is off</li><li>Joins LoRa, Wi-Fi radios, serial modems, KISS and the TCP/UDP backbone</li><li>Acts as a post office with three copies across the backbone</li><li>Runs as a Windows service or a Linux systemd service, with signed updates on Windows</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>It needs a computer or a phone that stays on to be useful as a gateway</li><li>History is stored unencrypted on disk by default (kept 90 days); turn it off if that matters</li><li>A host that is reachable from the internet should require an access key</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-tested">tested</span> end-to-end on a PC. <span class="badge b-bench">bench-tested</span> with Heltec V4 and XIAO nRF52840 as modems.</p>
+  </div>
+  <div class="facts"><div class="fact"><span>Role by default</span><strong>Anchor (desktop), client (phone)</strong></div><div class="fact"><span>Web client</span><strong>http://127.0.0.1:8080</strong></div><div class="fact"><span>Mail kept</span><strong>7 days, 100 per recipient</strong></div><div class="fact"><span>Programs</span><strong>maarse-host, maarse-server</strong></div></div>
+
+  <h2 id="what">What a host does</h2>
+  <div class="can">
+    <div class="yes"><h4>What a host does</h4><ul><li>Be a node with its own identity and address</li><li>Serve the web client and a WebSocket for the app</li><li>Attach LoRa radios over USB serial, a Wi-Fi modem, KISS (for example Direwolf) or a directional trunk</li><li>Join the TCP and UDP backbone, run a DHT and find other hosts</li><li>Keep history, a post office and a file mailbox</li><li>Serve <code>maarse://</code> pages and run an MQTT bridge to Home Assistant</li><li>Update the firmware of the radios attached to it, signed</li><li>Run as a service with a live log page</li></ul></div>
+    <div class="no"><h4>What a host is not</h4><ul><li>Replace a repeater on a hilltop: the radio on it is the repeater</li><li>Reach people by radio on its own: its radio range is whatever the attached radio gives</li><li>Be reached by phones on mobile networks directly: mobile networks use CGNAT, so a host needs a public address, a forwarded port or a VPN</li></ul></div>
+  </div>
+
+  <h2 id="shapes">Three shapes of host</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Shape</th><th>What it is</th><th>Role by default</th></tr>
+    <tr><td><strong>PC host</strong></td><td><code>maarse-host</code> on Windows or Linux with a radio over USB, opening a browser to the web client. Also a Windows service plus a tray app, installed with signed updates.</td><td>Anchor</td></tr>
+    <tr><td><strong>Phone host</strong></td><td>The Android app has the whole host built in, running in a foreground service. The phone is a node on the backbone with its own identity.</td><td>Client</td></tr>
+    <tr><td><strong>Server</strong></td><td><code>maarse-server</code>, the same code with an admin dashboard, for the internet. See <a href="role-server.html">Server</a>.</td><td>Anchor</td></tr>
+  </table></div>
+
+  <h2 id="mail">The post office in a host</h2>
+  <p>When a recipient is offline, your host keeps the message and sends copies to three other hosts over the backbone. See <a href="mailboxes-and-carry.html">mailboxes and carry</a> for how it works end to end. Measured in the simulator, a traveller who was offline from Aalborg to Rønne received 76 % of the mail written while away with post offices, against 4 % with no mail design, and 36 % with the older single home-host design, at about 2.5 times the airtime in that run. See <a href="simulation.html#mail">simulation results</a>.</p>
+  <h2 id="wifi">Wi-Fi: a board as the host's antenna</h2>
+  <p>A Heltec V4 or XIAO ESP32-S3 can join Wi-Fi (a phone hotspot on a hilltop is enough) and keep a TCP link to a host. It has two modes.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Mode</th><th>What it does</th><th>When the link is lost</th></tr>
+    <tr><td><strong>Mesh node</strong> (default)</td><td>A node of its own that peers with the host over the backbone and keeps working if the host goes away.</td><td>Keeps routing as a node</td></tr>
+    <tr><td><strong>LoRa modem for the host</strong></td><td>The host's antenna over Wi-Fi: forwards raw LoRa packets with their signal quality to the host and sends what the host asks for. It does not route or announce.</td><td>After 60 s it works as an ordinary node with its own identity, so the LoRa group around it keeps working</td></tr>
+  </table></div>
+
+  <p>The firmware contains both Bluetooth and Wi-Fi but runs one at a time. Hold the PRG button for 3 seconds to switch. A modem key makes the host check that the radio is really yours. <span class="badge b-bench">bench-tested</span> joining a WPA2 network, DHCP, ping, linking to a host, and switching between Bluetooth and Wi-Fi on a Heltec V4.3. Not tested: messages from LoRa through the Wi-Fi link, and the XIAO ESP32-S3.</p>
+  <h2 id="settings">Settings, not flags</h2>
+  <p>Everything is set in the web client under <strong>Settings</strong> and is stored in <code>settings.txt</code> in the host's data folder. A host that is a service restarts itself when you save. By default every client joins the open backbone; take it out under Settings to stay off it.</p>
+  <section class="deep" id="details">
+    <h2>Limits and defaults</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Item</th><th>Value</th><th>Meaning</th></tr>
+    <tr><td>Web client</td><td><code>http://127.0.0.1:8080</code></td><td>A request without a key must match the real listener and come from a same-origin browser request</td></tr>
+    <tr><td>Mail</td><td>100 per recipient, 7 days, 3 replica hosts</td><td>Spec 8.1</td></tr>
+    <tr><td>File mailbox</td><td>1 MB per file, 20 MB per recipient, 200 MB total, 7 days</td><td>Sealed offer and chunks, so the host cannot read them</td></tr>
+    <tr><td>Files over TCP</td><td>up to 1 MB</td><td>Over LoRa: 8 KB</td></tr>
+    <tr><td>History</td><td>kept 90 days</td><td>Stored unencrypted in <code>&lt;data&gt;/history</code>; <code>--no-history</code> turns it off</td></tr>
+    <tr><td>Backbone links</td><td>TCP frames <code>length | packet</code>, keepalive 30 s then 10 s; peers reconnect every 5 s</td><td>Spec 8.2</td></tr>
+    <tr><td>Incoming connections</td><td>at most 8 per IP address, 256 in all; 100 packets/s per link</td><td>Guard: a link over the limit is closed and the address banned for 10 minutes</td></tr>
+    <tr><td>Role</td><td>client, repeater or anchor</td><td>Settings → Routing role; changing it restarts the node</td></tr>
+    <tr><td>Android connection modes</td><td>radio over Bluetooth · phone as node · host elsewhere · server on this phone</td><td>The last stops itself when the phone leaves Wi-Fi or the charger</td></tr>
+    <tr><td>Service restart</td><td>exit code 75 after a settings save</td><td>The service manager starts the host again</td></tr>
+  </table></div>
+
+    <p>The host runs under systemd on Linux with a dynamic user, data in <code>/var/lib/maarse-host</code>, restart on failure, and a hardened unit. On Windows, the service and a tray app are installed together, and the service installs signed updates from GitHub releases. <span class="badge b-working">working copy</span> for the installer and tray.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>maarse-core/src/router.rs</code>, <code>maarse-host/src/*</code>, <code>docs/GUIDE.md</code> and the protocol specification.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

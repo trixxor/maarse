@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Messages · Må:rse handbook</title>
+<meta name="description" content="How a private message is protected, delivered and paid for in airtime.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>Messages</h1>
+    <p class="lede">How a private message is protected, delivered and paid for in airtime.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>direct message</strong> is a private, end-to-end encrypted text from one person to another, with a <em>delivered</em> mark when the other side has decrypted it. It travels along a route through repeaters or over the internet, and waits in a post office if the recipient is away.</p>
+    <p><strong>Why:</strong> Radio is public: anyone in range hears every packet. The message must be unreadable to everyone but the recipient, must hide who sent it, and must still be small enough to cost little airtime.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Encrypted end to end, with the sender hidden inside the message</li><li>Forward secrecy between contacts that support it: a leaked key does not open old messages</li><li>A delivered mark that means "the other node decrypted it"</li><li>Short texts are compressed to about 56 % of their size</li><li>Most messages in a conversation use a compact form with 22 bytes of overhead instead of 69</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>MeshCore's frame is lighter, because it pays 2 bytes for authentication where Må:rse pays 16</li><li>A text is at most about 140 bytes over LoRa: this is for short messages, not documents</li><li>The ratchet is a draft and has not been reviewed from outside</li><li>Mail waiting in a post office is sealed without forward secrecy</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-bench">bench-tested</span> direct messages on two boards. The compact frame is <span class="badge b-tested">tested</span> and fuzzed, <span class="badge b-simulated">simulated</span>, not yet on hardware.</p>
+  </div>
+  <div class="facts"><div class="fact"><span>Max text, static seal</span><strong>148 bytes</strong></div><div class="fact"><span>Max text, ratchet</span><strong>143 bytes</strong></div><div class="fact"><span>Overhead, ratchet / compact</span><strong>69 / 22 bytes</strong></div><div class="fact"><span>Delivered means</span><strong>decrypted by the recipient</strong></div></div>
+
+  <h2 id="states">What the delivery marks mean</h2>
+  <div class="table-wrap"><table>
+    <tr><th>You see</th><th>It means</th></tr>
+    <tr><td>sent</td><td>The message has left your node.</td></tr>
+    <tr><td>delivered</td><td>The recipient's node decrypted it and sent an end-to-end acknowledgement.</td></tr>
+    <tr><td>in mailbox</td><td>The recipient was not answering. A post office keeps the message for them.</td></tr>
+    <tr><td>delivered from mailbox</td><td>The recipient came back and fetched it. A receipt came back to you.</td></tr>
+    <tr><td>delivered (carried)</td><td>A person walking carried it and handed it over. See <a href="mailboxes-and-carry.html">carry</a>.</td></tr>
+  </table></div>
+
+  <h2 id="size">What a message costs</h2>
+  <p>A short text is mostly overhead. The text of a 40-byte message is less than a third of the 135 bytes that go on the air with the old frame. The compact frame, which is on by default between nodes that both announce support for it, cuts it to 88 bytes. MeshCore's documented frame is 57 bytes.</p>
+  <div class="viz">
+    <h3>Anatomy of a 40-byte text over 3 hops</h3>
+    <p class="viz-sub">The same message in three designs, drawn to one scale. Time is the airtime at SF9.</p>
+    <div id="c-frames"></div>
+    <p class="takeaway">The gap to MeshCore is not compression. It is what is paid for security, in the next table.</p>
+    <p class="src">Sizes: <code>docs/maybe/airtime-optimisation.md</code> section 9.4. MeshCore's size is computed from its published layout, not measured on a MeshCore radio.</p>
+  </div>
+  <div class="viz">
+    <h3>Capacity through one repeater</h3>
+    <p class="viz-sub">Messages per hour at the legal 10 % duty cycle, 40-byte text, 3 hops, SF9, data plus acknowledgement.</p>
+    <div id="c-cap"></div>
+    <p class="takeaway">The compact frame lifts capacity by about a quarter (363 to 447 messages an hour). MeshCore carries more, because it sends less.</p>
+    <p class="src">Same source, section 9.3 and 9.4.</p>
+  </div>
+
+  <h2 id="security">What the extra bytes buy</h2>
+  <div class="table-wrap"><table>
+    <tr><th></th><th>MeshCore v1 (from its published spec)</th><th>Må:rse</th></tr>
+    <tr><td>Authentication tag</td><td>2 bytes (a forged message passes with probability 2<sup>−16</sup> per try)</td><td>16 bytes (2<sup>−128</sup>)</td></tr>
+    <tr><td>Cipher</td><td>AES-128-ECB with zero padding: equal blocks give equal ciphertext</td><td>ChaCha20-Poly1305 with a new key per message</td></tr>
+    <tr><td>Sender and recipient</td><td>1-byte hashes of the public keys (collisions possible)</td><td>16-byte addresses; the sender is never in the header</td></tr>
+    <tr><td>Forward secrecy</td><td>none described in the pages read</td><td>ratchet; message keys are deleted after use</td></tr>
+    <tr><td>Replay protection</td><td>a timestamp inside the plaintext</td><td>per-message keys: a used key is gone</td></tr>
+  </table></div>
+
+  <p>This is a trade-off, not a flaw in either design. Only the destination address and the acknowledgement token could be made shorter without weakening security, and that would need an outside review first.</p>
+  <h2 id="compress">Compression</h2>
+  <p>Short chat messages are compressed with a codebook of common Danish and English words, to about 56 % of their size. This is used only toward nodes whose announce says they can read it.</p>
+  <h2 id="after">After you press send</h2>
+  <div class="viz">
+    <h3>Life of a message</h3>
+    <p class="viz-sub">Press Play. Times are typical, not guaranteed.</p>
+    <div id="tl"></div>
+    <p class="src">Constants from spec sections 5.2 to 5.6 and 8.1.</p>
+  </div>
+
+  <section class="deep" id="details">
+    <h2>The formats</h2>
+    <p>Source: <code>maarse-crypto/src/seal.rs</code>, <code>ratchet.rs</code>, spec section 6.2 and 6.3.</p>
+    <h3>Static seal (no session)</h3>
+<pre><code>e_pub (32) | sender address XOR k1 (16) | ChaCha20-Poly1305(k2, message) | tag (16)</code></pre>
+    <p>Overhead 64 bytes, so the largest message is 212 − 64 = 148 bytes. Used for the first message to a stranger, and for everything that goes into a post office.</p>
+    <h3>Ratchet frame</h3>
+<pre><code>type (1) | ratchet key (32) | sender XOR mask (16) | n (u16) | pn (u16)
+  | ChaCha20-Poly1305(mk, message, AAD = these 53 header bytes) | tag (16)</code></pre>
+    <p>Type <code>0xF0</code> is the first message of a session, <code>0xF1</code> a ratchet step. Overhead 69 bytes; the largest text is 143 bytes.</p>
+    <h3>Compact frame <span class="badge b-working">working copy</span></h3>
+<pre><code>type 0xF2 (1) | session id (3) | n (u16)
+  | ChaCha20-Poly1305(message key, message, AAD = these 6 bytes) | tag (16)</code></pre>
+    <p>Overhead 22 bytes. The tag is the full 16 bytes and the key is new for every message. After a ratchet step, the first 2 messages carry the full ratchet key so one lost message does not break the chain. A sender takes its next step after at most 8 messages on the current key.</p>
+    <p>Measured in tests, average encryption overhead: <strong>29.7 bytes</strong> for mixed chat, <strong>33.6 bytes</strong> for strictly alternating messages, compared with 69 for the long form. In tests with 20 % loss, three tries and up to 20 % swapped order, 0.1 % of messages became unreadable (the long form: 0 %).</p>
+    <h3>Why the simulator now uses honest sizes</h3>
+    <p>The simulator used to count a 40-byte text as 60 bytes in total, without the encryption overhead, and a preamble of 8 symbols where the firmware uses 16. With honest sizes, the E45 car scenario went from 954 s and 97 % to 2 426 s and 81 % (that run, in the report, section 6.1). The compact frame brought most of that back: −30 % airtime and +10 points delivered in the car, −17 % in the forest. <span class="badge b-simulated">simulated</span> See <a href="simulation.html#frame">simulation results</a>.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/GUIDE.md</code>, <code>docs/protocol-spec.md</code> and the code they name.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+(function(){
+  Viz.frames(document.getElementById('c-frames'), {rows:[
+    {label:'MeshCore', parts:[{label:'header',bytes:1,c:6},{label:'path length and hops',bytes:4,c:5},{label:'hashes',bytes:2,c:6},{label:'MAC',bytes:2,c:3},{label:'cipher blocks (40 B text, padded to 48)',bytes:48,short:'text 48',c:1,data:true}]},
+    {label:'Må:rse, compact', parts:[{label:'header',bytes:18,short:'18',c:6},{label:'path',bytes:7,short:'7',c:5},{label:'compact frame',bytes:22,short:'frame 22',c:3},{label:'type',bytes:1,c:6},{label:'text',bytes:40,short:'text 40',c:1,data:true}]},
+    {label:'Må:rse, ratchet', parts:[{label:'header',bytes:18,short:'18',c:6},{label:'path',bytes:7,short:'7',c:5},{label:'ratchet frame',bytes:69,short:'frame 69',c:3},{label:'type',bytes:1,c:6},{label:'text',bytes:40,short:'text 40',c:1,data:true}]}
+  ], scale: 140, legend:[[6,'Header and addresses'],[5,'Route'],[3,'Encryption and authentication'],[1,'Your text']], caption:'Drawn to one scale. Outlined segments are the text.'});
+  Viz.bars(document.getElementById('c-cap'), {title:'Messages per hour', unit:'', groups:[{label:'Messages per hour through one repeater at 10 % duty cycle', bars:[{label:'MeshCore (computed)', value:643, series:5},{label:'Må:rse, compact frame', value:447, series:0},{label:'Må:rse, old frame', value:363, series:1}]}]});
+  Viz.timeline(document.getElementById('tl'), [
+    {t:'0 s', title:'You press send', text:'The text is compressed and sealed for the recipient. If the recipient\'s key is not known, the node asks the network for it first (up to 60 s).', pkt:'Data'},
+    {t:'at once', title:'Route or discovery', text:'With a known route the packet goes along it. Otherwise the first message rides inside a flooded path request.', pkt:'PathRequest + Data'},
+    {t:'per hop', title:'Each hop confirms', text:'A node resends after 3 s if it does not hear the next node forward the packet, up to 4 times, then repairs locally.', pkt:'implicit acknowledgement'},
+    {t:'seconds', title:'Delivered', text:'The recipient decrypts and sends an end-to-end acknowledgement back along the route. You see the delivered mark.', pkt:'Ack'},
+    {t:'20 s', title:'No acknowledgement?', text:'The route is forgotten and the message is sent again with a new path request, up to 2 times.', pkt:'PathRequest'},
+    {t:'45 s', title:'Still nothing: the mailbox', text:'Your node hands the message to its home post office, which keeps it and sends copies to three hosts. You see in mailbox.', pkt:'Deposit'},
+    {t:'when they return', title:'Delivered from mailbox', text:'When the recipient announces again, or asks for mail, the post office delivers. A receipt reaches you.', pkt:'Deposit RECEIPT'}
+  ]);
+})();
+</script>
+</body>
+</html>

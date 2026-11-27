@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossary · Må:rse handbook</title>
+<meta name="description" content="Plain-language definitions of the terms used in the Må:rse handbook.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Reference</p>
+    <h1>Glossary</h1>
+    <p class="lede">The words this handbook uses, in plain language.</p>
+  </header>
+
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p>Short definitions, in alphabetical order. A term is defined once here and used the same way everywhere else.</p>
+  </div>
+
+  <dl id="terms">
+    <dt id="address">Address</dt>
+    <dd>16 bytes that identify a node. It is a hash of the node's public keys, so it is the same over radio, TCP and the internet.</dd>
+
+    <dt id="airtime">Airtime</dt>
+    <dd>Time spent transmitting. It is the scarce resource of a LoRa mesh, shared by everyone and legally limited.</dd>
+
+    <dt id="anchor">Anchor</dt>
+    <dd>A fixed repeater that also splits a long route into legs, so a route may be longer than 12 hops. A host or server that is always online is an anchor by default.</dd>
+
+    <dt id="announce">Announce</dt>
+    <dd>A signed message in which a node tells the network that it exists. It carries a small proof-of-work stamp.</dd>
+
+    <dt id="auto">Auto</dt>
+    <dd>A role for handhelds: a client while a repeater or anchor is heard, a relay after 2 minutes without one.</dd>
+
+    <dt id="backbone">Backbone</dt>
+    <dd>TCP and UDP links between hosts that join separate radio areas into one network.</dd>
+
+    <dt id="carry">Carry</dt>
+    <dd>When no route exists, a handheld keeps the message and hands it to people it meets, until it reaches the recipient.</dd>
+
+    <dt id="channel">Channel</dt>
+    <dd>A group conversation protected by a shared key. <code>public</code> and <code>#hashtag</code> channels have keys derived from the name, so anyone can read them.</dd>
+
+    <dt id="client">Client node</dt>
+    <dd>A node that sends and receives its own messages and never forwards for others. See <a href="role-client.html">Client node</a>.</dd>
+
+    <dt id="companion">Companion protocol</dt>
+    <dd>The protocol a client uses to talk to a host or to a single radio: over USB serial, Bluetooth or WebSocket.</dd>
+
+    <dt id="dht">DHT (distributed hash table)</dt>
+    <dd>A lookup table shared across the internet hosts, with no central server. A host uses it to find which host can reach an address.</dd>
+
+    <dt id="duty">Duty cycle</dt>
+    <dd>The legal limit on how much of the time a device may transmit. In the band Må:rse uses, a device may transmit up to 10 % of the time.</dd>
+
+    <dt id="edge-bridge">Edge bridge</dt>
+    <dd>A relay that hears a repeater while a neighbour does not: the group's way into the repeater network.</dd>
+
+    <dt id="flood">Flood</dt>
+    <dd>Every node that hears a packet repeats it once. Simple and robust, but expensive in airtime.</dd>
+
+    <dt id="hop">Hop</dt>
+    <dd>One radio jump between two nodes.</dd>
+
+    <dt id="host">Host</dt>
+    <dd>A program (<code>maarse-host</code> or <code>maarse-server</code>) that is a node itself and also a gateway between radios, the backbone and clients. It also keeps a post office.</dd>
+
+    <dt id="lora">LoRa</dt>
+    <dd>A long-range, low-power radio technique. Slow, a few hundred bytes per second, but it reaches kilometres.</dd>
+
+    <dt id="mailbox">Mailbox</dt>
+    <dd>Where mail waits for someone who is offline: a post office on a host, or a small flash area on a radio board for mail addressed to itself.</dd>
+
+    <dt id="path">Path</dt>
+    <dd>A known list of repeaters to follow from sender to recipient. Messages along a path are <em>source-routed</em>.</dd>
+
+    <dt id="path-request">Path request</dt>
+    <dd>The small flooded packet that discovers a path. Repeaters add themselves to it as it passes.</dd>
+
+    <dt id="post-office">Post office</dt>
+    <dd>A host that keeps messages for people who are offline and delivers them when they come back. Mail is kept for 7 days, up to 100 messages per recipient.</dd>
+
+    <dt id="ratchet">Ratchet</dt>
+    <dd>The forward-secrecy mechanism: the keys for each message are new and are deleted after use, so a leaked key does not open old messages. A draft, not externally reviewed.</dd>
+
+    <dt id="recipe">Recipe</dt>
+    <dd>The small program a sensor node runs, made in the designer from sentences like "when Temperature is below 10 °C, send an alarm".</dd>
+
+    <dt id="region">Region</dt>
+    <dd>A name such as <code>nordjylland</code> that keeps a channel local: repeaters forward a regional channel only if they serve the region.</dd>
+
+    <dt id="relay">Relay</dt>
+    <dd>A handheld that forwards for others when it hears no repeater, for up to 4 hops.</dd>
+
+    <dt id="repeater">Repeater</dt>
+    <dd>A fixed node that passes messages on.</dd>
+
+    <dt id="role">Role</dt>
+    <dd>What a node does with other people's traffic: client, relay, repeater or anchor.</dd>
+
+    <dt id="safety-number">Safety number</dt>
+    <dd>A 60-digit number two people can compare to check that nobody is between them.</dd>
+
+    <dt id="seal">Seal</dt>
+    <dd>The encryption wrapped around a direct message. The static seal costs 64 bytes, the ratchet frame 69, the compact frame 22.</dd>
+
+    <dt id="server">Server</dt>
+    <dd><code>maarse-server</code>: a host built for the internet that is a DHT node, relays hosts behind NAT and keeps mail copies. See <a href="role-server.html">Server</a>.</dd>
+
+    <dt id="snr">SNR</dt>
+    <dd>Signal-to-noise ratio, a measure of how well a packet was heard.</dd>
+
+    <dt id="sf">Spreading factor (SF)</dt>
+    <dd>LoRa's speed and range dial. Each step up reaches further but takes about twice as long per packet.</dd>
+
+    <dt id="stamp">Stamp</dt>
+    <dd>A small proof of work attached to announces and requests. It costs the sender a little computation, which makes spam expensive.</dd>
+
+    <dt id="trunk">Trunk</dt>
+    <dd>A long-distance LoRa link with directional antennas between two hosts, used as a backup when the internet is down. It uses the same frequency and settings as everything else.</dd>
+  </dl>
+</article>
+<footer class="site">Source: README glossary and the protocol specification.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

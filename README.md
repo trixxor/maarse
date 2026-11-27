@@ -6,7 +6,7 @@
 
 [**▶ Open the Mesh Lab**](https://trixxor.github.io/maarse/simulator/): race Må:rse against Meshtastic, MeshCore and Reticulum in your browser
 · [Denmark simulator](https://trixxor.github.io/maarse/denmark/): build and break a national network, real router code in WebAssembly ([how it works](docs/denmark/README.md))
-· [HTML manual](docs/manual/index.html) · [Technical guide](docs/GUIDE.md) · [MeshCore gateway firmware](firmware/meshcore-gateway/README.md) · [Full comparison](compare.md)
+· [**Documentation**](docs/index.md) · [HTML manual](docs/manual/index.html) · [Technical guide](docs/GUIDE.md) · [MeshCore gateway firmware](firmware/meshcore-gateway/README.md) · [Full comparison](compare.md)
 
 ![Status: prototype](https://img.shields.io/badge/status-prototype-orange) ![Rust, no heap](https://img.shields.io/badge/firmware-Rust%2C%20no%20heap-blue) ![Licence MIT or Apache-2.0](https://img.shields.io/badge/licence-MIT%20%2F%20Apache--2.0-green)
 
@@ -28,7 +28,7 @@ The working-copy Denmark map can show a TCP-only node's shared position and veri
 - **Radio where there is no coverage, internet where there is.** A home computer or a Wi-Fi-connected board joins its radio area to an internet backbone. Your address and your encryption stay the same everywhere.
 - **Private by design.** Your address is a hash of your public key, messages are end-to-end encrypted, and the sender's address is never sent in clear text.
 
-> **Honest status:** Må:rse is a working prototype (v0.5). It runs on two boards on a desk, a PC host, a web client and an Android app. It has not been measured in the field yet, and the cryptography has not been reviewed by outsiders. Meshtastic, MeshCore and Reticulum are mature projects with real users. Må:rse is an attempt to combine their best ideas.
+> **Honest status:** Må:rse is a working prototype (v0.9). It runs on two boards on a desk, a PC host, a web client and an Android app. It has not been measured in the field yet, and the cryptography has not been reviewed by outsiders. Meshtastic, MeshCore and Reticulum are mature projects with real users. Må:rse is an attempt to combine their best ideas.
 
 ---
 
@@ -185,7 +185,7 @@ Someone with a radio receiver and no keys can read this from a direct message:
 
 | | |
 | --- | --- |
-| 💬 **Messages** | End-to-end encrypted direct messages with delivery receipts and forward secrecy. Public, `#hashtag`, private and regional channels. Short chat messages are compressed (about 40 % smaller), and a conversation that has taken its first ratchet step sends most messages in a compact form (about 30 bytes of encryption overhead on average instead of 69). |
+| 💬 **Messages** | End-to-end encrypted direct messages with delivery receipts, and forward secrecy between contacts that have exchanged messages (the first messages, and copies left in a post office, do not have it). Public, `#hashtag`, private and regional channels. Short chat messages are compressed (about 40 % smaller), and a conversation that has taken its first ratchet step sends most messages in a compact form (about 30 bytes of encryption overhead on average instead of 69). |
 | 🚨 **Public alerts** | Signed warnings from trusted issuers, like cell broadcast but over the mesh: a separate issuer key, certificates from a root key that limit what an issuer may send, expiry and serial numbers against replays, exercise and test status, update and cancel. Shown as a banner that no chat message can imitate. |
 | 📦 **Post offices** | Mail for people who are offline is kept by hosts (three copies spread over the backbone) and carried by repeaters. Your node fetches it when it comes back, wherever you are, also over LoRa when the internet is down. |
 | 🖼️ **Files and voice** | Pictures and files up to 8 KB over LoRa and 1 MB over the internet; Codec2 voice messages; Opus calls over TCP. |

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operations and diagnostics · Må:rse handbook</title>
+<meta name="description" content="Tools for running, checking and trusting a network.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>Operations and diagnostics</h1>
+    <p class="lede">Tools for running, checking and trusting a network.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> <strong>Operations</strong> are the tools for running and checking a network: signed firmware updates, a status page, ping and trace route, a network crawl, a DHT check, a range test, position and telemetry, an MQTT bridge to Home Assistant, and a recovery phrase for your identity.</p>
+    <p><strong>Why:</strong> A mesh is only trusted if you can see what it does. These tools let you check that your repeater is healthy, your route is good and your backbone is connected, without leaving your chair.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Firmware updates are signed and run from the host over USB, Bluetooth, Wi-Fi or the network</li><li>Ping test, trace route and network crawl show loss, round trip, hops and SNR in both directions</li><li>A range test measures real distance with GPS and exports CSV</li><li>Home Assistant discovers battery, position and telemetry automatically</li><li>A 24-word recovery phrase restores your identity</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Updates over LoRa are shelved: too slow</li><li>The ping and crawl pages on Android are compiled but not run on a device</li><li>Firmware update from the host is a working-copy feature, <strong>not flashed</strong></li><li>No field results exist yet: the range test is the tool to make them</li></ul></div>
+    </div>
+    <p class="meta">Mixed: see each section.</p>
+  </div>
+
+  <h2 id="update">Firmware updates</h2>
+  <p>Radios attached to a host are listed in the web client and the Android app with an <strong>Update</strong> button, from a GitHub release or your own build. A node accepts an image only if it is signed with its built-in release key, made for its own board, with a newer version. OTA is disabled with a missing, weak or development key. Updates over LoRa are shelved, because 323 KB takes about 1.6 hours <em>per hop</em> at SF7 and days at SF9 (decision 0002).</p>
+  <h2 id="diagnostics">Diagnostics</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Tool</th><th>What it tells you</th><th>Where</th></tr>
+    <tr><td><strong>Ping test</strong></td><td>Sends trace routes again and again (default 10 pings, 10 s apart) and shows loss, round trip, hops and the worst SNR out and back. Can record your position with each ping, and export CSV. Can run over LoRa, over TCP or alternately.</td><td>Web: Diagnostics. Android: Experimental</td></tr>
+    <tr><td><strong>Trace route</strong></td><td>Every repeater appends the SNR it heard the packet with, so you see the signal for each hop, both ways.</td><td>Diagnostics</td></tr>
+    <tr><td><strong>Neighbour list</strong></td><td>Nodes heard directly, with SNR, RSSI, time and packet count.</td><td>Diagnostics</td></tr>
+    <tr><td><strong>Network crawl</strong></td><td>Maps who hears whom: asks a repeater you administer for its neighbour list, then each neighbour you also administer, one at a time with a pause. Flags links that are uneven (6 dB or more apart) or heard one way, which usually points at an antenna or a settings problem.</td><td>Diagnostics</td></tr>
+    <tr><td><strong>DHT check</strong></td><td>Checks the backbone from the host's own point of view: do the contacts answer, do others hold this host's records and agree, does a lookup work. It costs a few internet requests and no radio airtime.</td><td>Diagnostics</td></tr>
+    <tr><td><strong>Range test</strong></td><td>One node is a beacon sending numbered packets, optionally stepping through SF7 to SF12. The other reports every beacon with RSSI and SNR. The page adds the phone's GPS position and distance, draws the results and exports CSV.</td><td>Range test page, over USB or Bluetooth</td></tr>
+  </table></div>
+
+  <h2 id="data">Position, telemetry and Home Assistant</h2>
+  <p>Position is <strong>off by default</strong>. You can choose its precision (off, about 10 km, about 1 km, precise); the node sends it rounded to the middle of a grid cell, and only <em>precise</em> sends the exact position, after asking. Telemetry (battery, uptime, energy status) is opt-in.</p>
+  <p>A host can publish telemetry, positions and channel messages to an MQTT broker, and the first time a node sends telemetry, Home Assistant discovers it with battery voltage, battery percent, energy status, uptime, temperature and hops, grouped as one device per node.</p>
+  <h2 id="identity">Backup and recovery</h2>
+  <p>Under <em>Backup</em> you can create an identity from a 24-word recovery phrase or restore one. The phrase is made and shown only in the browser and never stored; you must confirm three random words before it is installed. <strong>There is no back door: whoever has the phrase is you.</strong> If you lose it, nobody can restore the identity.</p>
+  <h2 id="tunnel">IP tunnel</h2>
+  <p>Every node has an IPv6 address derived from its Må:rse address, and a host can tunnel IP over the mesh. It is optimised for LoRa with header compression and one-packet TCP segments. <span class="badge b-bench">bench-tested</span> A <code>ping -6</code> over LoRa took about 1.45 s round trip (4.2 s the first time with route and key), measured between a Heltec V4 and an XIAO nRF52840 at SF9. Use <em>mosh</em> over LoRa rather than SSH; web and file transfer are not realistic.</p>
+  <h2 id="map">Offline map</h2>
+  <p>A host can keep a free offline map of Denmark (OpenStreetMap data, a 22 MB overview or a 185 MB detailed version) and serve it to clients. The host side is built, the clients not yet.</p>
+  <section class="deep" id="details">
+    <h2>Technical details</h2>
+    <ul>
+      <li><strong>Trace route</strong> (command <code>0x20</code>): a probe packet follows the known route, and every repeater appends the SNR it heard. The packet ID is computed over the fixed part only, so implicit per-hop acknowledgements work as for other packets. A final byte <code>via</code> chooses LoRa only or internet only; firmware ignores it.</li>
+      <li><strong>Noise floor:</strong> the radio library does not give the instantaneous RSSI, so it is estimated from received packets as N = RSSI − 10·log10(1 + 10<sup>SNR/10</sup>), as a moving average.</li>
+      <li><strong>Position</strong> is carried in the announce's app data after the FS field, at most 67 of 99 bytes in total, so older nodes ignore it.</li>
+      <li><strong>MQTT topics:</strong> <code>maarse/status</code>, <code>maarse/node/&lt;address&gt;/telemetry</code>, <code>…/position</code> and <code>maarse/channel/&lt;channel&gt;</code>, JSON, QoS 0.</li>
+      <li><strong>IP tunnel:</strong> a random session key is sent once encrypted, after that traffic goes as datagram packets with 28 bytes of overhead and no end-to-end acknowledgement; the key changes every 5 minutes. The IPv6 header (40 bytes) is compressed to 2 to 7 bytes; TCP gets MSS 142.</li>
+    </ul>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/GUIDE.md</code> sections on diagnostics, MQTT, firmware updates, the IP tunnel and backup.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

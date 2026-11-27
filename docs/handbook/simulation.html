@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulation results · Må:rse handbook</title>
+<meta name="description" content="What the simulator says, run fresh, with what it does and does not prove.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Evidence · Measurements</p>
+    <h1>Simulation results</h1>
+    <p class="lede">What the simulator says, run fresh, with what it does and does not prove.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> The Må:rse simulator runs the <strong>real router code</strong> in many virtual nodes, with a radio model, on maps of Denmark. This page shows what it says, run fresh on 2026-11-27, with what each result does and does not prove.</p>
+    <p><strong>Why:</strong> Nobody has measured Må:rse outdoors yet. The simulator is how design choices were compared before hardware: which fix helped, which one was rejected, and what each cost in airtime.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Same router code as the radios, so a result says something about the real decision logic</li><li>Every chart on this page is a measured run with the seeds and the script named</li><li>Rejected ideas stay in the record with their numbers</li><li>Run it yourself in the browser, or with <code>node tools/sim-experiments/…</code></li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>It is a model: a log-distance path-loss model with exponent 3, not real terrain and interference</li><li>It was <strong>optimistic</strong> in the past: honest packet sizes moved the E45 car result from 97 % to 81 %</li><li>A few scenarios (national, outage) have moved over time, and some numbers in older documents are out of date</li><li>Four to seven seeds per scenario: differences under about 5 % are noise</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-simulated">simulated</span> everything on this page. Nothing is <span class="badge b-field">field-tested</span>.</p>
+  </div>
+
+  <h2 id="model">What the simulator is</h2>
+  <p>The scenarios are on a map of Denmark: a national network with about 800 nodes, 10 walkers in Rold Skov, 300 handhelds in Aarhus, a car on the E45, and a traveller from Aalborg to Rønne. A scenario runs for 45 minutes to 8 hours of simulated time, with messages between friends, and the simulator counts what arrived, how long it took, and how many seconds of radio time were used. Airtime is the budget: it is shared and limited by law.</p>
+  <div class="callout note"><strong>How to read a percentage</strong>
+    <p><strong>86 % delivered</strong> means: of all messages created in the run, 86 % had reached the recipient <em>before the run ended</em>. The window is fixed by the scenario (45 minutes for the forest and town, 8 hours for the crisis). A message sent late and still on its way at the end counts as not delivered, so the number is not "14 % lost for ever".</p>
+    <p>It is also not a promise that everything arrives given enough time. In the real system a message is retried twice and then dropped or carried. A carried copy lives 30 minutes, and mail in a post office lives 7 days, at most 100 messages per recipient. After that it is gone.</p></div>
+  <ul>
+    <li><strong>Delivered</strong> is the share of messages that had arrived when the run ended, <strong>acknowledged</strong> the share where the sender also saw the confirmation.</li>
+    <li><strong>Airtime</strong> is the sum of every node's transmitting time, in seconds.</li>
+    <li>You can run the same engine in the <a href="https://trixxor.github.io/maarse/denmark/">Denmark simulator</a> and compare in the <a href="https://trixxor.github.io/maarse/simulator/">Mesh Lab</a>.</li>
+  </ul>
+
+  <h2 id="airtime">Where the airtime goes</h2>
+  <div class="viz">
+    <h3>Share of airtime by packet type</h3>
+    <p class="viz-sub">Today's defaults, five scenarios, mean of 4 to 7 seeds.</p>
+    <div id="c-share"></div>
+    <p class="takeaway">In every scenario but the car, <strong>path requests are the largest line</strong>, 44 to 65 % of the airtime. Announces are 11 to 24 %. Only the moving car spends most of its airtime on data.</p>
+    <p class="src">Source: <code>tools/sim-experiments/airtime_round.mjs all 5 honest,c_old,c_new</code>, config <code>c_new</code>, run 2026-11-27 on the committed engine.</p>
+  </div>
+
+  <p>This is why the project works on <em>fewer</em> packets and not only smaller ones. A message with a known route is cheap. Discovering a route is not.</p>
+
+  <h2 id="now">What today's defaults changed</h2>
+  <p>Two changes went into the defaults on 2026-11-26: a <strong>compact frame</strong> that cuts encryption overhead from 69 to about 34 bytes, and <strong>path request tuning</strong>: retry after 20 s instead of 45 s, and a node with at least three neighbours forwards 80 % of the path requests it hears. Each was run in the same five scenarios, one at a time.</p>
+  <div class="viz">
+    <h3>Path request tuning: today against the old retry and forwarding settings</h3>
+    <p class="viz-sub">Both runs use the compact frame. Bars show the change in airtime; the note shows delivery before and after.</p>
+    <div id="c-tune"></div>
+    <p class="takeaway">Tuning saved airtime in all five scenarios, from 2 % in the town to 25 % in the car, and lifted the car from 90.2 % to 96.9 % delivered. This is the change that helps where path requests dominate.</p>
+    <p class="src">Source: <code>tools/sim-experiments/airtime_round.mjs all 5 honest,c_old,c_new</code>, <code>c_old</code> against <code>c_new</code>, run 2026-11-27. 4 to 7 seeds.</p>
+  </div>
+  <div class="viz">
+    <h3>The compact frame: 34 bytes of overhead against 69</h3>
+    <p class="viz-sub">Both runs use today's path request settings.</p>
+    <div id="c-frame-now"></div>
+    <p class="takeaway">In today's engine the compact frame saved 11 % in the forest and about 2 % elsewhere, and cost about 3 % in the car. That is much less than the report's 17 % and 30 %, which was measured on an earlier engine. The sign is stable. The size of the effect is not.</p>
+    <p class="src">Same run, <code>honest</code> (69 bytes) against <code>c_new</code> (34 bytes).</p>
+  </div>
+
+  <div class="callout honest"><strong>Read this before quoting a number</strong>
+  <p>These are 4 to 7 seeds each. Differences under about 5 % are noise. The national and outage scenarios are in a duty-cycle-saturated regime, where small changes make delivery jump. The effect of the compact frame in this run differs from the report's, because the committed engine has changed since the report was written.</p></div>
+
+  <h2 id="frame">What the compact frame and the other airtime ideas gave</h2>
+  <p>From the airtime report (section 9.3, five to eight seeds): the change in airtime against the honest baseline, cumulatively. Only the compact frame and the path-request tuning are built and switched on. The preamble and the lean header are <em>not</em>.</p>
+  <div class="viz">
+    <h3>Airtime saved, by change</h3>
+    <p class="viz-sub">Percent less airtime than the honest baseline. Higher is better.</p>
+    <div id="c-frame"></div>
+    <p class="takeaway">The compact frame alone saves 30 % in the car and 17 % in the forest, and almost nothing where path requests dominate (national, town, outage). Path request tuning is what helps there.</p>
+    <p class="src">Source: <code>docs/maybe/airtime-optimisation.md</code> section 9.3. The last bar is a size model in the simulator only: the lean header is not built.</p>
+  </div>
+
+  <h2 id="chain">What each chain fix did</h2>
+  <p>In November the whole chain, from a handheld in a forest through a bridge, a repeater, a host and the TCP backbone to another host, was reviewed and fixed in a series of changes. This run adds them one at a time on top of each other, starting from what ran on the boards before the review.</p>
+  <div class="viz">
+    <h3>Car on the E45: delivered, step by step</h3>
+    <p class="viz-sub">Percent delivered after each change was added.</p>
+    <div id="c-chain-car"></div>
+    <p class="takeaway">One change decides this scenario: the <em>queue fix</em>, which stops the firmware from queuing a second copy of a packet that is already waiting. Behind the duty cycle the copies piled up and each made the previous hop resend. 70 % became 96 %.</p>
+    <p class="src">Source: <code>tools/sim-experiments/final.mjs</code>, results file <code>final-results.json</code> (engine of 2026-11-16, 6 to 8 seeds).</p>
+  </div>
+  <div class="viz">
+    <h3>Forest group: delivered, step by step</h3>
+    <div id="c-chain-forest"></div>
+    <p class="src">Same source.</p>
+  </div>
+  <div class="viz">
+    <h3>Town with patchy coverage: delivered, step by step</h3>
+    <div id="c-chain-town"></div>
+    <p class="src">Same source.</p>
+  </div>
+
+  <p>The same file also shows national from 3.7 % to 96 %, and the outage journey from 1 % to 98 % for the full set of fixes, in the engine of 2026-11-16. <strong>Those two numbers are out of date.</strong> The engine has changed since (the height map from 2026-11-19, and host-to-host mail over radio when there is no TCP link), and national now gives about 85 to 91 % and the outage journey about 36 to 39 % (see below). The report calls forest and car the trustworthy ones.</p>
+
+  <h2 id="roles">Roles</h2>
+  <p>How client, relay and auto roles perform in a forest and a town is on the <a href="roles.html#evidence">roles page</a>.</p>
+
+  <h2 id="carry">Carry: when nobody can hear anyone</h2>
+  <p>A crisis scenario: the national network is hit at time zero. There is no internet, everything within 25 km of Aarhus, Odense, Copenhagen and Aalborg is destroyed, and a third of the remaining repeaters are gone. Thirty handhelds drive between towns at 70 km/h, and people write messages for 6 hours. Share delivered, by distance between sender and recipient.</p>
+  <div class="viz">
+    <h3>Carry in a crisis: delivered by distance</h3>
+    <p class="viz-sub">Percent delivered after 8 simulated hours, mean of 3 seeds.</p>
+    <div id="c-crisis"></div>
+    <p class="takeaway">Carry helps most at middle distances: 66 to 76 % at 25 to 100 km. Over 100 km it moves 9 to 14 %. Keeping messages 6 hours with room for 64 does <em>not</em> do better in this run, and costs much more airtime.</p>
+    <p class="src">Source: <code>tools/sim-experiments/crisis.mjs</code>, run 2026-11-27.</p>
+  </div>
+  <div class="viz">
+    <h3>Carry in a crisis: airtime</h3>
+    <p class="viz-sub">Seconds of radio time, all nodes.</p>
+    <div id="c-crisis-air"></div>
+    <p class="takeaway">Carry as the firmware has it costs about 24 % more airtime in this run. Longer lifetime and more room raises it to about 80 % more than no carry, for no gain.</p>
+    <p class="src">Same run.</p>
+  </div>
+
+  <p>Earlier runs with the forest and motorway scenarios, from the technical guide (10 seeds, engine of that time):</p>
+  <div class="table-wrap"><table>
+    <tr><th>Scenario</th><th>No carry</th><th>With carry (4 copies)</th><th>Extra airtime</th></tr>
+    <tr><td>Forest, 8 km, 18 people</td><td>60 % delivered</td><td>76 %</td><td>+9 %</td></tr>
+    <tr><td>Forest, 10 km</td><td>30 %</td><td>44 %</td><td>+11 %</td></tr>
+    <tr><td>E45, repeaters every 15 km</td><td>85 %</td><td>94 %</td><td>+27 %</td></tr>
+    <tr><td>E45 with a 100 km gap in repeaters</td><td>no gain</td><td>no gain</td><td>+19 to 36 %</td></tr>
+  </table></div>
+
+  <p>A tiny <em>delivered notice</em> that tells carriers to delete their copies keeps the extra airtime low: without it the forest cost +24 % and the E45 +150 %.</p>
+
+  <h2 id="mail">Mail for people who are offline</h2>
+  <p>A traveller lives in Aalborg, switches the phone off at 20 minutes, travels to Rønne on Bornholm, and switches it on again at 70 minutes. Friends write every two minutes. The chart shows the share of the messages written <em>while the phone was off</em> that arrived.</p>
+  <div class="viz">
+    <h3>Mail while the phone is off</h3>
+    <p class="viz-sub">Percent of the messages written during the offline period that arrived. Mean of 3 seeds.</p>
+    <div id="c-mail"></div>
+    <p class="takeaway">With the internet up, post offices take mail for an offline traveller from <strong>4 % to 76 %</strong>, and 88 % with repeaters acting as small offices. The older design with one named home host reached 36 %. With the internet down, post offices still give 39 %, against 3 to 4 % for the others.</p>
+    <p class="src">Source: <code>tools/sim-experiments/journey.mjs</code>, run 2026-11-27. The national preset with both LoRa trunks.</p>
+  </div>
+  <div class="viz">
+    <h3>What the post offices cost in this run</h3>
+    <p class="viz-sub">Airtime in seconds, and delivery of messages written after the traveller was back on air on Bornholm.</p>
+    <div id="c-mail-cost"></div>
+    <p class="takeaway">Post offices are not free in this model: about 2.5 times the airtime, and delivery to the traveller once on Bornholm fell from 99 % to 54 %. The run does not explain why. It is a warning, and an open item, not a verdict.</p>
+    <p class="src">Same run. Internet up.</p>
+  </div>
+
+  <div class="callout warn"><strong>A number that changed</strong>
+  <p>Earlier documents quote that with the internet down 98 % of a traveller's mail reaches Bornholm. In today's engine the same scenario gives about 36 to 39 %. The older figure came from an engine before the height map and before host-to-host mail moved to radio when no TCP link exists. The project's own report lists this as a possible model gap and has not resolved it.</p></div>
+
+  <h2 id="trunks">Long-distance LoRa trunks</h2>
+  <p>Two directional LoRa links between hosts (Aarhus to Zealand, Zealand to Bornholm), run with and without internet. 30 % of messages go to users anywhere in the country, so many cross the water.</p>
+  <div class="viz">
+    <h3>Messages across the water</h3>
+    <p class="viz-sub">Percent delivered across the water. Higher is better.</p>
+    <div id="c-trunks"></div>
+    <p class="takeaway">With the internet up the trunks add about 9 points as a backup (39 to 48 %) at almost no airtime cost. With the internet down, the trunks lift crossing the water from 2.5 % to 11 to 15 %. That is better, but still low: a trunk is a backup, not a replacement for the internet.</p>
+    <p class="src">Source: <code>tools/sim-experiments/trunks.mjs</code>, run 2026-11-27.</p>
+  </div>
+
+
+  <h2 id="stale">Numbers in older documents that have moved</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Claim in README or older text</th><th>Today's run</th><th>Why it moved</th></tr>
+    <tr><td>National: 96 % delivered</td><td>about 85 to 91 % (this run: 86.2 %)</td><td>Height map and mail rules changed the model after 2026-11-16; the scenario is now saturated</td></tr>
+    <tr><td>Traveller's mail reaches Bornholm, internet down: 98 %</td><td>about 36 to 39 %</td><td>Possible model gap in host-to-host mail without TCP; not resolved</td></tr>
+    <tr><td>E45 car: 97 % delivered at 954 s</td><td>96.9 % at 1 322 s with defaults; 80.7 % at 2 426 s in the report's honest baseline</td><td>The old simulator counted 8-symbol preambles and no encryption overhead</td></tr>
+    <tr><td>Forest group: 99 to 99.7 %</td><td>95.4 % clients, 99.7 % auto</td><td>Same scenario, five seeds; consistent</td></tr>
+  </table></div>
+
+  <h2 id="limits">What the simulator cannot say</h2>
+  <ul>
+    <li>Real range, interference, antennas and weather. Nothing is field-tested.</li>
+    <li>Whether a firmware change behaves on a board as in the model. Two boards on a desk have been tested.</li>
+    <li>Anything that needs more seeds: differences under about 5 % are not distinguishable from noise.</li>
+    <li>Files, voice and pages are not in these scenarios.</li>
+  </ul>
+  <section class="deep" id="repro">
+    <h2>Reproduce a result</h2>
+    <p>The scripts live in <code>tools/sim-experiments/</code>. They load the engine from <code>docs/denmark/maarse_sim_wasm.wasm</code> or the build in <code>target/wasm32-unknown-unknown/release/</code>.</p>
+<pre><code>node tools/sim-experiments/airtime_round.mjs all 5 honest,c_old,c_new   # airtime, honest sizes
+node tools/sim-experiments/forest_mode.mjs both 2700 1,2,3,4,5          # roles in forest and town
+node tools/sim-experiments/crisis.mjs                                   # carry in a crisis
+node tools/sim-experiments/journey.mjs                                  # mail for a traveller
+node tools/sim-experiments/trunks.mjs                                   # LoRa trunks
+node tools/sim-experiments/final.mjs                                    # the chain fixes</code></pre>
+    <p>On Windows run the commands in a shell with Node installed. Each can take several minutes. The raw outputs behind this page are the lines these scripts print.</p>
+    <h3>Model details</h3>
+    <ul>
+      <li>Radio: log-distance path loss with exponent 3, SF9, 125 kHz, coding rate 4/5, 10 % duty cycle. The "honest" config uses preamble 16 and a 69-byte seal. Hills and a height map are included since 2026-11-19.</li>
+      <li><code>maarse-hostrules</code> carries the host's decisions into the simulator, so hosts in the simulation make the same choices as the real host.</li>
+      <li>The simulator reports delivered, acknowledged, median latency, transmissions, airtime and airtime by packet type.</li>
+    </ul>
+  </section>
+</article>
+<footer class="site">Source: runs of <code>tools/sim-experiments/*.mjs</code> on 2026-11-27 on the committed engine, the airtime report <code>docs/maybe/airtime-optimisation.md</code>, and <code>final-results.json</code>.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+(function(){
+  var N = SIM.now, order = ['national','forest','town','car','outage'];
+  var labels = {national:'National (800 nodes)', forest:'Forest (10 walkers)', town:'Town (300 handhelds)', car:'Car on the E45', outage:'Outage journey'};
+  var keys = ['PathRequest','Announce','Hello','PathResponse','Data','Ack','Deposit','Other'];
+  Viz.stack(document.getElementById('c-share'), {keys: keys, rows: order.map(function(s){
+    var by = N[s].c_new.by, v = {}; Object.keys(by).forEach(function(k){ var key = keys.indexOf(k)>=0 ? k : 'Other'; v[key] = (v[key]||0) + by[k]; });
+    return {label: labels[s], values: v}; })});
+  function change(from, to, id){
+    Viz.bars(document.getElementById(id), {title:'Airtime change', unit:' %', max:30, groups: order.map(function(s){
+      var a = N[s][from], b = N[s][to], d = 100*(a.airtime-b.airtime)/a.airtime, dd = b.delivered - a.delivered;
+      return {label: labels[s], note: 'delivered ' + a.delivered.toFixed(1) + ' to ' + b.delivered.toFixed(1) + ' %', bars:[{label: d>=0 ? 'Airtime saved' : 'Airtime added', value: Math.abs(d), series: d>=0?0:1, tag: (d>=0?'less':'more')}]}; })});
+  }
+  change('c_old','c_new','c-tune'); change('honest','c_new','c-frame-now');
+  var F = {forest:[17,28,28,35], car:[30,43,55,61], town:[3,4,7,14], national:[3,3,20,24], outage:[0,8,18,23]};
+  Viz.bars(document.getElementById('c-frame'), {title:'Airtime saved', unit:' %', max:70, groups: ['car','forest','town','national','outage'].map(function(s){
+    return {label: labels[s], bars:[
+      {label:'Compact frame (built)', value:F[s][0], series:0},
+      {label:'+ preamble 8 (not built)', value:F[s][1], series:3},
+      {label:'+ path request tuning (built)', value:F[s][2], series:1},
+      {label:'+ lean header (model only)', value:F[s][3], series:4, dim:true}]}; })});
+  function chainChart(id, sc){
+    var c = SIM.chain[sc], names = ['boards before','chain fixes','+ queue fix','+ ring search','+ compression','+ announce 3'];
+    var nice = {'boards before':'Before the review','chain fixes':'Chain fixes','+ queue fix':'+ queue fix','+ ring search':'+ ring search','+ compression':'+ compression','+ announce 3':'+ announce scope 3 (final)'};
+    Viz.bars(document.getElementById(id), {title:sc, unit:' %', max:100, groups:[{label:'Delivered', bars: names.map(function(n,i){ return {label:nice[n], value:c[n].delivered, series: i===0?2:(i===names.length-1?0:3)}; })}]});
+  }
+  chainChart('c-chain-car','car'); chainChart('c-chain-forest','forest'); chainChart('c-chain-town','town');
+  var C = SIM.crisis, nm = {'no carry':'No carry','carry as today':'Carry as the firmware has it','+ 6 h, 64 in flash':'+ 6 h life, room for 64','+ 16 copies':'+ 16 copies','+ offices hand to carriers':'+ post offices hand to carriers'};
+  Viz.bars(document.getElementById('c-crisis'), {title:'Carry in a crisis', unit:' %', max:100, groups:[['near','Under 25 km'],['mid','25 to 100 km'],['far','Over 100 km']].map(function(b){
+    return {label:b[1], bars: C.map(function(r,i){ return {label:nm[r.name]||r.name, value:r[b[0]], series:i===0?2:(i===1?0:3)}; })}; })});
+  Viz.bars(document.getElementById('c-crisis-air'), {title:'Carry airtime', unit:' s', groups:[{label:'Airtime, all nodes, 8 hours', bars: C.map(function(r,i){ return {label:nm[r.name]||r.name, value:r.airtime, series:i===0?2:(i===1?0:3)}; })}]});
+  var J = SIM.journey, jn = {'no mail (today)':'No mail design','named post box (old)':'Named home host (old)','post offices (new)':'Post offices','post offices + repeaters':'Post offices + repeaters'};
+  Viz.bars(document.getElementById('c-mail'), {title:'Mail while off', unit:' %', max:100, groups:[{label:'Internet up', bars: J.up.map(function(r,i){return {label:jn[r.name]||r.name, value:r.offline, series:i>=2?0:2};})},{label:'Internet down from 17 minutes', bars: J.down.map(function(r,i){return {label:jn[r.name]||r.name, value:r.offline, series:i>=2?0:2};})}]});
+  Viz.bars(document.getElementById('c-mail-cost'), {title:'Mail cost', groups:[
+    {label:'Delivered once the traveller is on Bornholm', bars: J.up.slice(0,3).map(function(r,i){return {label:jn[r.name]||r.name, value:r.onBornholm, series:i===2?1:2, tag:'%'};})},
+    {label:'Airtime in seconds', bars: J.up.slice(0,3).map(function(r,i){return {label:jn[r.name]||r.name, value:r.airtime, series:i===2?1:2, tag:'s'};})}]});
+  var T = SIM.trunks, tn = {'internet up, no trunks':'Internet up, no trunks','internet up, trunks (backup)':'Internet up, trunks as backup','internet up, trunks (always)':'Internet up, trunks always','internet down, no trunks':'Internet down, no trunks','internet down, trunks (all floods)':'Internet down, trunks pass all floods','internet down, trunks (all requests)':'Internet down, trunks pass all requests','internet down, trunks (backup)':'Internet down, trunks as backup'};
+  Viz.bars(document.getElementById('c-trunks'), {title:'Across the water', unit:' %', max:60, groups:[{label:'Delivered across the water', bars: T.map(function(r,i){ return {label:tn[r.name]||r.name, value:r.water, series: r.name.indexOf('no trunks')>=0?2:0}; })}]});
+})();
+</script>
+</body>
+</html>

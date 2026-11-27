@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture · Må:rse handbook</title>
+<meta name="description" content="The parts of Må:rse, how they are layered, and where the code lives.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Understand · Explanation</p>
+    <h1>Architecture</h1>
+    <p class="lede">Nodes, hosts and clients, the layers they share, and the code behind them.</p>
+  </header>
+
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> three kinds of part. A <em>node</em> sends, receives and sometimes forwards packets. A <em>host</em> is a program that is a node itself and also a gateway between radios, the internet backbone and clients. A <em>client</em> is the app or web page you look at.</p>
+    <p><strong>Why it is built this way:</strong> the protocol core is written once, in Rust, without a heap, so the same code runs on a small radio, on a PC and in the simulator. That is why simulator results say something about the real router.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Advantages</h4>
+        <ul>
+          <li>One router for radio, host and simulator</li>
+          <li>A phone or PC can be a full node and a gateway</li>
+          <li>Clients are thin: they talk one companion protocol</li>
+        </ul>
+      </div>
+      <div class="cons"><h4>Good to know</h4>
+        <ul>
+          <li>The radios have almost no memory to spare, so every addition is checked</li>
+          <li>The Android app and web client must be kept level by hand</li>
+          <li>Many crates: more to learn than a single program</li>
+        </ul>
+      </div>
+    </div>
+    <p class="meta"><span class="badge b-working">working copy</span> Checked against the <code>Cargo.toml</code> files on 2026-11-27.</p>
+  </div>
+
+  <h2 id="parts">The three parts</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Part</th><th>What it is</th><th>Runs on</th></tr>
+    <tr><td><strong>Node</strong></td><td>An identity that sends, receives and, depending on its role, forwards packets.</td><td>Firmware on a LoRa board; the host program; the phone app, which embeds the host</td></tr>
+    <tr><td><strong>Host</strong></td><td>A node that is also a gateway. It attaches radios (USB, Bluetooth, Wi-Fi modem, KISS), joins TCP and UDP links, keeps history and a post office, and serves the web client.</td><td>PC, server, phone</td></tr>
+    <tr><td><strong>Client</strong></td><td>The user interface. It talks to a host or to a single radio with the <em>companion protocol</em>.</td><td>Browser, phone</td></tr>
+  </table></div>
+
+  <h2 id="layers">The layers</h2>
+<pre class="nocopy"><code> UI              web client · Android app · Heltec display
+ ─────────────── companion protocol (USB serial, Bluetooth, WebSocket) ───────────
+ Application     direct messages · channels · files · voice · pages · alerts · sensors
+ Security        identity · static seal · ratchet · channel keys · signed bulletins
+ Routing         path discovery · source routing · per-hop ack · carry · post offices
+ Link            LoRa (SX1262) · TCP backbone · UDP · serial · KISS · Wi-Fi modem</code></pre>
+  <p>Each layer only uses the one below it. The link layer does not know what a message is, and the routing layer does not know what is inside one.</p>
+
+  <h2 id="roles">Roles</h2>
+  <p>A node's role decides whether it forwards for others. Each role has its own page: <a href="role-client.html">client</a>, <a href="role-relay.html">relay</a>, <a href="role-repeater.html">repeater</a>, <a href="role-anchor.html">anchor</a>, <a href="role-host.html">host</a> and <a href="role-server.html">server</a>, and a lab on <a href="roles.html">roles and devices</a> lets you try them.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Role</th><th>Forwards for others?</th><th>Typical device</th></tr>
+    <tr><td>Client</td><td>No</td><td>Phone, handheld</td></tr>
+    <tr><td>Repeater</td><td>Yes</td><td>Rooftop or hilltop board</td></tr>
+    <tr><td>Relay</td><td>Yes, but only for up to 4 hops, and it waits longer so real repeaters win (the "forest mode")</td><td>Handheld in the field</td></tr>
+    <tr><td>Anchor</td><td>Yes, and it splits long routes so a route may be 12 hops on each side of the backbone</td><td>A host or server that is always online</td></tr>
+  </table></div>
+  <p>A node low on battery forwards less, and at the critical level it forwards nothing.</p>
+
+  <h2 id="where-code-lives">Where the code lives</h2>
+  <ul class="cards">
+    <li><a class="card" href="#shared"><strong>Shared crates</strong><span>Protocol core, crypto, host rules, voice, firmware packaging.</span></a></li>
+    <li><a class="card" href="#host-side"><strong>Host side</strong><span>The host, web client, Windows service and the Android app.</span></a></li>
+    <li><a class="card" href="#firmware"><strong>Firmware</strong><span>ESP32-S3 and nRF52840 boards.</span></a></li>
+    <li><a class="card" href="#sim"><strong>Simulation and tests</strong><span>Simulator, fuzzing, the test lab.</span></a></li>
+  </ul>
+
+  <section class="deep" id="shared">
+    <h2>Shared crates</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Crate</th><th>Responsibility</th></tr>
+      <tr><td><code>maarse-core</code></td><td>Protocol core, <code>no_std</code>, no heap: addresses, packet format, duplicate filter, route table, airtime budget, the <code>Router</code>, send priorities, announce stamps and the companion protocol codec. No dependencies.</td></tr>
+      <tr><td><code>maarse-crypto</code></td><td>Identities, signed announces, the static seal, the ratchet, channel keys, signed bulletins, firmware signing and the recovery phrase.</td></tr>
+      <tr><td><code>maarse-hostrules</code></td><td>The host's pure rules, with no I/O and no clock, shared by the real host and the simulator so both run the same decisions.</td></tr>
+      <tr><td><code>maarse-voice</code></td><td>Voice messages with Codec2.</td></tr>
+      <tr><td><code>maarse-uf2</code></td><td>ELF to UF2 conversion, and <code>maarse-sign</code> for signed firmware and releases.</td></tr>
+    </table></div>
+  </section>
+
+  <section class="deep" id="host-side">
+    <h2>Host side</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Crate / directory</th><th>Responsibility</th></tr>
+      <tr><td><code>maarse-host</code></td><td>The host as a library (also embedded in the Android app) and two programs: <code>maarse-host</code> for desktops and <code>maarse-server</code>, a dedicated server with an admin dashboard. It owns the web server, WebSocket, history, post office, DHT, MeshCore access, page server, MQTT and firmware updates.</td></tr>
+      <tr><td><code>maarse-client</code></td><td>The web client (static HTML and JavaScript, also a PWA) and <code>flash.html</code>, the browser flasher. Served by the host.</td></tr>
+      <tr><td><code>maarse-service</code>, <code>maarse-tray</code>, <code>maarse-desktop</code></td><td>The Windows service with signed updates, the tray app, and the installed desktop app (<code>maarse.exe</code>).</td></tr>
+      <tr><td><code>maarse-android</code></td><td>The JNI bridge that runs <code>maarse-host</code> inside the Android app.</td></tr>
+      <tr><td><code>android/</code></td><td>The native Android app in Kotlin and Jetpack Compose, which talks to the embedded host over the companion protocol on loopback.</td></tr>
+    </table></div>
+  </section>
+
+  <section class="deep" id="firmware">
+    <h2>Firmware</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Directory</th><th>Responsibility</th></tr>
+      <tr><td><code>firmware/common</code></td><td>Shared firmware logic: node, bus, storage, OTA.</td></tr>
+      <tr><td><code>firmware/nrf</code></td><td>nRF52840 with SX1262: WisMesh Tag and XIAO nRF52840. Bluetooth, USB serial, UF2 bootloader.</td></tr>
+      <tr><td><code>firmware/esp</code></td><td>ESP32-S3 with SX1262: Heltec V4 and XIAO ESP32-S3. Bluetooth, Wi-Fi, display, USB.</td></tr>
+      <tr><td><code>firmware/meshcore-gateway</code></td><td>A separate PlatformIO firmware that makes a Heltec V4 a gateway to MeshCore.</td></tr>
+    </table></div>
+    <div class="callout warn"><strong>The ESP32 stack is tight</strong>
+      <p>With a host attached, the Heltec firmware has under 100 bytes of stack to spare. After adding a static or a deeper call, check the stack with <code>tools/stack_probe.py</code> before flashing.</p></div>
+  </section>
+
+  <section class="deep" id="sim">
+    <h2>Simulation, testing and measurement</h2>
+    <div class="table-wrap"><table>
+      <tr><th>Crate / directory</th><th>Responsibility</th></tr>
+      <tr><td><code>maarse-sim</code></td><td>A command-line simulator running the real <code>Router</code> in many virtual nodes.</td></tr>
+      <tr><td><code>maarse-sim-wasm</code></td><td>The same engine compiled to WebAssembly for the Denmark simulator.</td></tr>
+      <tr><td><code>maarse-fuzz</code></td><td>A small dependency-free fuzz engine, deterministic and reproducible by seed.</td></tr>
+      <tr><td><code>maarse-lab</code>, <code>maarse-lab-data</code></td><td>A test lab in the browser: suites, fuzzing, simulator scenarios and benchmarks, with history.</td></tr>
+      <tr><td><code>tools/</code></td><td>End-to-end and hardware tests (Python and Node), release tooling, asset generators and simulator experiments.</td></tr>
+    </table></div>
+    <p>Dependencies: <code>maarse-core</code> and <code>maarse-crypto</code> depend on nothing in the project. <code>maarse-hostrules</code>, the host, the firmware and the simulator all build on them. The simulator and the firmware share <code>maarse-core</code>, which is why a simulated result runs the same router code as a radio.</p>
+  </section>
+</article>
+<footer class="site">Source: the <code>Cargo.toml</code> files, crate documentation and <code>docs/architecture/</code> in the repository.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

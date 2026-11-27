@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mailboxes and carry · Må:rse handbook</title>
+<meta name="description" content="How Må:rse delivers messages to people who are offline or out of reach: post offices, mail copies, relays and carry.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Understand · Explanation</p>
+    <h1>Mailboxes and carry</h1>
+    <p class="lede">What happens when the person you write to is not reachable right now.</p>
+  </header>
+
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> two mechanisms. A <em>post office</em> (a host with a disk) keeps a message for someone who is offline and hands it over when they come back. <em>Carry</em> lets handheld radios take a message with them when no route exists and give it to the recipient when they meet.</p>
+    <p><strong>Why:</strong> radios are switched off, batteries die and people walk out of range. A network that only delivers when both sides are online is not much use outdoors.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Advantages</h4>
+        <ul>
+          <li>Nothing to log in to and no sync interval to wait for</li>
+          <li>The sender sees <em>delivered from mailbox</em></li>
+          <li>Three copies on different hosts, so one failing host does not lose mail</li>
+          <li>Carry works with no repeaters and no internet</li>
+        </ul>
+      </div>
+      <div class="cons"><h4>Good to know</h4>
+        <ul>
+          <li>Mail is sealed without forward secrecy while it waits</li>
+          <li>A post office or carrier can delete or withhold what it holds</li>
+          <li>Mail is kept at most 7 days, 100 messages per recipient</li>
+          <li>Carry costs a little extra airtime and helps only when people actually meet</li>
+        </ul>
+      </div>
+    </div>
+    <p class="meta"><span class="badge b-working">working copy</span> Post offices and the LoRa trunks were built and flashed on a desk; carry is <span class="badge b-simulated">simulated</span>. No field measurement exists.</p>
+  </div>
+
+  <h2 id="offline">Your friend's radio is off</h2>
+  <div class="viz">
+    <h3>The life of a message to someone who is offline</h3>
+    <p class="viz-sub">Press Play. The times are the real constants of the post office protocol.</p>
+    <div id="tl"></div>
+    <p class="src">Constants: <code>DEPOSIT_AFTER_MS</code> 45 s, three replica hosts, <code>MailSync</code> every 6 hours and when a post office names you, presence checks at most every 10 minutes (spec 8.1).</p>
+  </div>
+  <ol>
+    <li>You send a message. If no confirmation arrives within 45 seconds, your node hands the message to <strong>its own home post office</strong>.</li>
+    <li>The post office keeps it and sends copies to the recipient's <strong>three replica hosts</strong> over the internet backbone.</li>
+    <li>When the recipient's radio comes back and announces itself, a post office that hears it delivers the mail. If the recipient is somewhere else, it asks for its mail, and the post office delivers over whatever route reaches it now.</li>
+    <li>The recipient's node sends a small receipt back to you, and your app shows <em>delivered</em>.</li>
+  </ol>
+  <div class="callout note">
+    <strong>Who keeps mail today</strong>
+    <p>Hosts (a PC or a server with a disk) keep mail. Repeaters on radio boards carry mail but do not keep it, because a small flash holds only 30 to 40 messages for everyone in range.</p>
+  </div>
+
+  <h2 id="forest">When there are no repeaters: relay and carry</h2>
+  <div class="viz">
+    <h3>What carry gives in a crisis</h3>
+    <p class="viz-sub">The national network is hit: no internet, the four biggest towns destroyed, a third of the remaining repeaters gone, thirty handhelds driving between towns. Share delivered, by distance.</p>
+    <div id="c-crisis"></div>
+    <p class="takeaway">Carry helps most at middle distances, 66 to 76 % at 25 to 100 km. Over 100 km it moves 9 to 14 %. It costs about 24 % more airtime. Keeping messages longer, with more room, did no better.</p>
+    <p class="src">Source: <code>tools/sim-experiments/crisis.mjs</code>, 8 simulated hours, mean of 3 seeds, run 2026-11-27. <span class="badge b-simulated">simulated</span></p>
+  </div>
+  <ul>
+    <li><strong>Relay role:</strong> a handheld that hears no repeater switches to relay. It forwards for up to 4 hops, and waits a little first so a real repeater would win.</li>
+    <li><strong>Carry:</strong> a message that no route can deliver is kept by the sender and handed over to people it meets, who hand it on until it reaches the recipient.</li>
+    <li><strong>Delivered notice:</strong> when the recipient gets a carried copy, it sends a tiny notice, and carriers delete their copies.</li>
+  </ul>
+  <div class="viz">
+    <h3>What post offices give a traveller</h3>
+    <p class="viz-sub">A traveller from Aalborg to Rønne switches the phone off for 50 minutes. Share of the messages written <em>while the phone was off</em> that arrived.</p>
+    <div id="c-mail"></div>
+    <p class="takeaway">With the internet up, post offices take it from 4 % to 76 %, and 88 % when repeaters also act as small offices. With the internet down, post offices still deliver 39 %. They are not free: in this run about 2.5 times the airtime, and delivery once the traveller was on Bornholm fell from 99 % to 54 %, which the run does not explain.</p>
+    <p class="src">Source: <code>tools/sim-experiments/journey.mjs</code>, mean of 3 seeds, run 2026-11-27. <span class="badge b-simulated">simulated</span> More on the <a href="simulation.html#mail">simulation results</a> page.</p>
+  </div>
+
+
+  <section class="deep" id="deposit">
+    <h2>Post office protocol</h2>
+    <p>Source: <code>maarse-core/src/mail.rs</code>, <code>maarse-host/src/node.rs</code>, spec section 8.1. <span class="badge b-working">working copy</span></p>
+    <h3>Who is a post office</h3>
+    <p>Post offices say so in their hellos and announces with a 2-bit class: 0 none, 1 small flash, 2 megabytes, 3 a host with a disk. Hosts are class 3; radio nodes are class 0 today. Every node picks the best post office among its neighbours (highest class, then best SNR) as its <em>home</em> post office and names it in its announce.</p>
+    <h3>Dropping mail</h3>
+    <p>When a direct message has no end-to-end acknowledgement within <code>DEPOSIT_AFTER_MS</code> = 45 s, the sender sends a <code>Deposit</code> to its home post office. The message is sealed in the static format, without forward secrecy, because a ratchet message delivered days later may fall outside the skipped-key window.</p>
+<pre><code>Deposit payload = recipient (16) | op (1) | body</code></pre>
+    <div class="table-wrap"><table>
+      <tr><th>op</th><th>Name</th><th>Body</th><th>Meaning</th></tr>
+      <tr><td>0</td><td><code>STORE</code></td><td>sealed message</td><td>Keep it for the recipient</td></tr>
+      <tr><td>1</td><td><code>SYNC</code></td><td>IDs already held</td><td>Deliver the recipient's mail to it, wherever it is</td></tr>
+      <tr><td>2</td><td><code>FETCH</code></td><td>asker, IDs held</td><td>Send the rest to the asker as <code>STORE</code></td></tr>
+      <tr><td>3</td><td><code>DELIVERED</code></td><td>IDs</td><td>Delete them</td></tr>
+      <tr><td>4</td><td><code>BUNDLE</code></td><td>n × (length, sealed message)</td><td>Messages sent to the recipient, packed into as few packets as fit</td></tr>
+      <tr><td>5</td><td><code>RECEIPT</code></td><td>receipt IDs</td><td>Recipient to the original sender: the mail arrived</td></tr>
+    </table></div>
+    <h3>Delivery receipts</h3>
+    <p>The post office does not know who sent a message, and the recipient's acknowledgement goes to the post office. So after opening a message from a bundle, the recipient, who now knows the sender from the decrypted message, sends the sender a <code>RECEIPT</code>. The sender recomputes the receipt ID for the copies in its outbox and marks the match as delivered.</p>
+    <h3>Copies</h3>
+    <p>A host that takes a message keeps it and sends copies to the recipient's three replica hosts: the three highest <em>rendezvous scores</em> over the hosts in its DHT table. Every host computes the same three for a given recipient, so when a host joins or leaves, only the recipients it ranked first move. Copies travel over the DHT's TCP requests and never over radio.</p>
+    <h3>Asking for mail</h3>
+    <p>A node sends a <code>MailSync</code> (two-hop flood) when it starts, when its home post office changes, when a post office's hello names it, and every 6 hours. The post office's hello carries up to four path IDs of recipients with mail waiting, like the traffic indication in a Wi-Fi beacon. A host that hears a node's announce over its own radio asks the node's replicas for mail, at most every 10 minutes per node, the way a mobile network delivers SMS when a phone registers.</p>
+    <h3>Limits</h3>
+    <div class="table-wrap"><table>
+      <tr><th>Limit</th><th>Value</th></tr>
+      <tr><td>Messages per recipient</td><td>100</td></tr>
+      <tr><td>Retention</td><td>7 days</td></tr>
+      <tr><td>Replica hosts</td><td>3</td></tr>
+      <tr><td>Retries without the backbone</td><td>after 5, 15 and 35 minutes, then wait for the recipient to ask</td></tr>
+      <tr><td>Delivery rate per recipient</td><td>at most one per minute</td></tr>
+    </table></div>
+    <p>With the backbone, presence and syncs deliver, and unlimited retries were found to cost 40 % more airtime in <code>maarse-sim</code>.</p>
+  </section>
+
+  <section class="deep" id="carry-protocol">
+    <h2>Carry protocol</h2>
+    <p>Source: spec section 5.10. <span class="badge b-simulated">simulated</span> Firmware relays are set to 4 copies; carry is off elsewhere.</p>
+    <p>Carry is enabled when <code>carry_copies &gt; 0</code>. A message the router gives up on (the path request failed, or no acknowledgement came after all retries) is carried using <em>binary spray and wait</em>: the carrier holds <code>carry_copies</code> tokens.</p>
+    <div class="table-wrap"><table>
+      <tr><th>Constant</th><th>Value</th></tr>
+      <tr><td><code>CARRY_TTL_MS</code></td><td>30 minutes</td></tr>
+      <tr><td><code>CARRY_MAX</code></td><td>8 messages</td></tr>
+      <tr><td><code>CARRY_EVERY_MS</code></td><td>5 s between looks at the neighbours</td></tr>
+      <tr><td><code>CARRY_FRESH_MS</code></td><td>30 s: neighbours heard within this window count</td></tr>
+      <tr><td><code>CARRY_RETRY_MS</code></td><td>60 s between repeated handoffs to the destination</td></tr>
+      <tr><td><code>CARRY_REROUTE_MS</code></td><td>300 s: a sender near a repeater retries ordinary routing</td></tr>
+    </table></div>
+    <p>At each step the carrier looks at its fresh neighbours. If the destination is among them, the message is handed over. Otherwise, if it holds more than one token, it gives half of them to a newly met non-repeater neighbour that has not had a copy. A handoff carries <code>tokens (1) | time left in s (2) | from (2) | message</code>. The destination delivers it as an ordinary <code>Data</code> message, still end-to-end encrypted.</p>
+    <p>The <strong>delivered notice</strong> is a type 11 packet with no path and an empty payload, 18 bytes on air. Its destination is <code>ack_token</code> of the message, so it names nobody. A carrier that hears it deletes its copy and remembers the notice for the copy's lifetime (at most 16 notices), passes it on once if it gave copies away, and repeats it when it meets a neighbour it exchanged a copy with. When it reaches the original sender, the router reports <code>CarryAcked</code>.</p>
+    <p>Notices are not entered in the duplicate filter, so they can be repeated.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/protocol-spec.md</code> sections 5.10 and 8.1; simulator figures from the README.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+(function(){
+  Viz.timeline(document.getElementById('tl'), [
+    {t:'0 s', title:'You send', text:'The recipient’s radio is off, so nothing answers.', pkt:'Data'},
+    {t:'45 s', title:'No acknowledgement: deposit', text:'Your node hands the message to its own home post office, sealed without forward secrecy.', pkt:'Deposit STORE'},
+    {t:'next', title:'Three copies', text:'The post office keeps it and sends copies to the recipient’s three replica hosts, by their rendezvous scores. Over TCP, never over radio.'},
+    {t:'waiting', title:'Mail waiting', text:'Post offices say in their hellos which recipients have mail, like the traffic indication in a Wi-Fi beacon. Up to 7 days, 100 messages.', pkt:'Hello'},
+    {t:'they return', title:'They announce, or ask', text:'A host that hears the announce asks the replicas for mail, at most every 10 minutes per node. The node also asks when it starts and every 6 hours.', pkt:'MailSync'},
+    {t:'delivered', title:'Delivered from mailbox', text:'The post office delivers; the recipient opens it. A small receipt goes back to you, because the post office never knew who sent it.', pkt:'Deposit RECEIPT'}
+  ]);
+  var C = SIM.crisis, nm = {'no carry':'No carry','carry as today':'Carry as the firmware has it','+ 6 h, 64 in flash':'+ 6 h life, room for 64','+ 16 copies':'+ 16 copies','+ offices hand to carriers':'+ post offices hand to carriers'};
+  Viz.bars(document.getElementById('c-crisis'), {title:'Carry in a crisis', unit:' %', max:100, groups:[['near','Under 25 km'],['mid','25 to 100 km'],['far','Over 100 km']].map(function(b){
+    return {label:b[1], bars: C.map(function(r,i){ return {label:nm[r.name]||r.name, value:r[b[0]], series:i===0?2:(i===1?0:3)}; })}; })});
+  var J = SIM.journey, jn = {'no mail (today)':'No mail design','named post box (old)':'Named home host (old)','post offices (new)':'Post offices','post offices + repeaters':'Post offices + repeaters'};
+  Viz.bars(document.getElementById('c-mail'), {title:'Mail while off', unit:' %', max:100, groups:[{label:'Internet up', bars: J.up.map(function(r,i){return {label:jn[r.name]||r.name, value:r.offline, series:i>=2?0:2};})},{label:'Internet down from 17 minutes', bars: J.down.map(function(r,i){return {label:jn[r.name]||r.name, value:r.offline, series:i>=2?0:2};})}]});
+})();
+</script>
+</body>
+</html>

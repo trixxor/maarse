@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pages · Må:rse handbook</title>
+<meta name="description" content="Small documents served over the mesh, like a notice board.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>Pages</h1>
+    <p class="lede">Small documents served over the mesh, like a notice board.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> A <strong>page</strong> is a small document served by a host and fetched by address, like <code>maarse://&lt;address&gt;/about</code>. Pages are written in a light markup (<code>.mu</code>), compressed, and sent as an ordinary file, so a page works over LoRa. A page is <strong>never HTML</strong>, so it cannot run code on your device.</p>
+    <p><strong>Why:</strong> A village, a club or a shop wants a notice board, a weather page or a menu that people can reach without internet. Pages give a mesh something to read, not only something to say.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Works over LoRa: a page is a compressed file of up to 8 KB, or 1 MB over the internet</li><li>Safe by design: markup, not code</li><li>Notice boards, locked pages, columns, cards, colours and small widgets</li><li>Pages you opened are cached in the browser and can be read offline</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Firmware nodes fetch pages but do not serve them: a host serves</li><li>A page over the file limit is replaced by a short error page</li><li>At most 5 pages per 30 seconds from the same node</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-tested">tested</span> unit tests and page-limit regression tests. Not run on hardware. Five demo pages are live on the backbone node under <code>/demo</code>.</p>
+  </div>
+
+  <h2 id="how">How a page travels</h2>
+  <ol>
+    <li>You type an address. The client sends a page request to that node.</li>
+    <li>The host answers with a file: the page compressed with raw deflate, named after the path.</li>
+    <li>The client shows it as a page only because you asked for exactly that page from exactly that node. A file that merely claims to be a page is shown as an ordinary file.</li>
+  </ol>
+  <h2 id="what">What a page can look like</h2>
+  <p>The whole look is written in the page's own <code>.mu</code> file: page settings (background, colours, font, grid, a ticker), columns and cards, effects, small widgets, notice boards and locked pages that only listed people may open. The full designer reference, with examples, is the Pages design guide on the project's site.</p>
+  <div class="can">
+    <div class="yes"><h4>What a page can do</h4><ul><li>Show text, links, columns and cards</li><li>Host a notice board people can post to</li><li>Lock a page to chosen addresses</li><li>Be fetched over LoRa, with a per-chunk acknowledgement</li><li>Be edited in the server dashboard's Pages tab, with a file editor and stats</li></ul></div>
+    <div class="no"><h4>What it cannot do</h4><ul><li>Run scripts: there is no code in a page</li><li>Point outside the pages folder: paths may only contain <code>a-z 0-9 - _ . /</code>, at most 60 bytes, with no <code>..</code></li><li>Be served by a radio board</li></ul></div>
+  </div>
+
+  <section class="deep" id="details">
+    <h2>Protocol and limits</h2>
+    <ul>
+      <li>The client sends a request for a path. The node answers with an encrypted direct message of the page content type, and the host replies with a file whose MIME type is <code>text/x-maarse-page;deflate</code>.</li>
+      <li>Files live in <code>&lt;data&gt;/pages/</code>: <code>index.mu</code> is the root, <code>about.mu</code> is <code>/about</code>, <code>weather/index.mu</code> is <code>/weather</code>.</li>
+      <li>Same limits as files: 8 KB compressed over LoRa, 1 MB over TCP. A missing page returns a short "Not found" page.</li>
+      <li>The page server serves regular files up to 2 MiB only. Links, special files and reparse points are excluded, and image size is limited. The operator must protect the data directory against concurrent local changes.</li>
+      <li>The browser keeps the latest 30 pages for offline reading.</li>
+    </ul>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/GUIDE.md</code>, <code>docs/protocol-spec.md</code> and the code they name.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

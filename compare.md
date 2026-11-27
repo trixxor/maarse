@@ -28,7 +28,7 @@ MIT/Apache-2.0 · Rust
 
 ### Må:rse
 
-Our prototype (v0.5). Reticulum's identity and global reach, MeshCore's repeater routing, run directly on the microcontroller. Runs on hardware with a gateway to MeshCore, an Android app and remote access over VPN; range and power have not been measured.
+Our prototype (v0.9). Reticulum's identity and global reach, MeshCore's repeater routing, run directly on the microcontroller. Runs on hardware with a gateway to MeshCore, an Android app and remote access over VPN; range and power have not been measured.
 
 ## Side by side
 
@@ -202,4 +202,4 @@ Sources (fetched November 2026):
 - [Reticulum RNS 1.6.0](https://newreleases.io/project/github/markqvist/Reticulum/release/1.6.0)
 - [FOSDEM 2026: Reticulum, what's next](https://fosdem.org/2026/events/attachments/9NCWUR-reticulum_community_meetup_implementations_migration_and_future/slides/262533/reticulum_dimz1j8.pdf) (licence and forks)
 
-Må:rse numbers come from the project's own tests and simulator (v0.5).
+Må:rse numbers come from the project's own tests and simulator (v0.9).

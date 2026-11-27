@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files, pictures and voice · Må:rse handbook</title>
+<meta name="description" content="What you can send, how big, and how long it takes.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>Files, pictures and voice</h1>
+    <p class="lede">What you can send, how big, and how long it takes.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> Må:rse sends <strong>pictures and files</strong> encrypted, in small chunks with an acknowledgement for each: up to <strong>8 KB over LoRa</strong> and <strong>1 MB over the internet</strong>. <strong>Voice messages</strong> are recorded with the Codec2 codec at 1200 bit/s, about 1.5 KB for 10 seconds, and sent as an ordinary file. Live <strong>calls</strong> use Opus over the internet only.</p>
+    <p><strong>Why:</strong> People want to send a photo or a voice note, but LoRa is slow. The app tells you before you send how big it can be and how long it will take, and shrinks pictures to fit.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>Encrypted chunks with a random key per file</li><li>The app says how big a file can be on the route, and how long it will take</li><li>Pictures are scaled down automatically</li><li>A file for an offline person waits in the host's file mailbox, sealed so the host cannot read it</li><li>Voice notes are small enough for LoRa</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>Over LoRa a picture is small, and takes minutes: roughly 2 minutes of airtime for 8 KB</li><li>A radio board handles one file at a time in each direction and does not keep files in its flash</li><li>Calls need the internet all the way, and Chrome or Edge in the web client</li><li>Files over LoRa on firmware are not tested on hardware yet</li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-bench">bench-tested</span> file transfer between hosts and boards; one measured case went from 157 s to 66.6 s with pull and batch transfer. Not field-tested.</p>
+  </div>
+  <div class="facts"><div class="fact"><span>Over LoRa</span><strong>up to 8 KB</strong></div><div class="fact"><span>Over the internet</span><strong>up to 1 MB</strong></div><div class="fact"><span>Chunk</span><strong>186 bytes of data</strong></div><div class="fact"><span>Voice</span><strong>Codec2, 1200 bit/s</strong></div></div>
+
+  <h2 id="limits">The limit depends on the route</h2>
+  <p>Before a file is sent, the client asks the host what the limit is for that contact, and shows the answer in plain words, for example <em>"The picture is sent over LoRa and scaled down to 8 KB (about 2 min. airtime)"</em> or <em>"Sent over the internet (up to 1 MB)"</em>.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Route</th><th>Limit</th><th>Why</th></tr>
+    <tr><td>Internet all the way (the recipient and every hop are known hosts)</td><td>up to 1 MB</td><td>TCP is fast</td></tr>
+    <tr><td>LoRa (any hop is a radio)</td><td>8 KB</td><td>Same as the firmware; the airtime is estimated at SF9, 125 kHz, 10 % duty cycle</td></tr>
+    <tr><td>Unknown or offline recipient</td><td>up to 1 MB into the file mailbox, 8 KB without one</td><td>The file waits in the sender's host</td></tr>
+  </table></div>
+
+  <p>If the host is in doubt, it never assumes TCP. A file over 8 KB is never sent along a route that is not internet all the way: the chunks are held back and the file goes into the file mailbox.</p>
+  <h2 id="time">How long 8 KB takes</h2>
+  <div class="viz">
+    <h3>A file over LoRa: the pull and batch transfer</h3>
+    <p class="viz-sub">One measured case, in seconds, same file between two boards.</p>
+    <div id="c-file"></div>
+    <p class="takeaway">Letting the receiver ask for the chunks it is missing, in batches, and stopping from both sides, more than halved the transfer time in this case.</p>
+    <p class="src">Source: bench test of 2026-11-18 (project notes). One case, not a statistic, and not outdoors.</p>
+  </div>
+
+  <h2 id="voice">Voice</h2>
+  <p>Tap the microphone in a direct conversation to record (at most 20 seconds) and tap again to send. The client downsamples to 8 kHz and encodes with <strong>Codec2 at 1200 bit/s</strong>: 10 seconds take about 1.5 KB, small enough to send over LoRa as a file. The recipient decodes and sees a player.</p>
+  <p><strong>Calls:</strong> the Call button appears in a direct conversation through a host. Audio is Opus at 16 kbit/s in 20 ms frames, sent encrypted. A host only sends calls when the recipient is reached over the internet all the way; otherwise it answers that the call is not possible. Calls over LoRa are not possible.</p>
+  <section class="deep" id="details">
+    <h2>Formats, mailbox and limits</h2>
+<pre><code>file ID (u64) | chunk index (u16) | ChaCha20-Poly1305(file key, data) | tag (16)</code></pre>
+    <p><code>CHUNK_OVERHEAD</code> = 26 bytes, so each chunk carries 212 − 26 = <strong>186 bytes</strong> of data. The file key is random per file and travels in the encrypted file offer. The host checks size, digest and chunk geometry, and allows at most 32 active incoming files, 8 per sender.</p>
+  <div class="table-wrap"><table>
+    <tr><th>File mailbox (host only)</th><th>Value</th></tr>
+    <tr><td>Per file</td><td>1 MB</td></tr>
+    <tr><td>Per recipient</td><td>20 MB</td></tr>
+    <tr><td>In total</td><td>200 MB</td></tr>
+    <tr><td>Lifetime</td><td>7 days</td></tr>
+    <tr><td>Stored as</td><td>sealed offer and sealed chunks: the host cannot read them</td></tr>
+    <tr><td>Delivered when</td><td>the recipient announces or a route appears; the sender sees <em>delivered from mailbox</em></td></tr>
+  </table></div>
+
+    <p>Files are never put in a radio board's flash, because one file would fill the 8 KB of mailbox flash completely. A received file is held in RAM until a client connects, and is overwritten by the next file. The content of files is not stored in history.</p>
+    <h3>Voice format</h3>
+    <p><code>"C2" | mode (5 = 1200 bit/s) | frame count (u16) | frames</code>, 6 bytes per 40 ms. Codec2 comes from <code>maarse-voice</code>, a pure-Rust implementation compiled to WebAssembly for the web client and used over JNI in the Android app. Hosts and firmware do not know the format: they just send the file (MIME <code>audio/x-codec2</code>).</p>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/GUIDE.md</code>, <code>docs/protocol-spec.md</code> and the code they name.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+(function(){
+  Viz.bars(document.getElementById('c-file'), {title:'File transfer time', unit:' s', groups:[{label:'Same file between two boards', bars:[{label:'Before: chunk by chunk', value:157, series:2},{label:'After: pull and batch, two-sided stop', value:66.6, series:0}]}]});
+})();
+</script>
+</body>
+</html>

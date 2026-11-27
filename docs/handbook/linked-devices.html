@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Linked devices · Må:rse handbook</title>
+<meta name="description" content="One person, several devices, one account.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Features · Explanation</p>
+    <h1>Linked devices</h1>
+    <p class="lede">One person, several devices, one account.</p>
+  </header>
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> <strong>Linked devices</strong> let one person use several devices, a phone, a PC and a tablet, as one account. You link a new device to a <em>master</em> device with a QR code or an address and check words. Each device has its own address, and the others know they belong to you.</p>
+    <p><strong>Why:</strong> People own more than one device. Without linking, each would be a different person: separate inboxes, separate contacts, and a message to your phone would never reach your PC.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Strengths</h4><ul><li>One account across devices</li><li>Linking takes a QR code or a pasted address and a comparison of check words</li><li>Channel messages from any of your devices appear as sent by you</li><li>Same words in the Android app and the web client</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>A device is only as safe as the person holding it: a linked device is you</li><li>Channel messages are claimed senders, so someone with the key can make a message look like yours on your own devices</li><li>Linked devices are <span class="badge b-tested">tested</span> end to end on a PC but <strong>not flashed or hardware-tested</strong></li></ul></div>
+    </div>
+    <p class="meta"><span class="badge b-tested">tested</span> with <code>tools/linked_devices_test.py</code>. Not hardware-tested.</p>
+  </div>
+
+  <h2 id="how">How to link</h2>
+  <div class="viz">
+    <h3>Linking a device</h3>
+    <p class="viz-sub">Press Play.</p>
+    <div id="tl"></div>
+    <p class="src">Technical guide, "Linking a device and the Settings menu".</p>
+  </div>
+
+  <p>On both the Android app and the web client the choices are in one place, <strong>Settings</strong>, with the same words. In the Android Settings, <em>How this phone connects</em> chooses between this phone being the node, going through my radio only, using my home computer, or running a server on this phone. <em>Role and regions</em> under <em>This node</em> sets the role, and changing it asks first because the node restarts.</p>
+  <h2 id="trust">What linking means for trust</h2>
+  <ul>
+    <li>A device on your own signed device list, and not revoked, counts as you.</li>
+    <li>A device of another person is shown as that person once its certificate has been checked.</li>
+    <li>Use each device's own address when you administer a repeater, not the account's.</li>
+  </ul>
+  <section class="deep" id="details">
+    <h2>Details</h2>
+    <p>The account keeps a signed list of its devices. A host that sees a message from a device checks that list and any certificate. Direct messages are authenticated and have no problem with this; channel messages carry only a claimed sender, which is why a key holder can make a message appear as yours (spec 6.4). A <em>public view</em> that shows the device instead of the account, with a layered verified display, is parked as a someday idea.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/GUIDE.md</code>, <code>docs/protocol-spec.md</code> and the code they name.</footer>
+</main>
+<script src="assets/site.js"></script>
+<script src="assets/simdata.js"></script>
+<script src="assets/viz.js"></script>
+<script>
+Viz.timeline(document.getElementById('tl'), [
+  {t:'1', title:'On the new device', text:'Choose Link this device to my account. It waits ten minutes and shows its address, a QR code and check words.'},
+  {t:'2', title:'On the master', text:'Choose Link a device. The Android app links as soon as it scans the code. The web client links the pasted address or link when you press Enter.'},
+  {t:'3', title:'Compare the check words', text:'Both devices now show the same check words. If they differ, someone is in the middle: stop.'},
+  {t:'4', title:'One account', text:'The master signs a device list. The account keeps a signed list of its devices. Your channel messages sent from any of them show as sent by you on all of them.'}
+]);
+</script>
+</body>
+</html>

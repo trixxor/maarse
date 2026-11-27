@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy and security · Må:rse handbook</title>
+<meta name="description" content="What Må:rse encrypts, what a listener can still see, and which trust boundaries remain.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main>
+<article>
+  <header>
+    <p class="kicker">Understand · Explanation</p>
+    <h1>Privacy and security</h1>
+    <p class="lede">What is protected, what is not, and who you still have to trust.</p>
+  </header>
+
+  <div class="tldr">
+    <span class="label">TL;DR</span>
+    <p><strong>What:</strong> messages are end-to-end encrypted and the sender is never written in a packet header. Your address is a hash of your public key, so nobody hands you an identity and nobody can take it away.</p>
+    <p><strong>Why it matters:</strong> radio is a broadcast medium. Anyone with a receiver in range hears every packet, so the design assumes the listener is always there.</p>
+    <div class="prosCons">
+      <div class="pros"><h4>Advantages</h4>
+        <ul>
+          <li>Well-known building blocks (X25519, ChaCha20-Poly1305, Ed25519)</li>
+          <li>Sender hidden inside the encrypted message</li>
+          <li>Announces and path requests need a small proof of work, which makes spam costly</li>
+          <li>Firmware and alerts are signed</li>
+        </ul>
+      </div>
+      <div class="cons"><h4>Good to know</h4>
+        <ul>
+          <li><strong>Not reviewed by outside experts</strong></li>
+          <li>No anonymity: who talks to whom is visible</li>
+          <li>Channel senders are not authenticated</li>
+          <li>Host history is stored unencrypted by default</li>
+        </ul>
+      </div>
+    </div>
+    <p class="meta"><span class="badge b-working">working copy</span> Do not rely on Må:rse for anything where a break would cause harm.</p>
+  </div>
+
+  <h2 id="listener">What a listener can read</h2>
+  <p>Someone with a LoRa receiver and no keys can read this from a direct message:</p>
+  <div class="table-wrap"><table>
+    <tr><th></th><th>Readable without a key</th></tr>
+    <tr><td>Meshtastic</td><td>Sender and recipient node numbers, packet id, channel hash, hop counts</td></tr>
+    <tr><td>MeshCore</td><td>Short hashes of recipient and sender, and the repeaters on the path</td></tr>
+    <tr><td>Reticulum</td><td>The recipient's destination hash; no sender address</td></tr>
+    <tr><td><strong>Må:rse</strong></td><td>The recipient's 16-byte address and the path; <strong>the sender is never in the header</strong></td></tr>
+  </table></div>
+  <div class="callout warn">
+    <strong>No anonymity</strong>
+    <p>Må:rse protects content and hides the sender inside the message. It does not hide the fact that two nodes are communicating, and it does not hide the recipient's address. Position and telemetry are off by default, and rounded to a grid when shared.</p>
+  </div>
+
+  <h2 id="identity">Your identity</h2>
+  <p>You get an identity the first time the app or host starts: two key pairs, one for signing and one for key agreement. Your <strong>address</strong> is a hash of both public keys, and it is the same over radio, TCP and the internet.</p>
+  <ul>
+    <li><strong>Recovery phrase:</strong> 24 words let you restore the identity. Anyone with the phrase <em>is</em> you, and the project does not store it.</li>
+    <li><strong>Safety number:</strong> a 60-digit number two people can compare, for example with QR codes, to check nobody is in the middle. It only protects you if you actually compare it.</li>
+  </ul>
+
+  <h2 id="channels">Channels and alerts</h2>
+  <ul>
+    <li><strong>Channels</strong> use a shared key. The keys of the <code>public</code> channel and of <code>#hashtag</code> channels are derived from the name, so <em>anyone</em> can read them. Private channels need the key to be shared.</li>
+    <li><strong>The sender of a channel message is not authenticated.</strong> Anyone holding the key can write as anyone. Signing is noted as a later improvement.</li>
+    <li><strong>Public alerts</strong> are signed by issuer keys and shown as a banner no chat message can imitate. Receivers trust only the root keys they are configured with.</li>
+  </ul>
+
+  <h2 id="trust">What you still have to trust</h2>
+  <div class="table-wrap"><table>
+    <tr><th>If this is compromised</th><th>What the attacker can do</th></tr>
+    <tr><td>A repeater or backbone operator</td><td>See destinations and routes, and drop, delay or replay what passes through</td></tr>
+    <tr><td>A post office or carrier</td><td>Delete or withhold the sealed messages it holds. It cannot read them.</td></tr>
+    <tr><td>A channel key</td><td>Read and write in that channel as anyone</td></tr>
+    <tr><td>The release signing key</td><td>Sign firmware that every node trusting it will install. A new key means visiting every node.</td></tr>
+    <tr><td>Your device or recovery phrase</td><td>Everything. This is out of scope for the protocol.</td></tr>
+  </table></div>
+
+  <div class="callout honest">
+    <strong>Known weaknesses</strong>
+    <ol>
+      <li>The cryptography has not been externally reviewed, and the forward-secrecy ratchet is a draft.</li>
+      <li>Channel senders are unauthenticated.</li>
+      <li>Host history is stored unencrypted on disk by default, and kept 90 days.</li>
+      <li>Any local program can reach a host on loopback unless it requires an access key.</li>
+      <li>No closed networks yet: any node can route through any repeater.</li>
+      <li>Jamming the radio band cannot be prevented by any protocol.</li>
+    </ol>
+  </div>
+
+  <section class="deep" id="crypto">
+    <h2>The cryptography in detail</h2>
+    <p>Source: <code>maarse-crypto/src/*</code>, spec section 6. <span class="badge b-working">working copy</span> Not externally reviewed.</p>
+    <p><strong>Primitives:</strong> Ed25519 (signatures), X25519 (key agreement), SHA-256, HKDF-SHA256, ChaCha20-Poly1305 (96-bit nonce, 128-bit tag), and PBKDF2-HMAC-SHA512 for the recovery phrase only. Every decoder is fuzzed, and the project's own crates forbid <code>unsafe</code> code.</p>
+    <h3>Identity and address</h3>
+    <p>The secret form is 64 bytes: the Ed25519 seed (32) and the X25519 secret (32). The public form is the two public keys (64 bytes). The address is the first 16 bytes of <code>SHA-256(Ed25519 public | X25519 public)</code>.</p>
+    <h3>The static seal</h3>
+    <p>A direct message without a session is sealed one-way in the style of Noise <code>X</code>:</p>
+<pre><code>e_pub (32) | sender address XOR k1 (16) | ChaCha20-Poly1305(k2, message) | tag (16)
+
+es = X25519(e, R_dh)          ss = X25519(S_dh, R_dh)
+k1 = HKDF(salt "maarse/dm/v0/sender", ikm es,      info e_pub | R_addr)           -- 16 bytes
+k2 = HKDF(salt "maarse/dm/v0",        ikm es | ss, info e_pub | R_addr | S_addr)  -- 32 bytes
+nonce = 12 zero bytes;  AAD = the first 48 bytes</code></pre>
+    <p>The overhead is 64 bytes, so the largest message is 212 − 64 = <strong>148 bytes</strong>. A fresh ephemeral key <code>e</code> is used for every message, so the zero nonce is safe. Only the recipient can recover the sender address, and the recipient needs the sender's public keys, normally from an announce, to verify the <code>ss</code> part. Non-contributory Diffie-Hellman results are rejected.</p>
+    <h3>Forward secrecy</h3>
+    <p>Contacts that support it use a ratchet. <span class="badge b-designed">draft</span> A leaked current key exposes the current session. Mail held in post offices is sealed with the static format, without forward secrecy.</p>
+    <h3>Proof-of-work stamps</h3>
+    <p>Announces need a stamp of about 0.3 s on an nRF52840. Path requests, key requests, mail syncs and deposits use a smaller 8-bit stamp: cheap for one message, costly for a flooder, but a determined attacker can still use airtime.</p>
+    <h3>Safety numbers</h3>
+    <p>The safety number hashes the public keys 512 times, turns the result into 6 groups of 5 digits, and concatenates the two people's fingerprints in sorted order, giving 60 digits.</p>
+    <h3>Signed things</h3>
+    <ul>
+      <li><strong>Firmware updates:</strong> an Ed25519-signed manifest. A node installs only for its own board, a newer version, and a signature matching its built-in release key. Updates are disabled with a missing, weak or development key.</li>
+      <li><strong>Releases:</strong> <code>SHA256SUMS</code> signed with the release key.</li>
+      <li><strong>Bulletins and alerts:</strong> signed by issuer keys with certificates from a root key that limit what an issuer may send, expiry, and serial numbers against replays.</li>
+    </ul>
+  </section>
+
+  <section class="deep" id="host-hardening">
+    <h2>Hosts and servers</h2>
+    <p>Spec and threat model. <span class="badge b-working">working copy</span></p>
+    <div class="table-wrap"><table>
+      <tr><th>Area</th><th>Protection</th><th>Boundary that remains</th></tr>
+      <tr><td>Web client and API</td><td>A request without a key must match the real listener (loopback or its numeric IP) and come from a same-origin browser request. Other requests need the access key. Header size, time and connection limits apply.</td><td>Put a reverse proxy in front for public access and require the key. Query-string keys are off by default.</td></tr>
+      <tr><td>Server admin</td><td>Password and sessions stored as hashes. Lockout after 5 failures for 15 minutes. Changing the password revokes sessions.</td><td>The dashboard is plain HTTP unless you put HTTPS in front.</td></tr>
+      <tr><td>Backbone links</td><td>Per-IP and per-link rate limits, bans, block lists, at most 4 DHT contacts per network.</td><td>One operator with many networks is not stopped.</td></tr>
+      <tr><td>Files</td><td>Encrypted chunks with a random per-file key; the host checks size, digest and geometry; at most 32 active incoming files, 8 per sender.</td><td></td></tr>
+      <tr><td>Page server</td><td>Regular files up to 2 MiB only; links and special files excluded.</td><td>The operator must protect the data directory against concurrent local changes.</td></tr>
+    </table></div>
+    <p>The full threat model, with the adversary list and the audit items, is in <code>docs/security/threat-model.md</code> and <code>docs/security-audit-2026-11-20.txt</code> in the repository.</p>
+  </section>
+</article>
+<footer class="site">Source: <code>docs/security/threat-model.md</code>, <code>docs/protocol-spec.md</code> section 6, and the security review of 2026-11-20.</footer>
+</main>
+<script src="assets/site.js"></script>
+</body>
+</html>

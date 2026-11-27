@@ -7,6 +7,7 @@ pub mod bme280;
 pub mod i2c_sensor;
 pub mod bus;
 pub mod gps;
+pub mod health;
 pub mod node;
 pub mod power;
 pub mod ota;

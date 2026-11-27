@@ -31,6 +31,8 @@ use embassy_nrf::nvmc::Nvmc;
 use maarse_crypto::ota::{Manifest, board};
 use maarse_fw_common::storage::OtaConfig;
 
+use crate::watchdog::{RELOAD, WDT_RR0};
+
 #[cfg(feature = "board-wismesh-tag")]
 pub const APP_START: u32 = 0x26000;
 #[cfg(feature = "board-wismesh-tag")]
@@ -98,6 +100,8 @@ unsafe extern "C" fn copy_and_reset(dst: u32, src: u32, len: u32) -> ! {
             // Try each page up to three times if the verify read fails.
             let mut tries = 0u32;
             loop {
+                // Interrupts are off, so nothing else feeds the watchdog meanwhile.
+                core::ptr::write_volatile(WDT_RR0, RELOAD);
                 while core::ptr::read_volatile(NVMC_READY) == 0 {}
                 core::ptr::write_volatile(NVMC_CONFIG, 2); // erase
                 core::ptr::write_volatile(NVMC_ERASEPAGE, dst + page);

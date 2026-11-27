@@ -53,7 +53,9 @@ def main():
         shutil.copyfile(uf2, os.path.join(drive, os.path.basename(uf2)))
     except OSError:
         pass  # The board restarts as soon as the file is written; that can give an error at the end.
-    print("Done. Press reset once so USB comes back (known issue after a UF2 flash).")
+    print("Done. USB comes back after about a minute (the first start hangs and the watchdog restarts the board).
+"
+          "If it has not after two minutes, or the firmware is older than the watchdog, press reset once.")
     return 0
 
 

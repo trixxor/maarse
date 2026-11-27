@@ -453,7 +453,7 @@ $("nrf-write").onclick = async () => {
     await w.write(image.bytes);
     try { await w.close(); } catch {} // the board may restart while the file is closed
     $("bar").value = 1;
-    log("Done. The board installs the firmware and restarts. If USB does not come back, press reset once.", "ok");
+    log("Done. The board installs the firmware and restarts. USB comes back after about a minute. If it has not after two minutes, press reset once.", "ok");
   } catch (e) {
     if (e?.name === "AbortError") log("No drive chosen.");
     else log("Failed: " + (e?.message || e) + ". Use Save the file instead and drag it onto the drive.", "bad");

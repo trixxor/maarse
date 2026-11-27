@@ -17,8 +17,8 @@ use trouble_host::prelude::*;
 mod security;
 use security::Security;
 
-/// Chunks of 20 bytes always fit (default ATT MTU 23).
-const CHUNK: usize = 20;
+/// The largest notification the `tx` characteristic holds.
+const CHUNK_MAX: usize = 244;
 
 #[gatt_server]
 struct Server {
@@ -177,7 +177,7 @@ async fn rx_task<C: Controller>(
     }
 }
 
-/// Events from the node: send them as notifications in small chunks.
+/// Events from the node: send them as notifications, as large as the link carries.
 async fn tx_task(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) {
     let tx = &server.nus.tx;
     loop {
@@ -188,8 +188,11 @@ async fn tx_task(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacke
             continue;
         }
         maarse_fw_common::bus::BLE_BYTES_OUT.fetch_add(frame.len() as u32, core::sync::atomic::Ordering::Relaxed);
-        for chunk in frame.chunks(CHUNK) {
-            let mut v: heapless09::Vec<u8, 244> = heapless09::Vec::new();
+        // A notification carries the ATT MTU less 3 bytes: 20 until the phone has asked for
+        // more (the default MTU is 23). Read for each frame, as the phone asks after connecting.
+        let size = usize::from(conn.raw().att_mtu()).saturating_sub(3).clamp(20, CHUNK_MAX);
+        for chunk in frame.chunks(size) {
+            let mut v: heapless09::Vec<u8, CHUNK_MAX> = heapless09::Vec::new();
             let _ = v.extend_from_slice(chunk);
             match select(tx.notify(conn, &v, false), embassy_time::Timer::after_secs(2)).await {
                 Either::First(Ok(())) => {}

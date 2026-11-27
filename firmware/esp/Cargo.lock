@@ -1906,6 +1906,7 @@ dependencies = [
  "maarse-fw-common",
  "rand_chacha",
  "rand_core 0.6.4",
+ "sha2 0.10.9",
  "smoltcp",
  "ssd1306",
  "static_cell",

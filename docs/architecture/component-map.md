@@ -35,6 +35,7 @@ depends on. For how the parts fit together at run time, see the
 | `firmware/esp` | ESP32-S3 + SX1262: Heltec V4, XIAO ESP32-S3. Bluetooth, Wi-Fi, display, USB. | common |
 | `firmware/meshcore-gateway` | MeshCore gateway firmware (PlatformIO, separate from the Rust firmware). | none |
 | `firmware/vendor/lora-phy` | Vendored radio driver. | none |
+| `firmware/vendor/trouble-host` | Vendored Bluetooth host library (nRF52840 only): version 0.8.0 with one patch that keeps its 4 KB packet pool out of flash. | none |
 
 ## Simulation, testing, measurement
 

@@ -43,7 +43,8 @@ use esp_hal::rng::{Trng, TrngSource};
 use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::Rate;
-use esp_hal::timer::timg::TimerGroup;
+use esp_hal::timer::timg::{MwdtStage, TimerGroup, Wdt};
+use maarse_fw_common::health;
 use esp_storage::FlashStorage;
 use lora_phy::LoRa;
 use lora_phy::iv::GenericSx126xInterfaceVariant;
@@ -152,6 +153,12 @@ pub fn stack_never_used() -> u32 {
     p - start
 }
 
+/// Feeds the hardware watchdog while the node and radio loops are alive.
+#[embassy_executor::task]
+async fn watchdog_task(mut watchdog: Wdt<esp_hal::peripherals::TIMG1<'static>>) {
+    health::supervise(move || watchdog.feed()).await
+}
+
 /// Updates the memory figures shown on the status page.
 #[embassy_executor::task]
 async fn memory_task() {
@@ -234,6 +241,12 @@ async fn main(spawner: Spawner) {
     let p = esp_hal::init(esp_hal::Config::default());
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
+    // The watchdog (`esp_hal::init` switches them all off): from here on a start-up or a task
+    // that hangs ends in a restart. Timer group 1 is off in deep sleep.
+    let mut watchdog = TimerGroup::new(p.TIMG1).wdt;
+    watchdog.set_timeout(MwdtStage::Stage0, esp_hal::time::Duration::from_secs(health::TIMEOUT_S as u64));
+    watchdog.enable();
+    spawner.spawn(watchdog_task(watchdog).unwrap());
     // Heap for the BLE controller (esp-radio), 72 KB, all in RAM that the
     // bootloader frees after start-up. A static heap would be taken from the
     // stack: with a 4 KB static part sending a direct message (curve25519)
@@ -407,7 +420,16 @@ async fn main(spawner: Spawner) {
         use_dcdc: true,
         rx_boost: true,
     };
-    let lora = LoRa::new(Sx126x::new(spi, iv, sx_cfg), false, Delay).await.ok();
+    // lora-phy waits for the BUSY pin without a limit, so a radio that never answers (no
+    // power, a broken module) would hang the start-up before USB exists. The timeout keeps
+    // the node reachable without a radio.
+    let lora = embassy_time::with_timeout(
+        embassy_time::Duration::from_secs(3),
+        LoRa::new(Sx126x::new(spi, iv, sx_cfg), false, Delay),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok);
     let radio_ok = lora.is_some();
     if let Some(lora) = lora {
         spawner.spawn(radio::radio_task(lora, led, led_on_high, rng.next_u64(), radio_cfg).unwrap());
@@ -524,7 +546,10 @@ async fn main(spawner: Spawner) {
             rst.set_high();
             core::mem::forget(rst);
             Timer::after_millis(20).await;
-            let i2c = esp_hal::i2c::master::I2c::new(p.I2C0, esp_hal::i2c::master::Config::default())
+            // 400 kHz: a redraw sends the whole picture and blocks while it does, about
+            // 26 ms (104 ms at the default 100 kHz).
+            let cfg = esp_hal::i2c::master::Config::default().with_frequency(Rate::from_khz(400));
+            let i2c = esp_hal::i2c::master::I2c::new(p.I2C0, cfg)
                 .unwrap()
                 .with_sda(p.GPIO17)
                 .with_scl(p.GPIO18);

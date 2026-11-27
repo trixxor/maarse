@@ -142,6 +142,8 @@ The station is available on the local mesh.
 <h2>Radio hardware and firmware</h2>
 <p>Firmware protects state-changing radio administration across reboot using flash-backed counter reservations. Immediately after a reboot, a legitimate remote administrator may need to wait for the previous counter range to pass. The radio rejects a change if it cannot persist its reservation. Local companion access still uses USB or Bluetooth.</p>
 
+<p>From firmware 0.9.12: a radio restarts by itself if its program stops responding, usually within about two minutes. On the nRF52840 boards it now also restarts after a program error, where it used to stay stopped until someone pressed reset. A radio that keeps restarting needs attention: connect it by USB and check it.</p>
+
 <p>Choose the firmware image for the board you actually have. The two ESP32-S3 targets support Wi-Fi backbone operation. The nRF52840 targets use USB or Bluetooth for companion access. The host can run without radio hardware and exchange packets with other hosts over the backbone.</p>
 <table>
 <caption>Firmware targets in the project</caption>

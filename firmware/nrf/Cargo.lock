@@ -1245,7 +1245,6 @@ dependencies = [
  "maarse-fw-common",
  "nrf-mpsl",
  "nrf-sdc",
- "panic-halt",
  "rand_chacha",
  "rand_core 0.6.4",
  "sha2",
@@ -1405,12 +1404,6 @@ dependencies = [
  "elliptic-curve",
  "primeorder",
 ]
-
-[[package]]
-name = "panic-halt"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a513e167849a384b7f9b746e517604398518590a9142f4846a32e3c2a4de7b11"
 
 [[package]]
 name = "phf"
@@ -1902,8 +1895,6 @@ dependencies = [
 [[package]]
 name = "trouble-host"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19a566cc37ceaff5cc2a6ff8cc02debd1ee6b95d59ced8830d005da8b080cbe9"
 dependencies = [
  "aes",
  "bt-hci",

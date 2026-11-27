@@ -31,7 +31,7 @@ Linux:
 ./scripts/build-firmware.sh <board> flash
 ```
 
-- **nRF52840:** the script makes `dist/maarse-<board>.uf2`. Double-click the board's reset button and drag the file onto the USB drive that appears. Press reset once afterwards so USB comes back.
+- **nRF52840:** the script makes `dist/maarse-<board>.uf2`. Double-click the board's reset button and drag the file onto the USB drive that appears. USB comes back after about a minute: the first start after a USB flash hangs, and the watchdog restarts the board (from firmware 0.9.12). If it has not after two minutes, or with older firmware, press reset once.
 - **ESP32-S3:** the first time, the script installs Espressif's toolchain (`espup`) and `espflash`, which takes several minutes. The port must be free: stop any host that uses the board as its modem first.
 
 **Check:** connect with the web client over **USB / serial** (Chrome or Edge) or **Bluetooth**; the status page shows the firmware version.

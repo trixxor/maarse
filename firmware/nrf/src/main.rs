@@ -20,6 +20,7 @@ mod storage;
 #[cfg(feature = "board-wismesh-tag")]
 mod tag;
 mod usb;
+mod watchdog;
 
 use embassy_executor::Spawner;
 use maarse_fw_common::node::Settings as _;
@@ -39,8 +40,19 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 use lora_phy::LoRa;
 use lora_phy::iv::GenericSx126xInterfaceVariant;
 use lora_phy::sx126x::{self, Sx126x, Sx1262, TcxoCtrlVoltage};
-use panic_halt as _;
 use rand_core::RngCore;
+
+/// Restart instead of hanging: a repeater out in the field must come back by itself.
+#[panic_handler]
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    cortex_m::peripheral::SCB::sys_reset()
+}
+
+/// A hardware fault (e.g. a bad address) restarts too; the default handler loops for ever.
+#[cortex_m_rt::exception]
+unsafe fn HardFault(_: &cortex_m_rt::ExceptionFrame) -> ! {
+    cortex_m::peripheral::SCB::sys_reset()
+}
 
 bind_interrupts!(pub struct Irqs {
     SPI2 => spim::InterruptHandler<peripherals::SPI2>;
@@ -98,6 +110,9 @@ async fn main(spawner: Spawner) {
         nrf_cfg.dcdc.reg1 = true;
     }
     let p = embassy_nrf::init(nrf_cfg);
+    // From here on a start-up that hangs ends in a restart.
+    watchdog::start();
+    spawner.spawn(watchdog::task().unwrap());
     interrupt::SPI2.set_priority(Priority::P3);
     interrupt::USBD.set_priority(Priority::P3);
     interrupt::RNG.set_priority(Priority::P3);

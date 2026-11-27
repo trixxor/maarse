@@ -31,7 +31,6 @@ heapless09 = { package = "heapless", version = "0.9" }
 lora-phy = "3.0.1"
 nrf-mpsl = { version = "0.4", default-features = false, features = ["critical-section-impl", "nrf52840"] }
 nrf-sdc = { version = "0.4", default-features = false, features = ["peripheral", "nrf52840"] }
-panic-halt = "1.0.0"
 rand_chacha = { version = "0.3", default-features = false }
 rand_core = "0.6"
 static_cell = "2.1.1"
@@ -57,3 +56,6 @@ panic = "abort"
 # (see firmware/vendor/lora-phy/src/sx126x/mod.rs, "Må:rse patch").
 [patch.crates-io]
 lora-phy = { path = "../vendor/lora-phy" }
+# trouble-host with its packet pool starting as all zeros: otherwise the whole 4 KB pool
+# is stored in flash (see src/packet_pool.rs there, "Må:rse patch").
+trouble-host = { path = "../vendor/trouble-host" }

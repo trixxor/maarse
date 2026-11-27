@@ -19,6 +19,8 @@ use core::fmt::Write as _;
 use core::sync::atomic::Ordering::Relaxed;
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer};
+use embedded_graphics::pixelcolor::BinaryColor;
+use embedded_graphics::prelude::*;
 use esp_hal::Blocking;
 use esp_hal::gpio::Input;
 use esp_hal::i2c::master::I2c;
@@ -81,6 +83,48 @@ fn toast(t: &str) -> Option<(heapless::String<32>, Instant)> {
     let mut s = heapless::String::new();
     let _ = s.push_str(t);
     Some((s, Instant::now() + TOAST))
+}
+
+/// Passes drawing on to `inner` and keeps a hash (FNV-1a) of everything drawn: the same
+/// page drawn the same way gives the same number, so an unchanged picture need not be sent.
+struct Fingerprint<'a, D> {
+    inner: &'a mut D,
+    hash: u32,
+}
+
+fn mix(hash: u32, word: u32) -> u32 {
+    (hash ^ word).wrapping_mul(0x0100_0193)
+}
+
+impl<D: OriginDimensions> OriginDimensions for Fingerprint<'_, D> {
+    fn size(&self) -> Size {
+        self.inner.size()
+    }
+}
+
+impl<D: DrawTarget<Color = BinaryColor> + OriginDimensions> DrawTarget for Fingerprint<'_, D> {
+    type Color = BinaryColor;
+    type Error = D::Error;
+
+    fn draw_iter<I: IntoIterator<Item = Pixel<BinaryColor>>>(&mut self, pixels: I) -> Result<(), Self::Error> {
+        let hash = &mut self.hash;
+        self.inner.draw_iter(pixels.into_iter().inspect(|Pixel(p, c)| {
+            *hash = mix(*hash, (p.x as u32) << 16 ^ (p.y as u32) << 1 ^ c.is_on() as u32);
+        }))
+    }
+
+    fn clear(&mut self, color: BinaryColor) -> Result<(), Self::Error> {
+        self.hash = mix(self.hash, color.is_on() as u32);
+        self.inner.clear(color)
+    }
+}
+
+/// Draws the page into the display's buffer (nothing is sent yet) and returns the
+/// picture's fingerprint. The only caller of `ui::draw`, so its code is built once.
+fn paint<D: DrawTarget<Color = BinaryColor> + OriginDimensions>(d: &mut D, v: &View) -> u32 {
+    let mut target = Fingerprint { inner: d, hash: 0x811c_9dc5 };
+    ui::draw(&mut target, v);
+    target.hash
 }
 
 /// Reads what the pages show from the node.
@@ -170,6 +214,8 @@ pub async fn display_task(i2c: I2c<'static, Blocking>, mut button: Input<'static
     let mut on = true;
     let mut toast_msg: Option<(heapless::String<32>, Instant)> = None;
     let mut confirm: Option<(u8, Instant)> = None;
+    // The picture on the screen, to send a new one only when it differs.
+    let mut shown: Option<u32> = None;
 
     loop {
         let (timeout_s, screen_label) = SCREEN_TIMEOUTS[screen_i];
@@ -192,8 +238,11 @@ pub async fn display_task(i2c: I2c<'static, Blocking>, mut button: Input<'static
                 let _ = s.push_str(n);
                 s
             }));
-            ui::draw(&mut d, &v);
-            d.flush().ok();
+            let picture = paint(&mut d, &v);
+            if shown != Some(picture) {
+                // Only a picture that reached the display counts as shown.
+                shown = d.flush().ok().map(|()| picture);
+            }
             if !on {
                 let _ = d.set_display_on(true);
                 on = true;
@@ -249,7 +298,7 @@ pub async fn display_task(i2c: I2c<'static, Blocking>, mut button: Input<'static
                         toast_msg = toast("Restarting");
                         let mut v = snapshot(page, sel, None, screen_label);
                         v.toast = toast_msg.as_ref().map(|t| t.0.clone());
-                        ui::draw(&mut d, &v);
+                        paint(&mut d, &v);
                         d.flush().ok();
                         Timer::after_millis(600).await;
                         RESTART.signal(());

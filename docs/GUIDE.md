@@ -564,6 +564,32 @@ only choose a new one: no messages, settings or administrators. USB works as bef
   pairing itself; set the code where no stranger is nearby.
 - **Cost:** about 50 KB of firmware. On the nRF52840 boards only a few KB of the app area are left.
 
+## Firmware: restart by itself and faster Bluetooth (2026-11-27, firmware 0.9.12)
+
+- **Watchdog (all boards).** A hardware watchdog restarts the radio if the node loop or the radio loop stops coming round, for
+  example when the LoRa chip stops answering. Each loop announces how long it may wait and has 30 s on top; the watchdog's own
+  timeout is 60 s, so a hang ends in a restart after about 1.5 to 2 minutes (longer if the loop was waiting, e.g. for the duty cycle).
+  Sensor nodes asleep and boards without a working radio are not restarted for being quiet (`firmware/common/src/health.rs`).
+- **Panics (nRF52840).** A panic or hardware fault now restarts the board, as it already did on the ESP32-S3. Before, the node
+  stood still until someone pressed reset.
+- **nRF52840 and older firmware.** The nRF watchdog cannot be stopped once started and survives a software restart. The UF2
+  bootloader feeds it while it waits for a file. Installing a firmware **older** than this one over the air therefore gives one
+  extra restart within a minute, after which it runs as before.
+- **After a USB flash (nRF52840).** The first start after copying a `.uf2` file hangs, with old and new firmware alike (cause
+  not found). The watchdog now restarts the board, so USB comes back by itself after about a minute instead of after a press on
+  reset.
+- **ESP32-S3.** A radio that does not answer at start-up is given 3 s, as on nRF52840, so USB and Bluetooth still come up.
+- **Bluetooth.** Radios send notifications as large as the connection allows (up to 244 bytes) instead of 20. Clients need no
+  change.
+- **Heltec V4 display.** The display bus runs at 400 kHz and the picture is sent only when it changes, so the rest of the node
+  waits much less for it.
+- **Size.** On the nRF52840 the Bluetooth packet pool no longer takes 4 KB of the app area (`firmware/vendor/trouble-host`);
+  the ESP32-S3 build uses compact SHA-2 code and is about 40 KB smaller in all.
+- **Verified** on a Heltec V4, a WisMesh Tag and a XIAO nRF52840 (27 November 2026): start-up, messages with delivery proof over
+  LoRa, no unwanted restarts in 6 to 25 minutes of running, and on the Heltec a restart by the watchdog from a test build whose
+  radio loop hangs on purpose. Not yet tested: the larger Bluetooth notifications, the Heltec display, the restart after a
+  panic on nRF52840, an over-the-air update with the watchdog running, sensor sleep, and Wi-Fi.
+
 ## Plain status, node types and MeshCore in the node list (2026-11-27, working copy)
 
 - **Status in everyday words.** The web client's Status page and the Android Mesh page lead with the radio's battery and a card **In short**

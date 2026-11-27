@@ -2,6 +2,7 @@
 //! listen-before-talk (CAD) and a duty cycle budget. The settings can be
 //! changed while it runs (`RADIO_CFG`).
 
+use crate::health;
 use crate::bus::{Pkt, RADIO_ASLEEP, RADIO_CANCEL, RADIO_CFG, RADIO_RX, RADIO_SLEEP, RADIO_TX, REC_REQ, REC_ROWS, REC_START_DELAY_MS, RSTATS, RecReq, RecRow, SWEEP, SweepReq, TxReq};
 use core::sync::atomic::Ordering::Relaxed;
 use embassy_futures::select::{Either, Either6, select, select6};
@@ -145,6 +146,7 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
 
     loop {
         RSTATS.loops.fetch_add(1, Relaxed);
+        health::RADIO.expect(health::now_s(), 0);
         if let Some(r) = REC_REQ.try_take() {
             rec = r.map(rec_begin);
         }
@@ -215,6 +217,8 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             } else {
                 led(true);
                 stage(4);
+                // At narrow bandwidths one packet can be on air longer than the watchdog's slack.
+                health::RADIO.expect(health::now_s(), air.div_ceil(1_000_000) as u32);
                 let ok = lora
                     .prepare_for_tx(
                         mdltn,
@@ -266,6 +270,8 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             continue;
         }
         stage(7);
+        // Listening ends at `next` at the latest (it can be minutes away when the duty cycle is used up).
+        health::RADIO.expect(health::now_s(), next.saturating_duration_since(Instant::now()).as_secs() as u32);
         match select6(
             lora.rx(&p.rx, &mut buf),
             RADIO_TX.receive(),
@@ -320,6 +326,8 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
                 queue.clear();
                 let _ = lora.sleep(true).await;
                 RADIO_ASLEEP.signal(());
+                // Asleep until woken, which may be hours.
+                health::RADIO.rest();
                 loop {
                     match select(RADIO_SLEEP.wait(), RADIO_TX.receive()).await {
                         Either::First(false) => break,
@@ -354,6 +362,7 @@ async fn sweep<RK: RadioKind, D: DelayNs>(lora: &mut LoRa<RK, D>, p: &Params, fi
         }
         let mut left = req.sweeps;
         while left > 0 {
+            health::RADIO.expect(health::now_s(), 0);
             let mut row: maarse_core::companion::Text = maarse_core::companion::Text::new();
             for i in 0..req.count.min(128) as u32 {
                 let khz = req.start_khz.saturating_add(i * req.step_khz as u32);
@@ -376,7 +385,7 @@ async fn sweep<RK: RadioKind, D: DelayNs>(lora: &mut LoRa<RK, D>, p: &Params, fi
                 break 'run;
             }
             // Let the link carry the row before the next one, so rows are not dropped on the way
-            // (Bluetooth moves about 20 bytes per notification); at most 150 ms.
+            // (Bluetooth may move as little as 20 bytes per notification); at most 150 ms.
             let wait_until = Instant::now() + Duration::from_millis(150);
             let usb_recent = {
                 let t = crate::bus::USB_LAST_RX.load(Relaxed);

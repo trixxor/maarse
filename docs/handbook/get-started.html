@@ -98,7 +98,7 @@ cd maarse</code></pre></li>
     <p>Linux:</p>
 <pre><code>./scripts/build-firmware.sh &lt;board&gt; flash</code></pre>
     <ul>
-      <li><strong>nRF52840:</strong> the script makes <code>dist/maarse-&lt;board&gt;.uf2</code>. Double-click the board's reset button, drag the file onto the USB drive that appears, then press reset once so USB comes back.</li>
+      <li><strong>nRF52840:</strong> the script makes <code>dist/maarse-&lt;board&gt;.uf2</code>. Double-click the board's reset button, drag the file onto the USB drive that appears, then wait about a minute for USB to come back. If it has not after two minutes, or with older firmware, press reset once.</li>
       <li><strong>ESP32-S3:</strong> the first run installs Espressif's toolchain (<code>espup</code>) and <code>espflash</code>, which takes several minutes. The port must be free, so stop any host that uses the board as its modem first.</li>
     </ul>
   </section>

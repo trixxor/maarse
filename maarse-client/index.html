@@ -1432,7 +1432,8 @@ const Cmd = {
   setRegions: (strict, names) => frame(0x11, [strict ? 1 : 0], enc.encode(names)),
   getRegions: () => frame(0x12),
   setTime: () => frame(0x0f, u32(Math.floor(Date.now() / 1000))),
-  traceRoute: (req, destHex) => frame(0x20, u16(req), unhex(destHex)),
+  // via: 0 the node's choice, 1 radio only, 2 internet links only (hosts with both; others ignore it)
+  traceRoute: (req, destHex, via = 0) => via ? frame(0x20, u16(req), unhex(destHex), [via]) : frame(0x20, u16(req), unhex(destHex)),
   getNeighbors: () => frame(0x21),
   setSharing: (prec, latE7, lonE7, tel) => frame(0x22, [prec], u32(latE7), u32(lonE7), [tel ? 1 : 0]),
   getSharing: () => frame(0x23),
@@ -3210,7 +3211,8 @@ function snrText(v) { return v === undefined ? "–" : (v > 0 ? "+" : "") + v + 
 // ---------- ping test: repeated trace routes with statistics (range and route check) ----------
 // Each ping is one trace route (command 0x20): the answer says which repeaters carry it and the SNR for
 // every hop both ways, and the time to the answer is the round trip. Nothing new goes over the air.
-const ping = { run: null, reqs: new Map(), form: { dest: "", count: 10, interval: 10, gps: false } };
+const ping = { run: null, reqs: new Map(), form: { dest: "", count: 10, interval: 10, gps: false, via: 0 } };
+const PING_VIA = ["Automatic", "LoRa only", "TCP only"];
 const PING_TIMEOUT_MS = 30000;
 const pingMin = a => (a && a.length ? Math.min(...a) : undefined);
 
@@ -3219,6 +3221,20 @@ function pingDistance(a, b) { // metres between two {lat, lon}
   const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/** Statistics per kind of link (0 automatic, 1 LoRa, 2 TCP) that was used in the run. */
+function pingByVia(run) {
+  const out = [];
+  for (const via of [0, 1, 2]) {
+    const rs = run.results.filter(r => r.via === via && r.state !== "waiting");
+    if (!rs.length) continue;
+    const ok = rs.filter(r => r.state === "ok");
+    out.push({ via, sent: rs.length, answered: ok.length, loss: Math.round(100 * (rs.length - ok.length) / rs.length),
+      avg: ok.length ? Math.round(ok.reduce((a, r) => a + r.rtt, 0) / ok.length) : undefined,
+      hops: ok.length ? Math.round(10 * ok.reduce((a, r) => a + r.hops, 0) / ok.length) / 10 : undefined });
+  }
+  return out;
 }
 
 function pingSummary(run) {
@@ -3235,6 +3251,7 @@ function pingSummary(run) {
     avg: rtts.length ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length) : undefined,
     farthest: withPos.length ? Math.round(Math.max(...withPos.map(r => pingDistance(base, r)))) : undefined,
     baseIsTarget: !!(target && target.lat && target.lon),
+    byVia: pingByVia(run),
   };
 }
 
@@ -3253,13 +3270,15 @@ function pingMaybeDone(run) {
 
 function pingTick(run) {
   if (ping.run !== run || run.stopped || run.results.length >= run.count) return;
-  const r = { seq: run.results.length + 1, state: "waiting", at: new Date(), t0: performance.now() };
+  // via 3 = compare: LoRa and TCP take turns, so both see the same conditions.
+  const via = run.via === 3 ? (run.results.length % 2 === 0 ? 1 : 2) : run.via;
+  const r = { seq: run.results.length + 1, state: "waiting", at: new Date(), t0: performance.now(), via };
   if (run.pos) { r.lat = run.pos.lat; r.lon = run.pos.lon; r.acc = run.pos.acc; }
   run.results.push(r);
   const req = state.nextReq++ & 0xffff;
   ping.reqs.set(req, { run, r });
   state.traceReq.set(req, run.dest);
-  transport?.send(Cmd.traceRoute(req, run.dest));
+  transport?.send(Cmd.traceRoute(req, run.dest, via));
   r.timeout = setTimeout(() => {
     if (r.state === "waiting") { r.state = "lost"; ping.reqs.delete(req); if (state.view === "diag") renderChat(); pingMaybeDone(run); }
   }, PING_TIMEOUT_MS);
@@ -3267,16 +3286,16 @@ function pingTick(run) {
   run.timer = setTimeout(() => pingTick(run), run.interval * 1000);
 }
 
-function pingStart(dest, count, interval, gps) {
+function pingStart(dest, count, interval, gps, via = 0) {
   pingStop();
-  const run = { dest, count, interval, gps, results: [], started: new Date(), pos: null };
+  const run = { dest, count, interval, gps, via, results: [], started: new Date(), pos: null };
   ping.run = run;
   if (gps && navigator.geolocation) {
     run.watch = navigator.geolocation.watchPosition(
       p => { run.pos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: Math.round(p.coords.accuracy) }; },
       e => log("Position: " + e.message), { enableHighAccuracy: true, maximumAge: 2000 });
   }
-  log(`Ping test to ${label(dest)}: ${count} pings, one every ${interval} s`);
+  log(`Ping test to ${label(dest)}: ${count} pings, one every ${interval} s${via === 3 ? ", LoRa and TCP in turn" : via ? ", " + PING_VIA[via] : ""}`);
   pingTick(run);
 }
 
@@ -3318,8 +3337,8 @@ function pingOnError(ev) {
 function pingCsv() {
   const run = ping.run;
   return { name: "ping-test", text: rtCsv(
-    ["time_iso", "target", "seq", "result", "rtt_ms", "hops", "worst_snr_out_db", "worst_snr_back_db", "lat", "lon", "accuracy_m", "route"],
-    run.results.map(r => [r.at.toISOString(), run.dest, r.seq, r.state, r.rtt ?? "", r.hops ?? "", r.outMin ?? "", r.backMin ?? "",
+    ["time_iso", "target", "seq", "result", "via", "rtt_ms", "hops", "worst_snr_out_db", "worst_snr_back_db", "lat", "lon", "accuracy_m", "route"],
+    run.results.map(r => [r.at.toISOString(), run.dest, r.seq, r.state, ["auto", "lora", "tcp"][r.via ?? 0], r.rtt ?? "", r.hops ?? "", r.outMin ?? "", r.backMin ?? "",
       r.lat ?? "", r.lon ?? "", r.acc ?? "", r.path ?? ""])) };
 }
 
@@ -3363,6 +3382,9 @@ function pingPanel(w, table) {
   inp.oninput = () => { f.dest = inp.value.trim().toLowerCase(); };
   cnt.oninput = () => { f.count = Math.max(1, Math.min(100, +cnt.value || 1)); };
   iv.oninput = () => { f.interval = Math.max(5, Math.min(600, +iv.value || 10)); };
+  const via = el("select", { title: "Which links the pings may use" });
+  [...PING_VIA, "LoRa and TCP in turn"].forEach((n, i) => via.append(new Option(n, i)));
+  via.value = f.via; via.onchange = () => { f.via = +via.value; };
   const gps = el("input", { type: "checkbox" }); gps.checked = f.gps; gps.onchange = () => { f.gps = gps.checked; };
   const lbl = el("label"); lbl.style.display = "block"; lbl.style.marginTop = "6px";
   lbl.append(gps, " Record my position with each ping (for a walk or drive; the browser asks for permission)");
@@ -3371,22 +3393,28 @@ function pingPanel(w, table) {
     if (busy) return pingStop();
     const d = (f.dest || sel.value || "").toLowerCase();
     if (!/^[0-9a-f]{32}$/.test(d)) return log("Choose a node or enter an address");
-    pingStart(d, f.count, f.interval, f.gps);
+    pingStart(d, f.count, f.interval, f.gps, f.via);
   };
   const exp = el("button", { textContent: "Export CSV" });
   exp.disabled = !run || !run.results.length; exp.onclick = () => rtExport(pingCsv());
   row.append(sel, inp); w.append(row);
   const r2 = el("div", { className: "row" }); r2.style.marginTop = "6px";
-  r2.append("Pings", cnt, "every", iv, "s", go, exp); w.append(r2, lbl);
+  r2.append("Pings", cnt, "every", iv, "s", via, go, exp); w.append(r2, lbl);
+  w.append(el("div", { className: "muted" }, "LoRa only and TCP only need a host with both a radio and internet links: the route is looked for again over that kind of link only. " +
+    "With LoRa and TCP in turn you see both side by side."));
   if (!run) return;
   const s = pingSummary(run);
   const sum = el("div"); sum.style.marginTop = "10px";
   sum.append(el("b", {}, `${label(run.dest)}: ${s.answered} of ${s.sent} answered, ${s.loss} % lost`));
   if (s.avg !== undefined) sum.append(el("div", { className: "muted" }, `Round trip ${s.min} / ${s.avg} / ${s.max} ms (fastest / average / slowest)`));
   if (s.farthest !== undefined) sum.append(el("div", { className: "muted" }, `Farthest answered ping: ${s.farthest} m from ${s.baseIsTarget ? "the node" : "the first position"}`));
+  for (const v of s.byVia.length > 1 ? s.byVia : []) {
+    sum.append(el("div", { className: "muted" }, `${PING_VIA[v.via]}: ${v.answered} of ${v.sent} answered, ${v.loss} % lost` +
+      (v.avg !== undefined ? `, round trip ${v.avg} ms on average, ${v.hops} hops on average` : "")));
+  }
   w.append(sum);
-  w.append(table(["#", "Result", "Round trip", "Hops", "Worst SNR out", "Worst SNR back", "Position"], run.results.map(r => [
-    r.seq, r.state === "ok" ? "answered" : r.state === "waiting" ? "waiting…" : r.state === "error" ? "error: " + r.text : "no answer",
+  w.append(table(["#", "Via", "Result", "Round trip", "Hops", "Worst SNR out", "Worst SNR back", "Position"], run.results.map(r => [
+    r.seq, PING_VIA[r.via ?? 0], r.state === "ok" ? "answered" : r.state === "waiting" ? "waiting…" : r.state === "error" ? "error: " + r.text : "no answer",
     r.rtt !== undefined ? r.rtt + " ms" : "–", r.hops ?? "–", snrText(r.outMin), snrText(r.backMin),
     r.lat !== undefined ? `${r.lat.toFixed(5)}, ${r.lon.toFixed(5)} (±${r.acc} m)` : "–"])));
   const track = pingTrack(run); if (track) w.append(track);

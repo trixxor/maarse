@@ -97,7 +97,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// does not belong here.
     pub(super) fn ext_command(&mut self, cmd: Command) -> Option<Command> {
         match cmd {
-            Command::TraceRoute { req, dest } => {
+            Command::TraceRoute { req, dest, .. } => {
                 if dest == self.addr {
                     err(req, error_code::UNKNOWN_DEST, "That is ourselves");
                     return None;

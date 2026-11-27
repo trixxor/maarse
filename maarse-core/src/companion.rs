@@ -140,7 +140,11 @@ pub enum Command {
     JoinPrivateChannel { key: [u8; 32], name: Text },
     /// 0x20: trace route to `dest`: SNR for every hop both ways. The reply
     /// is `TraceResult` (or `Error` with `req`). See [`crate::diag`].
-    TraceRoute { req: u16, dest: Address },
+    /// `via` (optional last byte, 0 when absent): 0 = the node's own choice,
+    /// 1 = look for the route and send the probe over the radio only, 2 = over
+    /// the internet links only. Only a host with both kinds of link can honour
+    /// it; other nodes ignore it.
+    TraceRoute { req: u16, dest: Address, via: u8 },
     /// 0x21: show direct neighbours. The reply is one or more `Neighbors`.
     GetNeighbors,
     /// 0x3c: GPS details (satellites with direction, height, speed, accuracy, time). The reply is
@@ -1256,7 +1260,10 @@ impl Command {
             }
             Command::GetRegions => w.start(0x12),
             Command::JoinPrivateChannel { key, name } => w.start(0x13).b(key).b(name),
-            Command::TraceRoute { req, dest } => w.start(0x20).b(&req.to_le_bytes()).b(&dest.0),
+            Command::TraceRoute { req, dest, via } => {
+                let w = w.start(0x20).b(&req.to_le_bytes()).b(&dest.0);
+                if *via != 0 { w.b(&[*via]) } else { w }
+            }
             Command::GetNeighbors => w.start(0x21),
             Command::GetGps => w.start(0x3c),
             Command::Sweep { start_khz, step_khz, count, sweeps } => w.start(0x3d).b(&start_khz.to_le_bytes()).b(&step_khz.to_le_bytes()).b(&[*count, *sweeps]),
@@ -1361,7 +1368,7 @@ impl Command {
                 key.copy_from_slice(r.take(32)?);
                 Command::JoinPrivateChannel { key, name: r.text()? }
             }
-            0x20 => Command::TraceRoute { req: r.u16()?, dest: r.addr()? },
+            0x20 => Command::TraceRoute { req: r.u16()?, dest: r.addr()?, via: r.u8().unwrap_or(0) },
             0x21 => Command::GetNeighbors,
             0x3c => Command::GetGps,
             0x3d => Command::Sweep { start_khz: r.u32()?, step_khz: r.u16()?, count: r.u8()?, sweeps: r.u8()? },
@@ -2301,7 +2308,8 @@ mod tests {
 
     #[test]
     fn diagnostics_roundtrip() {
-        roundtrip_cmd(Command::TraceRoute { req: 5, dest: Address([4; 16]) });
+        roundtrip_cmd(Command::TraceRoute { req: 5, dest: Address([4; 16]), via: 0 });
+        roundtrip_cmd(Command::TraceRoute { req: 6, dest: Address([4; 16]), via: 2 });
         roundtrip_cmd(Command::GetNeighbors);
         roundtrip_cmd(Command::GetGps);
         roundtrip_cmd(Command::Sweep { start_khz: 863_000, step_khz: 110, count: 64, sweeps: 3 });

@@ -83,7 +83,8 @@ object Cmd {
     fun setRegions(strict: Boolean, names: String) = frame(0x11) { u8(if (strict) 1 else 0); text(names) }
     fun getRegions() = frame(0x12)
     fun joinPrivate(key: ByteArray, name: String) = frame(0x13) { bytes(key); text(name) }
-    fun traceRoute(req: Int, dest: String) = frame(0x20) { u16(req); addr(dest) }
+    /** via: 0 the node's choice, 1 radio only, 2 internet links only (a host with both; other nodes ignore it). */
+    fun traceRoute(req: Int, dest: String, via: Int = 0) = frame(0x20) { u16(req); addr(dest); if (via != 0) u8(via) }
     fun getNeighbors() = frame(0x21)
     fun setSharing(prec: Int, latE7: Int, lonE7: Int, tel: Boolean) = frame(0x22) {
         u8(prec); u32(latE7.toLong()); u32(lonE7.toLong()); u8(if (tel) 1 else 0)

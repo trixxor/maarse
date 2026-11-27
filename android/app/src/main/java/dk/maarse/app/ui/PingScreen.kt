@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package dk.maarse.app.ui
 
 import android.Manifest
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -18,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -25,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,6 +57,7 @@ fun PingPage() {
     var count by remember { mutableStateOf("10") }
     var interval by remember { mutableStateOf("10") }
     var gps by remember { mutableStateOf(false) }
+    var via by remember { mutableIntStateOf(0) }
     var menu by remember { mutableStateOf(false) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> gps = ok }
     val busy = run?.finished == false
@@ -93,6 +99,14 @@ fun PingPage() {
                     label = { Text(tr("Seconds between")) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f),
                 )
             }
+            Text(tr("Links the pings may use"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PingTest.VIA_NAMES.forEachIndexed { i, n -> FilterChip(selected = via == i, enabled = !busy, onClick = { via = i }, label = { Text(tr(n)) }) }
+            }
+            if (via != 0) Text(
+                tr("LoRa only and TCP only need a host with both a radio and internet links: the route is looked for again over that kind of link only."),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             SwitchRow(
                 "Record my position with each ping", "For a walk or a drive. Asks for the location permission.", gps, last = true,
             ) { on ->
@@ -104,7 +118,7 @@ fun PingPage() {
                 Button(onClick = {
                     if (busy) PingTest.stop()
                     else if (Regex("[0-9a-f]{32}").matches(dest)) {
-                        PingTest.start(ctx, dest, count.toIntOrNull() ?: 10, interval.toIntOrNull() ?: 10, gps)
+                        PingTest.start(ctx, dest, count.toIntOrNull() ?: 10, interval.toIntOrNull() ?: 10, gps, via)
                     } else Node.lastError.value = "Choose a node or enter an address"
                 }) { Text(if (busy) tr("Stop") else tr("Start")) }
                 OutlinedButton(enabled = run?.pings?.isNotEmpty() == true, onClick = {
@@ -135,6 +149,15 @@ fun PingPage() {
                     )
                 }
             }
+            if (s.byVia.size > 1) {
+                Card2 {
+                    for (v in s.byVia) Text(
+                        "${PingTest.VIA_NAMES[v.via]}: ${v.answered} of ${v.sent} answered, ${v.lossPct} % lost" +
+                            (if (v.avgMs != null) ", round trip ${v.avgMs} ms on average, ${v.avgHops} hops on average" else ""),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
             GroupTitle("Pings")
             Card2 {
                 for (p in r.pings) {
@@ -144,7 +167,7 @@ fun PingPage() {
                         PingTest.State.ERROR -> "error: ${p.text}"
                         PingTest.State.LOST -> "no answer"
                     }
-                    Text("#${p.seq}  $what", style = MaterialTheme.typography.bodyMedium)
+                    Text("#${p.seq}  ${if (r.via != 0) "[" + PingTest.VIA_NAMES[p.via].substringBefore(" only") + "] " else ""}$what", style = MaterialTheme.typography.bodyMedium)
                     if (p.lat != null && p.lon != null) {
                         Text("%.5f, %.5f (±%d m)".format(p.lat, p.lon, p.accM ?: 0), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }

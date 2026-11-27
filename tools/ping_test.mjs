@@ -18,7 +18,7 @@ const logs = [];
 const harness = new Function("sent", "logs", `
   const state = { nextReq: 1, traceReq: new Map(), nodeInfo: new Map(), contacts: new Map(), view: "other" };
   const transport = { send: f => sent.push(f) };
-  const Cmd = { traceRoute: (req, d) => ({ req, d }) };
+  const Cmd = { traceRoute: (req, d, via = 0) => ({ req, d, via }) };
   const label = x => x.slice(0, 4);
   const idName = id => "r" + id;
   const log = m => logs.push(m);
@@ -69,7 +69,7 @@ assert.deepEqual([s.sent, s.answered, s.lost, s.loss], [4, 2, 2, 50]);
 assert(s.min <= s.avg && s.avg <= s.max);
 const csv = pingCsv().text.split("\n");
 assert.equal(csv.length, 5);
-assert(csv[0].startsWith("time_iso,target,seq,result,rtt_ms"));
+assert(csv[0].startsWith("time_iso,target,seq,result,via,rtt_ms"));
 assert(csv[2].includes(",error,"));
 assert(csv[4].includes(",lost,"));
 
@@ -96,6 +96,25 @@ pingOnTrace({ req: sent[1].req, path: [], out: [0], back: [0] });
 const s2 = pingSummary(ping.run);
 assert(s2.farthest > 950 && s2.farthest < 1050, "farthest " + s2.farthest);
 assert.equal(s2.baseIsTarget, false);
+
+// Compare mode: LoRa (1) and TCP (2) take turns, and the statistics are kept per kind of link.
+sent.length = 0;
+pingStart(dest, 4, 0.05, false, 3);
+for (let i = 0; i < 4; i++) {
+  await sleep(i === 0 ? 5 : 70);
+  assert.equal(sent[i].via, i % 2 === 0 ? 1 : 2, "ping " + (i + 1) + " goes over " + (i % 2 === 0 ? "LoRa" : "TCP"));
+  if (sent[i].via === 2) pingOnTrace({ req: sent[i].req, path: [], out: [5], back: [5] });
+  else pingOnTrace({ req: sent[i].req, path: [3, 4], out: [-8, -9, -7], back: [-6, -8, -7] });
+}
+await sleep(40);
+const s3 = pingSummary(ping.run);
+assert.equal(s3.byVia.length, 2);
+const lora = s3.byVia.find(v => v.via === 1), tcp = s3.byVia.find(v => v.via === 2);
+assert.deepEqual([lora.sent, lora.answered, lora.hops], [2, 2, 2]);
+assert.deepEqual([tcp.sent, tcp.answered, tcp.hops], [2, 2, 0]);
+const csvRows = pingCsv().text.split(String.fromCharCode(10));
+assert(csvRows[0].includes(",via,"), "the CSV has a via column");
+assert(csvRows[1].includes(",lora,") && csvRows[2].includes(",tcp,"), "the CSV says which link each ping used");
 
 console.log("OK  ping test: statistics, loss, errors, time-out, stop, CSV and distance");
 process.exit(0);

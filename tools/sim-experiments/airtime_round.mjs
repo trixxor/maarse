@@ -123,6 +123,9 @@ const CONFIGS = {
   // Built: the compact session frame measured in crypto tests (average overhead
   // 29.7 B mixed chat, 33.6 B strictly alternating; the old frame is 69 B).
   "compact":     sc => { HONEST(sc); sc.dm_overhead = 34; },
+  // Router defaults of 2026-11-26 (80 % request forwarding where a node has 3+ neighbours, 20 s retry) against the old ones.
+  "c_old":       sc => { HONEST(sc); sc.dm_overhead = 34; sc.request_fwd_permille = 1000; sc.path_retry_s = 45; },
+  "c_new":       sc => { HONEST(sc); sc.dm_overhead = 34; },
   "c_req":       sc => { HONEST(sc); sc.dm_overhead = 34; sc.request_fwd_permille = 800; sc.path_retry_s = 20; },
   "c_req80":     sc => { HONEST(sc); sc.dm_overhead = 34; sc.request_fwd_permille = 800; },
   "c_retry20":   sc => { HONEST(sc); sc.dm_overhead = 34; sc.path_retry_s = 20; },

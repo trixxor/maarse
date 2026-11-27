@@ -15,6 +15,9 @@ use std::fs;
 pub(super) struct Ext {
     /// Trace routes in progress: target -> (client, req).
     traces: HashMap<Address, (ClientId, u16)>,
+    /// Trace routes that may only use one kind of link (the radio or the internet
+    /// links): the target, the kind and when it was asked. See `Node::forced_only`.
+    pub(super) forced: HashMap<Address, (super::Only, std::time::Instant)>,
     pub(super) sharing: Sharing,
     pub(super) mqtt: Option<Mqtt>,
     /// Our display name (empty = none), stored in `name.txt`.
@@ -60,7 +63,7 @@ impl Ext {
             .and_then(|s| appdata::clean_name(s.as_bytes()))
             .map(|n| String::from_utf8_lossy(&n).into_owned())
             .unwrap_or_default();
-        Ext { traces: HashMap::new(), sharing, mqtt, name, names: HashMap::new(), site: load_site(data_dir) }
+        Ext { traces: HashMap::new(), forced: HashMap::new(), sharing, mqtt, name, names: HashMap::new(), site: load_site(data_dir) }
     }
 }
 
@@ -91,10 +94,32 @@ impl Node {
     /// does not belong here.
     pub(super) fn ext_command(&mut self, id: ClientId, cmd: Command) -> Option<Command> {
         match cmd {
-            Command::TraceRoute { req, dest } => {
+            Command::TraceRoute { req, dest, via } => {
                 if dest == self.addr {
                     self.send_client(id, &super::err_ev(req, error_code::UNKNOWN_DEST, "That is ourselves"));
                     return None;
+                }
+                let only = match via {
+                    1 => Some(super::Only::Radio),
+                    2 => Some(super::Only::Backbone),
+                    _ => None,
+                };
+                if let Some(only) = only {
+                    // Needs a link of that kind; the old route may use the other kind, so look for a new one.
+                    let wanted = only == super::Only::Backbone;
+                    let have = self
+                        .links
+                        .iter()
+                        .any(|(_, (n, _))| crate::extra_links::is_backbone(n) == wanted && !n.starts_with("trunk "));
+                    if !have {
+                        let what = if wanted { "This node has no internet link to trace over" } else { "This node has no radio to trace over" };
+                        self.send_client(id, &super::err_ev(req, error_code::UNKNOWN_DEST, what));
+                        return None;
+                    }
+                    self.router.forget_route(&dest);
+                    self.ext.forced.insert(dest, (only, std::time::Instant::now()));
+                } else {
+                    self.ext.forced.remove(&dest);
                 }
                 self.ext.traces.insert(dest, (id, req));
                 let now = self.now_ms();

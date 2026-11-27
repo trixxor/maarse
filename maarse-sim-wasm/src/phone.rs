@@ -723,7 +723,7 @@ impl Engine {
             Command::OtaStatus => {
                 self.phone_emit(node, &Event::OtaState { req: 0, state: 0, next: 0, size: 0, version: 0, current: 0, text: txt("Simulator: no firmware updates in the simulated world") });
             }
-            Command::TraceRoute { req, dest } => {
+            Command::TraceRoute { req, dest, .. } => {
                 let dest = self.person_device_addr(&dest).unwrap_or(dest);
                 if let Some(p) = self.phones.attached.get_mut(&node) {
                     p.traces.retain(|t| t.0 != dest);
@@ -1452,7 +1452,7 @@ mod tests {
         let sent = a.iter().find_map(|ev| if let Event::Sent { req: 7, msg_id } = ev { Some(*msg_id) } else { None }).expect("no Sent");
         assert!(a.iter().any(|ev| matches!(ev, Event::Acked { msg_id } if *msg_id == sent)), "{a:?}");
         // Trace route: the answer comes back with the path and the SNRs.
-        e.phone_cmd(0, &Command::TraceRoute { req: 9, dest: b_addr }.encode());
+        e.phone_cmd(0, &Command::TraceRoute { req: 9, dest: b_addr, via: 0 }.encode());
         e.run_until(260_000, usize::MAX);
         let a = frames(&e.phone_events(0));
         assert!(a.iter().any(|ev| matches!(ev, Event::TraceResult { req: 9, dest, out, .. } if *dest == b_addr && !out.is_empty())), "{a:?}");

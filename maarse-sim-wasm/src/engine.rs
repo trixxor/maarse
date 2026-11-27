@@ -859,6 +859,10 @@ impl Engine {
             if sc.announce_scope > 0 {
                 router.announce_scope = sc.announce_scope;
             }
+            if kind == Kind::Host {
+                // As maarse-host does: a host forwards every path request.
+                router.request_fwd_permille = 1000;
+            }
             if sc.request_fwd_permille > 0 {
                 router.request_fwd_permille = sc.request_fwd_permille;
             }

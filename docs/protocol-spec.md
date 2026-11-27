@@ -413,10 +413,12 @@ messages are dropped (or carried, 5.10).
 
 ### 5.3 Floods
 
-A forwarder passes on only `REQUEST_FWD_PERMILLE` = 800 of 1000 path requests
-(chosen from the packet ID and its own ID, so the same node always makes the
-same choice for the same request; `Router::request_fwd_permille`, 0 or 1000 =
-all). Other floods are always forwarded. In maarse-sim (8 seeds, with the
+A forwarder with at least `REQUEST_FWD_MIN_NEIGHBORS` = 3 neighbours passes on
+only `REQUEST_FWD_PERMILLE` = 800 of 1000 path requests (chosen from the packet
+ID and its own ID, so the same node always makes the same choice for the same
+request; `Router::request_fwd_permille`, 0 or 1000 = all). A node with fewer
+neighbours may be the one way through (a chain, a host between two networks)
+and forwards every request. Other floods are always forwarded. In maarse-sim (8 seeds, with the
 compact frame) this and the 20 s retry together changed the airtime by -9 %
 (forest), -24 % (car), -4 % (town), -13 % (national) and -16 % (outage) with the
 share delivered +0.2, +7.0, +5.2, +0.3 and -1.3 points
@@ -1368,7 +1370,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x19 | OtaChunk | req (2) \| offset (u32) \| data | offset and length multiples of 4 except the last |
 | 0x1a | OtaEnd | req (2) \| apply (1) | |
 | 0x1b | OtaStatus | – | |
-| 0x20 | TraceRoute | req (2) \| dest (16) | reply `TraceResult` |
+| 0x20 | TraceRoute | req (2) \| dest (16) \[\| via (1)\] | reply `TraceResult`; `via` 0 (or absent) = the node's choice, 1 = look for the route and send the probe over the radio only, 2 = over the internet links only (a host with both kinds of link; other nodes ignore it; a host without that kind answers `Error`) |
 | 0x21 | GetNeighbors | – | reply one or more `Neighbors` |
 | 0x22 | SetSharing | sharing (10) | reply `Sharing` |
 | 0x23 | GetSharing | – | |

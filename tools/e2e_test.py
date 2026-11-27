@@ -159,6 +159,17 @@ try:
     assert len(snr_out) == 2 and len(snr_back) == 2, (snr_out, snr_back)
     ok(f"trace route B -> P via A (SNR out {list(snr_out)}, back {list(snr_back)})")
 
+    # 2c-b. Trace with a chosen kind of link (optional last byte `via`): A is a host with
+    # TCP links only, so "internet only" works and "radio only" is answered with an error.
+    a.send(frame(0x20, struct.pack("<H", 31), addr_p, bytes([2])))
+    tr2 = a.wait(lambda f: f[0] == 0xA0 and f[1:3] == struct.pack("<H", 31), secs=15)
+    assert tr2[3:19] == addr_p
+    ok("trace route with via = 2 (internet links only) answered")
+    a.send(frame(0x20, struct.pack("<H", 32), addr_p, bytes([1])))
+    er = a.wait(lambda f: f[0] == 0x8F and f[1:3] == struct.pack("<H", 32), secs=10)
+    assert b"no radio" in er, er
+    ok("trace route with via = 1 (radio only) refused: this host has no radio")
+
     # 2d. Neighbour list: A has heard B and P directly.
     a.send(frame(0x21))
     nb = a.wait(lambda f: f[0] == 0xA1 and f[2] == 1)

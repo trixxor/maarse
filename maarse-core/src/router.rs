@@ -124,6 +124,8 @@ pub const MOBILE_ROUTE_MS: u64 = 300_000;
 pub const PATH_RETRY_MS: u64 = 20_000;
 /// Default share of path requests that are forwarded (per mille).
 pub const REQUEST_FWD_PERMILLE: u16 = 800;
+/// ... and only by a node that has at least this many neighbours (see `request_fwd_permille`).
+pub const REQUEST_FWD_MIN_NEIGHBORS: usize = 3;
 /// Number of repetitions of a path request.
 pub const PATH_RETRIES: u8 = 2;
 const MAX_FORWARDS: usize = 32;
@@ -2335,7 +2337,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
         let mut header = Header::new(PacketType::PathRequest, h.dest).with_path(record);
         header.hops = h.hops + 1 + (self.weak_hop_penalty && snr_db < self.weak_snr_db) as u8;
         let delay = self.flood_delay_ms(snr_db);
-        if self.request_fwd_permille > 0 && self.request_fwd_permille < 1000 {
+        // Only where others can pass the request on: a node with few neighbours may be the one
+        // way through (a chain, a host between two networks), and then a dropped request costs
+        // a whole retry for nothing.
+        if self.request_fwd_permille > 0 && self.request_fwd_permille < 1000 && self.neighbors.len() >= REQUEST_FWD_MIN_NEIGHBORS {
             let mix = packet_id(h.ptype, &h.dest, pkt.payload) ^ (self.id as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
             let mix = mix ^ (mix >> 29);
             if (mix % 1000) as u16 >= self.request_fwd_permille {
@@ -2720,12 +2725,15 @@ mod tests {
         r
     }
 
-    #[test]
-    fn about_four_fifths_of_path_requests_are_forwarded_by_default() {
+    /// How many of 400 different path requests a repeater with `neighbours` neighbours forwards.
+    fn forwarded_of_400(neighbours: u16) -> usize {
         let mut fwd = 0;
         for i in 0..400u32 {
             let mut r = R::new(Address([7; 16]), Role::Repeater);
             assert_eq!(r.request_fwd_permille, REQUEST_FWD_PERMILLE);
+            for n in 0..neighbours {
+                r.neighbors.heard(100 + n, None, 5, -80, 1000);
+            }
             let dest = Address([9; 16]);
             let mut payload = Buf::new();
             let _ = payload.extend_from_slice(&[i as u8, (i >> 8) as u8, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
@@ -2733,12 +2741,24 @@ mod tests {
             let h = Header::new(PacketType::PathRequest, dest).with_path(Path::new());
             let pkt = encode(&h, &payload).unwrap();
             let out = r.on_receive(&pkt, -5, 1000);
-            if !transmits(&out).is_empty() || out.iter().any(|a| matches!(a, Action::Transmit { .. })) {
+            if out.iter().any(|a| matches!(a, Action::Transmit { .. })) {
                 fwd += 1;
             }
         }
-        // 80 % with a margin for the hash.
+        fwd
+    }
+
+    #[test]
+    fn about_four_fifths_of_path_requests_are_forwarded_where_there_are_other_neighbours() {
+        let fwd = forwarded_of_400(REQUEST_FWD_MIN_NEIGHBORS as u16);
         assert!((280..=360).contains(&fwd), "forwarded {fwd} of 400");
+    }
+
+    #[test]
+    fn a_node_with_few_neighbours_forwards_every_path_request() {
+        // It may be the only way through (a chain, a host between two networks).
+        assert_eq!(forwarded_of_400(0), 400);
+        assert_eq!(forwarded_of_400(REQUEST_FWD_MIN_NEIGHBORS as u16 - 1), 400);
     }
 
     /// Lets `n` wait out the time slot in which it collects copies of a

@@ -605,6 +605,9 @@ impl Node {
         // A host keeps mail (it has a disk), unless told not to.
         router.mail_class = if cfg.no_post_office { maarse_core::mail::CLASS_NONE } else { maarse_core::mail::CLASS_LARGE };
         router.ring = 4;
+        // A host forwards every path request: its links are mostly TCP (no airtime to save), and it is
+        // often the one way between two networks. Radio nodes drop one request in five (see the router).
+        router.request_fwd_permille = 1000;
         // Only fast links here: short time slots, otherwise every hop waits needlessly.
         router.slot_ms = 5;
 
@@ -1292,7 +1295,23 @@ impl Node {
                 .is_some_and(|channel| channel.record(packet))
     }
 
+    /// A trace route asked to use only the radio or only the internet links
+    /// (companion command 0x20, `via`) keeps its path request and probe on that kind of
+    /// link for a minute; everything else goes where it always went.
+    fn forced_only(&mut self, packet: &[u8], only: Only) -> Only {
+        if only != Only::All || self.ext.forced.is_empty() {
+            return only;
+        }
+        self.ext.forced.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(60));
+        let Ok((h, _)) = Header::decode(packet) else { return only };
+        if !matches!(h.ptype, PacketType::PathRequest | PacketType::Probe) {
+            return only;
+        }
+        self.ext.forced.get(&h.dest).map_or(only, |(o, _)| *o)
+    }
+
     fn send_links_only(&mut self, packet: &[u8], only: Only) {
+        let only = self.forced_only(packet, only);
         // Decide for the trunks first (needs &mut self).
         let trunk_ids: Vec<LinkId> = self.links.iter().filter(|(_, (n, _))| n.starts_with("trunk ")).map(|(id, _)| *id).collect();
         let mut trunk_skip: HashSet<LinkId> = HashSet::new();

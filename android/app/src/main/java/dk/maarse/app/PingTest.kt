@@ -28,6 +28,8 @@ object PingTest {
     data class Ping(
         val seq: Int,
         val at: Long,
+        /** 0 the node's choice, 1 LoRa only, 2 TCP only. */
+        val via: Int = 0,
         val state: State = State.WAITING,
         val rttMs: Long? = null,
         val hops: Int? = null,
@@ -45,10 +47,15 @@ object PingTest {
         val count: Int,
         val intervalS: Int,
         val withPosition: Boolean,
+        /** 0 automatic, 1 LoRa only, 2 TCP only, 3 LoRa and TCP in turn. */
+        val via: Int,
         val started: Long,
         val pings: List<Ping> = emptyList(),
         val finished: Boolean = false,
     )
+
+    /** Statistics for the pings that used one kind of link. */
+    data class ViaStat(val via: Int, val sent: Int, val answered: Int, val lossPct: Int, val avgMs: Long?, val avgHops: Double?)
 
     data class Summary(
         val sent: Int,
@@ -60,7 +67,10 @@ object PingTest {
         val maxMs: Long?,
         val farthestM: Int?,
         val baseIsTarget: Boolean,
+        val byVia: List<ViaStat> = emptyList(),
     )
+
+    val VIA_NAMES = listOf("Automatic", "LoRa only", "TCP only", "LoRa and TCP in turn")
 
     /** A ping with no answer after this long counts as lost. */
     const val TIMEOUT_MS = 30_000L
@@ -77,16 +87,17 @@ object PingTest {
     private var listener: LocationListener? = null
     private var manager: LocationManager? = null
 
-    fun start(ctx: Context, dest: String, count: Int, intervalS: Int, withPosition: Boolean) {
+    fun start(ctx: Context, dest: String, count: Int, intervalS: Int, withPosition: Boolean, via: Int = 0) {
         stop()
-        val r = Run(dest, count.coerceIn(1, 100), intervalS.coerceIn(MIN_INTERVAL_S, 600), withPosition, System.currentTimeMillis())
+        val r = Run(dest, count.coerceIn(1, 100), intervalS.coerceIn(MIN_INTERVAL_S, 600), withPosition, via.coerceIn(0, 3), System.currentTimeMillis())
         run.value = r
         position = null
         if (withPosition) startLocation(ctx.applicationContext)
-        Node.note("Ping test to ${Node.label(dest)}: ${r.count} pings, one every ${r.intervalS} s")
+        Node.note("Ping test to ${Node.label(dest)}: ${r.count} pings, one every ${r.intervalS} s" + if (r.via != 0) ", ${VIA_NAMES[r.via]}" else "")
         job = scope.launch {
             for (seq in 1..r.count) {
-                sendPing(r, seq)
+                // Compare mode: LoRa and TCP take turns, so both see the same conditions.
+                sendPing(r, seq, if (r.via == 3) (if (seq % 2 == 1) 1 else 2) else r.via)
                 if (seq < r.count) delay(r.intervalS * 1000L)
             }
             // All sent: the run ends when the last answer or time-out is in.
@@ -109,16 +120,16 @@ object PingTest {
         run.update { it?.copy(finished = true) }
     }
 
-    private fun sendPing(r: Run, seq: Int) {
+    private fun sendPing(r: Run, seq: Int, via: Int) {
         val req = Node.req()
         val pos = position ?: lastKnown()
         synchronized(lock) {
             reqs[req] = seq
             run.update { cur ->
-                cur?.copy(pings = cur.pings + Ping(seq, System.currentTimeMillis(), lat = pos?.first, lon = pos?.second, accM = pos?.third))
+                cur?.copy(pings = cur.pings + Ping(seq, System.currentTimeMillis(), via, lat = pos?.first, lon = pos?.second, accM = pos?.third))
             }
         }
-        Node.send(Cmd.traceRoute(req, r.dest))
+        Node.send(Cmd.traceRoute(req, r.dest, via))
         scope.launch {
             delay(TIMEOUT_MS)
             synchronized(lock) {
@@ -227,6 +238,16 @@ object PingTest {
             maxMs = rtts.maxOrNull(),
             farthestM = far,
             baseIsTarget = target != null,
+            byVia = listOf(0, 1, 2).mapNotNull { v ->
+                val rs = done.filter { it.via == v }
+                if (rs.isEmpty()) return@mapNotNull null
+                val good = rs.filter { it.state == State.OK }
+                ViaStat(
+                    v, rs.size, good.size, Math.round(100.0 * (rs.size - good.size) / rs.size).toInt(),
+                    good.mapNotNull { it.rttMs }.takeIf { it.isNotEmpty() }?.average()?.let { Math.round(it) },
+                    good.mapNotNull { it.hops }.takeIf { it.isNotEmpty() }?.average()?.let { Math.round(it * 10) / 10.0 },
+                )
+            },
         )
     }
 
@@ -238,10 +259,10 @@ object PingTest {
     /** The run as CSV, the same columns as the web client. */
     fun csv(r: Run): String {
         val iso = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.ROOT).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
-        val head = listOf("time_iso", "target", "seq", "result", "rtt_ms", "hops", "worst_snr_out_db", "worst_snr_back_db", "lat", "lon", "accuracy_m", "route")
+        val head = listOf("time_iso", "target", "seq", "result", "via", "rtt_ms", "hops", "worst_snr_out_db", "worst_snr_back_db", "lat", "lon", "accuracy_m", "route")
         val rows = r.pings.map {
             listOf(
-                iso.format(java.util.Date(it.at)), r.dest, it.seq, it.state.name.lowercase(), it.rttMs, it.hops, it.outMin, it.backMin,
+                iso.format(java.util.Date(it.at)), r.dest, it.seq, it.state.name.lowercase(), listOf("auto", "lora", "tcp")[it.via], it.rttMs, it.hops, it.outMin, it.backMin,
                 it.lat, it.lon, it.accM, it.path,
             ).joinToString(",") { v -> cell(v) }
         }

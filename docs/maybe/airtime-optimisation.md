@@ -767,3 +767,25 @@ bytes.
   hardware.
 * The restart loss window is bounded by the announce (within seconds after a
   restart, or on the first unreadable compact message) but is not zero.
+
+## 12. Follow-up: hosts forward every path request, ping test over LoRa or TCP
+
+**Path request forwarding on hosts.** The end-to-end test (`tools/e2e_test.py`)
+failed about once in twelve runs after the 80 % forwarding share was added:
+a host counts its TCP neighbours, so a dropped request saved no airtime there
+but cost the 20 s retry. Hosts now forward every path request
+(`request_fwd_permille = 1000` in maarse-host and for simulated hosts); radio
+nodes keep the 80 % share and the three-neighbour guard. After the change the
+end-to-end test passed 30 runs out of 30.
+
+**Ping test over LoRa or TCP.** Trace route (0x20) takes an optional last byte
+`via`: 0 the node's choice, 1 radio only, 2 internet links only. A host with
+both kinds of link forgets the route and keeps the path request and probe on
+the chosen kind of link for 60 s. The web client and the Android app can send
+pings automatically, over LoRa only, over TCP only, or alternately, and show
+loss, round trip and hops per kind of link; the CSV has a `via` column.
+Firmware ignores `via`.
+
+Tests: workspace tests, `tools/ping_test.mjs`, `tools/denmark_sim_test.mjs`
+and the two new checks in `tools/e2e_test.py` pass. All four firmware images
+and the APK build. The Android ping page was compiled but not run on a device.

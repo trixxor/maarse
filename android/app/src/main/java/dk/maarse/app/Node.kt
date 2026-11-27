@@ -1144,6 +1144,7 @@ object Node : LinkListener {
             is Ev.Gps -> gps.value = ev.info
             is Ev.Sweep -> addSweep(ev)
             is Ev.SweepRecState -> RadioRec.onState("", ev)
+            is Ev.DhtLine -> DhtCheck.onLine(ev)
             is Ev.RemoteReply -> (ev.inner as? Ev.SweepRecState)?.let { RadioRec.onState(ev.from, it) } ?: run { if (!Crawl.onReply(ev.from, ev.inner)) RemoteAdmin.onReply(ev.from, ev.inner) }
             is Ev.Radio -> radio.value = ev.cfg
             is Ev.Regions -> regions.value = ev

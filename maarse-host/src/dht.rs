@@ -928,8 +928,197 @@ pub fn lookup(
     res
 }
 
+// ---------------------------------------------------------------------------
+// DHT doctor
+
+/// How serious a line of the DHT check is.
+pub mod level {
+    pub const INFO: u8 = 0;
+    pub const GOOD: u8 = 1;
+    pub const WARN: u8 = 2;
+    pub const BAD: u8 = 3;
+}
+
+/// The most contacts the check asks (it asks every one of them several times).
+pub const CHECK_MAX_CONTACTS: usize = 16;
+/// The most addresses the check looks up.
+pub const CHECK_MAX_TARGETS: usize = 4;
+
+fn short(a: &Address) -> String {
+    a.0[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Checks that the DHT does what it should, from this host's point of view: the contacts answer, the
+/// records this host publishes can be found by the other hosts, the hosts agree on where an address is, and
+/// a lookup from here succeeds. `targets` are the addresses this host should be findable under (itself, if it
+/// is public, and the addresses it publishes). `ask` performs one request (replaceable for tests). Returns
+/// the report lines, worst problems first within each topic.
+pub fn doctor(
+    me: &Address,
+    seeds: usize,
+    public_ep: Option<&str>,
+    table: &[Contact],
+    targets: &[Address],
+    mut ask: impl FnMut(&Contact, &Req) -> Option<(Address, Resp)>,
+) -> Vec<(u8, String)> {
+    use level::*;
+    let mut out: Vec<(u8, String)> = Vec::new();
+    if table.is_empty() {
+        out.push(if seeds == 0 {
+            (BAD, "No DHT contacts and no seed: this host cannot find other hosts. Add a seed (setting \"dht\").".into())
+        } else {
+            (BAD, format!("No DHT contacts yet, although {seeds} seed(s) are set: none has answered. Check the seed addresses and the internet connection."))
+        });
+        return out;
+    }
+    // 1. The contacts answer.
+    let contacts: Vec<&Contact> = table.iter().take(CHECK_MAX_CONTACTS).collect();
+    let mut alive: Vec<&Contact> = Vec::new();
+    let mut slowest = 0u128;
+    let mut wrong_id: Vec<String> = Vec::new();
+    let mut silent: Vec<String> = Vec::new();
+    for c in &contacts {
+        let t = std::time::Instant::now();
+        match ask(c, &Req::Ping) {
+            Some((id, Resp::Pong)) if id == c.id => {
+                slowest = slowest.max(t.elapsed().as_millis());
+                alive.push(c);
+            }
+            Some((id, _)) => wrong_id.push(format!("{} answered as {}", c.ep, short(&id))),
+            None => silent.push(c.ep.clone()),
+        }
+    }
+    let n = contacts.len();
+    if alive.len() == n {
+        out.push((GOOD, format!("All {n} contacts answer (slowest {slowest} ms).")));
+    } else if alive.len() * 2 >= n {
+        out.push((WARN, format!("{} of {n} contacts answer. Silent: {}.", alive.len(), silent.join(", "))));
+    } else {
+        out.push((BAD, format!("Only {} of {n} contacts answer. Silent: {}.", alive.len(), silent.join(", "))));
+    }
+    for w in wrong_id {
+        out.push((BAD, format!("A contact answered under another identity ({w}): the table is out of date or someone is impersonating it.")));
+    }
+    if table.len() > CHECK_MAX_CONTACTS {
+        out.push((INFO, format!("{} contacts in the table; the first {CHECK_MAX_CONTACTS} were asked.", table.len())));
+    }
+    if table.len() < K {
+        out.push((INFO, format!("{} contacts: a network of fewer than {K} hosts keeps a full copy of every record on every host.", table.len())));
+    }
+    if alive.is_empty() {
+        out.push((BAD, "No contact answers, so records and lookups cannot be checked.".into()));
+        return out;
+    }
+    // 2. The records: can the other hosts find what this host publishes, and do they agree?
+    if targets.is_empty() {
+        out.push((INFO, if public_ep.is_some() {
+            "This host publishes no addresses yet (none heard)."
+        } else {
+            "This host is not public (no \"public-addr\"), so it publishes nothing; it only looks up."
+        }.into()));
+    }
+    for t in targets.iter().take(CHECK_MAX_TARGETS) {
+        let mut have = 0usize;
+        let mut eps: Vec<String> = Vec::new();
+        for c in &alive {
+            if let Some((_, Resp::Value(r))) = ask(c, &Req::FindValue(*t)) {
+                if r.dest == *t && r.valid() {
+                    have += 1;
+                    if !eps.contains(&r.ep) {
+                        eps.push(r.ep.clone());
+                    }
+                }
+            }
+        }
+        let what = short(t);
+        let who = if t == me { "this host".to_string() } else { format!("address {what}") };
+        if have == alive.len() {
+            out.push((GOOD, format!("All {have} answering hosts hold the record for {who}.")));
+        } else if have > 0 {
+            out.push((WARN, format!("{have} of {} answering hosts hold the record for {who}; the others will catch up at the next republish (every {} min).", alive.len(), REPUBLISH.as_secs() / 60)));
+        } else {
+            out.push((BAD, format!("No other host holds the record for {who}: nobody can find it through the DHT. Publishing fails, or this host's endpoint is not reachable.")));
+        }
+        if eps.len() > 1 {
+            out.push((WARN, format!("The hosts do not agree where {who} is: {}.", eps.join(" and "))));
+        }
+    }
+    // 3. A real lookup from here, the way a message to an unknown address would do it.
+    if let Some(t) = targets.iter().find(|t| *t != me).or(targets.first()) {
+        let start: Vec<Contact> = alive.iter().map(|c| (*c).clone()).collect();
+        let res = lookup(me, start, t, true, &mut ask);
+        out.push(if res.record.is_some() {
+            (GOOD, format!("A lookup for {} from here found it.", short(t)))
+        } else {
+            (WARN, format!("A lookup for {} from here did not find it.", short(t)))
+        });
+        if !res.dead.is_empty() {
+            out.push((WARN, format!("{} contact(s) stopped answering during the lookup.", res.dead.len())));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    fn contact(n: u8) -> Contact {
+        Contact { id: a(n), ep: format!("10.0.0.{n}:4242") }
+    }
+
+    #[test]
+    fn doctor_reports_a_healthy_network() {
+        let id = Identity::generate(&mut OsRng);
+        let rec = record(&id, a(2), 1);
+        let target = id.address();
+        let table = vec![contact(2), contact(3)];
+        let report = doctor(&a(1), 1, Some("1.2.3.4:4242"), &table, &[target], |c, r| match r {
+            Req::Ping => Some((c.id, Resp::Pong)),
+            Req::FindValue(_) => Some((c.id, Resp::Value(rec.clone()))),
+            _ => None,
+        });
+        assert!(report.iter().all(|(l, _)| *l <= level::GOOD), "{report:?}");
+        assert!(report.iter().any(|(_, t)| t.starts_with("All 2 contacts answer")));
+        assert!(report.iter().any(|(_, t)| t.contains("All 2 answering hosts hold the record")));
+        assert!(report.iter().any(|(_, t)| t.contains("lookup") && t.contains("found it")));
+    }
+
+    #[test]
+    fn doctor_names_the_problems() {
+        // No contacts and no seed, then a seed that never answered.
+        assert_eq!(doctor(&a(1), 0, None, &[], &[], |_, _| None)[0].0, level::BAD);
+        assert!(doctor(&a(1), 2, None, &[], &[], |_, _| None)[0].1.contains("2 seed"));
+        // Every contact is silent.
+        let r = doctor(&a(1), 1, None, &[contact(2), contact(3)], &[], |_, _| None);
+        assert!(r.iter().any(|(l, t)| *l == level::BAD && t.contains("Only 0 of 2")), "{r:?}");
+        // One answers, the other does not: half is a warning; and nobody holds the record.
+        let id = Identity::generate(&mut OsRng);
+        let r = doctor(&a(1), 1, Some("x:1"), &[contact(2), contact(3)], &[id.address()], |c, req| match req {
+            Req::Ping if c.id == a(2) => Some((c.id, Resp::Pong)),
+            Req::FindValue(_) => Some((c.id, Resp::Nodes(vec![]))),
+            _ => None,
+        });
+        assert!(r.iter().any(|(l, t)| *l == level::WARN && t.starts_with("1 of 2 contacts answer")), "{r:?}");
+        assert!(r.iter().any(|(l, t)| *l == level::BAD && t.contains("No other host holds the record")), "{r:?}");
+        // A contact that answers under a different identity.
+        let r = doctor(&a(1), 1, None, &[contact(2)], &[], |_, _| Some((a(9), Resp::Pong)));
+        assert!(r.iter().any(|(l, t)| *l == level::BAD && t.contains("another identity")), "{r:?}");
+    }
+
+    #[test]
+    fn doctor_notices_hosts_that_disagree() {
+        let id = Identity::generate(&mut OsRng);
+        let mut r1 = record(&id, a(2), 1);
+        let mut r2 = record(&id, a(3), 1);
+        r1.ep = "10.1.1.1:1".into();
+        r2.ep = "10.2.2.2:1".into();
+        let report = doctor(&a(1), 1, None, &[contact(2), contact(3)], &[id.address()], |c, r| match r {
+            Req::Ping => Some((c.id, Resp::Pong)),
+            Req::FindValue(_) => Some((c.id, Resp::Value(if c.id == a(2) { r1.clone() } else { r2.clone() }))),
+            _ => None,
+        });
+        assert!(report.iter().any(|(l, t)| *l == level::WARN && t.contains("do not agree")), "{report:?}");
+    }
+
     #[test]
     fn mail_requests_roundtrip() {
         let me = Address([1; 16]);

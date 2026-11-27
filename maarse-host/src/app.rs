@@ -162,6 +162,8 @@ pub enum In {
     /// An IP packet from the TUN adapter (`--tun`).
     #[cfg_attr(not(feature = "tun"), allow(dead_code))]
     TunPacket(Vec<u8>),
+    /// A DHT check (run in a thread, asked with companion command 0x45) has finished.
+    DhtCheckDone { client: ClientId, req: u16, lines: Vec<(u8, String)> },
     /// A DHT lookup (run in a thread) has finished.
     DhtDone {
         target: maarse_core::Address,

@@ -1481,7 +1481,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             | Command::Sweep { .. }
             | Command::SweepRecStart { .. }
             | Command::SweepRecStop
-            | Command::SweepRecStatus => {}
+            | Command::SweepRecStatus
+            | Command::DhtCheck { .. } => {}
             Command::FileBegin { req, dest, size, mime, name } => {
                 self.file_begin(req, dest, size, &mime, &name)
             }

@@ -46,6 +46,7 @@ Then connect with the web client via **USB / serial** (needs Chrome or Edge) or 
 | Diagnostics: trace route, neighbour list, noise floor | trace and neighbours | yes | yes |
 | Ping test (repeated trace routes with loss, round trip, hops, SNR, optional positions, CSV) | yes (Diagnostics) | yes | yes (Experimental > Ping test) |
 | Network crawl (who hears whom: remote neighbour lists of the repeaters you administer, one by one, with uneven and one-way links flagged, CSV) | yes (Diagnostics) | yes | yes (Experimental > Network crawl) |
+| DHT check (do the DHT contacts answer, can other hosts find this host's records, do they agree, does a lookup work) | yes (Diagnostics) | yes | yes (Experimental > DHT check) |
 | Position (opt-in, rounded) and telemetry in announces | yes | yes, stored in flash | yes, stored in flash |
 | MQTT bridge with Home Assistant discovery | yes (`--mqtt`) | – | – |
 | Display name in announces | yes (`name.txt`) | yes, stored in flash (not tried on hardware) | yes, stored in flash (not tried on hardware) |
@@ -501,6 +502,7 @@ The web client has a **Diagnostics** page (the button next to Status/Radio):
 - **Neighbour list** (`0x21`, reply `0xA1`): nodes heard directly (announces without hops and the previous hop in source paths and path requests) with SNR, RSSI, time and packet count.
 - **Noise floor** (status key 80): lora-phy does not give the instantaneous RSSI, so the noise floor is estimated from received packets: N = RSSI − 10·log10(1 + 10^(SNR/10)), moving average.
 - **Network crawl** (web client: Diagnostics > Network crawl; Android: Experimental > Network crawl): maps who hears whom. It asks a repeater you administer for its neighbour list over remote control (one small reply), then each neighbour you also administer, and so on, one question at a time with a pause (default 15 s) between them, at most 8 nodes and 3 hops by default. The result lists every link with the SNR as each side hears it and flags links that are uneven (6 dB or more apart) or heard one way only, which usually points at an antenna or a settings problem at one end. Nodes that do not answer (you are not their administrator, or they are out of reach) are listed as such. CSV export.
+- **DHT check** (web client: Diagnostics > DHT check; Android: Experimental > DHT check): asks the host (the PC program, a server, or the host built into the app) to check the backbone DHT from its own point of view and answers with one line per finding, each marked info, OK, check or problem: do the DHT contacts answer (and under the identity they should), do the other hosts hold the records this host publishes and agree on where an address is, and does a real lookup from here succeed. It costs a few internet requests and no radio airtime. A radio node connected directly has no DHT and does not answer.
 
 ## Managing a repeater in the field (2026-11-26, working copy)
 

@@ -86,6 +86,8 @@ object Cmd {
     /** via: 0 the node's choice, 1 radio only, 2 internet links only (a host with both; other nodes ignore it). */
     fun traceRoute(req: Int, dest: String, via: Int = 0) = frame(0x20) { u16(req); addr(dest); if (via != 0) u8(via) }
     fun getNeighbors() = frame(0x21)
+    /** Asks the host to check its backbone DHT; answered with [Ev.DhtLine]s (a radio node ignores it). */
+    fun dhtCheck(req: Int) = frame(0x45) { u16(req) }
     fun setSharing(prec: Int, latE7: Int, lonE7: Int, tel: Boolean) = frame(0x22) {
         u8(prec); u32(latE7.toLong()); u32(lonE7.toLong()); u8(if (tel) 1 else 0)
     }
@@ -160,6 +162,8 @@ sealed class Ev {
     data class CarryAcked(val msgId: Long) : Ev()
     data class Stats(val items: List<Pair<Int, Int>>) : Ev()
     data class Gps(val info: GpsInfo) : Ev()
+    /** One line of a DHT check: level 0 info, 1 good, 2 check, 3 problem. */
+    data class DhtLine(val req: Int, val level: Int, val last: Boolean, val text: String) : Ev()
     /** One spectrum sweep: `rssi` is -dBm x 2 for each step (255 = not measured). */
     data class Sweep(val seq: Int, val startKhz: Long, val stepKhz: Int, val rssi: IntArray) : Ev()
     /** How a spectrum recording on a radio goes: state 0 idle, 1 recording, 2 ready, 3 sending, 4 failed. */
@@ -240,6 +244,7 @@ fun decodeEvent(f: ByteArray): Ev {
         0x8e -> Ev.Log(r.txt(1))
         0x8f -> Ev.Error(r.u16(1), r.u8(3), r.txt(4))
         0x90 -> Ev.Deposited(r.u64(1))
+        0xc0 -> Ev.DhtLine(r.u16(1), r.u8(3), r.u8(4) != 0, r.txt(5))
         0xbe -> GpsInfo.parse(f.copyOfRange(1, f.size))?.let { Ev.Gps(it) } ?: Ev.Unknown(t)
         0xbf -> Ev.Sweep(r.u16(1), r.u32(3), r.u16(7), IntArray(maxOf(0, f.size - 9)) { r.u8(9 + it) })
         0xb9 -> Ev.SweepRecState(r.u8(1), r.u16(2), r.u16(4), r.u16(6), r.u16(8))

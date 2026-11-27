@@ -1371,6 +1371,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x1a | OtaEnd | req (2) \| apply (1) | |
 | 0x1b | OtaStatus | – | |
 | 0x20 | TraceRoute | req (2) \| dest (16) \[\| via (1)\] | reply `TraceResult`; `via` 0 (or absent) = the node's choice, 1 = look for the route and send the probe over the radio only, 2 = over the internet links only (a host with both kinds of link; other nodes ignore it; a host without that kind answers `Error`) |
+| 0x45 | DhtCheck | req (2) | host only (a radio node ignores it): checks the backbone DHT (contacts answer, other hosts hold the records this host publishes and agree on them, a lookup succeeds); reply one `DhtLine` per finding, the last one marked |
 | 0x21 | GetNeighbors | – | reply one or more `Neighbors` |
 | 0x22 | SetSharing | sharing (10) | reply `Sharing` |
 | 0x23 | GetSharing | – | |
@@ -1423,6 +1424,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x9b | OtaInfo | board (u16 LE, `maarse_crypto::ota::board`); sent after `OtaState` as the answer to `OtaStatus` by firmware that can be updated, so a host picks the matching image. Older firmware never sends it (the host then says "update once over USB"). A frame of its own because `OtaState` ends in free text. |
 | 0xa0 | TraceResult | req (2) \| dest (16) \| k (1) \| k × PathId (u16 LE) \| m (1) \| m × SNR out (i8) \| SNR back (rest) |
 | 0xa1 | Neighbors | part (1) \| last (1) \| n × neighbour (15) |
+| 0xc0 | DhtLine | req (2) \| level (1: 0 info, 1 good, 2 check, 3 problem) \| last (1) \| text (UTF-8, rest of the frame) |
 | 0xa2 | Sharing | sharing (10) |
 | 0xa3 | NodeInfo | addr (16) \| hops (1) \| app-data TLVs `0x03`/`0x04`/`0x05` (section 4.2) |
 | 0xa4 | Name | name (text) |

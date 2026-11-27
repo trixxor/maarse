@@ -59,6 +59,7 @@ fun ExperimentalMenu(onGo: (MePage) -> Unit) {
         GroupRow("Signal per neighbour", "How each link changes over time", leading = { RowIcon(Icons.Outlined.ShowChart) }) { onGo(MePage.X_NEIGHBOURS) }
         GroupRow("Ping test", "Loss, round trip and range along a route", leading = { RowIcon(Icons.Outlined.Timeline) }) { onGo(MePage.X_PING) }
         GroupRow("Network crawl", "Who hears whom, asked of the repeaters one by one", leading = { RowIcon(Icons.Outlined.Timeline) }) { onGo(MePage.X_CRAWL) }
+        GroupRow("DHT check", "Does the backbone DHT work as intended", leading = { RowIcon(Icons.Outlined.Timeline) }) { onGo(MePage.X_DHT) }
         GroupRow("Battery and temperature", stats[85]?.let { "$it %" } ?: "History and time left", last = true, leading = { RowIcon(Icons.Outlined.BatteryChargingFull) }) { onGo(MePage.X_POWER) }
     }
     GroupTitle("Options")

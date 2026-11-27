@@ -170,6 +170,15 @@ try:
     assert b"no radio" in er, er
     ok("trace route with via = 1 (radio only) refused: this host has no radio")
 
+    # 2c-c. DHT check (command 0x45): the host asks its DHT contacts and answers with lines
+    # (0xC0: req u16 | level | last | text), the last one marked.
+    a.send(frame(0x45, struct.pack("<H", 33)))
+    mine = lambda f: f[0] == 0xC0 and f[1:3] == struct.pack("<H", 33)
+    a.wait(lambda f: mine(f) and f[4] == 1, secs=60)
+    lines = [(f[3], f[5:].decode()) for f in a.events if mine(f)]
+    assert any("contacts answer" in t or "No DHT contacts" in t for _, t in lines), lines
+    ok(f"DHT check answered: {len(lines)} lines, first: {lines[0][1]}")
+
     # 2d. Neighbour list: A has heard B and P directly.
     a.send(frame(0x21))
     nb = a.wait(lambda f: f[0] == 0xA1 and f[2] == 1)

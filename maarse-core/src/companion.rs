@@ -164,6 +164,9 @@ pub enum Command {
     SweepRecStop,
     /// 0x43: ask how a recording is going. Answered with `SweepRecState`.
     SweepRecStatus,
+    /// 0x45: check the backbone DHT from this host's point of view (contacts, records, a lookup). Answered with
+    /// one `DhtLine` per line of the report, the last one marked. Only a host has a DHT; a radio node ignores it.
+    DhtCheck { req: u16 },
     /// 0x22: what the node shares in its announces: position (precision 0 =
     /// off, the default) and telemetry. Stored. The reply is `Sharing`.
     SetSharing(Sharing),
@@ -602,6 +605,8 @@ pub enum Event {
         last: bool,
         items: heapless::Vec<NeighborInfo, NEIGHBORS_PER_FRAME>,
     },
+    /// 0xc0: one line of a DHT check (`DhtCheck`): level 0 information, 1 good, 2 warning, 3 problem.
+    DhtLine { req: u16, level: u8, last: bool, text: Text },
     /// 0xbe: GPS details, in the layout of [`crate::gpsinfo`].
     Gps { data: Text },
     /// 0xbf: one spectrum sweep: the number of the sweep, the first frequency and the step, and the
@@ -1272,6 +1277,7 @@ impl Command {
             }
             Command::SweepRecStop => w.start(0x3f),
             Command::SweepRecStatus => w.start(0x43),
+            Command::DhtCheck { req } => w.start(0x45).b(&req.to_le_bytes()),
             Command::SetSharing(s) => w.start(0x22).b(&s.to_bytes()),
             Command::GetSharing => w.start(0x23),
             Command::SetName { name } => w.start(0x24).b(name),
@@ -1375,6 +1381,7 @@ impl Command {
             0x3e => Command::SweepRecStart { start_khz: r.u32()?, step_khz: r.u16()?, duration_s: r.u16()?, interval_ds: r.u8()?, thr_db: r.u8()? },
             0x3f => Command::SweepRecStop,
             0x43 => Command::SweepRecStatus,
+            0x45 => Command::DhtCheck { req: r.u16()? },
             0x22 => Command::SetSharing(Sharing::from_bytes(r.take(Sharing::LEN)?).ok_or(FrameError::TooShort)?),
             0x23 => Command::GetSharing,
             0x24 => Command::SetName { name: r.text()? },
@@ -1595,6 +1602,7 @@ impl Event {
                 w
             }
             Event::Gps { data } => w.start(0xbe).b(data),
+            Event::DhtLine { req, level, last, text } => w.start(0xc0).b(&req.to_le_bytes()).b(&[*level, *last as u8]).b(text),
             Event::Sweep { seq, start_khz, step_khz, rssi } => {
                 w.start(0xbf).b(&seq.to_le_bytes()).b(&start_khz.to_le_bytes()).b(&step_khz.to_le_bytes()).b(rssi)
             }
@@ -1867,6 +1875,7 @@ impl Event {
                 Event::Neighbors { part, last, items }
             }
             0xbe => Event::Gps { data: r.text()? },
+            0xc0 => Event::DhtLine { req: r.u16()?, level: r.u8()?, last: r.u8()? != 0, text: r.text()? },
             0xbf => Event::Sweep { seq: r.u16()?, start_khz: r.u32()?, step_khz: r.u16()?, rssi: r.text()? },
             0xb9 => Event::SweepRecState { state: r.u8()?, elapsed_s: r.u16()?, duration_s: r.u16()?, sweeps: r.u16()?, bytes: r.u16()? },
             0xbb => Event::Site(crate::appdata::Site::from_bytes(r.text()?.as_slice()).ok_or(FrameError::TooShort)?),
@@ -2316,6 +2325,8 @@ mod tests {
         roundtrip_cmd(Command::SweepRecStart { start_khz: 863_000, step_khz: 110, duration_s: 600, interval_ds: 20, thr_db: 6 });
         roundtrip_cmd(Command::SweepRecStop);
         roundtrip_cmd(Command::SweepRecStatus);
+        roundtrip_cmd(Command::DhtCheck { req: 12 });
+        roundtrip_ev(Event::DhtLine { req: 12, level: 2, last: true, text: text(b"3 of 4 contacts answer") });
         roundtrip_ev(Event::SweepRecState { state: sweep_rec_state::RECORDING, elapsed_s: 42, duration_s: 600, sweeps: 21, bytes: 0 });
         roundtrip_ev(Event::Gps { data: text(&[1, 2, 3]) });
         roundtrip_ev(Event::Sweep { seq: 7, start_khz: 863_000, step_khz: 110, rssi: text(&[200, 150, 255]) });

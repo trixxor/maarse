@@ -1421,6 +1421,8 @@ const Cmd = {
   sweepRecStart: (startKhz, stepKhz, durationS, intervalDs, thrDb) => frame(0x3e, u32(startKhz), u16(stepKhz), u16(durationS), [intervalDs, thrDb]),
   sweepRecStop: () => frame(0x3f),
   sweepRecStatus: () => frame(0x43),
+  // Checks the backbone DHT from the host's point of view; answered with 0xC0 lines (hosts only)
+  dhtCheck: req => frame(0x45, u16(req)),
   setRadio: c => frame(0x0a, u32(c.freq), u32(c.bw), [c.sf, c.cr, c.power & 0xff], u16(c.duty), u16(c.preamble), [c.announce & 0xff]),
   getRadio: () => frame(0x0b),
   setRole: r => frame(0x10, [r]),
@@ -1511,6 +1513,7 @@ function decodeEvent(f) {
     // One spectrum sweep: number, first frequency (kHz), step (kHz) and one byte per step, -dBm x 2 (255 = not measured).
     case 0xbf: return { type: "sweep", seq: f[1] | f[2] << 8, startKhz: rd32(f, 3), stepKhz: f[7] | f[8] << 8, rssi: f.slice(9) };
     // How a spectrum recording on a radio goes: 0 idle, 1 recording, 2 ready, 3 sending, 4 failed.
+    case 0xc0: return { type: "dhtLine", req: f[1] | f[2] << 8, level: f[3], last: !!f[4], text: dec.decode(f.slice(5)) };
     case 0xb9: return { type: "sweepRecState", state: f[1], elapsedS: f[2] | f[3] << 8, durationS: f[4] | f[5] << 8, sweeps: f[6] | f[7] << 8, bytes: f[8] | f[9] << 8 };
     case 0x93: return { type: "remoteReply", from: a(1), inner: decodeEvent(f.slice(17)) };
     case 0x94: { const l = []; for (let o = 1; o + 16 <= f.length; o += 16) l.push(a(o)); return { type: "admins", list: l }; }
@@ -2298,6 +2301,7 @@ function onEvent(ev) {
       break;
     case "ota": if (!ota.target) otaOnState(ev); break;
     case "sweepRecState": xpRecState("", ev); break;
+    case "dhtLine": dhtOnLine(ev); break;
     case "remoteReply": {
       const i = ev.inner;
       if (i.type === "sweepRecState") { xpRecState(ev.from, i); break; }
@@ -3209,6 +3213,64 @@ function idName(id) {
 }
 function snrText(v) { return v === undefined ? "–" : (v > 0 ? "+" : "") + v + " dB"; }
 
+// ---------- DHT check: does the backbone DHT work as intended? ----------
+// Asks the host (PC or server) to check its DHT: do the contacts answer, can the other hosts find the
+// records this host publishes, do they agree, and does a lookup from here succeed. The host answers
+// with one line per finding (level 0 information, 1 good, 2 warning, 3 problem).
+
+const DHT_TIMEOUT_MS = 60000;
+const DHT_LEVELS = ["Info", "OK", "Check", "Problem"];
+const dhtCheck = { run: null };
+
+function dhtStart() {
+  const old = dhtCheck.run;
+  if (old) clearTimeout(old.timer);
+  const req = state.nextReq++ & 0xffff;
+  const run = { req, lines: [], done: false, started: new Date() };
+  run.timer = setTimeout(() => dhtFinish(run, true), DHT_TIMEOUT_MS);
+  dhtCheck.run = run;
+  transport?.send(Cmd.dhtCheck(req));
+  if (state.view === "diag") renderChat();
+}
+
+function dhtFinish(run, timedOut) {
+  clearTimeout(run.timer);
+  run.done = true;
+  if (timedOut && !run.lines.length) run.lines.push({ level: 3, text: "No answer. Only a host (the PC program or a server) has a DHT; a radio connected directly does not." });
+  if (state.view === "diag") renderChat();
+}
+
+/** One line of the report from the host; true if it belonged to the running check. */
+function dhtOnLine(ev) {
+  const run = dhtCheck.run;
+  if (!run || run.done || run.req !== ev.req) return false;
+  run.lines.push({ level: ev.level, text: ev.text });
+  if (ev.last) dhtFinish(run, false);
+  else if (state.view === "diag") renderChat();
+  return true;
+}
+
+/** The worst level in a report (0 if empty). */
+function dhtWorst(run) { return run.lines.reduce((m, l) => Math.max(m, l.level), 0); }
+
+function dhtPanel(w) {
+  const run = dhtCheck.run;
+  const busy = !!(run && !run.done);
+  const go = el("button", { textContent: busy ? "Checking…" : "Check the DHT", className: "primary" });
+  go.disabled = busy; go.onclick = dhtStart;
+  const row = el("div", { className: "row" }); row.style.marginTop = "8px"; row.append(go); w.append(row);
+  if (!run) return;
+  if (run.done) {
+    const worst = dhtWorst(run);
+    w.append(el("b", {}, worst >= 3 ? "The DHT has a problem." : worst === 2 ? "The DHT works, with things to look at." : "The DHT works."));
+  }
+  for (const l of run.lines) {
+    const d = el("div", { className: l.level >= 3 ? "" : "muted" }, `${DHT_LEVELS[l.level] || ""}: ${l.text}`);
+    if (l.level >= 3) d.style.color = "#d1453b"; else if (l.level === 2) d.style.color = "#b8860b";
+    w.append(d);
+  }
+}
+
 // ---------- topology crawl: who hears whom, asked of the repeaters one at a time ----------
 // Starts at one repeater you administer, asks it for its neighbour list over remote control (one small
 // reply), then asks each neighbour you also administer, and so on. One question at a time with a pause
@@ -3637,6 +3699,11 @@ function renderDiag(box) {
   const pw = sec("Ping test", "Sends a trace route again and again and counts the answers: loss, round trip, hops and the worst SNR on the way, for range tests on a walk or a drive " +
     "(tick the position box) and to check a route over time. A ping costs airtime, so keep the interval at 10 seconds or more.");
   pingPanel(pw, table);
+
+  // DHT check
+  const dw = sec("DHT check", "Checks the backbone DHT from this host: do the contacts answer, can the other hosts find the records this host publishes, " +
+    "do they agree where an address is, and does a lookup succeed. Needs a host (the PC program or a server); costs a few internet requests, no radio airtime.");
+  dhtPanel(dw);
 
   // Network crawl
   const cw = sec("Network crawl", "Maps who hears whom: asks a repeater you administer for its neighbours, then the neighbours you also administer, and so on, " +

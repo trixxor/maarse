@@ -1102,6 +1102,12 @@ impl Node {
                 publish,
                 result,
             } => self.dht_done(target, publish, result),
+            In::DhtCheckDone { client, req, lines } => {
+                let n = lines.len();
+                for (i, (level, text)) in lines.into_iter().enumerate() {
+                    self.send_client(client, &Event::DhtLine { req, level, last: i + 1 == n, text: maarse_core::companion::text(text.as_bytes()) });
+                }
+            }
             In::ClientFrame { id, frame } if is_get_backbones(&frame) => self.backbones(id),
             In::ClientFrame { id, frame } if crate::history::is_history_command(&frame) => {
                 self.hist_command(id, &frame)
@@ -3879,6 +3885,7 @@ impl Node {
             }
             // Handled in node/ext.rs.
             Command::TraceRoute { .. }
+            | Command::DhtCheck { .. }
             | Command::GetNeighbors
             | Command::SetSharing(_)
             | Command::GetSharing

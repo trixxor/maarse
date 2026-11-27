@@ -90,6 +90,29 @@ impl Node {
         v.to_vec()
     }
 
+    /// Checks the backbone DHT in a thread (see `dht::doctor`) and sends the report to the client.
+    fn dht_check(&mut self, id: ClientId, req: u16) {
+        use crate::dht;
+        let Some(tx) = self.tx.clone() else { return };
+        let me = self.addr;
+        let public = self.dht.public_ep.clone();
+        let seeds = self.dht.seeds.len();
+        let table = self.dht.table.all();
+        // What others should be able to find through us: ourselves if we are public, and what we have published.
+        let mut targets: Vec<Address> = Vec::new();
+        if public.is_some() {
+            targets.push(me);
+        }
+        targets.extend(self.dht.heard.iter().filter(|(a, (_, _, last))| **a != me && last.is_some()).map(|(a, _)| *a).take(3));
+        let identity = self.identity.clone();
+        let configured = self.dht.allowed_endpoints.clone();
+        std::thread::spawn(move || {
+            let ask = |c: &dht::Contact, r: &dht::Req| dht::rpc(c, &configured, &identity, public.as_deref(), r, true);
+            let lines = dht::doctor(&me, seeds, public.as_deref(), &table, &targets, ask);
+            let _ = tx.send(super::In::DhtCheckDone { client: id, req, lines });
+        });
+    }
+
     /// Commands for diagnostics and sharing. Returns the command if it
     /// does not belong here.
     pub(super) fn ext_command(&mut self, id: ClientId, cmd: Command) -> Option<Command> {
@@ -127,6 +150,7 @@ impl Node {
                 self.apply(actions.into_iter().collect());
                 self.send_client(id, &Event::Sent { req, msg_id: 0 });
             }
+            Command::DhtCheck { req } => self.dht_check(id, req),
             Command::GetNeighbors => {
                 for ev in neighbor_events(&self.router.neighbors, self.now_ms()) {
                     self.send_client(id, &ev);

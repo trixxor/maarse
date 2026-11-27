@@ -26,6 +26,15 @@ const APP_ONLY = {
   0x44: "managing another node's radio (trial and confirm) is not in the simulated phone yet",
   0x46: "the Bluetooth code of a radio: the simulated phone has no Bluetooth",
   0x47: "the Bluetooth code of a radio: the simulated phone has no Bluetooth",
+  0x0c: "remote control of another node is not in the simulated phone yet",
+  0x0d: "setting a node's administrators is not in the simulated phone yet",
+  0x0e: "showing a node's administrators is not in the simulated phone yet",
+  0x3c: "GPS details: the simulated phone has no GPS screen yet",
+  0x3d: "spectrum sweeps are not in the simulated phone yet",
+  0x3e: "spectrum recordings are not in the simulated phone yet",
+  0x3f: "spectrum recordings are not in the simulated phone yet",
+  0x43: "spectrum recordings are not in the simulated phone yet",
+  0x45: "the DHT check is not in the simulated phone yet",
 };
 const ENGINE_GAPS = {
   0x18: "firmware update (OTA) is not simulated",

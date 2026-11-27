@@ -38,6 +38,7 @@ import dk.maarse.app.Neighbor
 import dk.maarse.app.Node
 import dk.maarse.app.RadioCfg
 import dk.maarse.app.RemoteAdmin
+import dk.maarse.app.StatusSource
 import kotlinx.coroutines.delay
 
 /** What a stat key is called, and how its value reads. The same words as the PC client. */
@@ -51,6 +52,7 @@ private val STAT_NAMES: Map<Int, Pair<String, (Int) -> String>> = mapOf(
     44 to ("Transmit queue" to Int::toString), 34 to ("Latest RSSI" to { v -> "$v dBm" }), 35 to ("Latest SNR" to { v -> "$v dB" }),
     80 to ("Noise floor (estimated)" to { v -> "$v dBm" }), 49 to ("Battery" to { v -> "$v mV" }), 85 to ("Battery (approx.)" to { v -> "$v %" }),
     86 to ("Chip temperature" to { v -> "%.1f °C".format(v / 10f) }), 90 to ("Crashes" to Int::toString),
+    82 to ("USB power" to { v -> if (v < 0) "unknown" else if (v != 0) "yes" else "no" }),
     118 to ("Radio change on trial" to { v -> if (v > 0) "${v / 60} min ${v % 60} s left to confirm" else "None" }),
 )
 
@@ -73,6 +75,7 @@ fun ManageNodeScreen(addr: String, onBack: () -> Unit) {
     val full by RemoteAdmin.full.collectAsState()
     val neighbors by RemoteAdmin.neighbors.collectAsState()
     val message by RemoteAdmin.message.collectAsState()
+    var details by remember(addr) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
@@ -82,6 +85,10 @@ fun ManageNodeScreen(addr: String, onBack: () -> Unit) {
         if (message.isNotEmpty()) Hint(message)
 
         GroupTitle("Status")
+        if (stats.isNotEmpty()) {
+            BatteryCard(stats, StatusSource.REMOTE)
+            InShortCard(stats)
+        }
         Card2 {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 (if (!full) Button(onClick = { RemoteAdmin.setFull(false) }) { Text("Short status") }
@@ -90,11 +97,15 @@ fun ManageNodeScreen(addr: String, onBack: () -> Unit) {
                 else OutlinedButton(onClick = { RemoteAdmin.setFull(true) }) { Text("Full status") })
             }
             if (stats.isEmpty()) Text("Waiting for a reply…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            else stats.toSortedMap().forEach { (k, v) ->
-                val (name, show) = STAT_NAMES[k] ?: ("Key $k" to Int::toString)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                    Text(show(v), fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyMedium)
+            else {
+                // Everything technical is folded away.
+                TextButton(onClick = { details = !details }) { Text(if (details) "Hide details" else "Details") }
+                if (details) stats.toSortedMap().forEach { (k, v) ->
+                    val (name, show) = STAT_NAMES[k] ?: ("Key $k" to Int::toString)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        Text(show(v), fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
             OutlinedButton(onClick = { RemoteAdmin.fetch() }, Modifier.heightIn(min = 48.dp)) { Text("Fetch again") }

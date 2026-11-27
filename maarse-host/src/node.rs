@@ -3656,7 +3656,7 @@ impl Node {
         match cmd {
             Command::GetInfo => {
                 self.send_client(id, &self.info());
-                self.send_known_names(id);
+                self.send_known_nodes(id);
             }
             Command::AnnounceNow => {
                 self.announce();

@@ -187,12 +187,14 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             }
         }
         let pages = a.caps.is_some_and(|c| c & maarse_core::appdata::CAP_PAGES != 0);
-        if a.position.is_some() || a.telemetry.is_some() || a.name.is_some() || pages {
-            emit(&Event::NodeInfo { addr: from, hops, position: a.position, telemetry: a.telemetry, name: a.name, caps: a.caps });
+        if a.position.is_some() || a.telemetry.is_some() || a.name.is_some() || pages || a.role.is_some() || a.person.is_some() {
+            emit(&Event::NodeInfo { addr: from, hops, position: a.position, telemetry: a.telemetry, name: a.name, caps: a.caps, role: a.role, person: a.person });
         }
     }
 
-    pub(super) fn ext_stats(&self, items: &mut Stats) {
+    /// Battery and power. Kept apart so it can lead the first status frame: over the air a full status takes
+    /// several replies, and a remote administrator must have the battery even if a later one is lost.
+    pub(super) fn power_stats(&self, items: &mut Stats) {
         let mut put = |k: u8, v: i32| {
             let _ = items.push((k, v));
         };
@@ -203,6 +205,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
         put(stat::EXT_POWER, power::EXT_POWER.load(Relaxed));
         put(stat::ENERGY, self.router.energy as i32);
+    }
+
+    pub(super) fn ext_stats(&self, items: &mut Stats) {
+        let mut put = |k: u8, v: i32| {
+            let _ = items.push((k, v));
+        };
         for (k, a) in [
             (stat::STACK_FREE, &crate::bus::STACK_FREE),
             (stat::HEAP_FREE, &crate::bus::HEAP_FREE),

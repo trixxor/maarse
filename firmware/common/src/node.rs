@@ -2250,6 +2250,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let rs = &RSTATS;
         let u = |a: &core::sync::atomic::AtomicU32| a.load(Relaxed).min(i32::MAX as u32) as i32;
         let mut items = Stats::new();
+        self.power_stats(&mut items);
         let mut put = |k: u8, v: i32| {
             let _ = items.push((k, v));
         };

@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
  */
 object RemoteAdmin {
     /** Uptime, role, traffic, errors, queue, signal, noise, battery, temperature, crashes and the radio trial left. */
-    val SHORT = listOf(1, 7, 10, 11, 12, 13, 14, 32, 33, 40, 41, 44, 34, 35, 80, 49, 85, 86, 90, 118)
+    val SHORT = listOf(1, 7, 10, 11, 12, 13, 14, 32, 33, 40, 41, 44, 34, 35, 80, 49, 85, 82, 86, 90, 118)
     const val TRIAL_MINUTES = 5
 
     /** The trial: the settings tried, when it ends, and how far it is: applied, confirming, saved or expired. */

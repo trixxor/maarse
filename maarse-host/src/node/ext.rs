@@ -11,6 +11,13 @@ use maarse_core::diag;
 use std::collections::HashMap;
 use std::fs;
 
+/// The role and person claim from a node's latest announce.
+struct Kind {
+    role: Option<u8>,
+    person: Option<(Address, u8)>,
+    hops: u8,
+}
+
 #[derive(Default)]
 pub(super) struct Ext {
     /// Trace routes in progress: target -> (client, req).
@@ -24,6 +31,8 @@ pub(super) struct Ext {
     pub(super) name: String,
     /// Display names heard in others' announces. Shown only; not proven.
     pub(super) names: HashMap<Address, (appdata::Name, u8)>,
+    /// What kind of node others say they are, in their announces. Shown only; not proven.
+    kinds: HashMap<Address, Kind>,
     /// Our site (antenna height, gain, power, owner), stored in `site.txt`;
     /// sent in announces while the height is set.
     pub(super) site: appdata::Site,
@@ -63,7 +72,7 @@ impl Ext {
             .and_then(|s| appdata::clean_name(s.as_bytes()))
             .map(|n| String::from_utf8_lossy(&n).into_owned())
             .unwrap_or_default();
-        Ext { traces: HashMap::new(), forced: HashMap::new(), sharing, mqtt, name, names: HashMap::new(), site: load_site(data_dir) }
+        Ext { traces: HashMap::new(), forced: HashMap::new(), sharing, mqtt, name, names: HashMap::new(), kinds: HashMap::new(), site: load_site(data_dir) }
     }
 }
 
@@ -232,8 +241,13 @@ impl Node {
                 self.ext.names.remove(&from);
             }
         }
+        if a.role.is_some() || a.person.is_some() {
+            self.ext.kinds.insert(from, Kind { role: a.role, person: a.person, hops });
+        } else {
+            self.ext.kinds.remove(&from);
+        }
         let pages = a.caps.is_some_and(|c| c & appdata::CAP_PAGES != 0);
-        if a.position.is_none() && a.telemetry.is_none() && a.name.is_none() && !pages {
+        if a.position.is_none() && a.telemetry.is_none() && a.name.is_none() && !pages && a.role.is_none() && a.person.is_none() {
             return;
         }
         self.broadcast(&Event::NodeInfo {
@@ -243,6 +257,8 @@ impl Node {
             telemetry: a.telemetry,
             name: a.name.clone(),
             caps: a.caps,
+            role: a.role,
+            person: a.person,
         });
         if let Some(m) = self.ext.mqtt.as_mut() {
             if let Some(t) = &a.telemetry {
@@ -268,10 +284,22 @@ impl Node {
         items.push((stat::EXT_POWER, 1));
     }
 
-    /// Known display names for a client that has just connected.
-    pub(super) fn send_known_names(&self, id: ClientId) {
-        for (addr, (n, hops)) in &self.ext.names {
-            let ev = Event::NodeInfo { addr: *addr, hops: *hops, position: None, telemetry: None, name: Some(n.clone()), caps: None };
+    /// Known display names, roles and person claims for a client that has just connected.
+    pub(super) fn send_known_nodes(&self, id: ClientId) {
+        let only_kinds = self.ext.kinds.keys().filter(|a| !self.ext.names.contains_key(*a));
+        for addr in self.ext.names.keys().chain(only_kinds) {
+            let name = self.ext.names.get(addr);
+            let kind = self.ext.kinds.get(addr);
+            let ev = Event::NodeInfo {
+                addr: *addr,
+                hops: name.map(|n| n.1).or(kind.map(|k| k.hops)).unwrap_or(0),
+                position: None,
+                telemetry: None,
+                name: name.map(|n| n.0.clone()),
+                caps: None,
+                role: kind.and_then(|k| k.role),
+                person: kind.and_then(|k| k.person),
+            };
             self.send_client(id, &ev);
         }
     }

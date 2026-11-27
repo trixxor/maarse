@@ -17,6 +17,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.Switch
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -94,6 +97,9 @@ private fun NodesList(onContact: (String) -> Unit, onAnnounces: () -> Unit) {
     var filter by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
     if (!showMc && filter == 3) filter = 0
+    // MeshCore nodes can fill the list: they can be left out everywhere but under their own filter. Remembered.
+    var showMcNodes by remember { mutableStateOf(Node.prefs.showMeshcoreNodes) }
+    val mcVisible = showMc && (filter == 3 || showMcNodes)
     // Ask the MeshCore radio for its nodes while this list is open.
     LaunchedEffect(ready) {
         while (ready) {
@@ -124,7 +130,17 @@ private fun NodesList(onContact: (String) -> Unit, onAnnounces: () -> Unit) {
             )
         }
         item { ChipRow(if (showMc) FILTERS else FILTERS.take(3), filter, { filter = it }, violet = if (showMc) 3 else -1) }
-        if (ready) item {
+        if (showMc && filter != 3) item {
+            Row(
+                Modifier.fillMaxWidth().toggleable(showMcNodes, role = Role.Switch) { showMcNodes = it; Node.prefs.showMeshcoreNodes = it }
+                    .heightIn(min = 48.dp).padding(horizontal = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Show MeshCore", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Switch(showMcNodes, null)
+            }
+        }
+        if (ready && mcVisible) item {
             Column {
                 FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.Center) {
                     Text("MeshCore radio", Modifier.align(Alignment.CenterVertically), maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelMedium, color = Mc.color, fontWeight = FontWeight.SemiBold)
@@ -136,7 +152,7 @@ private fun NodesList(onContact: (String) -> Unit, onAnnounces: () -> Unit) {
         if (showMarse && q.isBlank()) item {
             Group { GroupRow("Announces", "Nodes and repeaters announcing themselves, live", last = true) { onAnnounces() } }
         }
-        if (showMarse && marse.isEmpty() && (mc.isEmpty() || filter != 0)) item {
+        if (showMarse && marse.isEmpty() && (!mcVisible || mc.isEmpty() || filter != 0)) item {
             Text(if (q.isNotBlank() || filter != 0) "Nobody matches." else "Nobody heard yet. People show up when they announce themselves or write to you. Give someone a name to save them.",
                 Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -144,7 +160,7 @@ private fun NodesList(onContact: (String) -> Unit, onAnnounces: () -> Unit) {
         if (showMarse) items(saved, key = { "s" + it.addr }) { n -> ContactRow(n, onContact) }
         if (showMarse && marse.size > saved.size) item { SectionLabel("Heard recently") }
         if (showMarse) items(marse - saved.toSet(), key = { it.addr }) { n -> ContactRow(n, onContact) }
-        if (showMc && (mc.isNotEmpty() || filter == 3)) {
+        if (mcVisible && (mc.isNotEmpty() || filter == 3)) {
             item { SectionLabel("MeshCore", meshcore = true) }
             if (mc.isEmpty()) item {
                 Text(if (mcState.nodes.isEmpty()) "No MeshCore nodes heard yet. Choose Scan now, or wait for adverts." else "Nobody matches.",

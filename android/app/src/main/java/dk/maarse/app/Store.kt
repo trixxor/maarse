@@ -194,6 +194,8 @@ class Prefs(ctx: Context) {
     /** Should the app connect at start (the user pressed Connect and not Disconnect)? */
     var running: Boolean get() = p.getBoolean("running", false); set(v) = p.edit().putBoolean("running", v).apply()
     var notifyMessages: Boolean get() = p.getBoolean("notifyMsg", true); set(v) = p.edit().putBoolean("notifyMsg", v).apply()
+    /** MeshCore nodes in the node list outside their own filter. */
+    var showMeshcoreNodes: Boolean get() = p.getBoolean("showMcNodes", true); set(v) = p.edit().putBoolean("showMcNodes", v).apply()
     /** Favourite users and favourite pages (addresses). */
     var favUsers: List<String>
         get() = (p.getString("favUsers", "") ?: "").split(',').filter { it.length == 32 }

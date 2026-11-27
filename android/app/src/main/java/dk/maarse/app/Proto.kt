@@ -23,6 +23,12 @@ fun ByteArray.hex(): String = joinToString("") { "%02x".format(it.toInt() and 0x
 fun String.unhex(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 fun shortAddr(h: String) = h.take(8)
 
+/** Administrator addresses as typed, one per line; null if a line is not an address or there are more than 4. */
+fun parseAdminList(text: String): List<String>? {
+    val words = text.split(Regex("\\s+")).filter { it.isNotEmpty() }.map { it.lowercase() }.distinct()
+    return words.takeIf { w -> w.size <= 4 && w.all { it.matches(Regex("[0-9a-f]{32}")) } }
+}
+
 private class W {
     val b = ByteArrayOutputStream()
     fun u8(v: Int) = apply { b.write(v and 0xff) }
@@ -77,6 +83,8 @@ object Cmd {
     }
     fun getRadio() = frame(0x0b)
     fun remote(req: Int, dest: String, inner: ByteArray) = frame(0x0c) { u16(req); addr(dest); bytes(inner.copyOfRange(2, inner.size)) }
+    /** Who may manage this node from a distance (at most 4). Only accepted over USB, Bluetooth or a client's own link. */
+    fun setAdmins(list: List<String>) = frame(0x0d) { list.forEach { addr(it) } }
     fun getAdmins() = frame(0x0e)
     fun setTime() = frame(0x0f) { u32(System.currentTimeMillis() / 1000) }
     fun setRole(r: Int) = frame(0x10) { u8(r) }
@@ -170,6 +178,8 @@ sealed class Ev {
     data class SweepRecState(val state: Int, val elapsedS: Int, val durationS: Int, val sweeps: Int, val bytes: Int) : Ev()
     data class Radio(val cfg: RadioCfg) : Ev()
     data class Regions(val strict: Boolean, val names: String) : Ev()
+    /** The node's administrators. */
+    data class Admins(val list: List<String>) : Ev()
     data class RemoteReply(val from: String, val inner: Ev?) : Ev()
     data class Trace(val req: Int, val dest: String, val path: List<Int>, val out: List<Int>, val back: List<Int>) : Ev()
     data class Neighbors(val part: Int, val last: Boolean, val items: List<Neighbor>) : Ev()
@@ -251,6 +261,7 @@ fun decodeEvent(f: ByteArray): Ev {
         0x91 -> Ev.Stats((1 until f.size - 4 step 5).map { r.u8(it) to r.i32(it + 1) })
         0x92 -> Ev.Radio(RadioCfg(r.u32(1), r.u32(5), r.u8(9), r.u8(10), r.s8(11), r.u16(12), r.u16(14), r.u8(16)))
         0x93 -> Ev.RemoteReply(r.addr(1), if (f.size > 17) decodeEvent(f.copyOfRange(17, f.size)) else null)
+        0x94 -> Ev.Admins((1..f.size - 16 step 16).map { r.addr(it) })
         0x95 -> Ev.Regions(r.u8(1) != 0, r.txt(2))
         0xa0 -> {
             val k = r.u8(19)

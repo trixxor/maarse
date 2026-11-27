@@ -65,6 +65,8 @@ object Node : LinkListener {
     fun clearSweeps() = synchronized(sweeps) { sweepDropped = 0; sweeps.value = emptyList() }
     val radio = MutableStateFlow<RadioCfg?>(null)
     val regions = MutableStateFlow<Ev.Regions?>(null)
+    /** The connected node's administrators; null until it has answered, so another node's list is never saved to it. */
+    val admins = MutableStateFlow<List<String>?>(null)
     val sharing = MutableStateFlow<Ev.Sharing?>(null)
     /** Site of the node (fixed nodes: antenna height, gain, owner). */
     val site = MutableStateFlow<Ev.Site?>(null)
@@ -180,6 +182,7 @@ object Node : LinkListener {
         main.removeCallbacks(poll)
         link?.let { link = null; it.close() }
         me.value = null
+        admins.value = null
     }
 
     private val retry = Runnable { connect() }
@@ -278,6 +281,7 @@ object Node : LinkListener {
         if (link !== this.link) return
         this.link = null
         me.value = null
+        admins.value = null
         note("Connection closed: $why")
         conn.value = Conn(prefs.mode, if (prefs.running) Conn.State.CONNECTING else Conn.State.OFF, why)
         // The phone's host exits on a settings restart: start it again.
@@ -1148,6 +1152,7 @@ object Node : LinkListener {
             is Ev.RemoteReply -> (ev.inner as? Ev.SweepRecState)?.let { RadioRec.onState(ev.from, it) } ?: run { if (!Crawl.onReply(ev.from, ev.inner)) RemoteAdmin.onReply(ev.from, ev.inner) }
             is Ev.Radio -> radio.value = ev.cfg
             is Ev.Regions -> regions.value = ev
+            is Ev.Admins -> admins.value = ev.list
             is Ev.Sharing -> {
                 val previous = sharing.value
                 sharing.value = ev

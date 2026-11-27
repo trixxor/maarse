@@ -848,8 +848,8 @@ impl Engine {
                         && let Some(raw) = payload.get(69..69 + len as usize)
                     {
                         let a = maarse_core::appdata::parse(raw);
-                        if a.name.is_some() || a.caps.is_some() || a.position.is_some() {
-                            self.phone_emit(node, &Event::NodeInfo { addr: dest, hops, position: a.position, telemetry: a.telemetry, name: a.name, caps: a.caps });
+                        if a.name.is_some() || a.caps.is_some() || a.position.is_some() || a.role.is_some() || a.person.is_some() {
+                            self.phone_emit(node, &Event::NodeInfo { addr: dest, hops, position: a.position, telemetry: a.telemetry, name: a.name, caps: a.caps, role: a.role, person: a.person });
                         }
                     }
                 }

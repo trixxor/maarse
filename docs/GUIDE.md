@@ -509,6 +509,15 @@ The web client has a **Diagnostics** page (the button next to Status/Radio):
 An administrator of a node can manage it over LoRa or the internet without a login: every command is signed by the administrator.
 Web client: Nodes > the node > Manage. Android: contact page > **Manage this node**.
 
+**Setting the administrators** (at most 4) is done while connected to the node itself (USB or Bluetooth), never over the mesh:
+web client: Settings > **Radios, role and regions**; Android: Settings > **Role and regions** (working copy 2026-11-27) >
+**Administrators of this node**. Enter one address per line and press **Save administrators**; the list replaces the old one,
+and nothing is saved if a line is not a 32-character address. Use the address of the device you will manage the node *from*
+(its address in Settings, or **Copy address** on its node page), not the node's own, and for linked devices each device's
+address, not the account's. A phone that uses the node as its Bluetooth radio *is* that node, so it cannot administer it
+from a distance in that mode. The firmware sets no Bluetooth pairing or PIN, so anyone within Bluetooth range who can
+connect to the node can change this list. The Android part is unit-tested and built; it has not been tried against a repeater yet.
+
 - **Short status** (the default) asks for about 20 stat keys in one small reply: uptime, role, traffic, errors, queue, signal, noise
   floor, battery, temperature, crashes. **Full status** asks for everything (several replies). **Neighbours** asks for the 8 heard most recently
   neighbours with signal strength. Over LoRa each byte costs airtime and the radio cannot hear while it transmits, so the heavy items are
@@ -518,6 +527,22 @@ Web client: Nodes > the node > Manage. Android: contact page > **Manage this nod
   its old settings, also after a reboot. Your own radio must hear the node on the new settings: **Switch my radio to these settings too**
   saves them on your radio. An older node saves a remote change at once. Specification: `docs/remote-repeater-info.md` and protocol spec 9.7.
 - Not built: a repeater that pushes its status to a TCP host by itself (to be looked at later).
+
+## Plain status, node types and MeshCore in the node list (2026-11-27, working copy)
+
+- **Status in everyday words.** The web client's Status page and the Android Mesh page lead with the radio's battery and a card **In short**
+  (what the node works as, how long it has run, the last signal, airtime, radios heard, packets passed on, temperature). The remote
+  Manage page does the same on both. Technical numbers are under **Details** (web client; Android Manage) or **All numbers** (Android Mesh).
+- **Battery.** A radio that reports its power source but no voltage is shown as having no battery reading; if that part of a remote
+  status has not arrived, the page says so. On a XIAO nRF52840 only a battery on the board's own BAT pads is measured; power fed in
+  through the 5 V or 3V3 pins (for example from a solar charger) is not. New radio firmware puts the battery in the first reply of a
+  remote status and in the short status.
+- **Node types.** Hosts and radios now pass a node's role and person claim on to the clients, so nodes show as **Repeater** or
+  **Person** instead of **Node**. This needs the new PC program or app; a radio you connect to directly needs the new firmware. A node's
+  type appears at its next announce.
+- **Show MeshCore.** A switch above the node list (web client and Android) leaves MeshCore nodes out of every filter except MeshCore.
+  It is remembered on the device.
+- Verified by unit tests and builds only until noted otherwise.
 
 ## Status page: radio connection, data and GPS
 

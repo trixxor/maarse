@@ -649,6 +649,10 @@ pub enum Event {
         name: Option<crate::appdata::Name>,
         /// Capabilities from the announce (`appdata::CAP_*`), if it had them.
         caps: Option<u8>,
+        /// Routing role from the announce (`router::Role::as_u8`), if it had one.
+        role: Option<u8>,
+        /// Linked devices: the person and device number the node claims to be. Not checked here.
+        person: Option<(Address, u8)>,
     },
     /// 0xb4: the node's identity has been replaced (reply to `SetIdentity`).
     /// Format: new address (16) | public identity (64).
@@ -1625,10 +1629,16 @@ impl Event {
                 .b(ssid)
                 .b(peer)
                 ,
-            Event::NodeInfo { addr, hops, position, telemetry, name, caps } => {
+            Event::NodeInfo { addr, hops, position, telemetry, name, caps, role, person } => {
                 let mut data = crate::appdata::build(None, false, *position, telemetry.as_ref(), name.as_deref());
+                if let Some(r) = role {
+                    crate::appdata::push_role(&mut data, *r, 0);
+                }
                 if let Some(c) = caps {
                     crate::appdata::push_caps(&mut data, *c);
+                }
+                if let Some((p, index)) = person {
+                    crate::appdata::push_person(&mut data, p, *index);
                 }
                 w.start(0xa3).b(&addr.0).b(&[*hops]).b(&data)
             }
@@ -1883,7 +1893,7 @@ impl Event {
             0xa3 => {
                 let (addr, hops) = (r.addr()?, r.u8()?);
                 let a = crate::appdata::parse(r.0);
-                Event::NodeInfo { addr, hops, position: a.position, telemetry: a.telemetry, name: a.name, caps: a.caps }
+                Event::NodeInfo { addr, hops, position: a.position, telemetry: a.telemetry, name: a.name, caps: a.caps, role: a.role, person: a.person }
             }
             0xa4 => Event::Name { name: r.text()? },
             0xa5 => Event::Call { from: r.addr()?, data: r.text()? },
@@ -2378,9 +2388,25 @@ mod tests {
             telemetry: Some(crate::appdata::Telemetry { battery_mv: 3700, energy: 2, uptime_s: 5, ..Default::default() }),
             name: crate::appdata::clean_name("Ida on the hill".as_bytes()),
             caps: None,
+            role: None,
+            person: None,
         });
-        roundtrip_ev(Event::NodeInfo { addr: Address([1; 16]), hops: 0, position: None, telemetry: None, name: None, caps: None });
-        roundtrip_ev(Event::NodeInfo { addr: Address([1; 16]), hops: 1, position: None, telemetry: None, name: None, caps: Some(0x20) });
+        roundtrip_ev(Event::NodeInfo { addr: Address([1; 16]), hops: 0, position: None, telemetry: None, name: None, caps: None, role: None, person: None });
+        roundtrip_ev(Event::NodeInfo { addr: Address([1; 16]), hops: 1, position: None, telemetry: None, name: None, caps: Some(0x20), role: None, person: None });
+        // A client tells a repeater from a person by these two: they must reach it, also with everything else set.
+        let full = Event::NodeInfo {
+            addr: Address([1; 16]),
+            hops: 1,
+            position: sh.position(),
+            telemetry: Some(crate::appdata::Telemetry { battery_mv: 3700, energy: 2, uptime_s: 5, ..Default::default() }),
+            name: crate::appdata::clean_name(&[b'n'; crate::appdata::MAX_NAME]),
+            caps: Some(0x20),
+            role: Some(1),
+            person: Some((Address([7; 16]), 3)),
+        };
+        let app = crate::appdata::parse(&full.encode()[2 + 1 + 16 + 1..]);
+        assert_eq!((app.role, app.person), (Some(1), Some((Address([7; 16]), 3))));
+        roundtrip_ev(full);
         roundtrip_cmd(Command::GetName);
         roundtrip_cmd(Command::RequestPage { req: 9, dest: Address([3; 16]), path: text(b"vejr") });
         roundtrip_cmd(Command::PostBoard { req: 9, dest: Address([3; 16]), path: text(b"crew"), text: text(b"hello board") });

@@ -43,6 +43,11 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import dk.maarse.app.parseAdminList
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -247,6 +252,7 @@ internal fun NodeSection(radioPart: Boolean = false) {
     }
 
     if (radioPart) {
+    AdminSection()
     GroupTitle("Regions")
     Card2 {
         var reg by remember(regions) { mutableStateOf(regions?.names ?: "") }
@@ -273,6 +279,38 @@ internal fun NodeSection(radioPart: Boolean = false) {
             OutlinedButton(onClick = { Node.send(Cmd.announce()) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Announce now") }
         }
         Hint("Address: " + (me?.addr ?: ""))
+    }
+}
+
+/** Who may manage the connected node from a distance. */
+@Composable
+private fun AdminSection() {
+    val admins by Node.admins.collectAsState()
+    val conn by Node.conn.collectAsState()
+    LaunchedEffect(conn.state) { Node.send(Cmd.getAdmins()) }
+    var sent by remember { mutableStateOf<List<String>?>(null) }
+    var refused by remember { mutableStateOf(false) }
+    GroupTitle("Administrators of this node")
+    Card2 {
+        Text("At most 4. They can see status and change radio settings over the network. One address per line: the address of the device you manage this node from, not its own.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val saved = admins
+        if (saved == null) {
+            Text("Waiting for the node…", style = MaterialTheme.typography.bodySmall)
+        } else {
+            var text by remember(saved) { mutableStateOf(saved.joinToString("\n")) }
+            OutlinedTextField(text, { text = it; refused = false; sent = null }, Modifier.fillMaxWidth(), label = { Text("Addresses") }, minLines = 2,
+                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false))
+            if (refused) Text("Not saved: at most 4 lines, each an address of 32 characters (0-9 and a-f).", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            if (sent == saved) Text("Saved on the node.", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = {
+                val list = parseAdminList(text)
+                refused = list == null
+                // Cleared until the node answers, so "Saved" is only shown for what it has really taken.
+                if (list != null && Node.send(Cmd.setAdmins(list))) { sent = list; Node.admins.value = null }
+            }) { Text("Save administrators") }
+        }
     }
 }
 

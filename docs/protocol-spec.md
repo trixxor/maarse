@@ -1426,7 +1426,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0xa1 | Neighbors | part (1) \| last (1) \| n × neighbour (15) |
 | 0xc0 | DhtLine | req (2) \| level (1: 0 info, 1 good, 2 check, 3 problem) \| last (1) \| text (UTF-8, rest of the frame) |
 | 0xa2 | Sharing | sharing (10) |
-| 0xa3 | NodeInfo | addr (16) \| hops (1) \| app-data TLVs `0x03`/`0x04`/`0x05` (section 4.2) |
+| 0xa3 | NodeInfo | addr (16) \| hops (1) \| app-data TLVs `0x03`/`0x04`/`0x05`, `0x06` role, `0x07` capabilities and `0x08` person claim (section 4.2). Role and person are forwarded since 2026-11-27; older hosts and radios leave them out, so a client shows such nodes as unknown kind. The role flags are sent as 0 |
 | 0xa4 | Name | name (text) |
 | 0xa5 | Call | from (16) \| data |
 | 0xa6 | Wifi | flags (1: bit 0 enabled, bit 1 modem) \| state (1) \| ip (4) \| ssid (str8) \| peer (text) |

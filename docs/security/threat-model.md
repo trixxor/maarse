@@ -37,9 +37,9 @@ traffic analysis by someone who can observe many places at once.
 | Area | Protection | Trust boundary that remains | Spec |
 | --- | --- | --- | --- |
 | Direct messages | End-to-end encrypted (static seal, Noise `X`-style); the sender address is masked and only the recipient learns it; messages are authenticated | No external review; the destination address is in clear in the header | [6.2](../protocol-spec.md#62-static-seal-direct-messages-without-a-session), [3.1](../protocol-spec.md#31-layout) |
-| Forward secrecy | Ratchet between contacts that support it | **Draft.** A leaked current key exposes the current session. Mail in post offices is sealed without forward secrecy (static format) | [6.3](../protocol-spec.md#63-forward-secrecy-ratchet-draft) |
+| Forward secrecy | Ratchet between contacts that support it | **Draft.** A leaked current key exposes the current session. Mail in post offices has forward secrecy with one week's granularity between nodes that have exchanged a message in the last week and both run 0.9.13 or later (radios only while they know the time, and for four contacts): the recipient erases a week's key after about three weeks. Otherwise it is sealed with the static format and has none | [6.3](../protocol-spec.md#63-forward-secrecy-ratchet-draft), [8.1](../protocol-spec.md#81-post-offices-deposit-mailsync) |
 | Delivery status | A recipient confirms only a message it opened, with an 8-byte proof only the two parties can compute (working copy) | Older recipients are confirmed by anyone who heard the message. Post office deposits, bundles and file chunks have no proof | [5.5](../protocol-spec.md#55-end-to-end-acknowledgement) |
-| Session state and replays | Hosts save the sending chain to disk before a message leaves, and ignore messages already received (working copy) | Restoring an old `sessions.bin` can reuse keys: delete it after a restore. Radio nodes keep no replay list | [6.3](../protocol-spec.md#63-forward-secrecy-ratchet-draft) |
+| Session state and replays | Hosts save the sending chain to disk before a message leaves, and send nothing if they cannot also save a counter outside the data folder. A `sessions.bin` that does not fit that counter (restored, moved, or the counter lost) is thrown away. Hosts and radios ignore messages already received (radios the last 24). A packet that does not fit a session does not replace it: the session is tested first (all since 0.9.13) | A restore that brings the counter back too (whole-disk snapshot) is not detected. A replayed old init that a node has forgotten can replace a session until the contact is heard from again | [6.3](../protocol-spec.md#63-forward-secrecy-ratchet-draft) |
 | Bluetooth to a radio | A 6-digit code with Bluetooth LE Secure Connections; with the factory code only a new one can be chosen; guessing is slowed (working copy; tried on a Heltec V4 with an Android phone) | Until the owner has chosen a code, anyone in range can do so with the factory code. A fixed passkey can be learned by someone who interferes with pairing | [9.8](../protocol-spec.md#98-the-bluetooth-code-working-copy-2026-11-27) |
 | Files on a host | The data folder and secret files are for the owner only on Unix; the Windows service limits its folder to SYSTEM and administrators | Not encrypted on disk | – |
 | Man in the middle | 60-digit safety number that two people can compare | Only works if people actually compare it | [6.1](../protocol-spec.md#61-identities) |
@@ -83,8 +83,9 @@ message, not the fact that two nodes are communicating.
    does not use `--require-key`.
 5. A compromised release key would let an attacker sign firmware for every node
    that trusts it. A new key means visiting every node.
-6. A forged packet can make a node restart a forward-secrecy session, which then
-   starts again at the weaker first-message level (noted for later work).
+6. A replayed old init that a node has forgotten can replace a
+   forward-secrecy session, which starts again at the weaker first-message level.
+   In released versions a forged packet can do the same.
 7. No closed networks ([decision 0005](../decisions/0005-network-key-maybe.md)): any
    node can route through any repeater.
 8. Dependency review of 2026-11-20 found no advisories classified as vulnerabilities,

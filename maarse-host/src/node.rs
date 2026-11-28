@@ -9,6 +9,7 @@ mod backbone;
 mod tun;
 mod hist;
 mod person;
+mod mailkey;
 mod sensors;
 pub(crate) use person::{BACKUP_FILE, RESTORE_FILE};
 mod seq;
@@ -141,6 +142,13 @@ const DHT_CONTACTS_FILE: &str = "dht-contacts.txt";
 const APP_POSTBOX: u8 = 0x01;
 /// A new FS session is sent at most this often to the same contact (resync).
 const RESYNC_EVERY: Duration = Duration::from_secs(60);
+/// A packet that does not fit the session with a contact proves nothing:
+/// anyone can make one look like it comes from them. So the session is first
+/// tested with `SESSION_PROBE`. Only when that has not been acknowledged
+/// after this long, and another unreadable packet comes, is a new session made.
+const PROBE_WAIT: Duration = Duration::from_secs(60);
+/// An unanswered probe older than this says nothing any more: probe again.
+const PROBE_LIFETIME: Duration = Duration::from_secs(3600);
 
 enum Timer {
     Tx { packet: Vec<u8>, id: u64, only: Only },
@@ -286,6 +294,10 @@ enum Pending {
     MailBundle(Address, Vec<u64>),
     /// Control command to a remote node (never put in a mailbox).
     Control,
+    /// Our weekly mail key to a contact (see `mailkey.rs`).
+    MailKey(Address),
+    /// A test of the session with a contact (see [`PROBE_WAIT`]).
+    Probe(Address),
 }
 
 /// Shown in a conversation when a message from that contact could not be
@@ -337,6 +349,8 @@ pub struct Node {
     sessions: crate::sessions::Sessions,
     /// When we last started a new session because of an unreadable message.
     resynced: HashMap<Address, Instant>,
+    /// Contacts whose session is being tested, and since when ([`PROBE_WAIT`]).
+    suspects: HashMap<Address, Instant>,
     /// When we last announced because a compact message could not be read.
     lost_session_announce: Option<Instant>,
     postboxes: HashMap<Address, Address>,
@@ -469,6 +483,8 @@ pub struct Node {
     hist: hist::Hist,
     /// Linked devices: our person, other devices' certificates (node/person.rs).
     persons: person::Persons,
+    /// Weekly keys for mail kept by post offices (a node without an account).
+    mailkeys: mailkey::MailKeys,
     /// Hosts found in the DHT (reached over TCP, if through a relay).
     dht_hosts: HashSet<Address>,
     /// Files whose wait for a TCP route has been logged.
@@ -634,6 +650,7 @@ impl Node {
             fs_peers: HashSet::new(),
             sessions: crate::sessions::Sessions::load(cfg.data_dir.join("sessions.bin")),
             resynced: HashMap::new(),
+            suspects: HashMap::new(),
             lost_session_announce: None,
             postboxes: HashMap::new(),
             my_postbox: cfg.postbox,
@@ -747,6 +764,7 @@ impl Node {
             ),
             hist: hist::Hist::open(&cfg.data_dir, cfg.history_days),
             persons: person::Persons::load(&cfg.data_dir, &addr),
+            mailkeys: mailkey::MailKeys::load(&cfg.data_dir),
             dht_hosts: HashSet::new(),
             file_wait_logged: HashSet::new(),
             beacon_deferred_since: None,
@@ -773,6 +791,12 @@ impl Node {
         }
         let saved = fs::read_to_string(node.data_dir.join("admins.txt")).unwrap_or_default();
         node.admins = saved.lines().filter_map(parse_addr).collect();
+        if node.sessions.restored_old_file {
+            node.log("sessions.bin does not fit what this computer has written (a restored backup or a moved data folder?): all encryption sessions start again");
+        }
+        if node.sessions.unprotected {
+            node.log("no folder for the restore protection file (set MAARSE_STATE_DIR): encryption sessions are not kept across restarts");
+        }
         if let Ok(b) = fs::read(node.data_dir.join("known.bin")) {
             for chunk in b.chunks_exact(64) {
                 if let Some(p) = PublicIdentity::from_bytes(chunk) {
@@ -1606,6 +1630,8 @@ impl Node {
                     Err(_) => ct[..n].to_vec(),
                 }
             };
+            // To the contact's weekly key when it has told us one (forward secrecy).
+            let mail_sealed = self.mail_seal_to_key(&dest, plain).unwrap_or(mail_sealed);
             let mail_proof = self.proof_from(&dest, &mail_sealed);
             self.outbox.insert(
                 msg_id,
@@ -1619,9 +1645,39 @@ impl Node {
                 },
             );
         }
+        let is_message = matches!(kind, Pending::Message);
         self.awaiting.insert(msg_id, kind);
         self.apply(actions.into_iter().collect());
+        if is_message {
+            // Our weekly mail key, once a week per contact (see mailkey.rs).
+            // After the message, so that it does not wait for the key.
+            self.mailkey_introduce(dest);
+        }
         Ok(msg_id)
+    }
+
+    /// A packet from `peer` did not fit our session. `true`: the session is
+    /// really broken, replace it. Otherwise it is tested (or still being
+    /// tested) and kept.
+    fn session_is_lost(&mut self, peer: Address) -> bool {
+        match self.suspects.get(&peer).map(Instant::elapsed) {
+            Some(age) if age < PROBE_WAIT => false,
+            Some(age) if age < PROBE_LIFETIME => {
+                self.suspects.remove(&peer);
+                true
+            }
+            _ => {
+                let probe = [content::PERSON, content::person::SESSION_PROBE];
+                if self.send_sealed(peer, &probe, Pending::Probe(peer)).is_ok() {
+                    if self.suspects.len() >= 4096 {
+                        self.suspects.clear();
+                    }
+                    self.suspects.insert(peer, Instant::now());
+                    self.log(format!("unreadable message from {}: testing the session", short(&peer)));
+                }
+                false
+            }
+        }
     }
 
     /// The proof `dest` must give for the sealed message `sealed`, if it
@@ -1720,6 +1776,12 @@ impl Node {
     fn on_acked(&mut self, msg_id: u64) {
         match self.awaiting.remove(&msg_id) {
             Some(Pending::Control) => {}
+            Some(Pending::MailKey(peer)) => self.mailkeys.acked(&peer),
+            Some(Pending::Probe(peer)) => {
+                if self.suspects.remove(&peer).is_some() {
+                    self.log(format!("the session with {} works: the unreadable packet is ignored", short(&peer)));
+                }
+            }
             Some(Pending::Message) | None => {
                 self.outbox.remove(&msg_id);
                 self.broadcast(&Event::Acked { msg_id });
@@ -1943,16 +2005,34 @@ impl Node {
         if let Some(sender) = self.seen.sender(rid) {
             let proof = self.proof_to(&sender, &payload);
             self.acknowledge(rid, proof);
-            if self.receipt_wanted.remove(&rid) {
+            let long = payload.len() > maarse_core::mail::MAX_BUNDLED && !matches!(payload.first(), Some(&(ratchet::INIT | ratchet::RATCHET)));
+            if self.receipt_wanted.remove(&rid) || long {
                 self.send_receipt(sender, rid, proof);
             }
             return self.log(format!("a message from {} that we already have was ignored", short(&sender)));
         }
         // Mail for our person, encrypted to its inbox key (node/person.rs).
         let inbox_stranger = match self.try_open_inbox(&payload, hops) {
-            Some(Ok(())) => {
+            // To our own weekly key: the sender gets its proof and a receipt
+            // (only a post office delivers this form).
+            Some(Ok(o)) if o.person == self.addr => {
+                self.seen.add(rid, o.from);
+                let proof = self.proof_to(&o.from, &payload);
+                self.acknowledge(rid, proof);
+                self.receipt_wanted.remove(&rid);
+                return self.send_receipt(o.from, rid, proof);
+            }
+            // To our account: the sender keeps the copy under the person, so
+            // the receipt names it that way, with this device's proof.
+            Some(Ok(o)) => {
                 self.seen.add(rid, self.addr);
-                return self.acknowledge(rid, None);
+                self.acknowledge(rid, None);
+                if o.from != self.addr {
+                    let id = maarse_core::mail::receipt_id(&o.person, &payload);
+                    let proof = self.proof_to(&o.from, &payload);
+                    self.send_receipt(o.from, id, proof);
+                }
+                return;
             }
             // It may wait for an announce, but only if nothing else reads it:
             // a compact ratchet message starts with the same byte.
@@ -1982,6 +2062,8 @@ impl Node {
         }
         match res {
             Ok(o) => {
+                // Something from the contact opened: the session is fine.
+                self.suspects.remove(&o.from);
                 if o.format != Format::Static {
                     // It supports forward secrecy, even if we have not heard so.
                     self.fs_peers.insert(o.from);
@@ -2000,10 +2082,14 @@ impl Node {
                 // Opened: now the sender may hear that it arrived.
                 let proof = self.proof_to(&o.from, &payload);
                 self.acknowledge(rid, proof);
-                // Mail from a post office: tell the sender it arrived.
-                if self.receipt_wanted.remove(&rid) {
+                // Mail from a post office: tell the sender it arrived. A
+                // message too long for a bundle comes as ordinary data.
+                let long = o.format == Format::Static && payload.len() > maarse_core::mail::MAX_BUNDLED;
+                if self.receipt_wanted.remove(&rid) || long {
                     self.send_receipt(o.from, rid, proof);
                 }
+                // The sender may want to leave mail for us later: our weekly key.
+                self.mailkey_introduce(o.from);
                 self.on_content(o.from, &out[..o.len], hops, o.format)
             }
             Err(CryptoError::UnknownSender(a)) => {
@@ -2020,6 +2106,10 @@ impl Node {
                     self.pending_rx.remove(0);
                 }
                 self.pending_rx.push((payload, hops));
+            }
+            // Only `Desync`: with no session at all there is nothing to throw away.
+            Err(CryptoError::Desync(a)) if !self.session_is_lost(a) => {
+                self.counters.errors += 1;
             }
             Err(CryptoError::NoSession(a) | CryptoError::Desync(a)) => {
                 self.counters.errors += 1;
@@ -3026,7 +3116,7 @@ impl Node {
                         .outbox
                         .iter()
                         .find(|(_, m)| mail::receipt_id(&m.dest, &m.mail_sealed) == *id)
-                        .filter(|(_, m)| m.mail_proof.is_none_or(|p| words.get(i + 1) == Some(&u64::from_le_bytes(p))))
+                        .filter(|(_, m)| self.receipt_proves(m, words.get(i + 1).copied()))
                         .map(|(msg_id, _)| *msg_id);
                     if let Some(msg_id) = found {
                         self.log(format!("delivery receipt for message {msg_id:016x}"));
@@ -3035,6 +3125,18 @@ impl Node {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Does the word after a receipt ID prove that the recipient of `m` has
+    /// it? For mail to a person, any of its checked devices may prove it.
+    fn receipt_proves(&self, m: &OutMsg, word: Option<u64>) -> bool {
+        let matches = |p: Proof| word == Some(u64::from_le_bytes(p));
+        let devices = self.person_proofs(&m.dest, &m.mail_sealed);
+        if devices.is_empty() {
+            m.mail_proof.is_none_or(matches)
+        } else {
+            devices.into_iter().any(matches)
         }
     }
 
@@ -3091,6 +3193,11 @@ impl Node {
 
     fn valid_mail_size(sealed: &[u8]) -> bool {
         !sealed.is_empty() && sealed.len() <= MAX_DIRECT_PAYLOAD
+    }
+
+    /// Does a sealed message of `len` bytes fit in a deposit at a post office?
+    fn fits_deposit(len: usize) -> bool {
+        len + 16 <= MAX_DIRECT_PAYLOAD
     }
 
     fn store_mail_local(&mut self, recipient: Address, sealed: Vec<u8>, replicate: bool, fetched: bool) -> bool {
@@ -3278,12 +3385,15 @@ impl Node {
             return;
         }
         // A recipient that reads bundles gets several messages per packet.
-        // Also for a single message (up to 255 bytes): a bundle is how the
-        // recipient learns the mail came from a post office and sends the
-        // sender a delivery receipt.
-        let bundle_ok = mails.len() >= 2 || mails.values().all(|m| m.sealed.len() <= 255);
-        if self.caps.get(&recipient).is_some_and(|c| c & maarse_core::appdata::CAP_BUNDLE != 0) && bundle_ok {
-            let all: Vec<(u64, Vec<u8>)> = mails.iter().map(|(id, m)| (*id, m.sealed.clone())).collect();
+        // Also for a single message: a bundle is how the recipient learns the
+        // mail came from a post office and sends the sender a delivery
+        // receipt. A message too long for a bundle goes as ordinary data.
+        let bundles = self.caps.get(&recipient).is_some_and(|c| c & maarse_core::appdata::CAP_BUNDLE != 0);
+        let (all, single): (Vec<(u64, Vec<u8>)>, Vec<(u64, Vec<u8>)>) = mails
+            .iter()
+            .map(|(id, m)| (*id, m.sealed.clone()))
+            .partition(|(_, sealed)| bundles && sealed.len() <= maarse_core::mail::MAX_BUNDLED);
+        if !all.is_empty() {
             let max = MAX_DIRECT_PAYLOAD - stamp::STAMP_LEN;
             let mut i = 0;
             while i < all.len() {
@@ -3292,10 +3402,6 @@ impl Node {
                 while i < all.len() && maarse_core::mail::bundle_push(&mut body, &all[i].1, max) {
                     ids.push(all[i].0);
                     i += 1;
-                }
-                if ids.is_empty() {
-                    i += 1;
-                    continue;
                 }
                 let mut p: maarse_core::router::Buf = maarse_core::router::Buf::new();
                 if maarse_core::mail::build(&mut p, &recipient, maarse_core::mail::OP_BUNDLE, &body) {
@@ -3306,15 +3412,16 @@ impl Node {
                     }
                 }
             }
+        }
+        if single.is_empty() {
             return;
         }
-        let items: Vec<Vec<u8>> = mails.values().map(|m| m.sealed.clone()).collect();
         self.log(format!(
             "mailbox: trying to deliver {} message(s) to {}",
-            items.len(),
+            single.len(),
             short(&recipient)
         ));
-        for sealed in items {
+        for (_, sealed) in single {
             let now = self.now_ms();
             if let Ok((msg_id, actions)) = self.router.send_direct(recipient, &sealed, token(), now)
             {
@@ -3332,7 +3439,7 @@ impl Node {
         let Some(m) = self.outbox.get_mut(&msg_id) else {
             return;
         };
-        if m.deposited || m.mail_sealed.len() + 16 > MAX_DIRECT_PAYLOAD || !Self::valid_mail_size(&m.mail_sealed) {
+        if m.deposited || !Self::fits_deposit(m.mail_sealed.len()) || !Self::valid_mail_size(&m.mail_sealed) {
             return;
         }
         m.next_deposit = Some(Instant::now() + Duration::from_secs(60));
@@ -3458,6 +3565,7 @@ impl Node {
         self.tun_tick();
         self.hist_maintain();
         self.person_maintain();
+        self.mailkey_maintain();
         self.sensors_tick();
         self.seqs.save();
         // A host has the system clock (NTP): stratum 1 in our hellos.
@@ -3481,8 +3589,9 @@ impl Node {
         for id in late {
             self.try_deposit(id);
         }
-        self.outbox
-            .retain(|_, m| now.duration_since(m.sent) < Duration::from_secs(3600));
+        // A copy left at a post office is remembered as long as it may wait
+        // there, so that its receipt can still be matched.
+        self.outbox.retain(|_, m| now.duration_since(m.sent) < if m.deposited { MAILBOX_TTL } else { Duration::from_secs(3600) });
 
         // Files: resend chunks without an acknowledgement. If the recipient does not answer,
         // the file is put in the file mailbox (if enabled), otherwise it is abandoned.
@@ -4102,7 +4211,7 @@ impl Node {
     fn radio_stats(&self, host: &Stats) -> Vec<(u8, i32)> {
         let (_, _, own) = crate::links::radio_summary();
         own.into_iter()
-            .filter(|(k, _)| matches!(*k, 30..=59 | 80..=113 | 116..=117) && !host.iter().any(|(h, _)| h == k))
+            .filter(|(k, _)| matches!(*k, 30..=59 | 80..=113 | 116..=117 | 119..=125) && !host.iter().any(|(h, _)| h == k))
             .collect()
     }
 
@@ -4154,12 +4263,13 @@ impl Node {
         if let Some(snr) = c.last_snr {
             items.push((stat::LAST_SNR_DB, snr as i32));
         }
-        let (radios, idle, _) = crate::links::radio_summary();
+        let (radios, idle, own) = crate::links::radio_summary();
         items.push((stat::RADIOS_CONNECTED, radios as i32));
         if let Some(s) = idle {
             items.push((stat::RADIO_IDLE_S, s.min(i32::MAX as u64) as i32));
         }
         self.ext_stats(&mut items);
+        Node::leave_power_to_radio(&mut items, &own);
         items.into_iter().collect()
     }
 }
@@ -5905,6 +6015,245 @@ mod radio_file_e2e_tests {
         }
         let (_, eb, _, _) = run_radio(&mut a, &mut b, 90, &mut |_, _| false);
         assert_eq!(notices(&eb), 1, "one notice for the lost session");
+    }
+
+    /// A packet anyone can make look like it comes from a contact (it cannot
+    /// be opened, but it gets as far as "no matching session").
+    fn forged_from(victim: &Node, claimed: &Address) -> Vec<u8> {
+        let stranger = maarse_crypto::Identity::generate(&mut OsRng);
+        let mut out = [0u8; 255];
+        let (n, _) = ratchet::seal(&stranger, &victim.identity.public(), &mut ratchet::FixedStore::<2>::new(), true, &mut OsRng, &[content::TEXT, b'x'], &mut out).unwrap();
+        let mut packet = out[..n].to_vec();
+        ratchet::forge_sender_for_test(&victim.identity, &mut packet, claimed);
+        packet
+    }
+
+    fn conversation(name: &str) -> (Side, Side) {
+        let (mut a, mut b) = radio_pair(name);
+        a.n.command(1, Command::SendDirect { req: 1, dest: b.n.addr, text: text(b"hello") });
+        run_radio(&mut a, &mut b, 60, &mut |_, eb| eb.iter().any(|e| matches!(e, Event::DirectReceived { .. })));
+        b.n.command(1, Command::SendDirect { req: 2, dest: a.n.addr, text: text(b"hi") });
+        run_radio(&mut a, &mut b, 60, &mut |ea, _| ea.iter().any(|e| matches!(e, Event::DirectReceived { .. })));
+        (a, b)
+    }
+
+    fn session_of(n: &mut Node, peer: &Address) -> Option<Vec<u8>> {
+        ratchet::SessionStore::get_mut(&mut n.sessions, peer).map(|s| s.to_bytes().to_vec())
+    }
+
+    /// Someone who is not authenticated cannot make a node start a new session:
+    /// the session is tested first, and it answers.
+    #[test]
+    fn a_forged_packet_does_not_throw_a_working_session_away() {
+        let (mut a, mut b) = conversation("forged-probe");
+        run_radio(&mut a, &mut b, 20, &mut |_, _| false);
+        let a_addr = a.n.addr;
+        let forged = forged_from(&b.n, &a_addr);
+        b.n.open_direct(forged, 0, true);
+        assert!(b.n.suspects.contains_key(&a_addr), "the session was not tested");
+        let (_, eb, _, _) = run_radio(&mut a, &mut b, 30, &mut |_, _| false);
+        assert!(!b.n.suspects.contains_key(&a_addr), "the probe was not acknowledged");
+        assert!(!eb.iter().any(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.as_slice() == UNREADABLE_NOTICE.as_bytes())), "a notice was shown");
+        // Much later another forged packet: tested again, still no new session.
+        let forged = forged_from(&b.n, &a_addr);
+        b.n.open_direct(forged, 0, true);
+        assert!(b.n.suspects.contains_key(&a_addr), "not tested again");
+        // And the conversation goes on, both ways.
+        a.n.command(1, Command::SendDirect { req: 3, dest: b.n.addr, text: text(b"still here") });
+        let (_, eb, _, _) = run_radio(&mut a, &mut b, 30, &mut |_, eb| eb.iter().any(|e| matches!(e, Event::DirectReceived { .. })));
+        assert!(eb.iter().any(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.ends_with(b"still here"))), "{eb:?}");
+        b.n.command(1, Command::SendDirect { req: 4, dest: a.n.addr, text: text(b"me too") });
+        let (ea, _, _, _) = run_radio(&mut a, &mut b, 30, &mut |ea, _| ea.iter().any(|e| matches!(e, Event::DirectReceived { .. })));
+        assert!(ea.iter().any(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.ends_with(b"me too"))), "{ea:?}");
+    }
+
+    /// When the probe is never answered, the next unreadable packet starts a
+    /// new session, so a really broken one still heals.
+    #[test]
+    fn an_unanswered_probe_and_another_unreadable_packet_start_a_new_session() {
+        let (a, mut b) = conversation("forged-heal");
+        let a_addr = a.n.addr;
+        let before = session_of(&mut b.n, &a_addr);
+        let Some(long_ago) = Instant::now().checked_sub(PROBE_WAIT) else { return };
+        b.n.suspects.insert(a_addr, long_ago);
+        let forged = forged_from(&b.n, &a_addr);
+        b.n.open_direct(forged, 0, true);
+        assert_ne!(session_of(&mut b.n, &a_addr), before, "the session was kept");
+        assert!(!b.n.suspects.contains_key(&a_addr));
+    }
+
+    /// A session that really no longer fits (B has started another one and the
+    /// start was lost) heals: the probe carries the new session across.
+    #[test]
+    fn a_really_broken_session_heals_through_the_probe() {
+        let (mut a, mut b) = conversation("probe-heals");
+        run_radio(&mut a, &mut b, 20, &mut |_, _| false);
+        // The long form names the sender (hidden), so B can tell whose
+        // session no longer fits. Compact messages heal by announcing.
+        let b_addr = b.n.addr;
+        let caps = a.n.caps[&b_addr] & !maarse_core::appdata::CAP_COMPACT;
+        a.n.caps.insert(b_addr, caps);
+        let a_public = a.n.identity.public();
+        ratchet::reset(&b.n.identity, &a_public, &mut b.n.sessions, &mut OsRng).unwrap();
+        a.n.command(1, Command::SendDirect { req: 5, dest: b.n.addr, text: text(b"lost one") });
+        run_radio(&mut a, &mut b, 40, &mut |_, _| false);
+        assert!(!b.n.suspects.contains_key(&a.n.addr), "the probe was not acknowledged");
+        // Both sides now share a session: what one seals, the other opens.
+        // (Handed over directly: routing after a lost message is not tested here.)
+        seal_and_open(&mut a, &mut b, "after healing");
+        seal_and_open(&mut b, &mut a, "and back");
+    }
+
+    /// `from` seals `words` with its session and `to` opens the bytes.
+    fn seal_and_open(from: &mut Side, to: &mut Side, words: &str) {
+        let to_public = to.n.identity.public();
+        let mut plain = vec![content::TEXT];
+        plain.extend_from_slice(words.as_bytes());
+        let mut out = [0u8; 255];
+        let (n, _) = ratchet::seal(&from.n.identity, &to_public, &mut from.n.sessions, true, &mut OsRng, &plain, &mut out).unwrap();
+        to.ev.try_iter().count();
+        to.n.open_direct(out[..n].to_vec(), 0, true);
+        let got: Vec<Event> = to.ev.try_iter().filter_map(|f| Event::decode(&f[2..]).ok()).collect();
+        assert!(got.iter().any(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.ends_with(words.as_bytes()))), "{words}: {got:?}");
+    }
+
+    #[test]
+    fn the_radios_power_source_is_not_hidden_by_the_hosts() {
+        use maarse_core::companion::stat;
+        let mut host = vec![(stat::UPTIME_S, 1), (stat::EXT_POWER, 1)];
+        // No radio, or one without a battery: the host's word stays.
+        Node::leave_power_to_radio(&mut host, &[(stat::UPTIME_S, 5)]);
+        assert!(host.contains(&(stat::EXT_POWER, 1)));
+        // A radio on battery: its own key must get through.
+        Node::leave_power_to_radio(&mut host, &[(stat::BATTERY_MV, 3900), (stat::EXT_POWER, 0)]);
+        assert!(!host.iter().any(|(k, _)| *k == stat::EXT_POWER));
+    }
+
+    /// `a` leaves `sealed` for `dest` at its own post office, which delivers
+    /// it. Returns whether `b` showed it, whether `a` was told it arrived and
+    /// whether the post office still holds it.
+    fn from_the_post_office(a: &mut Side, b: &mut Side, dest: Address, sealed: Vec<u8>, mail_proof: Option<Proof>) -> (bool, bool, bool) {
+        a.ev.try_iter().count();
+        b.ev.try_iter().count();
+        assert!(Node::fits_deposit(sealed.len()), "does not fit a deposit");
+        a.n.outbox.insert(42, OutMsg { dest, mail_proof, mail_sealed: sealed.clone(), sent: Instant::now(), deposited: true, next_deposit: None });
+        assert!(a.n.store_mail_local(dest, sealed, false, false));
+        let is_shown = |eb: &[Event]| eb.iter().any(|e| matches!(e, Event::DirectReceived { .. }));
+        let is_acked = |ea: &[Event]| ea.iter().any(|e| matches!(e, Event::Acked { msg_id: 42 }));
+        // One run (a new one would drop the packets on the air): until the
+        // message and its receipt are in, and a while more for the post
+        // office's own acknowledgement.
+        let mut met = None;
+        let (ea, eb, _, _) = run_radio(a, b, 90, &mut |ea, eb| {
+            if met.is_none() && is_shown(eb) && is_acked(ea) {
+                met = Some(Instant::now());
+            }
+            met.is_some_and(|t: Instant| t.elapsed() > Duration::from_secs(8))
+        });
+        (is_shown(&eb), is_acked(&ea), a.n.mailbox.get(&dest).is_some_and(|m| !m.is_empty()))
+    }
+
+    /// Mail from a post office arrives and is confirmed to its sender, in both
+    /// forms and also when it is too long for a bundle.
+    #[test]
+    fn mail_from_a_post_office_arrives_and_is_confirmed_at_every_length() {
+        use maarse_core::mail::MAX_BUNDLED;
+        use maarse_crypto::person::INBOX_OVERHEAD;
+        use maarse_crypto::seal::DM_OVERHEAD;
+        let deposit = MAX_DIRECT_PAYLOAD - 16;
+        for (weekly, sealed_len) in [(false, 104), (false, MAX_BUNDLED), (false, MAX_BUNDLED + 1), (false, deposit), (true, 108), (true, MAX_BUNDLED), (true, MAX_BUNDLED + 1), (true, deposit)] {
+            let (mut a, mut b) = conversation(&format!("po-{weekly}-{sealed_len}"));
+            run_radio(&mut a, &mut b, 20, &mut |_, _| false);
+            let dest = b.n.addr;
+            let mut plain = vec![b'x'; sealed_len - if weekly { INBOX_OVERHEAD } else { DM_OVERHEAD }];
+            plain[0] = content::TEXT;
+            let sealed = if weekly {
+                a.n.mail_seal_to_key(&dest, &plain).expect("B has told A its key")
+            } else {
+                let to = b.n.identity.public();
+                let mut out = [0u8; 255];
+                let (n, _) = ratchet::seal(&a.n.identity, &to, &mut a.n.sessions, false, &mut OsRng, &plain, &mut out).unwrap();
+                out[..n].to_vec()
+            };
+            assert_eq!(sealed.len(), sealed_len);
+            let proof = a.n.proof_from(&dest, &sealed);
+            assert!(proof.is_some(), "B proves delivery");
+            let got = from_the_post_office(&mut a, &mut b, dest, sealed, proof);
+            assert_eq!(got, (true, true, false), "weekly {weekly}, {sealed_len} bytes: (shown, confirmed, still kept)");
+        }
+    }
+
+    /// Mail sealed to an account is confirmed by the device that reads it, and
+    /// only with that device's proof.
+    #[test]
+    fn mail_to_an_account_is_confirmed_by_the_device_that_reads_it() {
+        let (mut a, mut b) = conversation("po-account");
+        run_radio(&mut a, &mut b, 20, &mut |_, _| false);
+        b.n.command(1, Command::PersonSetup { req: 9, op: maarse_core::companion::person_op::CREATE, text: text(b"") });
+        let person = b.n.account_for_test().expect("no account was made");
+        b.n.announce();
+        run_radio(&mut a, &mut b, 5, &mut |_, _| false);
+        a.n.command(1, Command::SendDirect { req: 10, dest: person, text: text(b"to you") });
+        run_radio(&mut a, &mut b, 40, &mut |_, _| false);
+        let key = a.n.account_key_for_test(&person).expect("A has the account's key");
+        let mut plain = vec![content::TEXT];
+        plain.extend_from_slice(b"left for the account");
+        let mut out = [0u8; 255];
+        let n = maarse_crypto::person::seal_inbox(&a.n.identity, &person, &key, &mut OsRng, &plain, &mut out).unwrap();
+        let sealed = out[..n].to_vec();
+        let m = OutMsg { dest: person, mail_proof: None, mail_sealed: sealed.clone(), sent: Instant::now(), deposited: true, next_deposit: None };
+        assert!(!a.n.receipt_proves(&m, None), "a receipt anyone can make");
+        assert!(!a.n.receipt_proves(&m, Some(7)));
+        let got = from_the_post_office(&mut a, &mut b, person, sealed, None);
+        assert_eq!(got, (true, true, false), "(shown, confirmed, still kept)");
+    }
+
+    /// A message too long for the longer weekly-key form still goes to the
+    /// post office in the static form.
+    #[test]
+    fn a_long_message_is_not_sealed_to_the_key_when_it_would_not_fit() {
+        let (mut a, mut b) = conversation("mailkey-long");
+        run_radio(&mut a, &mut b, 20, &mut |_, _| false);
+        let longest = MAX_DIRECT_PAYLOAD - 16 - maarse_crypto::person::INBOX_OVERHEAD;
+        assert!(a.n.mail_seal_to_key(&b.n.addr, &vec![content::TEXT; longest]).is_some());
+        assert!(a.n.mail_seal_to_key(&b.n.addr, &vec![content::TEXT; longest + 1]).is_none());
+    }
+
+    /// Mail left at a post office for a node without an account is sealed to
+    /// its weekly key, and the node opens it with that key.
+    #[test]
+    fn mail_for_a_plain_node_is_sealed_to_its_weekly_key() {
+        let (mut a, mut b) = conversation("mailkey");
+        run_radio(&mut a, &mut b, 20, &mut |_, _| false);
+        let mut plain = vec![content::TEXT];
+        plain.extend_from_slice(b"left at the post office");
+        let sealed = a.n.mail_seal_to_key(&b.n.addr, &plain).expect("B has told A its key");
+        assert_eq!(sealed[0], maarse_crypto::person::INBOX, "not the inbox format");
+        b.n.open_direct(sealed, 0, true);
+        let (_, eb, _, _) = run_radio(&mut a, &mut b, 2, &mut |_, _| false);
+        assert!(
+            eb.iter().any(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.ends_with(b"left at the post office"))),
+            "not shown: {eb:?}"
+        );
+    }
+
+    /// A node that has since joined an account still reads mail that was
+    /// sealed to its own weekly key.
+    #[test]
+    fn mail_to_the_own_key_is_still_read_after_joining_an_account() {
+        let (mut a, mut b) = conversation("mailkey-account");
+        run_radio(&mut a, &mut b, 20, &mut |_, _| false);
+        let mut plain = vec![content::TEXT];
+        plain.extend_from_slice(b"sent before the account");
+        let sealed = a.n.mail_seal_to_key(&b.n.addr, &plain).expect("B has told A its key");
+        b.n.command(1, Command::PersonSetup { req: 9, op: maarse_core::companion::person_op::CREATE, text: text(b"") });
+        assert!(b.n.persons.me.is_some(), "no account was made");
+        b.n.open_direct(sealed, 0, true);
+        let (_, eb, _, _) = run_radio(&mut a, &mut b, 2, &mut |_, _| false);
+        assert!(
+            eb.iter().any(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.ends_with(b"sent before the account"))),
+            "not shown: {eb:?}"
+        );
     }
 
     /// A message whose encryption state cannot be saved does not leave: after

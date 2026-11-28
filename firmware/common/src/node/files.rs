@@ -37,10 +37,27 @@ use maarse_crypto::files::{
 use maarse_crypto::ratchet::MAX_FS_TEXT;
 use maarse_crypto::seal::MAX_DM_TEXT;
 use rand_core::{CryptoRng, RngCore};
+#[cfg(not(test))]
 use static_cell::ConstStaticCell;
 
+#[cfg(not(test))]
 static OUT_BUF: ConstStaticCell<[u8; MAX_FILE]> = ConstStaticCell::new([0; MAX_FILE]);
+#[cfg(not(test))]
 static IN_BUF: ConstStaticCell<[u8; MAX_FILE]> = ConstStaticCell::new([0; MAX_FILE]);
+
+/// The two file buffers.
+#[cfg(not(test))]
+fn buffers() -> (&'static mut [u8; MAX_FILE], &'static mut [u8; MAX_FILE]) {
+    (OUT_BUF.take(), IN_BUF.take())
+}
+
+/// The PC tests run two nodes in one program.
+#[cfg(test)]
+fn buffers() -> (&'static mut [u8; MAX_FILE], &'static mut [u8; MAX_FILE]) {
+    extern crate std;
+    let leak = || std::boxed::Box::leak(std::boxed::Box::new([0; MAX_FILE]));
+    (leak(), leak())
+}
 
 /// New chunks are only sent while the radio's send queue is shorter than this.
 const TX_QUEUE_LIMIT: u32 = 4;
@@ -73,9 +90,10 @@ pub(super) struct Files {
 impl Files {
     /// May only be called once (the buffers are static).
     pub(super) fn new() -> Self {
+        let (out_buf, in_buf) = buffers();
         Files {
-            out_buf: OUT_BUF.take(),
-            in_buf: IN_BUF.take(),
+            out_buf,
+            in_buf,
             upload: None,
             out: None,
             offer: heapless::Vec::new(),

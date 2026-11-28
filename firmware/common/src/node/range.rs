@@ -254,7 +254,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             return;
         }
         let now = Instant::now();
-        if self.range.next_at.is_some_and(|t| t <= now) && !self.modem && !self.wifi_modem {
+        if self.range.next_at.is_some_and(|t| t <= now) && !self.modem && !self.wifi_modem() {
             self.send_beacon();
         }
         if self.range.switch_at.is_some_and(|t| t <= now) {

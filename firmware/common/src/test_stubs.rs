@@ -1,6 +1,12 @@
 //! What a PC test binary lacks and the radio driver's logging expects from a board. Nothing is logged.
 #![allow(non_upper_case_globals)]
 
+// The channels between the tasks. The PC tests are single-threaded and never
+// run them; the linker only wants the names.
+#[unsafe(no_mangle)]
+fn _critical_section_1_0_acquire() {}
+#[unsafe(no_mangle)]
+fn _critical_section_1_0_release(_: ()) {}
 #[unsafe(no_mangle)]
 fn _defmt_acquire() {}
 #[unsafe(no_mangle)]

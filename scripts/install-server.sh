@@ -20,6 +20,8 @@
 #    /var/lib/maarse-server/settings.txt   all settings (the dashboard edits it too)
 #    /etc/systemd/system/maarse-server.service
 #    /var/lib/maarse-server                data: identity, telemetry, mail, admin password
+#    /var/lib/maarse-server-state          a counter that notices a restored old data folder
+#                                          (do not back it up or restore it with the data)
 #    /opt/maarse/src                       the source code it was built from
 #    user "maarse" (system user, in the "dialout" group for a USB LoRa modem)
 # =============================================================================
@@ -28,6 +30,7 @@ set -euo pipefail
 REPO_DEFAULT="https://github.com/trixxor/maarse.git"
 SRC=/opt/maarse/src
 DATA=/var/lib/maarse-server
+STATE=/var/lib/maarse-server-state
 CONF=/etc/default/maarse-server
 UNIT=/etc/systemd/system/maarse-server.service
 BIN=/usr/local/bin/maarse-server
@@ -177,9 +180,9 @@ if ! id "$SVC_USER" >/dev/null 2>&1; then
   useradd --system --home-dir "$DATA" --no-create-home --shell /usr/sbin/nologin "$SVC_USER"
 fi
 usermod -aG dialout "$SVC_USER" 2>/dev/null || true
-mkdir -p "$DATA"
-chown -R "$SVC_USER:$SVC_USER" "$DATA"
-chmod 0700 "$DATA"
+mkdir -p "$DATA" "$STATE"
+chown -R "$SVC_USER:$SVC_USER" "$DATA" "$STATE"
+chmod 0700 "$DATA" "$STATE"
 
 # ---------------------------------------------------------------- settings
 bold "5/6  Settings"
@@ -315,11 +318,12 @@ Restart=on-failure
 RestartSec=3
 StartLimitIntervalSec=0
 WorkingDirectory=$DATA
+Environment=MAARSE_STATE_DIR=$STATE
 $DEVICES
 
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=$DATA
+ReadWritePaths=$DATA $STATE
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

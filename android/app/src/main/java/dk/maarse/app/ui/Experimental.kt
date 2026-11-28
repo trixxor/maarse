@@ -2,6 +2,7 @@ package dk.maarse.app.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -71,7 +72,10 @@ fun ExperimentalMenu(onGo: (MePage) -> Unit) {
 
 // ---------- charts ----------
 
-private val LINE_COLOURS = listOf(Color(0xFF1F6F5C), Color(0xFF5B8CC6), Color(0xFFB8730A), Color(0xFF9C4A6E), Color(0xFF6B5B95))
+private val LINE_LIGHT = listOf(Color(0xFF1F6F5C), Color(0xFF3F72AF), Color(0xFFB8730A), Color(0xFF9C4A6E), Color(0xFF6B5B95))
+private val LINE_DARK = listOf(Color(0xFF7FD1A5), Color(0xFF8DB8F0), Color(0xFFF0A93A), Color(0xFFE08BB0), Color(0xFFB4A5FF))
+/** Chart lines that stand out on the theme in use. */
+private val LINE_COLOURS: List<Color> @Composable get() = if (isSystemInDarkTheme()) LINE_DARK else LINE_LIGHT
 
 /** One line in a chart: points as (time in ms, value). */
 class Series(val color: Color, val points: List<Pair<Long, Float>>)
@@ -87,8 +91,10 @@ private fun TimeChart(
 ) {
     val grid = MaterialTheme.colorScheme.outlineVariant
     val ink = MaterialTheme.colorScheme.onSurfaceVariant
-    val shadeColor = Color(0xFF7FD1A5).copy(alpha = 0.28f)
-    val lowColor = Color(0xFFFDF1E6).copy(alpha = 0.9f)
+    // Light washes, so they work on a light and a dark background and the line stays readable on top. USB power is
+    // blue: a green wash would hide the green battery line.
+    val shadeColor = Color(0xFF4F8FE0).copy(alpha = 0.22f)
+    val lowColor = Color(0xFFE8912D).copy(alpha = 0.22f)
     Row(Modifier.fillMaxWidth().height(height.dp)) {
         Column(Modifier.size(width = 34.dp, height = height.dp), verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.End) {
             ticks.sortedDescending().forEach { Text("%.0f".format(it), style = MaterialTheme.typography.labelSmall, color = ink) }
@@ -151,18 +157,49 @@ fun PowerPage() {
                 progress = { (pct ?: 0).coerceIn(3, 100) / 100f }, modifier = Modifier.fillMaxWidth().height(16.dp).clip(RoundedCornerShape(8.dp)),
                 color = if (low) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
             )
-            val drain = History.drainPerHour()
+            // A radio that works out the time left itself (the WisMesh Tag) says what it rests on; for others the
+            // app uses the history it has collected.
+            val basis = stats[120]; val left = stats[119]; val total = (121..124).sumOf { stats[it] ?: 0 }
+            val drain = if (basis == null) History.drainPerHour() else null
             Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Column(Modifier.weight(1f)) {
                     Text("Time left", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(if (ext) "on power" else if (drain != null && pct != null) hoursText(pct / drain) else "not enough data yet", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (ext || basis == 1) "on power" else if (left != null) hoursText(left / 60.0)
+                        else if (basis != null) "not known" else if (drain != null && pct != null) hoursText(pct / drain) else "not enough data yet",
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (!ext && left != null) Text(if (basis == 2) "measured" else "estimate", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("Uses", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(if (drain != null && !ext) "%.1f %% per hour".format(drain) else "–", fontWeight = FontWeight.SemiBold)
+                    val fall = stats[125]
+                    Text(if (total > 0) "Current" else "Uses", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        if (total > 0) tr("about {0} mA", "%.1f".format(total / 10.0))
+                        else if (drain != null && !ext) "%.1f %% per hour".format(drain) else "–",
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (fall != null && !ext) Text(tr("{0} % per hour", "%.1f".format(fall / 10.0)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Text("Estimated from the last 6 hours. It changes when you send or receive a lot.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (basis == null) Text("Estimated from the last 6 hours. It changes when you send or receive a lot.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    GroupTitle("What uses power")
+    Card2 {
+        val parts = listOf("Basic running" to stats[121], "Listening" to stats[122], "Sending" to stats[123], "GPS" to stats[124])
+        val total = parts.sumOf { it.second ?: 0 }
+        if (total == 0) Text("The radio does not say what uses power. This needs a WisMesh Tag with new firmware.", style = MaterialTheme.typography.bodyMedium)
+        else {
+            parts.forEach { (name, value) ->
+                val ma = value ?: 0
+                Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(name, style = MaterialTheme.typography.bodyMedium)
+                    Text(if (name == "GPS" && ma == 0) tr("off") else tr("{0} mA · {1} %", "%.1f".format(ma / 10.0), (ma * 100 + total / 2) / total), style = MaterialTheme.typography.bodyMedium)
+                }
+                LinearProgressIndicator(progress = { ma.toFloat() / total }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp).height(8.dp).clip(RoundedCornerShape(4.dp)))
+            }
+            Text("Estimated from typical values and time on air: the radio cannot measure current. The time left is estimated until the battery voltage has been followed for an hour off power, and measured after that.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp))
         }
     }
     GroupTitle("Battery history")
@@ -177,7 +214,7 @@ fun PowerPage() {
             data.forEach { if (it.ext) { if (start == null) start = it.t } else if (start != null) { shade += start!! to it.t; start = null } }
             start?.let { shade += it to now }
             TimeChart(listOf(Series(LINE_COLOURS[0], data.map { it.t to it.pct!!.toFloat() })), now - span, now, 0f, 100f, listOf(0f, 25f, 50f, 75f, 100f), shade = shade, low = 20f, area = true)
-            Text("Green: on USB power · amber band: under 20 %", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Blue: on USB power · amber band: under 20 %", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
     GroupTitle("Chip temperature")

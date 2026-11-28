@@ -12,6 +12,7 @@
 //! A newer list (sent as a `PERSON::LIST` message) replaces the old one,
 //! which is also how a lost phone is removed.
 
+use super::SENSOR;
 use super::{FwNode, Settings, emit, log};
 use crate::bus;
 use core::sync::atomic::Ordering::Relaxed;
@@ -207,19 +208,31 @@ impl Sensor {
 
     /// The person that owns `device`, if any.
     pub(super) fn owner_person(&self, device: &Address) -> Option<Address> {
+        if !SENSOR {
+            return None;
+        }
         self.owners.iter().flatten().find(|o| o.has(device)).map(|o| o.person())
     }
 
     pub(super) fn is_owner_person(&self, person: &Address) -> bool {
+        if !SENSOR {
+            return false;
+        }
         self.owners.iter().flatten().any(|o| o.person() == *person)
     }
 
     pub(super) fn owner_count(&self) -> u8 {
+        if !SENSOR {
+            return 0;
+        }
         self.owners.iter().flatten().count() as u8
     }
 
     /// When the sensor next needs the node's attention.
     pub(super) fn deadline(&self) -> Option<Instant> {
+        if !SENSOR {
+            return None;
+        }
         self.engine.as_ref()?;
         if self.force {
             return Some(Instant::now());
@@ -264,9 +277,15 @@ impl Sensor {
     }
 }
 
+/// The answer to a sensor command on a board without sensor setups.
+pub(super) const NO_SENSORS: &str = "This board has no sensor setups";
+
 impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// Loads the recipe and the owners from flash, and what a deep sleep kept.
     pub(super) fn sensor_load(&mut self) {
+        if !SENSOR {
+            return;
+        }
         let blob = self.settings.load_owners();
         self.sensor.load_owners(&blob);
         let bytes = self.settings.load_sensor_recipe();
@@ -422,6 +441,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// A sensor command from the connected client (`local`) or from an owner
     /// far away. Returns the answers as (`op::EV_*`, data).
     pub(super) fn sensor_exec(&mut self, local: bool, op: u8, data: &[u8]) -> Vec<(u8, Text), 6> {
+        if !SENSOR {
+            return Default::default();
+        }
         let mut out: Vec<(u8, Text), 6> = Vec::new();
         let status = |me: &Self| (op::EV_STATUS, Text::from_slice(&me.sensor_status().to_bytes()).unwrap_or_default());
         match op {
@@ -531,6 +553,12 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     pub(super) fn sensor_command(&mut self, cmd: maarse_core::companion::Command) -> Option<maarse_core::companion::Command> {
         use maarse_core::companion::Command;
         match cmd {
+            // Without sensors only our own setup is refused: a setup for
+            // another node is still sent on (below).
+            Command::Sensor { req, dest, .. } if !SENSOR && (dest.0 == [0u8; 16] || dest == self.addr) => {
+                super::err(req, maarse_core::companion::error_code::BAD_FRAME, NO_SENSORS);
+                None
+            }
             Command::Sensor { dest, op, data, .. } if dest.0 == [0u8; 16] || dest == self.addr => {
                 for (ev, d) in self.sensor_exec(true, op, &data) {
                     emit(&Event::Sensor { node: Address([0; 16]), op: ev, data: d });
@@ -554,6 +582,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// owner and is newer, it replaces the old one (a lost phone is removed by
     /// sending a list that revokes it).
     pub(super) fn sensor_person_list(&mut self, bytes: &[u8]) {
+        if !SENSOR {
+            return;
+        }
         let mut changed = false;
         for o in self.sensor.owners.iter_mut().flatten() {
             if let Ok(list) = DeviceList::verify(&o.master, bytes)
@@ -572,6 +603,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     /// A wake pin fired (a reed switch, a button): something happened that the
     /// recipe waits for, so a cycle runs now instead of at the next timer.
     pub(super) fn sensor_pin_wake(&mut self, pin: u8) {
+        if !SENSOR {
+            return;
+        }
         let Some(engine) = self.sensor.engine.as_mut() else { return };
         let Some(i) = engine
             .recipe()
@@ -595,6 +629,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     /// Called from the node's timer.
     pub(super) fn sensor_tick(&mut self) {
+        if !SENSOR {
+            return;
+        }
         if self.sensor.engine.is_none() {
             return;
         }
@@ -646,6 +683,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     /// The board has read the sources.
     pub(super) fn sensor_samples(&mut self, mut values: [Option<i32>; 8]) {
+        if !SENSOR {
+            return;
+        }
         let Phase::Sampling(_) = self.sensor.phase else { return };
         let now_s = mono_s();
         let Some(engine) = self.sensor.engine.as_mut() else { return };
@@ -890,6 +930,9 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
 
     /// An end-to-end acknowledgement (or a delivery receipt) for `msg_id`.
     pub(super) fn sensor_on_ack(&mut self, msg_id: u64) {
+        if !SENSOR {
+            return;
+        }
         let Some(i) = self.sensor.pending.iter().position(|p| p.id == msg_id) else { return };
         let p = self.sensor.pending.remove(i);
         let bit = 1u8 << p.owner;

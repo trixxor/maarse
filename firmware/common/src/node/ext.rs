@@ -23,6 +23,8 @@ pub(super) struct Ext {
     /// Trace routes in progress: target -> req.
     traces: heapless::Vec<(Address, u16), 4>,
     pub(super) next_power: Instant,
+    /// How the battery has fallen since it last had power.
+    trend: battery::Trend,
 }
 
 impl Ext {
@@ -33,6 +35,7 @@ impl Ext {
             site: appdata::Site::default(),
             traces: heapless::Vec::new(),
             next_power: Instant::now() + Duration::from_secs(5),
+            trend: battery::Trend::default(),
         }
     }
 }
@@ -80,6 +83,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         self.ext.next_power = Instant::now() + POWER_EVERY;
         let mv = power::BATTERY_MV.load(Relaxed).min(u16::MAX as u32) as u16;
         let ext = power::EXT_POWER.load(Relaxed) == 1;
+        self.ext.trend.add((Instant::now().as_secs() / 60) as u32, mv, ext);
         let old = self.router.energy;
         let new = battery::energy_for(mv, ext, old);
         if new != old {
@@ -170,6 +174,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         if let Some(f) = a.role_flags {
             self.router.note_mobile(from, f & appdata::ROLE_MOBILE != 0, now_ms());
         }
+        self.mailkeys.set_capable(from, a.caps2 & appdata::CAP2_MAILKEY != 0);
         if let Some(c) = a.caps {
             if self.caps.insert(from, c).is_err() {
                 if let Some(k) = self.caps.keys().next().copied() {
@@ -232,6 +237,43 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
         put(stat::NEIGHBORS, self.router.neighbors.len() as i32);
         put(stat::POSITION_PRECISION, self.ext.sharing.precision as i32);
+    }
+
+    /// Time left on the battery and what draws current. Only for a board whose
+    /// battery size is known (the WisMesh Tag).
+    pub(super) fn battery_stats(&self, items: &mut Stats) {
+        let capacity = power::CAPACITY_MAH.load(Relaxed);
+        if capacity == 0 {
+            return;
+        }
+        let gps = if gps::HAS_MODULE.load(Relaxed) && gps::WANTED.load(Relaxed) { power::GPS_MA_X10.load(Relaxed) } else { 0 };
+        let draw = battery::Draw::new(
+            power::BASE_MA_X10.load(Relaxed),
+            power::RX_MA_X10.load(Relaxed),
+            power::tx_ma_x10(self.radio.tx_power_dbm),
+            gps,
+            crate::bus::RSTATS.airtime_ms.load(Relaxed) as u64,
+            self.started.elapsed().as_millis(),
+        );
+        let mv = power::BATTERY_MV.load(Relaxed).min(u16::MAX as u32) as u16;
+        let ext = power::EXT_POWER.load(Relaxed) == 1;
+        let (what, minutes) = battery::time_left(mv, ext, &self.ext.trend, capacity, &draw);
+        let mut put = |k: u8, v: u32| {
+            let _ = items.push((k, v.min(i32::MAX as u32) as i32));
+        };
+        put(stat::BATTERY_BASIS, what as u32);
+        if let Some(m) = minutes {
+            put(stat::BATTERY_LEFT_MIN, m);
+        }
+        if what == battery::basis::MEASURED
+            && let Some(f) = self.ext.trend.fall_per_hour()
+        {
+            put(stat::BATTERY_FALL, f);
+        }
+        put(stat::DRAW_BASE, draw.base);
+        put(stat::DRAW_LISTEN, draw.listen);
+        put(stat::DRAW_SEND, draw.send);
+        put(stat::DRAW_GPS, draw.gps);
     }
 
     /// GPS, Bluetooth and USB: what the status page needs to tell whether each one works.

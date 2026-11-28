@@ -111,6 +111,15 @@ pub mod person {
     /// From a device to a contact: "write to this sibling device of ours
     /// next time; the user is there" (16 bytes, the sibling's address).
     pub const REDIRECT: u8 = 10;
+    /// From a node that is not part of an account to a contact: this week's
+    /// key for mail kept by post offices under the node itself
+    /// (`maarse_crypto::person::InboxPublic`, 35 bytes). Same weekly chain as
+    /// [`INBOX_PUB`], but the "person" is the node's own address.
+    pub const DEVICE_INBOX: u8 = 11;
+    /// An empty message over the current session, sent when a packet from the
+    /// contact could not be opened: if it is acknowledged, the session works
+    /// and the packet is ignored. Nothing to do on receipt.
+    pub const SESSION_PROBE: u8 = 12;
 }
 
 /// MIME for a `maarse://` page: Må:rse markup (UTF-8), compressed with

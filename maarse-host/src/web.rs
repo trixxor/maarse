@@ -868,6 +868,7 @@ mod tests {
     fn server_dashboard_serves_gateway_routes() {
         let dir = std::env::temp_dir().join(format!("maarse-web-gateway-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        let _alone = crate::admin::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::admin::set_password(&dir, "a long test password").unwrap();
         let session = crate::admin::login(&dir, IpAddr::from([127, 0, 0, 1]), "a long test password").unwrap();
         let cookie = format!("Cookie: maarse_session={session}\r\n");

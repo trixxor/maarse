@@ -10,7 +10,7 @@
 //! | buzzer       | P0.21 | a passive piezo, driven by timed pin toggles          |
 //! | GPS enable   | P1.02 | high = module on                                      |
 //! | GPS UART     | P0.15 (RX), P0.16 (TX) | 9600 baud NMEA                        |
-//! | I2C          | P0.25 (SDA), P0.24 (SCL) | sensors (sensor recipe)             |
+//! | I2C          | P0.25 (SDA), P0.24 (SCL) | not used: no sensor setups on the tag |
 //!
 //! Button: one click shows the battery level (1-4 blinks), a double click mutes or unmutes
 //! the buzzer, holding it for 3 seconds powers the tag off (a press wakes it again).

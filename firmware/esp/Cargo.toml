@@ -70,7 +70,7 @@ ssd1306 = { version = "0.10.0", optional = true }
 static_cell = "2.1.1"
 maarse-core = { path = "../../maarse-core" }
 maarse-crypto = { path = "../../maarse-crypto" }
-maarse-fw-common = { path = "../common" }
+maarse-fw-common = { path = "../common", features = ["wifi", "display", "sensor"] }
 
 [profile.release]
 opt-level = "s"

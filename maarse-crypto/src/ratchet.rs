@@ -98,8 +98,9 @@
 //! * If the recipient loses its state (e.g. the firmware restarts), messages
 //!   sent in the old session cannot be read. The node then answers with a new init
 //!   (`Content::Resync`), and the conversation continues from there.
-//! * A replayed old init can reset a session (only denial of service,
-//!   not reading). So can a forged message that triggers a resync.
+//! * A replayed old init that a node has forgotten can reset a session (only
+//!   denial of service, not reading). A forged message cannot: the nodes test
+//!   the session before replacing it (see `docs/protocol-spec.md`, 6.3).
 //! * No header encryption: n, pn and the ratchet key are visible.
 
 use crate::seal::CryptoError;
@@ -848,6 +849,23 @@ pub fn reset(
 ) -> Result<(), CryptoError> {
     store.insert(Session::initiate(me, peer, rng)?);
     Ok(())
+}
+
+/// For tests in other crates: makes a packet in the ratchet or init format look
+/// as if it came from `claimed`, the way anyone can (the hidden sender is only
+/// masked with a key the forger can work out). It never opens as a message; it
+/// only gets as far as telling the recipient it has no matching session.
+/// `recipient` is used for the mask, as the forger's own ephemeral key would be.
+#[doc(hidden)]
+pub fn forge_sender_for_test(recipient: &Identity, packet: &mut [u8], claimed: &Address) {
+    let mut rpub = [0u8; 32];
+    rpub.copy_from_slice(&packet[1..33]);
+    let es = recipient.dh.diffie_hellman(&XPublic::from(rpub));
+    let mask = mask_key(es.as_bytes(), &rpub, &recipient.address());
+    for i in 0..16 {
+        packet[33 + i] = claimed.0[i] ^ mask[i];
+    }
+    packet[0] = RATCHET;
 }
 
 /// Decrypts a direct message in both formats.

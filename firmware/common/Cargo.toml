@@ -5,6 +5,22 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Shared firmware logic for Må:rse: node, radio loop and channels between tasks"
 
+[features]
+# Wi-Fi: the backbone link, the Wi-Fi modem mode and their settings. Enabled by
+# the ESP32-S3 firmware; the nRF52840 has no Wi-Fi, and its flash is nearly full.
+wifi = []
+# What a screen shows and its settings page (the Heltec V4).
+display = []
+
+# Sensor setups (recipes, owners, external sensors on I2C and pins). Not built for
+# the WisMesh Tag: it is a finished product with only its built-in measurements.
+sensor = []
+
+[dev-dependencies]
+# Two nodes against each other on the PC (src/node/tests.rs).
+embassy-time = { version = "0.5.1", features = ["mock-driver", "generic-queue-8"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+
 [dependencies]
 maarse-core = { path = "../../maarse-core" }
 maarse-crypto = { path = "../../maarse-crypto", default-features = false }

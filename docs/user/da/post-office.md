@@ -76,9 +76,14 @@ replika blive liggende til udløb efter leveringen.
 ## Er det privat?
 
 Den sendende node forsegler beskeden til Bo, før den afleveres. Et posthus kan
-se modtager og trafikmetadata og håndterer kun chiffertekst. Statisk offline
-post har ikke forward secrecy mod et senere brud på modtagerens langtidsnøgle.
-Godkendelse af modtageren ved hentning fra en replika er stadig under udvikling.
+se modtager og trafikmetadata og håndterer kun chiffertekst. Når du og
+modtageren har skrevet til hinanden den seneste uge, forsegles posten til en
+nøgle, der skifter hver uge. Modtagerens enhed sletter den efter cirka tre uger,
+og derefter kan gammel post ikke åbnes, selv om modtagerens langtidsnøgle lækker
+senere. Det kræver version 0.9.13 eller nyere i begge ender, og en radio skal
+kende klokken. Ellers forsegles posten i det statiske format uden den
+beskyttelse. Godkendelse af
+modtageren ved hentning fra en replika er stadig under udvikling.
 
 ## Hvem driver posthusene?
 

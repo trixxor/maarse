@@ -268,7 +268,7 @@ Source: `maarse-core/src/appdata.rs`.
                                                                          telemetry (len 10)
 0x05 | len | UTF-8 name (at most MAX_NAME = 24 bytes)                    display name
 0x06 | len | role (1) | flags (1) [| bridge (PathId, u16 BE)]          role (len 2, or 4 with the chosen edge bridge)
-0x07 | len | capabilities (1)                                           capabilities (len 1)
+0x07 | len | capabilities (1) [| capabilities 2 (1)]                    capabilities (len 1 or 2)
 ```
 
 Capabilities (`APP_CAPS`): bit 6 `CAP_COMPACT` (reads compact forward-secrecy
@@ -277,7 +277,9 @@ type `TEXT_Z`, section 7.1), bit 1 `CAP_BUNDLE` (reads mail bundles,
 `OP_BUNDLE`, section 8.1), bit 7 `CAP_PROOF` (proves delivery, section 5.5;
 working copy 2026-11-27). A sender compresses text and bundles mail only for
 a recipient whose announce has the bit; older nodes skip the field by its
-length.
+length. The second byte (since 0.9.13; older nodes send one byte
+and read only the first): bit 0 `CAP2_MAILKEY` (takes the weekly mail key,
+section 8.1).
 
 **Announce scope.** Forwarders pass an announce on at most
 `ANNOUNCE_SCOPE` = 3 hops (`Router::announce_scope`), except an announce
@@ -813,23 +815,59 @@ Rules:
 * Simultaneous start: the init from the numerically lower address wins.
 * A recipient that cannot open a ratchet message (no or broken session)
   starts a new session and sends content type `RESYNC` (0x04, section 7).
+  **Test first** (since 0.9.13): a packet that does not fit an
+  *existing* session (`Desync`) proves nothing, because anyone can make a
+  packet look like it comes from a contact (the hidden sender is masked with a
+  key the forger can work out). The node keeps the session and sends person
+  content `SESSION_PROBE` (op 12, no data) over it. A contact that can read it
+  acknowledges it, with the delivery proof of section 5.5, and the packet is
+  forgotten. A message from the contact that opens does the same. Only when a
+  probe has been unanswered for `PROBE_WAIT` = 60 s (and less than an hour)
+  and another unreadable packet comes does the node start a new session; an
+  older probe is sent again. With no session at all (`NoSession`) the node
+  starts one as before, at most once per `RESYNC_EVERY` = 60 s, as there is
+  nothing to lose. Radio nodes test at most four sessions at a time. For a
+  contact without `CAP_PROOF` anyone who hears the probe can acknowledge it,
+  which delays the healing of a really broken session.
 * **Saved before sending** (hosts, working copy 2026-11-27): a ratchet message
   leaves only after `sessions.bin` has been synced to disk with its sending
   chain at a later message number (saved up to 32 ahead, so one message in 32
   waits for the disk). After a restart the chain goes on from there; the
   recipient skips the unused keys. If the file cannot be written the message
-  is not sent. Restoring an old copy of the file is not covered.
+  is not sent.
+* **Restoring an old `sessions.bin`** (hosts, since 0.9.13): the file ends with
+  a trailer `"EPO1" | epoch (u64 LE)` (older versions ignore it). The first
+  epoch is random and it goes up with every synced write. The same number is
+  kept in a marker file outside the data folder
+  (`%LOCALAPPDATA%\Maarse\state` on Windows, `~/.local/state/maarse`
+  elsewhere, or `MAARSE_STATE_DIR`; the Android app keeps it in its no-backup
+  folder, and the Linux service files and `install-server.sh` use
+  `/var/lib/<service>-state`). The marker is written first: **if it cannot be
+  written, the message is not sent.** At start the file is used only if its
+  epoch equals the marker, or is exactly one behind (a crash between the two
+  writes; every sending chain then moves `RESTORE_SKIP` = 96 messages ahead).
+  Otherwise, also when the marker is missing or unreadable (a moved or copied
+  data folder, another user account, a new computer), all sessions are
+  discarded and every contact gets a new one. Without any folder for the
+  marker, sessions are not kept across restarts. A file from an older version
+  (no epoch) is used if there is no marker. **Not covered:** a restore that
+  brings the marker back too (a whole-disk or virtual-machine snapshot).
 * **Replays** (hosts, working copy 2026-11-27): the last 20 000 accepted direct
   and channel messages are remembered by packet ID (`seen.bin`); the same
-  sealed bytes are not shown again and do not reach the session. Radio nodes do
-  not keep this list.
+  sealed bytes are not shown again and do not reach the session. Radio nodes
+  (since 0.9.13) remember the last 24 direct messages they opened,
+  and acknowledge a repeated one again without opening it. Init, static and
+  weekly-key messages are also appended to flash (packet ID and proof, 16
+  bytes, in the sensor sector from offset 0x780, up to 136 before the sector
+  is rewritten with the newest 24), so an old one cannot set up a stale
+  session after a restart. A radio forgets older ones.
 * A static, init or inbox message whose sender's X25519 key gives a
   non-contributory shared secret is rejected; signatures are verified strictly.
 * Known gaps (from the source): init messages have no forward secrecy against
   the recipient's static key; a replayed init that the node has not seen before
-  or has forgotten can reset a session (denial of service); a forged packet can
-  make a node start a new session; headers (`n`, `pn`, ratchet key) are not
-  encrypted.
+  or has forgotten (hosts remember the last 20 000 packets, radio nodes 24) can
+  replace a session, which then heals when the real contact is next heard
+  from; headers (`n`, `pn`, ratchet key) are not encrypted.
 
 ### 6.4 Channels
 
@@ -1067,8 +1105,43 @@ it in its announce (app-data field `0x01`).
 
 **Dropping mail.** When a direct message has no end-to-end ack within
 `DEPOSIT_AFTER_MS` = 45 s, the sender hands it to **its own** home post office
-(a host keeps it itself), sealed without forward secrecy (static format: a
-ratchet message delivered days later may fall outside the skipped-key window).
+(a host keeps it itself), sealed without a session (a ratchet message
+delivered days later may fall outside the skipped-key window). Two forms:
+
+* **Weekly mail key** (since 0.9.13): a node that is not part of an
+  account keeps a hash chain `K(n+1) = HKDF(K(n), "maarse/inbox/next")` (the
+  inbox chain of linked devices, `maarse_crypto::person`, one step a week since
+  1970). Once a week per contact whose announce has `CAP2_MAILKEY` it sends, in
+  an ordinary sealed message (after the message that gave the occasion), person
+  content `DEVICE_INBOX` (op 11, 35 bytes: chain, week, X25519 public key). If
+  that is not acknowledged, it is sent again at a later message after an hour.
+  A sender that holds such a key at most one week old seals the deposit in the
+  inbox format (first byte `0xF2`, overhead 68 bytes, `ss` computed against the
+  weekly key) with the recipient's address in the place of the person, if the
+  result still fits a deposit (below). The recipient keeps the chain value for
+  the current and the two previous weeks and overwrites older ones (if the
+  write fails it tries again). Mail sealed to a week can therefore be opened
+  with the recipient's stored keys for about three weeks, also after it has
+  been fetched or has expired; after that not even someone who later learns the
+  long-term key can open it. Backups of `mailkey.bin` keep the older values.
+  Mail may wait seven days.
+  * Hosts keep the chain in `mailkey.bin` and contacts' keys in
+    `mailkey-peers.bin`.
+  * Radio nodes keep the chain and the keys of four contacts in the settings
+    page (`MBX1` at 0x620; the oldest contact gives way). A radio takes part
+    only while it knows the time (section on time in hellos). The time in
+    hellos is not authenticated (a jump over 10 minutes needs two neighbours
+    that agree), and a clock far ahead makes a radio delete old weeks early:
+    mail waiting for those weeks can then not be opened.
+* **Static seal** (everything else: the recipient has not told us a key, the
+  key is older than a week, the message is too long for the inbox format, or
+  one side runs an older version): no forward secrecy against a later
+  compromise of the recipient's long-term key.
+
+A host that has an account uses the account's inbox chain instead. A node that
+has joined an account still opens mail sealed to its own weekly key. If the
+chain is lost (new computer, identity restored without it, a radio's flash
+erased), mail sealed to it cannot be opened.
 
 ```text
 Deposit payload = recipient (16) | op (1) | body
@@ -1083,19 +1156,33 @@ Deposit payload = recipient (16) | op (1) | body
 | 4 `BUNDLE` | n × (length (1) \| sealed message) | one or more stored messages, sent to the recipient itself |
 | 5 `RECEIPT` | receipt ID (u64 LE) \| delivery proof (8, section 5.5; absent from older nodes) | recipient to the original sender: the mail arrived |
 
+**Sizes.** With a 212-byte direct payload, a `STORE` sent over the air holds a
+sealed message of at most 190 bytes (`MAX_DEPOSITED`), and a `BUNDLE` one of at
+most 189 bytes (`MAX_BUNDLED`). A host that is its own post office keeps up to
+196 bytes. A radio does not deposit a longer message than 190 bytes; the sender
+then never sees it as delivered unless the recipient is reached directly.
+
 `BUNDLE` goes only to a recipient announcing `CAP_BUNDLE`: a host packs as
-many waiting messages as fit in one packet (a single message of up to 255
-bytes too), and one end-to-end ack covers them all (then `DELIVERED` goes to
-the replicas). The recipient opens each sealed message as if it had arrived
-as `Data`.
+many waiting messages as fit in one packet (a single message too), and one
+end-to-end ack covers them all (then `DELIVERED` goes to the replicas). The
+recipient opens each sealed message as if it had arrived as `Data`. A message
+longer than `MAX_BUNDLED`, and every message for a recipient without
+`CAP_BUNDLE`, is sent as ordinary `Data` (before 0.9.13 a message of 190-196
+bytes for a `CAP_BUNDLE` recipient was never delivered).
 
 **Delivery receipt.** The post office does not know who sent a message, and
-the recipient's ack goes to the post office. So a recipient that opens a
-message from a `BUNDLE` sends the sender (now known from the decrypted
-message) a `Deposit` with op `RECEIPT` addressed to the sender. The receipt ID
-is `packet_id(Data, recipient, sealed)` of the copy the sender deposited; the
-sender recomputes it for the copies in its outbox and reports the matching
-message as acknowledged ("delivered") to its app. A node that does not know
+the recipient's ack goes to the post office. So a recipient sends the sender
+(known from the decrypted message) a `Deposit` with op `RECEIPT` when it opens
+mail that may have come from a post office: a message from a `BUNDLE`, a
+message in the inbox format (its weekly key or its account's), or a static
+message longer than `MAX_BUNDLED`. The receipt ID is
+`packet_id(Data, recipient, sealed)` of the copy the sender deposited; for mail
+sealed to an account, `recipient` is the account's address, and the proof is
+that of the device that opened it (the sender accepts the proof of any checked
+device of the account). The sender recomputes the ID for the copies in its
+outbox and reports the matching message as acknowledged ("delivered") to its
+app. A host remembers a deposited copy for seven days, until it restarts; a
+radio for ten minutes. A node that does not know
 op 5 ignores it (hosts) or treats it as the old format (older firmware keeps
 a few useless bytes in its small mailbox until they expire). Messages
 delivered straight to the recipient are acked as before and need no receipt.
@@ -1588,6 +1675,13 @@ Keys in `Stats` (module `stat`): 1 uptime s, 2 known nodes, 3 routes,
 93 hellos sent, 94 key requests sent, 95 local repairs, 96 messages carried,
 97 pinned contacts, 98 mobile mode (0/1), 99 quota dropped, 100 messages
 waiting for a key, 101 outbox (messages kept for a post office deposit), 118 seconds left of a remote radio change on trial (0 = none).
+From a radio that knows its battery size (the WisMesh Tag; working copy
+2026-11-28): 119 minutes of battery left, 120 what that rests on (0 unknown,
+1 on external power, 2 measured from the fall of the voltage, 3 estimated),
+121-124 estimated current in 0.1 mA (basic running, listening, sending, GPS),
+125 measured fall in 0.1 % per hour. A host passes 119-125 on from its attached
+radio, and leaves out its own external-power key (82) when that radio reports a
+battery voltage.
 Status page keys (2026-11-25, working copy, not released): 103 GPS satellites
 in use, 104 seconds since the last GPS fix, 105 GPS state (0 off, 1 on but the
 module is silent, 2 searching, 3 has a position), 106 satellites in view, 107

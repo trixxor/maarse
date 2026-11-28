@@ -31,9 +31,13 @@ copies. When it reaches the sender, the app can show "delivered".
 ## Why this design
 
 - Reuses the same acknowledgements and priorities as normal messages.
-- The post office stores sealed messages without forward secrecy, because a
-  ratchet message delivered days later may fall outside the skipped-key window
-  (see [Identity and keys](identity-and-keys.md)).
+- The post office stores messages sealed without a session, because a ratchet
+  message delivered days later may fall outside the skipped-key window (see
+  [Identity and keys](identity-and-keys.md)). Since 0.9.13 the seal uses the
+  recipient's weekly mail key, which the recipient erases after about three
+  weeks, so older mail stays closed even if the long-term key leaks later. It is the static seal, without forward secrecy,
+  when the sender has no recent key (not written to each other this week, an
+  older version, or a radio that does not know the time).
 - Messages stay end-to-end encrypted in every post office and every carrier.
 
 ## Limits you should know

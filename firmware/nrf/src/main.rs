@@ -15,6 +15,7 @@ mod battery;
 mod ble;
 mod ota;
 mod radio;
+#[cfg(feature = "sensor")]
 mod sensor;
 mod storage;
 #[cfg(feature = "board-wismesh-tag")]
@@ -23,6 +24,7 @@ mod usb;
 mod watchdog;
 
 use embassy_executor::Spawner;
+#[cfg(feature = "sensor")]
 use maarse_fw_common::node::Settings as _;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::nvmc::Nvmc;
@@ -59,6 +61,7 @@ bind_interrupts!(pub struct Irqs {
     USBD => embassy_nrf::usb::InterruptHandler<peripherals::USBD>;
     RNG => rng::InterruptHandler<peripherals::RNG>;
     SAADC => embassy_nrf::saadc::InterruptHandler;
+    #[cfg(feature = "sensor")]
     TWISPI0 => embassy_nrf::twim::InterruptHandler<peripherals::TWISPI0>;
     #[cfg(feature = "board-wismesh-tag")]
     UARTE1 => embassy_nrf::uarte::InterruptHandler<peripherals::UARTE1>;
@@ -86,6 +89,7 @@ async fn temp_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
 }
 
 /// Restarts when the node asks (a new sensor recipe needs other pins).
+#[cfg(feature = "sensor")]
 #[embassy_executor::task]
 async fn restart_task() {
     maarse_fw_common::bus::RESTART.wait().await;
@@ -117,6 +121,7 @@ async fn main(spawner: Spawner) {
     interrupt::USBD.set_priority(Priority::P3);
     interrupt::RNG.set_priority(Priority::P3);
     interrupt::SAADC.set_priority(Priority::P3);
+    #[cfg(feature = "sensor")]
     interrupt::TWISPI0.set_priority(Priority::P3);
     #[cfg(feature = "board-wismesh-tag")]
     interrupt::UARTE1.set_priority(Priority::P3);
@@ -212,14 +217,27 @@ async fn main(spawner: Spawner) {
     maarse_fw_common::bus::set_ble_pin(maarse_fw_common::node::Settings::load_ble_pin(&mut flash));
     let ble_bonds = maarse_fw_common::node::Settings::load_ble_bonds(&mut flash);
 
+    // The tag: its 1000 mAh battery and the GPS module's typical 23 mA (data sheet of a module with the same
+    // AT6558R receiver). With these the node gives the time left and what draws current.
+    #[cfg(feature = "board-wismesh-tag")]
+    {
+        use core::sync::atomic::Ordering::Relaxed;
+        maarse_fw_common::power::CAPACITY_MAH.store(1000, Relaxed);
+        maarse_fw_common::power::GPS_MA_X10.store(230, Relaxed);
+    }
+    let usb_power = battery::vbus_present();
+    maarse_fw_common::power::EXT_POWER.store(usb_power as i32, core::sync::atomic::Ordering::Relaxed);
     // ----- sensor node: what the stored recipe needs, and whether to sleep -----
     // On battery with a recipe that sleeps, Bluetooth, USB and the 32 MHz
     // crystal stay off between cycles (plug in USB and press reset to talk to
     // the node over USB).
+    #[cfg(feature = "sensor")]
     let sensor_recipe = flash.load_sensor_recipe();
-    let usb_power = battery::vbus_present();
-    maarse_fw_common::power::EXT_POWER.store(usb_power as i32, core::sync::atomic::Ordering::Relaxed);
+    #[cfg(feature = "sensor")]
     let low_power = maarse_core::sensor::recipe_sleeps(&sensor_recipe) && !usb_power;
+    #[cfg(not(feature = "sensor"))]
+    let low_power = false;
+    #[cfg(feature = "sensor")]
     let sensor_plan = maarse_core::sensor::recipe_pin_plan(&sensor_recipe);
     #[cfg(feature = "board-xiao-nrf52840")]
     let sensor_pins = {
@@ -238,19 +256,6 @@ async fn main(spawner: Spawner) {
         };
         sensor::Pins { d0, d6, d7, i2c }
     };
-    #[cfg(feature = "board-wismesh-tag")]
-    let sensor_pins = {
-        // I2C on the module's header: SDA P0.25, SCL P0.24 (as in MeshCore's variant).
-        let i2c = (sensor_plan & 1 != 0).then(|| {
-            let mut cfg = embassy_nrf::twim::Config::default();
-            cfg.sda_pullup = true;
-            cfg.scl_pullup = true;
-            static TX_RAM: StaticCell<[u8; 16]> = StaticCell::new();
-            embassy_nrf::twim::Twim::new(p.TWISPI0, Irqs, p.P0_25, p.P0_24, cfg, TX_RAM.init([0; 16]))
-        });
-        sensor::Pins { i2c }
-    };
-
     // ----- LoRa -----
     let mut spi_cfg = spim::Config::default();
     spi_cfg.frequency = spim::Frequency::M1;
@@ -364,9 +369,12 @@ async fn main(spawner: Spawner) {
     }
 
     // ----- sensors, and restarts when a new recipe needs other pins -----
-    let wake_pins = maarse_core::sensor::Recipe::from_bytes(&sensor_recipe).map(|r| r.wake_pins()).unwrap_or_default();
-    spawner.spawn(sensor::sensor_task(sensor_pins, wake_pins).unwrap());
-    spawner.spawn(restart_task().unwrap());
+    #[cfg(feature = "sensor")]
+    {
+        let wake_pins = maarse_core::sensor::Recipe::from_bytes(&sensor_recipe).map(|r| r.wake_pins()).unwrap_or_default();
+        spawner.spawn(sensor::sensor_task(sensor_pins, wake_pins).unwrap());
+        spawner.spawn(restart_task().unwrap());
+    }
 
     // ----- the node itself -----
     let mut node =

@@ -73,6 +73,10 @@ fn save_sessions(m: &HashMap<String, Instant>) {
 }
 static FAILS: Mutex<Option<HashMap<IpAddr, (u32, Instant)>>> = Mutex::new(None);
 static VERIFY_LOGIN: Mutex<()> = Mutex::new(());
+/// Tests that log in hold this: the logins and sessions are shared by the whole
+/// process, and a second password check at the same moment is refused.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
@@ -266,6 +270,7 @@ mod tests {
 
     #[test]
     fn password_login_and_lockout() {
+        let _alone = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("maarse-admin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let pw = ensure_password(&dir).unwrap().expect("a first password");

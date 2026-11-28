@@ -1095,6 +1095,19 @@ pub mod stat {
     pub const GPS_LON_E7: u8 = 117;
     /// Seconds left of a remote radio change that is still on trial (see `Command::ConfirmRadio`); 0 = none.
     pub const RADIO_TRIAL_S: u8 = 118;
+    /// Minutes of battery left (absent = not known; see `BATTERY_BASIS`).
+    pub const BATTERY_LEFT_MIN: u8 = 119;
+    /// What the time left rests on (`maarse_core::battery::basis`).
+    pub const BATTERY_BASIS: u8 = 120;
+    /// Estimated current in 0.1 mA, by consumer: everything except the radio
+    /// and the GPS; the LoRa radio listening; sending (average over time); GPS.
+    /// Typical values and time on air: the boards cannot measure current.
+    pub const DRAW_BASE: u8 = 121;
+    pub const DRAW_LISTEN: u8 = 122;
+    pub const DRAW_SEND: u8 = 123;
+    pub const DRAW_GPS: u8 = 124;
+    /// Measured fall of the battery in 0.1 % per hour (only with the measured basis).
+    pub const BATTERY_FALL: u8 = 125;
 }
 
 /// Error codes in `Event::Error`.

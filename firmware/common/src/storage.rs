@@ -17,6 +17,7 @@
 //!   0x500: "CTL1" + count (1) + per-administrator remote counter ceilings (up to 4)
 //!   0x560: "BPN1" + own Bluetooth code (u32 LE), only when one has been chosen
 //!   0x568: "BBD1" + paired phones (180, see `maarse_core::blepair`)
+//!   0x620: "MBX1" + weekly mail keys (241, see `node/mailkey.rs`)
 //!   ```
 //!   Without "SHR1" neither position nor telemetry is shared (the default).
 //!   Only written the first time and when radio/administrators/role/regions change.
@@ -27,6 +28,9 @@
 //!   [`FlashSettings::with_sensor`]): `"SEN1"` + length + recipe at 0x000,
 //!   `"OWN1"` + length + owners at 0x200, `"STA1"` + length + the state a
 //!   deep sleep must keep at 0x560 (see `node/sensor.rs`).
+//!   From 0x780: packets opened, for the replay guard (`node/guard.rs`): slots
+//!   of 16 bytes (packet ID, proof), appended without erasing. When full, the
+//!   sector is rewritten with the newest [`REPLAY_KEEP`].
 //!
 //! * Known contacts (one sector, 4 KB, optional: [`FlashSettings::with_known`]):
 //!   `"KNW1"` at 0x000, then 63 slots of 64 bytes from 0x040, each a public
@@ -50,6 +54,7 @@ use maarse_core::blepair::{BONDS_LEN, Bonds, is_own_pin};
 use maarse_core::router::Role;
 use maarse_core::companion::RadioConfig;
 use maarse_crypto::Identity;
+use crate::node::MAIL_KEYS_LEN;
 
 const PAGE: u32 = 4096;
 const ID_MAGIC: &[u8; 4] = b"MRS1";
@@ -66,6 +71,7 @@ const SHARING_MAGIC: &[u8; 4] = b"SHR1";
 const SHARING_OFF: usize = 0x300;
 const NAME_MAGIC: &[u8; 4] = b"NAM1";
 const NAME_OFF: usize = 0x320;
+#[cfg(feature = "wifi")]
 const WIFI_MAGIC: &[u8; 4] = b"WIF1";
 const WIFI_OFF: usize = 0x340;
 const WIFI_LEN: usize = 4 + 1 + 33 + 65 + 65;
@@ -73,6 +79,7 @@ const _: () = assert!(NAME_OFF + 5 + maarse_core::appdata::MAX_NAME <= WIFI_OFF)
 const RANGE_MAGIC: &[u8; 4] = b"RNG1";
 const RANGE_OFF: usize = 0x400;
 const RANGE_LEN: usize = 4 + maarse_core::rangetest::Config::LEN;
+#[cfg(feature = "wifi")]
 const MODEM_KEY_MAGIC: &[u8; 4] = b"MKY1";
 const MODEM_KEY_OFF: usize = 0x420;
 const MODEM_KEY_LEN: usize = 4 + 32;
@@ -91,7 +98,10 @@ const BLE_PIN_MAGIC: &[u8; 4] = b"BPN1";
 const BLE_PIN_OFF: usize = 0x560;
 const BLE_BONDS_MAGIC: &[u8; 4] = b"BBD1";
 const BLE_BONDS_OFF: usize = 0x568;
-const USED: usize = (BLE_BONDS_OFF + 4 + BONDS_LEN).div_ceil(4) * 4;
+const MAIL_KEYS_MAGIC: &[u8; 4] = b"MBX1";
+const MAIL_KEYS_OFF: usize = 0x620;
+const USED: usize = (MAIL_KEYS_OFF + 4 + MAIL_KEYS_LEN).div_ceil(4) * 4;
+const _: () = assert!(BLE_BONDS_OFF + 4 + BONDS_LEN <= MAIL_KEYS_OFF);
 const _: () = assert!(SITE_OFF + SITE_LEN <= CONTROL_OFF && USED <= PAGE as usize);
 const _: () = assert!(CONTROL_OFF + CONTROL_LEN <= BLE_PIN_OFF && BLE_PIN_OFF + 8 <= BLE_BONDS_OFF);
 const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= NAME_OFF);
@@ -99,15 +109,29 @@ const _: () = assert!(SHARING_OFF + 4 + maarse_core::companion::Sharing::LEN <= 
 /// The sensor sector: "SEN1" + length (u16) + recipe (at most 256) at 0x000,
 /// "OWN1" + length (u16) + owners (at most 816) at 0x200.
 const SENSOR_AREA: usize = 0x780;
+#[cfg(feature = "sensor")]
 const SEN_MAGIC: &[u8; 4] = b"SEN1";
+#[cfg(feature = "sensor")]
 const SEN_MAX: usize = 256;
+#[cfg(feature = "sensor")]
 const OWN_OFF: usize = 0x200;
+#[cfg(feature = "sensor")]
 const OWN_MAGIC: &[u8; 4] = b"OWN1";
+#[cfg(feature = "sensor")]
 const OWN_MAX: usize = 816;
+#[cfg(feature = "sensor")]
 const STA_OFF: usize = 0x560;
+#[cfg(feature = "sensor")]
 const STA_MAGIC: &[u8; 4] = b"STA1";
+#[cfg(feature = "sensor")]
 const STA_MAX: usize = 512;
+#[cfg(feature = "sensor")]
 const _: () = assert!(OWN_OFF + 6 + OWN_MAX <= STA_OFF && 6 + SEN_MAX <= OWN_OFF && STA_OFF + 6 + STA_MAX <= SENSOR_AREA);
+
+const REPLAY_SLOT: usize = 16;
+const REPLAY_SLOTS: usize = (PAGE as usize - SENSOR_AREA) / REPLAY_SLOT;
+/// Newest packets kept when the replay slots are full.
+const REPLAY_KEEP: usize = 24;
 
 const KNOWN_MAGIC: &[u8; 4] = b"KNW1";
 const KNOWN_FIRST: u32 = 0x40;
@@ -173,6 +197,7 @@ impl<F: NorFlash> FlashSettings<F> {
         self
     }
 
+    #[cfg(feature = "sensor")]
     /// Reads the used part of the sensor sector into `self.buf`.
     fn sensor_read(&mut self) -> Option<u32> {
         let a = self.sensor?;
@@ -180,6 +205,7 @@ impl<F: NorFlash> FlashSettings<F> {
         Some(a)
     }
 
+    #[cfg(feature = "sensor")]
     /// The bytes stored at `off` behind `magic` and a length, if any.
     fn sensor_get<const N: usize>(&mut self, off: usize, magic: &[u8; 4]) -> heapless::Vec<u8, N> {
         let mut v = heapless::Vec::new();
@@ -196,20 +222,31 @@ impl<F: NorFlash> FlashSettings<F> {
         v
     }
 
+    #[cfg(feature = "sensor")]
     /// Stores `data` at `off` behind `magic` and a length; rewrites the sector.
     fn sensor_put(&mut self, off: usize, magic: &[u8; 4], max: usize, data: &[u8]) -> bool {
-        if data.len() > max || self.sensor.is_none() {
+        if data.len() > max {
             return false;
         }
-        let Some(a) = self.sensor_read() else { return false };
+        let Some(a) = self.sensor else { return false };
+        if self.flash.read(a, &mut self.buf[..PAGE as usize]).is_err() {
+            return false;
+        }
         let b = &mut self.buf[..SENSOR_AREA];
         b[off..off + 4].copy_from_slice(magic);
         b[off + 4..off + 6].copy_from_slice(&(data.len() as u16).to_le_bytes());
         b[off + 6..off + 6 + data.len()].copy_from_slice(data);
+        self.sector_rewrite(a)
+    }
+
+    /// Erases the sector at `a` and writes the first page of `self.buf` to it,
+    /// without the erased end (those words stay free for appending).
+    fn sector_rewrite(&mut self, a: u32) -> bool {
+        let used = self.buf[..PAGE as usize].iter().rposition(|&b| b != 0xFF).map_or(0, |i| i + 1).div_ceil(4) * 4;
         if self.flash.erase(a, a + PAGE).is_err() {
             return false;
         }
-        self.flash.write(a, &self.buf[..SENSOR_AREA]).is_ok()
+        used == 0 || self.flash.write(a, &self.buf[..used]).is_ok()
     }
 
     /// Keeps known contacts in the 4 KB sector at `addr` (see the module docs).
@@ -495,6 +532,7 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         self.write_page(&buf);
     }
 
+    #[cfg(feature = "wifi")]
     fn save_wifi(&mut self, w: &maarse_core::companion::WifiSettings) {
         let mut buf = self.read_page();
         let b = &mut buf[WIFI_OFF..WIFI_OFF + WIFI_LEN];
@@ -510,6 +548,7 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         put(5 + 33 + 65, &w.peer);
         self.write_page(&buf);
     }
+    #[cfg(feature = "wifi")]
     fn load_wifi(&mut self) -> maarse_core::companion::WifiSettings {
         let buf = self.read_page();
         let b = &buf[WIFI_OFF..WIFI_OFF + WIFI_LEN];
@@ -558,6 +597,7 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         }
         Bonds::from_bytes(&buf[BLE_BONDS_OFF + 4..BLE_BONDS_OFF + 4 + BONDS_LEN])
     }
+    #[cfg(feature = "wifi")]
     fn save_modem_key(&mut self, key: Option<[u8; 32]>) {
         let mut buf = self.read_page();
         let b = &mut buf[MODEM_KEY_OFF..MODEM_KEY_OFF + MODEM_KEY_LEN];
@@ -568,6 +608,7 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         }
         self.write_page(&buf);
     }
+    #[cfg(feature = "wifi")]
     fn load_modem_key(&mut self) -> Option<[u8; 32]> {
         let buf = self.read_page();
         let b = &buf[MODEM_KEY_OFF..MODEM_KEY_OFF + MODEM_KEY_LEN];
@@ -601,6 +642,66 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         maarse_core::appdata::clean_name(&buf[NAME_OFF + 5..NAME_OFF + 5 + n]).unwrap_or_default()
     }
 
+    fn save_mail_keys(&mut self, keys: &[u8; MAIL_KEYS_LEN]) -> bool {
+        let mut buf = self.read_page();
+        buf[MAIL_KEYS_OFF..MAIL_KEYS_OFF + 4].copy_from_slice(MAIL_KEYS_MAGIC);
+        buf[MAIL_KEYS_OFF + 4..MAIL_KEYS_OFF + 4 + MAIL_KEYS_LEN].copy_from_slice(keys);
+        self.write_page(&buf);
+        self.read_page() == buf
+    }
+
+    fn load_mail_keys(&mut self) -> [u8; MAIL_KEYS_LEN] {
+        let buf = self.read_page();
+        let mut keys = [0u8; MAIL_KEYS_LEN];
+        if &buf[MAIL_KEYS_OFF..MAIL_KEYS_OFF + 4] == MAIL_KEYS_MAGIC {
+            keys.copy_from_slice(&buf[MAIL_KEYS_OFF + 4..MAIL_KEYS_OFF + 4 + MAIL_KEYS_LEN]);
+        }
+        keys
+    }
+
+    fn replay_add(&mut self, id: u64, proof: &[u8; 8]) {
+        let Some(a) = self.sensor else { return };
+        let mut entry = [0u8; REPLAY_SLOT];
+        entry[..8].copy_from_slice(&id.to_le_bytes());
+        entry[8..].copy_from_slice(proof);
+        for k in 0..REPLAY_SLOTS {
+            let at = a + (SENSOR_AREA + k * REPLAY_SLOT) as u32;
+            let mut slot = [0u8; REPLAY_SLOT];
+            if self.flash.read(at, &mut slot).is_err() {
+                return;
+            }
+            if slot == [0xFF; REPLAY_SLOT] {
+                let _ = self.flash.write(at, &entry);
+                return;
+            }
+        }
+        // Full: keep the newest and the new one, erase the rest.
+        if self.flash.read(a, &mut self.buf[..PAGE as usize]).is_err() {
+            return;
+        }
+        let end = SENSOR_AREA + REPLAY_SLOTS * REPLAY_SLOT;
+        let keep = (REPLAY_KEEP - 1) * REPLAY_SLOT;
+        self.buf.copy_within(end - keep..end, SENSOR_AREA);
+        self.buf[SENSOR_AREA + keep..SENSOR_AREA + keep + REPLAY_SLOT].copy_from_slice(&entry);
+        self.buf[SENSOR_AREA + keep + REPLAY_SLOT..PAGE as usize].fill(0xFF);
+        self.sector_rewrite(a);
+    }
+
+    fn replay_load(&mut self, f: &mut dyn FnMut(u64, [u8; 8])) {
+        let Some(a) = self.sensor else { return };
+        for k in 0..REPLAY_SLOTS {
+            let mut slot = [0u8; REPLAY_SLOT];
+            if self.flash.read(a + (SENSOR_AREA + k * REPLAY_SLOT) as u32, &mut slot).is_err() || slot == [0xFF; REPLAY_SLOT] {
+                return;
+            }
+            let mut id = [0u8; 8];
+            id.copy_from_slice(&slot[..8]);
+            let mut proof = [0u8; 8];
+            proof.copy_from_slice(&slot[8..]);
+            f(u64::from_le_bytes(id), proof);
+        }
+    }
+
     fn save_admins(&mut self, admins: &[Address]) {
 
         let mut buf = self.read_page();
@@ -628,26 +729,32 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         v
     }
 
+    #[cfg(feature = "sensor")]
     fn save_sensor_recipe(&mut self, recipe: &[u8]) -> bool {
         self.sensor_put(0, SEN_MAGIC, SEN_MAX, recipe)
     }
 
+    #[cfg(feature = "sensor")]
     fn load_sensor_recipe(&mut self) -> heapless::Vec<u8, 256> {
         self.sensor_get(0, SEN_MAGIC)
     }
 
+    #[cfg(feature = "sensor")]
     fn save_sensor_state(&mut self, state: &[u8]) -> bool {
         self.sensor_put(STA_OFF, STA_MAGIC, STA_MAX, state)
     }
 
+    #[cfg(feature = "sensor")]
     fn load_sensor_state(&mut self) -> heapless::Vec<u8, 512> {
         self.sensor_get(STA_OFF, STA_MAGIC)
     }
 
+    #[cfg(feature = "sensor")]
     fn save_owners(&mut self, owners: &[u8]) -> bool {
         self.sensor_put(OWN_OFF, OWN_MAGIC, OWN_MAX, owners)
     }
 
+    #[cfg(feature = "sensor")]
     fn load_owners(&mut self) -> heapless::Vec<u8, 816> {
         self.sensor_get(OWN_OFF, OWN_MAGIC)
     }
@@ -877,6 +984,56 @@ mod tests {
         assert_eq!(flash.load_control_limits().map(|l| l.len()), Some(0), "remote commands can be used");
         assert!(flash.flash.0[68..PAGE as usize].iter().all(|&b| b == 0xFF));
         assert_eq!(flash.load_or_create_identity(&mut Counting(9)).address(), id.address(), "kept after a restart");
+    }
+
+    fn board_with_sensor_sector() -> FlashSettings<Ram> {
+        // The settings page at 0 and the sensor sector right after it (the
+        // mailbox area is not used here).
+        board_after_other_firmware(0xFF).with_sensor(PAGE)
+    }
+
+    fn replays(flash: &mut FlashSettings<Ram>) -> std::vec::Vec<u64> {
+        let mut v = std::vec::Vec::new();
+        flash.replay_load(&mut |id, _| v.push(id));
+        v
+    }
+
+    #[test]
+    fn mail_keys_are_stored_next_to_the_other_settings() {
+        let mut flash = board_with_sensor_sector();
+        let id = flash.load_or_create_identity(&mut Counting(0));
+        assert_eq!(flash.load_mail_keys(), [0; MAIL_KEYS_LEN]);
+        let keys = [7u8; MAIL_KEYS_LEN];
+        assert!(flash.save_mail_keys(&keys));
+        assert!(flash.save_control_limits(&[]));
+        flash.save_role(2);
+        assert_eq!(flash.load_mail_keys(), keys);
+        assert_eq!(flash.load_or_create_identity(&mut Counting(9)).address(), id.address());
+    }
+
+    #[test]
+    fn replays_are_appended_kept_and_survive_sensor_writes() {
+        let mut flash = board_with_sensor_sector();
+        assert!(replays(&mut flash).is_empty());
+        for i in 1..=3u64 {
+            flash.replay_add(i, &[i as u8; 8]);
+        }
+        #[cfg(feature = "sensor")]
+        assert!(flash.save_sensor_recipe(b"recipe"));
+        assert_eq!(replays(&mut flash), [1, 2, 3]);
+        flash.replay_add(4, &[4; 8]);
+        assert_eq!(replays(&mut flash), [1, 2, 3, 4]);
+        // Full: the newest are kept, and the sensor settings too.
+        let total = REPLAY_SLOTS as u64 + 5;
+        for i in 5..=total {
+            flash.replay_add(i, &[1; 8]);
+        }
+        let v = replays(&mut flash);
+        assert!(v.len() >= REPLAY_KEEP && v.len() < REPLAY_SLOTS, "{}", v.len());
+        assert_eq!(v.last(), Some(&total));
+        assert!(v.windows(2).all(|w| w[1] == w[0] + 1), "{v:?}");
+        #[cfg(feature = "sensor")]
+        assert_eq!(&flash.load_sensor_recipe()[..], b"recipe");
     }
 
     #[test]

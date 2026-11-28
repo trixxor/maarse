@@ -222,6 +222,7 @@ impl Node {
     /// Position and telemetry from a verified announce.
     pub(super) fn on_app_data(&mut self, from: Address, hops: u8, app_data: &[u8]) {
         let a = appdata::parse(app_data);
+        self.mailkeys.set_capable(from, a.caps2 & appdata::CAP2_MAILKEY != 0);
         if let Some(c) = a.caps
             && self.caps.insert(from, c) != Some(c)
         {
@@ -275,6 +276,15 @@ impl Node {
         if let Some(m) = &self.ext.mqtt {
             let name = self.channels.get(channel).map_or("?", |(n, _)| n.as_str());
             m.channel(name, from, hops, &String::from_utf8_lossy(text));
+        }
+    }
+
+    /// A host has mains power as far as it knows. With an attached radio that
+    /// measures its own battery, the radio's word counts: its key must not be
+    /// hidden behind ours, or the app shows "on power" for a radio on battery.
+    pub(super) fn leave_power_to_radio(items: &mut Vec<(u8, i32)>, radio: &[(u8, i32)]) {
+        if radio.iter().any(|(k, _)| *k == stat::BATTERY_MV) {
+            items.retain(|(k, _)| *k != stat::EXT_POWER);
         }
     }
 

@@ -12,7 +12,9 @@ default = []
 # The button is on P0.09, a pin the chip also uses for NFC: the feature frees it (a one-time
 # UICR write at the first start, followed by a reset).
 board-wismesh-tag = ["embassy-nrf/nfc-pins-as-gpio"]
-board-xiao-nrf52840 = []
+board-xiao-nrf52840 = ["sensor"]
+# Sensor setups: for boards with free pins.
+sensor = ["maarse-fw-common/sensor"]
 
 [dependencies]
 cortex-m = { version = "0.7.10", features = ["inline-asm"] }

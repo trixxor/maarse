@@ -29,8 +29,11 @@ RestartSec=3
 StartLimitIntervalSec=0
 
 DynamicUser=yes
-StateDirectory=maarse-server
+StateDirectory=maarse-server maarse-server-state
 StateDirectoryMode=0700
+# Outside the data folder, so that restoring a backup of the data folder is
+# noticed and old encryption sessions are not used again.
+Environment=MAARSE_STATE_DIR=/var/lib/maarse-server-state
 WorkingDirectory=/var/lib/maarse-server
 
 # Hardening: no devices are needed.

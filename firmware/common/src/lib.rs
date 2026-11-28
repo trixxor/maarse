@@ -3,7 +3,9 @@
 
 #![no_std]
 
+#[cfg(feature = "sensor")]
 pub mod bme280;
+#[cfg(feature = "sensor")]
 pub mod i2c_sensor;
 pub mod bus;
 pub mod gps;

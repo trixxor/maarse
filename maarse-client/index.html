@@ -1270,7 +1270,7 @@
         <button class="si" id="btn-radio" data-view="radio" disabled><svg class="i"><use href="#i-radio"/></svg><span>Radios, role and regions</span></button>
         <button class="si" id="btn-firmware" data-view="firmware" disabled><svg class="i"><use href="#i-chip"/></svg><span>Firmware</span></button>
         <button class="si" id="btn-range" data-view="range" disabled title="Field measurement of range, loss and power use"><svg class="i"><use href="#i-range"/></svg><span>Range test</span></button>
-        <button class="si" id="btn-experimental" data-view="experimental" disabled title="New tools that only read from the radio: spectrum and recordings"><svg class="i"><use href="#i-range"/></svg><span>Experimental<small>Spectrum and recordings</small></span></button>
+        <button class="si" id="btn-experimental" data-view="experimental" disabled title="New tools that only read from the radio: spectrum and recordings"><svg class="i"><use href="#i-range"/></svg><span>Experimental<small>Spectrum, recordings and battery</small></span></button>
         <h3 class="grp mc">MeshCore</h3>
         <button class="si" id="btn-meshcore" data-view="meshcore-setup" disabled><svg class="i"><use href="#i-globe"/></svg><span>MeshCore setup</span></button>
         <h3 class="grp">This computer</h3>
@@ -2306,7 +2306,7 @@ function onEvent(ev) {
       for (const [k, v] of ev.items) m.set(k, v);
       state.stats = [...m.entries()].sort((a, b) => a[0] - b[0]);
     }
-    noteStats(); updateStrip(); if (["status", "radio", "diag", "network"].includes(state.view)) renderChat(); break;
+    noteStats(); updateStrip(); if (["status", "radio", "diag", "network"].includes(state.view) || (state.view === "experimental" && xp.tab === "battery")) renderChat(); break;
     case "radio": state.radio = ev.cfg; if (state.view === "radio") renderChat(); break;
     case "admins": state.admins = ev.list; if (state.view === "radio") renderChat(); break;
     case "blePin":
@@ -4238,6 +4238,11 @@ function setView(v) {
       state.statsTimer = setInterval(poll, 10000);
     }
     if (v === "range") { transport.send(Cmd.getRangeTest()); transport.send(Cmd.getRadio()); }
+    if (v === "experimental") {
+      // Only the battery tab needs the status; asking costs nothing on air.
+      const poll = () => { if (xp.tab === "battery") transport?.send(Cmd.getStats()); };
+      poll(); state.statsTimer = setInterval(poll, 10000);
+    }
     if (v === "network") {
       let n = 0;
       const poll = () => { transport?.send(Cmd.getStats()); if (n++ % 3 === 0) transport?.send(Cmd.getNeighbors()); };
@@ -4787,11 +4792,37 @@ function renderExperimental(box) {
   if (!SR) { wrap.append(el("p", { textContent: "This page needs a newer maarse-client." })); return; }
   wrap.append(el("p", { className: "muted", textContent: "These tools are new. They only read from the radio and never change how messages are sent. Numbers can be rough." }));
   const tabs = el("div", { className: "xp-tabs" });
-  for (const [k, label] of [["spectrum", "Spectrum"], ["remote", "Record on a radio"], ["recordings", `Recordings (${xp.recs.length})`]]) {
-    tabs.append(el("button", { className: xp.tab === k ? "on" : "", textContent: label, onclick: () => { xp.tab = k; xp.msg = ""; renderChat(); } }));
+  for (const [k, label] of [["spectrum", "Spectrum"], ["remote", "Record on a radio"], ["recordings", `Recordings (${xp.recs.length})`], ["battery", "Battery"]]) {
+    tabs.append(el("button", { className: xp.tab === k ? "on" : "", textContent: label, onclick: () => { xp.tab = k; xp.msg = ""; if (k === "battery") transport?.send(Cmd.getStats()); renderChat(); } }));
   }
   wrap.append(tabs);
-  if (xp.tab === "spectrum") xpSpectrumTab(wrap); else if (xp.tab === "remote") xpRemoteTab(wrap); else xpRecordingsTab(wrap);
+  if (xp.tab === "spectrum") xpSpectrumTab(wrap); else if (xp.tab === "remote") xpRemoteTab(wrap); else if (xp.tab === "battery") xpBatteryTab(wrap); else xpRecordingsTab(wrap);
+}
+// Battery of the radio: what the radio itself says (the WisMesh Tag gives the time left and what draws current,
+// see maarse-core/src/battery.rs). The Android app shows the same.
+function xpBatteryTab(wrap) {
+  const v = statValue, hours = m => { const h = Math.floor(m / 60); return h >= 48 ? `about ${Math.floor(h / 24)} d ${h % 24} h` : h >= 1 ? `about ${h} h` : "under an hour"; };
+  const pct = v(85), mv = v(49), ext = v(82) === 1, basis = v(120), left = v(119), fall = v(125);
+  const parts = [["Basic running", v(121)], ["Listening", v(122)], ["Sending", v(123)], ["GPS", v(124)]];
+  const total = parts.reduce((s, [, x]) => s + (x || 0), 0);
+  wrap.append(el("h3", { textContent: "Radio battery" }));
+  if (pct === undefined && !mv) { wrap.append(el("p", { className: "muted", textContent: "No battery value from the radio yet." })); return; }
+  const line = el("div", { className: "xp-bar" }, el("b", { textContent: pct === undefined ? "–" : pct + " %" }));
+  if (mv) line.append(el("span", { className: "muted", textContent: (mv / 1000).toFixed(2) + " V" }));
+  if (ext) line.append(el("span", { textContent: "charging or on USB power" }));
+  wrap.append(line);
+  const time = ext || basis === 1 ? "on power" : left !== undefined ? hours(left) : "not known";
+  const info = el("div", { className: "xp-bar" }, el("span", { className: "muted", textContent: "Time left" }), el("b", { textContent: time }));
+  if (!ext && left !== undefined) info.append(el("span", { className: "muted", textContent: basis === 2 ? "measured" : "estimate" }));
+  if (!ext && fall !== undefined) info.append(el("span", { className: "muted", textContent: `${(fall / 10).toFixed(1)} % per hour` }));
+  wrap.append(info);
+  wrap.append(el("h3", { textContent: "What uses power" }));
+  if (!total) { wrap.append(el("p", { className: "muted", textContent: "The radio does not say what uses power. This needs a WisMesh Tag with new firmware." })); return; }
+  for (const [name, x = 0] of parts) {
+    wrap.append(el("div", { className: "sn-mrow" }, el("span", { textContent: name }), el("span", { textContent: name === "GPS" && !x ? "off" : `${(x / 10).toFixed(1)} mA · ${Math.round(x * 100 / total)} %` })),
+      el("div", { className: "sn-meter" }, el("div", { style: `width:${x * 100 / total}%` })));
+  }
+  wrap.append(el("p", { textContent: `about ${(total / 10).toFixed(1)} mA` }), el("p", { className: "muted", textContent: "Estimated from typical values and time on air: the radio cannot measure current. The time left is estimated until the battery voltage has been followed for an hour off power, and measured after that." }));
 }
 function xpSpectrumTab(wrap) {
   const d = xp.dom = {};
@@ -10973,7 +11004,6 @@ const SN_BOARDS = {
     note: "The radio uses the other pins. A BME280 takes D6 and D7.", holds: true },
   heltec_v4: { name: "Heltec WiFi LoRa 32 V4", pins: [3, 4, 6, 38, 39, 40, 41].map(p => [p, "GPIO" + p]), i2c: [47, 48], i2cText: "GPIO47 = SDA, GPIO48 = SCL",
     adc: [4, "GPIO4"], note: "Power a sensor from Ve (off while asleep) or 3V3.", holds: false },
-  wismesh: { name: "RAK WisMesh Tag", pins: [], i2c: null, adc: null, note: "No free pins: battery and chip temperature only.", holds: true },
 };
 // The boards and sensors come from the host (GET /api/sensors/catalog), so the Android app and this client always offer the same.
 function snBoards() {

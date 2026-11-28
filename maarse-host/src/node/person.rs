@@ -28,11 +28,13 @@ use maarse_core::Address;
 use maarse_core::appdata;
 use maarse_core::companion::{Command, Event, PersonInfo, error_code, person_op, person_state, text};
 use maarse_core::content::{self, person as op};
+use maarse_core::router::Proof;
 use maarse_crypto::person::{
     self as pc, CERT_LEN, DeviceCert, DeviceEntry, DeviceList, INBOX_STATE_LEN, InboxChain, InboxPublic, MAX_DEVICES, link_words,
 };
 use maarse_crypto::{Identity, recovery};
 use rand_core::{OsRng, RngCore};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -142,6 +144,9 @@ pub(super) struct Persons {
     /// the first automatic sync is due.
     sync_since: u32,
     auto_sync_at: Option<Instant>,
+    /// The last save of our membership failed: tried again, so that deleted
+    /// inbox weeks do not stay on the disk.
+    unsaved: Cell<bool>,
 }
 
 fn read_member(dir: &Path, me: &Address) -> Option<Member> {
@@ -205,6 +210,7 @@ impl Persons {
             sync_since: fs::read_to_string(dir.join("person-sync.txt")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0),
             // Catch up a little after start-up, when the links are up.
             auto_sync_at: Some(Instant::now() + Duration::from_secs(20)),
+            unsaved: Cell::new(false),
         };
         // device (16) | certificate, one after the other.
         if let Ok(b) = fs::read(dir.join("person-certs.bin")) {
@@ -240,7 +246,14 @@ impl Persons {
         for c in [&m.inbox, &m.old_inbox].into_iter().flatten() {
             b.extend_from_slice(&c.to_bytes());
         }
-        let _ = crate::private_file::write(&path, &b, true);
+        match crate::private_file::write(&path, &b, true) {
+            Ok(()) => self.unsaved.set(false),
+            Err(e) => {
+                if !self.unsaved.replace(true) {
+                    eprintln!("the account file could not be saved (trying again): {e}");
+                }
+            }
+        }
     }
 
     fn remember_cert(&mut self, c: DeviceCert) {
@@ -287,6 +300,13 @@ fn parse_hex_addr(t: &[u8]) -> Option<Address> {
     }
     let b: Vec<u8> = (0..32).step_by(2).filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect();
     Address::from_slice(&b)
+}
+
+/// Who wrote an opened inbox message, and the person (or, for the own weekly
+/// key, the node) it was sealed to.
+pub(super) struct OpenedInbox {
+    pub(super) from: Address,
+    pub(super) person: Address,
 }
 
 impl Node {
@@ -754,6 +774,28 @@ impl Node {
             })
     }
 
+    /// What each checked device of `person` that proves delivery would send
+    /// back for `sealed`.
+    pub(super) fn person_proofs(&self, person: &Address, sealed: &[u8]) -> Vec<Proof> {
+        let p = &self.persons;
+        p.claims
+            .keys()
+            .chain(p.certs.values().filter(|c| c.person() == *person).map(|c| &c.device))
+            .filter(|d| p.person_of(d) == Some(*person))
+            .filter_map(|d| self.proof_from(d, sealed))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn account_for_test(&self) -> Option<Address> {
+        self.persons.me.as_ref().map(|m| m.person())
+    }
+
+    #[cfg(test)]
+    pub(super) fn account_key_for_test(&self, person: &Address) -> Option<InboxPublic> {
+        self.persons.inboxes.get(person).copied()
+    }
+
     fn send_to_person(&mut self, id: ClientId, req: u16, person: Address, msg: Vec<u8>) {
         if msg.len() > maarse_crypto::ratchet::MAX_FS_TEXT - 1 {
             return self.send_client(id, &err_ev(req, error_code::TOO_LARGE, "The message is too long"));
@@ -792,10 +834,14 @@ impl Node {
                 {
                     let mut out = [0u8; 255];
                     if let Ok(n) = pc::seal_inbox(&self.identity, &person, &ip, &mut OsRng, &plain, &mut out)
+                        && Node::fits_deposit(n)
                         && let Some(o) = self.outbox.get_mut(&msg_id)
                     {
                         o.dest = person;
                         o.mail_sealed = out[..n].to_vec();
+                        // The proof comes from whichever device reads it
+                        // (`person_proofs`), not from the one written to.
+                        o.mail_proof = None;
                     }
                 }
                 self.log(format!("message to {} via device {}", short(&person), short(&device)));
@@ -854,7 +900,7 @@ impl Node {
                 changed = true;
             }
         }
-        if changed {
+        if changed || self.persons.unsaved.get() {
             self.persons.save_member();
         }
         if let Some(person) = self.persons.me.as_ref().map(|m| m.person())
@@ -917,33 +963,57 @@ impl Node {
         true
     }
 
-    /// An inbox message (first byte `0xF2`) for our person. `None` if it is
-    /// not one (the caller tries the other formats).
-    pub(super) fn try_open_inbox(&mut self, payload: &[u8], hops: u8) -> Option<Result<(), maarse_crypto::seal::CryptoError>> {
+    /// An inbox message (first byte `0xF2`) for our person or our own weekly
+    /// key. `None` if it is not one (the caller tries the other formats).
+    pub(super) fn try_open_inbox(&mut self, payload: &[u8], hops: u8) -> Option<Result<OpenedInbox, maarse_crypto::seal::CryptoError>> {
         let (chain, week) = pc::inbox_header(payload)?;
-        let m = self.persons.me.as_ref()?;
-        let person = m.person();
-        let secret = m.inbox_secret(chain, week)?;
-        let current = m.inbox.as_ref().map(|c| c.chain);
+        // Two keys can fit: the account's inbox, and the node's own weekly key
+        // (mailkey.rs), where the node's address plays the part of the person.
+        // The own key is also tried by a node that has since joined an account.
+        let account = self.persons.me.as_ref().and_then(|m| Some((m.person(), m.inbox_secret(chain, week)?)));
+        let own = self.mailkeys.secret(chain, week).map(|s| (self.addr, s));
         let mut out = [0u8; 256];
         let known = &self.known;
-        let (from, n) = match pc::open_inbox(&secret, &person, payload, |a| known.get(a).copied(), &mut out) {
-            Ok(r) => r,
-            Err(e) => return Some(Err(e)),
+        let mut failed = None;
+        let mut opened = None;
+        for (person, secret) in [account, own].into_iter().flatten() {
+            match pc::open_inbox(&secret, &person, payload, |a| known.get(a).copied(), &mut out) {
+                Ok((from, n)) => {
+                    opened = Some((from, n, person));
+                    break;
+                }
+                Err(e) => {
+                    failed.get_or_insert(e);
+                }
+            }
+        }
+        let Some((from, n, person)) = opened else { return failed.map(Err) };
+        let result = OpenedInbox { from, person };
+        let solo = self.persons.me.is_none();
+        // The key the sender should be using. With an account, mail to our own
+        // key never used it.
+        let current = match self.persons.me.as_ref() {
+            Some(m) => m.inbox.as_ref().map(|c| c.chain).filter(|_| person == m.person()),
+            None => self.mailkeys.chain_id(),
         };
         if !self.persons.seen_mail.insert(maarse_core::mail::mail_id(&person, payload)) {
-            return Some(Ok(()));
+            return Some(Ok(result));
         }
         if self.persons.seen_mail.len() > 4096 {
             self.persons.seen_mail.clear();
         }
         if current != Some(chain) {
             // The sender has an old inbox key: send it the new one.
-            self.persons.introduced.remove(&from);
-            self.introduce(from);
+            if solo {
+                self.mailkeys.forget_told(&from);
+                self.mailkey_introduce(from);
+            } else {
+                self.persons.introduced.remove(&from);
+                self.introduce(from);
+            }
         }
         self.on_content(from, &out[..n], hops, maarse_crypto::ratchet::Format::Static);
-        Some(Ok(()))
+        Some(Ok(result))
     }
 
     // ---------- sibling sync ----------
@@ -1092,6 +1162,7 @@ impl Node {
                     }
                 }
             }
+            op::DEVICE_INBOX => self.on_device_inbox(from, data),
             op::INBOX_STATE => self.on_inbox_state(from, data),
             op::LINK_GRANT => {
                 if !self.persons.awaiting.is_some_and(|t| Instant::now() < t) {

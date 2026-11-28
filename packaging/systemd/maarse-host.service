@@ -28,8 +28,11 @@ StartLimitIntervalSec=0
 
 # Dedicated user and data dir (/var/lib/maarse-host).
 DynamicUser=yes
-StateDirectory=maarse-host
+StateDirectory=maarse-host maarse-host-state
 StateDirectoryMode=0700
+# Outside the data folder, so that restoring a backup of the data folder is
+# noticed and old encryption sessions are not used again.
+Environment=MAARSE_STATE_DIR=/var/lib/maarse-host-state
 WorkingDirectory=/var/lib/maarse-host
 # Serial access to LoRa / MeshCore nodes.
 SupplementaryGroups=dialout

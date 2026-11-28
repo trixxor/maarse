@@ -31,7 +31,7 @@
       </div>
       <div class="cons"><h4>Good to know</h4>
         <ul>
-          <li>Mail is sealed without forward secrecy while it waits</li>
+          <li>Mail between nodes that have written to each other this week is sealed to a weekly key that is erased about three weeks later (since 0.9.13); other mail is sealed without forward secrecy</li>
           <li>A post office or carrier can delete or withhold what it holds</li>
           <li>Mail is kept at most 7 days, 100 messages per recipient</li>
           <li>Carry costs a little extra airtime and helps only when people actually meet</li>
@@ -87,7 +87,7 @@
     <h3>Who is a post office</h3>
     <p>Post offices say so in their hellos and announces with a 2-bit class: 0 none, 1 small flash, 2 megabytes, 3 a host with a disk. Hosts are class 3; radio nodes are class 0 today. Every node picks the best post office among its neighbours (highest class, then best SNR) as its <em>home</em> post office and names it in its announce.</p>
     <h3>Dropping mail</h3>
-    <p>When a direct message has no end-to-end acknowledgement within <code>DEPOSIT_AFTER_MS</code> = 45 s, the sender sends a <code>Deposit</code> to its home post office. The message is sealed in the static format, without forward secrecy, because a ratchet message delivered days later may fall outside the skipped-key window.</p>
+    <p>When a direct message has no end-to-end acknowledgement within <code>DEPOSIT_AFTER_MS</code> = 45 s, the sender sends a <code>Deposit</code> to its home post office. The message is sealed without a session, because a ratchet message delivered days later may fall outside the skipped-key window: to the recipient's weekly mail key if we have one that is at most a week old (since 0.9.13; the key is erased after about three weeks), otherwise in the static format, without forward secrecy.</p>
 <pre><code>Deposit payload = recipient (16) | op (1) | body</code></pre>
     <div class="table-wrap"><table>
       <tr><th>op</th><th>Name</th><th>Body</th><th>Meaning</th></tr>
@@ -99,7 +99,7 @@
       <tr><td>5</td><td><code>RECEIPT</code></td><td>receipt IDs</td><td>Recipient to the original sender: the mail arrived</td></tr>
     </table></div>
     <h3>Delivery receipts</h3>
-    <p>The post office does not know who sent a message, and the recipient's acknowledgement goes to the post office. So after opening a message from a bundle, the recipient, who now knows the sender from the decrypted message, sends the sender a <code>RECEIPT</code>. The sender recomputes the receipt ID for the copies in its outbox and marks the match as delivered.</p>
+    <p>The post office does not know who sent a message, and the recipient's acknowledgement goes to the post office. So after opening mail that may have come from a post office (a bundle, mail sealed to its weekly or account key, or a message too long to bundle), the recipient, who now knows the sender from the decrypted message, sends the sender a <code>RECEIPT</code>. The sender recomputes the receipt ID for the copies in its outbox and marks the match as delivered.</p>
     <h3>Copies</h3>
     <p>A host that takes a message keeps it and sends copies to the recipient's three replica hosts: the three highest <em>rendezvous scores</em> over the hosts in its DHT table. Every host computes the same three for a given recipient, so when a host joins or leaves, only the recipients it ranked first move. Copies travel over the DHT's TCP requests and never over radio.</p>
     <h3>Asking for mail</h3>
@@ -143,7 +143,7 @@
 (function(){
   Viz.timeline(document.getElementById('tl'), [
     {t:'0 s', title:'You send', text:'The recipient’s radio is off, so nothing answers.', pkt:'Data'},
-    {t:'45 s', title:'No acknowledgement: deposit', text:'Your node hands the message to its own home post office, sealed without forward secrecy.', pkt:'Deposit STORE'},
+    {t:'45 s', title:'No acknowledgement: deposit', text:'Your node hands the message to its own home post office, sealed to the weekly mail key if it has one.', pkt:'Deposit STORE'},
     {t:'next', title:'Three copies', text:'The post office keeps it and sends copies to the recipient’s three replica hosts, by their rendezvous scores. Over TCP, never over radio.'},
     {t:'waiting', title:'Mail waiting', text:'Post offices say in their hellos which recipients have mail, like the traffic indication in a Wi-Fi beacon. Up to 7 days, 100 messages.', pkt:'Hello'},
     {t:'they return', title:'They announce, or ask', text:'A host that hears the announce asks the replicas for mail, at most every 10 minutes per node. The node also asks when it starts and every 6 hours.', pkt:'MailSync'},

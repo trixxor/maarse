@@ -42,6 +42,9 @@ class HostService : Service() {
         if (!started) {
             started = true
             System.loadLibrary("maarse_android")
+            // The host keeps a counter here, outside its data folder, so that an old copy of the data folder is
+            // noticed and old encryption sessions are not used again (see sessions.rs). Never backed up.
+            android.system.Os.setenv("MAARSE_STATE_DIR", File(noBackupFilesDir, "state").absolutePath, true)
             val args = HostFiles.args(this, server)
             Thread({ runHost(args.toTypedArray(), server) }, "maarse-host").start()
             if (server) main.postDelayed(::checkServerConditions, 30_000)

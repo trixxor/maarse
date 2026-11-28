@@ -7,7 +7,8 @@
 //! 0x04 | length | telemetry
 //! 0x05 | length | display name            (UTF-8, at most 24 bytes)
 //! 0x06 | length | role | services         (see [`push_role`])
-//! 0x07 | 1 | capabilities
+//! 0x07 | 2 | capabilities | more capabilities (`CAP2_*`; older nodes send
+//!             1 byte, and read only the first)
 //! 0x08 | 17 | person | device index
 //! 0x09 | length | site                     (see [`Site`])
 //! ```
@@ -43,7 +44,8 @@ pub const APP_POSITION: u8 = 0x03;
 pub const APP_TELEMETRY: u8 = 0x04;
 pub const APP_NAME: u8 = 0x05;
 pub const APP_ROLE: u8 = 0x06;
-/// Capabilities: `0x07 | 1 | bits`. Older nodes skip it by its length.
+/// Capabilities: `0x07 | length | bits | bits2`. Older nodes skip it by its
+/// length, or read only the first byte.
 pub const APP_CAPS: u8 = 0x07;
 /// Linked devices: "I am device number i of person M": M's address (16) |
 /// index (1). A claim only: it is trusted after the device's certificate has
@@ -166,8 +168,13 @@ pub const CALL_DATAGRAM: [u8; 8] = *b"mrsCALL1";
 
 /// Appends the capabilities field.
 pub fn push_caps(v: &mut AppBuf, caps: u8) {
-    let _ = v.extend_from_slice(&[APP_CAPS, 1, caps]);
+    let _ = v.extend_from_slice(&[APP_CAPS, 2, caps, MY_CAPS2]);
 }
+/// Second capability byte: reads `content::person::DEVICE_INBOX` and opens
+/// mail sealed to its weekly key.
+pub const CAP2_MAILKEY: u8 = 0x01;
+/// What this firmware/host can do, second byte.
+pub const MY_CAPS2: u8 = CAP2_MAILKEY;
 /// Role flag: the node hears a repeater or anchor directly.
 pub const ROLE_HEARS_REPEATER: u8 = 0x01;
 /// Role flags bits 1-2: how many edge bridges (relays that hear a repeater)
@@ -375,6 +382,8 @@ pub struct AppData {
     pub role_flags: Option<u8>,
     /// Capabilities (`CAP_*`), if present.
     pub caps: Option<u8>,
+    /// The second capability byte (`CAP2_*`); 0 when not sent.
+    pub caps2: u8,
     /// The edge bridge the sender has chosen (role field bytes 2-3).
     pub role_bridge: Option<u16>,
     /// Person and device index (`APP_PERSON`), if present.
@@ -433,7 +442,10 @@ pub fn parse(b: &[u8]) -> AppData {
                     APP_POSITION => a.position = Position::decode(d),
                     APP_TELEMETRY => a.telemetry = Telemetry::decode(d),
                     APP_NAME => a.name = clean_name(d),
-                    APP_CAPS => a.caps = d.first().copied(),
+                    APP_CAPS => {
+                        a.caps = d.first().copied();
+                        a.caps2 = d.get(1).copied().unwrap_or(0);
+                    }
                     APP_SITE => a.site = Site::from_bytes(d),
                     APP_PERSON if d.len() >= 17 => a.person = Address::from_slice(&d[..16]).map(|p| (p, d[16])),
                     APP_ROLE => {
@@ -471,6 +483,17 @@ mod tests {
         assert_eq!(a.person, Some((m, 2)));
         assert_eq!(a.caps, Some(MY_CAPS));
         assert_eq!(a.name.as_deref(), Some(&b"Ida"[..]));
+    }
+
+    #[test]
+    fn the_second_capability_byte_is_optional() {
+        let mut v = build(None, true, None, None, None);
+        push_caps(&mut v, MY_CAPS);
+        assert_eq!(parse(&v).caps2, MY_CAPS2);
+        // An older node sends one byte, and a field after it is still read.
+        let a = parse(&[APP_CAPS, 1, MY_CAPS, APP_NAME, 2, b'J', b'o']);
+        assert_eq!((a.caps, a.caps2), (Some(MY_CAPS), 0));
+        assert_eq!(a.name.as_deref(), Some(&b"Jo"[..]));
     }
 
     #[test]

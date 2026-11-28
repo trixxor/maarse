@@ -49,6 +49,7 @@ backbone TCP port restricted if the backbone is private.
 | `/usr/local/bin/maarse-server` | the program |
 | `/var/lib/maarse-server/settings.txt` | your settings |
 | `/var/lib/maarse-server` | identity, history, mail, telemetry |
+| `/var/lib/maarse-server-state` | a counter that notices a restored old data folder; leave it out of data backups. The server sends no encrypted messages if it cannot write it (since 0.9.13) |
 | `/opt/maarse/src` | source used to build |
 
 Related: [Architecture overview](../architecture/overview.md) · [Post offices and carry](../concepts/post-offices-and-carry.md) · [Threat model](../security/threat-model.md)

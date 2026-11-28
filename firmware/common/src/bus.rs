@@ -312,7 +312,11 @@ pub static BEEP: Signal<M, ()> = Signal::new();
 
 /// Remembers the latest message (the sender's short address and the start of the text).
 pub fn note_message(from: &Address, text: &[u8]) {
+    // Also without a screen: the WisMesh Tag beeps when it changes.
     MSG_COUNT.fetch_add(1, Relaxed);
+    if !cfg!(feature = "display") {
+        return;
+    }
     let short = u32::from_be_bytes([from.0[0], from.0[1], from.0[2], from.0[3]]);
     let mut p = Preview::new();
     let s = core::str::from_utf8(text).unwrap_or("?");

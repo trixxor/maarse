@@ -39,6 +39,8 @@
 use crate::Address;
 use crate::dedup::packet_id;
 use crate::packet::PacketType;
+use crate::router::MAX_DIRECT_PAYLOAD;
+use crate::stamp::STAMP_LEN;
 
 pub const OP_STORE: u8 = 0;
 pub const OP_SYNC: u8 = 1;
@@ -65,6 +67,15 @@ pub const CLASS_NONE: u8 = 0;
 pub const CLASS_SMALL: u8 = 1;
 pub const CLASS_MEDIUM: u8 = 2;
 pub const CLASS_LARGE: u8 = 3;
+
+/// The longest sealed message that fits in a [`OP_BUNDLE`]: the packet also
+/// holds the recipient, the op, a length byte and the stamp. A longer stored
+/// message is delivered as ordinary `Data`, and a recipient that opens one
+/// in the static format sends a receipt, since it may come from a post office.
+pub const MAX_BUNDLED: usize = MAX_DIRECT_PAYLOAD - STAMP_LEN - 18;
+/// The longest sealed message a node can hand to a post office over the air
+/// (recipient, op and stamp around it).
+pub const MAX_DEPOSITED: usize = MAX_DIRECT_PAYLOAD - STAMP_LEN - 17;
 
 /// The 4-byte ID of a stored message.
 pub fn mail_id(recipient: &Address, sealed: &[u8]) -> u32 {
@@ -188,6 +199,19 @@ pub fn replicas<const K: usize>(recipient: &Address, offices: &[Address]) -> hea
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The limits are exactly what the packets hold.
+    #[test]
+    fn size_limits_match_the_packets() {
+        let mut body: heapless::Vec<u8, 300> = heapless::Vec::new();
+        let max = MAX_DIRECT_PAYLOAD - STAMP_LEN;
+        assert!(bundle_push(&mut body, &[1; MAX_BUNDLED], max));
+        body.clear();
+        assert!(!bundle_push(&mut body, &[1; MAX_BUNDLED + 1], max));
+        let mut p: heapless::Vec<u8, 300> = heapless::Vec::new();
+        assert!(build(&mut p, &Address([1; 16]), OP_STORE, &[1; MAX_DEPOSITED]));
+        assert_eq!(p.len() + STAMP_LEN, MAX_DIRECT_PAYLOAD);
+    }
 
     #[test]
     fn deposit_roundtrip_and_ids() {

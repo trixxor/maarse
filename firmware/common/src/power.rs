@@ -75,6 +75,11 @@ pub fn set_profile(base_ma_x10: u32, rx_ma_x10: u32, tx_extra_ma_x10: u32) {
     TX_EXTRA_MA_X10.store(tx_extra_ma_x10, Relaxed);
 }
 
+/// Typical current of the GPS module while it runs, in 0.1 mA (0 = none).
+pub static GPS_MA_X10: AtomicU32 = AtomicU32::new(0);
+/// The size of the board's battery in mAh (0 = not known: no time left is given).
+pub static CAPACITY_MAH: AtomicU32 = AtomicU32::new(0);
+
 /// Estimated transmit current at `dbm` (radio setting), in 0.1 mA.
 pub fn tx_ma_x10(dbm: i8) -> u32 {
     maarse_core::rangetest::sx1262_tx_ma_x10(dbm) + TX_EXTRA_MA_X10.load(Relaxed)

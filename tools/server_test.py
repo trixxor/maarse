@@ -119,10 +119,12 @@ try:
     stop("bb2")
     saved = open(os.path.join(TMP, "bb2", "dht-contacts.txt")).read() if os.path.exists(os.path.join(TMP, "bb2", "dht-contacts.txt")) else ""
     print(f"  ..  bb2 saved contacts: {saved.strip() or '(none yet)'}")
-    # Restart bb2 without --peer: it must find bb1 from what it saved.
+    # Restart bb2 without --peer: it must find bb1 from what it saved. A saved
+    # private address (here loopback) is only dialled when it is allowed, which
+    # --dht-allow-private does without naming bb1 as a peer or seed.
     assert "127.0.0.1:4261" in saved, "bb2 saved no contact for bb1"
     os.replace(os.path.join(TMP, "bb2", "log.txt"), os.path.join(TMP, "bb2", "log-first-run.txt"))
-    start("bb2", BACKBONE, ["--listen", "127.0.0.1:4262", "--public-addr", "127.0.0.1:4262", "--min-peers", "2", "--http", "127.0.0.1:8196"])
+    start("bb2", BACKBONE, ["--listen", "127.0.0.1:4262", "--public-addr", "127.0.0.1:4262", "--min-peers", "2", "--dht-allow-private", "127.0.0.1:4261", "--http", "127.0.0.1:8196"])
     assert log_has("bb2", "127.0.0.1:4261", 90), "bb2 did not reconnect to bb1 from its saved contacts"
     print("  OK  bb2 finds bb1 again after a restart without seeds")
     import json

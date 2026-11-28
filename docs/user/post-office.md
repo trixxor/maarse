@@ -75,10 +75,13 @@ replica may remain until expiry after delivery.
 ## Is it private?
 
 The sending node seals the message for Bo before depositing it. A post
-office can see recipient and traffic metadata and handle ciphertext. Static
-offline mail has no forward secrecy against a later compromise of the
-recipient's long-term key. Recipient authentication at replica fetch is
-still being developed.
+office can see recipient and traffic metadata and handle ciphertext. When you
+and the recipient have written to each other in the last week, mail is sealed to
+a key that changes every week. The recipient's device erases it after about
+three weeks, and from then on old mail cannot be opened, even if the
+recipient's long-term key leaks later. This needs version 0.9.13 or later at
+both ends, and a radio must know the time. Otherwise mail is sealed with the
+static format, which has no such protection. Recipient authentication at replica fetch is still being developed.
 
 ## Who runs the post offices?
 

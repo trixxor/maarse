@@ -219,6 +219,7 @@ fn curl_program() -> &'static str {
 }
 
 fn curl_command() -> std::process::Command {
+    #[cfg_attr(not(windows), allow(unused_mut))] // Only changed on Windows.
     let mut c = std::process::Command::new(curl_program());
     #[cfg(windows)]
     {

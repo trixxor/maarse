@@ -46,19 +46,19 @@ Each page says which type it is.
 
 | Area | Page | Type | Status |
 | --- | --- | --- | --- |
-| Overview and component map | [architecture/](architecture/overview.md) | Explanation | working copy |
-| Packet formats, crypto, routing, companion protocol | [protocol-spec.md](protocol-spec.md) | Reference | follows the code of the working copy |
+| Overview and component map | [architecture/](architecture/overview.md) | Explanation | released |
+| Packet formats, crypto, routing, companion protocol | [protocol-spec.md](protocol-spec.md) | Reference | follows the code in the repository |
 | Settings of host and server | [reference/settings.md](reference/settings.md) | Reference | generated from the code |
-| Everything in one long page | [GUIDE.md](GUIDE.md) | Mixed (all four types) | released + working copy, being split |
-| Plain-language pages for users | [user/](user/README.md) | How-to | working copy |
-| Sensors | [sensors.md](sensors.md) | Reference + how-to | working copy |
+| Everything in one long page | [GUIDE.md](GUIDE.md) | Mixed (all four types) | released, being split |
+| Plain-language pages for users | [user/](user/README.md) | How-to | released |
+| Sensors | [sensors.md](sensors.md) | Reference + how-to | released |
 | Range, loss and power measurement | [FIELD-TEST.md](FIELD-TEST.md) | How-to | procedure written; no field results yet |
-| Threat model | [security/threat-model.md](security/threat-model.md) | Explanation | working copy |
+| Threat model | [security/threat-model.md](security/threat-model.md) | Explanation | released |
 | Security review | [security-audit-2026-11-20.txt](security-audit-2026-11-20.txt) | Report | internal, 2026-11-20 |
 | Decision log (including rejected ideas) | [decisions/](decisions/README.md) | Explanation | maintained |
 | What is verified, and how | [verification/](verification/README.md) | Reference | maintained |
 | Comparison with Meshtastic, MeshCore, Reticulum | [../compare.md](../compare.md) | Explanation | simulator and documentation based |
-| Interactive manual | [manual/index.html](manual/index.html) | Mixed | released + working copy |
+| Interactive manual | [manual/index.html](manual/index.html) | Mixed | released |
 
 ## Status labels
 

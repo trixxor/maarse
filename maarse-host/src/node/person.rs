@@ -929,6 +929,11 @@ impl Node {
             return true;
         }
         self.log(format!("mailbox: {} message(s) for {} to its device {}", items.len(), short(&person), short(&device)));
+        // A device that signs for bundles gets them that way (only then is a
+        // forged acknowledgement not enough to delete the mail).
+        let signs = self.signs.contains(&device) && self.caps.get(&device).is_some_and(|c| c & maarse_core::appdata::CAP_BUNDLE != 0);
+        let (bundled, items): (Vec<_>, Vec<_>) = items.into_iter().partition(|(_, sealed)| signs && sealed.len() <= maarse_core::mail::MAX_BUNDLED);
+        self.send_bundles(person, device, &bundled);
         for (stored, sealed) in items {
             let now = self.now_ms();
             if let Ok((msg_id, actions)) = self.router.send_direct(device, &sealed, super::token(), now) {

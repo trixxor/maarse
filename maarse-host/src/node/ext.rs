@@ -223,6 +223,14 @@ impl Node {
     pub(super) fn on_app_data(&mut self, from: Address, hops: u8, app_data: &[u8]) {
         let a = appdata::parse(app_data);
         self.mailkeys.set_capable(from, a.caps2 & appdata::CAP2_MAILKEY != 0);
+        if a.caps2 & appdata::CAP2_SIGNED_ACK != 0 {
+            if self.signs.len() >= 20_000 {
+                self.signs.clear();
+            }
+            self.signs.insert(from);
+        } else {
+            self.signs.remove(&from);
+        }
         if let Some(c) = a.caps
             && self.caps.insert(from, c) != Some(c)
         {

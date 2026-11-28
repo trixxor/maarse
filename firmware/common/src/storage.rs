@@ -538,7 +538,7 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         let b = &mut buf[WIFI_OFF..WIFI_OFF + WIFI_LEN];
         b.fill(0);
         b[..4].copy_from_slice(WIFI_MAGIC);
-        b[4] = w.enabled as u8 | (w.modem as u8) << 1 | (w.hotspot as u8) << 2;
+        b[4] = w.enabled as u8 | (w.modem as u8) << 1;
         let mut put = |at: usize, s: &[u8]| {
             b[at] = s.len() as u8;
             b[at + 1..at + 1 + s.len()].copy_from_slice(s);
@@ -562,7 +562,6 @@ impl<F: NorFlash> crate::node::Settings for FlashSettings<F> {
         maarse_core::companion::WifiSettings {
             enabled: b[4] & 1 != 0,
             modem: b[4] & 2 != 0,
-            hotspot: b[4] & 4 != 0,
             ssid: get(b, 5),
             password: get(b, 5 + 33),
             peer: get(b, 5 + 33 + 65),

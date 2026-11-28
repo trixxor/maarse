@@ -146,6 +146,10 @@ fn fuzz_open_compact() {
         corpus.push(out[..n].to_vec());
         if i < 5 {
             ratchet::open(&b, &out[..n], &mut sb, |_| Some(a_pub), &mut pt).unwrap();
+            // Acknowledged: from here the short form is used.
+            let s = sa.get_mut(&b_pub.address()).unwrap();
+            let chain = s.send_position().unwrap().0;
+            s.confirm(chain);
         }
     }
     // The last one is compact and not yet read: it is the genuine message.

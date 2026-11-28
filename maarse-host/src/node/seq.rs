@@ -6,7 +6,7 @@
 use super::{Node, short};
 use maarse_core::Address;
 use maarse_core::companion::{Event, text};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,11 +15,17 @@ pub(super) struct Seqs {
     out: HashMap<Address, u32>,
     inn: HashMap<Address, u32>,
     dirty: bool,
+    /// The latest numbered messages shown (sender and a hash of the content,
+    /// number included). In memory only.
+    shown: VecDeque<(Address, u64)>,
 }
+
+/// Numbered messages remembered.
+const SHOWN: usize = 512;
 
 impl Seqs {
     pub(super) fn load(dir: &Path) -> Self {
-        let mut s = Seqs { file: dir.join("seq.txt"), out: HashMap::new(), inn: HashMap::new(), dirty: false };
+        let mut s = Seqs { file: dir.join("seq.txt"), out: HashMap::new(), inn: HashMap::new(), dirty: false, shown: VecDeque::new() };
         for line in fs::read_to_string(&s.file).unwrap_or_default().lines() {
             let v: Vec<&str> = line.split_whitespace().collect();
             if let [dir, a, n] = v[..]
@@ -43,6 +49,21 @@ impl Seqs {
             }
         }
         let _ = fs::write(&self.file, t);
+    }
+
+    /// `false` for a numbered message from `from` that has been shown lately.
+    /// The content counts too: a sender that lost its counter may use a number
+    /// again, for another message.
+    pub(super) fn first_time(&mut self, from: Address, numbered: &[u8]) -> bool {
+        let key = (from, maarse_core::dedup::packet_id(maarse_core::PacketType::Data, &from, numbered));
+        if self.shown.contains(&key) {
+            return false;
+        }
+        if self.shown.len() >= SHOWN {
+            self.shown.pop_front();
+        }
+        self.shown.push_back(key);
+        true
     }
 
     /// The next number for a message to `dest`.

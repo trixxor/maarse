@@ -2,7 +2,7 @@
 
 > **Type:** how-to · **Goal:** put Må:rse firmware on a LoRa board · **Assumes:** you know which board you have. If you are new, start with the [tutorial](../tutorials/first-node.md).
 >
-> **Status:** `working copy`. The commands are taken from [GUIDE.md](../GUIDE.md) and [FIELD-TEST.md](../FIELD-TEST.md). The web flasher is live at <https://trixxor.github.io/maarse/flash.html> but has not been tested on every board. `bench-tested`: Heltec V4 and XIAO nRF52840 by cable. WisMesh Tag and XIAO ESP32-S3 build, but are not flashed.
+> **Status:** `released`. The commands are taken from [GUIDE.md](../GUIDE.md) and [FIELD-TEST.md](../FIELD-TEST.md). The web flasher is live at <https://trixxor.github.io/maarse/flash.html> but has not been tested on every board. `bench-tested`: Heltec V4 and XIAO nRF52840 by cable. WisMesh Tag and XIAO ESP32-S3 build, but are not flashed.
 
 Supported boards: `wismesh-tag`, `xiao-nrf52840`, `heltec-v4`, `xiao-esp32s3`.
 

@@ -134,7 +134,6 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
         return;
     };
     let mut duty = DutyCycle::new(p.cfg.duty_permille as u32, Instant::now().as_millis());
-    crate::bus::set_radio_air(&p.cfg);
     let mut jitter = Jitter(seed | 1);
     let mut queue: heapless::Vec<Planned, QUEUE> = heapless::Vec::new();
     // Signed bulletins go before other channel traffic (see maarse_core::qos).
@@ -304,7 +303,6 @@ pub async fn radio_loop<RK: RadioKind, D: DelayNs>(
             Either6::Third(cfg) => {
                 let _ = lora.enter_standby().await;
                 if let Some(np) = params(lora, cfg) {
-                    crate::bus::set_radio_air(&np.cfg);
                     // Keep the airtime already used unless the limit itself
                     // changed: the range test receiver switches SF often, and
                     // a fresh budget on every switch would defeat the limiter.

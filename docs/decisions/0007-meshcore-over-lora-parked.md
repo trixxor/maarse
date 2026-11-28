@@ -6,7 +6,7 @@
 ## Context
 
 MeshCore in the apps needs an HTTPS session to the backbone (`/meshcore/session`,
-the node signs every operation, see [spec, MeshCore service enrollment](../protocol-spec.md#meshcore-service-enrollment-working-copy)).
+the node signs every operation, see [spec, MeshCore service enrollment](../protocol-spec.md#meshcore-service-enrollment)).
 A phone whose only link is LoRa gets Må:rse messages but no MeshCore.
 
 ## Options

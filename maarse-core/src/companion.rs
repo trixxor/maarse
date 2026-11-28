@@ -36,14 +36,12 @@ pub type Text = heapless::Vec<u8, MAX_TEXT>;
 /// host over the backbone. `modem = true`: the node is the host's LoRa modem
 /// over Wi-Fi (like `--serial` over USB); the host does all routing.
 ///
-/// On the wire the first byte holds flags: bit 0 enabled, bit 1 modem, bit 2 hotspot (the node opens its own Wi-Fi
-/// network for phones, see [`crate::hotspot`]; then `ssid` and `password` are the network's name and its WPA2
-/// passphrase of 8 to 63 characters, and `peer` is not used).
+/// On the wire the first byte holds flags: bit 0 enabled, bit 1 modem. The
+/// other bits are 0 and ignored.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WifiSettings {
     pub enabled: bool,
     pub modem: bool,
-    pub hotspot: bool,
     pub ssid: heapless::Vec<u8, 32>,
     pub password: heapless::Vec<u8, 64>,
     pub peer: heapless::Vec<u8, 64>,
@@ -67,10 +65,6 @@ pub mod wifi_state {
     pub const BAD_SETTINGS: u8 = 11;
     /// Not started: the Wi-Fi driver could not be initialised.
     pub const DRIVER_FAILED: u8 = 12;
-    /// Hotspot: the network is open for phones (the node has the address 192.168.4.1) and no phone is connected.
-    pub const HOTSPOT_OPEN: u8 = 4;
-    /// Hotspot: at least one phone is connected.
-    pub const HOTSPOT_CLIENTS: u8 = 5;
 }
 pub type FrameBuf = heapless::Vec<u8, { MAX_FRAME + 2 }>;
 
@@ -648,8 +642,6 @@ pub enum Event {
         enabled: bool,
         /// The node is the host's LoRa modem over Wi-Fi (see [`WifiSettings`]).
         modem: bool,
-        /// The node runs its own hotspot for phones (see [`WifiSettings`]).
-        hotspot: bool,
         state: u8,
         ip: [u8; 4],
         ssid: heapless::Vec<u8, 32>,
@@ -1323,7 +1315,7 @@ impl Command {
             Command::SetName { name } => w.start(0x24).b(name),
             Command::SetWifi(cfg) => w
                 .start(0x28)
-                .b(&[cfg.enabled as u8 | (cfg.modem as u8) << 1 | (cfg.hotspot as u8) << 2, cfg.ssid.len() as u8])
+                .b(&[cfg.enabled as u8 | (cfg.modem as u8) << 1, cfg.ssid.len() as u8])
                 .b(&cfg.ssid)
                 .b(&[cfg.password.len() as u8])
                 .b(&cfg.password)
@@ -1438,7 +1430,7 @@ impl Command {
                 let ssid = r.short()?;
                 let password = r.short()?;
                 let peer = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
-                Command::SetWifi(WifiSettings { enabled: flags & 1 != 0, modem: flags & 2 != 0, hotspot: flags & 4 != 0, ssid, password, peer, modem_key: None })
+                Command::SetWifi(WifiSettings { enabled: flags & 1 != 0, modem: flags & 2 != 0, ssid, password, peer, modem_key: None })
             }
             0x29 => Command::GetWifi,
             0x2d => Command::SetModemKey { passphrase: r.text()? },
@@ -1667,8 +1659,8 @@ impl Event {
             Event::Name { name } => w.start(0xa4).b(name),
             Event::Call { from, data } => w.start(0xa5).b(&from.0).b(data),
             Event::CarryAcked { msg_id } => w.start(0xa7).b(&msg_id.to_le_bytes()),
-            Event::Wifi { enabled, modem, hotspot, state, ip, ssid, peer } => w.start(0xa6)
-                .b(&[*enabled as u8 | (*modem as u8) << 1 | (*hotspot as u8) << 2, *state])
+            Event::Wifi { enabled, modem, state, ip, ssid, peer } => w.start(0xa6)
+                .b(&[*enabled as u8 | (*modem as u8) << 1, *state])
                 .b(ip)
                 .b(&[ssid.len() as u8])
                 .b(ssid)
@@ -1946,13 +1938,13 @@ impl Event {
             0xa7 => Event::CarryAcked { msg_id: r.u64()? },
             0xa6 => {
                 let flags = r.u8()?;
-                let (enabled, modem, hotspot) = (flags & 1 != 0, flags & 2 != 0, flags & 4 != 0);
+                let (enabled, modem) = (flags & 1 != 0, flags & 2 != 0);
                 let state = r.u8()?;
                 let mut ip = [0u8; 4];
                 ip.copy_from_slice(r.take(4)?);
                 let ssid = r.short()?;
                 let peer = heapless::Vec::from_slice(r.take(r.0.len())?).map_err(|_| FrameError::TooLong)?;
-                Event::Wifi { enabled, modem, hotspot, state, ip, ssid, peer }
+                Event::Wifi { enabled, modem, state, ip, ssid, peer }
             }
             0xb5 => Event::DeviceLinked {
                 device: r.addr()?,
@@ -2475,7 +2467,6 @@ mod tests {
         roundtrip_cmd(Command::SetWifi(WifiSettings {
             enabled: true,
             modem: true,
-            hotspot: false,
             ssid: heapless::Vec::from_slice(b"Telefon").unwrap(),
             password: heapless::Vec::from_slice(b"hemmelig kode").unwrap(),
             peer: heapless::Vec::from_slice(b"example.org:4242").unwrap(),
@@ -2483,20 +2474,10 @@ mod tests {
         }));
         roundtrip_cmd(Command::SetModemKey { passphrase: Text::from_slice(b"mast modem key").unwrap() });
         roundtrip_cmd(Command::SetWifi(WifiSettings::default()));
-        roundtrip_cmd(Command::SetWifi(WifiSettings {
-            enabled: true,
-            modem: false,
-            hotspot: true,
-            ssid: heapless::Vec::from_slice(b"Maarse repeater").unwrap(),
-            password: heapless::Vec::from_slice(b"correct horse").unwrap(),
-            peer: heapless::Vec::new(),
-            modem_key: None,
-        }));
         roundtrip_cmd(Command::GetWifi);
         roundtrip_ev(Event::Wifi {
             enabled: true,
             modem: false,
-            hotspot: false,
             state: wifi_state::LINKED,
             ip: [192, 168, 43, 17],
             ssid: heapless::Vec::from_slice(b"Telefon").unwrap(),

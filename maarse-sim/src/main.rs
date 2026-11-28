@@ -910,6 +910,8 @@ impl Sim {
                     ..
                 } => self.on_deliver(node, ptype, dest, &payload),
                 Action::RouteLearned { .. } => self.stats.routes_learned += 1,
+                // Only asked for by post offices that check signatures.
+                Action::SignedAck { .. } => {}
                 Action::Acked { msg_id } | Action::CarryAcked { msg_id } => {
                     if let Some((i, m)) = self
                         .msgs

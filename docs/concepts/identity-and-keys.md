@@ -1,6 +1,6 @@
 # Identity and keys
 
-> **Type:** explanation · **Status:** `working copy`. **The cryptography has not been reviewed by an external cryptographer**, and the forward-secrecy ratchet is a draft in its own source. Exact formats: [protocol-spec.md, sections 2 and 6](../protocol-spec.md#6-cryptography). Source: `maarse-crypto/src/*`.
+> **Type:** explanation · **Status:** `released`. **The cryptography has not been reviewed by an external cryptographer**, and the forward-secrecy ratchet is a draft in its own source. Exact formats: [protocol-spec.md, sections 2 and 6](../protocol-spec.md#6-cryptography). Source: `maarse-crypto/src/*`.
 
 ## An identity is two key pairs
 

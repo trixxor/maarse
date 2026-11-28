@@ -19,7 +19,7 @@
   <div class="tldr">
     <span class="label">TL;DR</span>
     <p><strong>Nothing is field-tested.</strong> No range, loss or power measurement has been made outdoors. Behaviour is checked by automated tests, fuzzing, simulators, and bench tests on two boards on a desk. The cryptography has not been reviewed by outsiders.</p>
-    <p class="meta">Release <code>v0.9.10</code> is the latest. The working copy has a few uncommitted changes on top (the ESP32 Wi-Fi hotspot gateway, airtime work on the branch <code>airtime-compact-frame</code>, and the documentation). Checked 2026-11-27.</p>
+    <p class="meta">Release <code>v0.9.14</code> is the latest (2026-11-28). Features marked as released below are in it. Its message and post office changes were tried between a Heltec V4 and a WisMesh Tag on a desk the same day; the XIAO boards were not. Checked 2026-11-28.</p>
   </div>
 
   <h2 id="kinds">Kinds of evidence</h2>
@@ -39,7 +39,7 @@
     <tr><th>Feature</th><th>Evidence</th><th>Notes</th></tr>
     <tr><td>Direct messages with a delivered mark</td><td><span class="badge b-bench">bench-tested</span> tested</td><td>End-to-end test; two boards</td></tr>
     <tr><td>Forward-secrecy ratchet</td><td>tested, fuzzed</td><td><strong>Draft</strong>, not externally reviewed</td></tr>
-    <tr><td>Compact frame for ratchet messages</td><td>tested, fuzzed, <span class="badge b-simulated">simulated</span></td><td>Firmware change <em>not on hardware</em>; needs a stack check before flashing</td></tr>
+    <tr><td>Compact frame for ratchet messages</td><td>tested, fuzzed, <span class="badge b-simulated">simulated</span></td><td>Flashed on a Heltec V4; not measured over the air</td></tr>
     <tr><td>Routing: path discovery, per-hop acknowledgement, repair</td><td><span class="badge b-simulated">simulated</span> <span class="badge b-bench">bench-tested</span></td><td>Two boards; not field-tested</td></tr>
     <tr><td>Carry and the delivered notice</td><td>tested, <span class="badge b-simulated">simulated</span></td><td><em>Not on hardware</em></td></tr>
     <tr><td>Host post office</td><td>tested</td><td><code>tools/post_office_test.py</code> and the end-to-end test</td></tr>
@@ -48,15 +48,14 @@
     <tr><td>Files over LoRa</td><td><span class="badge b-bench">bench-tested</span></td><td>One case went from 157 s to 66.6 s with pull and batch transfer. Not field-tested.</td></tr>
     <tr><td><code>maarse://</code> pages and public alerts</td><td>tested</td><td>Page limits covered by regression tests. Not on hardware.</td></tr>
     <tr><td>Linked devices (own devices as one identity)</td><td>tested</td><td>Not flashed, not hardware-tested</td></tr>
-    <tr><td>Sensor nodes: catalog and designer</td><td><span class="badge b-working">working copy</span></td><td>Firmware has not run on boards</td></tr>
+    <tr><td>Sensor nodes: catalog and designer</td><td><span class="badge b-released">released</span></td><td>Firmware has not run on boards</td></tr>
     <tr><td>Spectrum recordings</td><td><span class="badge b-bench">bench-tested</span></td><td>Heltec over USB. Remote recording over LoRa untested.</td></tr>
-    <tr><td>Heltec display and button settings</td><td><span class="badge b-working">working copy</span></td><td>Confirm on the board</td></tr>
-    <tr><td>Firmware update from the host (USB, Bluetooth, Wi-Fi)</td><td><span class="badge b-working">working copy</span></td><td>Not flashed</td></tr>
+    <tr><td>Heltec display and button settings</td><td><span class="badge b-released">released</span></td><td>Confirm on the board</td></tr>
+    <tr><td>Firmware update from the host (USB, Bluetooth, Wi-Fi)</td><td><span class="badge b-released">released</span></td><td>Not flashed</td></tr>
     <tr><td>Web flasher</td><td>live on the project site</td><td>Not tested on every board</td></tr>
     <tr><td>Android app (native)</td><td>verified in an emulator</td><td>Bluetooth on a real phone not tested; some features missing</td></tr>
-    <tr><td>Windows service, tray app, installer</td><td><span class="badge b-working">working copy</span></td><td>Signed updates; a SmartScreen warning is accepted</td></tr>
-    <tr><td>ESP32 Wi-Fi hotspot gateway</td><td><span class="badge b-working">working copy</span></td><td>In progress</td></tr>
-    <tr><td>Network test tools: ping, crawl, DHT check</td><td><span class="badge b-working">working copy</span></td><td>Android pages not run on devices</td></tr>
+    <tr><td>Windows service, tray app, installer</td><td><span class="badge b-released">released</span></td><td>Signed updates; a SmartScreen warning is accepted</td></tr>
+    <tr><td>Network test tools: ping, crawl, DHT check</td><td><span class="badge b-released">released</span></td><td>Android pages not run on devices</td></tr>
   </table></div>
 
   <h2 id="not-done">Considered and not done</h2>

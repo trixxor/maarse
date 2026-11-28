@@ -77,6 +77,19 @@ const PINNED_MAX: usize = 32;
 /// for mail anyway.
 const OUTBOX: usize = 4;
 const OUTBOX_GIVE_UP: Duration = Duration::from_secs(600);
+/// Messages left at a post office whose receipt we still know how to check
+/// (the newest; until the node restarts). 32 bytes each, instead of the
+/// sealed copy.
+const POSTED: usize = 16;
+
+/// A message left at a post office.
+struct Posted {
+    msg_id: u64,
+    /// The ID its receipt names, and the proof it must carry (`None`: the
+    /// recipient is too old to prove delivery).
+    receipt: u64,
+    proof: Option<Proof>,
+}
 const MAIL_SYNC_EVERY: Duration = Duration::from_secs(6 * 3600);
 const MAIL_SYNC_MIN: Duration = Duration::from_secs(60);
 
@@ -264,7 +277,11 @@ pub struct FwNode<R: RngCore + CryptoRng, S: Settings> {
     next_mobile_check: Instant,
     /// Sent messages not acknowledged yet: (msg ID, recipient, the message
     /// sealed for a post office (static seal), sent, deposited).
-    outbox: heapless::Vec<(u64, Address, heapless::Vec<u8, 255>, Instant, bool), OUTBOX>,
+    outbox: heapless::Vec<(u64, Address, heapless::Vec<u8, 255>, Instant), OUTBOX>,
+    posted: heapless::Vec<Posted, POSTED>,
+    /// The latest session messages not yet acknowledged, with the sending
+    /// chain each used (see `ratchet::Session::confirm`).
+    sent_chains: heapless::Vec<(u64, Address, [u8; 8]), 8>,
     /// Receipt IDs of mail a post office delivered to us, until it is opened.
     receipt_wanted: heapless::Vec<u64, 4>,
     /// What other nodes can read (`appdata::CAP_*`), from their announces.
@@ -496,6 +513,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
             handovers: heapless::Vec::new(),
             next_mobile_check: Instant::now() + Duration::from_secs(15),
             outbox: heapless::Vec::new(),
+            posted: heapless::Vec::new(),
+            sent_chains: heapless::Vec::new(),
             receipt_wanted: heapless::Vec::new(),
             got_mail: heapless::Vec::new(),
             caps: heapless::FnvIndexMap::new(),
@@ -567,6 +586,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         n.router.hello = true;
         // A message is acknowledged when it has been opened (see `on_data`).
         n.router.app_acks = true;
+        // A mail bundle is acknowledged with our signature.
+        n.router.signed_acks = true;
         if n.wifi_modem() {
             // The host's antenna: the host routes and says hello, not us.
             n.router.hello = false;
@@ -1006,12 +1027,10 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     fn transmit(&self, packet: Pkt, delay_ms: u32, id: u64) {
         // The backbone link gets every packet at once; flood delays and
         // cancellation only matter on the shared radio channel.
-        // (A hotspot with phones connected gets them too: see esp/src/hotspot.rs.)
         #[cfg(feature = "wifi")]
         {
-            use maarse_core::companion::wifi_state::{HOTSPOT_CLIENTS, LINKED};
-            let net = crate::bus::WIFI_STATE.load(Relaxed);
-            if !self.wifi_modem() && (net == LINKED as u32 || net == HOTSPOT_CLIENTS as u32) {
+            let linked = crate::bus::WIFI_STATE.load(Relaxed) == maarse_core::companion::wifi_state::LINKED as u32;
+            if !self.wifi_modem() && linked {
                 let _ = crate::bus::NET_TX.try_send((packet.clone(), 0));
             }
         }
@@ -1060,16 +1079,20 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 Action::CarryAcked { msg_id } => {
                     // Handled like an acknowledgement, but the app is told
                     // "carried" (only relays carry, see `apply_role`).
+                    self.confirm_chain(msg_id);
                     if let Some(id) = self.mail_inflight.remove(&msg_id) {
                         self.settings.mail_remove(id);
                         self.mail_delivered += 1;
                     } else if !self.file_on_ack(msg_id) && !self.probe_acked(msg_id) && !self.mailkeys.acked(msg_id) {
+                        self.forget_sent(msg_id);
                         emit(&Event::CarryAcked { msg_id });
                     }
                 }
+                Action::SignedAck { .. } => {}
                 Action::Acked { msg_id } => {
+                    self.confirm_chain(msg_id);
                     self.sensor_on_ack(msg_id);
-                    self.outbox.retain(|e| e.0 != msg_id);
+                    self.forget_sent(msg_id);
                     if let Some(id) = self.mail_inflight.remove(&msg_id) {
                         self.settings.mail_remove(id);
                         self.mail_delivered += 1;
@@ -1127,7 +1150,6 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         Event::Wifi {
             enabled: w.enabled,
             modem: w.modem,
-            hotspot: w.hotspot,
             state: crate::bus::WIFI_STATE.load(Relaxed) as u8,
             ip,
             ssid: w.ssid,
@@ -1272,6 +1294,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                             let _ = self.receipt_wanted.push(mail::receipt_id(&self.addr, &m));
                             self.on_data(&m, hops);
                         }
+                        self.sign_for_bundles();
                     }
                     // A recipient says it got mail we deposited: the same as an ack.
                     Some(d) if d.op == mail::OP_RECEIPT && d.recipient == self.addr => {
@@ -1279,14 +1302,8 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                         // proof from a recipient that has one.
                         let words: heapless::Vec<u64, 8> = d.receipts().take(8).collect();
                         for (i, id) in words.iter().enumerate() {
-                            let found = self
-                                .outbox
-                                .iter()
-                                .find(|e| mail::receipt_id(&e.1, &e.2) == *id)
-                                .filter(|e| self.proof_from(&e.1, &e.2).is_none_or(|p| words.get(i + 1) == Some(&u64::from_le_bytes(p))))
-                                .map(|e| e.0);
-                            if let Some(msg_id) = found {
-                                self.outbox.retain(|e| e.0 != msg_id);
+                            if let Some(msg_id) = self.receipt_for(*id, words.get(i + 1).copied()) {
+                                self.forget_sent(msg_id);
                                 self.sensor_on_ack(msg_id);
                                 emit(&Event::Acked { msg_id });
                             }
@@ -1607,9 +1624,6 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 if !WIFI || !crate::bus::WIFI_SUPPORTED.load(Relaxed) {
                     return err(0, error_code::BAD_FRAME, "This board has no Wi-Fi");
                 }
-                if w.hotspot && !crate::bus::HOTSPOT_SUPPORTED.load(Relaxed) {
-                    return err(0, error_code::BAD_FRAME, "This firmware build has no Wi-Fi hotspot yet");
-                }
                 // An empty password for the same network keeps the saved one,
                 // so the host can be changed without typing it again.
                 let mut w = w;
@@ -1780,7 +1794,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         };
         self.pin(dest);
         let mut ct = [0u8; 255];
-        let Ok(n) = self.seal(&recipient, plain, &mut ct) else {
+        let Ok((n, format)) = self.seal(&recipient, plain, &mut ct) else {
             err(req, error_code::TOO_LARGE, "The message is too long");
             return None;
         };
@@ -1791,6 +1805,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                 if let Some(p) = self.proof_from(&dest, &ct[..n]) {
                     self.router.expect_proof(msg_id, p);
                 }
+                self.note_chain(msg_id, dest, format);
                 emit(&Event::Sent { req, msg_id });
                 self.apply(actions);
                 // A copy for a post office, sealed without a session (a ratchet
@@ -1806,7 +1821,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
                     if self.outbox.is_full() {
                         self.outbox.remove(0);
                     }
-                    let _ = self.outbox.push((msg_id, dest, heapless::Vec::from_slice(&st[..m]).unwrap_or_default(), Instant::now(), false));
+                    let _ = self.outbox.push((msg_id, dest, heapless::Vec::from_slice(&st[..m]).unwrap_or_default(), Instant::now()));
                 }
                 Some(msg_id)
             }
@@ -1822,12 +1837,11 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         recipient: &PublicIdentity,
         plain: &[u8],
         out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
+    ) -> Result<(usize, Format), CryptoError> {
         let dest = recipient.address();
         let fs_ok = self.fs_peers.contains(&dest) || self.sessions.contains(&dest);
         let compact_ok = self.caps.get(&dest).is_some_and(|c| c & appdata::CAP_COMPACT != 0);
         ratchet::seal_compact(&self.identity, recipient, &mut self.sessions, fs_ok, compact_ok, &mut self.rng, plain, out)
-            .map(|(n, _)| n)
     }
 
     /// `secs` with ±10 % randomness, so nodes do not announce in step.
@@ -1888,7 +1902,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     fn send_plain(&mut self, dest: Address, plain: &[u8]) -> Result<u64, &'static str> {
         let recipient = self.known.get(&dest).map(|(id, _)| *id).ok_or("The recipient has not been heard yet")?;
         let mut ct = [0u8; 255];
-        let n = self.seal(&recipient, plain, &mut ct).map_err(|_| "The message is too long")?;
+        let (n, format) = self.seal(&recipient, plain, &mut ct).map_err(|_| "The message is too long")?;
         let mut token = [0u8; 16];
         self.rng.fill_bytes(&mut token);
         let (msg_id, actions) = self
@@ -1898,6 +1912,7 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         if let Some(p) = self.proof_from(&dest, &ct[..n]) {
             self.router.expect_proof(msg_id, p);
         }
+        self.note_chain(msg_id, dest, format);
         self.apply(actions);
         Ok(msg_id)
     }
@@ -2294,6 +2309,56 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         }
     }
 
+    /// Remembers which chain the session message `msg_id` to `dest` used.
+    fn note_chain(&mut self, msg_id: u64, dest: Address, format: Format) {
+        if format == Format::Static {
+            return;
+        }
+        let Some((chain, _)) = ratchet::SessionStore::get_mut(&mut self.sessions, &dest).and_then(|s| s.send_position()) else { return };
+        if self.sent_chains.is_full() {
+            self.sent_chains.remove(0);
+        }
+        let _ = self.sent_chains.push((msg_id, dest, chain));
+    }
+
+    /// The recipient itself has `msg_id` (not a post office): it has the
+    /// sending chain, so short messages are safe on it.
+    fn confirm_chain(&mut self, msg_id: u64) {
+        let Some(i) = self.sent_chains.iter().position(|e| e.0 == msg_id) else { return };
+        let (_, peer, chain) = self.sent_chains.remove(i);
+        if let Some(s) = ratchet::SessionStore::get_mut(&mut self.sessions, &peer) {
+            s.confirm(chain);
+        }
+    }
+
+    /// Signs for the mail bundles just handled, so the post office can delete
+    /// them. Not inlined: signing takes stack.
+    #[inline(never)]
+    fn sign_for_bundles(&mut self) {
+        while let Some(id) = self.router.signature_wanted() {
+            let signature = self.identity.sign_delivery(id);
+            let actions = self.router.acknowledge_signed(id, signature, now_ms());
+            self.apply(actions);
+        }
+    }
+
+    /// Message `msg_id` is delivered: nothing more to wait for.
+    fn forget_sent(&mut self, msg_id: u64) {
+        self.outbox.retain(|e| e.0 != msg_id);
+        self.posted.retain(|e| e.msg_id != msg_id);
+    }
+
+    /// Which of our messages a receipt (its ID and the word after it) confirms.
+    #[inline(never)]
+    fn receipt_for(&self, id: u64, word: Option<u64>) -> Option<u64> {
+        let proves = |p: Option<Proof>| p.is_none_or(|p| word == Some(u64::from_le_bytes(p)));
+        if let Some(e) = self.posted.iter().find(|e| e.receipt == id) {
+            return proves(e.proof).then_some(e.msg_id);
+        }
+        let e = self.outbox.iter().find(|e| maarse_core::mail::receipt_id(&e.1, &e.2) == id)?;
+        proves(self.proof_from(&e.1, &e.2)).then_some(e.0)
+    }
+
     /// Post offices, the client side (see `maarse_core::mail`): keep our home
     /// post office up to date (the best one our neighbors' hellos name),
     /// drop unacknowledged messages there after 45 s, and ask for our mail
@@ -2330,22 +2395,29 @@ impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
         let home = self.home_po.and_then(|h| h.1);
         let mut i = 0;
         while i < self.outbox.len() {
-            let (_, dest, _, sent, deposited) = &self.outbox[i];
-            let age = sent.elapsed();
+            let (msg_id, dest, _, sent) = &self.outbox[i];
+            let (msg_id, age) = (*msg_id, sent.elapsed());
             if age >= OUTBOX_GIVE_UP {
                 self.outbox.remove(i);
                 continue;
             }
-            if !*deposited
-                && self.outbox[i].2.len() <= maarse_core::mail::MAX_DEPOSITED
+            if self.outbox[i].2.len() <= maarse_core::mail::MAX_DEPOSITED
                 && age >= Duration::from_millis(maarse_core::mail::DEPOSIT_AFTER_MS)
                 && let Some(po) = home
                 && po != *dest
             {
-                let (dest, sealed) = (*dest, self.outbox[i].2.clone());
-                self.outbox[i].4 = true;
+                let (_, dest, sealed, _) = self.outbox.remove(i);
+                if self.posted.is_full() {
+                    self.posted.remove(0);
+                }
+                let receipt = maarse_core::mail::receipt_id(&dest, &sealed);
+                let proof = self.proof_from(&dest, &sealed);
+                let _ = self.posted.push(Posted { msg_id, receipt, proof });
+                // The post office delivers it from here.
+                self.router.stop_resending(msg_id, now_ms());
                 self.send_deposit(po, dest, maarse_core::mail::OP_STORE, &sealed);
                 log("Recipient not answering: message handed to our post office");
+                continue;
             }
             i += 1;
         }

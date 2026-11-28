@@ -1,13 +1,13 @@
 # Offline map of Denmark
 
-Status: host side built and tested in the working copy (branch `map-dk-offline`); the web client draws it (see below); not released, the `map-dk`
+Status: host side built and tested; the web client draws it (see below); not released, the `map-dk`
 release does not exist yet, and neither the web client nor the Android app draws the map from it yet.
 
 The map is one free vector tile archive (Protomaps basemap, OpenStreetMap data) that the host keeps on disk
 and serves to the web client and the Android app. Once it is installed nothing needs the internet to draw
 the map. Server mode (the dedicated VPS `maarse-server`) does not serve the map.
 
-## Online by default, offline file optional (web client, working copy)
+## Online by default, offline file optional (web client)
 
 The web client's Map tab draws the real map without any download. The source is chosen in this order:
 

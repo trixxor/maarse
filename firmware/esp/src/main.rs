@@ -30,8 +30,6 @@ mod sensor;
 mod usb;
 #[cfg(feature = "wifi")]
 mod wifi;
-#[cfg(feature = "hotspot")]
-mod hotspot;
 
 use embassy_executor::Spawner;
 use embassy_time::Delay;
@@ -396,7 +394,7 @@ async fn main(spawner: Spawner) {
     let wifi_on = wifi_settings.enabled && !lean;
     // Modem for a host over Wi-Fi: the node does not route (see wifi.rs).
     maarse_fw_common::bus::WIFI_MODEM.store(
-        cfg!(feature = "wifi") && wifi_on && wifi_settings.modem && !wifi_settings.hotspot,
+        cfg!(feature = "wifi") && wifi_on && wifi_settings.modem,
         core::sync::atomic::Ordering::Relaxed,
     );
 
@@ -466,7 +464,6 @@ async fn main(spawner: Spawner) {
     // ----- Wi-Fi backbone (the `wifi` build; see wifi.rs) -----
     #[cfg(feature = "wifi")]
     maarse_fw_common::bus::WIFI_SUPPORTED.store(true, core::sync::atomic::Ordering::Relaxed);
-    maarse_fw_common::bus::HOTSPOT_SUPPORTED.store(cfg!(feature = "hotspot"), core::sync::atomic::Ordering::Relaxed);
     {
         use core::sync::atomic::Ordering::Relaxed;
         let c = crash_words();

@@ -275,11 +275,12 @@ Capabilities (`APP_CAPS`): bit 6 `CAP_COMPACT` (reads compact forward-secrecy
 messages, section 6.3), bit 0 `CAP_TEXTZ` (reads compressed text, content
 type `TEXT_Z`, section 7.1), bit 1 `CAP_BUNDLE` (reads mail bundles,
 `OP_BUNDLE`, section 8.1), bit 7 `CAP_PROOF` (proves delivery, section 5.5;
-working copy 2026-11-27). A sender compresses text and bundles mail only for
+since 2026-11-27). A sender compresses text and bundles mail only for
 a recipient whose announce has the bit; older nodes skip the field by its
 length. The second byte (since 0.9.13; older nodes send one byte
 and read only the first): bit 0 `CAP2_MAILKEY` (takes the weekly mail key,
-section 8.1).
+section 8.1), bit 1 `CAP2_SIGNED_ACK` (signs for mail bundles, section 5.5;
+since 0.9.14).
 
 **Announce scope.** Forwarders pass an announce on at most
 `ANNOUNCE_SCOPE` = 3 hops (`Router::announce_scope`), except an announce
@@ -396,6 +397,11 @@ announce, probe) are not forwarded; at `Critical` nothing is forwarded.
    `reply token (16, random) | [first queued Data payload] | stamp (5)`.
    The first queued `Data` message for the target is included when
    `16 + len + 5 <= MAX_DIRECT_PAYLOAD`; the reply then also acknowledges it.
+   Since 0.9.14 one attempt, the second after the first one failed (resends
+   and repeated requests together, `BARE_ATTEMPT`), goes without the message:
+   a target that cannot open it (it restarted and lost the session) answers
+   nothing (section 5.5), and without this the route was never found, so the
+   messages queued behind it were dropped too.
 2. Each forwarder that may forward appends its own path ID to the path
    (record route), increments `hops`, and re-floods after the flood delay
    (5.3). A non-anchor whose path is already 12 long drops the request.
@@ -494,7 +500,7 @@ reaches it (also repeats, because the first ack may have been lost) with an
 `Ack`: destination = `ack_token(packet_id)`, path = reverse of the received
 path. `Datagram` is never acknowledged end to end.
 
-**Delivery proof** (working copy 2026-11-27). The token above can be computed
+**Delivery proof** (2026-11-27). The token above can be computed
 by anyone who heard the message, so it proves nothing. A recipient therefore
 acknowledges a `Data` message only after it has opened it, and adds a proof:
 
@@ -526,10 +532,29 @@ a reply; the sender then sends the message once more along the route and gets
 the proof in the `Ack`. A carrier from before proofs ignores a notice with a
 payload, so the destination sends an empty notice after it.
 
-**Not covered:** the acknowledgements of `Deposit` and `Fragment` packets have
-no proof. A forged one can still make a sender believe a post office has its
-message, or make a post office delete mail it delivers in a bundle. The sender
-is not told "delivered" without the recipient's proof.
+**Signed acknowledgement of a mail bundle** (since 0.9.14). A post office
+cannot compute the proof above, and it deletes its copy when the bundle it
+delivered is acknowledged. A recipient that announces `CAP2_SIGNED_ACK`
+therefore answers a `Deposit` with op `BUNDLE`, once it has handled the
+messages, with an `Ack` whose payload is its 64-byte Ed25519 signature over
+
+```text
+"maarse/bundle/v1" (16) | recipient address (16) | packet ID (u64 LE)
+```
+
+A repeated copy of the bundle gets the same signature again. A host post office
+that sends a bundle to such a node counts only a valid signature: any other
+acknowledgement is ignored, the copy is kept, and the delivery is tried again.
+Repeaters pass the 64 bytes on unread. Mail kept for an account goes to a
+signing device as bundles too. A handheld with no client connected ignores a
+bundle, so the mail stays at the post office.
+
+**Not covered:** the acknowledgements of `Fragment` packets and of other
+`Deposit` packets have no proof: a forged one can make a sender believe a post
+office has its message. A post office deletes on any acknowledgement when the
+recipient does not sign (older versions), for a stored message too long for a
+bundle (190-196 bytes, sent as `Data`), and in a radio's small flash mailbox.
+The sender is not told "delivered" without the recipient's proof.
 
 ### 5.6 Route repair
 
@@ -768,7 +793,11 @@ rejected.
 Rules:
 
 * The first `FULL_FIRST` = 2 messages after a ratchet step carry the full
-  ratchet key (`0xF1`), so one lost message does not break the chain.
+  ratchet key (`0xF1`), so one lost message does not break the chain. Since
+  0.9.14 the long form goes on after those until the sender knows that the
+  recipient has the chain: a message from it that builds on the chain, or an
+  end-to-end acknowledgement of a message in it. Before, a recipient that was
+  away could not read the first short message.
 * A sender that has heard a new ratchet key takes its next step after at most
   `STEP_EVERY` = 8 messages on the current key, not at once. A step is never
   delayed before the first one (the init chain is only as strong as the static
@@ -813,6 +842,17 @@ Rules:
 * Skipped message keys: at most `MAX_SKIP` = 8 per session; a chain may jump
   at most `MAX_JUMP` = 512 messages.
 * Simultaneous start: the init from the numerically lower address wins.
+* **Replacing a session** (since 0.9.14). A session is *proven* once the
+  contact has sent a ratchet or compact message in it. A proven session that is
+  replaced (by an incoming init, or because the node starts a new one) is kept
+  as the backup until the new one is proven. A message only the backup can open
+  is read with it; if the new session came from an incoming init, the backup
+  then takes its place again, since the contact evidently does not use the new
+  one. When the new session is proven, the backup is deleted and its init key
+  is remembered (the latest `OLD_INITS` = 4): that init is refused from then
+  on. Hosts keep backups in memory only; a radio has room for one. Sessions on
+  disk have version 3 (32 bytes longer); versions 1 and 2 are read, and an
+  older program discards version 3 sessions.
 * A recipient that cannot open a ratchet message (no or broken session)
   starts a new session and sends content type `RESYNC` (0x04, section 7).
   **Test first** (since 0.9.13): a packet that does not fit an
@@ -829,7 +869,7 @@ Rules:
   nothing to lose. Radio nodes test at most four sessions at a time. For a
   contact without `CAP_PROOF` anyone who hears the probe can acknowledge it,
   which delays the healing of a really broken session.
-* **Saved before sending** (hosts, working copy 2026-11-27): a ratchet message
+* **Saved before sending** (hosts, 2026-11-27): a ratchet message
   leaves only after `sessions.bin` has been synced to disk with its sending
   chain at a later message number (saved up to 32 ahead, so one message in 32
   waits for the disk). After a restart the chain goes on from there; the
@@ -852,7 +892,7 @@ Rules:
   marker, sessions are not kept across restarts. A file from an older version
   (no epoch) is used if there is no marker. **Not covered:** a restore that
   brings the marker back too (a whole-disk or virtual-machine snapshot).
-* **Replays** (hosts, working copy 2026-11-27): the last 20 000 accepted direct
+* **Replays** (hosts, 2026-11-27): the last 20 000 accepted direct
   and channel messages are remembered by packet ID (`seen.bin`); the same
   sealed bytes are not shown again and do not reach the session. Radio nodes
   (since 0.9.13) remember the last 24 direct messages they opened,
@@ -864,10 +904,11 @@ Rules:
 * A static, init or inbox message whose sender's X25519 key gives a
   non-contributory shared secret is rejected; signatures are verified strictly.
 * Known gaps (from the source): init messages have no forward secrecy against
-  the recipient's static key; a replayed init that the node has not seen before
-  or has forgotten (hosts remember the last 20 000 packets, radio nodes 24) can
-  replace a session, which then heals when the real contact is next heard
-  from; headers (`n`, `pn`, ratchet key) are not encrypted.
+  the recipient's static key; a replayed init that the node has forgotten (in
+  neither its replay cache, of the last 20 000 packets on hosts and 24 on
+  radios, nor its four remembered init keys) can replace a session until the
+  contact is next heard from; headers (`n`, `pn`, ratchet key) are not
+  encrypted.
 
 ### 6.4 Channels
 
@@ -1156,6 +1197,16 @@ Deposit payload = recipient (16) | op (1) | body
 | 4 `BUNDLE` | n × (length (1) \| sealed message) | one or more stored messages, sent to the recipient itself |
 | 5 `RECEIPT` | receipt ID (u64 LE) \| delivery proof (8, section 5.5; absent from older nodes) | recipient to the original sender: the mail arrived |
 
+**One path at a time** (since 0.9.14). Once a message has been handed to a post
+office, the sender stops sending it directly (`Router::stop_resending`; a node
+that carries messages still carries it), so a recipient that returns does not get
+both. An acknowledgement of a copy already under way still counts, and a host
+that gets one with the recipient's proof deletes the copy in its own post office.
+A host also shows a numbered message (content `SEQ`) once, whatever number of
+sealed forms arrive. A duplicate is still possible when the direct message
+arrived but its acknowledgement was lost and the recipient is a radio, or the
+other copy is held by another post office.
+
 **Sizes.** With a 212-byte direct payload, a `STORE` sent over the air holds a
 sealed message of at most 190 bytes (`MAX_DEPOSITED`), and a `BUNDLE` one of at
 most 189 bytes (`MAX_BUNDLED`). A host that is its own post office keeps up to
@@ -1164,7 +1215,7 @@ then never sees it as delivered unless the recipient is reached directly.
 
 `BUNDLE` goes only to a recipient announcing `CAP_BUNDLE`: a host packs as
 many waiting messages as fit in one packet (a single message too), and one
-end-to-end ack covers them all (then `DELIVERED` goes to the replicas). The
+end-to-end ack covers them all, signed by a recipient that can (section 5.5). The
 recipient opens each sealed message as if it had arrived as `Data`. A message
 longer than `MAX_BUNDLED`, and every message for a recipient without
 `CAP_BUNDLE`, is sent as ordinary `Data` (before 0.9.13 a message of 190-196
@@ -1182,7 +1233,9 @@ that of the device that opened it (the sender accepts the proof of any checked
 device of the account). The sender recomputes the ID for the copies in its
 outbox and reports the matching message as acknowledged ("delivered") to its
 app. A host remembers a deposited copy for seven days, until it restarts; a
-radio for ten minutes. A node that does not know
+radio remembers the receipt ID and proof of the latest 16 messages it has
+handed to a post office, until it restarts (since 0.9.14; before, ten
+minutes). A node that does not know
 op 5 ignores it (hosts) or treats it as the old format (older firmware keeps
 a few useless bytes in its small mailbox until they expire). Messages
 delivered straight to the recipient are acked as before and need no receipt.
@@ -1259,7 +1312,7 @@ content is:
 count it as invalid. After a hello, floods with a region are only sent to peers
 that serve that region; peers without a hello get everything.
 
-**Packet observations (working copy).** An observation collector sets bit 5
+**Packet observations.** An observation collector sets bit 5
 of the capability flags appended to its region hello (section 8.4). An opted-in
 host sends reports only on the configured outgoing TCP peer link after it sees
 this capability. Each report is a normal length-prefixed TCP frame, with content
@@ -1281,7 +1334,7 @@ sizes remain observable. Authentication binds each report to an allowed host,
 which still controls the accuracy of its telemetry. Relaying reports between
 collectors is outside this version.
 
-**Open channel names (working copy).** Capability bit 6 in the TCP region
+**Open channel names.** Capability bit 6 in the TCP region
 hello signals support for an optional length-prefixed descriptor
 `0xFF 'O' 'C' | name (UTF-8, up to 240 bytes)` immediately before an
 ordinary `Channel` flood. Names use `public` or `#name` and may include
@@ -1389,7 +1442,7 @@ traffic.
 | `RADIO_LIFETIME` | 30 h (`maarse-host/src/node/reach.rs`) |
 | `HOST_LIFETIME` | 45 min (same file) |
 
-**What a host publishes (working copy, not field-tested).** A public host
+**What a host publishes (not field-tested).** A public host
 publishes its own address and the addresses whose announce arrived on one of
 its links. An announce it obtained through a DHT lookup is not published as its
 own. An address stays published for `RADIO_LIFETIME` after the latest new
@@ -1551,7 +1604,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x25 | GetName | – | |
 | 0x26 | RequestPage | req (2) \| dest (16) \| path (text) | reply `Sent` |
 | 0x27 | SendCall | dest (16) \| data (text) | TCP only, else `Error` code 9 |
-| 0x28 | SetWifi | flags (1: bit 0 enabled, bit 1 modem, bit 2 hotspot) \| ssid (str8) \| password (str8) \| peer (text) | local only; with the hotspot bit the node opens its own WPA2 network (ssid, password of 8 to 63 characters, `peer` unused); a firmware build without the hotspot answers `Error` |
+| 0x28 | SetWifi | flags (1: bit 0 enabled, bit 1 modem; other bits 0, ignored) \| ssid (str8) \| password (str8) \| peer (text) | local only |
 | 0x29 | GetWifi | – | reply `Wifi` |
 | 0x2a | SetRangeTest | range test config (15) | local only; reply `RangeState` |
 | 0x2b | GetRangeTest | – | reply `RangeState` then `Power` |
@@ -1564,7 +1617,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0x34 | SetIdentity | flags (1: bit 0 confirm) \| secret (64) | local only; reply `IdentityChanged` |
 | 0x35–0x37 | – | reserved (linked devices) |
 | 0x39 | Sensor | req (2) \| dest (16, all zeros = the connected node or the host) \| op (1) \| data | sensor nodes: recipe, owners, status, host operations (history, simulation); a command for another node goes to it as a control command; see `docs/sensors.md` | |
-| 0x46 | SetBlePin | code (u32, 0..999999, not 123456) | radio nodes (working copy 2026-11-27): a new Bluetooth code (section 9.8); locally or through `Remote` from an administrator. Other paired devices are forgotten. Reply `BlePin` |
+| 0x46 | SetBlePin | code (u32, 0..999999, not 123456) | radio nodes (2026-11-27): a new Bluetooth code (section 9.8); locally or through `Remote` from an administrator. Other paired devices are forgotten. Reply `BlePin` |
 | 0x47 | GetBlePin | – | reply `BlePin`; the code is never sent |
 | 0x44 | ConfirmRadio | – | keep the radio settings on trial (allowed through `Remote`); reply `Radio` with the settings in use. Without a trial it only answers that, so a repeated confirmation is harmless |
 
@@ -1604,7 +1657,7 @@ client) have type >= 0x80. `req` is a client-chosen u16 echoed in replies.
 | 0xa3 | NodeInfo | addr (16) \| hops (1) \| app-data TLVs `0x03`/`0x04`/`0x05`, `0x06` role, `0x07` capabilities and `0x08` person claim (section 4.2). Role and person are forwarded since 2026-11-27; older hosts and radios leave them out, so a client shows such nodes as unknown kind. The role flags are sent as 0 |
 | 0xa4 | Name | name (text) |
 | 0xa5 | Call | from (16) \| data |
-| 0xa6 | Wifi | flags (1: bit 0 enabled, bit 1 modem, bit 2 hotspot) \| state (1: 0 off, 1 joining, 2 online, 3 linked, 4 hotspot open, 5 hotspot with phones, 10 skipped after crash, 11 bad settings, 12 driver failed) \| ip (4) \| ssid (str8) \| peer (text) |
+| 0xa6 | Wifi | flags (1: bit 0 enabled, bit 1 modem) \| state (1: 0 off, 1 joining, 2 online, 3 linked, 10 skipped after crash, 11 bad settings, 12 driver failed) \| ip (4) \| ssid (str8) \| peer (text) |
 | 0xa7 | CarryAcked | msg_id (u64) |
 | 0xa8 | RangeState | config (15) \| sf (1) \| synced (1) \| count (u32) \| missed (u32) \| seq (u32) \| n × per-SF (12) |
 | 0xa9 | RangeRx | see `RangeRx` in `companion.rs` |
@@ -1675,14 +1728,14 @@ Keys in `Stats` (module `stat`): 1 uptime s, 2 known nodes, 3 routes,
 93 hellos sent, 94 key requests sent, 95 local repairs, 96 messages carried,
 97 pinned contacts, 98 mobile mode (0/1), 99 quota dropped, 100 messages
 waiting for a key, 101 outbox (messages kept for a post office deposit), 118 seconds left of a remote radio change on trial (0 = none).
-From a radio that knows its battery size (the WisMesh Tag; working copy
+From a radio that knows its battery size (the WisMesh Tag; since
 2026-11-28): 119 minutes of battery left, 120 what that rests on (0 unknown,
 1 on external power, 2 measured from the fall of the voltage, 3 estimated),
 121-124 estimated current in 0.1 mA (basic running, listening, sending, GPS),
 125 measured fall in 0.1 % per hour. A host passes 119-125 on from its attached
 radio, and leaves out its own external-power key (82) when that radio reports a
 battery voltage.
-Status page keys (2026-11-25, working copy, not released): 103 GPS satellites
+Status page keys (2026-11-25 ): 103 GPS satellites
 in use, 104 seconds since the last GPS fix, 105 GPS state (0 off, 1 on but the
 module is silent, 2 searching, 3 has a position), 106 satellites in view, 107
 NMEA bytes received, 108 Bluetooth state (0 off, 1 advertising, 2 connected),
@@ -1699,7 +1752,7 @@ the second with the post office counters (60, 61, 70) and keys 93–101.
 Receivers merge them by key (a frame containing key 1 starts a new set).
 Over remote control the values come in chunks of 25 as before. In modem mode
 the firmware answers `GetStats` and `GetRadio` without leaving modem mode;
-Experimental tools (2026-11-25, working copy, not released): command `0x3c`
+Experimental tools (2026-11-25 ): command `0x3c`
 `GetGps` (a board with a GPS module answers with event `0xBE` `Gps`, the layout of
 `maarse-core/src/gpsinfo.rs`: state, satellites used and in view, HDOP, height, speed,
 course, UTC, position and up to 24 satellites with system, number, elevation, azimuth,
@@ -1714,7 +1767,7 @@ not receive packets.
 Modem mode frame `0x42` (host to radio, one byte, no content): a message arrived at the
 host; a board with a buzzer beeps. It does not end modem mode. Boards without a buzzer ignore it.
 
-Recording on the radio itself (2026-11-26, working copy, not released). Command `0x3e` `SweepRecStart` (start kHz
+Recording on the radio itself (2026-11-26 ). Command `0x3e` `SweepRecStart` (start kHz
 u32, step kHz u16, duration s u16 (1 to 600), interval u8 in tenths of a second with 0 = 1, threshold dB u8 with 0 = 6) makes
 the radio record 64 steps from the start frequency, one sweep after the other (10 a second with an interval of 1), and make
 the file below. While it records the radio hears nothing and sends nothing (what waits to be sent waits), so a repeater is out
@@ -1734,7 +1787,7 @@ restart. maarse-host passes the three commands to its USB and Bluetooth radios a
 own file events (a radio in modem mode receives no files from the air) to its clients; clients save a file with this MIME
 under Recordings instead of showing it in a chat.
 
-Spectrum recordings (2026-11-26, working copy, not released; `maarse-core/src/sweeprec.rs`). A
+Spectrum recordings (2026-11-26; `maarse-core/src/sweeprec.rs`). A
 long run of sweeps is kept as one small file, the "MSR2" format: 5 minutes at 10 sweeps a second is 205 KB
 of sweeps and a few hundred bytes of file. All numbers are little endian. The recorder takes the strongest
 value of each step in each time bucket, `bucket ms = max(ceil(duration ms / 256), 1000)` (at most 256
@@ -1813,7 +1866,7 @@ runs out first, the node returns to the settings in flash (a reboot during the t
 `SetRadio` is sent before the switch; the administrator's own radio must hear the node on the new settings for `ConfirmRadio` to arrive.
 Stats key 118 shows the seconds left (second stats frame).
 
-### 9.8 The Bluetooth code (working copy 2026-11-27)
+### 9.8 The Bluetooth code (2026-11-27)
 
 A radio node has a 6-digit code (`maarse_core::blepair`) and uses Bluetooth LE
 Secure Connections pairing with it as passkey: it asks a connecting client to
@@ -1892,7 +1945,7 @@ Status as of the documentation review of 2026-11-27.
 
 
 
-### MeshCore service enrollment (working copy)
+### MeshCore service enrollment
 
 `/meshcore/session` uses a WebSocket behind the backbone's HTTPS endpoint. It
 sends a one-use 32-byte random challenge as hexadecimal with `version: 1`.
@@ -1945,7 +1998,7 @@ The temporary login queue is removed on pickup or after roughly one second
 if the worker is unavailable.
 
 
-### Host receive limits (working copy)
+### Host receive limits
 
 The PC host validates an incoming file offer against the configured maximum and
 requires exactly `max(1, ceil(size / chunk_size))` chunks. Each chunk must match

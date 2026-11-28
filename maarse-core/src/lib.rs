@@ -37,7 +37,6 @@ pub mod stamp;
 pub mod sweeprec;
 pub mod textz;
 pub mod modemauth;
-pub mod hotspot;
 pub mod blepair;
 pub mod sort;
 

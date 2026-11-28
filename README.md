@@ -14,11 +14,11 @@
 
 </div>
 
-The working copy adds map traffic inspection and the **Great Belt traffic demo** to the browser simulator. Use **Traffic** to pin a packet or scrub recent activity around an outage. [Traffic controls and limits](docs/denmark/README.md#traffic-on-the-map)
+There is map traffic inspection and the **Great Belt traffic demo** to the browser simulator. Use **Traffic** to pin a packet or scrub recent activity around an outage. [Traffic controls and limits](docs/denmark/README.md#traffic-on-the-map)
 
-In the working copy, **Real network** shows the real network next to the simulation: nodes, packets, open channels and 24 hours of history from participating hosts. Dedicated server operators can enable **Share live traffic** in the dashboard. [Real network: setup and privacy](docs/denmark/README.md#real-network-setup-and-privacy)
+**Real network** shows the real network next to the simulation: nodes, packets, open channels and 24 hours of history from participating hosts. Dedicated server operators can enable **Share live traffic** in the dashboard. [Real network: setup and privacy](docs/denmark/README.md#real-network-setup-and-privacy)
 
-The working-copy Denmark map can show a TCP-only node's shared position and verified announces. Enable **Share open channels** on the collector to show new messages and activity from `public` and automatically identified open channels. [Collector setup](docs/denmark/README.md#packet-observers-and-public-channels)
+The Denmark map can show a TCP-only node's shared position and verified announces. Enable **Share open channels** on the collector to show new messages and activity from `public` and automatically identified open channels. [Collector setup](docs/denmark/README.md#packet-observers-and-public-channels)
 
 ## Må:rse in 30 seconds
 
@@ -196,7 +196,7 @@ Someone with a radio receiver and no keys can read this from a direct message:
 | 🌲 **Forest mode and carry** | Handheld relays when there are no repeaters, and edge bridges: the person on the hill who hears a repeater relays for the group. Messages carried by people on the move. |
 | 🤝 **Neighbours and keys** | Small hello packets tell neighbours roles and coverage within seconds; a node asks the network for a key it lacks; contacts you talk to are pinned and kept in flash; cars say they move so routes to them are refreshed. |
 | 🏠 **Home Assistant** | MQTT bridge with auto-discovery for battery, position and telemetry. |
-| 🌡️ **Sensor nodes** | A board with a BME280, a door contact or a probe reads on a schedule, sleeps in between, and sends readings and alarms to its owners (up to four people). The recipe is made in a designer in the web client and the Android app out of sentences, tested on a simulated day, and sent over USB or the radio. Built and tested in the working copy; firmware not yet run on boards. See [docs/sensors.md](docs/sensors.md). |
+| 🌡️ **Sensor nodes** | A board with a BME280, a door contact or a probe reads on a schedule, sleeps in between, and sends readings and alarms to its owners (up to four people). The recipe is made in a designer in the web client and the Android app out of sentences, tested on a simulated day, and sent over USB or the radio. Built and tested; sensor firmware not yet run on boards. See [docs/sensors.md](docs/sensors.md). |
 | 🌍 **Languages** | Everything a person reads (Android app, PC web client, server pages, flasher, Windows tray app and installer) is shown in English or Dansk. It follows the device, and Settings can choose one by hand. A new language is one file in `i18n/`; see [docs/i18n.md](docs/i18n.md). |
 | 🔐 **Identity** | 24-word recovery phrase, encrypted backup, safety numbers with QR codes. |
 | 🛠️ **Operations** | Signed firmware updates over USB, Bluetooth, Wi-Fi and the network: radios attached to a host are listed in the web client and the Android app with an **Update** button (GitHub release or your own build). The host runs as a service with a live log page and a Windows tray icon; the Windows app (service plus tray app) installs signed updates from GitHub releases. Repeaters can be managed remotely by administrators. The host can keep a free **offline map of Denmark** (OpenStreetMap data, 22 MB overview or 185 MB detailed, downloaded from this project's releases) and serve it to the web client and the app; see [docs/map.md](docs/map.md) (host side built, clients not yet). |

@@ -2,7 +2,7 @@
 
 # Settings reference
 
-> **Type:** reference · **Status:** released (generated from the code of the working copy)
+> **Type:** reference · **Status:** released (generated from the code)
 
 Every option of `maarse-host` and `maarse-server`. **The primary way to change them is the web client (Settings tab, or Settings page in the Android app).** Saving there writes `settings.txt` in the data folder and restarts the host. You can also edit `settings.txt` by hand: one option per line, exactly as listed below, for example:
 

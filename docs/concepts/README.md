@@ -6,9 +6,9 @@
 | --- | --- | --- |
 | Finding a route, per-hop acknowledgement, repair, roles, priorities | [Routing](routing.md) | `simulated`, `bench-tested` on two boards; not field-tested |
 | Messages that wait for you, and messages that get carried | [Post offices and carry](post-offices-and-carry.md) | host post office `tested (automated)`; carry `simulated` |
-| Addresses, keys, sealed messages, ratchet, channels | [Identity and keys](identity-and-keys.md) | `working copy`; **not externally reviewed** |
+| Addresses, keys, sealed messages, ratchet, channels | [Identity and keys](identity-and-keys.md) | `released`; **not externally reviewed** |
 | Why every node uses the same radio settings | [Decision 0003](../decisions/0003-one-radio-setting.md) | decision |
-| What the network does and does not protect | [Threat model](../security/threat-model.md) | `working copy` |
+| What the network does and does not protect | [Threat model](../security/threat-model.md) | `released` |
 | Comparison with Meshtastic, MeshCore, Reticulum | [compare.md](../../compare.md) | documentation and simulator based |
 
 Still only in [GUIDE.md](../GUIDE.md) and waiting for their own concept page:

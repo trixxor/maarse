@@ -19,7 +19,7 @@ The first start takes a few minutes, because the program is built. After that it
 
 **Backbone with DHT:** a host with a public address is started with `--public-addr <host:port>` (and `--dht <another backbone host>`). It publishes the addresses it can reach in the DHT. Other hosts look up unknown addresses and connect directly to the right gateway. The DHT only exists over TCP, never over LoRa.
 
-In the working copy a host stops publishing an address that has gone quiet: after 30 hours without a new announce (45 minutes for a host connected directly to it). A record already in the DHT lasts up to 2 hours more. When a node turns up behind another gateway with an announce more than an hour newer, the old host stops treating it as being on its own radio. A radio node set to announce less often than about every 27 hours is missing from the DHT between its announces (above about 13 hours, one lost announce is enough); nodes without a clock are not detected as moved. Details in [protocol-spec 8.3](protocol-spec.md#83-dht-purpose-and-records).
+A host stops publishing an address that has gone quiet: after 30 hours without a new announce (45 minutes for a host connected directly to it). A record already in the DHT lasts up to 2 hours more. When a node turns up behind another gateway with an announce more than an hour newer, the old host stops treating it as being on its own radio. A radio node set to announce less often than about every 27 hours is missing from the DHT between its announces (above about 13 hours, one lost announce is enough); nodes without a clock are not detected as moved. Details in [protocol-spec 8.3](protocol-spec.md#83-dht-purpose-and-records).
 
 **Firmware for a radio:**
 
@@ -201,7 +201,7 @@ curl -fsSL https://raw.githubusercontent.com/trixxor/maarse/main/scripts/install
 sudo bash install-server.sh
 ```
 
-The script installs the packages and Rust, builds `maarse-server` from source (5-15 minutes the first time; on a small VPS without swap it offers a 2 GB swap file), and asks for the public address, port, peers, DNS seed, regions, post office and quota, relay, a USB LoRa modem if one is plugged in, and how to reach the dashboard (HTTPS through Caddy with Let's Encrypt, an SSH tunnel, or plain HTTP). It saves the answers in `/var/lib/maarse-server/settings.txt` (one option per line, as on the command line) and the service itself runs without options. An older install that kept `MAARSE_ARGS` in `/etc/default/maarse-server` is moved into `settings.txt` automatically on the next update (the old file is renamed `.migrated`). Every setting can be changed in the dashboard (Settings tab; **Other options** takes any option that has no field of its own) or by editing `settings.txt`, then restarting the service. It sets the admin password (yours or a random one, shown once), creates the system user `maarse`, installs a hardened systemd service that starts at boot, and opens the ports in ufw if it is active. Files: `/usr/local/bin/maarse-server`, options in `/etc/default/maarse-server`, data in `/var/lib/maarse-server`, a restore counter in `/var/lib/maarse-server-state` (working copy; see *Backup and recovery phrase*), source in `/opt/maarse/src`. Run it again to update; the settings are kept unless you choose to change them.
+The script installs the packages and Rust, builds `maarse-server` from source (5-15 minutes the first time; on a small VPS without swap it offers a 2 GB swap file), and asks for the public address, port, peers, DNS seed, regions, post office and quota, relay, a USB LoRa modem if one is plugged in, and how to reach the dashboard (HTTPS through Caddy with Let's Encrypt, an SSH tunnel, or plain HTTP). It saves the answers in `/var/lib/maarse-server/settings.txt` (one option per line, as on the command line) and the service itself runs without options. An older install that kept `MAARSE_ARGS` in `/etc/default/maarse-server` is moved into `settings.txt` automatically on the next update (the old file is renamed `.migrated`). Every setting can be changed in the dashboard (Settings tab; **Other options** takes any option that has no field of its own) or by editing `settings.txt`, then restarting the service. It sets the admin password (yours or a random one, shown once), creates the system user `maarse`, installs a hardened systemd service that starts at boot, and opens the ports in ufw if it is active. Files: `/usr/local/bin/maarse-server`, options in `/etc/default/maarse-server`, data in `/var/lib/maarse-server`, a restore counter in `/var/lib/maarse-server-state` (see *Backup and recovery phrase*), source in `/opt/maarse/src`. Run it again to update; the settings are kept unless you choose to change them.
 
 **Running it**
 
@@ -365,7 +365,7 @@ A relay that can reach a repeater (say, someone who climbs a hill) is often the 
 With `carry_copies > 0` (on in firmware for the relay role with 4 copies; off for repeaters, clients and the host; `maarse-sim --carry N` to try it), a direct message the router gives up on is carried instead of dropped: the node keeps it with N tokens and hands half of them to new encounters ("binary spray and wait"), and to the destination when it is heard. Copies live 30 minutes. Details are in `maarse-core/src/router.rs` ("Carry").
 
 - **Carry packet** (type 11): a one-element path naming the receiving neighbour, payload `tokens (1) | ttl left in s (u16 BE) | from (PathId, u16 BE) | message`. The message stays end-to-end encrypted.
-- **Delivery proof** (working copy 2026-11-27): "delivered" now means the recipient opened the message. Its acknowledgement carries 8 bytes that only sender and recipient can compute, so a stranger cannot fake it (protocol-spec 5.5). A host sends nothing whose encryption state it cannot save to disk, and ignores a message it has already received.
+- **Delivery proof** (2026-11-27): "delivered" now means the recipient opened the message. Its acknowledgement carries 8 bytes that only sender and recipient can compute, so a stranger cannot fake it (protocol-spec 5.5). A host sends nothing whose encryption state it cannot save to disk, and ignores a message it has already received.
 - **Delivered notice:** when the destination gets a carried message (also a repeated copy), it sends a type 11 packet *without* a path, addressed to `ack_token(message id)` (the same 16-byte token as an ordinary acknowledgement), with the proof as payload and once more without (18 bytes on the air; older nodes send only the empty one). Nodes without the notice drop Carry packets without a path, so it is backward tolerant.
 - A carrier that hears the notice deletes its copy, stops handing out copies, passes the notice on once and remembers it for the rest of the copy's lifetime. It repeats it when it meets a neighbour it gave a copy to (or got its copy from), and answers a handoff of a delivered message with the notice instead of storing it. The notice thus walks back along the spray tree to the sender.
 - **Sender:** the router reports `Action::CarryAcked { msg_id }`; the host and firmware send companion event `0xa7 CarryAcked` (`msg_id` u64 LE), and the web client shows "delivered (carried)" (history state 4). A sender that gets an ordinary acknowledgement for a message it still carries (the outbox retried it near a repeater) also stops and tells its carriers.
@@ -404,7 +404,7 @@ the open-backbone placement policy remains active.
 
 ## Announces
 
-In the working copy, the host rejects dated announcements older than seven days
+The host rejects dated announcements older than seven days
 or more than ten minutes ahead of its clock. It preserves the latest accepted
 dated timestamp per destination in its data directory and rejects older
 statements after restart. A clockless announcement is accepted while the host
@@ -510,13 +510,13 @@ The web client has a **Diagnostics** page (the button next to Status/Radio):
 - **Network crawl** (web client: Diagnostics > Network crawl; Android: Experimental > Network crawl): maps who hears whom. It asks a repeater you administer for its neighbour list over remote control (one small reply), then each neighbour you also administer, and so on, one question at a time with a pause (default 15 s) between them, at most 8 nodes and 3 hops by default. The result lists every link with the SNR as each side hears it and flags links that are uneven (6 dB or more apart) or heard one way only, which usually points at an antenna or a settings problem at one end. Nodes that do not answer (you are not their administrator, or they are out of reach) are listed as such. CSV export.
 - **DHT check** (web client: Diagnostics > DHT check; Android: Experimental > DHT check): asks the host (the PC program, a server, or the host built into the app) to check the backbone DHT from its own point of view and answers with one line per finding, each marked info, OK, check or problem: do the DHT contacts answer (and under the identity they should), do the other hosts hold the records this host publishes and agree on where an address is, and does a real lookup from here succeed. It costs a few internet requests and no radio airtime. A radio node connected directly has no DHT and does not answer.
 
-## Managing a repeater in the field (2026-11-26, working copy)
+## Managing a repeater in the field (2026-11-26)
 
 An administrator of a node can manage it over LoRa or the internet without a login: every command travels end-to-end encrypted, and the encryption proves which address sent it (the commands carry no separate signature).
 Web client: Nodes > the node > Manage. Android: contact page > **Manage this node**.
 
 **Setting the administrators** (at most 4) is done while connected to the node itself (USB or Bluetooth), never over the mesh:
-web client: Settings > **Radios, role and regions**; Android: Settings > **Role and regions** (working copy 2026-11-27) >
+web client: Settings > **Radios, role and regions**; Android: Settings > **Role and regions** (2026-11-27) >
 **Administrators of this node**. Enter one address per line and press **Save administrators**; the list replaces the old one,
 and nothing is saved if a line is not a 32-character address. Use the address of the device you will manage the node *from*
 (its address in Settings, or **Copy address** on its node page), not the node's own, and for linked devices each device's
@@ -533,7 +533,7 @@ from a distance in that mode. Over Bluetooth this needs the node's **Bluetooth c
   saves them on your radio. An older node saves a remote change at once. Specification: `docs/remote-repeater-info.md` and protocol spec 9.7.
 - Not built: a repeater that pushes its status to a TCP host by itself (to be looked at later).
 
-## Bluetooth code (2026-11-27, working copy)
+## Bluetooth code (2026-11-27)
 
 Tried on a Heltec V4 with an Android 16 phone: pairing with the factory code, choosing a code, reconnecting after a
 restart of the radio, using the radio as the phone's modem, and a code changed over USB. Between a Heltec and a WisMesh
@@ -590,7 +590,7 @@ only choose a new one: no messages, settings or administrators. USB works as bef
   radio loop hangs on purpose. Not yet tested: the larger Bluetooth notifications, the Heltec display, the restart after a
   panic on nRF52840, an over-the-air update with the watchdog running, sensor sleep, and Wi-Fi.
 
-## Plain status, node types and MeshCore in the node list (2026-11-27, working copy)
+## Plain status, node types and MeshCore in the node list (2026-11-27)
 
 - **Status in everyday words.** The web client's Status page and the Android Mesh page lead with the radio's battery and a card **In short**
   (what the node works as, how long it has run, the last signal, airtime, radios heard, packets passed on, temperature). The remote
@@ -618,14 +618,14 @@ The **Status** page (Mesh › Status in the web client, Mesh › All numbers in 
 
 Status keys 103-117 in `docs/protocol-spec.md`. Verified: unit tests for the NMEA parser (including satellites in view), builds of the nRF firmware for the tag, the host and the Android app. Not yet tested on the real tag with a satellite view (the firmware is not flashed).
 
-## Experimental (Android, 2026-11-25, working copy)
+## Experimental (Android, 2026-11-25)
 
 Settings › **Experimental** (beta) holds tools that only read from the radio:
 
 - **Spectrum and waterfall**: the radio measures the signal strength on 64 frequencies (EU 863-870 MHz in steps of 110 kHz; the tag's radio part is built for 863-928 MHz, so there is no 433 MHz band: a test on the tag showed a higher, flat noise floor there and nothing could be verified) and the app draws the latest sweep as a line and the last minutes as a waterfall that slides down smoothly. **Live** repeats sweeps (about 5-8 a second on the SX1262, an estimate that is not measured on hardware) and stops by itself after 2 minutes and when you leave the page; **Sweep once** does one. While it sweeps, the radio does not receive messages. Needs the new firmware. Commands `0x3d`/`0xBF`, see the protocol specification.
 - **GPS**: sky view with every satellite (in use filled), signal per satellite, height, speed, accuracy (HDOP), position and time from the satellites. Needs the new firmware on a board with a GPS module (RAK WisMesh Tag); the GPS is only on while position sharing is on. Satellites that are used are matched by number only, so with several systems a number can be marked used for the wrong one.
 - **Signal per neighbour**: a line per neighbour over 1 hour, 24 hours or 7 days, with a word for the trend.
-- **Battery and temperature**: the radio's battery with time left, what uses power, 24 hour and 7 day history with charging marked, and chip temperature. A WisMesh Tag with the new firmware (working copy) works out the time left itself: an estimate from its 1000 mAh battery and typical currents at first, measured from the fall of the voltage once it has been off power for an hour. What uses power (basic running, listening, sending, GPS) is always an estimate: no board can measure current. With other radios the app estimates the time left from its last 6 hours of history. The PC web client shows the same under Settings, Experimental, Battery.
+- **Battery and temperature**: the radio's battery with time left, what uses power, 24 hour and 7 day history with charging marked, and chip temperature. A WisMesh Tag with the new firmware works out the time left itself: an estimate from its 1000 mAh battery and typical currents at first, measured from the fall of the voltage once it has been off power for an hour. What uses power (basic running, listening, sending, GPS) is always an estimate: no board can measure current. With other radios the app estimates the time left from its last 6 hours of history. The PC web client shows the same under Settings, Experimental, Battery.
 - **Coverage on the map**: a choice on the Map tab (the Coverage chip, or Experimental): a dot where the radio heard someone and the phone knew its position (green strong, amber weak, red barely) and the outline of the reach. Max one dot per 25 m.
 
 History (battery, temperature, neighbour signals, coverage spots) is kept for 7 days in the app's own files on the phone, one value a minute while the app runs and a radio answers; it can be switched off under Experimental. The PC web client has the Spectrum and Recordings pages (below) and a Battery tab without history; GPS, signal per neighbour, battery history and the coverage layer are not in the web client yet. Not tested on hardware.
@@ -816,7 +816,7 @@ The client asks for the picture like a page, with the step as the first path seg
 
 ## MeshCore access on the backbone
 
-The working copy removes the previous MeshCore USB bridge and its `/mc` socket.
+The project has removed the previous MeshCore USB bridge and its `/mc` socket.
 Remove `--meshcore`, `--meshcore-baud` and `--meshcore-bridge` from service
 arguments and saved settings before upgrading a host that used the bridge.
 
@@ -1094,7 +1094,7 @@ and accepts control WebSockets from its own local browser origin.
 
 The simulator's event trace (`--trace-json <file|->`) is one JSON line per event: `setup` (positions and roles), `links` (audible pairs with SNR), `tx`, `rx` (receivers and collisions), `defer` (duty cycle or busy channel), `send`, `deliver`, `ack`, `move` and `end`. The format is described in `maarse-sim/src/trace.rs`.
 
-In the working copy of the **Denmark browser simulator**, **Traffic** pairs
+In the **Denmark browser simulator**, **Traffic** pairs
 WebAssembly `tx` and `rx` events by transmission ID, groups copies by packet
 ID when pinned, and draws TCP/Wi-Fi and dedicated LoRa arrivals from `bb` and
 `trunk` events. Live hop motion follows those trace records. Its on-screen
@@ -1103,7 +1103,7 @@ the engine keeps its current state. See
 [Traffic on the map](denmark/README.md#traffic-on-the-map) for retention,
 display limits and the Great Belt simulation.
 
-For actual host activity, the working-copy dedicated server dashboard has
+For actual host activity, the dedicated server dashboard has
 **Share the public map** and **Share live traffic** under **Settings**. Enable
 both and choose **Save and restart**. Both settings are required.
 The HTTP(S) endpoint
@@ -1201,13 +1201,13 @@ use the existing companion session.
 
 So solar repeaters in the field can be updated without being brought in. **Not tried on hardware yet** (see the checklist below).
 
-**From the host: USB, Bluetooth and Wi-Fi radios (working copy; not tried on hardware).** A radio that is attached to a `maarse-host` (a USB modem, a Bluetooth modem from the phone, or an ESP32 that joined the host over Wi-Fi) is listed in the web client under **Settings > Firmware > Your radios** and in the Android app under **Settings > Firmware**, with the version it runs and an **Update** button when something newer is available. The host fetches and pushes, the radio only receives: it needs no internet and no open port.
+**From the host: USB, Bluetooth and Wi-Fi radios (not tried on hardware).** A radio that is attached to a `maarse-host` (a USB modem, a Bluetooth modem from the phone, or an ESP32 that joined the host over Wi-Fi) is listed in the web client under **Settings > Firmware > Your radios** and in the Android app under **Settings > Firmware**, with the version it runs and an **Update** button when something newer is available. The host fetches and pushes, the radio only receives: it needs no internet and no open port.
 
 - *Sources.* The newest GitHub release (the signed `maarse-<board>-ota.manifest` and `.bin`; the host uses `curl`, the Android app downloads the files itself and hands them to the host), or the person's own build (pick the `.manifest` and the `.bin`; kept under `<data>/firmware/local/`). Downloads are kept under `<data>/firmware/github/`. The host refuses a manifest that is not signed with the release key built into it (when the build has one); the radio checks the same and also the board, the version and the SHA-256.
 - *Safety.* Nothing on the way is trusted. A radio keeps its old firmware in the other A/B slot and goes back to it if the new one does not start. An update never goes to an older version, and the "allow older" flag is ignored over a modem link. Only one update runs at a time, and the list asks before it starts because the radio is away for about a minute.
 - *Transport.* USB and Bluetooth modems use the same stream as before; a Wi-Fi modem carries the commands on its existing link (protocol-spec section 8.2, "Firmware updates through a modem link"). 200-byte chunks, stop-and-wait with resume: an interrupted update continues from the first unfinished 4 KB block, also after a restart of the radio.
 - *API.* `GET /api/firmware`, `POST /api/firmware/check`, `POST /api/firmware/upload?name=<file>[&source=github]`, `POST /api/firmware/update` (`{"id": link, "source": "github" | "local"}`) and `POST /api/firmware/stop`, in `maarse-host/src/fwupdate.rs`, behind the same access key as the other `/api/` calls.
-- *One-time USB step.* Firmware from before this change cannot answer on a Wi-Fi link, and an older radio on USB does not tell its board. The list says so; update it once with the web flasher, and from then on it updates from the list. The node firmware of this change (the `OtaInfo` event 0x9b that tells the board, and the Wi-Fi channel) is in the working copy and not yet in a release.
+- *One-time USB step.* Firmware from before this change cannot answer on a Wi-Fi link, and an older radio on USB does not tell its board. The list says so; update it once with the web flasher, and from then on it updates from the list. The node firmware of this change (the `OtaInfo` event 0x9b that tells the board, and the Wi-Fi channel) has been released since.
 - *Not done.* A radio that is only connected over Bluetooth to the Android app (no host) still has no update screen in the app; the web client's **Update the connected radio directly** and the web flasher do that. Radios that are not attached to a host (a repeater on a mast that is only on LoRa) cannot be updated this way; LoRa updates stay shelved.
 
 **Signing.** A release is an image and a 112-byte manifest: board ID, version, size, SHA-256 and an Ed25519 signature (the format is in `maarse-crypto/src/ota.rs`). The node only installs when the signature matches the release key in the firmware, the board ID matches, and the version is newer than the running one (anti-rollback). Only locally (USB/Bluetooth) can an older version be allowed with a flag; via the net the flag is ignored.

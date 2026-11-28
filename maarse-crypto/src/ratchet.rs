@@ -66,7 +66,11 @@
 //!   session id and the sender from the session; a message that does not open
 //!   under any session with that id is rejected.
 //! * The first [`FULL_FIRST`] messages after a step still carry the full
-//!   ratchet key (so one lost message does not break the chain), and a sender
+//!   ratchet key (so one lost message does not break the chain). After those,
+//!   the long form goes on until the sender knows that the recipient has the
+//!   chain: a message from it that builds on the chain, or an end-to-end
+//!   acknowledgement of a message in it ([`Session::confirm`]). Otherwise a
+//!   recipient that was away could not read the short form. And a sender
 //!   that has heard a new key from the other party takes its next step after
 //!   [`STEP_EVERY`] messages instead of at once. So the keys heal after at
 //!   most that many messages in each direction (not every turn). No step is
@@ -86,6 +90,23 @@
 //! mask:   HKDF(salt "maarse/fs/v1/sender", DH(...), info ratchet key | R)
 //! ```
 //!
+//! ## Replacing a session
+//!
+//! A session is **proven** once the other party has sent a ratchet (or
+//! compact) message in it: only someone who has the session can. A proven
+//! session that is replaced (by an init from the contact, or by [`reset`]) is
+//! kept as the **backup** until the new one is proven:
+//!
+//! * a message that only the backup can open is read with it. If the new
+//!   session came from an incoming init, the contact evidently does not use it
+//!   (it may have been a recording): the backup takes its place again.
+//! * when the new session is proven, the backup is deleted and its init key
+//!   is remembered (the last [`OLD_INITS`]): that init can never replace a
+//!   session again.
+//!
+//! A store keeps the backups in memory only ([`SessionStore::set_backup`]);
+//! the firmware has room for one.
+//!
 //! ## Simultaneous start
 //!
 //! If both parties start a session before they have heard from each other, the
@@ -98,9 +119,11 @@
 //! * If the recipient loses its state (e.g. the firmware restarts), messages
 //!   sent in the old session cannot be read. The node then answers with a new init
 //!   (`Content::Resync`), and the conversation continues from there.
-//! * A replayed old init that a node has forgotten can reset a session (only
-//!   denial of service, not reading). A forged message cannot: the nodes test
-//!   the session before replacing it (see `docs/protocol-spec.md`, 6.3).
+//! * A replayed old init that a node has forgotten (neither in its replay
+//!   cache nor among the remembered init keys) can replace a session until the
+//!   contact is heard from again (only denial of service, not reading). A
+//!   forged message cannot: the nodes test the session before replacing it
+//!   (see `docs/protocol-spec.md`, 6.3).
 //! * No header encryption: n, pn and the ratchet key are visible.
 
 use crate::seal::CryptoError;
@@ -141,6 +164,8 @@ pub const APP_FS: u8 = 0x02;
 /// Old ratchet keys from the other party that we can recognise (so a late
 /// message is not taken for a broken session).
 const OLD_PUBS: usize = 4;
+/// Init keys of replaced sessions remembered per contact.
+pub const OLD_INITS: usize = 4;
 
 /// Reads app data from an announce: does the node announce forward secrecy?
 ///
@@ -223,6 +248,14 @@ pub struct Session {
     /// lost its session (it sent us a static message or announced itself), and
     /// only the long form lets it find the sender and start a new session.
     force_full: bool,
+    /// The other party is known to have our sending chain.
+    confirmed: bool,
+    /// The other party has sent a ratchet message in this session.
+    proven: bool,
+    /// Made from the other party's init (not started by us).
+    inbound: bool,
+    /// Init keys of proven sessions that this one has replaced.
+    old_inits: [[u8; 8]; OLD_INITS],
 }
 
 /// The length of the version 1 form (before compact messages).
@@ -230,9 +263,11 @@ pub const SESSION_LEN_V1: usize = 1 + 16 + 32 * 2 + 4 + 32 + 2 + 32 * 2 + 16 + 3
     + MAX_SKIP * SKIPPED_LEN
     + 1
     + OLD_PUBS * 8;
+/// The length of the version 2 form (before replaced sessions were kept).
+pub const SESSION_LEN_V2: usize = SESSION_LEN_V1 + SID_LEN * 2 + 2 + 1;
 /// The length of [`Session::to_bytes`].
-pub const SESSION_LEN: usize = SESSION_LEN_V1 + SID_LEN * 2 + 2 + 1;
-const SESSION_VERSION: u8 = 2;
+pub const SESSION_LEN: usize = SESSION_LEN_V2 + OLD_INITS * 8;
+const SESSION_VERSION: u8 = 3;
 
 impl Drop for Session {
     fn drop(&mut self) {
@@ -267,6 +302,14 @@ pub trait SessionStore {
     /// The `skip`-th session whose receive chain has session id `sid`
     /// (ids can collide, so the caller tries them one by one).
     fn find_sid(&mut self, sid: &[u8; SID_LEN], skip: usize) -> Option<&mut Session>;
+    /// Keeps `s`, which is being replaced (see "Replacing a session"). A
+    /// store without room for it does nothing.
+    fn set_backup(&mut self, s: Session);
+    fn backup_mut(&mut self, peer: &Address) -> Option<&mut Session>;
+    /// Removes and returns the backup for `peer`.
+    fn take_backup(&mut self, peer: &Address) -> Option<Session>;
+    /// A backup whose receive chain has session id `sid`.
+    fn backup_by_sid(&mut self, sid: &[u8; SID_LEN]) -> Option<&mut Session>;
 }
 
 fn dh(secret: &[u8; 32], public: &[u8; 32]) -> Result<[u8; 32], CryptoError> {
@@ -388,6 +431,10 @@ impl Session {
             stepped: false,
             sent_in_chain: 0,
             force_full: false,
+            confirmed: false,
+            proven: false,
+            inbound: false,
+            old_inits: [[0; 8]; OLD_INITS],
         }
     }
 
@@ -440,6 +487,14 @@ impl Session {
         self.force_full = true;
     }
 
+    /// A message of the sending chain `chain` (see [`Session::send_position`])
+    /// has been acknowledged: the other party has that chain.
+    pub fn confirm(&mut self, chain: [u8; 8]) {
+        if self.has_cks && fp(&self.dhs_pub) == chain {
+            self.confirmed = true;
+        }
+    }
+
     /// The session id of the chain we receive on, if known.
     pub fn receive_sid(&self) -> Option<[u8; SID_LEN]> {
         self.has_sid_r.then_some(self.sid_r)
@@ -485,7 +540,7 @@ impl Session {
         // chain is already a ratcheted one.
         let lazy = compact_ok && self.stepped && !self.pending && self.has_sid_s && !self.force_full;
         let step = self.need_step && (!lazy || self.sent_in_chain >= STEP_EVERY);
-        let compact = lazy && !step && self.sent_in_chain >= FULL_FIRST;
+        let compact = lazy && !step && self.sent_in_chain >= FULL_FIRST && self.confirmed;
         let total = msg.len() + if compact { COMPACT_OVERHEAD } else { FS_OVERHEAD };
         if out.len() < total || total > maarse_core::router::MAX_DIRECT_PAYLOAD {
             return Err(CryptoError::BufferTooSmall);
@@ -511,6 +566,7 @@ impl Session {
             self.need_step = false;
             self.stepped = true;
             self.sent_in_chain = 0;
+            self.confirmed = false;
             s.zeroize();
         }
         if !self.has_cks {
@@ -646,6 +702,9 @@ impl Session {
                 self.nr = 0;
                 self.has_ckr = true;
                 self.need_step = true;
+                // It built its new chain on ours (the caller keeps this
+                // state only if the message opens).
+                self.confirmed = true;
             } else if n < self.nr {
                 // Already used (and deleted) or too old.
                 return Err(CryptoError::Decrypt);
@@ -713,19 +772,36 @@ impl Session {
         w.put(&self.sid_r);
         w.put(&self.sent_in_chain.to_le_bytes());
         w.put(&[
-            self.has_sid_s as u8 | (self.has_sid_r as u8) << 1 | (self.stepped as u8) << 2 | (self.force_full as u8) << 3,
+            self.has_sid_s as u8
+                | (self.has_sid_r as u8) << 1
+                | (self.stepped as u8) << 2
+                | (self.force_full as u8) << 3
+                | (self.confirmed as u8) << 4
+                | (self.proven as u8) << 5
+                | (self.inbound as u8) << 6,
         ]);
+        for p in &self.old_inits {
+            w.put(p);
+        }
         debug_assert_eq!(w.i, SESSION_LEN);
         b
     }
 
-    /// Reads the current form, or the version 1 form (from before compact
-    /// messages, without session ids: it sends long messages until its next step).
+    /// Reads the current form, version 2 (a session that has been heard from
+    /// counts as proven), or version 1 (from before compact messages, without
+    /// session ids: it sends long messages until its next step).
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        let v1 = b.len() == SESSION_LEN_V1 && b.first() == Some(&1);
-        if !v1 && (b.len() != SESSION_LEN || b[0] != SESSION_VERSION) {
+        let version = *b.first()?;
+        let wanted = match version {
+            1 => SESSION_LEN_V1,
+            2 => SESSION_LEN_V2,
+            SESSION_VERSION => SESSION_LEN,
+            _ => return None,
+        };
+        if b.len() != wanted {
             return None;
         }
+        let v1 = version == 1;
         let mut r = Reader { b, i: 1 };
         let mut s = Session::blank(Address(r.arr()));
         s.rk = r.arr();
@@ -766,6 +842,16 @@ impl Session {
             s.has_sid_r = f2 & 2 != 0;
             s.stepped = f2 & 4 != 0;
             s.force_full = f2 & 8 != 0;
+            s.confirmed = f2 & 16 != 0;
+            s.proven = f2 & 32 != 0;
+            s.inbound = f2 & 64 != 0;
+        }
+        if version == SESSION_VERSION {
+            for p in s.old_inits.iter_mut() {
+                *p = r.arr();
+            }
+        } else {
+            s.proven = s.has_ckr && !s.pending;
         }
         Some(s)
     }
@@ -847,8 +933,48 @@ pub fn reset(
     store: &mut impl SessionStore,
     rng: &mut impl CryptoRngCore,
 ) -> Result<(), CryptoError> {
-    store.insert(Session::initiate(me, peer, rng)?);
+    replace_session(store, Session::initiate(me, peer, rng)?);
     Ok(())
+}
+
+/// Puts `fresh` in the place of the contact's session. A proven one is kept
+/// until the new one is proven too.
+#[inline(never)]
+fn replace_session(store: &mut impl SessionStore, mut fresh: Session) {
+    if let Some(old) = store.get_mut(&fresh.peer) {
+        fresh.old_inits = old.old_inits;
+        if old.proven {
+            let old = old.clone();
+            store.set_backup(old);
+        }
+    }
+    store.insert(fresh);
+}
+
+/// A ratchet message has opened in the current session with `peer`: the
+/// replaced one is not needed any more, and its init never counts again.
+fn session_proven(store: &mut impl SessionStore, peer: &Address) {
+    let Some(old) = store.take_backup(peer) else { return };
+    let init = fp(&old.init_pub);
+    if let Some(s) = store.get_mut(peer) {
+        s.old_inits.rotate_right(1);
+        s.old_inits[0] = init;
+    }
+}
+
+/// `opened` is the backup session after it has read a message. If the current
+/// one came from an incoming init, the contact does not use it: back to the
+/// old one. Otherwise (we started the new one) the old one only reads what was
+/// still on its way.
+#[inline(never)]
+fn keep_opened_backup(store: &mut impl SessionStore, opened: Session) {
+    let peer = opened.peer;
+    if store.get_mut(&peer).is_some_and(|s| s.inbound && !s.proven) {
+        store.take_backup(&peer);
+        store.insert(opened);
+    } else if let Some(b) = store.backup_mut(&peer) {
+        *b = opened;
+    }
 }
 
 /// For tests in other crates: makes a packet in the ratchet or init format look
@@ -952,10 +1078,30 @@ fn open_compact(
             out,
         ) {
             let from = c.peer;
+            c.proven = true;
             *sess = c;
+            session_proven(store, &from);
             return Ok(Opened { from, len, format: Format::Ratchet });
         }
         skip += 1;
+    }
+    if let Some(sess) = store.backup_by_sid(&sid) {
+        let mut c = sess.clone();
+        let rpub = c.dhr;
+        if let Ok(len) = c.decrypt_parts(
+            &rpub,
+            n,
+            0,
+            false,
+            &payload[..COMPACT_HEADER_LEN],
+            &payload[COMPACT_HEADER_LEN..COMPACT_HEADER_LEN + len],
+            &payload[COMPACT_HEADER_LEN + len..],
+            out,
+        ) {
+            let from = c.peer;
+            keep_opened_backup(store, c);
+            return Ok(Opened { from, len, format: Format::Ratchet });
+        }
     }
     Err(CryptoError::Decrypt)
 }
@@ -1001,6 +1147,19 @@ fn open_fs(
             *sess = c;
             return Ok(Opened { from, len: n, format: Format::Init });
         }
+        // A late one of the session that is being replaced.
+        if let Some(sess) = store.backup_mut(&from)
+            && sess.init_pub == rpub
+        {
+            let mut c = sess.clone();
+            let n = c.decrypt(&rpub, n, pn, false, payload, out)?;
+            *sess = c;
+            return Ok(Opened { from, len: n, format: Format::Init });
+        }
+        // The init of a session we have left behind for good: a recording.
+        if store.get_mut(&from).is_some_and(|s| s.old_inits.contains(&fp(&rpub))) {
+            return Err(CryptoError::Decrypt);
+        }
         let ss = me.dh.diffie_hellman(&XPublic::from(peer.dh));
         if !ss.was_contributory() {
             return Err(CryptoError::Decrypt);
@@ -1015,6 +1174,7 @@ fn open_fs(
         fresh.dhr = rpub;
         fresh.init_pub = rpub;
         fresh.need_step = true;
+        fresh.inbound = true;
         let n = fresh.decrypt(&rpub, n, pn, false, payload, out)?;
         let adopt = match store.get_mut(&from) {
             None => true,
@@ -1022,7 +1182,7 @@ fn open_fs(
             Some(old) => !old.pending || from.0 < my_addr.0,
         };
         if adopt {
-            store.insert(fresh);
+            replace_session(store, fresh);
         }
         return Ok(Opened { from, len: n, format: Format::Init });
     }
@@ -1032,14 +1192,38 @@ fn open_fs(
     match c.decrypt(&rpub, n, pn, true, payload, out) {
         Ok(n) => {
             c.pending = false;
+            c.proven = true;
             *sess = c;
+            session_proven(store, &from);
             Ok(Opened { from, len: n, format: Format::Ratchet })
         }
-        Err(CryptoError::Decrypt) if !sess.knows_old(&rpub) && rpub != sess.dhr => {
-            Err(CryptoError::Desync(from))
+        Err(e) => {
+            let unknown = !sess.knows_old(&rpub) && rpub != sess.dhr;
+            if let Some(len) = open_backup(store, &from, &rpub, n, pn, payload, out) {
+                return Ok(Opened { from, len, format: Format::Ratchet });
+            }
+            Err(if e == CryptoError::Decrypt && unknown { CryptoError::Desync(from) } else { e })
         }
-        Err(e) => Err(e),
     }
+}
+
+/// A ratchet message that the current session could not open, tried with the
+/// one being replaced.
+#[inline(never)]
+fn open_backup(
+    store: &mut impl SessionStore,
+    from: &Address,
+    rpub: &[u8; 32],
+    n: u16,
+    pn: u16,
+    payload: &[u8],
+    out: &mut [u8],
+) -> Option<usize> {
+    let mut c = store.backup_mut(from)?.clone();
+    let len = c.decrypt(rpub, n, pn, true, payload, out).ok()?;
+    c.pending = false;
+    keep_opened_backup(store, c);
+    Some(len)
 }
 
 /// A simple store with room for `N` sessions, without heap (for firmware).
@@ -1047,6 +1231,8 @@ fn open_fs(
 pub struct FixedStore<const N: usize> {
     slots: [Option<(u32, Session)>; N],
     clock: u32,
+    /// The latest replaced session (see "Replacing a session").
+    backup: Option<Session>,
 }
 
 impl<const N: usize> Default for FixedStore<N> {
@@ -1057,7 +1243,7 @@ impl<const N: usize> Default for FixedStore<N> {
 
 impl<const N: usize> FixedStore<N> {
     pub const fn new() -> Self {
-        FixedStore { slots: [const { None }; N], clock: 0 }
+        FixedStore { slots: [const { None }; N], clock: 0, backup: None }
     }
 
     pub fn len(&self) -> usize {
@@ -1073,6 +1259,7 @@ impl<const N: usize> FixedStore<N> {
     }
 
     pub fn remove(&mut self, peer: &Address) {
+        self.take_backup(peer);
         for slot in self.slots.iter_mut() {
             if slot.as_ref().is_some_and(|(_, s)| s.peer == *peer) {
                 *slot = None;
@@ -1098,6 +1285,22 @@ impl<const N: usize> SessionStore for FixedStore<N> {
             .filter(|(_, s)| s.has_sid_r && s.sid_r == *sid)
             .nth(skip)
             .map(|(_, s)| s)
+    }
+
+    fn set_backup(&mut self, s: Session) {
+        self.backup = Some(s);
+    }
+
+    fn backup_mut(&mut self, peer: &Address) -> Option<&mut Session> {
+        self.backup.as_mut().filter(|s| s.peer == *peer)
+    }
+
+    fn take_backup(&mut self, peer: &Address) -> Option<Session> {
+        if self.backup.as_ref().is_some_and(|s| s.peer == *peer) { self.backup.take() } else { None }
+    }
+
+    fn backup_by_sid(&mut self, sid: &[u8; SID_LEN]) -> Option<&mut Session> {
+        self.backup.as_mut().filter(|s| s.has_sid_r && s.sid_r == *sid)
     }
 
     fn insert(&mut self, s: Session) {

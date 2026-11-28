@@ -38,7 +38,7 @@
         </ul>
       </div>
     </div>
-    <p class="meta"><span class="badge b-working">working copy</span> <span class="badge b-simulated">simulated</span> Routing results come from <code>maarse-sim</code>, not from field measurements.</p>
+    <p class="meta"><span class="badge b-released">released</span> <span class="badge b-simulated">simulated</span> Routing results come from <code>maarse-sim</code>, not from field measurements.</p>
   </div>
 
   <h2 id="route-once">1. Find the route once, then follow it</h2>
@@ -87,7 +87,7 @@
 
   <section class="deep" id="packet-layout">
     <h2>Packet layout</h2>
-    <p>Source: <code>maarse-core/src/packet.rs</code>. A packet is at most 255 bytes, the largest LoRa packet. <span class="badge b-working">working copy</span></p>
+    <p>Source: <code>maarse-core/src/packet.rs</code>. A packet is at most 255 bytes, the largest LoRa packet. <span class="badge b-released">released</span></p>
 <pre><code>+-------+------+-------------+----------------------------+-------------+---------+
 | flags | hops | destination | path (optional)            | region (opt)| payload |
 | 1     | 1    | 16          | count (1) + 2 x count (BE) | 2 (BE)      | rest    |
@@ -134,7 +134,7 @@
 
   <section class="deep" id="path-discovery">
     <h2>Path discovery step by step</h2>
-    <p>Source: <code>maarse-core/src/router.rs</code>, spec section 5.2. <span class="badge b-working">working copy</span></p>
+    <p>Source: <code>maarse-core/src/router.rs</code>, spec section 5.2. <span class="badge b-released">released</span></p>
     <ol>
       <li>The sender floods a <code>PathRequest</code> with an empty path. The payload is a random 16-byte <em>reply token</em>, optionally the first queued <code>Data</code> payload, and a small proof-of-work stamp. The message is included only if <code>16 + len + 5 ≤ 212</code>.</li>
       <li>Each forwarder that may forward appends its own path ID, increments <code>hops</code> and re-floods after a delay. A forwarder that is not an anchor drops a request whose path is already 12 long.</li>
@@ -164,7 +164,7 @@
 
   <section class="deep" id="source-routing">
     <h2>Source routing and the per-hop confirmation</h2>
-    <p>Spec sections 5.4 to 5.7. <span class="badge b-working">working copy</span></p>
+    <p>Spec sections 5.4 to 5.7. <span class="badge b-released">released</span></p>
     <p>For packets with a path, <code>hops</code> is the index of the next forwarder. A node whose path ID is at that index increments <code>hops</code> and retransmits after 50 ms (<code>SOURCE_ROUTE_DELAY_MS</code>).</p>
     <p>The per-hop confirmation is <em>implicit</em>: after sending, the node listens for the same packet ID with a higher <code>hops</code>. No separate acknowledgement packet is sent for a hop, which saves airtime.</p>
     <div class="table-wrap"><table>
@@ -180,13 +180,13 @@
 
   <section class="deep" id="anchors">
     <h2>Anchors: routes beyond 12 hops</h2>
-    <p>Spec section 5.8. <span class="badge b-working">working copy</span> <span class="badge b-simulated">simulated</span> on a 210 km motorway.</p>
+    <p>Spec section 5.8. <span class="badge b-released">released</span> <span class="badge b-simulated">simulated</span> on a 210 km motorway.</p>
     <p>An anchor is a fixed repeater that splits a long route into legs. When it receives a path request with a non-empty trail it remembers the reply token and the trail so far (for 120 s, at most 16 legs) and forwards the request with an <em>empty</em> trail. When the response comes back, it stores its own route to the target and sends the first leg to the sender. The sender's route therefore ends at the anchor, and the anchor continues along its own route. Several anchors in a row work the same way, up to 64 hops in total.</p>
   </section>
 
   <section class="deep" id="backbone">
     <h2>The backbone and the DHT</h2>
-    <p>Source: <code>maarse-host/src/links.rs</code> and <code>dht.rs</code>, spec sections 8.2 and 8.3. <span class="badge b-working">working copy</span></p>
+    <p>Source: <code>maarse-host/src/links.rs</code> and <code>dht.rs</code>, spec sections 8.2 and 8.3. <span class="badge b-released">released</span></p>
     <p>A backbone link is a TCP connection carrying frames of <code>length (u16, little endian, 1..255) | Må:rse packet</code>. Packets that arrive over TCP are treated as heard with a good signal (SNR 10), so the router can use them like any link. Links use TCP keepalive, and outgoing peers are reconnected every 5 seconds.</p>
     <p>The DHT is Kademlia-like, uses TCP only and never runs over LoRa. A node's ID is its Må:rse address and distance is XOR. To limit one machine filling the table with made-up identities, at most 4 contacts may come from the same IPv4 /24 or IPv6 /48. Contacts are saved to <code>dht-contacts.txt</code> and used as seeds at the next start.</p>
     <p>The first two bytes of an incoming connection select the protocol: <code>D7 D7</code> is a DHT request, <code>4D 4D</code> ("MM") is an ESP32 LoRa modem over Wi-Fi, and anything else is the length of the first backbone frame.</p>

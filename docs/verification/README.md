@@ -26,7 +26,7 @@
 
 ## Status by feature
 
-`working copy` unless stated. Entries marked *not on hardware* are only verified by tests and simulation.
+`released` (v0.9.14) unless stated. Entries marked *not on hardware* are only verified by tests and simulation.
 
 | Feature | Status | Notes |
 | --- | --- | --- |
@@ -35,22 +35,22 @@
 | Compact FS frame (`0xF2`) | tested (automated), fuzzed, simulated | firmware change *not on hardware*; stack probe needed before flashing |
 | Routing (path discovery, per-hop ack, repair) | simulated, bench-tested on two boards | not field-tested |
 | Carry and delivered notice | tested (automated), simulated | *not on hardware* |
+| Delivery changes of 0.9.14 (receipts, signed bundle acknowledgement, one delivery path, recovery after a restart) | tested (automated), bench-tested | 2026-11-28, Heltec V4 and WisMesh Tag on a desk; a replayed old session init was not tried on radios; XIAO boards not tried |
 | Host post office | tested (automated) | `tools/post_office_test.py`, e2e |
 | LoRa trunks between post offices | simulated | |
-| Backbone DHT | tested (automated) | `tools/dht_test.py`; DHT check tool in the working copy |
-| Expiry of published addresses and moved nodes | working copy, unit tests | `maarse-host/src/node/reach.rs`, `dht.rs`; *not field-tested* |
+| Backbone DHT | tested (automated) | `tools/dht_test.py`; with a DHT check tool |
+| Expiry of published addresses and moved nodes | released, unit tests | `maarse-host/src/node/reach.rs`, `dht.rs`; *not field-tested* |
 | Files over LoRa (pull/batch transfer, progress) | bench-tested | measured 157 to 66.6 s in one case; not field-tested |
 | Pages (`maarse://`), alerts | unit tests; page limits covered by regression tests ([audit](../security-audit-2026-11-20.txt)) | not on hardware |
 | Linked devices | tested (automated) | `tools/linked_devices_test.py`; *not flashed, not hardware-tested* |
-| Sensors catalog and designer | working copy | `tools/sensor_catalog.py` |
+| Sensors catalog and designer | released | `tools/sensor_catalog.py` |
 | Spectrum recordings | bench-tested (Heltec over USB) | remote recording over LoRa untested |
-| Heltec display and button settings | working copy | preview tool `tools/display_preview.py`; confirm on the board |
-| Firmware update from the host (USB, Bluetooth, Wi-Fi) | working copy | *not flashed* |
+| Heltec display and button settings | released | preview tool `tools/display_preview.py`; confirm on the board |
+| Firmware update from the host (USB, Bluetooth, Wi-Fi) | released | *not flashed* |
 | Web flasher | live on the Pages site | not tested on every board |
 | Android app (native) | emulator-verified | Bluetooth mode on a real phone not tested; some features missing (see [decision 0009](../decisions/0009-native-android-app.md)) |
-| Windows service, tray, installer | working copy | signed updates; SmartScreen warning accepted |
-| ESP32 Wi-Fi hotspot gateway | working copy | `tools/hotspot_hw_test.py` exists; the feature is in progress |
-| Network test tools (ping, crawl, DHT check) | working copy | `tools/ping_test.mjs`, `crawl_test.mjs`, `dht_check_test.mjs`; Android pages not run on devices |
+| Windows service, tray, installer | released | signed updates; SmartScreen warning accepted |
+| Network test tools (ping, crawl, DHT check) | released | `tools/ping_test.mjs`, `crawl_test.mjs`, `dht_check_test.mjs`; Android pages not run on devices |
 
 ## Simulator results worth knowing
 

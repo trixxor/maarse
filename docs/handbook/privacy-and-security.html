@@ -38,7 +38,7 @@
         </ul>
       </div>
     </div>
-    <p class="meta"><span class="badge b-working">working copy</span> Do not rely on Må:rse for anything where a break would cause harm.</p>
+    <p class="meta"><span class="badge b-released">released</span> Do not rely on Må:rse for anything where a break would cause harm.</p>
   </div>
 
   <h2 id="listener">What a listener can read</h2>
@@ -93,7 +93,7 @@
 
   <section class="deep" id="crypto">
     <h2>The cryptography in detail</h2>
-    <p>Source: <code>maarse-crypto/src/*</code>, spec section 6. <span class="badge b-working">working copy</span> Not externally reviewed.</p>
+    <p>Source: <code>maarse-crypto/src/*</code>, spec section 6. <span class="badge b-released">released</span> Not externally reviewed.</p>
     <p><strong>Primitives:</strong> Ed25519 (signatures), X25519 (key agreement), SHA-256, HKDF-SHA256, ChaCha20-Poly1305 (96-bit nonce, 128-bit tag), and PBKDF2-HMAC-SHA512 for the recovery phrase only. Every decoder is fuzzed, and the project's own crates forbid <code>unsafe</code> code.</p>
     <h3>Identity and address</h3>
     <p>The secret form is 64 bytes: the Ed25519 seed (32) and the X25519 secret (32). The public form is the two public keys (64 bytes). The address is the first 16 bytes of <code>SHA-256(Ed25519 public | X25519 public)</code>.</p>
@@ -107,7 +107,7 @@ k2 = HKDF(salt "maarse/dm/v0",        ikm es | ss, info e_pub | R_addr | S_addr)
 nonce = 12 zero bytes;  AAD = the first 48 bytes</code></pre>
     <p>The overhead is 64 bytes, so the largest message is 212 − 64 = <strong>148 bytes</strong>. A fresh ephemeral key <code>e</code> is used for every message, so the zero nonce is safe. Only the recipient can recover the sender address, and the recipient needs the sender's public keys, normally from an announce, to verify the <code>ss</code> part. Non-contributory Diffie-Hellman results are rejected.</p>
     <h3>Forward secrecy</h3>
-    <p>Contacts that support it use a ratchet. <span class="badge b-designed">draft</span> A leaked current key exposes the current session. Mail held in post offices is sealed to the recipient's weekly mail key when the two sides have written to each other within a week (since 0.9.13; a radio must also know the time), and that key is erased about three weeks later; otherwise it is sealed with the static format, without forward secrecy. An unreadable packet no longer replaces a session: it is tested first. Hosts also throw away a restored or moved session file, and send nothing if they cannot record the state that protects against this. Hosts and radios ignore messages they have already received.</p>
+    <p>Contacts that support it use a ratchet. <span class="badge b-designed">draft</span> A leaked current key exposes the current session. Mail held in post offices is sealed to the recipient's weekly mail key when the two sides have written to each other within a week (since 0.9.13; a radio must also know the time), and that key is erased about three weeks later; otherwise it is sealed with the static format, without forward secrecy. An unreadable packet no longer replaces a session: it is tested first, and since 0.9.14 a replaced session is kept until the contact has used the new one. Hosts also throw away a restored or moved session file, and send nothing if they cannot record the state that protects against this. Hosts and radios ignore messages they have already received.</p>
     <h3>Proof-of-work stamps</h3>
     <p>Announces need a stamp of about 0.3 s on an nRF52840. Path requests, key requests, mail syncs and deposits use a smaller 8-bit stamp: cheap for one message, costly for a flooder, but a determined attacker can still use airtime.</p>
     <h3>Safety numbers</h3>
@@ -122,7 +122,7 @@ nonce = 12 zero bytes;  AAD = the first 48 bytes</code></pre>
 
   <section class="deep" id="host-hardening">
     <h2>Hosts and servers</h2>
-    <p>Spec and threat model. <span class="badge b-working">working copy</span></p>
+    <p>Spec and threat model. <span class="badge b-released">released</span></p>
     <div class="table-wrap"><table>
       <tr><th>Area</th><th>Protection</th><th>Boundary that remains</th></tr>
       <tr><td>Web client and API</td><td>A request without a key must match the real listener (loopback or its numeric IP) and come from a same-origin browser request. Other requests need the access key. Header size, time and connection limits apply.</td><td>Put a reverse proxy in front for public access and require the key. Query-string keys are off by default.</td></tr>

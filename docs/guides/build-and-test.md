@@ -2,7 +2,7 @@
 
 > **Type:** how-to · **Goal:** build the workspace and run the automated checks · **Assumes:** Rust installed; Node and Python for the extra tests.
 >
-> **Status:** `working copy`. Commands from [GUIDE.md, Tests](../GUIDE.md#tests). The test count in GUIDE (180) is old; run `cargo test --workspace` for the current number.
+> **Status:** `released`. Commands from [GUIDE.md, Tests](../GUIDE.md#tests). The test count in GUIDE (180) is old; run `cargo test --workspace` for the current number.
 
 ```text
 cargo test --workspace

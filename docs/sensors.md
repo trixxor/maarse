@@ -8,7 +8,7 @@ below 10 °C for 2 readings, send an alarm". The designer turns it into a small
 **recipe** that the node runs by itself, so alarms work even when your phone
 or PC is off.
 
-Status of this document: **built and tested in the working copy** (core,
+Status of this document: **built and tested** (core,
 host and both user interfaces, with unit tests and screenshots on a PC and on
 Android). **Not yet verified on hardware:** the firmware compiles for the XIAO
 nRF52840 and the Heltec V4, but sleep current, the BME280 on a real board,
@@ -151,7 +151,7 @@ Only pins that are free on the board are offered.
 | Seeed XIAO nRF52840 + Wio-SX1262 | D0 (P0.02), D6 (P1.11), D7 (P1.12) | D6 = SDA, D7 = SCL (takes both pins) | none yet (use an ADS1115) |
 | Heltec WiFi LoRa 32 V4 | GPIO 3, 4, 6, 38, 39, 40, 41 | GPIO47 = SDA, GPIO48 = SCL (the OLED has its own bus) | GPIO4 (ADC1, 0 - 2.5 V) |
 | Seeed XIAO ESP32S3 + Wio-SX1262 | D0 to D7 (GPIO 1 to 6, 43, 44) | D4 = SDA, D5 = SCL | D0 to D5 (not ready: the firmware cannot read sensors yet) |
-| RAK WisMesh Tag | not a sensor board (working copy) | – | – |
+| RAK WisMesh Tag | not a sensor board | – | – |
 
 **RAK WisMesh Tag** (since 0.9.13): the firmware no longer has sensor
 setups on the tag, which is a finished product without free pins. It still

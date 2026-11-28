@@ -143,6 +143,13 @@ impl MailKeys {
     }
 }
 
+#[cfg(test)]
+impl MailKeys {
+    pub(super) fn key_for_test(&self, peer: &Address) -> Option<InboxPublic> {
+        self.peers.iter().find(|e| e.0 == *peer).map(|e| e.1)
+    }
+}
+
 impl<R: RngCore + CryptoRng, S: Settings> FwNode<R, S> {
     fn mail_week(&self) -> Option<u16> {
         self.unix_now().map(pc::week_of)

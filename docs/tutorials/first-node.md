@@ -2,7 +2,7 @@
 
 > **Type:** tutorial · **Reader:** a complete beginner with a Windows or Linux PC · **Time:** about 15 minutes after the first build (the first build takes a few minutes)
 >
-> **Status:** `working copy`. The steps come from `scripts/start-host.*`, [GUIDE.md](../GUIDE.md#getting-started-windows-and-linux) and `tools/e2e_test.py`. **This walkthrough has not been re-run from a clean machine since it was written (2026-11-27).** If a step does not give the result described, that is a bug in this page: fix it here.
+> **Status:** `released`. The steps come from `scripts/start-host.*`, [GUIDE.md](../GUIDE.md#getting-started-windows-and-linux) and `tools/e2e_test.py`. **This walkthrough has not been re-run from a clean machine since it was written (2026-11-27).** If a step does not give the result described, that is a bug in this page: fix it here.
 
 You will start a Må:rse host on your computer, open its web client in the
 browser, and find your own address. Then you will start a second node on the

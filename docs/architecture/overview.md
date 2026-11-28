@@ -1,6 +1,6 @@
 # Architecture overview
 
-> **Type:** explanation · **Status:** working copy · Reader: someone new to the project who wants the whole picture before reading the [protocol specification](../protocol-spec.md).
+> **Type:** explanation · **Status:** released · Reader: someone new to the project who wants the whole picture before reading the [protocol specification](../protocol-spec.md).
 
 Må:rse is a mesh network for LoRa radios with an optional internet backbone.
 Every participant has one 16-byte address, a hash of its public key, that is

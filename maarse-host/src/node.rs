@@ -284,14 +284,27 @@ struct InFile {
     active: Instant,
 }
 
+/// Stored messages sent together.
+struct Bundle {
+    /// Whom they are kept for, and the node they were sent to (a device, for
+    /// mail kept for a person).
+    kept_for: Address,
+    to: Address,
+    ids: Vec<u64>,
+    /// Counts as delivered only with a signed acknowledgement.
+    signed: bool,
+    /// It has had one.
+    checked: bool,
+}
+
 /// What an acknowledgement belongs to.
 enum Pending {
     Message,
     FileOffer(u64),
     FileChunk(u64, u16),
     MailDelivery(Address),
-    /// A bundle of stored messages for the recipient (their IDs).
-    MailBundle(Address, Vec<u64>),
+    /// A bundle of stored messages kept for an address (their IDs).
+    MailBundle(Bundle),
     /// Control command to a remote node (never put in a mailbox).
     Control,
     /// Our weekly mail key to a contact (see `mailkey.rs`).
@@ -371,6 +384,9 @@ pub struct Node {
     cancelled: HashSet<u64>,
     pending_rx: Vec<(Vec<u8>, u8)>,
     awaiting: HashMap<u64, Pending>,
+    /// Sent session messages not yet acknowledged: which sending chain each
+    /// used (see `ratchet::Session::confirm`).
+    sent_chains: HashMap<u64, (Address, [u8; 8])>,
     outbox: HashMap<u64, OutMsg>,
     uploads: HashMap<(ClientId, u16), Upload>,
     pages: pages::Pages,
@@ -485,6 +501,8 @@ pub struct Node {
     persons: person::Persons,
     /// Weekly keys for mail kept by post offices (a node without an account).
     mailkeys: mailkey::MailKeys,
+    /// Nodes whose announce says they sign for mail bundles.
+    signs: std::collections::HashSet<Address>,
     /// Hosts found in the DHT (reached over TCP, if through a relay).
     dht_hosts: HashSet<Address>,
     /// Files whose wait for a TCP route has been logged.
@@ -633,6 +651,8 @@ impl Node {
         router.hello = true;
         // A message is acknowledged when it has been opened (see open_direct).
         router.app_acks = true;
+        // A mail bundle is acknowledged with our signature.
+        router.signed_acks = true;
         // A host keeps mail (it has a disk), unless told not to.
         router.mail_class = if cfg.no_post_office { maarse_core::mail::CLASS_NONE } else { maarse_core::mail::CLASS_LARGE };
         router.ring = 4;
@@ -666,6 +686,7 @@ impl Node {
             cancelled: HashSet::new(),
             pending_rx: Vec::new(),
             awaiting: HashMap::new(),
+            sent_chains: HashMap::new(),
             outbox: HashMap::new(),
             uploads: HashMap::new(),
             pages: pages::Pages::new(cfg),
@@ -765,6 +786,7 @@ impl Node {
             hist: hist::Hist::open(&cfg.data_dir, cfg.history_days),
             persons: person::Persons::load(&cfg.data_dir, &addr),
             mailkeys: mailkey::MailKeys::load(&cfg.data_dir),
+            signs: Default::default(),
             dht_hosts: HashSet::new(),
             file_wait_logged: HashSet::new(),
             beacon_deferred_since: None,
@@ -1530,8 +1552,16 @@ impl Node {
                     self.broadcast(&Event::RouteLearned { dest, hops });
                     self.flush_mailbox(dest);
                 }
-                Action::Acked { msg_id } => self.on_acked(msg_id),
-                Action::CarryAcked { msg_id } => self.on_carry_acked(msg_id),
+                Action::Acked { msg_id } => {
+                    self.confirm_chain(msg_id);
+                    self.drop_own_copy(msg_id);
+                    self.on_acked(msg_id)
+                }
+                Action::CarryAcked { msg_id } => {
+                    self.confirm_chain(msg_id);
+                    self.on_carry_acked(msg_id)
+                }
+                Action::SignedAck { msg_id, signature } => self.on_signed_ack(msg_id, &signature),
             }
         }
         if let Some(d) = self.router.next_deadline()
@@ -1620,6 +1650,14 @@ impl Node {
             .send_direct(dest, &ct[..n], token(), now)
             .map_err(|_| "The queue is full, try again shortly")?;
         self.expect_proof(&dest, &ct[..n], msg_id);
+        if format != Format::Static
+            && let Some(chain) = self.sessions.send_chain(&dest)
+        {
+            if self.sent_chains.len() >= 4096 {
+                self.sent_chains.clear();
+            }
+            self.sent_chains.insert(msg_id, (dest, chain));
+        }
         if matches!(kind, Pending::Message) {
             let mail_sealed = if format == Format::Static {
                 ct[..n].to_vec()
@@ -1760,6 +1798,73 @@ impl Node {
         self.send_call_audio(dest, plain)
     }
 
+    /// The recipient itself has `msg_id` (not a post office): it has the
+    /// sending chain the message used, so short messages are safe on it.
+    fn confirm_chain(&mut self, msg_id: u64) {
+        if let Some((peer, chain)) = self.sent_chains.remove(&msg_id) {
+            self.sessions.confirm(&peer, chain);
+        }
+    }
+
+    /// The recipient itself has acknowledged a message we also left in our own
+    /// post office: that copy would only show it a second time. Not for a
+    /// recipient that cannot prove it (anyone could then delete the mail).
+    fn drop_own_copy(&mut self, msg_id: u64) {
+        let Some(m) = self.outbox.get(&msg_id).filter(|m| m.deposited && m.mail_proof.is_some()) else { return };
+        let (dest, id) = (m.dest, maarse_core::dedup::packet_id(PacketType::Data, &m.dest, &m.mail_sealed));
+        let Some(mails) = self.mailbox.get_mut(&dest) else { return };
+        if mails.remove(&id).is_none() {
+            return;
+        }
+        if mails.is_empty() {
+            self.mailbox.remove(&dest);
+        }
+        self.save_mailbox();
+        self.update_tim();
+    }
+
+    /// The recipient of a bundle signed for it: delete the mail.
+    fn on_signed_ack(&mut self, msg_id: u64, signature: &maarse_core::router::Signature) {
+        let Some(Pending::MailBundle(b)) = self.awaiting.get_mut(&msg_id) else { return };
+        if !self.known.get(&b.to).is_some_and(|id| id.verify_delivery(msg_id, signature)) {
+            self.counters.errors += 1;
+            return;
+        }
+        b.checked = true;
+        let now = self.now_ms();
+        let actions = self.router.accept(msg_id, now);
+        self.apply(actions.into_iter().collect());
+    }
+
+    /// Sends the stored messages `mails` (id, sealed) kept for `kept_for` to
+    /// the node `to`, as many per packet as fit.
+    fn send_bundles(&mut self, kept_for: Address, to: Address, mails: &[(u64, Vec<u8>)]) {
+        let signed = self.signs.contains(&to);
+        let max = MAX_DIRECT_PAYLOAD - stamp::STAMP_LEN;
+        let mut i = 0;
+        while i < mails.len() {
+            let mut body: maarse_core::router::Buf = maarse_core::router::Buf::new();
+            let mut ids = Vec::new();
+            while i < mails.len() && maarse_core::mail::bundle_push(&mut body, &mails[i].1, max) {
+                ids.push(mails[i].0);
+                i += 1;
+            }
+            let mut p: maarse_core::router::Buf = maarse_core::router::Buf::new();
+            if ids.is_empty() || !maarse_core::mail::build(&mut p, &to, maarse_core::mail::OP_BUNDLE, &body) {
+                i += usize::from(ids.is_empty());
+                continue;
+            }
+            let now = self.now_ms();
+            if let Ok((msg_id, actions)) = self.router.send_typed(PacketType::Deposit, to, &p, token(), now) {
+                if signed {
+                    self.router.expect_signature(msg_id);
+                }
+                self.awaiting.insert(msg_id, Pending::MailBundle(Bundle { kept_for, to, ids, signed, checked: false }));
+                self.apply(actions.into_iter().collect());
+            }
+        }
+    }
+
     /// A message delivered by carrying: like an acknowledgement, but the
     /// app is told "delivered (carried)".
     fn on_carry_acked(&mut self, msg_id: u64) {
@@ -1808,7 +1913,10 @@ impl Node {
                 self.pump_file(file_id);
             }
             Some(Pending::FileChunk(file_id, idx)) => self.chunk_acked(file_id, idx),
-            Some(Pending::MailBundle(recipient, ids)) => {
+            // A plain acknowledgement where a signed one is due: anyone can
+            // make it. The mail is kept and sent again later.
+            Some(Pending::MailBundle(b)) if b.signed && !b.checked => {}
+            Some(Pending::MailBundle(Bundle { kept_for: recipient, ids, .. })) => {
                 let mut done = Vec::new();
                 if let Some(m) = self.mailbox.get_mut(&recipient) {
                     for id in &ids {
@@ -2190,6 +2298,9 @@ impl Node {
             }
             Some(Content::Person(o, data)) => self.on_person(from, o, data),
             Some(Content::Seq(n, inner)) => {
+                if !self.seqs.first_time(from, plain) {
+                    return;
+                }
                 self.seq_received(from, n, hops);
                 let inner = inner.to_vec();
                 self.on_content(from, &inner, hops, format);
@@ -3105,6 +3216,12 @@ impl Node {
                     self.receipt_wanted.insert(mail::receipt_id(&self.addr, &m));
                     self.open_direct(m, hops, true);
                 }
+                while let Some(id) = self.router.signature_wanted() {
+                    let signature = self.identity.sign_delivery(id);
+                    let now = self.now_ms();
+                    let actions = self.router.acknowledge_signed(id, signature, now);
+                    self.apply(actions.into_iter().collect());
+                }
             }
             // A recipient says it got mail we deposited: the same as an ack.
             mail::OP_RECEIPT if d.recipient == self.addr => {
@@ -3393,26 +3510,7 @@ impl Node {
             .iter()
             .map(|(id, m)| (*id, m.sealed.clone()))
             .partition(|(_, sealed)| bundles && sealed.len() <= maarse_core::mail::MAX_BUNDLED);
-        if !all.is_empty() {
-            let max = MAX_DIRECT_PAYLOAD - stamp::STAMP_LEN;
-            let mut i = 0;
-            while i < all.len() {
-                let mut body: maarse_core::router::Buf = maarse_core::router::Buf::new();
-                let mut ids = Vec::new();
-                while i < all.len() && maarse_core::mail::bundle_push(&mut body, &all[i].1, max) {
-                    ids.push(all[i].0);
-                    i += 1;
-                }
-                let mut p: maarse_core::router::Buf = maarse_core::router::Buf::new();
-                if maarse_core::mail::build(&mut p, &recipient, maarse_core::mail::OP_BUNDLE, &body) {
-                    let now = self.now_ms();
-                    if let Ok((msg_id, actions)) = self.router.send_typed(PacketType::Deposit, recipient, &p, token(), now) {
-                        self.awaiting.insert(msg_id, Pending::MailBundle(recipient, ids));
-                        self.apply(actions.into_iter().collect());
-                    }
-                }
-            }
-        }
+        self.send_bundles(recipient, recipient, &all);
         if single.is_empty() {
             return;
         }
@@ -3456,6 +3554,9 @@ impl Node {
             && !message.deposited
         {
             message.deposited = true;
+            // The post office delivers it from here.
+            let now = self.now_ms();
+            self.router.stop_resending(msg_id, now);
             self.counters.deposits += 1;
             self.broadcast(&Event::Deposited { msg_id });
         }
@@ -6183,6 +6284,81 @@ mod radio_file_e2e_tests {
         }
     }
 
+    /// A message left at the post office while its recipient is away is shown
+    /// once when it comes back, also to a node that does not read numbers.
+    #[test]
+    fn a_deposited_message_is_not_also_delivered_directly() {
+        let (mut a, mut b) = conversation("po-once");
+        run_radio(&mut a, &mut b, 20, &mut |_, _| false);
+        let dest = b.n.addr;
+        let caps = a.n.caps[&dest] & !maarse_core::appdata::CAP_SEQ;
+        a.n.caps.insert(dest, caps);
+        a.ev.try_iter().count();
+        b.ev.try_iter().count();
+        a.n.command(1, Command::SendDirect { req: 40, dest, text: text(b"only once") });
+        // Lost: B is away.
+        a.out.try_iter().count();
+        let msg_id = *a.n.outbox.keys().next().expect("not in the outbox");
+        // The copy leaves for the post office; its first delivery is lost too.
+        a.n.try_deposit(msg_id);
+        a.out.try_iter().count();
+        // Long enough for every resend of the direct message and of the copy.
+        let (ea, eb, _, _) = run_radio(&mut a, &mut b, 90, &mut |_, _| false);
+        let shown = eb.iter().filter(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.ends_with(b"only once"))).count();
+        assert_eq!(shown, 1, "{eb:?}");
+        assert!(ea.iter().any(|e| matches!(e, Event::Acked { msg_id: m } if *m == msg_id)), "not confirmed");
+    }
+
+    /// The same numbered message in two sealed forms is shown once; the same
+    /// number with other words is another message.
+    #[test]
+    fn a_numbered_message_is_shown_once() {
+        let (a, mut b) = conversation("seq-once");
+        let from = a.n.addr;
+        b.ev.try_iter().count();
+        let numbered = |n: u32, words: &str| {
+            let mut v = vec![content::SEQ];
+            v.extend_from_slice(&n.to_le_bytes());
+            v.push(content::TEXT);
+            v.extend_from_slice(words.as_bytes());
+            v
+        };
+        for plain in [numbered(900, "twice"), numbered(900, "twice"), numbered(900, "another")] {
+            b.n.on_content(from, &plain, 0, Format::Static);
+        }
+        let got: Vec<Event> = b.ev.try_iter().filter_map(|f| Event::decode(&f[2..]).ok()).collect();
+        let count = |w: &[u8]| got.iter().filter(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.ends_with(w))).count();
+        assert_eq!((count(b"twice"), count(b"another")), (1, 1), "{got:?}");
+    }
+
+    /// Someone who only heard the bundle cannot make the post office delete
+    /// the mail.
+    #[test]
+    fn a_forged_acknowledgement_does_not_delete_stored_mail() {
+        let (mut a, mut b) = conversation("po-forged");
+        run_radio(&mut a, &mut b, 20, &mut |_, _| false);
+        let dest = b.n.addr;
+        assert!(a.n.signs.contains(&dest), "B says it signs");
+        let mut plain = vec![content::TEXT];
+        plain.extend_from_slice(b"still here after a forgery");
+        let sealed = a.n.mail_seal_to_key(&dest, &plain).expect("B has told A its key");
+        assert!(a.n.store_mail_local(dest, sealed, false, false));
+        let bundle = *a.n.awaiting.iter().find(|(_, p)| matches!(p, Pending::MailBundle(_))).expect("no bundle sent").0;
+        // What a forger can send: no signature, or someone else's.
+        let other = maarse_crypto::Identity::generate(&mut OsRng);
+        a.n.on_signed_ack(bundle, &other.sign_delivery(bundle));
+        a.n.on_signed_ack(bundle, &[0; 64]);
+        assert!(a.n.mailbox.get(&dest).is_some_and(|m| !m.is_empty()), "deleted on a forgery");
+        // Even if the router has forgotten that it wanted a signature.
+        a.n.on_acked(bundle);
+        assert!(a.n.mailbox.get(&dest).is_some_and(|m| !m.is_empty()), "deleted on a plain acknowledgement");
+        // The recipient's own answer does it (the delivery is tried again).
+        a.n.flush_mailbox(dest);
+        let (_, eb, _, _) = run_radio(&mut a, &mut b, 40, &mut |_, _| false);
+        assert!(eb.iter().any(|e| matches!(e, Event::DirectReceived { text: t, .. } if t.ends_with(b"after a forgery"))), "{eb:?}");
+        assert!(a.n.mailbox.get(&dest).is_none_or(|m| m.is_empty()), "kept after the signature");
+    }
+
     /// Mail sealed to an account is confirmed by the device that reads it, and
     /// only with that device's proof.
     #[test]
@@ -6300,6 +6476,9 @@ mod radio_file_e2e_tests {
             for turn in 0..2 {
                 let m = seal(&mut a.n, &b_pub, &plain(10 + turn));
                 b.n.open_direct(m, 0, true);
+                // Acknowledged: the short form is safe from here.
+                let chain = a.n.sessions.send_chain(&b.n.addr).unwrap();
+                a.n.sessions.confirm(&b.n.addr, chain);
             }
             let m = seal(&mut a.n, &b_pub, &plain(10_000 + attempt));
             assert_eq!(m[0], ratchet::COMPACT);

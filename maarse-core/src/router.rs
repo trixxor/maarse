@@ -81,6 +81,17 @@
 //! expect ([`Router::expect_proof`]) counts nothing else as delivered.
 //! Repeaters and anchors pass the bytes on without reading them.
 //!
+//! ## Signed acknowledgement of a mail bundle
+//!
+//! A post office cannot compute that proof, and it deletes its copy when the
+//! bundle it delivered is acknowledged. So a recipient with
+//! [`Router::signed_acks`] answers a bundle with its signature over the
+//! packet ID (`maarse_crypto`'s delivery signature) as the payload of the
+//! `Ack`, once the app has handled it ([`Router::signature_wanted`],
+//! [`Router::acknowledge_signed`]). A post office that knows the recipient
+//! signs calls [`Router::expect_signature`], checks the signature it gets
+//! with [`Action::SignedAck`] and then calls [`Router::accept`].
+//!
 //! With [`Router::app_acks`] the recipient's router does not acknowledge a
 //! direct message by itself: the app calls [`Router::acknowledge`] once it
 //! has opened it. A message nobody could open is then not reported as
@@ -144,6 +155,9 @@ pub const REQUEST_FWD_PERMILLE: u16 = 800;
 pub const REQUEST_FWD_MIN_NEIGHBORS: usize = 3;
 /// Number of repetitions of a path request.
 pub const PATH_RETRIES: u8 = 2;
+/// The attempt at a message (resends and repeated path requests together) whose
+/// path request goes without it.
+const BARE_ATTEMPT: u8 = 2;
 const MAX_FORWARDS: usize = 32;
 const MAX_FLOOD_PENDING: usize = 16;
 const MAX_QUEUE: usize = 8;
@@ -353,6 +367,10 @@ pub enum Action {
     /// (carried)"): the delivered notice came back to us. `msg_id` is the
     /// id `send_direct` returned.
     CarryAcked { msg_id: u64 },
+    /// An acknowledgement of a message that expects a signature (see
+    /// [`Router::expect_signature`]), not yet counted: check it and call
+    /// [`Router::accept`].
+    SignedAck { msg_id: u64, signature: Signature },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -464,10 +482,18 @@ pub fn weak_snr_for_sf(sf: u8) -> i8 {
 pub const PROOF_LEN: usize = 8;
 /// A delivery proof.
 pub type Proof = [u8; PROOF_LEN];
+/// The recipient's signature on a mail bundle (Ed25519).
+pub const SIGNATURE_LEN: usize = 64;
+pub type Signature = [u8; SIGNATURE_LEN];
 /// Messages we know the proof for and still wait for.
 const MAX_EXPECT: usize = 16;
 /// Messages to us that the app has not answered, or may be asked about again.
 const MAX_OWED: usize = 8;
+/// Bundles waiting for the app's signature, and signatures kept to answer a
+/// repeated bundle.
+const MAX_SIGN: usize = 2;
+/// Sent messages whose acknowledgement must be signed.
+const MAX_EXPECT_SIGNED: usize = 16;
 
 /// The token the recipient sends the acknowledgement to.
 pub fn ack_token(msg_id: u64) -> Address {
@@ -552,6 +578,12 @@ pub struct Router<const R: usize, const D: usize> {
     owed: heapless::Vec<Owed, MAX_OWED>,
     /// The app acknowledges direct messages with [`Router::acknowledge`].
     pub app_acks: bool,
+    /// We answer a mail bundle with our signature (see the module
+    /// documentation).
+    pub signed_acks: bool,
+    sign_owed: heapless::Vec<(u64, Path), MAX_SIGN>,
+    sign_sent: heapless::Vec<(u64, Signature), MAX_SIGN>,
+    sign_expected: heapless::Vec<u64, MAX_EXPECT_SIGNED>,
     channels: heapless::Vec<Address, MAX_CHANNELS>,
     forwards: heapless::Vec<Forward, MAX_FORWARDS>,
     replies: heapless::Vec<PendingReply, 4>,
@@ -739,6 +771,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
             expected: heapless::Vec::new(),
             owed: heapless::Vec::new(),
             app_acks: false,
+            signed_acks: false,
+            sign_owed: heapless::Vec::new(),
+            sign_sent: heapless::Vec::new(),
+            sign_expected: heapless::Vec::new(),
             channels: heapless::Vec::new(),
             forwards: heapless::Vec::new(),
             replies: heapless::Vec::new(),
@@ -2056,6 +2092,74 @@ impl<const R: usize, const D: usize> Router<R, D> {
         }
     }
 
+    /// A bundle the app has been given and not yet signed for.
+    pub fn signature_wanted(&self) -> Option<u64> {
+        self.sign_owed.first().map(|o| o.0)
+    }
+
+    /// Acknowledges the bundle `id` with our signature on it.
+    pub fn acknowledge_signed(&mut self, id: u64, signature: Signature, now_ms: u64) -> Actions {
+        let mut out = Actions::new();
+        let Some(i) = self.sign_owed.iter().position(|o| o.0 == id) else {
+            return out;
+        };
+        let (_, back) = self.sign_owed.remove(i);
+        if self.sign_sent.is_full() {
+            self.sign_sent.remove(0);
+        }
+        let _ = self.sign_sent.push((id, signature));
+        let header = Header::new(PacketType::Ack, ack_token(id)).with_path(back);
+        self.emit_routed(&header, &signature, SOURCE_ROUTE_DELAY_MS, now_ms, &mut out);
+        out
+    }
+
+    /// An acknowledgement of our message `msg_id` is only reported as
+    /// [`Action::SignedAck`]. Call it right after sending. With more than
+    /// sixteen outstanding the oldest is forgotten and reported as
+    /// [`Action::Acked`] again: the app must not count that for such a message.
+    pub fn expect_signature(&mut self, msg_id: u64) {
+        self.sign_expected.retain(|id| *id != msg_id);
+        if self.sign_expected.is_full() {
+            self.sign_expected.remove(0);
+        }
+        let _ = self.sign_expected.push(msg_id);
+    }
+
+    /// The app has checked the signature for `msg_id`: it is delivered.
+    pub fn accept(&mut self, msg_id: u64, now_ms: u64) -> Actions {
+        let mut out = Actions::new();
+        self.sign_expected.retain(|id| *id != msg_id);
+        let Some(i) = self.awaiting.iter().position(|a| a.msg_id == msg_id) else {
+            return out;
+        };
+        let a = self.awaiting.remove(i);
+        self.routes.confirm(&a.dest, now_ms);
+        let _ = out.push(Action::Acked { msg_id });
+        out
+    }
+
+    /// Message `msg_id` has been left at a post office, which delivers it
+    /// from now on: it is not sent directly again, so the recipient does not
+    /// get it twice. An acknowledgement of a copy already on its way still
+    /// counts, and a node that carries messages carries this one as it would
+    /// after the last resend.
+    pub fn stop_resending(&mut self, msg_id: u64, now_ms: u64) {
+        if let Some(a) = self.awaiting.iter_mut().find(|a| a.msg_id == msg_id) {
+            a.tries = E2E_RETRIES;
+        }
+        let Some(i) = self.queue.iter().position(|q| packet_id(q.ptype, &q.dest, &q.payload) == msg_id) else {
+            return;
+        };
+        let q = self.queue.remove(i);
+        if q.ptype == PacketType::Data {
+            self.start_carry(q.dest, &q.payload, now_ms);
+        }
+        // Nothing else waits for this route: stop looking for it.
+        if !self.queue.iter().any(|other| other.dest == q.dest) {
+            self.pending.retain(|p| p.target != q.dest);
+        }
+    }
+
     /// Message `msg_id` (from [`Router::send_direct`]) counts as delivered
     /// only with `proof`. Call it right after sending.
     pub fn expect_proof(&mut self, msg_id: u64, proof: Proof) {
@@ -2190,7 +2294,10 @@ impl<const R: usize, const D: usize> Router<R, D> {
         self.stats.path_requests += 1;
         self.stats.originated += 1;
         // The first message in the queue is sent along if it fits when
-        // the path is full (12 hops).
+        // the path is full (12 hops), except at the second attempt after the
+        // first one failed: a recipient that cannot open it (it restarted and
+        // lost the session) answers nothing, and the route must still be found
+        // for the messages behind it.
         let mut payload = Buf::new();
         let _ = payload.extend_from_slice(&token.0);
         let mut carried = None;
@@ -2199,9 +2306,12 @@ impl<const R: usize, const D: usize> Router<R, D> {
             .iter()
             .find(|q| q.dest == dest && q.ptype == PacketType::Data)
             && 16 + q.payload.len() + stamp::STAMP_LEN <= MAX_DIRECT_PAYLOAD
-            && payload.extend_from_slice(&q.payload).is_ok()
         {
-            carried = Some(packet_id(PacketType::Data, &dest, &q.payload));
+            let id = packet_id(PacketType::Data, &dest, &q.payload);
+            let resent = self.awaiting.iter().find(|a| a.msg_id == id).map_or(0, |a| a.tries);
+            if tries + resent != BARE_ATTEMPT && payload.extend_from_slice(&q.payload).is_ok() {
+                carried = Some(id);
+            }
         }
         let wait = if ringed { RING_RETRY_MS } else { self.path_retry_ms as u64 * if self.load_control && self.load_high { 2 } else { 1 } };
         let _ = self.pending.push(PendingRequest {
@@ -2347,7 +2457,7 @@ impl<const R: usize, const D: usize> Router<R, D> {
                 Action::Acked { .. } | Action::CarryAcked { .. } => self.stats.acked += 1,
                 Action::RouteLearned { .. } => self.stats.routes_learned += 1,
                 Action::Cancel { .. } => self.stats.floods_cancelled += 1,
-                Action::Transmit { .. } => {}
+                Action::Transmit { .. } | Action::SignedAck { .. } => {}
             }
         }
         out
@@ -2593,6 +2703,13 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     return;
                 };
                 let msg_id = self.awaiting[i].msg_id;
+                if self.sign_expected.contains(&msg_id) {
+                    // Counted only when the app has checked it (see `accept`).
+                    if let Ok(signature) = Signature::try_from(pkt.payload) {
+                        let _ = out.push(Action::SignedAck { msg_id, signature });
+                    }
+                    return;
+                }
                 if self.dedup.contains(id) || !self.proven(msg_id, pkt.payload) {
                     return;
                 }
@@ -2631,9 +2748,30 @@ impl<const R: usize, const D: usize> Router<R, D> {
                     hops: h.hops,
                 });
             }
-            _ if h.dest == self.addr && self.hold_direct && matches!(h.ptype, PacketType::Data | PacketType::Fragment) => {
+            _ if h.dest == self.addr
+                && self.hold_direct
+                && (matches!(h.ptype, PacketType::Data | PacketType::Fragment) || is_bundle(pkt)) => {
                 // Nobody to hand it to: no delivery, no acknowledgement.
                 self.stats.held_direct += 1;
+            }
+            _ if h.dest == self.addr && self.signed_acks && is_bundle(pkt) => {
+                self.dedup.insert(id);
+                let back = reversed(path);
+                if let Some(signature) = self.sign_sent.iter().find(|s| s.0 == id).map(|s| s.1) {
+                    // A copy: the acknowledgement may have been lost.
+                    let header = Header::new(PacketType::Ack, ack_token(id)).with_path(back);
+                    self.emit_routed(&header, &signature, SOURCE_ROUTE_DELAY_MS, now_ms, out);
+                    return;
+                }
+                if let Some(o) = self.sign_owed.iter_mut().find(|o| o.0 == id) {
+                    o.1 = back;
+                    return;
+                }
+                if self.sign_owed.is_full() {
+                    self.sign_owed.remove(0);
+                }
+                let _ = self.sign_owed.push((id, back));
+                deliver(pkt, out);
             }
             _ if h.dest == self.addr => {
                 // A repeated message is not delivered again, but acknowledged again,
@@ -2870,6 +3008,12 @@ fn announce_is_mobile(payload: &[u8]) -> bool {
 
 /// Delivers the packet to the app. A stamp is removed first, so the app sees the same
 /// payload the sender made (e.g. a signed announce).
+/// Is this a delivery of stored mail (`mail::OP_BUNDLE`)?
+fn is_bundle(pkt: &Packet) -> bool {
+    pkt.header.ptype == PacketType::Deposit
+        && crate::mail::Deposit::parse(stamp::strip(pkt.header.ptype, pkt.payload)).is_some_and(|d| d.op == crate::mail::OP_BUNDLE)
+}
+
 fn deliver(pkt: &Packet, out: &mut Actions) {
     let payload = stamp::strip(pkt.header.ptype, pkt.payload);
     let _ = out.push(Action::Deliver {
@@ -3627,6 +3771,67 @@ mod tests {
         assert_eq!(r.stats.forwarded, 1);
     }
 
+    /// A recipient that cannot open the message a request carries answers
+    /// nothing; one attempt goes without it, so the route is still found and
+    /// the messages behind it get through.
+    #[test]
+    fn a_route_is_found_although_the_first_message_cannot_be_opened() {
+        let mut a = node(1, Role::Client);
+        let mut b = node(4, Role::Client);
+        b.app_acks = true;
+        let (_, out) = a.send_direct(b.addr, b"unreadable", [1; 16], 0).unwrap();
+        let (_, _) = a.send_direct(b.addr, b"behind it", [2; 16], 10).unwrap();
+        let mut requests = transmits(&out);
+        let mut now = 0;
+        for attempt in 0..=PATH_RETRIES {
+            let request = requests.iter().find(|p| Packet::decode(p).unwrap().header.ptype == PacketType::PathRequest).expect("a path request").clone();
+            let carried = stamp::strip(PacketType::PathRequest, Packet::decode(&request).unwrap().payload).len() > 16;
+            assert_eq!(carried, attempt != BARE_ATTEMPT, "attempt {attempt}");
+            // B's app never acknowledges: a request with the message gets no answer.
+            b.on_receive(&request, 0, now);
+            let answers = transmits(&b.tick(now + 60_000));
+            if !carried {
+                assert!(!answers.is_empty(), "no answer to a bare request");
+                let sent = a.on_receive(&answers[0], 0, now + 60_000);
+                assert_eq!(transmits(&sent).len(), 2, "both waiting messages go along the route");
+                return;
+            }
+            assert!(answers.is_empty());
+            now += DEFAULT_ACK_TIMEOUT_MS as u64 + 60_000;
+            requests = transmits(&a.tick(now));
+        }
+        panic!("every request carried the message");
+    }
+
+    /// Once a post office has the message it is not sent directly again, but
+    /// an acknowledgement already under way counts.
+    #[test]
+    fn a_message_at_a_post_office_is_not_sent_again() {
+        let mut a = node(1, Role::Client);
+        let mut b = node(4, Role::Client);
+        // Waiting for a route.
+        let (queued, out) = a.send_direct(b.addr, b"waiting", [1; 16], 0).unwrap();
+        assert_eq!(transmits(&out).len(), 1);
+        a.stop_resending(queued, 100);
+        for t in 1..20 {
+            assert!(transmits(&a.tick(t * 10_000)).is_empty(), "still looking for a route");
+        }
+        // Sent along a route and not yet acknowledged.
+        let (_, out) = a.send_direct(b.addr, b"1", [2; 16], 300_000).unwrap();
+        b.on_receive(&transmits(&out)[0], 0, 300_000);
+        a.on_receive(&reply(&mut b, 300_000)[0], 0, 300_000);
+        let (msg, out) = a.send_direct(b.addr, b"2", [3; 16], 301_000).unwrap();
+        a.stop_resending(msg, 302_000);
+        let ack = b.on_receive(&transmits(&out)[0], 0, 302_000);
+        let late = a.on_receive(&transmits(&ack)[0], 0, 303_000);
+        assert!(late.contains(&Action::Acked { msg_id: msg }), "{late:?}");
+        let (msg, _) = a.send_direct(b.addr, b"3", [4; 16], 304_000).unwrap();
+        a.stop_resending(msg, 305_000);
+        for t in 32..60 {
+            assert!(transmits(&a.tick(t * 10_000)).is_empty(), "sent again at {t}0 s");
+        }
+    }
+
     #[test]
     fn missing_ack_repairs_route_and_resends() {
         let mut a = node(1, Role::Client);
@@ -4099,6 +4304,65 @@ mod tests {
         let (old, out) = nodes[0].send_direct(dest, b"unreadable too", [2; 16], now).unwrap();
         let ev = run_with_app(&mut nodes, transmits(&out).into_iter().map(|p| (0, p)).collect(), &mut now, None);
         assert!(!acked(&ev, old), "{ev:?}");
+    }
+
+    /// A mail bundle is answered with the app's signature, and a post office
+    /// that expects one counts nothing else.
+    #[test]
+    fn a_bundle_is_acknowledged_only_with_the_signature() {
+        let mut office = node(1, Role::Client);
+        let mut dest = node(5, Role::Client);
+        dest.app_acks = true;
+        dest.signed_acks = true;
+        let mut body = Buf::new();
+        assert!(crate::mail::build(&mut body, &dest.addr, crate::mail::OP_BUNDLE, &[3, 1, 2, 3]));
+        assert!(crate::stamp::append(PacketType::Deposit, &dest.addr, &mut body));
+        let header = Header::new(PacketType::Deposit, dest.addr).with_path(Path::new());
+        let packet = encode(&header, &body).unwrap();
+        let id = packet_id(PacketType::Deposit, &dest.addr, &body);
+
+        let out = dest.on_receive(&packet, 5, 100);
+        assert!(out.iter().any(|a| matches!(a, Action::Deliver { ptype: PacketType::Deposit, .. })));
+        assert!(transmits(&out).is_empty(), "answered before the app signed");
+        assert_eq!(dest.signature_wanted(), Some(id));
+        let signature = [7; SIGNATURE_LEN];
+        let ack = transmits(&dest.acknowledge_signed(id, signature, 200));
+        assert_eq!(Packet::decode(&ack[0]).unwrap().payload, &signature);
+        assert_eq!(dest.signature_wanted(), None);
+        // A copy: the same answer, and the app is not given it again.
+        let again = dest.on_receive(&packet, 5, 300);
+        assert!(!again.iter().any(|a| matches!(a, Action::Deliver { .. })));
+        assert_eq!(Packet::decode(&transmits(&again)[0]).unwrap().payload, &signature);
+
+        // The post office.
+        let _ = office.awaiting.push(AwaitAck { token: ack_token(id), msg_id: id, ptype: PacketType::Deposit, dest: dest.addr, payload: body.clone(), sent_ms: 100, tries: 0 });
+        office.expect_signature(id);
+        for forged in [&[][..], &[0; PROOF_LEN]] {
+            let header = Header::new(PacketType::Ack, ack_token(id)).with_path(Path::new());
+            let out = office.on_receive(&encode(&header, forged).unwrap(), 5, 400);
+            assert!(!out.iter().any(|a| matches!(a, Action::Acked { .. } | Action::SignedAck { .. })), "{out:?}");
+        }
+        let out = office.on_receive(&ack[0], 5, 500);
+        assert!(out.contains(&Action::SignedAck { msg_id: id, signature }), "{out:?}");
+        assert!(!out.contains(&Action::Acked { msg_id: id }), "not before the app has checked it");
+        assert!(office.accept(id, 600).contains(&Action::Acked { msg_id: id }));
+        assert!(office.accept(id, 700).is_empty());
+    }
+
+    /// A handheld with nobody connected leaves stored mail at the post office.
+    #[test]
+    fn a_held_node_does_not_take_a_bundle() {
+        let mut dest = node(5, Role::Client);
+        dest.app_acks = true;
+        dest.signed_acks = true;
+        dest.hold_direct = true;
+        let mut body = Buf::new();
+        assert!(crate::mail::build(&mut body, &dest.addr, crate::mail::OP_BUNDLE, &[1, 9]));
+        assert!(crate::stamp::append(PacketType::Deposit, &dest.addr, &mut body));
+        let header = Header::new(PacketType::Deposit, dest.addr).with_path(Path::new());
+        let out = dest.on_receive(&encode(&header, &body).unwrap(), 5, 100);
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(dest.signature_wanted(), None);
     }
 
     #[test]

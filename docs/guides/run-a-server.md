@@ -2,7 +2,7 @@
 
 > **Type:** how-to · **Goal:** run `maarse-server` on a machine with a public address, so it acts as backbone node, DHT node and post office · **Assumes:** a Debian or Ubuntu machine with root access and an open TCP port.
 >
-> **Status:** installer `released`; Settings tab and hardening in the `working copy`. Long-form details: [GUIDE.md, Dedicated server](../GUIDE.md#dedicated-server-maarse-server).
+> **Status:** `released`. Long-form details: [GUIDE.md, Dedicated server](../GUIDE.md#dedicated-server-maarse-server).
 
 ## Install
 

@@ -4,11 +4,11 @@
 
 | I want to... | Guide | Status |
 | --- | --- | --- |
-| Flash firmware onto a LoRa board | [How to flash a board](flash-a-board.md) | working copy; web flasher not yet tested on every board |
-| Run a dedicated server (backbone, post office, dashboard) | [How to run a server](run-a-server.md) | released (Debian installer), settings page in working copy |
-| Build and run the tests | [How to build and test](build-and-test.md) | working copy |
+| Flash firmware onto a LoRa board | [How to flash a board](flash-a-board.md) | released; web flasher not yet tested on every board |
+| Run a dedicated server (backbone, post office, dashboard) | [How to run a server](run-a-server.md) | released |
+| Build and run the tests | [How to build and test](build-and-test.md) | released |
 | Measure range, loss and power outdoors | [Field test](../FIELD-TEST.md) | procedure only; no results yet |
-| Add a sensor to a node | [Sensors](../sensors.md) | working copy |
+| Add a sensor to a node | [Sensors](../sensors.md) | released; sensor firmware not run on boards |
 | Publish a release | [Releases (signed)](../GUIDE.md#releases-signed) | released |
 | Use the app as an ordinary person | [User guide](../user/README.md) | partly written |
 

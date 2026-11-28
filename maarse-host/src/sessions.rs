@@ -33,7 +33,7 @@
 //! file (a whole-disk snapshot).
 
 use maarse_core::Address;
-use maarse_crypto::ratchet::{SESSION_LEN, SESSION_LEN_V1, SID_LEN, Session, SessionStore};
+use maarse_crypto::ratchet::{SESSION_LEN, SESSION_LEN_V1, SESSION_LEN_V2, SID_LEN, Session, SessionStore};
 use rand_core::{OsRng, RngCore};
 use std::collections::HashMap;
 use std::fs;
@@ -100,6 +100,9 @@ type Position = ([u8; 8], u16);
 
 pub struct Sessions {
     map: HashMap<Address, (u64, Session)>,
+    /// Replaced sessions not yet given up (`ratchet`, "Replacing a session").
+    /// In memory only.
+    backups: HashMap<Address, Session>,
     clock: u64,
     path: PathBuf,
     dirty: bool,
@@ -133,8 +136,12 @@ impl Sessions {
         let mut dropped = false;
         if let Ok(b) = fs::read(&path) {
             let (body, file_epoch) = split_trailer(&b);
-            // Version 1 files (before compact messages) have shorter sessions.
-            let size = if body.first() == Some(&1) { SESSION_LEN_V1 } else { SESSION_LEN };
+            // Files from older versions have shorter sessions.
+            let size = match body.first() {
+                Some(1) => SESSION_LEN_V1,
+                Some(2) => SESSION_LEN_V2,
+                _ => SESSION_LEN,
+            };
             // A file that does not fit the marker may hold sending chains
             // that are behind what has been used.
             let stale = match (file_epoch, marked) {
@@ -173,7 +180,7 @@ impl Sessions {
         // What was read is on the disk: nothing at or after these numbers has
         // been used.
         let saved = map.iter().filter_map(|(a, (_, s))| s.send_position().map(|p| (*a, p))).collect();
-        Sessions { map, clock, path, dirty: dropped || one_behind, saved, epoch, marker, restored_old_file, unprotected }
+        Sessions { map, backups: HashMap::new(), clock, path, dirty: dropped || one_behind, saved, epoch, marker, restored_old_file, unprotected }
     }
 
     pub fn contains(&self, peer: &Address) -> bool {
@@ -185,9 +192,23 @@ impl Sessions {
         self.map.len()
     }
 
+    /// The chain `peer`'s session sends on.
+    pub fn send_chain(&self, peer: &Address) -> Option<[u8; 8]> {
+        self.map.get(peer).and_then(|(_, s)| s.send_position()).map(|(chain, _)| chain)
+    }
+
+    /// `peer` has acknowledged a message of the chain `chain`.
+    pub fn confirm(&mut self, peer: &Address, chain: [u8; 8]) {
+        if let Some((_, s)) = self.map.get_mut(peer) {
+            s.confirm(chain);
+            self.dirty = true;
+        }
+    }
+
     /// Forgets all sessions (new identity) and writes that to disk.
     pub fn clear(&mut self) {
         self.map.clear();
+        self.backups.clear();
         self.saved.clear();
         self.dirty = true;
         self.save();
@@ -291,12 +312,33 @@ impl SessionStore for Sessions {
         })
     }
 
+    fn set_backup(&mut self, s: Session) {
+        // As many as there can be sessions; anyone may start one, so bounded.
+        if self.backups.len() >= MAX_SESSIONS && !self.backups.contains_key(&s.peer()) {
+            self.backups.clear();
+        }
+        self.backups.insert(s.peer(), s);
+    }
+
+    fn backup_mut(&mut self, peer: &Address) -> Option<&mut Session> {
+        self.backups.get_mut(peer)
+    }
+
+    fn take_backup(&mut self, peer: &Address) -> Option<Session> {
+        self.backups.remove(peer)
+    }
+
+    fn backup_by_sid(&mut self, sid: &[u8; SID_LEN]) -> Option<&mut Session> {
+        self.backups.values_mut().find(|s| s.receive_sid() == Some(*sid))
+    }
+
     fn insert(&mut self, s: Session) {
         self.clock += 1;
         if self.map.len() >= MAX_SESSIONS && !self.map.contains_key(&s.peer())
             && let Some(old) = self.map.iter().min_by_key(|(_, (t, _))| *t).map(|(a, _)| *a)
         {
             self.map.remove(&old);
+            self.backups.remove(&old);
             self.saved.remove(&old);
         }
         self.map.insert(s.peer(), (self.clock, s));
@@ -519,6 +561,27 @@ mod tests {
         drop(s);
         let s = Sessions::load_with_marker(path, None);
         assert!(s.unprotected && s.len() == 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// What 0.9.13 wrote (shorter sessions, with an epoch) is read.
+    #[test]
+    fn a_file_with_version_2_sessions_is_read() {
+        let dir = temp_dir("version2");
+        let path = dir.join("sessions.bin");
+        let (_a, b, sa, _sb) = established(&path);
+        drop(sa);
+        let bytes = fs::read(&path).unwrap();
+        let (body, epoch) = split_trailer(&bytes);
+        let mut old = body[..SESSION_LEN_V2].to_vec();
+        old[0] = 2;
+        old[SESSION_LEN_V2 - 1] &= 0x0f;
+        old.extend_from_slice(TRAILER_MAGIC);
+        old.extend_from_slice(&epoch.unwrap().to_le_bytes());
+        fs::write(&path, old).unwrap();
+        let s = Sessions::load(path);
+        assert!(!s.restored_old_file);
+        assert!(s.contains(&b.address()));
         let _ = fs::remove_dir_all(&dir);
     }
 

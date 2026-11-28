@@ -1754,6 +1754,8 @@ impl Engine {
                     };
                     self.tr(format!("{{\"t\":{},\"ev\":\"route\",\"n\":{node},\"dest\":{d},\"hops\":{hops}{tj}}}", self.now));
                 }
+                // The simulated post offices do not check signatures.
+                Action::SignedAck { .. } => {}
                 Action::Acked { msg_id } | Action::CarryAcked { msg_id } if self.xfer_acked(node, msg_id) => {}
                 Action::Acked { msg_id } | Action::CarryAcked { msg_id } if self.mail_acked(node, msg_id) => {}
                 Action::Acked { msg_id } | Action::CarryAcked { msg_id } => {

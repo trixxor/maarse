@@ -711,13 +711,13 @@ impl Engine {
             }
             Command::GetWifi => {
                 let w = self.phones.attached[&node].wifi.clone().unwrap_or_default();
-                self.phone_emit(node, &Event::Wifi { enabled: w.enabled, modem: w.modem, hotspot: w.hotspot, state: 0, ip: [0; 4], ssid: w.ssid.clone(), peer: w.peer.clone() });
+                self.phone_emit(node, &Event::Wifi { enabled: w.enabled, modem: w.modem, state: 0, ip: [0; 4], ssid: w.ssid.clone(), peer: w.peer.clone() });
             }
             Command::SetWifi(w) => {
                 if let Some(p) = self.phones.attached.get_mut(&node) {
                     p.wifi = Some(w.clone());
                 }
-                self.phone_emit(node, &Event::Wifi { enabled: w.enabled, modem: w.modem, hotspot: w.hotspot, state: 0, ip: [0; 4], ssid: w.ssid.clone(), peer: w.peer.clone() });
+                self.phone_emit(node, &Event::Wifi { enabled: w.enabled, modem: w.modem, state: 0, ip: [0; 4], ssid: w.ssid.clone(), peer: w.peer.clone() });
                 self.phone_emit(node, &Event::Log { text: txt("Wi-Fi saved. Simulator: a node's own Wi-Fi link is drawn as a link on the map (Build), not from this setting") });
             }
             Command::OtaStatus => {

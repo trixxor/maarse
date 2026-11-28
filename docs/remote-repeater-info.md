@@ -1,6 +1,6 @@
 # Remote repeater information and safe radio changes (proposal)
 
-Status: approved and built 2026-11-26 (working copy, not flashed, not bench-tested). Original wording of the proposal follows; the decisions are in section 6.
+Status: approved and built 2026-11-26 (not flashed, not bench-tested). Original wording of the proposal follows; the decisions are in section 6.
 
 ## 1. Problem
 

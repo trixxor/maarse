@@ -38,7 +38,7 @@
         </ul>
       </div>
     </div>
-    <p class="meta"><span class="badge b-working">working copy</span> Post offices and the LoRa trunks were built and flashed on a desk; carry is <span class="badge b-simulated">simulated</span>. No field measurement exists.</p>
+    <p class="meta"><span class="badge b-released">released</span> Post offices and the LoRa trunks were built and flashed on a desk; carry is <span class="badge b-simulated">simulated</span>. No field measurement exists.</p>
   </div>
 
   <h2 id="offline">Your friend's radio is off</h2>
@@ -83,7 +83,7 @@
 
   <section class="deep" id="deposit">
     <h2>Post office protocol</h2>
-    <p>Source: <code>maarse-core/src/mail.rs</code>, <code>maarse-host/src/node.rs</code>, spec section 8.1. <span class="badge b-working">working copy</span></p>
+    <p>Source: <code>maarse-core/src/mail.rs</code>, <code>maarse-host/src/node.rs</code>, spec section 8.1. <span class="badge b-released">released</span></p>
     <h3>Who is a post office</h3>
     <p>Post offices say so in their hellos and announces with a 2-bit class: 0 none, 1 small flash, 2 megabytes, 3 a host with a disk. Hosts are class 3; radio nodes are class 0 today. Every node picks the best post office among its neighbours (highest class, then best SNR) as its <em>home</em> post office and names it in its announce.</p>
     <h3>Dropping mail</h3>
@@ -99,7 +99,7 @@
       <tr><td>5</td><td><code>RECEIPT</code></td><td>receipt IDs</td><td>Recipient to the original sender: the mail arrived</td></tr>
     </table></div>
     <h3>Delivery receipts</h3>
-    <p>The post office does not know who sent a message, and the recipient's acknowledgement goes to the post office. So after opening mail that may have come from a post office (a bundle, mail sealed to its weekly or account key, or a message too long to bundle), the recipient, who now knows the sender from the decrypted message, sends the sender a <code>RECEIPT</code>. The sender recomputes the receipt ID for the copies in its outbox and marks the match as delivered.</p>
+    <p>The post office does not know who sent a message, and the recipient's acknowledgement goes to the post office. So after opening mail that may have come from a post office (a bundle, mail sealed to its weekly or account key, or a message too long to bundle), the recipient, who now knows the sender from the decrypted message, sends the sender a <code>RECEIPT</code>. The sender recomputes the receipt ID for the copies in its outbox and marks the match as delivered. Since 0.9.14 the recipient also signs its acknowledgement of a bundle, and a host post office deletes its copy only on that signature (older recipients and a few over-long messages are the exception).</p>
     <h3>Copies</h3>
     <p>A host that takes a message keeps it and sends copies to the recipient's three replica hosts: the three highest <em>rendezvous scores</em> over the hosts in its DHT table. Every host computes the same three for a given recipient, so when a host joins or leaves, only the recipients it ranked first move. Copies travel over the DHT's TCP requests and never over radio.</p>
     <h3>Asking for mail</h3>

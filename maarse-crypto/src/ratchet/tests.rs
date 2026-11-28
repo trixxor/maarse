@@ -5,7 +5,7 @@ use sha2::Digest;
 use std::collections::HashMap;
 
 #[derive(Default, Clone)]
-struct Map(HashMap<Address, Session>);
+struct Map(HashMap<Address, Session>, HashMap<Address, Session>);
 impl SessionStore for Map {
     fn get_mut(&mut self, peer: &Address) -> Option<&mut Session> {
         self.0.get_mut(peer)
@@ -15,6 +15,18 @@ impl SessionStore for Map {
     }
     fn find_sid(&mut self, sid: &[u8; SID_LEN], skip: usize) -> Option<&mut Session> {
         self.0.values_mut().filter(|s| s.receive_sid() == Some(*sid)).nth(skip)
+    }
+    fn set_backup(&mut self, s: Session) {
+        self.1.insert(s.peer(), s);
+    }
+    fn backup_mut(&mut self, peer: &Address) -> Option<&mut Session> {
+        self.1.get_mut(peer)
+    }
+    fn take_backup(&mut self, peer: &Address) -> Option<Session> {
+        self.1.remove(peer)
+    }
+    fn backup_by_sid(&mut self, sid: &[u8; SID_LEN]) -> Option<&mut Session> {
+        self.1.values_mut().find(|s| s.receive_sid() == Some(*sid))
     }
 }
 
@@ -536,6 +548,15 @@ impl Peer {
             seal_compact(&self.id, &to.id.public(), &mut self.store, true, true, &mut OsRng, msg, &mut out).unwrap();
         (out[..n].to_vec(), f)
     }
+
+    /// What the node does when a message it sent to `to` is acknowledged.
+    fn acked(&mut self, to: &Peer) {
+        if let Some(s) = self.store.get_mut(&to.addr())
+            && let Some((chain, _)) = s.send_position()
+        {
+            s.confirm(chain);
+        }
+    }
 }
 
 /// Both parties talk compact and A has taken its first ratchet step.
@@ -549,7 +570,58 @@ fn compact_established() -> (Peer, Peer) {
     let (c, f) = a.send_c(&b, b"first ratcheted");
     assert_eq!((c[0], f), (RATCHET, Format::Ratchet));
     b.recv(&c).unwrap();
+    a.acked(&b);
     (a, b)
+}
+
+/// Without an acknowledgement or a reply the long form goes on, so a recipient
+/// that missed the first messages of a chain can still read.
+#[test]
+fn a_chain_nobody_has_confirmed_stays_long_and_readable() {
+    let (mut a, mut b) = compact_established();
+    // A new chain of A's, none of whose messages arrive.
+    let old = a.session(&b).send_position().unwrap().0;
+    let mut last = Vec::new();
+    for i in 0..(STEP_EVERY * 4) {
+        let (r, _) = b.send_c(&a, b"reply");
+        a.recv(&r).unwrap();
+        let (c, _) = a.send_c(&b, &[i as u8]);
+        if a.session(&b).send_position().unwrap().0 != old {
+            // The step: from here on nothing is confirmed.
+            for j in 0..6u8 {
+                let (c, _) = a.send_c(&b, &[j]);
+                assert_eq!(c[0], RATCHET, "short although B may not have the chain");
+                last = c;
+            }
+            break;
+        }
+        b.recv(&c).unwrap();
+        a.acked(&b);
+    }
+    assert_eq!(b.recv(&last).unwrap().0, vec![5], "B was away for the chain's start");
+    a.acked(&b);
+    let (c, _) = a.send_c(&b, b"short now");
+    assert_eq!(c[0], COMPACT);
+    assert_eq!(b.recv(&c).unwrap().0, b"short now");
+}
+
+/// An acknowledgement of a message from an earlier chain confirms nothing.
+#[test]
+fn only_the_current_chain_can_be_confirmed() {
+    let (mut a, mut b) = compact_established();
+    let (old, _) = a.session(&b).send_position().unwrap();
+    for i in 0..(STEP_EVERY * 3) {
+        let (r, _) = b.send_c(&a, b"r");
+        a.recv(&r).unwrap();
+        let (c, _) = a.send_c(&b, &[i as u8]);
+        b.recv(&c).unwrap();
+        if a.session(&b).send_position().unwrap().0 != old {
+            a.store.0.get_mut(&b.addr()).unwrap().confirm(old);
+            assert!(!a.session(&b).confirmed);
+            return;
+        }
+    }
+    panic!("no step was taken");
 }
 
 #[test]
@@ -585,6 +657,7 @@ fn compact_message_roundtrip_many_both_ways_and_steps_every_few() {
             full += 1
         }
         assert_eq!(to.recv(&c).unwrap().0, msg.into_bytes());
+        from.acked(to);
     }
     // Most messages are compact; the others carry a fresh key.
     assert!(compact > full * 2, "compact {compact} full {full}");
@@ -605,6 +678,7 @@ fn compact_alternating_chat_average_overhead() {
         total += c.len() - 10;
         count += 1;
         to.recv(&c).unwrap();
+        from.acked(to);
     }
     let avg = total as f64 / count as f64;
     println!("average overhead, strictly alternating: {avg:.1} bytes (long form {FS_OVERHEAD})");
@@ -831,6 +905,10 @@ fn compact_known_lengths() {
         let (n, _) = seal_compact(&a, &pb, &mut sa, true, true, &mut rng, &[i; 20], &mut buf).unwrap();
         lens.push((buf[0], n));
         open(&b, &buf[..n], &mut sb, |x| (*x == a.address()).then_some(pa), &mut out).unwrap();
+        // Acknowledged.
+        let s = sa.get_mut(&b.address()).unwrap();
+        let chain = s.send_position().unwrap().0;
+        s.confirm(chain);
     }
     assert_eq!(
         lens,
@@ -906,6 +984,7 @@ fn force_full_gives_exactly_one_long_message() {
         let (c, _) = a.send_c(&b, b"x");
         b.recv(&c).unwrap();
     }
+    a.acked(&b);
     a.store.0.get_mut(&b.addr()).unwrap().force_full();
     let (c, _) = a.send_c(&b, b"long");
     assert_eq!(c[0], RATCHET);
@@ -950,4 +1029,115 @@ fn init_from_a_sender_key_of_small_order_is_rejected() {
     let r = open(&me, &m, &mut store, |a| (*a == from).then_some(weak), &mut out);
     assert!(r.is_err(), "{r:?}");
     assert!(store.0.is_empty());
+}
+
+// ---- replacing a session ---------------------------------------------------
+
+/// Two parties with a proven session, and the very first init A sent.
+fn proven_pair() -> (Peer, Peer, Vec<u8>) {
+    let (mut a, mut b) = pair();
+    let (init, f) = a.send(&b, b"the first");
+    assert_eq!(f, Format::Init);
+    b.recv(&init).unwrap();
+    talk(&mut a, &mut b, 3);
+    (a, b, init)
+}
+
+/// Messages both ways, all of which must open.
+fn talk(a: &mut Peer, b: &mut Peer, rounds: u8) {
+    for i in 0..rounds {
+        let (c, _) = a.send(b, &[i, b'a']);
+        assert_eq!(b.recv(&c).unwrap().0, [i, b'a']);
+        let (c, _) = b.send(a, &[i, b'b']);
+        assert_eq!(a.recv(&c).unwrap().0, [i, b'b']);
+    }
+}
+
+fn restart_from_a(a: &mut Peer, b: &mut Peer) {
+    let pb = b.id.public();
+    reset(&a.id, &pb, &mut a.store, &mut OsRng).unwrap();
+    talk(a, b, 3);
+}
+
+#[test]
+fn a_replaced_session_is_given_up_when_the_new_one_is_proven_and_its_init_never_counts_again() {
+    let (mut a, mut b, init) = proven_pair();
+    restart_from_a(&mut a, &mut b);
+    assert!(a.store.1.is_empty() && b.store.1.is_empty(), "a backup was kept");
+    let before = b.session(&a).to_bytes();
+    assert!(b.recv(&init).is_err(), "the recording of the old init was accepted");
+    assert_eq!(b.session(&a).to_bytes()[..], before[..]);
+    talk(&mut a, &mut b, 2);
+}
+
+#[test]
+fn a_recorded_init_that_was_forgotten_is_undone_by_the_contacts_next_message() {
+    let (mut a, mut b, init) = proven_pair();
+    restart_from_a(&mut a, &mut b);
+    // As if the init had left every memory.
+    b.store.0.get_mut(&a.addr()).unwrap().old_inits = Default::default();
+    let good = b.session(&a).to_bytes();
+    b.recv(&init).unwrap();
+    assert_ne!(b.session(&a).to_bytes()[..], good[..], "the recording replaced the session");
+    assert_eq!(b.store.1.len(), 1, "the proven session was thrown away");
+    // A knows nothing of it and writes on.
+    let (c, _) = a.send(&b, b"still me");
+    assert_eq!(b.recv(&c).unwrap().0, b"still me");
+    assert!(b.store.1.is_empty());
+    talk(&mut b, &mut a, 3);
+}
+
+#[test]
+fn messages_on_their_way_in_the_old_session_still_open_after_a_reset() {
+    let (mut a, mut b, _) = proven_pair();
+    let (late, _) = b.send(&a, b"sent before your reset");
+    let pb = b.id.public();
+    reset(&a.id, &pb, &mut a.store, &mut OsRng).unwrap();
+    let new = a.session(&b).to_bytes();
+    assert_eq!(a.recv(&late).unwrap().0, b"sent before your reset");
+    assert_eq!(a.session(&b).to_bytes()[..], new[..], "our own new session was given up");
+    talk(&mut a, &mut b, 3);
+    assert!(a.store.1.is_empty() && b.store.1.is_empty());
+}
+
+#[test]
+fn the_new_session_still_wins_when_the_contact_really_restarted() {
+    let (mut a, mut b, _) = proven_pair();
+    let (late, _) = a.send(&b, b"from before the restart");
+    let mut a2 = rebooted(&a, &[&b]);
+    let (hello, _) = a2.send(&b, b"I restarted");
+    b.recv(&hello).unwrap();
+    // A late message of the old session arrives after the new init.
+    assert_eq!(b.recv(&late).unwrap().0, b"from before the restart");
+    // The new one comes back with A's next init.
+    let (again, _) = a2.send(&b, b"hello again");
+    assert_eq!(b.recv(&again).unwrap().0, b"hello again");
+    talk(&mut b, &mut a2, 3);
+}
+
+#[test]
+fn the_backup_also_reads_compact_messages() {
+    let (mut a, mut b) = compact_established();
+    for _ in 0..4 {
+        let (c, _) = a.send_c(&b, b"x");
+        b.recv(&c).unwrap();
+        a.acked(&b);
+    }
+    let (late, _) = a.send_c(&b, b"short and late");
+    assert_eq!(late[0], COMPACT);
+    let pa = a.id.public();
+    reset(&b.id, &pa, &mut b.store, &mut OsRng).unwrap();
+    assert_eq!(b.recv(&late).unwrap().0, b"short and late");
+}
+
+#[test]
+fn a_version_2_session_counts_as_proven() {
+    let (a, b, _) = proven_pair();
+    let now = a.session(&b).to_bytes();
+    let mut old = now[..SESSION_LEN_V2].to_vec();
+    old[0] = 2;
+    old[SESSION_LEN_V2 - 1] &= 0x0f;
+    let back = Session::from_bytes(&old).unwrap();
+    assert!(back.proven);
+    assert_eq!(back.send_position(), a.session(&b).send_position());
 }

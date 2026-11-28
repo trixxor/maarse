@@ -21,7 +21,7 @@
     <p><strong>Why:</strong> Radio is public: anyone in range hears every packet. The message must be unreadable to everyone but the recipient, must hide who sent it, and must still be small enough to cost little airtime.</p>
     <div class="prosCons">
       <div class="pros"><h4>Strengths</h4><ul><li>Encrypted end to end, with the sender hidden inside the message</li><li>Forward secrecy between contacts that support it: a leaked key does not open old messages</li><li>A delivered mark that means "the other node decrypted it"</li><li>Short texts are compressed to about 56 % of their size</li><li>Most messages in a conversation use a compact form with 22 bytes of overhead instead of 69</li></ul></div>
-      <div class="cons"><h4>Good to know</h4><ul><li>MeshCore's frame is lighter, because it pays 2 bytes for authentication where Må:rse pays 16</li><li>A text is at most about 140 bytes over LoRa: this is for short messages, not documents</li><li>The ratchet is a draft and has not been reviewed from outside</li><li>Mail waiting in a post office has forward secrecy only when the two sides have written to each other this week (working copy)</li></ul></div>
+      <div class="cons"><h4>Good to know</h4><ul><li>MeshCore's frame is lighter, because it pays 2 bytes for authentication where Må:rse pays 16</li><li>A text is at most about 140 bytes over LoRa: this is for short messages, not documents</li><li>The ratchet is a draft and has not been reviewed from outside</li><li>Mail waiting in a post office has forward secrecy only when the two sides have written to each other this week</li></ul></div>
     </div>
     <p class="meta"><span class="badge b-bench">bench-tested</span> direct messages on two boards. The compact frame is <span class="badge b-tested">tested</span> and fuzzed, <span class="badge b-simulated">simulated</span>, not yet on hardware.</p>
   </div>
@@ -85,7 +85,7 @@
 <pre><code>type (1) | ratchet key (32) | sender XOR mask (16) | n (u16) | pn (u16)
   | ChaCha20-Poly1305(mk, message, AAD = these 53 header bytes) | tag (16)</code></pre>
     <p>Type <code>0xF0</code> is the first message of a session, <code>0xF1</code> a ratchet step. Overhead 69 bytes; the largest text is 143 bytes.</p>
-    <h3>Compact frame <span class="badge b-working">working copy</span></h3>
+    <h3>Compact frame <span class="badge b-released">released</span></h3>
 <pre><code>type 0xF2 (1) | session id (3) | n (u16)
   | ChaCha20-Poly1305(message key, message, AAD = these 6 bytes) | tag (16)</code></pre>
     <p>Overhead 22 bytes. The tag is the full 16 bytes and the key is new for every message. After a ratchet step, the first 2 messages carry the full ratchet key so one lost message does not break the chain. A sender takes its next step after at most 8 messages on the current key.</p>

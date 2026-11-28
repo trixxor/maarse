@@ -173,8 +173,11 @@ pub fn push_caps(v: &mut AppBuf, caps: u8) {
 /// Second capability byte: reads `content::person::DEVICE_INBOX` and opens
 /// mail sealed to its weekly key.
 pub const CAP2_MAILKEY: u8 = 0x01;
+/// Second capability byte: acknowledges a mail bundle with its signature
+/// (`router`, "Signed acknowledgement").
+pub const CAP2_SIGNED_ACK: u8 = 0x02;
 /// What this firmware/host can do, second byte.
-pub const MY_CAPS2: u8 = CAP2_MAILKEY;
+pub const MY_CAPS2: u8 = CAP2_MAILKEY | CAP2_SIGNED_ACK;
 /// Role flag: the node hears a repeater or anchor directly.
 pub const ROLE_HEARS_REPEATER: u8 = 0x01;
 /// Role flags bits 1-2: how many edge bridges (relays that hear a repeater)

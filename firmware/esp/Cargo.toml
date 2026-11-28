@@ -21,10 +21,6 @@ ble = ["esp-radio/ble", "dep:bt-hci", "dep:trouble-host"]
 # `--no-default-features --features board-heltec-v4,ble` (or `,wifi`) builds
 # a firmware with just one of them and more free RAM.
 wifi = ["esp-radio/wifi", "dep:embassy-net", "dep:smoltcp"]
-# Wi-Fi hotspot for phones (hotspot.rs). Off by default: its statics (about 8 KB) come out of the main stack, and the Wi-Fi driver
-# needs nearly all of that when it starts (about 51 KB of 57 KB; 6 KB are left with the hotspot, 14 KB without). Build with
-# `scripts/build-firmware.ps1 heltec-v4 -Hotspot`.
-hotspot = ["wifi"]
 # Only for checking the code with the ordinary Rust toolchain
 # (RISC-V, ESP32-C6); does not run on any real board.
 check-esp32c6 = ["esp-hal/esp32c6", "esp-rtos/esp32c6", "esp-radio/esp32c6", "esp-storage/esp32c6", "esp-bootloader-esp-idf/esp32c6", "esp-println/esp32c6"]
@@ -51,7 +47,7 @@ esp-radio = { version = "=1.0.0-beta.1", features = ["unstable", "esp-alloc"] }
 # Crash logging over USB: the panic handler prints the reason (esp-hal turns
 # hardware exceptions into panics too). Read with `espflash monitor`.
 esp-println = { version = "0.18", default-features = false, features = ["jtag-serial", "critical-section"] }
-embassy-net = { version = "0.9.1", optional = true, features = ["tcp", "udp", "dhcpv4", "dns", "proto-ipv4", "medium-ethernet"] }
+embassy-net = { version = "0.9.1", optional = true, features = ["tcp", "dhcpv4", "dns", "proto-ipv4", "medium-ethernet"] }
 # Only to switch on automatic ping replies in the TCP/IP stack embassy-net uses.
 smoltcp = { version = "0.13.1", optional = true, default-features = false, features = ["auto-icmp-echo-reply"] }
 esp-rtos = { version = "0.4.0", features = ["embassy", "esp-radio", "esp-alloc"] }

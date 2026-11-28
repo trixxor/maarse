@@ -70,6 +70,13 @@ impl PublicIdentity {
         Address(a)
     }
 
+    /// Is `signature` this node's signature on the mail bundle `id`
+    /// addressed to it (see [`Identity::sign_delivery`])?
+    pub fn verify_delivery(&self, id: u64, signature: &maarse_core::router::Signature) -> bool {
+        let Ok(key) = VerifyingKey::from_bytes(&self.sign) else { return false };
+        key.verify_strict(&delivery_message(&self.address(), id), &Signature::from_bytes(signature)).is_ok()
+    }
+
     pub fn verify_dht_reply(&self, challenge: &[u8; 32], request: &[u8], response: &[u8], signature: &[u8; SIGNATURE_LEN]) -> bool {
         let Ok(key) = VerifyingKey::from_bytes(&self.sign) else { return false };
         key.verify_strict(&dht_exchange_digest(b"maarse/dht-reply/v1", challenge, request, response), &Signature::from_bytes(signature)).is_ok()
@@ -185,6 +192,13 @@ impl Identity {
         Some(proof)
     }
 
+    /// Our signature that the mail bundle with packet ID `id`, addressed to
+    /// us, has arrived (the payload of its acknowledgement).
+    #[inline(never)]
+    pub fn sign_delivery(&self, id: u64) -> maarse_core::router::Signature {
+        self.sign.sign(&delivery_message(&self.address(), id)).to_bytes()
+    }
+
     pub(crate) fn signing_key(&self) -> &SigningKey {
         &self.sign
     }
@@ -279,6 +293,15 @@ fn signed_message(addr: &Address, body: &[u8]) -> Option<heapless::Vec<u8, 320>>
     m.extend_from_slice(&addr.0).ok()?;
     m.extend_from_slice(body).ok()?;
     Some(m)
+}
+
+/// What is signed for a mail bundle: context | recipient | packet ID.
+fn delivery_message(recipient: &Address, id: u64) -> [u8; 40] {
+    let mut m = [0u8; 40];
+    m[..16].copy_from_slice(b"maarse/bundle/v1");
+    m[16..32].copy_from_slice(&recipient.0);
+    m[32..].copy_from_slice(&id.to_le_bytes());
+    m
 }
 
 /// Address of a channel: hash of the channel key.

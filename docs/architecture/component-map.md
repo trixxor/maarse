@@ -1,6 +1,6 @@
 # Component map
 
-> **Type:** explanation · **Status:** working copy (checked against the `Cargo.toml` files and crate docs on 2026-11-27)
+> **Type:** explanation · **Status:** released (checked against the `Cargo.toml` files and crate docs on 2026-11-27)
 
 Every directory of the repository, what it is responsible for, and what it
 depends on. For how the parts fit together at run time, see the

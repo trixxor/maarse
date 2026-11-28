@@ -23,7 +23,7 @@
       <div class="pros"><h4>Strengths</h4><ul><li>The same feature set and wording on Android and the web client, built together</li><li>The Android app has four connection modes: Bluetooth radio, phone as node, host elsewhere, server on this phone</li><li>The web client installs as an app and works offline once opened</li><li>Notification sounds you choose per kind of message</li><li>The Windows service installs signed updates</li></ul></div>
       <div class="cons"><h4>Good to know</h4><ul><li>The Android app is verified in an emulator: <strong>Bluetooth on a real phone has not been tested</strong></li><li>Not in the Android app yet: the map, the range test and the alert issuing form</li><li>iPhone: Safari has neither Web Bluetooth nor Web Serial, so only a WebSocket to a host works</li></ul></div>
     </div>
-    <p class="meta"><span class="badge b-tested">tested</span> web client on Windows. Android emulator-verified. Windows installer working copy.</p>
+    <p class="meta"><span class="badge b-tested">tested</span> web client on Windows. Android emulator-verified. Windows installer released; the Android app is in the source and has no released APK.</p>
   </div>
 
   <h2 id="android">The Android app</h2>
@@ -45,7 +45,7 @@
     <li><strong>One inbox on several screens:</strong> a host at home keeps the message history, so the phone, laptop and desktop follow the same conversations. A sent message shows on the others at once, and reading a conversation on one clears the unread counter on the others. File content is not stored.</li>
   </ul>
   <h2 id="windows">The Windows app</h2>
-  <p>A service plus a tray app, installed together. The service runs the host and installs signed updates from GitHub releases. The tray icon shows status and opens the web client. The service starts the tray app in the signed-in user's session when none is running. <span class="badge b-working">working copy</span> SmartScreen shows a warning for the installer, which is accepted.</p>
+  <p>A service plus a tray app, installed together. The service runs the host and installs signed updates from GitHub releases. The tray icon shows status and opens the web client. The service starts the tray app in the signed-in user's session when none is running. <span class="badge b-released">released</span> SmartScreen shows a warning for the installer, which is accepted.</p>
   <h2 id="languages">Languages</h2>
   <p>The Android app, the web client, the server pages, the web flasher, the Windows tray app and the installer can be shown in English or Dansk. It follows the device, and <em>Settings → Language</em> chooses by hand. A text without a translation is shown in English. A language is one file, <code>i18n/&lt;code&gt;.json</code>, and a new one can be added without rebuilding by putting the file in the data folder.</p>
   <section class="deep" id="details">
